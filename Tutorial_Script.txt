@@ -1,0 +1,82 @@
+Better Fingers Guided Tour Script
+
+Introduction
+"Welcome to Better Fingers! I am your tour guide. This app converts your voice into clean, usable text, giving your fingers a well-deserved break. Let us walk through each section together. You can click Back or Next at any time, and Play Narration to hear each step read aloud."
+
+Master Hotkey
+"This is your Master Hotkey. Press this key to start or stop dictation. By default it is set to a comfortable key, but you can change it to whatever feels natural for you. Click the box and press your preferred key."
+
+Emergency Stop
+"This is your Emergency Stop key. If dictation ever runs away or you need to cancel immediately, press this key. Think of it as your safety switch."
+
+Recording Mode
+"Choose your Recording Mode. Toggle mode lets you press once to start and once to stop. Hold mode keeps recording only while you hold the key. Pick whichever fits your workflow."
+
+Audio Ducking
+"This is Smart Audio Ducking. When enabled, your desktop audio such as games, music, or videos will automatically lower while you speak, then restore when you finish. This keeps your microphone signal crystal clear."
+
+Ducking Level
+"Adjust the Ducking Level here. Slide left for quieter background audio during dictation, or right to keep more of your original volume."
+
+Typing Speed
+"Set your Typing Speed here. This controls how fast text appears when typed into your target application. A natural speed feels less robotic."
+
+Instant Typing
+"Enable Instant Typing if you want text to appear immediately without any simulated delay. This is faster but may look less human-like."
+
+Custom Sign-Off
+"Add a Custom Sign-Off here. This is an optional phrase that gets appended to the end of your messages automatically, like a signature."
+
+Controller Support
+"Enable Controller Support to use a gamepad for dictation. This is ideal for gamers who want hands-free voice control while holding a controller."
+
+Controller Binding Mode
+"Choose your Controller Binding Mode. You can use a single button, a chord of buttons pressed together, or a sequence of button presses to trigger dictation."
+
+Chat Open Key
+"Set your Chat Open Key here. This is the key that opens your in-game chat window before pasting text. Usually this is Enter or T depending on the game."
+
+Voice Mute Key
+"Set your Voice Mute Key here. If your game has a push-to-talk key, enter it here so the app can work around it during dictation."
+
+Send Mode
+"Choose your Send Mode. Review First shows you a preview before sending so you can approve or edit. Auto Send types directly into the active window without confirmation."
+
+Primary Action Hotkey
+"This is your Primary Action Hotkey. By default it is F9. In Review mode, pressing it accepts and sends your draft. When no draft is pending, it reads highlighted text aloud using TTS."
+
+Review TTS Voice
+"Select your Review TTS Voice here. This is the voice that reads your drafts aloud during review. You can preview different voices using the play button."
+
+Review TTS Speed
+"Adjust the Review TTS Speed here. Slide left for slower narration, right for faster. Find a pace that is comfortable for you."
+
+LLM Post-Processing
+"Enable LLM Post-Processing to have an AI clean up, rephrase, or format your dictated text. This can fix grammar, add punctuation, and improve clarity."
+
+Persona Selection
+"Select your AI Persona here. Each persona has a different style, such as professional, casual, or gaming-focused. Choose one that matches your communication needs."
+
+Whisper Model Size
+"Choose your Whisper Model Size. Larger models are more accurate but slower and use more memory. Smaller models are faster but may miss some words."
+
+Quantization Level
+"Set the Quantization Level. Using int4 saves memory but may reduce accuracy slightly. Using int8 balances speed and quality."
+
+GPU Acceleration
+"Enable GPU Acceleration if you have a compatible graphics card. This dramatically speeds up transcription and processing."
+
+Model Memory Residency
+"Configure Model Memory Residency. Keep models loaded for faster responses, or unload after each request to save RAM. Balance speed against memory usage."
+
+Status Indicator Position
+"Set your Status Indicator Position. This is the small dot that shows whether the app is idle, recording, or processing. Place it where it will not block important game elements."
+
+Notification Overlay Position
+"Set your Notification Overlay Position. Toast messages appear here to confirm actions. Drag it or use the dropdown to place it out of the way."
+
+Preview Overlay Position
+"Set your Preview Overlay Position. This is where your draft text appears for review. Position it where you can easily read and approve your messages."
+
+Closing
+"Congratulations, you have completed the Better Fingers guided tour! Your voice is now ready to handle the typing workload. You can reopen this tour anytime from the Settings menu if you need a refresher. Happy dictating!"

@@ -1,0 +1,20 @@
+# Python cache/artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Test/cache outputs
+.pytest_cache/
+.tmp_pip_meta/
+*.log
+
+# Build/package outputs
+build/
+dist/
+*.spec.bak
+
+# Local virtual environments
+.venv/
+venv/
+env/

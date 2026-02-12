@@ -1,0 +1,34 @@
+# ---- Core ----
+pystray                     # System tray icon
+Pillow                      # Image processing (tray icon, overlays)
+numpy                       # Numeric arrays for audio processing
+scipy                       # Signal processing (audio gate)
+
+# ---- Audio & Speech ----
+sounddevice                 # Microphone capture
+faster-whisper              # Whisper speech-to-text (CTranslate2)
+kokoro; python_version < "3.13"   # TTS backend (primary)
+kokoro-onnx                 # TTS backend (ONNX variant)
+
+# ---- UI ----
+flet==0.80.5                # Settings window (standardized stable line)
+
+# ---- Input & Clipboard ----
+keyboard                    # Global hotkey listener
+pygame                      # Controller / gamepad support
+pydirectinput               # Simulated keystrokes
+pyperclip                   # Cross-platform clipboard
+
+# ---- LLM Server ----
+requests                    # HTTP client (model downloads)
+huggingface_hub             # Model cache management (Whisper)
+pyyaml                      # Profile / config files
+
+# ---- Sidecar API ----
+fastapi                     # REST + WebSocket server
+uvicorn                     # ASGI server
+websockets                  # WebSocket protocol support
+
+# ---- Windows Audio Control ----
+comtypes                    # COM automation (Windows)
+pycaw                       # Windows audio session control

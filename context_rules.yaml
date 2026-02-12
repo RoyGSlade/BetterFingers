@@ -1,0 +1,5 @@
+context_rules:
+  # Format: "problem_word": "contextual instruction"
+  "meal/me": "If the context involves 'water' or 'drink', change 'meal' or 'me' to 'Mio'. Otherwise keep as is."
+  "their/there": "Ensure correct usage of their/there/they're based on grammatical context."
+  "its/it's": "Ensure strict apostrophe usage for possession vs contraction."

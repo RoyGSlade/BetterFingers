@@ -1,0 +1,6 @@
+hotkey: f8
+max_inter_key_delay: 0.0012
+max_key_hold: 0.015
+min_inter_key_delay: 0.0008
+min_key_hold: 0.005
+model_size: base.en
