@@ -1,4 +1,4 @@
-const { ipcMain } = require('electron');
+const { clipboard, ipcMain } = require('electron');
 
 function registerIpc({ getMainWindow, onQuit, onShow } = {}) {
   ipcMain.handle('app:quit', async () => {
@@ -22,6 +22,11 @@ function registerIpc({ getMainWindow, onQuit, onShow } = {}) {
       isVisible: Boolean(window && !window.isDestroyed() && window.isVisible()),
       isFocused: Boolean(window && !window.isDestroyed() && window.isFocused()),
     };
+  });
+
+  ipcMain.handle('clipboard:write-text', (_event, text) => {
+    clipboard.writeText(String(text ?? ''));
+    return true;
   });
 }
 

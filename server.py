@@ -1,6 +1,8 @@
 import os
 import shutil
 import logging
+import threading
+from datetime import datetime, timezone
 from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -37,6 +39,10 @@ hotkey_manager = None
 hotkey_recorder = None
 hotkey_manager_started = False
 active_websockets = []
+draft_queue = []
+next_draft_id = 1
+draft_lock = threading.Lock()
+MAX_DRAFT_HISTORY = 20
 
 
 def get_voices_dir():
@@ -141,25 +147,94 @@ async def broadcast_status(status: str, data: dict = None):
     for ws in to_remove:
         active_websockets.remove(ws)
 
+
+def broadcast_status_threadsafe(status: str, data: dict = None):
+    if loop:
+        asyncio.run_coroutine_threadsafe(broadcast_status(status, data), loop)
+    else:
+        logging.warning("Loop not ready for broadcast")
+
+
+def create_draft(raw_text, final_text, preset="True Janitor"):
+    global next_draft_id
+
+    with draft_lock:
+        draft = {
+            "id": next_draft_id,
+            "raw_text": raw_text or "",
+            "final_text": final_text or "",
+            "preset": preset,
+            "status": "pending",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        next_draft_id += 1
+        draft_queue.append(draft)
+
+        if len(draft_queue) > MAX_DRAFT_HISTORY:
+            del draft_queue[: len(draft_queue) - MAX_DRAFT_HISTORY]
+
+        return dict(draft)
+
+
+def get_draft_by_id(draft_id):
+    with draft_lock:
+        for draft in draft_queue:
+            if draft["id"] == draft_id:
+                return draft
+    return None
+
+
+def process_recording_result(recording_result):
+    preset = "True Janitor"
+    try:
+        broadcast_status_threadsafe("transcribing")
+        trans = ensure_transcriber_initialized(preload=False)
+        audio_data = getattr(recording_result, "audio_data", recording_result)
+        raw_text = trans.transcribe(audio_data)
+
+        broadcast_status_threadsafe("rewriting")
+        engine = get_engine()
+        final_text = engine.process_fast_lane(raw_text, preset)
+
+        draft = create_draft(raw_text, final_text, preset=preset)
+        broadcast_status_threadsafe(
+            "preview_ready",
+            {
+                "draft_id": draft["id"],
+                "raw_text": draft["raw_text"],
+                "final_text": draft["final_text"],
+            },
+        )
+        return draft
+    except Exception as exc:
+        logging.error(f"Recording processing failed: {exc}")
+        broadcast_status_threadsafe("error", {"message": str(exc)})
+        raise
+    finally:
+        broadcast_status_threadsafe("idle")
+
+
 # Hotkey Callbacks
 import asyncio
 loop = None
 
 def on_recording_start():
-    if loop:
-        asyncio.run_coroutine_threadsafe(broadcast_status("listening"), loop)
-    else:
-        logging.warning("Loop not ready for broadcast")
+    broadcast_status_threadsafe("listening")
 
-def on_recording_complete(audio_data):
+def on_recording_complete(recording_result):
     try:
-        size = len(audio_data.audio_data)
+        size = len(recording_result.audio_data)
     except Exception:
-        size = len(audio_data) if audio_data is not None else 0
+        size = len(recording_result) if recording_result is not None else 0
     logging.info(f"CALLBACK: Recording Complete ({size} samples)")
-    if loop:
-        asyncio.run_coroutine_threadsafe(broadcast_status("thinking"), loop)
-    # Trigger processing would go here...
+
+    def _worker():
+        try:
+            process_recording_result(recording_result)
+        except Exception:
+            logging.exception("Recording worker failed")
+
+    threading.Thread(target=_worker, daemon=True, name="betterfingers-recording-worker").start()
 
 @app.on_event("startup")
 async def startup_event():
@@ -246,6 +321,40 @@ async def runtime_status():
 @app.get("/capabilities")
 async def capabilities():
     return get_capabilities()
+
+
+@app.get("/drafts")
+async def list_drafts():
+    with draft_lock:
+        return {"drafts": [dict(draft) for draft in draft_queue]}
+
+
+@app.get("/drafts/latest")
+async def latest_draft():
+    with draft_lock:
+        if not draft_queue:
+            return {"draft": None}
+        return {"draft": dict(draft_queue[-1])}
+
+
+@app.post("/drafts/{draft_id}/accept")
+async def accept_draft(draft_id: int):
+    with draft_lock:
+        for draft in draft_queue:
+            if draft["id"] == draft_id:
+                draft["status"] = "accepted"
+                return dict(draft)
+    raise HTTPException(status_code=404, detail="Draft not found")
+
+
+@app.post("/drafts/{draft_id}/decline")
+async def decline_draft(draft_id: int):
+    with draft_lock:
+        for draft in draft_queue:
+            if draft["id"] == draft_id:
+                draft["status"] = "declined"
+                return dict(draft)
+    raise HTTPException(status_code=404, detail="Draft not found")
 
 
 @app.post("/runtime/warmup")

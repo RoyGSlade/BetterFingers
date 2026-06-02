@@ -45,6 +45,35 @@
       <section class="stream-panel">
         <div class="panel-header">
           <div>
+            <p class="eyebrow">Preview</p>
+            <h2>Latest Draft</h2>
+          </div>
+          <div class="connection-pill" id="draftStatus">No draft yet</div>
+        </div>
+
+        <div class="draft-preview">
+          <div class="draft-column">
+            <span class="status-label">Raw transcript</span>
+            <p id="draftRawText" class="draft-text">Waiting for a recording...</p>
+          </div>
+          <div class="draft-column">
+            <span class="status-label">Cleaned output</span>
+            <p id="draftFinalText" class="draft-text">Nothing to preview yet.</p>
+          </div>
+        </div>
+
+        <div class="action-row" aria-label="Draft actions">
+          <button id="copyDraftButton" class="secondary-button" type="button" disabled>Copy Cleaned Output</button>
+          <button id="acceptDraftButton" class="secondary-button" type="button" disabled>Accept</button>
+          <button id="declineDraftButton" class="secondary-button" type="button" disabled>Decline</button>
+        </div>
+
+        <div id="draftMessage" class="warmup-message" role="status" aria-live="polite"></div>
+      </section>
+
+      <section class="stream-panel">
+        <div class="panel-header">
+          <div>
             <p class="eyebrow">Runtime controls</p>
             <h2>Backend runtime</h2>
           </div>

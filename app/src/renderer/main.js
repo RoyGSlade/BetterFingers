@@ -1,7 +1,10 @@
 import {
+  acceptDraft,
   connectVoiceStatus,
+  declineDraft,
   fetchCapabilities,
   fetchHealth,
+  fetchLatestDraft,
   fetchRuntimeStatus,
   normalizeHealthPayload,
   warmupRuntime,
@@ -23,9 +26,17 @@ const runtimeStatusListEl = document.getElementById('runtimeStatusList');
 const warmupMessageEl = document.getElementById('warmupMessage');
 const capabilitiesListEl = document.getElementById('capabilitiesList');
 const capabilitiesSummaryEl = document.getElementById('capabilitiesSummary');
+const draftStatusEl = document.getElementById('draftStatus');
+const draftRawTextEl = document.getElementById('draftRawText');
+const draftFinalTextEl = document.getElementById('draftFinalText');
+const copyDraftButton = document.getElementById('copyDraftButton');
+const acceptDraftButton = document.getElementById('acceptDraftButton');
+const declineDraftButton = document.getElementById('declineDraftButton');
+const draftMessageEl = document.getElementById('draftMessage');
 
 let healthRefreshTimer = null;
 let websocketHandle = null;
+let latestDraft = null;
 
 function setBadgeState(el, text, tone) {
   if (!el) {
@@ -129,6 +140,69 @@ function setWarmupMessage(message = '', tone = '') {
   }
 }
 
+function setMessage(el, message = '', tone = '') {
+  if (!el) {
+    return;
+  }
+
+  el.textContent = message;
+  if (tone) {
+    el.dataset.tone = tone;
+  } else {
+    delete el.dataset.tone;
+  }
+}
+
+function setDraftControlsEnabled(enabled) {
+  if (copyDraftButton) {
+    copyDraftButton.disabled = !enabled;
+  }
+  if (acceptDraftButton) {
+    acceptDraftButton.disabled = !enabled;
+  }
+  if (declineDraftButton) {
+    declineDraftButton.disabled = !enabled;
+  }
+}
+
+function renderDraft(draft) {
+  latestDraft = draft ?? null;
+
+  if (!latestDraft) {
+    if (draftStatusEl) {
+      draftStatusEl.textContent = 'No draft yet';
+      delete draftStatusEl.dataset.state;
+    }
+    if (draftRawTextEl) {
+      draftRawTextEl.textContent = 'Waiting for a recording...';
+    }
+    if (draftFinalTextEl) {
+      draftFinalTextEl.textContent = 'Nothing to preview yet.';
+    }
+    setDraftControlsEnabled(false);
+    return;
+  }
+
+  if (draftStatusEl) {
+    draftStatusEl.textContent = latestDraft.status ?? 'pending';
+    draftStatusEl.dataset.state = latestDraft.status === 'pending' ? 'connecting' : 'connected';
+  }
+  if (draftRawTextEl) {
+    draftRawTextEl.textContent = latestDraft.raw_text || '(empty transcript)';
+  }
+  if (draftFinalTextEl) {
+    draftFinalTextEl.textContent = latestDraft.final_text || '(empty cleaned output)';
+  }
+
+  setDraftControlsEnabled(true);
+}
+
+async function refreshLatestDraft() {
+  const payload = await fetchLatestDraft();
+  renderDraft(payload?.draft ?? null);
+  return payload?.draft ?? null;
+}
+
 async function refreshHealth() {
   try {
     const payload = await fetchHealth();
@@ -226,6 +300,16 @@ function updateVoiceStatus(message) {
   const statusText = typeof message === 'string' ? message : String(message.status ?? message.type ?? 'unknown');
   voiceStatusEl.textContent = statusText;
   voiceStatusDetailEl.textContent = JSON.stringify(message, null, 2);
+
+  if (message.status === 'preview_ready') {
+    renderDraft({
+      id: message.draft_id,
+      raw_text: message.raw_text,
+      final_text: message.final_text,
+      status: 'pending',
+    });
+    setMessage(draftMessageEl, 'New draft ready for review.', 'success');
+  }
 }
 
 async function bootstrap() {
@@ -241,6 +325,9 @@ async function bootstrap() {
         capabilitiesSummaryEl.textContent = 'Unavailable';
       }
       renderDetailList(capabilitiesListEl, {});
+    }),
+    refreshLatestDraft().catch(() => {
+      renderDraft(null);
     }),
   ]);
 
@@ -286,6 +373,47 @@ warmupLlmButton?.addEventListener('click', () => {
 
 startHotkeysButton?.addEventListener('click', () => {
   runWarmup(startHotkeysButton, { hotkeys: true });
+});
+
+copyDraftButton?.addEventListener('click', async () => {
+  if (!latestDraft?.final_text) {
+    return;
+  }
+
+  try {
+    await window.betterFingers?.writeClipboardText?.(latestDraft.final_text);
+    setMessage(draftMessageEl, 'Cleaned output copied to clipboard.', 'success');
+  } catch (error) {
+    setMessage(draftMessageEl, `Copy failed: ${error.message}`, 'danger');
+  }
+});
+
+acceptDraftButton?.addEventListener('click', async () => {
+  if (!latestDraft?.id) {
+    return;
+  }
+
+  try {
+    const draft = await acceptDraft(latestDraft.id);
+    renderDraft(draft);
+    setMessage(draftMessageEl, 'Draft accepted.', 'success');
+  } catch (error) {
+    setMessage(draftMessageEl, `Accept failed: ${error.message}`, 'danger');
+  }
+});
+
+declineDraftButton?.addEventListener('click', async () => {
+  if (!latestDraft?.id) {
+    return;
+  }
+
+  try {
+    const draft = await declineDraft(latestDraft.id);
+    renderDraft(draft);
+    setMessage(draftMessageEl, 'Draft declined.', 'success');
+  } catch (error) {
+    setMessage(draftMessageEl, `Decline failed: ${error.message}`, 'danger');
+  }
 });
 
 window.addEventListener('beforeunload', () => {

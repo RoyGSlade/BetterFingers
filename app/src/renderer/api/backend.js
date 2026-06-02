@@ -3,6 +3,7 @@ const HEALTH_URL = `${BACKEND_ORIGIN}/health`;
 const RUNTIME_STATUS_URL = `${BACKEND_ORIGIN}/runtime/status`;
 const RUNTIME_WARMUP_URL = `${BACKEND_ORIGIN}/runtime/warmup`;
 const CAPABILITIES_URL = `${BACKEND_ORIGIN}/capabilities`;
+const DRAFTS_URL = `${BACKEND_ORIGIN}/drafts`;
 const VOICE_STATUS_WS_URL = 'ws://127.0.0.1:8000/ws/voice_status';
 
 async function fetchHealth(timeoutMs = 2500) {
@@ -51,6 +52,46 @@ async function fetchRuntimeStatus(timeoutMs = 2500) {
 
 async function fetchCapabilities(timeoutMs = 2500) {
   return fetchJson(CAPABILITIES_URL, timeoutMs);
+}
+
+async function fetchDrafts(timeoutMs = 2500) {
+  return fetchJson(DRAFTS_URL, timeoutMs);
+}
+
+async function fetchLatestDraft(timeoutMs = 2500) {
+  return fetchJson(`${DRAFTS_URL}/latest`, timeoutMs);
+}
+
+async function postJson(url, payload = {}, timeoutMs = 2500) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`${url} failed with status ${response.status}`);
+    }
+
+    return await response.json();
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function acceptDraft(id, timeoutMs = 2500) {
+  return postJson(`${DRAFTS_URL}/${id}/accept`, {}, timeoutMs);
+}
+
+async function declineDraft(id, timeoutMs = 2500) {
+  return postJson(`${DRAFTS_URL}/${id}/decline`, {}, timeoutMs);
 }
 
 async function warmupRuntime({ stt = false, llm = false, hotkeys = false } = {}, timeoutMs = 120000) {
@@ -170,13 +211,18 @@ function connectVoiceStatus({
 export {
   BACKEND_ORIGIN,
   CAPABILITIES_URL,
+  DRAFTS_URL,
   HEALTH_URL,
   RUNTIME_STATUS_URL,
   RUNTIME_WARMUP_URL,
   VOICE_STATUS_WS_URL,
+  acceptDraft,
   connectVoiceStatus,
+  declineDraft,
   fetchCapabilities,
+  fetchDrafts,
   fetchHealth,
+  fetchLatestDraft,
   fetchRuntimeStatus,
   warmupRuntime,
   normalizeHealthPayload,
