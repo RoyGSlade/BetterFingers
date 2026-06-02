@@ -1,0 +1,66 @@
+{
+  "name": "betterfingers-electron",
+  "version": "0.1.0",
+  "description": "Electron shell for BetterFingers with a FastAPI Python backend.",
+  "main": "out/main/main.js",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "build:backend": "node scripts/build-backend.js",
+    "dist": "npm run build && npm run build:backend && electron-builder",
+    "dist:win": "npm run build && npm run build:backend && electron-builder --win",
+    "dist:linux": "npm run build && npm run build:backend && electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^4.0.0"
+  },
+  "build": {
+    "appId": "com.betterfingers.desktop",
+    "productName": "BetterFingers",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/backend",
+        "to": "backend",
+        "filter": [
+          "**/*",
+          "!.gitkeep"
+        ]
+      },
+      {
+        "from": "../assets",
+        "to": "assets"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ]
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "publish": null
+  }
+}

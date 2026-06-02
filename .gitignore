@@ -12,6 +12,12 @@ __pycache__/
 # Build/package outputs
 build/
 dist/
+app/out/
+app/release/
+app/node_modules/
+app/.electron-backend-build/
+app/resources/backend/*
+!app/resources/backend/.gitkeep
 *.spec.bak
 
 # Local virtual environments

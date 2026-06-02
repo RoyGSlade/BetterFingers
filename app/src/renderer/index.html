@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0"
+    />
+    <title>BetterFingers Dashboard</title>
+    <link rel="stylesheet" href="./styles/base.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">BetterFingers Electron Shell</p>
+          <h1>Backend Status Dashboard</h1>
+          <p class="lede">
+            The Electron shell starts the existing FastAPI backend and keeps a live view of health and voice status.
+          </p>
+        </div>
+        <button id="quitButton" class="secondary-button" type="button">Quit app</button>
+      </header>
+
+      <section class="status-grid" aria-label="Backend status">
+        <article class="status-card">
+          <span class="status-label">Backend</span>
+          <strong id="backendStatus" class="status-value">Loading...</strong>
+          <p id="backendDetail" class="status-detail">Waiting for /health</p>
+        </article>
+
+        <article class="status-card">
+          <span class="status-label">Transcriber</span>
+          <strong id="transcriberStatus" class="status-value">Loading...</strong>
+          <p class="status-detail">FastAPI health probe</p>
+        </article>
+
+        <article class="status-card">
+          <span class="status-label">LLM Engine</span>
+          <strong id="llmStatus" class="status-value">Loading...</strong>
+          <p class="status-detail">FastAPI health probe</p>
+        </article>
+      </section>
+
+      <section class="stream-panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">WebSocket stream</p>
+            <h2>Voice status</h2>
+          </div>
+          <div class="connection-pill" id="wsConnection">Connecting...</div>
+        </div>
+
+        <div class="voice-status">
+          <span id="voiceStatus" class="voice-status-value">No updates yet</span>
+          <p id="voiceStatusDetail" class="voice-status-detail">
+            Listening to ws://127.0.0.1:8000/ws/voice_status
+          </p>
+        </div>
+      </section>
+    </div>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
