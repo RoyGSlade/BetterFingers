@@ -1,12 +1,39 @@
 import {
   acceptDraft,
+  activateProfile,
   connectVoiceStatus,
+  createProfile,
+  deleteProfile,
+  deleteLlmModel,
+  deleteWhisperModel,
   declineDraft,
+  downloadLlmModel,
+  downloadWhisperModel,
+  editDraft,
+  emergencyStop,
   fetchCapabilities,
+  fetchDiagnosticsLogs,
+  fetchDiagnosticsPaths,
+  fetchDrafts,
   fetchHealth,
   fetchLatestDraft,
+  fetchLlmModels,
+  fetchOutputSettings,
+  fetchProfile,
+  fetchProfiles,
+  fetchRuntimeErrors,
   fetchRuntimeStatus,
+  fetchWhisperModels,
   normalizeHealthPayload,
+  retryDraft,
+  rewriteDraft,
+  runPrimaryAction,
+  saveProfile,
+  sendDraft,
+  selectLlmModel,
+  speakDraft,
+  testWhisperModel,
+  unloadModel,
   warmupRuntime,
 } from './api/backend.js';
 
@@ -22,21 +49,96 @@ const refreshRuntimeButton = document.getElementById('refreshRuntimeButton');
 const warmupSttButton = document.getElementById('warmupSttButton');
 const warmupLlmButton = document.getElementById('warmupLlmButton');
 const startHotkeysButton = document.getElementById('startHotkeysButton');
+const primaryActionButton = document.getElementById('primaryActionButton');
+const emergencyStopButton = document.getElementById('emergencyStopButton');
 const runtimeStatusListEl = document.getElementById('runtimeStatusList');
 const warmupMessageEl = document.getElementById('warmupMessage');
+const outputSettingsSummaryEl = document.getElementById('outputSettingsSummary');
 const capabilitiesListEl = document.getElementById('capabilitiesList');
 const capabilitiesSummaryEl = document.getElementById('capabilitiesSummary');
 const draftStatusEl = document.getElementById('draftStatus');
 const draftRawTextEl = document.getElementById('draftRawText');
 const draftFinalTextEl = document.getElementById('draftFinalText');
+const draftTokenSummaryEl = document.getElementById('draftTokenSummary');
+const saveDraftEditButton = document.getElementById('saveDraftEditButton');
+const rewriteShorterButton = document.getElementById('rewriteShorterButton');
+const rewriteClearerButton = document.getElementById('rewriteClearerButton');
+const rewriteToneButton = document.getElementById('rewriteToneButton');
+const customRewriteInstructionEl = document.getElementById('customRewriteInstruction');
+const rewriteCustomButton = document.getElementById('rewriteCustomButton');
+const readSelectionButton = document.getElementById('readSelectionButton');
+const readFullDraftButton = document.getElementById('readFullDraftButton');
 const copyDraftButton = document.getElementById('copyDraftButton');
 const acceptDraftButton = document.getElementById('acceptDraftButton');
 const declineDraftButton = document.getElementById('declineDraftButton');
+const retryDraftButton = document.getElementById('retryDraftButton');
+const sendDraftButton = document.getElementById('sendDraftButton');
 const draftMessageEl = document.getElementById('draftMessage');
+const draftMetadataEl = document.getElementById('draftMetadata');
+const draftHistoryListEl = document.getElementById('draftHistoryList');
+const refreshDiagnosticsButton = document.getElementById('refreshDiagnosticsButton');
+const sidecarStatusEl = document.getElementById('sidecarStatus');
+const diagnosticsPathsListEl = document.getElementById('diagnosticsPathsList');
+const runtimeErrorsListEl = document.getElementById('runtimeErrorsList');
+const debugLogTailEl = document.getElementById('debugLogTail');
+const refreshProfilesButton = document.getElementById('refreshProfilesButton');
+const profileSelectEl = document.getElementById('profileSelect');
+const newProfileNameEl = document.getElementById('newProfileName');
+const activateProfileButton = document.getElementById('activateProfileButton');
+const saveProfileButton = document.getElementById('saveProfileButton');
+const discardProfileChangesButton = document.getElementById('discardProfileChangesButton');
+const createProfileButton = document.getElementById('createProfileButton');
+const deleteProfileButton = document.getElementById('deleteProfileButton');
+const profileMessageEl = document.getElementById('profileMessage');
+const refreshModelsButton = document.getElementById('refreshModelsButton');
+const llmModelSelectEl = document.getElementById('llmModelSelect');
+const whisperModelSelectEl = document.getElementById('whisperModelSelect');
+const modelStatusSummaryEl = document.getElementById('modelStatusSummary');
+const modelMessageEl = document.getElementById('modelMessage');
+const selectLlmModelButton = document.getElementById('selectLlmModelButton');
+const downloadLlmModelButton = document.getElementById('downloadLlmModelButton');
+const deleteLlmModelButton = document.getElementById('deleteLlmModelButton');
+const downloadWhisperButton = document.getElementById('downloadWhisperButton');
+const testWhisperButton = document.getElementById('testWhisperButton');
+const deleteWhisperButton = document.getElementById('deleteWhisperButton');
+const unloadSttButton = document.getElementById('unloadSttButton');
+const unloadLlmButton = document.getElementById('unloadLlmButton');
+const unloadTtsButton = document.getElementById('unloadTtsButton');
 
 let healthRefreshTimer = null;
 let websocketHandle = null;
 let latestDraft = null;
+let draftHistory = [];
+let outputSettings = null;
+let activeProfileSettings = null;
+let profileDirty = false;
+let llmModelsPayload = null;
+let whisperModelsPayload = null;
+
+const settingEls = {
+  hotkey: document.getElementById('settingHotkey'),
+  recording_mode: document.getElementById('settingRecordingMode'),
+  force_stop_key: document.getElementById('settingForceStopKey'),
+  manual_send_hotkey: document.getElementById('settingManualSendHotkey'),
+  review_tts_hotkey: document.getElementById('settingReviewTtsHotkey'),
+  chat_open_key: document.getElementById('settingChatOpenKey'),
+  voice_mute_key: document.getElementById('settingVoiceMuteKey'),
+  send_mode: document.getElementById('settingSendMode'),
+  current_preset: document.getElementById('settingCurrentPreset'),
+  output_token_limit: document.getElementById('settingOutputTokenLimit'),
+  no_audio_min_duration_sec: document.getElementById('settingNoAudioDuration'),
+  no_audio_min_rms: document.getElementById('settingNoAudioRms'),
+  no_audio_min_peak: document.getElementById('settingNoAudioPeak'),
+  auto_submit: document.getElementById('settingAutoSubmit'),
+  instant_typing: document.getElementById('settingInstantTyping'),
+  audio_ducking: document.getElementById('settingAudioDucking'),
+  status_indicator_enabled: document.getElementById('settingStatusIndicator'),
+  notification_overlay_enabled: document.getElementById('settingNotificationOverlay'),
+  preview_overlay_enabled: document.getElementById('settingPreviewOverlay'),
+  model_keep_llm_loaded: document.getElementById('settingKeepLlm'),
+  model_keep_stt_loaded: document.getElementById('settingKeepStt'),
+  model_keep_tts_loaded: document.getElementById('settingKeepTts'),
+};
 
 function setBadgeState(el, text, tone) {
   if (!el) {
@@ -153,16 +255,110 @@ function setMessage(el, message = '', tone = '') {
   }
 }
 
+function getDraftEditorText() {
+  if (!draftFinalTextEl) {
+    return latestDraft?.final_text ?? '';
+  }
+
+  return draftFinalTextEl.value ?? latestDraft?.final_text ?? '';
+}
+
+function getSelectedDraftText() {
+  if (!draftFinalTextEl) {
+    return getDraftEditorText();
+  }
+
+  const start = Number(draftFinalTextEl.selectionStart ?? 0);
+  const end = Number(draftFinalTextEl.selectionEnd ?? 0);
+  const value = getDraftEditorText();
+  if (end > start) {
+    return value.slice(start, end);
+  }
+  return value;
+}
+
+function renderTokenSummary(draft) {
+  if (!draftTokenSummaryEl) {
+    return;
+  }
+
+  if (!draft) {
+    draftTokenSummaryEl.textContent = '0 tokens';
+    delete draftTokenSummaryEl.dataset.state;
+    return;
+  }
+
+  const tokenCount = Number(draft.token_count ?? 0);
+  const tokenLimit = Number(draft.token_limit ?? 0);
+  const longText = Boolean(draft.long_text || (tokenLimit && tokenCount > tokenLimit));
+  draftTokenSummaryEl.textContent = tokenLimit
+    ? `${tokenCount} / ${tokenLimit} tokens${longText ? ' · long text' : ''}`
+    : `${tokenCount} tokens`;
+  if (longText) {
+    draftTokenSummaryEl.dataset.state = 'warning';
+  } else {
+    delete draftTokenSummaryEl.dataset.state;
+  }
+}
+
 function setDraftControlsEnabled(enabled) {
+  const status = latestDraft?.status ?? '';
+  const hasDraft = enabled && Boolean(latestDraft?.id);
+  const hasFinalText = hasDraft && Boolean(getDraftEditorText().trim());
+  const canReview = hasDraft && status === 'pending';
+  const canRetry = hasDraft && ['blocked', 'error'].includes(status);
+  const canEdit = hasDraft;
+
+  if (draftFinalTextEl) {
+    draftFinalTextEl.disabled = !canEdit;
+  }
+  if (saveDraftEditButton) {
+    saveDraftEditButton.disabled = !canEdit;
+  }
+  for (const button of [rewriteShorterButton, rewriteClearerButton, rewriteToneButton, rewriteCustomButton]) {
+    if (button) {
+      button.disabled = !canEdit || !hasFinalText;
+    }
+  }
+  if (customRewriteInstructionEl) {
+    customRewriteInstructionEl.disabled = !canEdit;
+  }
+  if (readSelectionButton) {
+    readSelectionButton.disabled = !canEdit || !hasFinalText;
+  }
+  if (readFullDraftButton) {
+    readFullDraftButton.disabled = !canEdit || !hasFinalText;
+  }
+
   if (copyDraftButton) {
-    copyDraftButton.disabled = !enabled;
+    copyDraftButton.disabled = !hasFinalText;
   }
   if (acceptDraftButton) {
-    acceptDraftButton.disabled = !enabled;
+    acceptDraftButton.disabled = !canReview;
   }
   if (declineDraftButton) {
     declineDraftButton.disabled = !enabled;
   }
+  if (retryDraftButton) {
+    retryDraftButton.disabled = !canRetry;
+  }
+  if (sendDraftButton) {
+    sendDraftButton.disabled = !hasFinalText;
+  }
+}
+
+function formatDraftMetadata(draft) {
+  const metadata = draft?.metadata ?? {};
+  if (!Object.keys(metadata).length) {
+    return 'No recording metadata available.';
+  }
+
+  const duration = Number(metadata.duration_seconds || 0).toFixed(2);
+  const rms = Number(metadata.rms_amplitude || 0).toFixed(5);
+  const peak = Number(metadata.max_amplitude || 0).toFixed(5);
+  const samples = metadata.sample_count ?? 0;
+  const stopReason = metadata.stop_reason || 'unknown';
+  return `duration ${duration}s · samples ${samples} · peak ${peak} · rms ${rms} · stop ${stopReason}`;
 }
 
 function renderDraft(draft) {
@@ -177,30 +373,100 @@ function renderDraft(draft) {
       draftRawTextEl.textContent = 'Waiting for a recording...';
     }
     if (draftFinalTextEl) {
-      draftFinalTextEl.textContent = 'Nothing to preview yet.';
+      draftFinalTextEl.value = 'Nothing to preview yet.';
+      draftFinalTextEl.disabled = true;
     }
+    renderTokenSummary(null);
+    if (draftMetadataEl) {
+      draftMetadataEl.textContent = 'No recording metadata yet.';
+    }
+    setMessage(draftMessageEl, '');
     setDraftControlsEnabled(false);
     return;
   }
 
   if (draftStatusEl) {
     draftStatusEl.textContent = latestDraft.status ?? 'pending';
-    draftStatusEl.dataset.state = latestDraft.status === 'pending' ? 'connecting' : 'connected';
+    draftStatusEl.dataset.state = ['blocked', 'error'].includes(latestDraft.status) ? 'error' : latestDraft.status === 'pending' ? 'connecting' : 'connected';
   }
   if (draftRawTextEl) {
     draftRawTextEl.textContent = latestDraft.raw_text || '(empty transcript)';
   }
   if (draftFinalTextEl) {
-    draftFinalTextEl.textContent = latestDraft.final_text || '(empty cleaned output)';
+    draftFinalTextEl.value = latestDraft.final_text || '';
+  }
+  renderTokenSummary(latestDraft);
+  if (draftMetadataEl) {
+    draftMetadataEl.textContent = formatDraftMetadata(latestDraft);
+  }
+
+  if (latestDraft.error) {
+    const reasons = Array.isArray(latestDraft.gate_reasons) && latestDraft.gate_reasons.length
+      ? ` (${latestDraft.gate_reasons.join(', ')})`
+      : '';
+    setMessage(draftMessageEl, `${latestDraft.error}${reasons}`, 'danger');
+  } else {
+    const tokenLimit = Number(latestDraft.token_limit ?? 0);
+    const tokenCount = Number(latestDraft.token_count ?? 0);
+    if (latestDraft.long_text || (tokenLimit && tokenCount > tokenLimit)) {
+      setMessage(draftMessageEl, 'Long text warning: this draft may need shortening before send.', 'warning');
+    } else {
+      setMessage(draftMessageEl, '');
+    }
   }
 
   setDraftControlsEnabled(true);
+}
+
+function renderDraftHistory(drafts) {
+  if (!draftHistoryListEl) {
+    return;
+  }
+
+  draftHistory = Array.isArray(drafts) ? drafts : [];
+  draftHistoryListEl.innerHTML = '';
+
+  if (!draftHistory.length) {
+    draftHistoryListEl.innerHTML = '<span class="empty-state">No draft history yet.</span>';
+    return;
+  }
+
+  for (const draft of draftHistory.slice().reverse()) {
+    const item = document.createElement('button');
+    item.className = 'draft-history-item';
+    item.type = 'button';
+    item.dataset.status = draft.status ?? 'pending';
+
+    const title = document.createElement('strong');
+    title.textContent = `#${draft.id} · ${draft.status ?? 'pending'}`;
+
+    const detail = document.createElement('small');
+    const text = draft.final_text || draft.raw_text || draft.error || 'No text';
+    detail.textContent = text.length > 140 ? `${text.slice(0, 140)}...` : text;
+
+    item.append(title, detail);
+    item.addEventListener('click', () => {
+      renderDraft(draft);
+    });
+    draftHistoryListEl.append(item);
+  }
 }
 
 async function refreshLatestDraft() {
   const payload = await fetchLatestDraft();
   renderDraft(payload?.draft ?? null);
   return payload?.draft ?? null;
+}
+
+async function refreshDrafts() {
+  const payload = await fetchDrafts();
+  renderDraftHistory(payload?.drafts ?? []);
+  if (payload?.drafts?.length) {
+    renderDraft(payload.drafts[payload.drafts.length - 1]);
+  } else {
+    renderDraft(null);
+  }
+  return payload?.drafts ?? [];
 }
 
 async function refreshHealth() {
@@ -235,6 +501,126 @@ async function refreshRuntime() {
   return runtime;
 }
 
+async function refreshOutputSettings() {
+  outputSettings = await fetchOutputSettings();
+  if (outputSettingsSummaryEl) {
+    const supportsInput = outputSettings?.capabilities?.supports_input_injection ? 'input injection available' : 'copy fallback';
+    const pendingCount = Array.isArray(outputSettings?.pending_manual_send_ids) ? outputSettings.pending_manual_send_ids.length : 0;
+    outputSettingsSummaryEl.textContent = `send mode ${outputSettings?.send_mode ?? 'unknown'} · auto-submit ${formatValue(outputSettings?.auto_submit)} · ${supportsInput} · pending sends ${pendingCount}`;
+  }
+  return outputSettings;
+}
+
+function fillSelect(selectEl, options, selectedValue, labelFor = (item) => item) {
+  if (!selectEl) {
+    return;
+  }
+
+  selectEl.innerHTML = '';
+  for (const item of options) {
+    const value = typeof item === 'string' ? item : item.value;
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = labelFor(item);
+    option.selected = value === selectedValue;
+    selectEl.append(option);
+  }
+}
+
+function renderProfileSettings(settings) {
+  activeProfileSettings = { ...(settings ?? {}) };
+  profileDirty = false;
+for (const [key, el] of Object.entries(settingEls)) {
+    if (!el) {
+      continue;
+    }
+    if (el.type === 'checkbox') {
+      el.checked = Boolean(activeProfileSettings[key]);
+    } else {
+      el.value = activeProfileSettings[key] ?? '';
+    }
+  }
+}
+
+function markProfileDirty() {
+  profileDirty = true;
+  setMessage(profileMessageEl, 'Unsaved profile changes.', 'warning');
+}
+
+function collectProfileSettings() {
+  const next = { ...(activeProfileSettings ?? {}) };
+  for (const [key, el] of Object.entries(settingEls)) {
+    if (!el) {
+      continue;
+    }
+    if (el.type === 'checkbox') {
+      next[key] = Boolean(el.checked);
+    } else if (el.type === 'number') {
+      next[key] = Number(el.value);
+    } else {
+      next[key] = el.value;
+    }
+  }
+  return next;
+}
+
+async function refreshProfiles() {
+  const payload = await fetchProfiles();
+  fillSelect(profileSelectEl, payload.profiles ?? [], payload.active_profile);
+  renderProfileSettings(payload.settings ?? {});
+  setMessage(profileMessageEl, `Active profile: ${payload.active_profile}`, 'success');
+  return payload;
+}
+
+async function refreshModels() {
+  const [llmPayload, whisperPayload] = await Promise.all([
+    fetchLlmModels(),
+    fetchWhisperModels(),
+  ]);
+  llmModelsPayload = llmPayload;
+  whisperModelsPayload = whisperPayload;
+
+  fillSelect(
+    llmModelSelectEl,
+    (llmPayload.models ?? []).map((model) => ({ value: model.id, label: `${model.name} ${model.installed ? '(installed)' : ''}` })),
+    llmPayload.selected_model_id,
+    (item) => item.label,
+  );
+  fillSelect(whisperModelSelectEl, whisperPayload.supported ?? [], whisperPayload.selected_model_size);
+
+  if (modelStatusSummaryEl) {
+    const llmSelected = (llmPayload.models ?? []).find((model) => model.id === llmPayload.selected_model_id);
+    const installedWhisper = (whisperPayload.models ?? []).filter((model) => model.installed).map((model) => model.model_size);
+    const estimateMb = Number(llmSelected?.size_mb || 0);
+    modelStatusSummaryEl.textContent = [
+      `LLM: ${llmSelected?.name ?? llmPayload.selected_model_id ?? 'unknown'} (${llmSelected?.installed ? 'installed' : 'missing'})`,
+      `approx model size: ${estimateMb ? `${estimateMb} MB` : 'unknown'}`,
+      `llama-server: ${llmPayload.llama_server_exists ? 'found' : 'missing'}`,
+      `Whisper installed: ${installedWhisper.length ? installedWhisper.join(', ') : 'none'}`,
+    ].join(' · ');
+  }
+  return { llmPayload, whisperPayload };
+}
+
+async function runModelAction(button, label, action) {
+  if (!button) {
+    return;
+  }
+  const previous = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Working...';
+  try {
+    const result = await action();
+    setMessage(modelMessageEl, result?.message || `${label} completed.`, result?.ok === false ? 'danger' : 'success');
+    await Promise.all([refreshModels(), refreshRuntime()]);
+  } catch (error) {
+    setMessage(modelMessageEl, `${label} failed: ${error.message}`, 'danger');
+  } finally {
+    button.textContent = previous;
+    button.disabled = false;
+  }
+}
+
 async function refreshCapabilities() {
   const capabilities = await fetchCapabilities();
   if (capabilitiesSummaryEl) {
@@ -260,12 +646,107 @@ async function refreshCapabilities() {
   return capabilities;
 }
 
+function renderRuntimeErrors(payload) {
+  if (!runtimeErrorsListEl) {
+    return;
+  }
+
+  const errors = Array.isArray(payload?.errors) ? payload.errors : [];
+  runtimeErrorsListEl.innerHTML = '';
+
+  if (!errors.length) {
+    runtimeErrorsListEl.innerHTML = '<span class="empty-state">No runtime errors recorded.</span>';
+    return;
+  }
+
+  for (const error of errors.slice(-8).reverse()) {
+    const row = document.createElement('div');
+    row.className = 'diagnostics-error';
+
+    const title = document.createElement('strong');
+    title.textContent = `${error.component ?? 'runtime'}: ${error.message ?? 'Unknown error'}`;
+
+    const meta = document.createElement('small');
+    meta.textContent = error.created_at ?? '';
+
+    row.append(title, meta);
+    runtimeErrorsListEl.append(row);
+  }
+}
+
+async function refreshSidecarStatus() {
+  if (!sidecarStatusEl) {
+    return null;
+  }
+
+  const status = await window.betterFingers?.getSidecarStatus?.();
+  if (!status) {
+    sidecarStatusEl.textContent = 'Sidecar status is unavailable.';
+    sidecarStatusEl.dataset.tone = 'warning';
+    return null;
+  }
+
+  sidecarStatusEl.textContent = [
+    `state: ${status.state ?? 'unknown'}`,
+    `owns process: ${status.ownsProcess ? 'yes' : 'no'}`,
+    `pid: ${status.pid ?? 'none'}`,
+    status.message ?? '',
+  ].filter(Boolean).join('\n');
+  sidecarStatusEl.dataset.tone = status.state === 'error' ? 'danger' : status.state === 'ready' ? 'success' : 'warning';
+  return status;
+}
+
+async function refreshDiagnostics() {
+  await Promise.all([
+    refreshSidecarStatus().catch((error) => {
+      if (sidecarStatusEl) {
+        sidecarStatusEl.textContent = `Sidecar status failed: ${error.message}`;
+        sidecarStatusEl.dataset.tone = 'danger';
+      }
+    }),
+    fetchDiagnosticsPaths().then((paths) => {
+      renderDetailList(diagnosticsPathsListEl, paths, [
+        'debug_log_path',
+        'models_dir',
+        'default_model_path',
+        'default_model_exists',
+        'llama_server_path',
+        'llama_server_exists',
+        'repo_local_llama_server_path',
+        'repo_local_llama_server_exists',
+        'BETTERFINGERS_LLAMA_SERVER',
+        'BETTERFINGERS_MODEL_PATH',
+      ]);
+    }).catch(() => {
+      renderDetailList(diagnosticsPathsListEl, {});
+    }),
+    fetchRuntimeErrors().then(renderRuntimeErrors).catch(() => {
+      renderRuntimeErrors({ errors: [{ component: 'diagnostics', message: 'Failed loading runtime errors.' }] });
+    }),
+    fetchDiagnosticsLogs(80).then((logs) => {
+      if (debugLogTailEl) {
+        const lines = Array.isArray(logs?.lines) ? logs.lines : [];
+        debugLogTailEl.textContent = lines.length ? lines.join('\n') : `No log lines found at ${logs?.path ?? 'debug.log'}.`;
+      }
+    }).catch((error) => {
+      if (debugLogTailEl) {
+        debugLogTailEl.textContent = `Failed loading log tail: ${error.message}`;
+      }
+    }),
+  ]);
+}
+
 function summarizeWarmupResult(result, requestedPayload) {
   const labels = {
     stt: 'STT',
     llm: 'LLM',
     hotkeys: 'Hotkeys',
-  };
+};
+
+for (const el of Object.values(settingEls)) {
+  el?.addEventListener('input', markProfileDirty);
+  el?.addEventListener('change', markProfileDirty);
+}
   const errors = [];
   const successes = [];
 
@@ -311,6 +792,7 @@ async function runWarmup(button, payload) {
       return;
     }
     setWarmupMessage(summary.successes.length ? summary.successes.join(' · ') : 'Warmup request completed.', 'success');
+    await refreshOutputSettings().catch(() => {});
   } catch (error) {
     setWarmupMessage(`Warmup failed: ${error.message}`, 'danger');
     button.textContent = previousText;
@@ -338,15 +820,137 @@ function updateVoiceStatus(message) {
   voiceStatusEl.textContent = statusText;
   voiceStatusDetailEl.textContent = JSON.stringify(message, null, 2);
 
-  if (message.status === 'preview_ready') {
+  if (['preview_ready', 'draft_blocked', 'draft_error'].includes(message.status)) {
     renderDraft({
       id: message.draft_id,
       raw_text: message.raw_text,
       final_text: message.final_text,
-      status: 'pending',
+      status: message.status === 'draft_blocked' ? 'blocked' : message.status === 'draft_error' ? 'error' : 'pending',
+      error: message.error ?? '',
+      gate_reasons: message.gate_reasons ?? [],
+      token_count: message.token_count,
+      token_limit: message.token_limit,
+      long_text: message.long_text,
     });
-    setMessage(draftMessageEl, 'New draft ready for review.', 'success');
+    setMessage(
+      draftMessageEl,
+      message.status === 'preview_ready' ? 'New draft ready for review.' : message.error || 'Draft needs attention.',
+      message.status === 'preview_ready' ? 'success' : 'danger',
+    );
+    refreshDrafts().catch(() => {});
   }
+
+  if (['draft_accepted', 'draft_declined'].includes(message.status)) {
+    refreshDrafts().catch(() => {});
+    refreshOutputSettings().catch(() => {});
+  }
+
+  if (['draft_updated', 'draft_rewriting', 'draft_rewritten', 'draft_rewrite_error', 'draft_tts_requested'].includes(message.status)) {
+    if (message.status === 'draft_rewriting') {
+      setMessage(draftMessageEl, `Rewriting draft with ${message.action || 'selected'} action...`, 'warning');
+    } else if (message.status === 'draft_rewrite_error') {
+      setMessage(draftMessageEl, `Rewrite failed: ${message.error}`, 'danger');
+    } else if (message.status === 'draft_tts_requested') {
+      setMessage(draftMessageEl, 'Draft read-aloud request sent.', 'success');
+    } else {
+      setMessage(draftMessageEl, message.status === 'draft_rewritten' ? 'Rewrite complete.' : 'Draft edit saved.', 'success');
+    }
+    refreshDrafts().catch(() => {});
+  }
+
+  if (['draft_sent', 'draft_send_error', 'selection_captured', 'selection_capture_failed', 'emergency_stop'].includes(message.status)) {
+    setMessage(draftMessageEl, message.message || message.send_result?.message || statusText, message.status.endsWith('error') || message.status.endsWith('failed') ? 'danger' : 'success');
+    refreshDrafts().catch(() => {});
+    refreshOutputSettings().catch(() => {});
+  }
+}
+
+async function saveCurrentDraftEdit({ silent = false } = {}) {
+  if (!latestDraft?.id) {
+    return null;
+  }
+
+  const finalText = getDraftEditorText();
+  if (finalText === (latestDraft.final_text ?? '')) {
+    return latestDraft;
+  }
+
+  const draft = await editDraft(latestDraft.id, finalText);
+  renderDraft(draft);
+  await refreshDrafts();
+  if (!silent) {
+    setMessage(draftMessageEl, 'Draft edit saved.', 'success');
+  }
+  return draft;
+}
+
+async function runRewriteAction(button, action, customInstruction = '') {
+  if (!latestDraft?.id) {
+    return;
+  }
+
+  const originalText = button?.textContent;
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Rewriting...';
+  }
+
+  try {
+    await saveCurrentDraftEdit({ silent: true });
+    const result = await rewriteDraft(latestDraft.id, { action, customInstruction });
+    if (result?.ok === false) {
+      if (result.draft?.id) {
+        renderDraft(result.draft);
+      }
+      setMessage(draftMessageEl, `Rewrite failed: ${result.error || 'Unknown error'}`, 'danger');
+      return;
+    }
+    renderDraft(result);
+    await refreshDrafts();
+    setMessage(draftMessageEl, `${action === 'custom' ? 'Custom' : action} rewrite complete.`, 'success');
+  } catch (error) {
+    setMessage(draftMessageEl, `Rewrite failed: ${error.message}`, 'danger');
+  } finally {
+    if (button) {
+      button.textContent = originalText;
+    }
+    setDraftControlsEnabled(Boolean(latestDraft));
+  }
+}
+
+async function runDraftTts(selectedOnly = false) {
+  if (!latestDraft?.id) {
+    return;
+  }
+
+  const text = selectedOnly ? getSelectedDraftText() : getDraftEditorText();
+  if (!text.trim()) {
+    setMessage(draftMessageEl, 'No draft text is available to read.', 'warning');
+    return;
+  }
+
+  try {
+    await saveCurrentDraftEdit({ silent: true });
+    const result = await speakDraft(latestDraft.id, { text });
+    setMessage(draftMessageEl, result?.message || 'Draft read-aloud request sent.', result?.ok === false ? 'warning' : 'success');
+  } catch (error) {
+    setMessage(draftMessageEl, `Read aloud failed: ${error.message}`, 'danger');
+  }
+}
+
+async function copyCurrentDraftText() {
+  if (!latestDraft?.id) {
+    return;
+  }
+
+  const text = getDraftEditorText();
+  if (!text.trim()) {
+    setMessage(draftMessageEl, 'No cleaned output is available to copy.', 'warning');
+    return;
+  }
+
+  await window.betterFingers?.writeClipboardText?.(text);
+  setMessage(draftMessageEl, 'Cleaned output copied to clipboard.', 'success');
 }
 
 async function bootstrap() {
@@ -363,13 +967,26 @@ async function bootstrap() {
       }
       renderDetailList(capabilitiesListEl, {});
     }),
-    refreshLatestDraft().catch(() => {
+    refreshDrafts().catch(() => {
       renderDraft(null);
     }),
+    refreshOutputSettings().catch(() => {
+      if (outputSettingsSummaryEl) {
+        outputSettingsSummaryEl.textContent = 'Output settings unavailable.';
+      }
+    }),
+    refreshProfiles().catch((error) => {
+      setMessage(profileMessageEl, `Profiles unavailable: ${error.message}`, 'danger');
+    }),
+    refreshModels().catch((error) => {
+      setMessage(modelMessageEl, `Models unavailable: ${error.message}`, 'danger');
+    }),
+    refreshDiagnostics().catch(() => {}),
   ]);
 
   healthRefreshTimer = setInterval(() => {
     refreshHealth();
+    refreshSidecarStatus().catch(() => {});
     refreshRuntime().catch(() => {
       setBadgeState(transcriberStatusEl, 'offline', 'danger');
       setBadgeState(llmStatusEl, 'offline', 'danger');
@@ -412,14 +1029,243 @@ startHotkeysButton?.addEventListener('click', () => {
   runWarmup(startHotkeysButton, { hotkeys: true });
 });
 
-copyDraftButton?.addEventListener('click', async () => {
-  if (!latestDraft?.final_text) {
+primaryActionButton?.addEventListener('click', async () => {
+  primaryActionButton.disabled = true;
+  primaryActionButton.textContent = 'Working...';
+  try {
+    const result = await runPrimaryAction();
+    if (result?.send_result) {
+      renderDraft(result);
+      setMessage(draftMessageEl, result.send_result.message || 'Primary action sent pending draft.', result.send_result.ok ? 'success' : 'danger');
+    } else {
+      setMessage(draftMessageEl, result?.message || 'Primary action completed.', result?.ok ? 'success' : 'warning');
+    }
+    await Promise.all([refreshDrafts(), refreshOutputSettings()]);
+  } catch (error) {
+    setMessage(draftMessageEl, `Primary action failed: ${error.message}`, 'danger');
+  } finally {
+    primaryActionButton.textContent = 'Primary Action';
+    primaryActionButton.disabled = false;
+  }
+});
+
+emergencyStopButton?.addEventListener('click', async () => {
+  emergencyStopButton.disabled = true;
+  emergencyStopButton.textContent = 'Stopping...';
+  try {
+    const result = await emergencyStop();
+    setWarmupMessage(result?.message || 'Emergency stop completed.', result?.ok ? 'success' : 'warning');
+    await Promise.all([refreshRuntime(), refreshOutputSettings()]);
+  } catch (error) {
+    setWarmupMessage(`Emergency stop failed: ${error.message}`, 'danger');
+  } finally {
+    emergencyStopButton.textContent = 'Emergency Stop';
+    emergencyStopButton.disabled = false;
+  }
+});
+
+refreshDiagnosticsButton?.addEventListener('click', () => {
+  refreshDiagnostics();
+});
+
+refreshProfilesButton?.addEventListener('click', () => {
+  refreshProfiles().catch((error) => setMessage(profileMessageEl, `Refresh failed: ${error.message}`, 'danger'));
+});
+
+profileSelectEl?.addEventListener('change', async () => {
+  try {
+    const payload = await fetchProfile(profileSelectEl.value);
+    renderProfileSettings(payload.settings ?? {});
+    setMessage(profileMessageEl, `${payload.profile} loaded for editing.`, payload.active ? 'success' : 'warning');
+  } catch (error) {
+    setMessage(profileMessageEl, `Profile load failed: ${error.message}`, 'danger');
+  }
+});
+
+activateProfileButton?.addEventListener('click', async () => {
+  const name = profileSelectEl?.value;
+  if (!name) {
+    return;
+  }
+  try {
+    const payload = await activateProfile(name);
+    fillSelect(profileSelectEl, payload.profiles ?? [], payload.active_profile);
+    renderProfileSettings(payload.settings ?? {});
+    await Promise.all([refreshRuntime(), refreshOutputSettings()]);
+    setMessage(profileMessageEl, `Activated ${payload.active_profile}.`, 'success');
+  } catch (error) {
+    setMessage(profileMessageEl, `Activate failed: ${error.message}`, 'danger');
+  }
+});
+
+saveProfileButton?.addEventListener('click', async () => {
+  const name = profileSelectEl?.value;
+  if (!name) {
+    return;
+  }
+  try {
+    const payload = await saveProfile(name, collectProfileSettings());
+    renderProfileSettings(payload.settings ?? {});
+    await Promise.all([refreshRuntime(), refreshOutputSettings(), refreshModels()]);
+    setMessage(profileMessageEl, `Saved ${payload.profile}.`, 'success');
+  } catch (error) {
+    setMessage(profileMessageEl, `Save failed: ${error.message}`, 'danger');
+  }
+});
+
+createProfileButton?.addEventListener('click', async () => {
+  const name = newProfileNameEl?.value?.trim();
+  if (!name) {
+    setMessage(profileMessageEl, 'Enter a profile name first.', 'warning');
+    return;
+  }
+  try {
+    const payload = await createProfile(name, collectProfileSettings());
+    fillSelect(profileSelectEl, payload.profiles ?? [], payload.profile);
+    renderProfileSettings(payload.settings ?? {});
+    setMessage(profileMessageEl, `Created ${payload.profile}. Activate it when ready.`, 'success');
+  } catch (error) {
+    setMessage(profileMessageEl, `Create failed: ${error.message}`, 'danger');
+  }
+});
+
+discardProfileChangesButton?.addEventListener('click', async () => {
+  const name = profileSelectEl?.value;
+  if (!name) {
+    return;
+  }
+  try {
+    const payload = await fetchProfile(name);
+    renderProfileSettings(payload.settings ?? {});
+    setMessage(profileMessageEl, `Discarded changes for ${payload.profile}.`, 'success');
+  } catch (error) {
+    setMessage(profileMessageEl, `Discard failed: ${error.message}`, 'danger');
+  }
+});
+
+deleteProfileButton?.addEventListener('click', async () => {
+  const name = profileSelectEl?.value;
+  if (!name || name === 'Default') {
+    setMessage(profileMessageEl, 'Default profile cannot be deleted.', 'warning');
+    return;
+  }
+  try {
+    const payload = await deleteProfile(name);
+    fillSelect(profileSelectEl, payload.profiles ?? [], payload.active_profile);
+    renderProfileSettings(payload.settings ?? {});
+    await Promise.all([refreshRuntime(), refreshOutputSettings()]);
+    setMessage(profileMessageEl, `Deleted ${name}.`, 'success');
+  } catch (error) {
+    setMessage(profileMessageEl, `Delete failed: ${error.message}`, 'danger');
+  }
+});
+
+refreshModelsButton?.addEventListener('click', () => {
+  refreshModels().catch((error) => setMessage(modelMessageEl, `Refresh failed: ${error.message}`, 'danger'));
+});
+
+selectLlmModelButton?.addEventListener('click', () => {
+  const modelId = llmModelSelectEl?.value;
+  runModelAction(selectLlmModelButton, 'Select LLM', () => selectLlmModel(modelId));
+});
+
+downloadLlmModelButton?.addEventListener('click', () => {
+  const modelId = llmModelSelectEl?.value;
+  runModelAction(downloadLlmModelButton, 'Download LLM', () => downloadLlmModel(modelId));
+});
+
+deleteLlmModelButton?.addEventListener('click', () => {
+  const modelId = llmModelSelectEl?.value;
+  runModelAction(deleteLlmModelButton, 'Delete LLM', () => deleteLlmModel(modelId));
+});
+
+downloadWhisperButton?.addEventListener('click', () => {
+  const modelSize = whisperModelSelectEl?.value;
+  runModelAction(downloadWhisperButton, 'Download Whisper', () => downloadWhisperModel(modelSize));
+});
+
+testWhisperButton?.addEventListener('click', () => {
+  const modelSize = whisperModelSelectEl?.value;
+  runModelAction(testWhisperButton, 'Test Whisper', () => testWhisperModel(modelSize));
+});
+
+deleteWhisperButton?.addEventListener('click', () => {
+  const modelSize = whisperModelSelectEl?.value;
+  runModelAction(deleteWhisperButton, 'Delete Whisper', () => deleteWhisperModel(modelSize));
+});
+
+unloadSttButton?.addEventListener('click', () => {
+  runModelAction(unloadSttButton, 'Unload STT', () => unloadModel('stt'));
+});
+
+unloadLlmButton?.addEventListener('click', () => {
+  runModelAction(unloadLlmButton, 'Unload LLM', () => unloadModel('llm'));
+});
+
+unloadTtsButton?.addEventListener('click', () => {
+  runModelAction(unloadTtsButton, 'Unload TTS', () => unloadModel('tts'));
+});
+
+saveDraftEditButton?.addEventListener('click', async () => {
+  if (!latestDraft?.id) {
     return;
   }
 
+  saveDraftEditButton.disabled = true;
+  saveDraftEditButton.textContent = 'Saving...';
   try {
-    await window.betterFingers?.writeClipboardText?.(latestDraft.final_text);
-    setMessage(draftMessageEl, 'Cleaned output copied to clipboard.', 'success');
+    await saveCurrentDraftEdit();
+  } catch (error) {
+    setMessage(draftMessageEl, `Save failed: ${error.message}`, 'danger');
+  } finally {
+    saveDraftEditButton.textContent = 'Save Edit';
+    setDraftControlsEnabled(Boolean(latestDraft));
+  }
+});
+
+rewriteShorterButton?.addEventListener('click', () => {
+  runRewriteAction(rewriteShorterButton, 'shorter');
+});
+
+rewriteClearerButton?.addEventListener('click', () => {
+  runRewriteAction(rewriteClearerButton, 'clearer');
+});
+
+rewriteToneButton?.addEventListener('click', () => {
+  runRewriteAction(rewriteToneButton, 'tone');
+});
+
+rewriteCustomButton?.addEventListener('click', () => {
+  const instruction = customRewriteInstructionEl?.value?.trim() ?? '';
+  if (!instruction) {
+    setMessage(draftMessageEl, 'Add a custom rewrite instruction first.', 'warning');
+    return;
+  }
+  runRewriteAction(rewriteCustomButton, 'custom', instruction);
+});
+
+readSelectionButton?.addEventListener('click', () => {
+  runDraftTts(true);
+});
+
+readFullDraftButton?.addEventListener('click', () => {
+  runDraftTts(false);
+});
+
+draftFinalTextEl?.addEventListener('input', () => {
+  const words = getDraftEditorText().trim().split(/\s+/).filter(Boolean).length;
+  const tokenLimit = Number(latestDraft?.token_limit ?? 0);
+  renderTokenSummary({
+    token_count: words,
+    token_limit: tokenLimit,
+    long_text: Boolean(tokenLimit && words > tokenLimit),
+  });
+  setDraftControlsEnabled(Boolean(latestDraft));
+});
+
+copyDraftButton?.addEventListener('click', async () => {
+  try {
+    await copyCurrentDraftText();
   } catch (error) {
     setMessage(draftMessageEl, `Copy failed: ${error.message}`, 'danger');
   }
@@ -431,9 +1277,11 @@ acceptDraftButton?.addEventListener('click', async () => {
   }
 
   try {
+    await saveCurrentDraftEdit({ silent: true });
     const draft = await acceptDraft(latestDraft.id);
     renderDraft(draft);
-    setMessage(draftMessageEl, 'Draft accepted.', 'success');
+    await refreshOutputSettings();
+    setMessage(draftMessageEl, 'Draft accepted and queued for primary action send.', 'success');
   } catch (error) {
     setMessage(draftMessageEl, `Accept failed: ${error.message}`, 'danger');
   }
@@ -447,9 +1295,81 @@ declineDraftButton?.addEventListener('click', async () => {
   try {
     const draft = await declineDraft(latestDraft.id);
     renderDraft(draft);
+    await refreshOutputSettings();
     setMessage(draftMessageEl, 'Draft declined.', 'success');
   } catch (error) {
     setMessage(draftMessageEl, `Decline failed: ${error.message}`, 'danger');
+  }
+});
+
+retryDraftButton?.addEventListener('click', async () => {
+  if (!latestDraft?.id) {
+    return;
+  }
+
+  retryDraftButton.disabled = true;
+  retryDraftButton.textContent = 'Retrying...';
+  try {
+    const draft = await retryDraft(latestDraft.id);
+    renderDraft(draft);
+    await refreshDrafts();
+    setMessage(draftMessageEl, draft.status === 'pending' ? 'Retry created a new draft.' : 'Retry completed with a draft state update.', draft.status === 'pending' ? 'success' : 'warning');
+  } catch (error) {
+    setMessage(draftMessageEl, `Retry failed: ${error.message}`, 'danger');
+  } finally {
+    retryDraftButton.textContent = 'Retry';
+    setDraftControlsEnabled(Boolean(latestDraft));
+  }
+});
+
+sendDraftButton?.addEventListener('click', async () => {
+  if (!latestDraft?.id) {
+    return;
+  }
+
+  sendDraftButton.disabled = true;
+  sendDraftButton.textContent = 'Sending...';
+  try {
+    await saveCurrentDraftEdit({ silent: true });
+    const action = outputSettings?.capabilities?.supports_input_injection ? 'paste' : 'copy_only';
+    const draft = await sendDraft(latestDraft.id, { action });
+    renderDraft(draft);
+    await Promise.all([refreshDrafts(), refreshOutputSettings()]);
+    setMessage(draftMessageEl, draft.send_result?.message || 'Draft send completed.', draft.send_result?.ok ? 'success' : 'danger');
+  } catch (error) {
+    setMessage(draftMessageEl, `Send failed: ${error.message}`, 'danger');
+  } finally {
+    sendDraftButton.textContent = 'Send / Copy';
+    setDraftControlsEnabled(Boolean(latestDraft));
+  }
+});
+
+document.addEventListener('keydown', async (event) => {
+  const modifier = event.ctrlKey || event.metaKey;
+  if (!modifier || !latestDraft?.id) {
+    return;
+  }
+
+  const key = event.key.toLowerCase();
+  try {
+    if (event.shiftKey && key === 'enter') {
+      event.preventDefault();
+      sendDraftButton?.click();
+    } else if (key === 'enter') {
+      event.preventDefault();
+      acceptDraftButton?.click();
+    } else if (event.shiftKey && key === 'c') {
+      event.preventDefault();
+      await copyCurrentDraftText();
+    } else if (key === 's') {
+      event.preventDefault();
+      await saveCurrentDraftEdit();
+    } else if (key === 'd') {
+      event.preventDefault();
+      declineDraftButton?.click();
+    }
+  } catch (error) {
+    setMessage(draftMessageEl, `Shortcut failed: ${error.message}`, 'danger');
   }
 });
 

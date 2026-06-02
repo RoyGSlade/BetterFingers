@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -29,6 +30,7 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
         server.hotkey_recorder = None
         server.hotkey_manager_started = False
         server.loop = None
+        server.runtime_error_history.clear()
 
     def test_capabilities_endpoint_returns_platform_data(self):
         with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
@@ -89,6 +91,53 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
         self.assertEqual(save_response.json()["status"], "success")
         self.assertEqual(load_response.status_code, 200)
         self.assertEqual(load_response.json()["nodes"][0]["id"], "start")
+
+    def test_diagnostics_paths_returns_runtime_paths(self):
+        with tempfile.TemporaryDirectory() as data_dir, tempfile.TemporaryDirectory() as config_dir:
+            env = {
+                "BETTERFINGERS_LAZY_STARTUP": "1",
+                "XDG_DATA_HOME": data_dir,
+                "XDG_CONFIG_HOME": config_dir,
+            }
+            with patch.dict(os.environ, env, clear=False), patch("sys.platform", "linux"):
+                with TestClient(server.app) as client:
+                    response = client.get("/diagnostics/paths")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("debug_log_path", data)
+        self.assertIn("llama_server_path", data)
+        self.assertIn("default_model_path", data)
+        self.assertIn("BETTERFINGERS_LAZY_STARTUP", data)
+
+    def test_runtime_errors_endpoint_returns_error_history(self):
+        server.record_runtime_error("llm", "llama-server missing", {"action": "warmup"})
+
+        with TestClient(server.app) as client:
+            response = client.get("/runtime/errors")
+
+        self.assertEqual(response.status_code, 200)
+        errors = response.json()["errors"]
+        self.assertEqual(errors[0]["component"], "llm")
+        self.assertEqual(errors[0]["message"], "llama-server missing")
+        self.assertEqual(errors[0]["details"]["action"], "warmup")
+
+    def test_diagnostics_logs_returns_log_tail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = os.path.join(tmp, "debug.log")
+            with open(log_path, "w", encoding="utf-8") as handle:
+                handle.write("one\n")
+                handle.write("two\n")
+                handle.write("three\n")
+
+            with patch.object(server, "get_debug_log_path", return_value=Path(log_path)):
+                with TestClient(server.app) as client:
+                    response = client.get("/diagnostics/logs?lines=2")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["exists"])
+        self.assertEqual(data["lines"], ["two", "three"])
 
 
 if __name__ == "__main__":

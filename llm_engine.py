@@ -16,7 +16,7 @@ import signal
 import re
 import tempfile
 import yaml
-from model_manager import get_model_path, get_server_path, check_and_download_resources
+from model_manager import get_model_path, get_model_server_args, get_server_path, check_and_download_resources
 
 # --- Configuration ---
 SIDECAR_PORT = 8080
@@ -543,6 +543,7 @@ class LLMEngine:
             "--n-gpu-layers", "99",
             "--parallel", "1",
         ]
+        cmd.extend(get_model_server_args(model_id))
         
         logging.info(f"ðŸš€ Starting llama-server: {os.path.basename(server_exe)}")
         

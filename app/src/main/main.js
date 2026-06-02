@@ -52,6 +52,7 @@ function bootstrapApp() {
 
   registerIpc({
     getMainWindow: () => mainWindow,
+    getSidecarStatus: () => sidecar?.getStatus?.() ?? { state: 'unknown', message: 'Sidecar is unavailable.' },
     onQuit: requestQuit,
     onShow: () => focusMainWindow(mainWindow),
   });

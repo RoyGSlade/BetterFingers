@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from llm_engine import LLMEngine
 
@@ -8,10 +8,16 @@ class LLMEngineReloadTests(unittest.TestCase):
     def setUp(self):
         self._ready = LLMEngine._ready
         self._process = LLMEngine._process
+        self._process_pid = LLMEngine._process_pid
+        self._owns_process = LLMEngine._owns_process
+        self._initialized = LLMEngine._initialized
 
     def tearDown(self):
         LLMEngine._ready = self._ready
         LLMEngine._process = self._process
+        LLMEngine._process_pid = self._process_pid
+        LLMEngine._owns_process = self._owns_process
+        LLMEngine._initialized = self._initialized
 
     def _new_engine(self):
         engine = LLMEngine.__new__(LLMEngine)
@@ -42,6 +48,24 @@ class LLMEngineReloadTests(unittest.TestCase):
             output = engine.process_fast_lane("hello world")
             self.assertEqual(output, "cleaned output")
             ensure_mock.assert_called_once()
+
+    def test_start_server_includes_gemma_4_server_args(self):
+        engine = self._new_engine()
+        engine.model_id = "gemma-4-e4b-q4"
+        process = Mock()
+        process.pid = 123
+
+        with patch("llm_engine.os.path.exists", return_value=True), patch(
+            "llm_engine.get_server_path", return_value="/tmp/llama-server"
+        ), patch("llm_engine.get_model_path", return_value="/tmp/gemma-4.gguf"), patch(
+            "llm_engine.subprocess.Popen", return_value=process
+        ) as popen, patch.object(engine, "_wait_for_server"):
+            engine._start_server()
+
+        cmd = popen.call_args.args[0]
+        self.assertIn("--jinja", cmd)
+        self.assertIn("--chat-template-kwargs", cmd)
+        self.assertIn('{"enable_thinking":false}', cmd)
 
 
 if __name__ == "__main__":

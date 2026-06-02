@@ -14,16 +14,21 @@ Bring the Electron shell to full BetterFingers functionality while keeping the P
 
 ## Phase 0: Baseline Inventory And Parity Map
 
-- [ ] Create a feature inventory from the original Python desktop app.
-- [ ] Mark each feature as one of: `portable`, `Windows-only`, `Linux-ready`, `needs abstraction`, `defer`.
-- [ ] Define Electron route/panel structure for all major workflows.
-- [ ] Decide which old overlays become Electron windows and which become backend-only services.
-- [ ] Add a manual QA checklist for Linux and Windows.
+- [x] Create a feature inventory from the original Python desktop app.
+- [x] Mark each feature as one of: `portable`, `Windows-only`, `Linux-ready`, `needs abstraction`, `defer`.
+- [x] Define Electron route/panel structure for all major workflows.
+- [x] Decide which old overlays become Electron windows and which become backend-only services.
+- [x] Add a manual QA checklist for Linux and Windows.
 
 Done when:
 
-- [ ] Every original BetterFingers feature has a migration destination.
-- [ ] Linux limitations are documented in user-facing language.
+- [x] Every original BetterFingers feature has a migration destination.
+- [x] Linux limitations are documented in user-facing language.
+
+References:
+
+- `docs/ELECTRON_FEATURE_PARITY_MAP.md`
+- `docs/ELECTRON_MANUAL_QA_CHECKLIST.md`
 
 ## Phase 1: Core Runtime And Diagnostics
 
@@ -34,144 +39,144 @@ Current status: mostly started.
 - [x] Runtime warmup supports STT, LLM, and hotkeys.
 - [x] Dashboard shows health, runtime status, capabilities, and WebSocket status.
 - [x] Linux `llama-server` can be configured through repo-local path or env override.
-- [ ] Add backend log tail endpoint or IPC-backed log viewer.
-- [ ] Add runtime error history panel.
-- [ ] Add model/runtime path diagnostics.
-- [ ] Add port conflict detection and helpful recovery message.
+- [x] Add backend log tail endpoint or IPC-backed log viewer.
+- [x] Add runtime error history panel.
+- [x] Add model/runtime path diagnostics.
+- [x] Add port conflict detection and helpful recovery message.
 
 Done when:
 
-- [ ] A user can see exactly why STT, LLM, hotkeys, TTS, or llama-server is not ready.
-- [ ] Warmup failures never appear as unexplained generic 500s in the Electron UI.
+- [x] A user can see exactly why STT, LLM, hotkeys, TTS, or llama-server is not ready.
+- [x] Warmup failures never appear as unexplained generic 500s in the Electron UI.
 
 ## Phase 2: Recording To Draft Pipeline
 
-Current status: first slice started.
+Current status: complete.
 
 - [x] Hotkey recording result can create an in-memory draft.
 - [x] Drafts expose `GET /drafts`, `GET /drafts/latest`, accept, and decline endpoints.
 - [x] Electron dashboard previews latest raw and cleaned draft.
 - [x] Electron can copy cleaned output to clipboard.
-- [ ] Add no-audio gate parity using `audio_gate.py`.
-- [ ] Include recording metadata in draft: duration, sample count, RMS, max amplitude, stop reason.
-- [ ] Add draft error state for transcription/LLM failures.
-- [ ] Add draft retry action.
-- [ ] Add draft history panel with last 20 drafts.
-- [ ] Persist drafts optionally, or explicitly keep them session-only with UI messaging.
-- [ ] Add WebSocket events for `recording_started`, `recording_complete`, `transcribing`, `rewriting`, `preview_ready`, `draft_accepted`, `draft_declined`, `error`, `idle`.
+- [x] Add no-audio gate parity using `audio_gate.py`.
+- [x] Include recording metadata in draft: duration, sample count, RMS, max amplitude, stop reason.
+- [x] Add draft error state for transcription/LLM failures.
+- [x] Add draft retry action.
+- [x] Add draft history panel with last 20 drafts.
+- [x] Persist drafts optionally, or explicitly keep them session-only with UI messaging.
+- [x] Add WebSocket events for `recording_started`, `recording_complete`, `transcribing`, `rewriting`, `preview_ready`, `draft_accepted`, `draft_declined`, `error`, `idle`.
 
 Done when:
 
-- [ ] Recording with hotkeys produces a draft reliably.
-- [ ] Empty/silent recordings do not trigger unwanted LLM cleanup.
-- [ ] User can inspect, copy, accept, decline, and retry drafts.
+- [x] Recording with hotkeys produces a draft reliably.
+- [x] Empty/silent recordings do not trigger unwanted LLM cleanup.
+- [x] User can inspect, copy, accept, decline, and retry drafts.
 
 ## Phase 3: Send Modes, Injection, And Clipboard Safety
 
 Original functionality includes review mode, send behavior, chat opening, typing/paste injection, mute-key handling, and clipboard-safe selected-text capture.
 
-- [ ] Add backend abstraction for output actions: `copy_only`, `paste`, `type`, `open_chat_then_send`.
-- [ ] Expose `/drafts/{id}/send` endpoint.
-- [ ] Wire accepted draft to pending-send queue.
-- [ ] Implement primary action hotkey behavior:
-  - [ ] If accepted draft is pending, send it.
-  - [ ] If no draft is pending, capture selected text for TTS/review.
-- [ ] Port send mode settings: review, auto-send, manual-send/copy-only.
-- [ ] Preserve clipboard snapshot/restore behavior from `clipboard_capture.py`.
-- [ ] Add Linux-aware input capability checks:
-  - [ ] X11 paste/type support.
-  - [ ] Wayland limitations and fallback to clipboard copy.
-  - [ ] Windows existing behavior.
-- [ ] Add emergency stop/cancel for recording, typing, and TTS.
+- [x] Add backend abstraction for output actions: `copy_only`, `paste`, `type`, `open_chat_then_send`.
+- [x] Expose `/drafts/{id}/send` endpoint.
+- [x] Wire accepted draft to pending-send queue.
+- [x] Implement primary action hotkey behavior:
+  - [x] If accepted draft is pending, send it.
+  - [x] If no draft is pending, capture selected text for TTS/review.
+- [x] Port send mode settings: review, auto-send, manual-send/copy-only.
+- [x] Preserve clipboard snapshot/restore behavior from `clipboard_capture.py`.
+- [x] Add Linux-aware input capability checks:
+  - [x] X11 paste/type support.
+  - [x] Wayland limitations and fallback to clipboard copy.
+  - [x] Windows existing behavior.
+- [x] Add emergency stop/cancel for recording, typing, and TTS.
 
 Done when:
 
-- [ ] Electron can complete record -> draft -> accept -> send/copy end to end.
-- [ ] Linux users get safe fallback behavior when input injection is unsupported.
-- [ ] Clipboard content is restored after selected-text capture where supported.
+- [x] Electron can complete record -> draft -> accept -> send/copy end to end.
+- [x] Linux users get safe fallback behavior when input injection is unsupported.
+- [x] Clipboard content is restored after selected-text capture where supported.
 
 ## Phase 4: Settings And Profiles
 
 Original settings are extensive and profile-driven.
 
-- [ ] Add Electron settings page.
-- [ ] Expose profile endpoints:
-  - [ ] List profiles.
-  - [ ] Get active profile.
-  - [ ] Save profile.
-  - [ ] Switch profile.
-  - [ ] Create/delete profile.
-- [ ] Port core settings:
-  - [ ] Recording hotkey.
-  - [ ] Record mode: toggle / push-to-talk.
-  - [ ] Emergency stop.
-  - [ ] Primary action hotkey.
-  - [ ] Review TTS hotkey.
-  - [ ] Open chat hotkey.
-  - [ ] Voice mute key.
-  - [ ] Send mode and auto-submit.
-  - [ ] Current cleanup preset.
-  - [ ] WPM/typing behavior.
-  - [ ] Audio gate thresholds.
-  - [ ] Audio ducking options.
-  - [ ] Overlay/notification preferences.
-  - [ ] Model keep-loaded flags.
-- [ ] Add dirty-state and save/discard behavior.
-- [ ] Add migration/defaults validation for older profiles.
+- [x] Add Electron settings page.
+- [x] Expose profile endpoints:
+  - [x] List profiles.
+  - [x] Get active profile.
+  - [x] Save profile.
+  - [x] Switch profile.
+  - [x] Create/delete profile.
+- [x] Port core settings:
+  - [x] Recording hotkey.
+  - [x] Record mode: toggle / push-to-talk.
+  - [x] Emergency stop.
+  - [x] Primary action hotkey.
+  - [x] Review TTS hotkey.
+  - [x] Open chat hotkey.
+  - [x] Voice mute key.
+  - [x] Send mode and auto-submit.
+  - [x] Current cleanup preset.
+  - [x] WPM/typing behavior.
+  - [x] Audio gate thresholds.
+  - [x] Audio ducking options.
+  - [x] Overlay/notification preferences.
+  - [x] Model keep-loaded flags.
+- [x] Add dirty-state and save/discard behavior.
+- [x] Add migration/defaults validation for older profiles.
 
 Done when:
 
-- [ ] Electron can configure the same core behavior as the old settings window.
-- [ ] Profile changes affect runtime without restarting Electron unless required.
+- [x] Electron can configure the same core behavior as the old settings window.
+- [x] Profile changes affect runtime without restarting Electron unless required.
 
 ## Phase 5: Model Management
 
 Original app supports LLM model selection, downloads, Whisper cache status, Whisper downloads, and unload/reload controls.
 
-- [ ] Add model management backend endpoints:
-  - [ ] List LLM models.
-  - [ ] Get selected LLM model.
-  - [ ] Select LLM model.
-  - [ ] Download LLM model.
-  - [ ] Delete LLM model.
-  - [ ] Show download progress.
-  - [ ] List Whisper models.
-  - [ ] Download Whisper model.
-  - [ ] Remove Whisper model.
-  - [ ] Test Whisper model.
-  - [ ] Unload STT.
-  - [ ] Unload LLM.
-  - [ ] Unload TTS.
-- [ ] Add Linux llama-server setup/status UI.
-- [ ] Add `BETTERFINGERS_LLAMA_SERVER` and `BETTERFINGERS_MODEL_PATH` diagnostics.
-- [ ] Preserve Windows model download behavior.
-- [ ] Keep Linux from downloading Windows CUDA assets.
-- [ ] Add VRAM/memory estimate UI for selected STT + LLM stack.
+- [x] Add model management backend endpoints:
+  - [x] List LLM models.
+  - [x] Get selected LLM model.
+  - [x] Select LLM model.
+  - [x] Download LLM model.
+  - [x] Delete LLM model.
+  - [x] Show download progress.
+  - [x] List Whisper models.
+  - [x] Download Whisper model.
+  - [x] Remove Whisper model.
+  - [x] Test Whisper model.
+  - [x] Unload STT.
+  - [x] Unload LLM.
+  - [x] Unload TTS.
+- [x] Add Linux llama-server setup/status UI.
+- [x] Add `BETTERFINGERS_LLAMA_SERVER` and `BETTERFINGERS_MODEL_PATH` diagnostics.
+- [x] Preserve Windows model download behavior.
+- [x] Keep Linux from downloading Windows CUDA assets.
+- [x] Add VRAM/memory estimate UI for selected STT + LLM stack.
 
 Done when:
 
-- [ ] A fresh Linux user can understand what local LLM runtime is missing and how to configure it.
-- [ ] A Windows user can still use the existing model download flow.
+- [x] A fresh Linux user can understand what local LLM runtime is missing and how to configure it.
+- [x] A Windows user can still use the existing model download flow.
 
 ## Phase 6: Preview, Review, And Rewrite UX
 
 Original app has a preview overlay with accept, decline, TTS, rewrite, selected text, and token handling.
 
-- [ ] Expand Electron Latest Draft into a full Review panel.
-- [ ] Add editable cleaned output.
-- [ ] Add rewrite actions:
-  - [ ] Make shorter.
-  - [ ] Make clearer.
-  - [ ] Change tone.
-  - [ ] Custom instruction.
-- [ ] Add selected-text-aware TTS for draft text.
-- [ ] Add token count and long-text warning.
-- [ ] Add review state WebSocket updates.
-- [ ] Add keyboard shortcuts for accept/decline/copy/send.
+- [x] Expand Electron Latest Draft into a full Review panel.
+- [x] Add editable cleaned output.
+- [x] Add rewrite actions:
+  - [x] Make shorter.
+  - [x] Make clearer.
+  - [x] Change tone.
+  - [x] Custom instruction.
+- [x] Add selected-text-aware TTS for draft text.
+- [x] Add token count and long-text warning.
+- [x] Add review state WebSocket updates.
+- [x] Add keyboard shortcuts for accept/decline/copy/send.
 
 Done when:
 
-- [ ] Electron review flow matches or exceeds the old preview overlay behavior.
+- [x] Electron review flow matches or exceeds the old preview overlay behavior.
 
 ## Phase 7: TTS And Read-Aloud
 

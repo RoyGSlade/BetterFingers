@@ -4,10 +4,33 @@ import unittest
 from unittest.mock import patch
 
 import model_manager
-from model_manager import check_and_download_resources
+from model_manager import check_and_download_resources, get_model_server_args
 
 
 class ModelManagerStatusTests(unittest.TestCase):
+    def test_gemma_4_models_are_available(self):
+        expected = {
+            "gemma-4-e2b-q4",
+            "gemma-4-e2b-q8",
+            "gemma-4-e4b-q4",
+            "gemma-4-e4b-q8",
+            "gemma-4-26b-a4b-q4",
+            "gemma-4-31b-q4",
+        }
+
+        self.assertTrue(expected.issubset(set(model_manager.AVAILABLE_MODELS)))
+        for model_id in expected:
+            model = model_manager.AVAILABLE_MODELS[model_id]
+            self.assertIn("gemma-4", model["url"])
+            self.assertTrue(model["filename"].endswith(".gguf"))
+            self.assertGreater(model["size_mb"], 0)
+
+    def test_gemma_4_models_use_jinja_server_args(self):
+        args = get_model_server_args("gemma-4-e4b-q4")
+
+        self.assertIn("--jinja", args)
+        self.assertIn("--chat-template-kwargs", args)
+
     def test_check_and_download_resources_reports_error_when_model_unavailable(self):
         with tempfile.TemporaryDirectory() as tmp:
             model_path = os.path.join(tmp, "missing.gguf")
@@ -33,6 +56,8 @@ class ModelManagerStatusTests(unittest.TestCase):
             with patch.dict(os.environ, {"BETTERFINGERS_MODEL_PATH": model_path}, clear=True), patch(
                 "model_manager.sys.platform", "linux"
             ), patch("model_manager.get_models_dir", return_value=tmp), patch(
+                "model_manager.get_repo_root", return_value=tmp
+            ), patch(
                 "model_manager.download_file"
             ) as download_file:
                 result = check_and_download_resources(model_id="gemma-3-4b-q4")

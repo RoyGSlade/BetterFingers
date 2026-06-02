@@ -10,6 +10,54 @@ from utils import get_user_data_path
 
 # --- Constants ---
 AVAILABLE_MODELS = {
+    "gemma-4-e2b-q4": {
+        "name": "Gemma 4 E2B (Q4_K_M)",
+        "filename": "gemma-4-E2B-it-Q4_K_M.gguf",
+        "url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf",
+        "size_mb": 2963,
+        "family": "gemma-4",
+        "server_args": ["--jinja", "--chat-template-kwargs", '{"enable_thinking":false}'],
+    },
+    "gemma-4-e2b-q8": {
+        "name": "Gemma 4 E2B (Q8_0)",
+        "filename": "gemma-4-E2B-it-Q8_0.gguf",
+        "url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q8_0.gguf",
+        "size_mb": 4814,
+        "family": "gemma-4",
+        "server_args": ["--jinja", "--chat-template-kwargs", '{"enable_thinking":false}'],
+    },
+    "gemma-4-e4b-q4": {
+        "name": "Gemma 4 E4B (Q4_K_M)",
+        "filename": "gemma-4-E4B-it-Q4_K_M.gguf",
+        "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
+        "size_mb": 4747,
+        "family": "gemma-4",
+        "server_args": ["--jinja", "--chat-template-kwargs", '{"enable_thinking":false}'],
+    },
+    "gemma-4-e4b-q8": {
+        "name": "Gemma 4 E4B (Q8_0)",
+        "filename": "gemma-4-E4B-it-Q8_0.gguf",
+        "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q8_0.gguf",
+        "size_mb": 7813,
+        "family": "gemma-4",
+        "server_args": ["--jinja", "--chat-template-kwargs", '{"enable_thinking":false}'],
+    },
+    "gemma-4-26b-a4b-q4": {
+        "name": "Gemma 4 26B-A4B MoE (UD-Q4_K_M)",
+        "filename": "gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+        "url": "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/main/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+        "size_mb": 16162,
+        "family": "gemma-4",
+        "server_args": ["--jinja", "--chat-template-kwargs", '{"enable_thinking":false}'],
+    },
+    "gemma-4-31b-q4": {
+        "name": "Gemma 4 31B (Q4_K_M)",
+        "filename": "gemma-4-31B-it-Q4_K_M.gguf",
+        "url": "https://huggingface.co/unsloth/gemma-4-31B-it-GGUF/resolve/main/gemma-4-31B-it-Q4_K_M.gguf",
+        "size_mb": 17475,
+        "family": "gemma-4",
+        "server_args": ["--jinja", "--chat-template-kwargs", '{"enable_thinking":false}'],
+    },
     "gemma-3-4b-q4": {
         "name": "Gemma 3 4B (Q4_K_M)",
         "filename": "gemma-3-4b-it-Q4_K_M.gguf",
@@ -104,6 +152,13 @@ def get_model_path(model_id=None):
         model_id = DEFAULT_MODEL
     filename = AVAILABLE_MODELS[model_id]["filename"]
     return os.path.join(get_models_dir(), filename)
+
+
+def get_model_server_args(model_id=None):
+    """Returns additional llama-server args for model families that need them."""
+    if not model_id or model_id not in AVAILABLE_MODELS:
+        model_id = DEFAULT_MODEL
+    return list(AVAILABLE_MODELS.get(model_id, {}).get("server_args", []))
 
 
 def check_model_exists(model_id):

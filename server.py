@@ -3,19 +3,51 @@ import shutil
 import logging
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
+import pyperclip
 from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from llm_engine import get_engine, get_engine_if_initialized
 from transcriber import Transcriber
 from hotkey_manager import HotkeyManager
+from audio_gate import should_block_for_no_audio
 from user_profile_manager import profile_manager
 from intent_engine import intent_engine, IntentState
 from project_generator import project_generator
 from platform_capabilities import get_capabilities
 from platform_paths import ensure_app_dirs, get_app_data_dir, get_config_dir
+from model_manager import (
+    DEFAULT_MODEL,
+    AVAILABLE_MODELS,
+    check_and_download_resources,
+    delete_model,
+    get_download_state,
+    get_model_path,
+    get_models_dir,
+    get_repo_local_server_path,
+    get_server_path,
+    is_ready as is_llm_model_ready,
+)
 # Configure Logging
-from utils import setup_logging
+from transcriber import (
+    SUPPORTED_MODEL_SIZES,
+    download_whisper_model,
+    get_whisper_download_state,
+    list_cached_models,
+    remove_cached_model,
+)
+from utils import (
+    get_app_path,
+    get_last_active_profile,
+    get_profiles_dir,
+    get_user_data_path,
+    list_profiles,
+    load_profile,
+    save_profile as save_runtime_profile,
+    set_last_active_profile,
+    setup_logging,
+)
 # Will be initialized in __main__ or implicitly if imported (logging lib handles singleton)
 # But let's verify we don't double init.
 if __name__ != "__main__":
@@ -38,11 +70,18 @@ transcriber = None
 hotkey_manager = None
 hotkey_recorder = None
 hotkey_manager_started = False
+output_injector = None
+tts_engine = None
 active_websockets = []
 draft_queue = []
+draft_recordings = {}
+pending_manual_send_ids = []
 next_draft_id = 1
-draft_lock = threading.Lock()
+draft_lock = threading.RLock()
 MAX_DRAFT_HISTORY = 20
+runtime_error_history = []
+runtime_error_lock = threading.Lock()
+MAX_RUNTIME_ERROR_HISTORY = 50
 
 
 def get_voices_dir():
@@ -55,6 +94,122 @@ def get_voices_dir():
 def get_graph_path():
     ensure_app_dirs()
     return get_config_dir() / "graph.json"
+
+
+def get_debug_log_path():
+    return Path(get_user_data_path()) / "debug.log"
+
+
+def record_runtime_error(component, message, details=None):
+    with runtime_error_lock:
+        row = {
+            "component": str(component or "runtime"),
+            "message": str(message or ""),
+            "details": details or {},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        runtime_error_history.append(row)
+        if len(runtime_error_history) > MAX_RUNTIME_ERROR_HISTORY:
+            del runtime_error_history[: len(runtime_error_history) - MAX_RUNTIME_ERROR_HISTORY]
+        return dict(row)
+
+
+def get_runtime_error_history():
+    with runtime_error_lock:
+        return [dict(row) for row in runtime_error_history]
+
+
+def read_log_tail(max_lines=120):
+    safe_max_lines = max(1, min(int(max_lines or 120), 500))
+    log_path = get_debug_log_path()
+    if not log_path.exists():
+        return {"path": str(log_path), "exists": False, "lines": []}
+
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as handle:
+            lines = handle.readlines()
+    except Exception as exc:
+        logging.exception("Failed reading debug log")
+        record_runtime_error("diagnostics", f"Failed reading debug log: {exc}")
+        return {"path": str(log_path), "exists": True, "error": str(exc), "lines": []}
+
+    return {
+        "path": str(log_path),
+        "exists": True,
+        "lines": [line.rstrip("\n") for line in lines[-safe_max_lines:]],
+    }
+
+
+def get_runtime_paths_snapshot():
+    model_path = get_model_path(DEFAULT_MODEL)
+    server_path = get_server_path()
+    repo_server_path = get_repo_local_server_path()
+    return {
+        "app_path": str(get_app_path()),
+        "user_data_path": str(get_user_data_path()),
+        "app_data_dir": str(get_app_data_dir()),
+        "config_dir": str(get_config_dir()),
+        "debug_log_path": str(get_debug_log_path()),
+        "models_dir": str(get_models_dir()),
+        "default_model_path": str(model_path),
+        "default_model_exists": os.path.exists(model_path),
+        "llama_server_path": str(server_path),
+        "llama_server_exists": os.path.exists(server_path),
+        "repo_local_llama_server_path": str(repo_server_path),
+        "repo_local_llama_server_exists": os.path.exists(repo_server_path),
+        "BETTERFINGERS_LLAMA_SERVER": os.getenv("BETTERFINGERS_LLAMA_SERVER", ""),
+        "BETTERFINGERS_MODEL_PATH": os.getenv("BETTERFINGERS_MODEL_PATH", ""),
+        "BETTERFINGERS_LAZY_STARTUP": os.getenv("BETTERFINGERS_LAZY_STARTUP", ""),
+    }
+
+
+def sanitize_profile_name(raw_name):
+    value = "".join(ch for ch in str(raw_name or "") if ch.isalnum() or ch in (" ", "_", "-")).strip()
+    return value or "Default"
+
+
+def get_active_profile_payload():
+    name = get_last_active_profile()
+    return {
+        "active_profile": name,
+        "profiles": list_profiles(),
+        "settings": load_profile(name),
+    }
+
+
+def apply_active_profile_runtime(profile_name):
+    global output_injector
+    safe_name = sanitize_profile_name(profile_name)
+    set_last_active_profile(safe_name)
+
+    if transcriber is not None:
+        try:
+            transcriber.reload_profile(profile_name=safe_name, preload=False)
+        except Exception as exc:
+            logging.warning(f"Failed applying profile to transcriber: {exc}")
+
+    if hotkey_manager is not None:
+        try:
+            hotkey_manager.update_config(safe_name)
+        except Exception as exc:
+            logging.warning(f"Failed applying profile to hotkeys: {exc}")
+
+    if output_injector is not None:
+        try:
+            output_injector.reload_config(safe_name)
+        except Exception as exc:
+            logging.warning(f"Failed applying profile to output injector: {exc}")
+
+    try:
+        cfg = load_profile(safe_name)
+        engine = get_engine_if_initialized()
+        if engine is not None:
+            model_id = str(cfg.get("llm_model_id", DEFAULT_MODEL) or DEFAULT_MODEL).strip()
+            engine.set_model_id(model_id)
+    except Exception as exc:
+        logging.warning(f"Failed applying profile to LLM engine: {exc}")
+
+    return get_active_profile_payload()
 
 
 def is_lazy_startup_enabled():
@@ -106,7 +261,9 @@ def start_hotkey_manager():
     manager = HotkeyManager(
         recorder=recorder,
         on_recording_complete_callback=on_recording_complete,
-        on_recording_start_callback=on_recording_start
+        on_recording_start_callback=on_recording_start,
+        on_force_stop_callback=emergency_stop_runtime,
+        on_manual_send_callback=handle_primary_action,
     )
     manager.start()
     hotkey_manager = manager
@@ -149,13 +306,65 @@ async def broadcast_status(status: str, data: dict = None):
 
 
 def broadcast_status_threadsafe(status: str, data: dict = None):
-    if loop:
-        asyncio.run_coroutine_threadsafe(broadcast_status(status, data), loop)
-    else:
+    if not loop or loop.is_closed():
         logging.warning("Loop not ready for broadcast")
+        return
+
+    coroutine = broadcast_status(status, data)
+    try:
+        asyncio.run_coroutine_threadsafe(coroutine, loop)
+    except Exception as exc:
+        logging.warning(f"Failed scheduling broadcast '{status}': {exc}")
+        coroutine.close()
 
 
-def create_draft(raw_text, final_text, preset="True Janitor"):
+def get_recording_metadata(recording_result):
+    if recording_result is None:
+        return {}
+
+    return {
+        "sample_rate": int(getattr(recording_result, "sample_rate", 0) or 0),
+        "duration_seconds": float(getattr(recording_result, "duration_seconds", 0.0) or 0.0),
+        "frame_count": int(getattr(recording_result, "frame_count", 0) or 0),
+        "sample_count": int(getattr(recording_result, "sample_count", 0) or 0),
+        "max_amplitude": float(getattr(recording_result, "max_amplitude", 0.0) or 0.0),
+        "rms_amplitude": float(getattr(recording_result, "rms_amplitude", 0.0) or 0.0),
+        "stop_reason": str(getattr(recording_result, "stop_reason", "") or ""),
+    }
+
+
+def get_active_recording_config():
+    try:
+        return load_profile(get_last_active_profile())
+    except Exception as exc:
+        logging.warning(f"Failed loading active profile for recording gate: {exc}")
+        return {}
+
+
+def get_active_token_limit():
+    try:
+        config = load_profile(get_last_active_profile())
+        return int(config.get("output_token_limit", 1100) or 1100)
+    except Exception as exc:
+        logging.warning(f"Failed loading active profile token limit: {exc}")
+        return 1100
+
+
+def count_draft_tokens(text):
+    return len(str(text or "").split())
+
+
+def update_draft_review_fields(draft):
+    token_limit = get_active_token_limit()
+    token_count = count_draft_tokens(draft.get("final_text") or draft.get("raw_text") or "")
+    draft["token_count"] = token_count
+    draft["token_limit"] = token_limit
+    draft["long_text"] = token_count > token_limit
+    draft["review_state"] = draft.get("review_state") or "ready"
+    return draft
+
+
+def create_draft(raw_text, final_text, preset="True Janitor", status="pending", metadata=None, error="", gate_reasons=None, recording_result=None):
     global next_draft_id
 
     with draft_lock:
@@ -164,14 +373,25 @@ def create_draft(raw_text, final_text, preset="True Janitor"):
             "raw_text": raw_text or "",
             "final_text": final_text or "",
             "preset": preset,
-            "status": "pending",
+            "status": status or "pending",
+            "metadata": metadata or {},
+            "error": error or "",
+            "gate_reasons": list(gate_reasons or []),
+            "pending_send": False,
+            "send_result": None,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+        update_draft_review_fields(draft)
         next_draft_id += 1
         draft_queue.append(draft)
+        if recording_result is not None:
+            draft_recordings[draft["id"]] = recording_result
 
         if len(draft_queue) > MAX_DRAFT_HISTORY:
+            removed = draft_queue[: len(draft_queue) - MAX_DRAFT_HISTORY]
             del draft_queue[: len(draft_queue) - MAX_DRAFT_HISTORY]
+            for removed_draft in removed:
+                draft_recordings.pop(removed_draft["id"], None)
 
         return dict(draft)
 
@@ -184,32 +404,292 @@ def get_draft_by_id(draft_id):
     return None
 
 
+def get_profile_output_settings():
+    try:
+        config = load_profile(get_last_active_profile())
+    except Exception as exc:
+        logging.warning(f"Failed loading active profile for output settings: {exc}")
+        config = {}
+
+    send_mode = str(config.get("send_mode", "review_first") or "review_first").strip().lower()
+    if send_mode not in {"review_first", "auto_send"}:
+        send_mode = "review_first"
+
+    return {
+        "send_mode": send_mode,
+        "auto_submit": bool(config.get("auto_submit", False)),
+        "chat_close_action": str(config.get("chat_close_action", "none") or "none").strip().lower(),
+        "instant_typing": bool(config.get("instant_typing", False)),
+    }
+
+
+def copy_text_to_clipboard(text):
+    try:
+        pyperclip.copy(text or "")
+        return {"ok": True, "action": "copy_only", "message": "Copied text to clipboard."}
+    except Exception as exc:
+        logging.exception("Clipboard copy failed")
+        return {"ok": False, "action": "copy_only", "message": f"Clipboard copy failed: {exc}", "error": str(exc)}
+
+
+def perform_output_action(text, action="copy_only", open_chat=False):
+    global output_injector
+    requested_action = str(action or "copy_only").strip().lower()
+    if requested_action not in {"copy_only", "paste", "type", "open_chat_then_send"}:
+        requested_action = "copy_only"
+
+    payload = {
+        "requested_action": requested_action,
+        "action": requested_action,
+        "fallback": False,
+        "ok": False,
+        "message": "",
+    }
+
+    final_text = str(text or "").strip()
+    if not final_text:
+        payload.update({"message": "No text available to send.", "error": "empty_text"})
+        return payload
+
+    capabilities = get_capabilities()
+    if requested_action == "copy_only":
+        result = copy_text_to_clipboard(final_text)
+        payload.update(result)
+        return payload
+
+    if not capabilities.get("supports_input_injection", False):
+        result = copy_text_to_clipboard(final_text)
+        payload.update(result)
+        payload.update(
+            {
+                "requested_action": requested_action,
+                "fallback": True,
+                "message": (
+                    "Input injection is not supported in this session; copied text to clipboard instead."
+                    if result.get("ok")
+                    else result.get("message", "Copy fallback failed.")
+                ),
+            }
+        )
+        return payload
+
+    try:
+        from injector import InputInjector
+
+        settings = get_profile_output_settings()
+        if output_injector is None:
+            output_injector = InputInjector(profile_name=get_last_active_profile())
+        else:
+            try:
+                output_injector.reload_config(get_last_active_profile())
+            except Exception as exc:
+                logging.debug(f"Failed reloading output injector config: {exc}")
+        injector = output_injector
+        should_open_chat = open_chat or requested_action == "open_chat_then_send"
+        if should_open_chat:
+            injector.open_chat()
+
+        if requested_action == "type":
+            injector.type_text(final_text)
+        else:
+            injector.send_output(
+                text=final_text,
+                auto_submit=settings["auto_submit"],
+                close_action=settings["chat_close_action"],
+            )
+
+        payload.update({"ok": True, "message": "Output sent.", "action": requested_action})
+        return payload
+    except Exception as exc:
+        logging.exception("Output action failed")
+        result = copy_text_to_clipboard(final_text)
+        payload.update(result)
+        payload.update(
+            {
+                "requested_action": requested_action,
+                "fallback": True,
+                "message": (
+                    f"Output action failed ({exc}); copied text to clipboard instead."
+                    if result.get("ok")
+                    else f"Output action failed ({exc}); copy fallback also failed."
+                ),
+                "error": str(exc),
+            }
+        )
+        return payload
+
+
+def mark_draft_pending_send(draft):
+    draft["pending_send"] = True
+    if draft["id"] not in pending_manual_send_ids:
+        pending_manual_send_ids.append(draft["id"])
+
+
+def send_draft_by_id(draft_id, action=None, open_chat=False):
+    with draft_lock:
+        draft = get_draft_by_id(draft_id)
+        if draft is None:
+            raise HTTPException(status_code=404, detail="Draft not found")
+        final_text = draft.get("final_text", "")
+
+    settings = get_profile_output_settings()
+    requested_action = action or ("open_chat_then_send" if settings["send_mode"] == "auto_send" else "copy_only")
+    result = perform_output_action(final_text, requested_action, open_chat=open_chat)
+
+    with draft_lock:
+        draft = get_draft_by_id(draft_id)
+        if draft is not None:
+            draft["send_result"] = result
+            if result.get("ok"):
+                draft["status"] = "sent"
+                draft["pending_send"] = False
+                while draft_id in pending_manual_send_ids:
+                    pending_manual_send_ids.remove(draft_id)
+            else:
+                draft["status"] = "send_error"
+                draft["error"] = result.get("message", "Send failed.")
+            response = dict(draft)
+        else:
+            response = {"id": draft_id, "send_result": result}
+
+    broadcast_status_threadsafe("draft_sent" if result.get("ok") else "draft_send_error", {"draft_id": draft_id, "send_result": result})
+    return response
+
+
+def handle_primary_action():
+    while pending_manual_send_ids:
+        draft_id = pending_manual_send_ids.pop(0)
+        draft = get_draft_by_id(draft_id)
+        if not draft or not draft.get("pending_send"):
+            continue
+        return send_draft_by_id(draft_id, action="paste", open_chat=False)
+
+    try:
+        from clipboard_capture import capture_selection_text_with_restore
+
+        result = capture_selection_text_with_restore(timeout_ms=350, poll_ms=25)
+    except Exception as exc:
+        logging.exception("Primary action selection capture failed")
+        result = {"ok": False, "text": "", "message": f"Selection capture failed: {exc}", "error": str(exc)}
+
+    broadcast_status_threadsafe("selection_captured" if result.get("ok") else "selection_capture_failed", result)
+    return result
+
+
+def emergency_stop_runtime():
+    if hotkey_manager is not None:
+        try:
+            hotkey_manager.request_stop(reason="emergency_stop")
+        except Exception as exc:
+            logging.warning(f"Emergency recording stop failed: {exc}")
+
+    if output_injector is not None:
+        try:
+            output_injector.stop_typing()
+            output_injector.release_mute_key()
+        except Exception as exc:
+            logging.warning(f"Emergency injector stop failed: {exc}")
+
+    pending_manual_send_ids.clear()
+    broadcast_status_threadsafe("emergency_stop", {"message": "Emergency stop completed."})
+    return {"ok": True, "message": "Emergency stop completed."}
+
+
 def process_recording_result(recording_result):
     preset = "True Janitor"
+    raw_text = ""
+    metadata = get_recording_metadata(recording_result)
     try:
         broadcast_status_threadsafe("transcribing")
         trans = ensure_transcriber_initialized(preload=False)
         audio_data = getattr(recording_result, "audio_data", recording_result)
-        raw_text = trans.transcribe(audio_data)
+        if hasattr(audio_data, "size") and audio_data.size <= 0:
+            raw_text = ""
+        elif audio_data is None:
+            raw_text = ""
+        else:
+            raw_text = trans.transcribe(audio_data)
+
+        blocked, reasons = should_block_for_no_audio(
+            recording_result,
+            raw_text,
+            get_active_recording_config(),
+        )
+        if blocked:
+            draft = create_draft(
+                raw_text,
+                "",
+                preset=preset,
+                status="blocked",
+                metadata=metadata,
+                error="No usable audio was recorded.",
+                gate_reasons=reasons,
+                recording_result=recording_result,
+            )
+            broadcast_status_threadsafe(
+                "draft_blocked",
+                {
+                    "draft_id": draft["id"],
+                    "raw_text": draft["raw_text"],
+                    "final_text": draft["final_text"],
+                    "error": draft["error"],
+                    "gate_reasons": draft["gate_reasons"],
+                    "token_count": draft["token_count"],
+                    "token_limit": draft["token_limit"],
+                    "long_text": draft["long_text"],
+                },
+            )
+            return draft
 
         broadcast_status_threadsafe("rewriting")
         engine = get_engine()
         final_text = engine.process_fast_lane(raw_text, preset)
 
-        draft = create_draft(raw_text, final_text, preset=preset)
+        draft = create_draft(
+            raw_text,
+            final_text,
+            preset=preset,
+            metadata=metadata,
+            recording_result=recording_result,
+        )
         broadcast_status_threadsafe(
             "preview_ready",
             {
                 "draft_id": draft["id"],
                 "raw_text": draft["raw_text"],
                 "final_text": draft["final_text"],
+                "token_count": draft["token_count"],
+                "token_limit": draft["token_limit"],
+                "long_text": draft["long_text"],
             },
         )
         return draft
     except Exception as exc:
         logging.error(f"Recording processing failed: {exc}")
-        broadcast_status_threadsafe("error", {"message": str(exc)})
-        raise
+        record_runtime_error("recording", str(exc))
+        draft = create_draft(
+            raw_text,
+            "",
+            preset=preset,
+            status="error",
+            metadata=metadata,
+            error=str(exc),
+            recording_result=recording_result,
+        )
+        broadcast_status_threadsafe(
+            "draft_error",
+            {
+                "draft_id": draft["id"],
+                "raw_text": draft["raw_text"],
+                "final_text": draft["final_text"],
+                "error": draft["error"],
+                "token_count": draft["token_count"],
+                "token_limit": draft["token_limit"],
+                "long_text": draft["long_text"],
+            },
+        )
+        broadcast_status_threadsafe("error", {"message": str(exc), "draft_id": draft["id"]})
+        return draft
     finally:
         broadcast_status_threadsafe("idle")
 
@@ -219,7 +699,7 @@ import asyncio
 loop = None
 
 def on_recording_start():
-    broadcast_status_threadsafe("listening")
+    broadcast_status_threadsafe("recording_started")
 
 def on_recording_complete(recording_result):
     try:
@@ -227,6 +707,7 @@ def on_recording_complete(recording_result):
     except Exception:
         size = len(recording_result) if recording_result is not None else 0
     logging.info(f"CALLBACK: Recording Complete ({size} samples)")
+    broadcast_status_threadsafe("recording_complete", {"sample_count": size})
 
     def _worker():
         try:
@@ -248,6 +729,7 @@ async def startup_event():
         logging.info("Transcriber initialized successfully.")
     except Exception as e:
         logging.error(f"Transcriber startup failure: {e}")
+        record_runtime_error("stt", str(e))
 
     if lazy_startup:
         logging.info("Lazy startup enabled; deferring LLM warmup and Hotkey Manager startup.")
@@ -259,12 +741,14 @@ async def startup_event():
         logging.info("LLM Engine ready.")
     except Exception as e:
         logging.error(f"LLM Engine startup failure: {e}")
+        record_runtime_error("llm", str(e))
 
     try:
         start_hotkey_manager()
         logging.info("Hotkey Manager started.")
     except Exception as e:
         logging.error(f"Hotkey Manager startup failure: {e}")
+        record_runtime_error("hotkeys", str(e))
 
 @app.on_event("shutdown")
 def shutdown_event():
@@ -318,9 +802,236 @@ async def runtime_status():
     return get_runtime_status_snapshot()
 
 
+@app.get("/runtime/output-settings")
+async def runtime_output_settings():
+    settings = get_profile_output_settings()
+    settings["pending_manual_send_ids"] = list(pending_manual_send_ids)
+    settings["supported_actions"] = ["copy_only", "paste", "type", "open_chat_then_send"]
+    settings["capabilities"] = get_capabilities()
+    return settings
+
+
+class ProfileSaveRequest(BaseModel):
+    settings: dict
+
+
+class ProfileCreateRequest(BaseModel):
+    name: str
+    settings: dict = {}
+
+
+@app.get("/settings/profiles")
+async def settings_profiles():
+    return get_active_profile_payload()
+
+
+@app.get("/settings/profiles/{profile_name}")
+async def settings_profile(profile_name: str):
+    safe_name = sanitize_profile_name(profile_name)
+    return {
+        "profile": safe_name,
+        "active": safe_name == get_last_active_profile(),
+        "settings": load_profile(safe_name),
+    }
+
+
+@app.post("/settings/profiles/{profile_name}")
+async def settings_save_profile(profile_name: str, request: ProfileSaveRequest):
+    safe_name = sanitize_profile_name(profile_name)
+    save_runtime_profile(safe_name, request.settings)
+    if safe_name == get_last_active_profile():
+        apply_active_profile_runtime(safe_name)
+    return {
+        "profile": safe_name,
+        "active": safe_name == get_last_active_profile(),
+        "settings": load_profile(safe_name),
+    }
+
+
+@app.post("/settings/profiles")
+async def settings_create_profile(request: ProfileCreateRequest):
+    safe_name = sanitize_profile_name(request.name)
+    if safe_name in list_profiles():
+        raise HTTPException(status_code=409, detail="Profile already exists")
+    base = load_profile(get_last_active_profile())
+    base.update(request.settings or {})
+    save_runtime_profile(safe_name, base)
+    return {"profile": safe_name, "settings": load_profile(safe_name), "profiles": list_profiles()}
+
+
+@app.post("/settings/profiles/{profile_name}/activate")
+async def settings_activate_profile(profile_name: str):
+    safe_name = sanitize_profile_name(profile_name)
+    if safe_name not in list_profiles():
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return apply_active_profile_runtime(safe_name)
+
+
+@app.delete("/settings/profiles/{profile_name}")
+async def settings_delete_profile(profile_name: str):
+    safe_name = sanitize_profile_name(profile_name)
+    if safe_name == "Default":
+        raise HTTPException(status_code=400, detail="Default profile cannot be deleted")
+    profile_path = Path(get_profiles_dir()) / f"{safe_name}.yaml"
+    if not profile_path.exists():
+        raise HTTPException(status_code=404, detail="Profile not found")
+    profile_path.unlink()
+    if get_last_active_profile() == safe_name:
+        apply_active_profile_runtime("Default")
+    return get_active_profile_payload()
+
+
 @app.get("/capabilities")
 async def capabilities():
     return get_capabilities()
+
+
+class LlmModelSelectRequest(BaseModel):
+    model_id: str
+
+
+class WhisperModelRequest(BaseModel):
+    model_size: str
+    prefer_gpu: bool = True
+
+
+def get_selected_llm_model_id():
+    cfg = load_profile(get_last_active_profile())
+    return str(cfg.get("llm_model_id", DEFAULT_MODEL) or DEFAULT_MODEL).strip()
+
+
+@app.get("/models/llm")
+async def list_llm_models():
+    selected = get_selected_llm_model_id()
+    models = []
+    for model_id, info in AVAILABLE_MODELS.items():
+        model_path = get_model_path(model_id)
+        models.append(
+            {
+                "id": model_id,
+                "selected": model_id == selected,
+                "installed": os.path.exists(model_path),
+                "ready": is_llm_model_ready(model_id),
+                "path": model_path,
+                **info,
+            }
+        )
+    return {
+        "selected_model_id": selected,
+        "models": models,
+        "download_state": get_download_state(selected),
+        "llama_server_path": get_server_path(),
+        "llama_server_exists": os.path.exists(get_server_path()),
+    }
+
+
+@app.post("/models/llm/select")
+async def select_llm_model(request: LlmModelSelectRequest):
+    if request.model_id not in AVAILABLE_MODELS:
+        raise HTTPException(status_code=400, detail="Unsupported LLM model")
+    profile_name = get_last_active_profile()
+    cfg = load_profile(profile_name)
+    cfg["llm_model_id"] = request.model_id
+    save_runtime_profile(profile_name, cfg)
+    engine = get_engine_if_initialized()
+    if engine is not None:
+        engine.set_model_id(request.model_id)
+    return await list_llm_models()
+
+
+@app.post("/models/llm/{model_id}/download")
+async def download_llm_model(model_id: str):
+    if model_id not in AVAILABLE_MODELS:
+        raise HTTPException(status_code=400, detail="Unsupported LLM model")
+    result = check_and_download_resources(model_id)
+    return {"model_id": model_id, **(result if isinstance(result, dict) else {"ok": bool(result)})}
+
+
+@app.delete("/models/llm/{model_id}")
+async def delete_llm_model(model_id: str):
+    if model_id not in AVAILABLE_MODELS:
+        raise HTTPException(status_code=400, detail="Unsupported LLM model")
+    ok, message = delete_model(model_id)
+    return {"ok": ok, "model_id": model_id, "message": message}
+
+
+@app.get("/models/llm/{model_id}/download-state")
+async def llm_download_state(model_id: str):
+    return get_download_state(model_id)
+
+
+@app.get("/models/whisper")
+async def list_whisper_models():
+    selected = str(load_profile(get_last_active_profile()).get("model_size", "base.en") or "base.en").strip()
+    return {
+        "selected_model_size": selected,
+        "supported": list(SUPPORTED_MODEL_SIZES),
+        "models": list_cached_models(),
+        "download_state": get_whisper_download_state(selected),
+    }
+
+
+@app.post("/models/whisper/download")
+async def download_whisper(request: WhisperModelRequest):
+    result = download_whisper_model(request.model_size, prefer_gpu=request.prefer_gpu)
+    return result
+
+
+@app.delete("/models/whisper/{model_size}")
+async def delete_whisper(model_size: str):
+    result = remove_cached_model(model_size)
+    if transcriber is not None and getattr(transcriber, "model_size", "") == model_size:
+        transcriber.unload()
+    return result
+
+
+@app.post("/models/whisper/test")
+async def test_whisper(request: WhisperModelRequest):
+    if request.model_size not in SUPPORTED_MODEL_SIZES:
+        return {"ok": False, "message": f"Unsupported Whisper model: {request.model_size}"}
+    try:
+        probe = Transcriber(profile_name=get_last_active_profile(), preload=False)
+        probe.model_size = request.model_size
+        ok = probe.ensure_loaded()
+        probe.unload()
+        return {"ok": bool(ok), "message": f"Whisper {request.model_size} {'loaded' if ok else 'failed to load'}."}
+    except Exception as exc:
+        logging.exception("Whisper test failed")
+        return {"ok": False, "message": str(exc)}
+
+
+@app.post("/models/unload/{component}")
+async def unload_model_component(component: str):
+    normalized = component.strip().lower()
+    if normalized == "stt":
+        if transcriber is not None:
+            transcriber.unload()
+        return {"ok": True, "component": "stt", "message": "STT unloaded."}
+    if normalized == "llm":
+        engine = get_engine_if_initialized()
+        if engine is not None:
+            engine.shutdown()
+        return {"ok": True, "component": "llm", "message": "LLM unloaded."}
+    if normalized == "tts":
+        if tts_engine is not None:
+            tts_engine.unload()
+        return {"ok": True, "component": "tts", "message": "TTS unloaded."}
+    raise HTTPException(status_code=400, detail="Unsupported component")
+
+
+@app.get("/diagnostics/logs")
+async def diagnostics_logs(lines: int = 120):
+    return read_log_tail(lines)
+
+
+@app.get("/diagnostics/paths")
+async def diagnostics_paths():
+    return get_runtime_paths_snapshot()
+
+
+@app.get("/runtime/errors")
+async def runtime_errors():
+    return {"errors": get_runtime_error_history()}
 
 
 @app.get("/drafts")
@@ -343,7 +1054,10 @@ async def accept_draft(draft_id: int):
         for draft in draft_queue:
             if draft["id"] == draft_id:
                 draft["status"] = "accepted"
-                return dict(draft)
+                mark_draft_pending_send(draft)
+                response = dict(draft)
+                broadcast_status_threadsafe("draft_accepted", {"draft_id": draft_id, "pending_send": True})
+                return response
     raise HTTPException(status_code=404, detail="Draft not found")
 
 
@@ -353,8 +1067,210 @@ async def decline_draft(draft_id: int):
         for draft in draft_queue:
             if draft["id"] == draft_id:
                 draft["status"] = "declined"
-                return dict(draft)
+                draft["pending_send"] = False
+                while draft_id in pending_manual_send_ids:
+                    pending_manual_send_ids.remove(draft_id)
+                response = dict(draft)
+                broadcast_status_threadsafe("draft_declined", {"draft_id": draft_id})
+                return response
     raise HTTPException(status_code=404, detail="Draft not found")
+
+
+@app.post("/drafts/{draft_id}/retry")
+async def retry_draft(draft_id: int):
+    with draft_lock:
+        recording_result = draft_recordings.get(draft_id)
+
+    if recording_result is None:
+        raise HTTPException(status_code=409, detail="No recording data is available for this draft")
+
+    return process_recording_result(recording_result)
+
+
+class DraftEditRequest(BaseModel):
+    final_text: str
+
+
+class DraftRewriteRequest(BaseModel):
+    action: str = "clearer"
+    custom_instruction: str = ""
+
+
+class DraftTtsRequest(BaseModel):
+    text: str = ""
+    voice_id: str = "standard_female"
+    speed: float = 1.0
+    pitch: float = 1.0
+
+
+def get_rewrite_instruction(action, custom_instruction=""):
+    action_key = str(action or "clearer").strip().lower()
+    custom = str(custom_instruction or "").strip()
+    instructions = {
+        "shorter": "Make the draft shorter while preserving the user's intent and important details.",
+        "clearer": "Make the draft clearer, more direct, and easier to read.",
+        "tone": "Adjust the tone to be polished, warm, and professional without changing the meaning.",
+        "custom": custom or "Rewrite the draft according to the user's custom instruction.",
+    }
+    return action_key if action_key in instructions else "clearer", instructions.get(action_key, instructions["clearer"])
+
+
+def rewrite_draft_text(text, action, custom_instruction=""):
+    action_key, instruction = get_rewrite_instruction(action, custom_instruction)
+    clean_text = str(text or "").strip()
+    if not clean_text:
+        raise ValueError("No cleaned output is available to rewrite.")
+
+    engine = get_engine()
+    token_limit = get_active_token_limit()
+    if hasattr(engine, "rewrite_text"):
+        return (
+            engine.rewrite_text(
+                clean_text,
+                action=action_key,
+                custom_instruction=custom_instruction,
+                max_output_tokens=token_limit,
+            )
+            or clean_text
+        )
+
+    prompt = (
+        f"{instruction}\n\n"
+        "Return only the rewritten text.\n\n"
+        f"Draft:\n{clean_text}"
+    )
+    return engine.process_fast_lane(prompt, "True Janitor") or clean_text
+
+
+@app.post("/drafts/{draft_id}/edit")
+async def edit_draft(draft_id: int, request: DraftEditRequest):
+    with draft_lock:
+        draft = get_draft_by_id(draft_id)
+        if draft is None:
+            raise HTTPException(status_code=404, detail="Draft not found")
+
+        draft["final_text"] = request.final_text or ""
+        if draft.get("status") in {"accepted", "declined", "sent", "send_error"}:
+            draft["status"] = "pending"
+            draft["pending_send"] = False
+            while draft_id in pending_manual_send_ids:
+                pending_manual_send_ids.remove(draft_id)
+        else:
+            draft["status"] = draft.get("status", "pending")
+        draft["error"] = ""
+        draft["updated_at"] = datetime.now(timezone.utc).isoformat()
+        update_draft_review_fields(draft)
+        response = dict(draft)
+
+    broadcast_status_threadsafe(
+        "draft_updated",
+        {
+            "draft_id": response["id"],
+            "final_text": response["final_text"],
+            "token_count": response["token_count"],
+            "token_limit": response["token_limit"],
+            "long_text": response["long_text"],
+        },
+    )
+    return response
+
+
+@app.post("/drafts/{draft_id}/rewrite")
+async def rewrite_draft(draft_id: int, request: DraftRewriteRequest):
+    with draft_lock:
+        draft = get_draft_by_id(draft_id)
+        if draft is None:
+            raise HTTPException(status_code=404, detail="Draft not found")
+        source_text = draft.get("final_text") or draft.get("raw_text") or ""
+
+    action_key, _instruction = get_rewrite_instruction(request.action, request.custom_instruction)
+    try:
+        broadcast_status_threadsafe("draft_rewriting", {"draft_id": draft_id, "action": action_key})
+        rewritten = str(rewrite_draft_text(source_text, action_key, request.custom_instruction) or source_text).strip()
+        with draft_lock:
+            draft = get_draft_by_id(draft_id)
+            if draft is None:
+                raise HTTPException(status_code=404, detail="Draft not found")
+            draft["final_text"] = rewritten
+            draft["status"] = "pending"
+            draft["error"] = ""
+            draft["rewrite_action"] = action_key
+            draft["updated_at"] = datetime.now(timezone.utc).isoformat()
+            update_draft_review_fields(draft)
+            response = dict(draft)
+        broadcast_status_threadsafe(
+            "draft_rewritten",
+            {
+                "draft_id": response["id"],
+                "action": action_key,
+                "final_text": response["final_text"],
+                "token_count": response["token_count"],
+                "token_limit": response["token_limit"],
+                "long_text": response["long_text"],
+            },
+        )
+        return response
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logging.exception("Draft rewrite failed")
+        record_runtime_error("review", str(exc), {"action": "rewrite", "draft_id": draft_id})
+        broadcast_status_threadsafe("draft_rewrite_error", {"draft_id": draft_id, "action": action_key, "error": str(exc)})
+        return {
+            "ok": False,
+            "draft_id": draft_id,
+            "action": action_key,
+            "error": str(exc),
+            "draft": dict(get_draft_by_id(draft_id) or {}),
+        }
+
+
+@app.post("/drafts/{draft_id}/tts")
+async def speak_draft(draft_id: int, request: DraftTtsRequest):
+    with draft_lock:
+        draft = get_draft_by_id(draft_id)
+        if draft is None:
+            raise HTTPException(status_code=404, detail="Draft not found")
+        text = (request.text or draft.get("final_text") or draft.get("raw_text") or "").strip()
+
+    if not text:
+        return {"ok": False, "draft_id": draft_id, "message": "No draft text is available to read aloud.", "error": "empty_text"}
+
+    logging.info(f"Draft TTS Request: draft={draft_id} '{text[:20]}...' | Voice: {request.voice_id} | Speed: {request.speed}x")
+    voice_path = get_voices_dir() / f"{request.voice_id}.npy"
+    if request.voice_id.startswith("cloned_") and not os.path.exists(voice_path):
+        logging.warning(f"Voice {request.voice_id} not found, using default.")
+
+    result = {
+        "ok": True,
+        "status": "success",
+        "draft_id": draft_id,
+        "message": "Draft text sent to TTS.",
+        "mock_url": "/audio/placeholder.wav",
+        "text_length": len(text),
+    }
+    broadcast_status_threadsafe("draft_tts_requested", {"draft_id": draft_id, "text_length": len(text)})
+    return result
+
+
+class DraftSendRequest(BaseModel):
+    action: str = "copy_only"
+    open_chat: bool = False
+
+
+@app.post("/drafts/{draft_id}/send")
+async def send_draft(draft_id: int, request: DraftSendRequest = DraftSendRequest()):
+    return send_draft_by_id(draft_id, action=request.action, open_chat=request.open_chat)
+
+
+@app.post("/runtime/primary-action")
+async def runtime_primary_action():
+    return handle_primary_action()
+
+
+@app.post("/runtime/emergency-stop")
+async def runtime_emergency_stop():
+    return emergency_stop_runtime()
 
 
 @app.post("/runtime/warmup")
@@ -371,6 +1287,7 @@ async def runtime_warmup(request: RuntimeWarmupRequest):
             }
         except Exception as e:
             logging.exception("Transcriber warmup failure")
+            record_runtime_error("stt", str(e), {"action": "warmup"})
             result["stt"] = {
                 "ok": False,
                 "initialized": transcriber is not None,
@@ -388,6 +1305,7 @@ async def runtime_warmup(request: RuntimeWarmupRequest):
             }
         except Exception as e:
             logging.exception("LLM warmup failure")
+            record_runtime_error("llm", str(e), {"action": "warmup"})
             engine = get_engine_if_initialized()
             result["llm"] = {
                 "ok": False,
@@ -405,6 +1323,7 @@ async def runtime_warmup(request: RuntimeWarmupRequest):
             }
         except Exception as e:
             logging.exception("Hotkey warmup failure")
+            record_runtime_error("hotkeys", str(e), {"action": "warmup"})
             result["hotkeys"] = {
                 "ok": False,
                 "started": hotkey_manager_started,

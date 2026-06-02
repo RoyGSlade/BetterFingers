@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const net = require('node:net');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { app } = require('electron');
@@ -24,6 +25,40 @@ async function waitForHealthy(url, timeoutMs = 30000) {
   }
 
   throw new Error(`Timed out waiting for backend health at ${url}`);
+}
+
+function isTcpPortOpen(host, port, timeoutMs = 800) {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let settled = false;
+
+    const finish = (isOpen) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      socket.destroy();
+      resolve(isOpen);
+    };
+
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => finish(true));
+    socket.once('timeout', () => finish(false));
+    socket.once('error', () => finish(false));
+    socket.connect(port, host);
+  });
+}
+
+async function tryReadHealth(url) {
+  try {
+    const response = await fetch(url, { cache: 'no-store' });
+    if (!response.ok) {
+      return null;
+    }
+    return await response.json();
+  } catch (error) {
+    return null;
+  }
 }
 
 function resolveBackendExecutable() {
@@ -118,6 +153,24 @@ function createSidecar({
   };
   let childProcess = null;
   let startPromise = null;
+  let status = {
+    state: 'stopped',
+    message: 'Backend has not started yet.',
+    pid: null,
+    healthUrl,
+    ownsProcess: false,
+    packaged: isPackaged,
+    error: '',
+  };
+
+  function setStatus(nextStatus) {
+    status = {
+      ...status,
+      ...nextStatus,
+      pid: childProcess?.pid ?? null,
+      ownsProcess: Boolean(childProcess),
+    };
+  }
 
   async function start() {
     if (startPromise) {
@@ -129,6 +182,38 @@ function createSidecar({
       let exitPromise = null;
 
       if (!childProcess) {
+        setStatus({
+          state: 'starting',
+          message: `Checking backend port ${host}:${port}...`,
+          error: '',
+        });
+
+        const portOpen = await isTcpPortOpen(host, port);
+        if (portOpen) {
+          const existingHealth = await tryReadHealth(healthUrl);
+          if (existingHealth?.status) {
+            setStatus({
+              state: 'external',
+              message: `A BetterFingers backend is already responding on ${host}:${port}. Electron will use it but will not own or stop that process.`,
+              health: existingHealth,
+            });
+            return {
+              url: healthUrl,
+              packaged: isPackaged,
+              external: true,
+              health: existingHealth,
+            };
+          }
+
+          const message = `Port ${port} is already in use, but it is not responding as BetterFingers. Stop the process using ${host}:${port} or choose a different backend port.`;
+          setStatus({
+            state: 'error',
+            message,
+            error: message,
+          });
+          throw new Error(message);
+        }
+
         if (isPackaged) {
           const executablePath = resolveBackendExecutable();
           childProcess = spawn(executablePath, ['--host', host, '--port', String(port)], {
@@ -146,6 +231,12 @@ function createSidecar({
           });
         }
 
+        setStatus({
+          state: 'starting',
+          message: `Started backend process and waiting for ${healthUrl}.`,
+          error: '',
+        });
+
         childProcess.stdout?.on('data', (chunk) => {
           process.stdout.write(`[backend] ${chunk}`);
         });
@@ -158,11 +249,24 @@ function createSidecar({
           exitListener = (code, signal) => {
             const descriptor = signal ? `signal ${signal}` : `code ${code}`;
             childProcess = null;
-            reject(new Error(`BetterFingers backend exited before readiness (${descriptor})`));
+            const message = `BetterFingers backend exited before readiness (${descriptor}). If port ${port} is occupied, stop the other process and restart Electron.`;
+            setStatus({
+              state: 'error',
+              message,
+              error: message,
+              pid: null,
+              ownsProcess: false,
+            });
+            reject(new Error(message));
           };
 
           childProcess.once('error', (error) => {
             childProcess = null;
+            setStatus({
+              state: 'error',
+              message: `Failed to start backend: ${error.message}`,
+              error: error.message,
+            });
             reject(error);
           });
           childProcess.once('exit', exitListener);
@@ -174,6 +278,13 @@ function createSidecar({
           waitForHealthy(healthUrl),
           exitPromise,
         ].filter(Boolean));
+
+        setStatus({
+          state: 'ready',
+          message: `Backend is ready at ${healthUrl}.`,
+          health: result,
+          error: '',
+        });
 
         return {
           url: healthUrl,
@@ -200,10 +311,22 @@ function createSidecar({
     startPromise = null;
 
     if (!processRef) {
+      setStatus({
+        state: status.state === 'external' ? 'external' : 'stopped',
+        message: status.state === 'external' ? status.message : 'Backend is stopped.',
+        pid: null,
+        ownsProcess: false,
+      });
       return;
     }
 
     await killChildProcess(processRef);
+    setStatus({
+      state: 'stopped',
+      message: 'Backend process stopped.',
+      pid: null,
+      ownsProcess: false,
+    });
   }
 
   function getPid() {
@@ -219,6 +342,7 @@ function createSidecar({
     stop,
     getPid,
     isRunning,
+    getStatus: () => ({ ...status, pid: childProcess?.pid ?? status.pid }),
     healthUrl,
   };
 }
