@@ -1,5 +1,8 @@
 const BACKEND_ORIGIN = 'http://127.0.0.1:8000';
 const HEALTH_URL = `${BACKEND_ORIGIN}/health`;
+const RUNTIME_STATUS_URL = `${BACKEND_ORIGIN}/runtime/status`;
+const RUNTIME_WARMUP_URL = `${BACKEND_ORIGIN}/runtime/warmup`;
+const CAPABILITIES_URL = `${BACKEND_ORIGIN}/capabilities`;
 const VOICE_STATUS_WS_URL = 'ws://127.0.0.1:8000/ws/voice_status';
 
 async function fetchHealth(timeoutMs = 2500) {
@@ -14,6 +17,58 @@ async function fetchHealth(timeoutMs = 2500) {
 
     if (!response.ok) {
       throw new Error(`Health check failed with status ${response.status}`);
+    }
+
+    return await response.json();
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function fetchJson(url, timeoutMs = 2500) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`${url} failed with status ${response.status}`);
+    }
+
+    return await response.json();
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function fetchRuntimeStatus(timeoutMs = 2500) {
+  return fetchJson(RUNTIME_STATUS_URL, timeoutMs);
+}
+
+async function fetchCapabilities(timeoutMs = 2500) {
+  return fetchJson(CAPABILITIES_URL, timeoutMs);
+}
+
+async function warmupRuntime({ stt = false, llm = false, hotkeys = false } = {}, timeoutMs = 120000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(RUNTIME_WARMUP_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ stt, llm, hotkeys }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Runtime warmup failed with status ${response.status}`);
     }
 
     return await response.json();
@@ -114,9 +169,15 @@ function connectVoiceStatus({
 
 export {
   BACKEND_ORIGIN,
+  CAPABILITIES_URL,
   HEALTH_URL,
+  RUNTIME_STATUS_URL,
+  RUNTIME_WARMUP_URL,
   VOICE_STATUS_WS_URL,
   connectVoiceStatus,
+  fetchCapabilities,
   fetchHealth,
+  fetchRuntimeStatus,
+  warmupRuntime,
   normalizeHealthPayload,
 };

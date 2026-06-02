@@ -1,7 +1,10 @@
 import {
   connectVoiceStatus,
+  fetchCapabilities,
   fetchHealth,
+  fetchRuntimeStatus,
   normalizeHealthPayload,
+  warmupRuntime,
 } from './api/backend.js';
 
 const backendStatusEl = document.getElementById('backendStatus');
@@ -12,6 +15,13 @@ const wsConnectionEl = document.getElementById('wsConnection');
 const voiceStatusEl = document.getElementById('voiceStatus');
 const voiceStatusDetailEl = document.getElementById('voiceStatusDetail');
 const quitButton = document.getElementById('quitButton');
+const refreshRuntimeButton = document.getElementById('refreshRuntimeButton');
+const warmupSttButton = document.getElementById('warmupSttButton');
+const warmupLlmButton = document.getElementById('warmupLlmButton');
+const startHotkeysButton = document.getElementById('startHotkeysButton');
+const runtimeStatusListEl = document.getElementById('runtimeStatusList');
+const capabilitiesListEl = document.getElementById('capabilitiesList');
+const capabilitiesSummaryEl = document.getElementById('capabilitiesSummary');
 
 let healthRefreshTimer = null;
 let websocketHandle = null;
@@ -23,6 +33,54 @@ function setBadgeState(el, text, tone) {
 
   el.textContent = text;
   el.dataset.tone = tone;
+}
+
+function formatValue(value) {
+  if (typeof value === 'boolean') {
+    return value ? 'yes' : 'no';
+  }
+
+  if (value === null || value === undefined || value === '') {
+    return 'unknown';
+  }
+
+  return String(value);
+}
+
+function renderDetailList(container, values, preferredKeys = []) {
+  if (!container) {
+    return;
+  }
+
+  const keys = preferredKeys.length ? preferredKeys : Object.keys(values ?? {});
+  container.innerHTML = '';
+
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(values ?? {}, key)) {
+      continue;
+    }
+
+    const row = document.createElement('div');
+    row.className = 'detail-row';
+
+    const label = document.createElement('span');
+    label.className = 'detail-label';
+    label.textContent = key.replaceAll('_', ' ');
+
+    const value = document.createElement('strong');
+    value.className = 'detail-value';
+    value.textContent = formatValue(values[key]);
+    if (typeof values[key] === 'boolean') {
+      value.dataset.tone = values[key] ? 'success' : 'warning';
+    }
+
+    row.append(label, value);
+    container.append(row);
+  }
+
+  if (!container.children.length) {
+    container.innerHTML = '<span class="empty-state">No data available</span>';
+  }
 }
 
 async function refreshHealth() {
@@ -47,6 +105,68 @@ async function refreshHealth() {
   }
 }
 
+async function refreshRuntime() {
+  const runtime = await fetchRuntimeStatus();
+  renderDetailList(runtimeStatusListEl, runtime, [
+    'transcriber_initialized',
+    'transcriber_loaded',
+    'llm_initialized',
+    'llm_ready',
+    'hotkey_manager_started',
+  ]);
+  return runtime;
+}
+
+async function refreshCapabilities() {
+  const capabilities = await fetchCapabilities();
+  if (capabilitiesSummaryEl) {
+    const platform = capabilities.platform ?? 'unknown';
+    const session = capabilities.session_type ?? 'unknown';
+    capabilitiesSummaryEl.textContent = `${platform} · ${session}`;
+  }
+  renderDetailList(capabilitiesListEl, capabilities, [
+    'platform',
+    'session_type',
+    'is_linux',
+    'is_wayland',
+    'is_x11',
+    'supports_basic_clipboard',
+    'supports_rich_clipboard_restore',
+    'supports_input_injection',
+    'supports_global_hotkeys',
+    'supports_audio_ducking',
+    'supports_stt',
+    'supports_llm',
+    'supports_tts',
+  ]);
+  return capabilities;
+}
+
+async function runWarmup(button, payload) {
+  if (!button) {
+    return;
+  }
+
+  const previousText = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Working...';
+
+  try {
+    await warmupRuntime(payload);
+    await Promise.all([refreshHealth(), refreshRuntime()]);
+  } catch (error) {
+    button.textContent = 'Failed';
+    setTimeout(() => {
+      button.textContent = previousText;
+      button.disabled = false;
+    }, 1400);
+    return;
+  }
+
+  button.textContent = previousText;
+  button.disabled = false;
+}
+
 function updateConnectionPill(state, detail) {
   if (wsConnectionEl) {
     wsConnectionEl.textContent = detail ? `${state} · ${detail}` : state;
@@ -66,6 +186,17 @@ function updateVoiceStatus(message) {
 
 async function bootstrap() {
   await refreshHealth();
+  await Promise.all([
+    refreshRuntime().catch(() => {
+      renderDetailList(runtimeStatusListEl, {});
+    }),
+    refreshCapabilities().catch(() => {
+      if (capabilitiesSummaryEl) {
+        capabilitiesSummaryEl.textContent = 'Unavailable';
+      }
+      renderDetailList(capabilitiesListEl, {});
+    }),
+  ]);
 
   healthRefreshTimer = setInterval(() => {
     refreshHealth();
@@ -82,6 +213,22 @@ async function bootstrap() {
 
 quitButton?.addEventListener('click', () => {
   window.betterFingers?.quitApp?.();
+});
+
+refreshRuntimeButton?.addEventListener('click', () => {
+  Promise.all([refreshHealth(), refreshRuntime()]);
+});
+
+warmupSttButton?.addEventListener('click', () => {
+  runWarmup(warmupSttButton, { stt: true });
+});
+
+warmupLlmButton?.addEventListener('click', () => {
+  runWarmup(warmupLlmButton, { llm: true });
+});
+
+startHotkeysButton?.addEventListener('click', () => {
+  runWarmup(startHotkeysButton, { hotkeys: true });
 });
 
 window.addEventListener('beforeunload', () => {

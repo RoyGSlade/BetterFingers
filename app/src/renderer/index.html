@@ -45,6 +45,40 @@
       <section class="stream-panel">
         <div class="panel-header">
           <div>
+            <p class="eyebrow">Runtime controls</p>
+            <h2>Backend runtime</h2>
+          </div>
+          <button id="refreshRuntimeButton" class="secondary-button" type="button">Refresh Runtime</button>
+        </div>
+
+        <div class="action-row" aria-label="Runtime warmup actions">
+          <button id="warmupSttButton" class="secondary-button" type="button">Warm Up STT</button>
+          <button id="warmupLlmButton" class="secondary-button" type="button">Warm Up LLM</button>
+          <button id="startHotkeysButton" class="secondary-button" type="button">Start Hotkeys</button>
+        </div>
+
+        <div id="runtimeStatusList" class="detail-list">
+          <span class="empty-state">Runtime status loading...</span>
+        </div>
+      </section>
+
+      <section class="stream-panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Platform</p>
+            <h2>Capabilities</h2>
+          </div>
+          <div class="connection-pill" id="capabilitiesSummary">Loading...</div>
+        </div>
+
+        <div id="capabilitiesList" class="detail-list">
+          <span class="empty-state">Capabilities loading...</span>
+        </div>
+      </section>
+
+      <section class="stream-panel">
+        <div class="panel-header">
+          <div>
             <p class="eyebrow">WebSocket stream</p>
             <h2>Voice status</h2>
           </div>

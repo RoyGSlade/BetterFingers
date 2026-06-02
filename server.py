@@ -10,6 +10,8 @@ from hotkey_manager import HotkeyManager
 from user_profile_manager import profile_manager
 from intent_engine import intent_engine, IntentState
 from project_generator import project_generator
+from platform_capabilities import get_capabilities
+from platform_paths import ensure_app_dirs, get_app_data_dir, get_config_dir
 # Configure Logging
 from utils import setup_logging
 # Will be initialized in __main__ or implicitly if imported (logging lib handles singleton)
@@ -35,6 +37,18 @@ hotkey_manager = None
 hotkey_recorder = None
 hotkey_manager_started = False
 active_websockets = []
+
+
+def get_voices_dir():
+    ensure_app_dirs()
+    voices_dir = get_app_data_dir() / "voices"
+    voices_dir.mkdir(parents=True, exist_ok=True)
+    return voices_dir
+
+
+def get_graph_path():
+    ensure_app_dirs()
+    return get_config_dir() / "graph.json"
 
 
 def is_lazy_startup_enabled():
@@ -229,6 +243,11 @@ async def runtime_status():
     return get_runtime_status_snapshot()
 
 
+@app.get("/capabilities")
+async def capabilities():
+    return get_capabilities()
+
+
 @app.post("/runtime/warmup")
 async def runtime_warmup(request: RuntimeWarmupRequest):
     result = {"requested": request.dict()}
@@ -328,7 +347,7 @@ async def tts_speak(request: TTSRequest):
     # In real impl, we would run Lux inference here
     
     # Verify voice exists
-    voice_path = os.path.join(os.getenv('APPDATA', ''), "BetterFingers", "voices", f"{request.voice_id}.npy")
+    voice_path = get_voices_dir() / f"{request.voice_id}.npy"
     if request.voice_id.startswith("cloned_") and not os.path.exists(voice_path):
         logging.warning(f"Voice {request.voice_id} not found, using default.")
         
@@ -337,26 +356,24 @@ async def tts_speak(request: TTSRequest):
 @app.post("/tts/clone")
 async def tts_clone(file: UploadFile = File(...), name: str = "My Voice"):
     # Ensure directory exists
-    voices_dir = os.path.join(os.getenv('APPDATA', ''), "BetterFingers", "voices")
-    os.makedirs(voices_dir, exist_ok=True)
+    voices_dir = get_voices_dir()
     
     safe_name = "".join([c for c in name if c.isalnum() or c in (' ', '_', '-')]).strip().replace(" ", "_")
-    target_path = os.path.join(voices_dir, f"cloned_{safe_name}.wav") # Saving wav for now, real impl extracts embedding
+    target_path = voices_dir / f"cloned_{safe_name}.wav" # Saving wav for now, real impl extracts embedding
     
     try:
         with open(target_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
         logging.info(f"Voice cloned: {safe_name} saved to {target_path}")
-        return {"status": "success", "voice_id": f"cloned_{safe_name}", "path": target_path}
+        return {"status": "success", "voice_id": f"cloned_{safe_name}", "path": str(target_path)}
     except Exception as e:
         logging.error(f"Cloning failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/tts/voices")
 async def list_voices():
-    voices_dir = os.path.join(os.getenv('APPDATA', ''), "BetterFingers", "voices")
-    os.makedirs(voices_dir, exist_ok=True)
+    voices_dir = get_voices_dir()
     
     cloned = []
     if os.path.exists(voices_dir):
@@ -407,9 +424,9 @@ class GraphRequest(BaseModel):
 
 @app.post("/graph/save")
 async def save_graph(data: GraphRequest):
-    graph_path = os.path.join(os.getenv('APPDATA'), "BetterFingers", "graph.json")
+    graph_path = get_graph_path()
     try:
-        os.makedirs(os.path.dirname(graph_path), exist_ok=True)
+        graph_path.parent.mkdir(parents=True, exist_ok=True)
         with open(graph_path, "w") as f:
             import json
             json.dump(data.dict(), f)
@@ -420,7 +437,7 @@ async def save_graph(data: GraphRequest):
 
 @app.get("/graph/load")
 async def load_graph():
-    graph_path = os.path.join(os.getenv('APPDATA'), "BetterFingers", "graph.json")
+    graph_path = get_graph_path()
     if os.path.exists(graph_path):
         try:
             with open(graph_path, "r") as f:
