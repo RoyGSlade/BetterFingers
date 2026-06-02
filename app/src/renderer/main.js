@@ -20,6 +20,7 @@ const warmupSttButton = document.getElementById('warmupSttButton');
 const warmupLlmButton = document.getElementById('warmupLlmButton');
 const startHotkeysButton = document.getElementById('startHotkeysButton');
 const runtimeStatusListEl = document.getElementById('runtimeStatusList');
+const warmupMessageEl = document.getElementById('warmupMessage');
 const capabilitiesListEl = document.getElementById('capabilitiesList');
 const capabilitiesSummaryEl = document.getElementById('capabilitiesSummary');
 
@@ -83,6 +84,51 @@ function renderDetailList(container, values, preferredKeys = []) {
   }
 }
 
+function getTranscriberRuntimeState(runtime) {
+  if (runtime?.transcriber_loaded) {
+    return { text: 'loaded', tone: 'success' };
+  }
+
+  if (runtime?.transcriber_initialized) {
+    return { text: 'initialized', tone: 'warning' };
+  }
+
+  return { text: 'unloaded', tone: 'danger' };
+}
+
+function getLlmRuntimeState(runtime) {
+  if (runtime?.llm_ready) {
+    return { text: 'ready', tone: 'success' };
+  }
+
+  if (runtime?.llm_initialized) {
+    return { text: 'initialized', tone: 'warning' };
+  }
+
+  return { text: 'unloaded', tone: 'danger' };
+}
+
+function updateRuntimeTopCards(runtime) {
+  const transcriber = getTranscriberRuntimeState(runtime);
+  const llm = getLlmRuntimeState(runtime);
+
+  setBadgeState(transcriberStatusEl, transcriber.text, transcriber.tone);
+  setBadgeState(llmStatusEl, llm.text, llm.tone);
+}
+
+function setWarmupMessage(message = '', tone = '') {
+  if (!warmupMessageEl) {
+    return;
+  }
+
+  warmupMessageEl.textContent = message;
+  if (tone) {
+    warmupMessageEl.dataset.tone = tone;
+  } else {
+    delete warmupMessageEl.dataset.tone;
+  }
+}
+
 async function refreshHealth() {
   try {
     const payload = await fetchHealth();
@@ -92,9 +138,6 @@ async function refreshHealth() {
     if (backendDetailEl) {
       backendDetailEl.textContent = 'FastAPI /health responded successfully';
     }
-
-    setBadgeState(transcriberStatusEl, health.transcriberStatus, health.transcriberStatus === 'ready' ? 'success' : 'warning');
-    setBadgeState(llmStatusEl, health.llmEngineStatus, health.llmEngineStatus === 'ready' ? 'success' : 'warning');
   } catch (error) {
     setBadgeState(backendStatusEl, 'offline', 'danger');
     if (backendDetailEl) {
@@ -107,6 +150,7 @@ async function refreshHealth() {
 
 async function refreshRuntime() {
   const runtime = await fetchRuntimeStatus();
+  updateRuntimeTopCards(runtime);
   renderDetailList(runtimeStatusListEl, runtime, [
     'transcriber_initialized',
     'transcriber_loaded',
@@ -150,19 +194,19 @@ async function runWarmup(button, payload) {
   const previousText = button.textContent;
   button.disabled = true;
   button.textContent = 'Working...';
+  setWarmupMessage('');
 
   try {
     await warmupRuntime(payload);
     await Promise.all([refreshHealth(), refreshRuntime()]);
   } catch (error) {
-    button.textContent = 'Failed';
-    setTimeout(() => {
-      button.textContent = previousText;
-      button.disabled = false;
-    }, 1400);
+    setWarmupMessage(`Warmup failed: ${error.message}`, 'danger');
+    button.textContent = previousText;
+    button.disabled = false;
     return;
   }
 
+  setWarmupMessage('Warmup request completed.', 'success');
   button.textContent = previousText;
   button.disabled = false;
 }
@@ -188,6 +232,8 @@ async function bootstrap() {
   await refreshHealth();
   await Promise.all([
     refreshRuntime().catch(() => {
+      setBadgeState(transcriberStatusEl, 'offline', 'danger');
+      setBadgeState(llmStatusEl, 'offline', 'danger');
       renderDetailList(runtimeStatusListEl, {});
     }),
     refreshCapabilities().catch(() => {
@@ -200,6 +246,10 @@ async function bootstrap() {
 
   healthRefreshTimer = setInterval(() => {
     refreshHealth();
+    refreshRuntime().catch(() => {
+      setBadgeState(transcriberStatusEl, 'offline', 'danger');
+      setBadgeState(llmStatusEl, 'offline', 'danger');
+    });
   }, 3000);
 
   websocketHandle = connectVoiceStatus({
@@ -216,7 +266,14 @@ quitButton?.addEventListener('click', () => {
 });
 
 refreshRuntimeButton?.addEventListener('click', () => {
-  Promise.all([refreshHealth(), refreshRuntime()]);
+  Promise.all([
+    refreshHealth(),
+    refreshRuntime().catch(() => {
+      setBadgeState(transcriberStatusEl, 'offline', 'danger');
+      setBadgeState(llmStatusEl, 'offline', 'danger');
+      renderDetailList(runtimeStatusListEl, {});
+    }),
+  ]);
 });
 
 warmupSttButton?.addEventListener('click', () => {

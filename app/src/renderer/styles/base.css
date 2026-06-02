@@ -181,6 +181,12 @@ h1 {
   gap: 10px;
 }
 
+.warmup-message {
+  min-height: 1.4rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
 .detail-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

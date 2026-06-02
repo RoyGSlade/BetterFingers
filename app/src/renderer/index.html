@@ -32,13 +32,13 @@
         <article class="status-card">
           <span class="status-label">Transcriber</span>
           <strong id="transcriberStatus" class="status-value">Loading...</strong>
-          <p class="status-detail">FastAPI health probe</p>
+          <p class="status-detail">Runtime initialization and model load state</p>
         </article>
 
         <article class="status-card">
           <span class="status-label">LLM Engine</span>
           <strong id="llmStatus" class="status-value">Loading...</strong>
-          <p class="status-detail">FastAPI health probe</p>
+          <p class="status-detail">Runtime initialization and readiness state</p>
         </article>
       </section>
 
@@ -56,6 +56,8 @@
           <button id="warmupLlmButton" class="secondary-button" type="button">Warm Up LLM</button>
           <button id="startHotkeysButton" class="secondary-button" type="button">Start Hotkeys</button>
         </div>
+
+        <div id="warmupMessage" class="warmup-message" role="status" aria-live="polite"></div>
 
         <div id="runtimeStatusList" class="detail-list">
           <span class="empty-state">Runtime status loading...</span>
