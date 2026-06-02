@@ -260,6 +260,36 @@ async function refreshCapabilities() {
   return capabilities;
 }
 
+function summarizeWarmupResult(result, requestedPayload) {
+  const labels = {
+    stt: 'STT',
+    llm: 'LLM',
+    hotkeys: 'Hotkeys',
+  };
+  const errors = [];
+  const successes = [];
+
+  for (const key of Object.keys(labels)) {
+    if (!requestedPayload[key]) {
+      continue;
+    }
+
+    const row = result?.[key];
+    if (!row) {
+      errors.push(`${labels[key]} returned no result data.`);
+      continue;
+    }
+
+    if (row.ok === false) {
+      errors.push(`${labels[key]} failed: ${row.error || 'Unknown error'}`);
+    } else {
+      successes.push(`${labels[key]} ok`);
+    }
+  }
+
+  return { errors, successes };
+}
+
 async function runWarmup(button, payload) {
   if (!button) {
     return;
@@ -271,8 +301,16 @@ async function runWarmup(button, payload) {
   setWarmupMessage('');
 
   try {
-    await warmupRuntime(payload);
+    const result = await warmupRuntime(payload);
     await Promise.all([refreshHealth(), refreshRuntime()]);
+    const summary = summarizeWarmupResult(result, payload);
+    if (summary.errors.length) {
+      setWarmupMessage(summary.errors.join('\n'), 'danger');
+      button.textContent = previousText;
+      button.disabled = false;
+      return;
+    }
+    setWarmupMessage(summary.successes.length ? summary.successes.join(' · ') : 'Warmup request completed.', 'success');
   } catch (error) {
     setWarmupMessage(`Warmup failed: ${error.message}`, 'danger');
     button.textContent = previousText;
@@ -280,7 +318,6 @@ async function runWarmup(button, payload) {
     return;
   }
 
-  setWarmupMessage('Warmup request completed.', 'success');
   button.textContent = previousText;
   button.disabled = false;
 }

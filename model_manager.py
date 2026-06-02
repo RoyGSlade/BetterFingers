@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 import threading
 import zipfile
 
@@ -91,6 +92,10 @@ def get_models_dir():
 
 def get_model_path(model_id=None):
     """Returns absolute path to the GGUF model."""
+    override = os.getenv("BETTERFINGERS_MODEL_PATH")
+    if override and os.path.exists(override):
+        return override
+
     if not model_id or model_id not in AVAILABLE_MODELS:
         model_id = DEFAULT_MODEL
     filename = AVAILABLE_MODELS[model_id]["filename"]
@@ -115,9 +120,19 @@ def delete_model(model_id):
     return False, "Model not found"
 
 
+def get_server_filename():
+    """Returns the platform-specific llama-server binary name."""
+    if sys.platform.startswith("win"):
+        return "llama-server.exe"
+    return "llama-server"
+
+
 def get_server_path():
-    """Returns absolute path to the llama-server.exe."""
-    return os.path.join(get_models_dir(), SERVER_FILENAME)
+    """Returns absolute path to the llama-server binary."""
+    override = os.getenv("BETTERFINGERS_LLAMA_SERVER")
+    if override and os.path.exists(override):
+        return override
+    return os.path.join(get_models_dir(), get_server_filename())
 
 
 def download_file(url, dest_path, desc="File", progress_callback=None, progress_key=""):
@@ -262,6 +277,15 @@ def check_and_download_resources(model_id=None, progress_callback=None):
 
     server_path = get_server_path()
     if not os.path.exists(server_path):
+        if not sys.platform.startswith("win"):
+            message = (
+                "llama-server is not configured for this platform. "
+                "Install a local llama-server binary and set BETTERFINGERS_LLAMA_SERVER to its path."
+            )
+            logging.warning(message)
+            report({"key": target_model_id, "status": "error", "percent": 0.0, "message": message})
+            return {"ok": False, "model_id": target_model_id, "message": message}
+
         logging.info("llama-server not found. Downloading binaries...")
 
         bin_zip = os.path.join(models_dir, SERVER_ZIP_NAME)

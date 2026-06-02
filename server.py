@@ -365,33 +365,51 @@ async def runtime_warmup(request: RuntimeWarmupRequest):
         try:
             trans = ensure_transcriber_initialized(preload=False)
             result["stt"] = {
+                "ok": True,
                 "initialized": trans is not None,
                 "loaded": bool(trans and trans.ensure_loaded()),
             }
         except Exception as e:
-            logging.error(f"Transcriber warmup failure: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            logging.exception("Transcriber warmup failure")
+            result["stt"] = {
+                "ok": False,
+                "initialized": transcriber is not None,
+                "loaded": bool(getattr(transcriber, "model", None)),
+                "error": str(e),
+            }
 
     if request.llm:
         try:
             engine = get_engine()
             result["llm"] = {
+                "ok": True,
                 "initialized": engine is not None,
                 "ready": bool(getattr(engine, "_ready", False)),
             }
         except Exception as e:
-            logging.error(f"LLM warmup failure: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            logging.exception("LLM warmup failure")
+            engine = get_engine_if_initialized()
+            result["llm"] = {
+                "ok": False,
+                "initialized": engine is not None,
+                "ready": bool(getattr(engine, "_ready", False)) if engine else False,
+                "error": str(e),
+            }
 
     if request.hotkeys:
         try:
             manager = start_hotkey_manager()
             result["hotkeys"] = {
+                "ok": True,
                 "started": manager is not None and hotkey_manager_started,
             }
         except Exception as e:
-            logging.error(f"Hotkey warmup failure: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            logging.exception("Hotkey warmup failure")
+            result["hotkeys"] = {
+                "ok": False,
+                "started": hotkey_manager_started,
+                "error": str(e),
+            }
 
     result.update(get_runtime_status_snapshot())
     return result

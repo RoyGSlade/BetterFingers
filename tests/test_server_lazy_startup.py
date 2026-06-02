@@ -162,6 +162,22 @@ class ServerLazyStartupTests(unittest.TestCase):
                 self.assertTrue(status_after.json()["llm_initialized"])
                 self.assertFalse(status_after.json()["hotkey_manager_started"])
 
+    def test_warmup_returns_200_with_structured_llm_failure(self):
+        with TestClient(server.app) as client, patch.object(
+            server, "get_engine", side_effect=RuntimeError("llama-server missing")
+        ), patch.object(server, "get_engine_if_initialized", return_value=None):
+            warmup = client.post(
+                "/runtime/warmup",
+                json={"stt": False, "llm": True, "hotkeys": False},
+            )
+
+        self.assertEqual(warmup.status_code, 200)
+        payload = warmup.json()
+        self.assertFalse(payload["llm"]["ok"])
+        self.assertFalse(payload["llm"]["initialized"])
+        self.assertFalse(payload["llm"]["ready"])
+        self.assertIn("llama-server missing", payload["llm"]["error"])
+
 
 if __name__ == "__main__":
     unittest.main()
