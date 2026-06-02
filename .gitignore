@@ -24,3 +24,6 @@ app/resources/backend/*
 .venv/
 venv/
 env/
+
+# Repo-local runtime assets
+.betterfingers/

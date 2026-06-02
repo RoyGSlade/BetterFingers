@@ -65,3 +65,33 @@ The startup code also accepts fallback names so packaging can evolve without bre
 - Linux setup commands depend on your current directory:
   - From the repo root, use `requirements.txt`.
   - From `app/`, use `../requirements.txt`.
+
+## Linux llama-server Runtime
+
+Linux development can use a repo-local llama-server binary without changing the legacy Windows flow.
+
+BetterFingers checks this path automatically:
+
+```bash
+.betterfingers/llama-server/bin/llama-server
+```
+
+Install an existing binary into that location:
+
+```bash
+python tools/setup_linux_llama_server.py --from /path/to/llama-server
+```
+
+Or build from a local llama.cpp checkout:
+
+```bash
+git clone https://github.com/ggml-org/llama.cpp .betterfingers/llama.cpp
+python tools/setup_linux_llama_server.py --source .betterfingers/llama.cpp
+```
+
+Manual overrides are also supported:
+
+```bash
+export BETTERFINGERS_LLAMA_SERVER=/path/to/llama-server
+export BETTERFINGERS_MODEL_PATH=/path/to/model.gguf
+```

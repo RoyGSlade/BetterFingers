@@ -30,7 +30,7 @@ class ModelManagerStatusTests(unittest.TestCase):
             with open(model_path, "wb") as handle:
                 handle.write(b"model")
 
-            with patch.dict(os.environ, {"BETTERFINGERS_MODEL_PATH": model_path}, clear=False), patch(
+            with patch.dict(os.environ, {"BETTERFINGERS_MODEL_PATH": model_path}, clear=True), patch(
                 "model_manager.sys.platform", "linux"
             ), patch("model_manager.get_models_dir", return_value=tmp), patch(
                 "model_manager.download_file"
@@ -45,13 +45,34 @@ class ModelManagerStatusTests(unittest.TestCase):
             self.assertIn("BETTERFINGERS_LLAMA_SERVER", result.get("message", ""))
             download_file.assert_not_called()
 
+    def test_repo_local_linux_llama_server_is_respected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model_path = os.path.join(tmp, "local.gguf")
+            server_path = os.path.join(tmp, ".betterfingers", "llama-server", "bin", "llama-server")
+            os.makedirs(os.path.dirname(server_path), exist_ok=True)
+            with open(model_path, "wb") as handle:
+                handle.write(b"model")
+            with open(server_path, "w", encoding="utf-8") as handle:
+                handle.write("#!/bin/sh\n")
+
+            with patch.dict(os.environ, {"BETTERFINGERS_MODEL_PATH": model_path}, clear=True), patch(
+                "model_manager.sys.platform", "linux"
+            ), patch("model_manager.get_repo_root", return_value=tmp), patch(
+                "model_manager.get_models_dir", return_value=os.path.join(tmp, "models")
+            ), patch("model_manager.download_file") as download_file:
+                self.assertEqual(model_manager.get_server_path(), server_path)
+                result = check_and_download_resources(model_id="gemma-3-4b-q4")
+
+            self.assertTrue(bool(result.get("ok", False)))
+            download_file.assert_not_called()
+
     def test_llama_server_env_override_is_respected(self):
         with tempfile.TemporaryDirectory() as tmp:
             server_path = os.path.join(tmp, "custom-llama-server")
             with open(server_path, "w", encoding="utf-8") as handle:
                 handle.write("#!/bin/sh\n")
 
-            with patch.dict(os.environ, {"BETTERFINGERS_LLAMA_SERVER": server_path}, clear=False), patch(
+            with patch.dict(os.environ, {"BETTERFINGERS_LLAMA_SERVER": server_path}, clear=True), patch(
                 "model_manager.sys.platform", "linux"
             ):
                 self.assertEqual(model_manager.get_server_path(), server_path)

@@ -9,6 +9,7 @@
     "build": "electron-vite build",
     "build:backend": "node scripts/build-backend.js",
     "fix:electron": "node scripts/fix-electron.js",
+    "setup:llama:linux": "python3 ../tools/setup_linux_llama_server.py",
     "dist": "npm run build && npm run build:backend && electron-builder",
     "dist:win": "npm run build && npm run build:backend && electron-builder --win",
     "dist:linux": "npm run build && npm run build:backend && electron-builder --linux"

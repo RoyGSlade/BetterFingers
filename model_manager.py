@@ -90,6 +90,10 @@ def get_models_dir():
     return path
 
 
+def get_repo_root():
+    return os.path.dirname(os.path.abspath(__file__))
+
+
 def get_model_path(model_id=None):
     """Returns absolute path to the GGUF model."""
     override = os.getenv("BETTERFINGERS_MODEL_PATH")
@@ -127,11 +131,21 @@ def get_server_filename():
     return "llama-server"
 
 
+def get_repo_local_server_path():
+    """Returns the repo-local llama-server path used for Linux development."""
+    return os.path.join(get_repo_root(), ".betterfingers", "llama-server", "bin", get_server_filename())
+
+
 def get_server_path():
     """Returns absolute path to the llama-server binary."""
     override = os.getenv("BETTERFINGERS_LLAMA_SERVER")
     if override and os.path.exists(override):
         return override
+
+    repo_local = get_repo_local_server_path()
+    if os.path.exists(repo_local):
+        return repo_local
+
     return os.path.join(get_models_dir(), get_server_filename())
 
 
@@ -278,9 +292,11 @@ def check_and_download_resources(model_id=None, progress_callback=None):
     server_path = get_server_path()
     if not os.path.exists(server_path):
         if not sys.platform.startswith("win"):
+            repo_local_path = get_repo_local_server_path()
             message = (
                 "llama-server is not configured for this platform. "
-                "Install a local llama-server binary and set BETTERFINGERS_LLAMA_SERVER to its path."
+                "Install a local llama-server binary at "
+                f"{repo_local_path} or set BETTERFINGERS_LLAMA_SERVER to its path."
             )
             logging.warning(message)
             report({"key": target_model_id, "status": "error", "percent": 0.0, "message": message})
