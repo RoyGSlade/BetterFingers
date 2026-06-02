@@ -112,6 +112,10 @@ function createSidecar({
 } = {}) {
   const healthUrl = `http://${host}:${port}/health`;
   const isPackaged = app.isPackaged;
+  const backendEnv = {
+    ...process.env,
+    BETTERFINGERS_LAZY_STARTUP: '1',
+  };
   let childProcess = null;
   let startPromise = null;
 
@@ -127,16 +131,18 @@ function createSidecar({
       if (!childProcess) {
         if (isPackaged) {
           const executablePath = resolveBackendExecutable();
-          childProcess = spawn(executablePath, [], {
+          childProcess = spawn(executablePath, ['--host', host, '--port', String(port)], {
             cwd: path.dirname(executablePath),
             stdio: ['ignore', 'pipe', 'pipe'],
             windowsHide: true,
+            env: backendEnv,
           });
         } else {
           childProcess = spawn(devCommand, devArgs, {
             cwd: path.resolve(__dirname, '../../../'),
             stdio: ['ignore', 'pipe', 'pipe'],
             windowsHide: true,
+            env: backendEnv,
           });
         }
 
@@ -155,6 +161,10 @@ function createSidecar({
             reject(new Error(`BetterFingers backend exited before readiness (${descriptor})`));
           };
 
+          childProcess.once('error', (error) => {
+            childProcess = null;
+            reject(error);
+          });
           childProcess.once('exit', exitListener);
         });
       }

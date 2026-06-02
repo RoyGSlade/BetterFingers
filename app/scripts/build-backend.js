@@ -46,6 +46,16 @@ function ensureBackendSourceExists() {
   }
 }
 
+function addDataIfExists(args, source, target) {
+  const sourcePath = path.join(repoRoot, source);
+  if (!fs.existsSync(sourcePath)) {
+    console.warn(`[build-backend] Skipping missing optional data path: ${sourcePath}`);
+    return;
+  }
+
+  args.push('--add-data', `${sourcePath}${dataSeparator}${target}`);
+}
+
 async function main() {
   ensureBackendSourceExists();
 
@@ -76,7 +86,7 @@ async function main() {
   ];
 
   for (const [source, target] of dataSources) {
-    pyinstallerArgs.push('--add-data', `${path.join(repoRoot, source)}${dataSeparator}${target}`);
+    addDataIfExists(pyinstallerArgs, source, target);
   }
 
   pyinstallerArgs.push(backendSource);

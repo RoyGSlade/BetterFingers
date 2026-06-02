@@ -4,7 +4,7 @@ import logging
 from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from llm_engine import get_engine
+from llm_engine import get_engine, get_engine_if_initialized
 from transcriber import Transcriber
 from hotkey_manager import HotkeyManager
 from user_profile_manager import profile_manager
@@ -32,7 +32,81 @@ app.add_middleware(
 # Global Instances
 transcriber = None
 hotkey_manager = None
+hotkey_recorder = None
+hotkey_manager_started = False
 active_websockets = []
+
+
+def is_lazy_startup_enabled():
+    return os.getenv("BETTERFINGERS_LAZY_STARTUP") == "1"
+
+
+def ensure_transcriber_initialized(preload=False):
+    global transcriber
+    if transcriber is None:
+        transcriber = Transcriber(preload=preload)
+    elif preload:
+        transcriber.ensure_loaded()
+    return transcriber
+
+
+def get_runtime_status_snapshot():
+    engine = get_engine_if_initialized()
+    engine_ready = False
+    if engine is not None:
+        try:
+            engine_ready = bool(getattr(engine, "_ready", False))
+        except Exception:
+            engine_ready = False
+
+    return {
+        "transcriber_initialized": transcriber is not None,
+        "llm_initialized": engine is not None,
+        "hotkey_manager_started": hotkey_manager_started,
+        "transcriber_loaded": bool(getattr(transcriber, "model", None)),
+        "llm_ready": engine_ready,
+    }
+
+
+def start_hotkey_manager():
+    global hotkey_manager, hotkey_manager_started, hotkey_recorder
+
+    if hotkey_manager_started and hotkey_manager is not None:
+        return hotkey_manager
+
+    if hotkey_manager is not None:
+        try:
+            hotkey_manager.stop()
+        except Exception as exc:
+            logging.warning(f"Hotkey Manager stop before restart failed: {exc}")
+
+    from recorder import AudioRecorder
+
+    recorder = AudioRecorder()
+    manager = HotkeyManager(
+        recorder=recorder,
+        on_recording_complete_callback=on_recording_complete,
+        on_recording_start_callback=on_recording_start
+    )
+    manager.start()
+    hotkey_manager = manager
+    hotkey_recorder = recorder
+    hotkey_manager_started = True
+    return manager
+
+
+def stop_hotkey_manager():
+    global hotkey_manager, hotkey_manager_started, hotkey_recorder
+
+    if hotkey_manager:
+        try:
+            hotkey_manager.stop()
+        except Exception as exc:
+            logging.warning(f"Hotkey Manager stop failed: {exc}")
+
+    hotkey_manager = None
+    hotkey_recorder = None
+    hotkey_manager_started = False
 
 # Status Broadcaster
 async def broadcast_status(status: str, data: dict = None):
@@ -75,41 +149,37 @@ def on_recording_complete(audio_data):
 
 @app.on_event("startup")
 async def startup_event():
-    global transcriber, hotkey_manager, loop
+    global loop
     loop = asyncio.get_event_loop()
-    
+    lazy_startup = is_lazy_startup_enabled()
+
     try:
         logging.info("Initializing Transcriber...")
-        transcriber = Transcriber()
+        ensure_transcriber_initialized(preload=not lazy_startup)
         logging.info("Transcriber initialized successfully.")
-        
+    except Exception as e:
+        logging.error(f"Transcriber startup failure: {e}")
+
+    if lazy_startup:
+        logging.info("Lazy startup enabled; deferring LLM warmup and Hotkey Manager startup.")
+        return
+
+    try:
         logging.info("Warming up LLM Engine...")
         get_engine()
         logging.info("LLM Engine ready.")
-
-        # Initialize Hotkey Manager
-        # We need a proper Recorder passed in. 
-        # Wait, HotkeyManager takes a 'recorder'.
-        # I need to see what recorder expects. It's likely 'mic_recorder' module.
-        # Let's import it.
-        from recorder import AudioRecorder
-        recorder = AudioRecorder()
-        
-        hotkey_manager = HotkeyManager(
-            recorder=recorder,
-            on_recording_complete_callback=on_recording_complete,
-            on_recording_start_callback=on_recording_start
-        )
-        hotkey_manager.start()
-        logging.info("Hotkey Manager started.")
-
     except Exception as e:
-        logging.error(f"Startup Failure: {e}")
+        logging.error(f"LLM Engine startup failure: {e}")
+
+    try:
+        start_hotkey_manager()
+        logging.info("Hotkey Manager started.")
+    except Exception as e:
+        logging.error(f"Hotkey Manager startup failure: {e}")
 
 @app.on_event("shutdown")
 def shutdown_event():
-    if hotkey_manager:
-        hotkey_manager.stop()
+    stop_hotkey_manager()
 
 @app.websocket("/ws/voice_status")
 async def websocket_endpoint(websocket: WebSocket):
@@ -133,7 +203,11 @@ async def websocket_endpoint(websocket: WebSocket):
 async def health_check():
     engine_ready = False
     try:
-        engine_ready = get_engine()._ready
+        if is_lazy_startup_enabled():
+            engine = get_engine_if_initialized()
+            engine_ready = bool(getattr(engine, "_ready", False)) if engine else False
+        else:
+            engine_ready = get_engine()._ready
     except Exception:
         pass
         
@@ -142,6 +216,57 @@ async def health_check():
         "transcriber": transcriber is not None,
         "llm_engine": engine_ready
     }
+
+
+class RuntimeWarmupRequest(BaseModel):
+    stt: bool = False
+    llm: bool = False
+    hotkeys: bool = False
+
+
+@app.get("/runtime/status")
+async def runtime_status():
+    return get_runtime_status_snapshot()
+
+
+@app.post("/runtime/warmup")
+async def runtime_warmup(request: RuntimeWarmupRequest):
+    result = {"requested": request.dict()}
+
+    if request.stt:
+        try:
+            trans = ensure_transcriber_initialized(preload=False)
+            result["stt"] = {
+                "initialized": trans is not None,
+                "loaded": bool(trans and trans.ensure_loaded()),
+            }
+        except Exception as e:
+            logging.error(f"Transcriber warmup failure: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    if request.llm:
+        try:
+            engine = get_engine()
+            result["llm"] = {
+                "initialized": engine is not None,
+                "ready": bool(getattr(engine, "_ready", False)),
+            }
+        except Exception as e:
+            logging.error(f"LLM warmup failure: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    if request.hotkeys:
+        try:
+            manager = start_hotkey_manager()
+            result["hotkeys"] = {
+                "started": manager is not None and hotkey_manager_started,
+            }
+        except Exception as e:
+            logging.error(f"Hotkey warmup failure: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    result.update(get_runtime_status_snapshot())
+    return result
 
 class LLMRequest(BaseModel):
     text: str

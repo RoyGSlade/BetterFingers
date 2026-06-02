@@ -1,28 +1,35 @@
 const path = require('node:path');
 const fs = require('node:fs');
+const { app } = require('electron');
 const { Tray, Menu, nativeImage } = require('electron');
 
 let tray = null;
 
 function resolveTrayIconPath() {
-  if (process.resourcesPath) {
-    return path.join(process.resourcesPath, 'assets', 'indicator_idle.png');
+  const candidates = app.isPackaged
+    ? [
+        path.join(process.resourcesPath, 'assets', 'indicator_idle.png'),
+        path.join(process.resourcesPath, 'images', 'InactiveTray.png'),
+        path.join(process.resourcesPath, 'images', 'activetray.png'),
+      ]
+    : [
+        path.resolve(__dirname, '../../../assets/indicator_idle.png'),
+        path.resolve(__dirname, '../../../images/InactiveTray.png'),
+        path.resolve(__dirname, '../../../images/activetray.png'),
+      ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
   }
 
-  return path.resolve(__dirname, '../../../assets/indicator_idle.png');
-}
-
-function loadTrayImage() {
-  const iconPath = resolveTrayIconPath();
-  if (iconPath && fs.existsSync(iconPath)) {
-    return nativeImage.createFromPath(iconPath);
-  }
-
-  return nativeImage.createEmpty();
+  return null;
 }
 
 function createTray({ getMainWindow, onShow, onQuit }) {
-  const trayImage = loadTrayImage();
+  const iconPath = resolveTrayIconPath();
+  const trayImage = iconPath ? nativeImage.createFromPath(iconPath) : nativeImage.createEmpty();
   tray = new Tray(trayImage);
   tray.setToolTip('BetterFingers');
 

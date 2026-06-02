@@ -1,3 +1,4 @@
+const path = require('node:path');
 const { app } = require('electron');
 const { createMainWindow, focusMainWindow } = require('./windows');
 const { createSidecar } = require('./sidecar');
@@ -9,11 +10,30 @@ let tray = null;
 let sidecar = null;
 let isQuitting = false;
 
+function resolveDevPythonCommand() {
+  if (process.env.BETTERFINGERS_PYTHON) {
+    const pythonPath = process.env.BETTERFINGERS_PYTHON;
+    if (path.isAbsolute(pythonPath)) {
+      return pythonPath;
+    }
+    if (/[\\/]/.test(pythonPath)) {
+      return path.resolve(process.cwd(), pythonPath);
+    }
+    return pythonPath;
+  }
+
+  if (process.platform === 'win32') {
+    return 'python';
+  }
+
+  return 'python3';
+}
+
 function bootstrapApp() {
   sidecar = createSidecar({
     host: '127.0.0.1',
     port: 8000,
-    devCommand: 'python',
+    devCommand: resolveDevPythonCommand(),
     devArgs: [
       'server.py',
       '--host',
