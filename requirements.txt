@@ -28,6 +28,7 @@ pyyaml                      # Profile / config files
 fastapi                     # REST + WebSocket server
 uvicorn                     # ASGI server
 websockets                  # WebSocket protocol support
+python-multipart            # FastAPI file/form uploads
 
 # ---- Windows Audio Control ----
 comtypes                    # COM automation (Windows)

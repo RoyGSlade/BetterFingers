@@ -8,6 +8,10 @@ module.exports = defineConfig({
       rollupOptions: {
         input: {
           main: resolve(__dirname, 'src/main/main.js'),
+          windows: resolve(__dirname, 'src/main/windows.js'),
+          sidecar: resolve(__dirname, 'src/main/sidecar.js'),
+          tray: resolve(__dirname, 'src/main/tray.js'),
+          ipc: resolve(__dirname, 'src/main/ipc.js'),
         },
       },
     },

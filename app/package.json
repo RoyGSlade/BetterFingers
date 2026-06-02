@@ -8,12 +8,13 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "build:backend": "node scripts/build-backend.js",
+    "fix:electron": "node scripts/fix-electron.js",
     "dist": "npm run build && npm run build:backend && electron-builder",
     "dist:win": "npm run build && npm run build:backend && electron-builder --win",
     "dist:linux": "npm run build && npm run build:backend && electron-builder --linux"
   },
   "devDependencies": {
-    "electron": "^38.0.0",
+    "electron": "^42.3.1",
     "electron-builder": "^26.0.12",
     "electron-vite": "^4.0.0"
   },
@@ -62,5 +63,11 @@
       "allowToChangeInstallationDirectory": true
     },
     "publish": null
+  },
+  "allowScripts": {
+    "electron@42.3.1": true,
+    "electron-winstaller@5.4.0": true,
+    "esbuild@0.25.12": true,
+    "esbuild@0.27.7": true
   }
 }

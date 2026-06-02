@@ -62,3 +62,6 @@ The startup code also accepts fallback names so packaging can evolve without bre
 - The Electron app expects port `8000` to be free so it can own the backend process.
 - Closing the Electron app quits the backend process too.
 - The tray icon is present for quick access to the dashboard and the quit action, but it does not keep the backend alive after app exit.
+- Linux setup commands depend on your current directory:
+  - From the repo root, use `requirements.txt`.
+  - From `app/`, use `../requirements.txt`.
