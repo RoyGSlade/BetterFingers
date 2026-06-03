@@ -1,6 +1,6 @@
 const { clipboard, ipcMain } = require('electron');
 
-function registerIpc({ getMainWindow, getSidecarStatus, onQuit, onShow } = {}) {
+function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, onQuit, onShow } = {}) {
   ipcMain.handle('app:quit', async () => {
     if (onQuit) {
       await onQuit();
@@ -32,6 +32,13 @@ function registerIpc({ getMainWindow, getSidecarStatus, onQuit, onShow } = {}) {
       state: 'unknown',
       message: 'Sidecar status is unavailable.',
     };
+  });
+
+  ipcMain.handle('sidecar:get-logs', () => {
+    if (typeof getSidecarLogs === 'function') {
+      return getSidecarLogs();
+    }
+    return [];
   });
 
   ipcMain.handle('clipboard:write-text', (_event, text) => {

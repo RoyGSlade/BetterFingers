@@ -478,3 +478,161 @@ h1 {
     min-width: 0;
   }
 }
+
+/* Tabs & Doctor Checkup Styles */
+.tab-nav {
+  display: flex;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+  margin-bottom: 16px;
+}
+
+.tab-button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 1.05rem;
+  font-weight: 600;
+  padding: 8px 16px;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: all 0.15s ease;
+}
+
+.tab-button:hover {
+  color: var(--text);
+  background: var(--bg-soft);
+}
+
+.tab-button.active {
+  color: var(--accent);
+  background: rgba(102, 242, 193, 0.08);
+  border: 1px solid rgba(102, 242, 193, 0.2);
+}
+
+.tab-content {
+  display: none !important;
+}
+
+.tab-content.active {
+  display: grid !important;
+  gap: 24px;
+}
+
+.warning-banner {
+  background: rgba(255, 200, 107, 0.12);
+  border: 1px solid rgba(255, 200, 107, 0.3);
+  color: var(--warning);
+  padding: 14px 20px;
+  border-radius: 16px;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.warning-banner.hidden {
+  display: none !important;
+}
+
+.doctor-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.doctor-card {
+  padding: 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(159, 177, 203, 0.12);
+  display: grid;
+  gap: 8px;
+}
+
+.doctor-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+
+.doctor-card-status {
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.doctor-card-status[data-tone='success'] {
+  background: rgba(102, 242, 193, 0.1);
+  color: var(--accent);
+}
+
+.doctor-card-status[data-tone='warning'] {
+  background: rgba(255, 200, 107, 0.1);
+  color: var(--warning);
+}
+
+.doctor-card-status[data-tone='danger'] {
+  background: rgba(255, 124, 135, 0.1);
+  color: var(--danger);
+}
+
+.doctor-card-detail {
+  font-size: 0.88rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.doctor-recovery-panel {
+  padding: 16px;
+  border-radius: 16px;
+  background: rgba(255, 124, 135, 0.04);
+  border: 1px solid rgba(255, 124, 135, 0.2);
+  display: grid;
+  gap: 10px;
+}
+
+.recovery-item {
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: var(--text);
+  padding: 6px 0;
+}
+
+.recovery-item strong {
+  color: var(--warning);
+}
+
+.diagnostics-error {
+  border-left: 3px solid var(--border);
+  padding-left: 10px;
+}
+
+.diagnostics-error[data-severity='fatal'] {
+  border-left-color: var(--danger);
+  background: rgba(255, 124, 135, 0.04);
+}
+
+.diagnostics-error[data-severity='recoverable'] {
+  border-left-color: #ff9f43;
+}
+
+.diagnostics-error[data-severity='warning'] {
+  border-left-color: var(--warning);
+}
+
+.diagnostics-error[data-severity='info'] {
+  border-left-color: #54a0ff;
+}
+
+.hidden {
+  display: none !important;
+}
+

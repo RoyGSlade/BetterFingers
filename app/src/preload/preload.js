@@ -5,6 +5,7 @@ const api = {
   showApp: () => ipcRenderer.invoke('app:show'),
   getAppState: () => ipcRenderer.invoke('app:get-state'),
   getSidecarStatus: () => ipcRenderer.invoke('sidecar:get-status'),
+  getSidecarLogs: () => ipcRenderer.invoke('sidecar:get-logs'),
   writeClipboardText: (text) => ipcRenderer.invoke('clipboard:write-text', text),
 };
 

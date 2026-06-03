@@ -22,259 +22,318 @@
         <button id="quitButton" class="secondary-button" type="button">Quit app</button>
       </header>
 
-      <section class="status-grid" aria-label="Backend status">
-        <article class="status-card">
-          <span class="status-label">Backend</span>
-          <strong id="backendStatus" class="status-value">Loading...</strong>
-          <p id="backendDetail" class="status-detail">Waiting for /health</p>
-        </article>
+      <!-- Warning Banner for Version Mismatch -->
+      <div id="versionMismatchBanner" class="warning-banner hidden" role="alert">
+        <strong>Backend Version Mismatch:</strong> The running backend version does not match the version expected by this Electron client (0.1.0). Some features may behave unexpectedly. Please verify your installation.
+      </div>
 
-        <article class="status-card">
-          <span class="status-label">Transcriber</span>
-          <strong id="transcriberStatus" class="status-value">Loading...</strong>
-          <p class="status-detail">Runtime initialization and model load state</p>
-        </article>
+      <!-- Tab Navigation -->
+      <nav class="tab-nav" aria-label="Main Navigation">
+        <button id="tabButtonDashboard" class="tab-button active" type="button" data-tab="dashboard">Dashboard</button>
+        <button id="tabButtonSettings" class="tab-button" type="button" data-tab="settings">Settings</button>
+        <button id="tabButtonModels" class="tab-button" type="button" data-tab="models">Models</button>
+        <button id="tabButtonDiagnostics" class="tab-button" type="button" data-tab="diagnostics">Diagnostics & Doctor</button>
+      </nav>
 
-        <article class="status-card">
-          <span class="status-label">LLM Engine</span>
-          <strong id="llmStatus" class="status-value">Loading...</strong>
-          <p class="status-detail">Runtime initialization and readiness state</p>
-        </article>
-      </section>
-
-      <section class="stream-panel">
-        <div class="panel-header">
-          <div>
-            <p class="eyebrow">Preview & Review</p>
-            <h2>Review Draft</h2>
-          </div>
-          <div class="connection-pill" id="draftStatus">No draft yet</div>
-        </div>
-
-        <div class="draft-preview">
-          <div class="draft-column">
-            <span class="status-label">Raw transcript</span>
-            <p id="draftRawText" class="draft-text">Waiting for a recording...</p>
-          </div>
-          <div class="draft-column">
-            <div class="draft-column-header">
-              <span class="status-label">Cleaned output</span>
-              <span id="draftTokenSummary" class="token-summary">0 tokens</span>
-            </div>
-            <textarea id="draftFinalText" class="draft-text review-editor" rows="8" disabled>Nothing to preview yet.</textarea>
-          </div>
-        </div>
-
-        <div class="review-tools" aria-label="Review rewrite and read-aloud actions">
-          <button id="saveDraftEditButton" class="secondary-button" type="button" disabled>Save Edit</button>
-          <button id="rewriteShorterButton" class="secondary-button" type="button" disabled>Make Shorter</button>
-          <button id="rewriteClearerButton" class="secondary-button" type="button" disabled>Make Clearer</button>
-          <button id="rewriteToneButton" class="secondary-button" type="button" disabled>Change Tone</button>
-          <input id="customRewriteInstruction" class="settings-input review-instruction" type="text" placeholder="Custom rewrite instruction" disabled />
-          <button id="rewriteCustomButton" class="secondary-button" type="button" disabled>Custom Rewrite</button>
-          <button id="readSelectionButton" class="secondary-button" type="button" disabled>Read Selection</button>
-          <button id="readFullDraftButton" class="secondary-button" type="button" disabled>Read Full</button>
-        </div>
-
-        <div class="action-row" aria-label="Draft actions">
-          <button id="copyDraftButton" class="secondary-button" type="button" disabled>Copy Cleaned Output</button>
-          <button id="acceptDraftButton" class="secondary-button" type="button" disabled>Accept</button>
-          <button id="declineDraftButton" class="secondary-button" type="button" disabled>Decline</button>
-          <button id="retryDraftButton" class="secondary-button" type="button" disabled>Retry</button>
-          <button id="sendDraftButton" class="secondary-button" type="button" disabled>Send / Copy</button>
-        </div>
-
-        <div id="draftMessage" class="warmup-message" role="status" aria-live="polite"></div>
-
-        <div id="draftMetadata" class="draft-metadata">No recording metadata yet.</div>
-
-        <div>
-          <span class="status-label">Draft history</span>
-          <p class="draft-metadata">Session-only history keeps the latest 20 drafts while the backend is running.</p>
-          <div id="draftHistoryList" class="draft-history">
-            <span class="empty-state">No draft history yet.</span>
-          </div>
-        </div>
-      </section>
-
-      <section class="stream-panel">
-        <div class="panel-header">
-          <div>
-            <p class="eyebrow">Runtime controls</p>
-            <h2>Backend runtime</h2>
-          </div>
-          <button id="refreshRuntimeButton" class="secondary-button" type="button">Refresh Runtime</button>
-        </div>
-
-        <div class="action-row" aria-label="Runtime warmup actions">
-          <button id="warmupSttButton" class="secondary-button" type="button">Warm Up STT</button>
-          <button id="warmupLlmButton" class="secondary-button" type="button">Warm Up LLM</button>
-          <button id="startHotkeysButton" class="secondary-button" type="button">Start Hotkeys</button>
-          <button id="primaryActionButton" class="secondary-button" type="button">Primary Action</button>
-          <button id="emergencyStopButton" class="secondary-button" type="button">Emergency Stop</button>
-        </div>
-
-        <div id="warmupMessage" class="warmup-message" role="status" aria-live="polite"></div>
-        <div id="outputSettingsSummary" class="draft-metadata">Output settings loading...</div>
-
-        <div id="runtimeStatusList" class="detail-list">
-          <span class="empty-state">Runtime status loading...</span>
-        </div>
-      </section>
-
-      <section class="stream-panel">
-        <div class="panel-header">
-          <div>
-            <p class="eyebrow">Profiles</p>
-            <h2>Settings & Profiles</h2>
-          </div>
-          <button id="refreshProfilesButton" class="secondary-button" type="button">Refresh Profiles</button>
-        </div>
-
-        <div class="settings-grid">
-          <label>
-            <span class="status-label">Active Profile</span>
-            <select id="profileSelect" class="settings-input"></select>
-          </label>
-          <label>
-            <span class="status-label">New Profile</span>
-            <input id="newProfileName" class="settings-input" type="text" placeholder="Profile name" />
-          </label>
-        </div>
-
-        <div class="settings-grid">
-          <label><span class="status-label">Recording Hotkey</span><input id="settingHotkey" class="settings-input" type="text" /></label>
-          <label><span class="status-label">Record Mode</span><select id="settingRecordingMode" class="settings-input"><option value="toggle">toggle</option><option value="ptt">push-to-talk</option></select></label>
-          <label><span class="status-label">Emergency Stop</span><input id="settingForceStopKey" class="settings-input" type="text" /></label>
-          <label><span class="status-label">Primary Action</span><input id="settingManualSendHotkey" class="settings-input" type="text" /></label>
-          <label><span class="status-label">Review TTS Hotkey</span><input id="settingReviewTtsHotkey" class="settings-input" type="text" /></label>
-          <label><span class="status-label">Open Chat Key</span><input id="settingChatOpenKey" class="settings-input" type="text" /></label>
-          <label><span class="status-label">Voice Mute Key</span><input id="settingVoiceMuteKey" class="settings-input" type="text" /></label>
-          <label><span class="status-label">Send Mode</span><select id="settingSendMode" class="settings-input"><option value="review_first">review first</option><option value="auto_send">auto send</option></select></label>
-          <label><span class="status-label">Cleanup Preset</span><input id="settingCurrentPreset" class="settings-input" type="text" /></label>
-          <label><span class="status-label">Output Token Limit</span><input id="settingOutputTokenLimit" class="settings-input" type="number" min="100" /></label>
-          <label><span class="status-label">No-Audio Min Duration</span><input id="settingNoAudioDuration" class="settings-input" type="number" step="0.05" min="0" /></label>
-          <label><span class="status-label">No-Audio Min RMS</span><input id="settingNoAudioRms" class="settings-input" type="number" step="0.001" min="0" /></label>
-          <label><span class="status-label">No-Audio Min Peak</span><input id="settingNoAudioPeak" class="settings-input" type="number" step="0.001" min="0" /></label>
-        </div>
-
-        <div class="toggle-grid">
-          <label><input id="settingAutoSubmit" type="checkbox" /> Auto-submit</label>
-          <label><input id="settingInstantTyping" type="checkbox" /> Instant typing</label>
-          <label><input id="settingAudioDucking" type="checkbox" /> Audio ducking</label>
-          <label><input id="settingStatusIndicator" type="checkbox" /> Status overlay</label>
-          <label><input id="settingNotificationOverlay" type="checkbox" /> Notifications</label>
-          <label><input id="settingPreviewOverlay" type="checkbox" /> Preview overlay</label>
-          <label><input id="settingKeepLlm" type="checkbox" /> Keep LLM loaded</label>
-          <label><input id="settingKeepStt" type="checkbox" /> Keep STT loaded</label>
-          <label><input id="settingKeepTts" type="checkbox" /> Keep TTS loaded</label>
-        </div>
-
-        <div class="action-row">
-          <button id="activateProfileButton" class="secondary-button" type="button">Activate Profile</button>
-          <button id="saveProfileButton" class="secondary-button" type="button">Save Settings</button>
-          <button id="discardProfileChangesButton" class="secondary-button" type="button">Discard Changes</button>
-          <button id="createProfileButton" class="secondary-button" type="button">Create Profile</button>
-          <button id="deleteProfileButton" class="secondary-button" type="button">Delete Profile</button>
-        </div>
-        <div id="profileMessage" class="warmup-message" role="status" aria-live="polite"></div>
-      </section>
-
-      <section class="stream-panel">
-        <div class="panel-header">
-          <div>
-            <p class="eyebrow">Models</p>
-            <h2>Model Management</h2>
-          </div>
-          <button id="refreshModelsButton" class="secondary-button" type="button">Refresh Models</button>
-        </div>
-
-        <div class="settings-grid">
-          <label><span class="status-label">LLM Model</span><select id="llmModelSelect" class="settings-input"></select></label>
-          <label><span class="status-label">Whisper Model</span><select id="whisperModelSelect" class="settings-input"></select></label>
-        </div>
-
-        <div id="modelStatusSummary" class="draft-metadata">Model status loading...</div>
-
-        <div class="action-row">
-          <button id="selectLlmModelButton" class="secondary-button" type="button">Select LLM</button>
-          <button id="downloadLlmModelButton" class="secondary-button" type="button">Download LLM</button>
-          <button id="deleteLlmModelButton" class="secondary-button" type="button">Delete LLM</button>
-          <button id="downloadWhisperButton" class="secondary-button" type="button">Download Whisper</button>
-          <button id="testWhisperButton" class="secondary-button" type="button">Test Whisper</button>
-          <button id="deleteWhisperButton" class="secondary-button" type="button">Delete Whisper</button>
-          <button id="unloadSttButton" class="secondary-button" type="button">Unload STT</button>
-          <button id="unloadLlmButton" class="secondary-button" type="button">Unload LLM</button>
-          <button id="unloadTtsButton" class="secondary-button" type="button">Unload TTS</button>
-        </div>
-        <div id="modelMessage" class="warmup-message" role="status" aria-live="polite"></div>
-      </section>
-
-      <section class="stream-panel">
-        <div class="panel-header">
-          <div>
-            <p class="eyebrow">Platform</p>
-            <h2>Capabilities</h2>
-          </div>
-          <div class="connection-pill" id="capabilitiesSummary">Loading...</div>
-        </div>
-
-        <div id="capabilitiesList" class="detail-list">
-          <span class="empty-state">Capabilities loading...</span>
-        </div>
-      </section>
-
-      <section class="stream-panel">
-        <div class="panel-header">
-          <div>
-            <p class="eyebrow">Diagnostics</p>
-            <h2>Runtime diagnostics</h2>
-          </div>
-          <button id="refreshDiagnosticsButton" class="secondary-button" type="button">Refresh Diagnostics</button>
-        </div>
-
-        <div class="diagnostics-grid">
-          <article class="diagnostics-card">
-            <span class="status-label">Sidecar</span>
-            <p id="sidecarStatus" class="status-detail">Loading sidecar status...</p>
+      <!-- Dashboard Tab Content -->
+      <div id="tabDashboard" class="tab-content active">
+        <section class="status-grid" aria-label="Backend status">
+          <article class="status-card">
+            <span class="status-label">Backend</span>
+            <strong id="backendStatus" class="status-value">Loading...</strong>
+            <p id="backendDetail" class="status-detail">Waiting for /health</p>
           </article>
-          <article class="diagnostics-card">
-            <span class="status-label">Paths</span>
-            <div id="diagnosticsPathsList" class="detail-list compact">
-              <span class="empty-state">Path diagnostics loading...</span>
-            </div>
+
+          <article class="status-card">
+            <span class="status-label">Transcriber</span>
+            <strong id="transcriberStatus" class="status-value">Loading...</strong>
+            <p class="status-detail">Runtime initialization and model load state</p>
           </article>
-        </div>
 
-        <div>
-          <span class="status-label">Runtime errors</span>
-          <div id="runtimeErrorsList" class="diagnostics-list">
-            <span class="empty-state">No runtime errors loaded yet.</span>
+          <article class="status-card">
+            <span class="status-label">LLM Engine</span>
+            <strong id="llmStatus" class="status-value">Loading...</strong>
+            <p class="status-detail">Runtime initialization and readiness state</p>
+          </article>
+        </section>
+
+        <section class="stream-panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Preview & Review</p>
+              <h2>Review Draft</h2>
+            </div>
+            <div class="connection-pill" id="draftStatus">No draft yet</div>
           </div>
-        </div>
 
-        <div>
-          <span class="status-label">debug.log tail</span>
-          <pre id="debugLogTail" class="log-tail">Log tail loading...</pre>
-        </div>
-      </section>
+          <div class="draft-preview">
+            <div class="draft-column">
+              <span class="status-label">Raw transcript</span>
+              <p id="draftRawText" class="draft-text">Waiting for a recording...</p>
+            </div>
+            <div class="draft-column">
+              <div class="draft-column-header">
+                <span class="status-label">Cleaned output</span>
+                <span id="draftTokenSummary" class="token-summary">0 tokens</span>
+              </div>
+              <textarea id="draftFinalText" class="draft-text review-editor" rows="8" disabled>Nothing to preview yet.</textarea>
+            </div>
+          </div>
 
-      <section class="stream-panel">
-        <div class="panel-header">
+          <div class="review-tools" aria-label="Review rewrite and read-aloud actions">
+            <button id="saveDraftEditButton" class="secondary-button" type="button" disabled>Save Edit</button>
+            <button id="rewriteShorterButton" class="secondary-button" type="button" disabled>Make Shorter</button>
+            <button id="rewriteClearerButton" class="secondary-button" type="button" disabled>Make Clearer</button>
+            <button id="rewriteToneButton" class="secondary-button" type="button" disabled>Change Tone</button>
+            <input id="customRewriteInstruction" class="settings-input review-instruction" type="text" placeholder="Custom rewrite instruction" disabled />
+            <button id="rewriteCustomButton" class="secondary-button" type="button" disabled>Custom Rewrite</button>
+            <button id="readSelectionButton" class="secondary-button" type="button" disabled>Read Selection</button>
+            <button id="readFullDraftButton" class="secondary-button" type="button" disabled>Read Full</button>
+          </div>
+
+          <div class="action-row" aria-label="Draft actions">
+            <button id="copyDraftButton" class="secondary-button" type="button" disabled>Copy Cleaned Output</button>
+            <button id="acceptDraftButton" class="secondary-button" type="button" disabled>Accept</button>
+            <button id="declineDraftButton" class="secondary-button" type="button" disabled>Decline</button>
+            <button id="retryDraftButton" class="secondary-button" type="button" disabled>Retry</button>
+            <button id="sendDraftButton" class="secondary-button" type="button" disabled>Send / Copy</button>
+          </div>
+
+          <div id="draftMessage" class="warmup-message" role="status" aria-live="polite"></div>
+
+          <div id="draftMetadata" class="draft-metadata">No recording metadata yet.</div>
+
           <div>
-            <p class="eyebrow">WebSocket stream</p>
-            <h2>Voice status</h2>
+            <span class="status-label">Draft history</span>
+            <p class="draft-metadata">Session-only history keeps the latest 20 drafts while the backend is running.</p>
+            <div id="draftHistoryList" class="draft-history">
+              <span class="empty-state">No draft history yet.</span>
+            </div>
           </div>
-          <div class="connection-pill" id="wsConnection">Connecting...</div>
-        </div>
+        </section>
 
-        <div class="voice-status">
-          <span id="voiceStatus" class="voice-status-value">No updates yet</span>
-          <p id="voiceStatusDetail" class="voice-status-detail">
-            Listening to ws://127.0.0.1:8000/ws/voice_status
-          </p>
-        </div>
-      </section>
+        <section class="stream-panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">WebSocket stream</p>
+              <h2>Voice status</h2>
+            </div>
+            <div class="connection-pill" id="wsConnection">Connecting...</div>
+          </div>
+
+          <div class="voice-status">
+            <span id="voiceStatus" class="voice-status-value">No updates yet</span>
+            <p id="voiceStatusDetail" class="voice-status-detail">
+              Listening to ws://127.0.0.1:8000/ws/voice_status
+            </p>
+          </div>
+        </section>
+      </div>
+
+      <!-- Settings Tab Content -->
+      <div id="tabSettings" class="tab-content">
+        <section class="stream-panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Runtime controls</p>
+              <h2>Backend runtime</h2>
+            </div>
+            <button id="refreshRuntimeButton" class="secondary-button" type="button">Refresh Runtime</button>
+          </div>
+
+          <div class="action-row" aria-label="Runtime warmup actions">
+            <button id="warmupSttButton" class="secondary-button" type="button">Warm Up STT</button>
+            <button id="warmupLlmButton" class="secondary-button" type="button">Warm Up LLM</button>
+            <button id="startHotkeysButton" class="secondary-button" type="button">Start Hotkeys</button>
+            <button id="primaryActionButton" class="secondary-button" type="button">Primary Action</button>
+            <button id="emergencyStopButton" class="secondary-button" type="button">Emergency Stop</button>
+          </div>
+
+          <div id="warmupMessage" class="warmup-message" role="status" aria-live="polite"></div>
+          <div id="outputSettingsSummary" class="draft-metadata">Output settings loading...</div>
+
+          <div id="runtimeStatusList" class="detail-list">
+            <span class="empty-state">Runtime status loading...</span>
+          </div>
+        </section>
+
+        <section class="stream-panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Profiles</p>
+              <h2>Settings & Profiles</h2>
+            </div>
+            <button id="refreshProfilesButton" class="secondary-button" type="button">Refresh Profiles</button>
+          </div>
+
+          <div class="settings-grid">
+            <label>
+              <span class="status-label">Active Profile</span>
+              <select id="profileSelect" class="settings-input"></select>
+            </label>
+            <label>
+              <span class="status-label">New Profile</span>
+              <input id="newProfileName" class="settings-input" type="text" placeholder="Profile name" />
+            </label>
+          </div>
+
+          <div class="settings-grid">
+            <label><span class="status-label">Recording Hotkey</span><input id="settingHotkey" class="settings-input" type="text" /></label>
+            <label><span class="status-label">Record Mode</span><select id="settingRecordingMode" class="settings-input"><option value="toggle">toggle</option><option value="ptt">push-to-talk</option></select></label>
+            <label><span class="status-label">Emergency Stop</span><input id="settingForceStopKey" class="settings-input" type="text" /></label>
+            <label><span class="status-label">Primary Action</span><input id="settingManualSendHotkey" class="settings-input" type="text" /></label>
+            <label><span class="status-label">Review TTS Hotkey</span><input id="settingReviewTtsHotkey" class="settings-input" type="text" /></label>
+            <label><span class="status-label">Open Chat Key</span><input id="settingChatOpenKey" class="settings-input" type="text" /></label>
+            <label><span class="status-label">Voice Mute Key</span><input id="settingVoiceMuteKey" class="settings-input" type="text" /></label>
+            <label><span class="status-label">Send Mode</span><select id="settingSendMode" class="settings-input"><option value="review_first">review first</option><option value="auto_send">auto send</option></select></label>
+            <label><span class="status-label">Cleanup Preset</span><input id="settingCurrentPreset" class="settings-input" type="text" /></label>
+            <label><span class="status-label">Output Token Limit</span><input id="settingOutputTokenLimit" class="settings-input" type="number" min="100" /></label>
+            <label><span class="status-label">No-Audio Min Duration</span><input id="settingNoAudioDuration" class="settings-input" type="number" step="0.05" min="0" /></label>
+            <label><span class="status-label">No-Audio Min RMS</span><input id="settingNoAudioRms" class="settings-input" type="number" step="0.001" min="0" /></label>
+            <label><span class="status-label">No-Audio Min Peak</span><input id="settingNoAudioPeak" class="settings-input" type="number" step="0.001" min="0" /></label>
+          </div>
+
+          <div class="toggle-grid">
+            <label><input id="settingAutoSubmit" type="checkbox" /> Auto-submit</label>
+            <label><input id="settingInstantTyping" type="checkbox" /> Instant typing</label>
+            <label><input id="settingAudioDucking" type="checkbox" /> Audio ducking</label>
+            <label><input id="settingStatusIndicator" type="checkbox" /> Status overlay</label>
+            <label><input id="settingNotificationOverlay" type="checkbox" /> Notifications</label>
+            <label><input id="settingPreviewOverlay" type="checkbox" /> Preview overlay</label>
+            <label><input id="settingKeepLlm" type="checkbox" /> Keep LLM loaded</label>
+            <label><input id="settingKeepStt" type="checkbox" /> Keep STT loaded</label>
+            <label><input id="settingKeepTts" type="checkbox" /> Keep TTS loaded</label>
+          </div>
+
+          <div class="action-row">
+            <button id="activateProfileButton" class="secondary-button" type="button">Activate Profile</button>
+            <button id="saveProfileButton" class="secondary-button" type="button">Save Settings</button>
+            <button id="discardProfileChangesButton" class="secondary-button" type="button">Discard Changes</button>
+            <button id="createProfileButton" class="secondary-button" type="button">Create Profile</button>
+            <button id="deleteProfileButton" class="secondary-button" type="button">Delete Profile</button>
+          </div>
+          <div id="profileMessage" class="warmup-message" role="status" aria-live="polite"></div>
+        </section>
+
+        <section class="stream-panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Platform</p>
+              <h2>Capabilities</h2>
+            </div>
+            <div class="connection-pill" id="capabilitiesSummary">Loading...</div>
+          </div>
+
+          <div id="capabilitiesList" class="detail-list">
+            <span class="empty-state">Capabilities loading...</span>
+          </div>
+        </section>
+      </div>
+
+      <!-- Models Tab Content -->
+      <div id="tabModels" class="tab-content">
+        <section class="stream-panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Models</p>
+              <h2>Model Management</h2>
+            </div>
+            <button id="refreshModelsButton" class="secondary-button" type="button">Refresh Models</button>
+          </div>
+
+          <div class="settings-grid">
+            <label><span class="status-label">LLM Model</span><select id="llmModelSelect" class="settings-input"></select></label>
+            <label><span class="status-label">Whisper Model</span><select id="whisperModelSelect" class="settings-input"></select></label>
+          </div>
+
+          <div id="modelStatusSummary" class="draft-metadata">Model status loading...</div>
+
+          <div class="action-row">
+            <button id="selectLlmModelButton" class="secondary-button" type="button">Select LLM</button>
+            <button id="downloadLlmModelButton" class="secondary-button" type="button">Download LLM</button>
+            <button id="deleteLlmModelButton" class="secondary-button" type="button">Delete LLM</button>
+            <button id="downloadWhisperButton" class="secondary-button" type="button">Download Whisper</button>
+            <button id="testWhisperButton" class="secondary-button" type="button">Test Whisper</button>
+            <button id="deleteWhisperButton" class="secondary-button" type="button">Delete Whisper</button>
+            <button id="unloadSttButton" class="secondary-button" type="button">Unload STT</button>
+            <button id="unloadLlmButton" class="secondary-button" type="button">Unload LLM</button>
+            <button id="unloadTtsButton" class="secondary-button" type="button">Unload TTS</button>
+          </div>
+          <div id="modelMessage" class="warmup-message" role="status" aria-live="polite"></div>
+        </section>
+      </div>
+
+      <!-- Diagnostics Tab Content -->
+      <div id="tabDiagnostics" class="tab-content">
+        <!-- Centralized Doctor Checkup Panel -->
+        <section class="stream-panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Doctor checkup</p>
+              <h2>Subsystem Health Diagnostics</h2>
+            </div>
+            <button id="refreshDoctorButton" class="secondary-button" type="button">Run Doctor Check</button>
+          </div>
+          <div id="doctorCardsGrid" class="doctor-cards-grid">
+            <!-- Populated dynamically via JS -->
+          </div>
+          <div id="doctorRecoveryPanel" class="doctor-recovery-panel hidden">
+            <span class="status-label">Recommended Recovery Actions</span>
+            <div id="doctorRecoveryList" class="recovery-list"></div>
+          </div>
+        </section>
+
+        <!-- Captured Sidecar startup logs (rendered if backend fails or on diagnostics tab) -->
+        <section class="stream-panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Sidecar process logs</p>
+              <h2>Startup & Console Streams</h2>
+            </div>
+            <button id="clearSidecarLogsButton" class="secondary-button" type="button">Clear Sidecar Logs</button>
+          </div>
+          <div>
+            <span class="status-label">Captured backend stdout/stderr</span>
+            <pre id="sidecarLogsTail" class="log-tail" style="max-height: 400px;">Logs loading...</pre>
+          </div>
+        </section>
+
+        <!-- Existing Diagnostics panel -->
+        <section class="stream-panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Diagnostics</p>
+              <h2>Runtime diagnostics</h2>
+            </div>
+            <button id="refreshDiagnosticsButton" class="secondary-button" type="button">Refresh Diagnostics</button>
+          </div>
+
+          <div class="diagnostics-grid">
+            <article class="diagnostics-card">
+              <span class="status-label">Sidecar</span>
+              <p id="sidecarStatus" class="status-detail">Loading sidecar status...</p>
+            </article>
+            <article class="diagnostics-card">
+              <span class="status-label">Paths</span>
+              <div id="diagnosticsPathsList" class="detail-list compact">
+                <span class="empty-state">Path diagnostics loading...</span>
+              </div>
+            </article>
+          </div>
+
+          <div>
+            <span class="status-label">Runtime errors</span>
+            <div id="runtimeErrorsList" class="diagnostics-list">
+              <span class="empty-state">No runtime errors loaded yet.</span>
+            </div>
+          </div>
+
+          <div>
+            <span class="status-label">debug.log tail</span>
+            <pre id="debugLogTail" class="log-tail">Log tail loading...</pre>
+          </div>
+        </section>
+      </div>
     </div>
 
     <script type="module" src="./main.js"></script>

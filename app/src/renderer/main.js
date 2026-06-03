@@ -35,6 +35,9 @@ import {
   testWhisperModel,
   unloadModel,
   warmupRuntime,
+  fetchDoctor,
+  refreshAudioDevices,
+  fetchVersion,
 } from './api/backend.js';
 
 const backendStatusEl = document.getElementById('backendStatus');
@@ -104,6 +107,14 @@ const deleteWhisperButton = document.getElementById('deleteWhisperButton');
 const unloadSttButton = document.getElementById('unloadSttButton');
 const unloadLlmButton = document.getElementById('unloadLlmButton');
 const unloadTtsButton = document.getElementById('unloadTtsButton');
+
+const versionMismatchBanner = document.getElementById('versionMismatchBanner');
+const refreshDoctorButton = document.getElementById('refreshDoctorButton');
+const doctorCardsGrid = document.getElementById('doctorCardsGrid');
+const doctorRecoveryPanel = document.getElementById('doctorRecoveryPanel');
+const doctorRecoveryList = document.getElementById('doctorRecoveryList');
+const clearSidecarLogsButton = document.getElementById('clearSidecarLogsButton');
+const sidecarLogsTail = document.getElementById('sidecarLogsTail');
 
 let healthRefreshTimer = null;
 let websocketHandle = null;
@@ -662,9 +673,30 @@ function renderRuntimeErrors(payload) {
   for (const error of errors.slice(-8).reverse()) {
     const row = document.createElement('div');
     row.className = 'diagnostics-error';
+    row.dataset.severity = error.severity ?? 'recoverable';
 
     const title = document.createElement('strong');
     title.textContent = `${error.component ?? 'runtime'}: ${error.message ?? 'Unknown error'}`;
+
+    const severityPill = document.createElement('span');
+    severityPill.className = 'doctor-card-status';
+    severityPill.style.display = 'inline-block';
+    severityPill.style.marginLeft = '10px';
+    severityPill.style.fontSize = '0.75rem';
+    severityPill.style.padding = '2px 6px';
+    severityPill.textContent = error.severity ?? 'recoverable';
+    
+    if (error.severity === 'fatal') {
+      severityPill.dataset.tone = 'danger';
+    } else if (error.severity === 'warning') {
+      severityPill.dataset.tone = 'warning';
+    } else if (error.severity === 'info') {
+      severityPill.dataset.tone = 'success';
+    } else {
+      severityPill.dataset.tone = 'danger';
+    }
+
+    title.append(severityPill);
 
     const meta = document.createElement('small');
     meta.textContent = error.created_at ?? '';
@@ -692,7 +724,29 @@ async function refreshSidecarStatus() {
     `pid: ${status.pid ?? 'none'}`,
     status.message ?? '',
   ].filter(Boolean).join('\n');
-  sidecarStatusEl.dataset.tone = status.state === 'error' ? 'danger' : status.state === 'ready' ? 'success' : 'warning';
+  
+  if (status.state === 'error') {
+    sidecarStatusEl.dataset.tone = 'danger';
+  } else if (status.state === 'ready') {
+    sidecarStatusEl.dataset.tone = 'success';
+  } else if (status.state === 'version_mismatch') {
+    sidecarStatusEl.dataset.tone = 'warning';
+  } else {
+    sidecarStatusEl.dataset.tone = 'warning';
+  }
+
+  if (versionMismatchBanner) {
+    if (status.state === 'version_mismatch') {
+      versionMismatchBanner.classList.remove('hidden');
+    } else {
+      versionMismatchBanner.classList.add('hidden');
+    }
+  }
+
+  if (status.state === 'error' || status.state === 'stopped') {
+    refreshSidecarLogs().catch(() => {});
+  }
+
   return status;
 }
 
@@ -982,6 +1036,8 @@ async function bootstrap() {
       setMessage(modelMessageEl, `Models unavailable: ${error.message}`, 'danger');
     }),
     refreshDiagnostics().catch(() => {}),
+    refreshDoctor().catch(() => {}),
+    refreshSidecarLogs().catch(() => {}),
   ]);
 
   healthRefreshTimer = setInterval(() => {
@@ -1371,6 +1427,229 @@ document.addEventListener('keydown', async (event) => {
   } catch (error) {
     setMessage(draftMessageEl, `Shortcut failed: ${error.message}`, 'danger');
   }
+});
+
+// Tab switching logic
+const tabButtons = document.querySelectorAll('.tab-button');
+const tabContents = document.querySelectorAll('.tab-content');
+
+tabButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    const targetTab = button.dataset.tab;
+
+    tabButtons.forEach((btn) => btn.classList.remove('active'));
+    button.classList.add('active');
+
+    tabContents.forEach((content) => {
+      if (content.id === `tab${targetTab.charAt(0).toUpperCase() + targetTab.slice(1)}`) {
+        content.classList.add('active');
+      } else {
+        content.classList.remove('active');
+      }
+    });
+
+    if (targetTab === 'diagnostics') {
+      refreshDiagnostics().catch(() => {});
+      refreshDoctor().catch(() => {});
+    }
+  });
+});
+
+// Sidecar Startup Logs
+async function refreshSidecarLogs() {
+  if (!sidecarLogsTail) {
+    return;
+  }
+  try {
+    const logs = await window.betterFingers?.getSidecarLogs?.();
+    if (Array.isArray(logs)) {
+      sidecarLogsTail.textContent = logs.length ? logs.join('\n') : 'No captured logs from sidecar process yet.';
+    } else {
+      sidecarLogsTail.textContent = 'Sidecar logs are not available.';
+    }
+  } catch (error) {
+    sidecarLogsTail.textContent = `Failed to retrieve sidecar logs: ${error.message}`;
+  }
+}
+
+clearSidecarLogsButton?.addEventListener('click', () => {
+  if (sidecarLogsTail) {
+    sidecarLogsTail.textContent = '';
+  }
+});
+
+// Doctor Health Checkup
+async function refreshDoctor(refreshAudio = false) {
+  if (!doctorCardsGrid) {
+    return;
+  }
+  
+  if (refreshDoctorButton) {
+    refreshDoctorButton.disabled = true;
+    refreshDoctorButton.textContent = 'Running check...';
+  }
+
+  try {
+    const doctor = await fetchDoctor(refreshAudio);
+    
+    doctorCardsGrid.innerHTML = '';
+    
+    const subsystems = [
+      { id: 'stt', name: 'STT (Transcriber)', data: doctor.stt },
+      { id: 'llm', name: 'LLM Engine', data: doctor.llm },
+      { id: 'tts', name: 'TTS (Read-Aloud)', data: doctor.tts },
+      { id: 'hotkeys', name: 'Hotkey Manager', data: doctor.hotkeys },
+      { id: 'models', name: 'Model Paths', data: doctor.models },
+      { id: 'audio', name: 'Audio System', data: doctor.audio },
+      { id: 'platform', name: 'Platform Capabilities', data: doctor.platform }
+    ];
+
+    let recoveryTriggers = [];
+
+    for (const sub of subsystems) {
+      const card = document.createElement('div');
+      card.className = 'doctor-card';
+
+      const header = document.createElement('div');
+      header.className = 'doctor-card-header';
+      
+      const title = document.createElement('span');
+      title.textContent = sub.name;
+
+      const badge = document.createElement('span');
+      badge.className = 'doctor-card-status';
+
+      let detailsText = '';
+      
+      if (sub.id === 'stt') {
+        const isLoaded = sub.data.loaded;
+        const isInit = sub.data.initialized;
+        badge.textContent = isLoaded ? 'Loaded' : isInit ? 'Initialized' : 'Offline';
+        badge.dataset.tone = isLoaded ? 'success' : isInit ? 'warning' : 'danger';
+        detailsText = `Initialized: ${isInit ? 'Yes' : 'No'}\nLoaded: ${isLoaded ? 'Yes' : 'No'}\nModel Size: ${sub.data.model_size ?? 'None'}\nDevice: ${sub.data.device ?? 'None'}`;
+        if (!isInit) {
+          recoveryTriggers.push('missing_model');
+        }
+      } else if (sub.id === 'llm') {
+        const isReady = sub.data.ready;
+        const isInit = sub.data.initialized;
+        badge.textContent = isReady ? 'Ready' : isInit ? 'Warming Up' : 'Offline';
+        badge.dataset.tone = isReady ? 'success' : isInit ? 'warning' : 'danger';
+        detailsText = `Initialized: ${isInit ? 'Yes' : 'No'}\nReady: ${isReady ? 'Yes' : 'No'}\nSelected Model: ${sub.data.model_id ?? 'None'}\nllama-server: ${sub.data.llama_server_exists ? 'Found' : 'Missing'}`;
+        if (!sub.data.llama_server_exists) {
+          recoveryTriggers.push('missing_llama_server');
+        }
+        if (!isInit && sub.data.llama_server_exists) {
+          recoveryTriggers.push('missing_model');
+        }
+      } else if (sub.id === 'tts') {
+        const isLoaded = sub.data.loaded;
+        const isInit = sub.data.initialized;
+        badge.textContent = isLoaded ? 'Active' : isInit ? 'Offline' : 'Error';
+        badge.dataset.tone = isLoaded ? 'success' : isInit ? 'warning' : 'danger';
+        detailsText = `Provider: ${sub.data.backend}\nLoaded: ${isLoaded ? 'Yes' : 'No'}\nStatus: ${sub.data.status_message}\nFallback Active: ${sub.data.fallback ? 'Yes' : 'No'}`;
+        if (sub.data.backend === 'none') {
+          recoveryTriggers.push('failed_tts_dependency');
+        }
+      } else if (sub.id === 'hotkeys') {
+        const isStarted = sub.data.started;
+        const isActive = sub.data.active;
+        badge.textContent = isActive ? 'Listening' : isStarted ? 'Started' : 'Stopped';
+        badge.dataset.tone = isActive ? 'success' : isStarted ? 'warning' : 'danger';
+        detailsText = `Manager Started: ${isStarted ? 'Yes' : 'No'}\nHotkey Thread Active: ${isActive ? 'Yes' : 'No'}`;
+      } else if (sub.id === 'models') {
+        const defaultExists = sub.data.default_model_exists;
+        badge.textContent = defaultExists ? 'Verified' : 'Missing Default';
+        badge.dataset.tone = defaultExists ? 'success' : 'danger';
+        detailsText = `Models Folder: ${sub.data.models_dir}\nDefault Model (Gemma): ${defaultExists ? 'Found' : 'Missing'}`;
+        if (!defaultExists) {
+          recoveryTriggers.push('missing_model');
+        }
+      } else if (sub.id === 'audio') {
+        const hasDevices = Array.isArray(sub.data.devices) && sub.data.devices.length > 0;
+        badge.textContent = hasDevices ? 'Available' : 'No Mics';
+        badge.dataset.tone = hasDevices ? 'success' : 'danger';
+        
+        let micNames = 'No devices detected.';
+        if (hasDevices) {
+          const defaultInIdx = sub.data.default_input_device;
+          const defaultMic = sub.data.devices.find(d => d.index === defaultInIdx);
+          micNames = `Default Mic: ${defaultMic ? defaultMic.name : 'System Default'}\nTotal Devices: ${sub.data.devices.length}`;
+        }
+        detailsText = `${micNames}\nSounddevice Error: ${sub.data.error ?? 'None'}`;
+        if (!hasDevices || sub.data.error) {
+          recoveryTriggers.push('microphone_unavailable');
+        }
+      } else if (sub.id === 'platform') {
+        const injection = sub.data.supports_input_injection;
+        badge.textContent = injection ? 'Fully Supported' : 'Limited';
+        badge.dataset.tone = injection ? 'success' : 'warning';
+        detailsText = `Platform: ${sub.data.platform}\nSession: ${sub.data.session_type}\nInput Injection: ${injection ? 'Yes' : 'No'}\nGlobal Hotkeys: ${sub.data.supports_global_hotkeys ? 'Yes' : 'No'}`;
+        if (sub.data.is_wayland && !injection) {
+          recoveryTriggers.push('unsupported_wayland_injection');
+        }
+      }
+
+      header.append(title, badge);
+      
+      const detail = document.createElement('pre');
+      detail.className = 'doctor-card-detail';
+      detail.textContent = detailsText;
+
+      card.append(header, detail);
+      doctorCardsGrid.append(card);
+    }
+
+    if (doctorRecoveryPanel && doctorRecoveryList) {
+      doctorRecoveryList.innerHTML = '';
+      const uniqueTriggers = [...new Set(recoveryTriggers)];
+      
+      if (uniqueTriggers.length > 0) {
+        doctorRecoveryPanel.classList.remove('hidden');
+        for (const trigger of uniqueTriggers) {
+          const recommendation = doctor.recovery[trigger];
+          if (recommendation) {
+            const item = document.createElement('div');
+            item.className = 'recovery-item';
+            
+            const labelMap = {
+              missing_model: 'Model Download Needed',
+              missing_llama_server: 'llama-server Required',
+              port_conflict: 'Port Conflict',
+              microphone_unavailable: 'Microphone Not Found',
+              unsupported_wayland_injection: 'Wayland Restriction',
+              failed_clipboard: 'Clipboard Failure',
+              failed_tts_dependency: 'TTS Missing'
+            };
+
+            const title = document.createElement('strong');
+            title.textContent = `[${labelMap[trigger] ?? trigger}] `;
+
+            const text = document.createTextNode(recommendation);
+            item.append(title, text);
+            doctorRecoveryList.append(item);
+          }
+        }
+      } else {
+        doctorRecoveryPanel.classList.add('hidden');
+      }
+    }
+
+  } catch (error) {
+    if (doctorCardsGrid) {
+      doctorCardsGrid.innerHTML = `<span class="empty-state" data-tone="danger">Doctor check failed: ${error.message}. Is the backend running?</span>`;
+    }
+    doctorRecoveryPanel?.classList.add('hidden');
+  } finally {
+    if (refreshDoctorButton) {
+      refreshDoctorButton.disabled = false;
+      refreshDoctorButton.textContent = 'Run Doctor Check';
+    }
+  }
+}
+
+refreshDoctorButton?.addEventListener('click', () => {
+  refreshDoctor(true).catch(() => {});
 });
 
 window.addEventListener('beforeunload', () => {

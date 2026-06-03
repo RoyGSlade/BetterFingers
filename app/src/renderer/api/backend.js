@@ -15,6 +15,21 @@ const MODELS_LLM_URL = `${BACKEND_ORIGIN}/models/llm`;
 const MODELS_WHISPER_URL = `${BACKEND_ORIGIN}/models/whisper`;
 const MODELS_UNLOAD_URL = `${BACKEND_ORIGIN}/models/unload`;
 const VOICE_STATUS_WS_URL = 'ws://127.0.0.1:8000/ws/voice_status';
+const DOCTOR_URL = `${BACKEND_ORIGIN}/doctor`;
+const REFRESH_AUDIO_DEVICES_URL = `${BACKEND_ORIGIN}/runtime/audio-devices/refresh`;
+const RUNTIME_VERSION_URL = `${BACKEND_ORIGIN}/runtime/version`;
+
+async function fetchDoctor(refreshAudio = false, timeoutMs = 5000) {
+  return fetchJson(`${DOCTOR_URL}?refresh_audio=${refreshAudio}`, timeoutMs);
+}
+
+async function refreshAudioDevices(timeoutMs = 5000) {
+  return postJson(REFRESH_AUDIO_DEVICES_URL, {}, timeoutMs);
+}
+
+async function fetchVersion(timeoutMs = 2500) {
+  return fetchJson(RUNTIME_VERSION_URL, timeoutMs);
+}
 
 async function fetchHealth(timeoutMs = 2500) {
   const controller = new AbortController();
@@ -397,4 +412,7 @@ export {
   unloadModel,
   warmupRuntime,
   normalizeHealthPayload,
+  fetchDoctor,
+  refreshAudioDevices,
+  fetchVersion,
 };

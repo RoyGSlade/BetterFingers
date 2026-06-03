@@ -100,18 +100,25 @@ def get_debug_log_path():
     return Path(get_user_data_path()) / "debug.log"
 
 
-def record_runtime_error(component, message, details=None):
+def record_runtime_error(component, message, severity="recoverable", details=None):
+    if isinstance(severity, dict):
+        details = severity
+        severity = "recoverable"
     with runtime_error_lock:
         row = {
             "component": str(component or "runtime"),
             "message": str(message or ""),
+            "severity": str(severity or "recoverable").lower(),
             "details": details or {},
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+        if row["severity"] not in {"info", "warning", "recoverable", "fatal"}:
+            row["severity"] = "recoverable"
         runtime_error_history.append(row)
         if len(runtime_error_history) > MAX_RUNTIME_ERROR_HISTORY:
             del runtime_error_history[: len(runtime_error_history) - MAX_RUNTIME_ERROR_HISTORY]
         return dict(row)
+
 
 
 def get_runtime_error_history():
@@ -772,8 +779,166 @@ async def websocket_endpoint(websocket: WebSocket):
         if websocket in active_websockets:
             active_websockets.remove(websocket)
 
+
+def ensure_tts_initialized():
+    global tts_engine
+    if tts_engine is None:
+        try:
+            from tts_engine import ReviewTTSEngine
+            tts_engine = ReviewTTSEngine()
+        except Exception as e:
+            logging.error(f"Failed to load ReviewTTSEngine: {e}")
+            record_runtime_error("tts", str(e))
+    return tts_engine
+
+
+cached_audio_devices = None
+cached_audio_devices_lock = threading.Lock()
+
+
+def get_audio_devices(refresh=False):
+    global cached_audio_devices
+    with cached_audio_devices_lock:
+        if cached_audio_devices is None or refresh:
+            try:
+                import sounddevice as sd
+                devices = []
+                for idx, dev in enumerate(sd.query_devices()):
+                    devices.append({
+                        "index": idx,
+                        "name": str(dev.get("name", "")),
+                        "max_input_channels": int(dev.get("max_input_channels", 0)),
+                        "max_output_channels": int(dev.get("max_output_channels", 0)),
+                        "default_samplerate": float(dev.get("default_samplerate", 0.0)),
+                    })
+                
+                default_input = -1
+                default_output = -1
+                try:
+                    default_input = int(sd.default.device[0])
+                    default_output = int(sd.default.device[1])
+                except Exception:
+                    pass
+
+                cached_audio_devices = {
+                    "devices": devices,
+                    "default_input_device": default_input,
+                    "default_output_device": default_output,
+                    "error": None,
+                }
+            except Exception as e:
+                logging.warning(f"Failed to query sound devices: {e}")
+                cached_audio_devices = {
+                    "devices": [],
+                    "default_input_device": -1,
+                    "default_output_device": -1,
+                    "error": str(e),
+                }
+        return dict(cached_audio_devices)
+
+
+@app.get("/runtime/version")
+async def runtime_version():
+    return {
+        "backend_version": "0.1.0",
+        "expected_electron_api_version": "0.1.0",
+        "schema_version": 1,
+        "config_version": 1,
+    }
+
+
+@app.post("/runtime/audio-devices/refresh")
+async def refresh_audio_devices():
+    return get_audio_devices(refresh=True)
+
+
+@app.get("/doctor")
+async def run_doctor(refresh_audio: bool = False):
+    engine = get_engine_if_initialized()
+    engine_ready = False
+    model_id = None
+    if engine is not None:
+        try:
+            engine_ready = bool(getattr(engine, "_ready", False))
+            model_id = getattr(engine, "model_id", None)
+        except Exception:
+            pass
+
+    # STT details
+    stt_info = {
+        "initialized": transcriber is not None,
+        "loaded": bool(getattr(transcriber, "model", None)) if transcriber else False,
+        "model_size": getattr(transcriber, "model_size", None) if transcriber else None,
+        "device": getattr(transcriber, "device", None) if transcriber else None,
+    }
+
+    # LLM details
+    llm_info = {
+        "initialized": engine is not None,
+        "ready": engine_ready,
+        "model_id": model_id or get_selected_llm_model_id(),
+        "llama_server_path": str(get_server_path()),
+        "llama_server_exists": os.path.exists(get_server_path()),
+    }
+
+    # TTS details
+    tts_engine_inst = ensure_tts_initialized()
+    tts_info = {
+        "initialized": tts_engine_inst is not None,
+        "loaded": tts_engine_inst.is_loaded() if tts_engine_inst else False,
+        "backend": tts_engine_inst.backend() if tts_engine_inst else "none",
+        "status_message": tts_engine_inst._status_message if tts_engine_inst else "TTS is not initialized.",
+        "fallback": tts_engine_inst._fallback if tts_engine_inst else False,
+    }
+
+    # Hotkeys details
+    hotkeys_info = {
+        "started": hotkey_manager_started,
+        "active": hotkey_manager is not None and getattr(hotkey_manager, "_running", False),
+    }
+
+    # Models dir
+    model_dir = Path(get_model_path(DEFAULT_MODEL)).parent
+    model_path_info = {
+        "models_dir": str(model_dir),
+        "models_dir_exists": os.path.exists(model_dir),
+        "default_model_path": str(get_model_path(DEFAULT_MODEL)),
+        "default_model_exists": os.path.exists(get_model_path(DEFAULT_MODEL)),
+    }
+
+    # Audio
+    audio_info = get_audio_devices(refresh=refresh_audio)
+
+    # Capabilities
+    platform_info = get_capabilities()
+
+    # Recovery instructions
+    recovery_guidelines = {
+        "missing_model": "Go to the Models screen to download the recommended LLM or Whisper models, or verify that the GGUF/Whisper files exist in the models directory.",
+        "missing_llama_server": "llama-server binary could not be found. If you are on Linux, please compile or install llama-server and set the BETTERFINGERS_LLAMA_SERVER environment variable.",
+        "port_conflict": "Port 8000 is occupied by another process. Please close the conflicting application or configure a different port.",
+        "microphone_unavailable": "No input audio devices were detected, or microphone permission was denied. Please connect a microphone and ensure BetterFingers has permission to access it.",
+        "unsupported_wayland_injection": "Typing and pasting injection are not supported under Wayland. BetterFingers has safely fallen back to copying text to the clipboard.",
+        "failed_clipboard": "The clipboard manager is not responding. On Linux, ensure xclip or xsel is installed.",
+        "failed_tts_dependency": "Sound playback dependencies are missing. Ensure libsndfile1 is installed on Linux."
+    }
+
+    return {
+        "health": "active",
+        "stt": stt_info,
+        "llm": llm_info,
+        "tts": tts_info,
+        "hotkeys": hotkeys_info,
+        "models": model_path_info,
+        "audio": audio_info,
+        "platform": platform_info,
+        "recovery": recovery_guidelines,
+    }
+
+
 @app.get("/health")
 async def health_check():
+
     engine_ready = False
     try:
         if is_lazy_startup_enabled():

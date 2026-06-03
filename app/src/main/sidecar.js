@@ -153,6 +153,8 @@ function createSidecar({
   };
   let childProcess = null;
   let startPromise = null;
+  let logBuffer = [];
+  const maxLogBufferLines = 200;
   let status = {
     state: 'stopped',
     message: 'Backend has not started yet.',
@@ -172,6 +174,36 @@ function createSidecar({
     };
   }
 
+  function appendLog(streamName, data) {
+    const text = String(data);
+    const lines = text.split('\n');
+    const timestamp = new Date().toISOString();
+    
+    let fileChunk = '';
+    for (let line of lines) {
+      if (line.endsWith('\r')) {
+        line = line.slice(0, -1);
+      }
+      if (!line && line === lines[lines.length - 1]) {
+        continue;
+      }
+      const logLine = `[${timestamp}] [${streamName}] ${line}`;
+      logBuffer.push(logLine);
+      fileChunk += logLine + '\n';
+    }
+
+    if (logBuffer.length > maxLogBufferLines) {
+      logBuffer = logBuffer.slice(logBuffer.length - maxLogBufferLines);
+    }
+
+    try {
+      const logFilePath = path.join(app.getPath('userData'), 'sidecar_backend_raw.log');
+      fs.appendFileSync(logFilePath, fileChunk);
+    } catch (e) {
+      // Ignore write errors to prevent crashing the main process
+    }
+  }
+
   async function start() {
     if (startPromise) {
       return startPromise;
@@ -181,12 +213,21 @@ function createSidecar({
       let exitListener = null;
       let exitPromise = null;
 
+      try {
+        const logFilePath = path.join(app.getPath('userData'), 'sidecar_backend_raw.log');
+        fs.writeFileSync(logFilePath, '');
+      } catch (e) {
+        console.error('Failed to clear sidecar backend log file:', e);
+      }
+      logBuffer = [];
+
       if (!childProcess) {
         setStatus({
           state: 'starting',
           message: `Checking backend port ${host}:${port}...`,
           error: '',
         });
+        appendLog('electron', `Checking backend port ${host}:${port}...`);
 
         const portOpen = await isTcpPortOpen(host, port);
         if (portOpen) {
@@ -197,6 +238,7 @@ function createSidecar({
               message: `A BetterFingers backend is already responding on ${host}:${port}. Electron will use it but will not own or stop that process.`,
               health: existingHealth,
             });
+            appendLog('electron', `External backend found responding on ${host}:${port}.`);
             return {
               url: healthUrl,
               packaged: isPackaged,
@@ -211,11 +253,13 @@ function createSidecar({
             message,
             error: message,
           });
+          appendLog('electron', `CRITICAL: Port conflict. ${message}`);
           throw new Error(message);
         }
 
         if (isPackaged) {
           const executablePath = resolveBackendExecutable();
+          appendLog('electron', `Spawning packaged backend executable at: ${executablePath}`);
           childProcess = spawn(executablePath, ['--host', host, '--port', String(port)], {
             cwd: path.dirname(executablePath),
             stdio: ['ignore', 'pipe', 'pipe'],
@@ -223,6 +267,7 @@ function createSidecar({
             env: backendEnv,
           });
         } else {
+          appendLog('electron', `Spawning dev backend: ${devCommand} ${devArgs.join(' ')}`);
           childProcess = spawn(devCommand, devArgs, {
             cwd: path.resolve(__dirname, '../../../'),
             stdio: ['ignore', 'pipe', 'pipe'],
@@ -239,10 +284,12 @@ function createSidecar({
 
         childProcess.stdout?.on('data', (chunk) => {
           process.stdout.write(`[backend] ${chunk}`);
+          appendLog('stdout', chunk);
         });
 
         childProcess.stderr?.on('data', (chunk) => {
           process.stderr.write(`[backend] ${chunk}`);
+          appendLog('stderr', chunk);
         });
 
         exitPromise = new Promise((resolve, reject) => {
@@ -257,6 +304,7 @@ function createSidecar({
               pid: null,
               ownsProcess: false,
             });
+            appendLog('electron', `CRITICAL: Backend exited before readiness (${descriptor}).`);
             reject(new Error(message));
           };
 
@@ -267,6 +315,7 @@ function createSidecar({
               message: `Failed to start backend: ${error.message}`,
               error: error.message,
             });
+            appendLog('electron', `CRITICAL: Failed to spawn child process: ${error.message}`);
             reject(error);
           });
           childProcess.once('exit', exitListener);
@@ -279,12 +328,42 @@ function createSidecar({
           exitPromise,
         ].filter(Boolean));
 
+        // Perform Version Handshake
+        const versionUrl = `http://${host}:${port}/runtime/version`;
+        const expectedVersion = '0.1.0';
+        let versionPayload = null;
+        try {
+          const res = await fetch(versionUrl, { cache: 'no-store' });
+          if (res.ok) {
+            versionPayload = await res.json();
+          }
+        } catch (e) {
+          appendLog('electron', `Failed to fetch backend version: ${e.message}`);
+        }
+
+        let versionMismatch = false;
+        if (versionPayload) {
+          const backendVer = versionPayload.backend_version;
+          appendLog('electron', `Backend version: ${backendVer} (expected: ${expectedVersion})`);
+          if (backendVer !== expectedVersion) {
+            versionMismatch = true;
+            appendLog('electron', `Version mismatch detected! Backend is ${backendVer}, Frontend expects ${expectedVersion}`);
+          }
+        } else {
+          versionMismatch = true;
+          appendLog('electron', `Could not verify backend version compatibility.`);
+        }
+
         setStatus({
-          state: 'ready',
-          message: `Backend is ready at ${healthUrl}.`,
+          state: versionMismatch ? 'version_mismatch' : 'ready',
+          message: versionMismatch
+            ? `Warning: Frontend expects API version ${expectedVersion}, but backend reported version ${versionPayload?.backend_version ?? 'unknown'}.`
+            : `Backend is ready at ${healthUrl}.`,
           health: result,
-          error: '',
+          error: versionMismatch ? 'version_mismatch' : '',
         });
+
+        appendLog('electron', `Backend handshake completed. State: ${status.state}`);
 
         return {
           url: healthUrl,
@@ -311,15 +390,17 @@ function createSidecar({
     startPromise = null;
 
     if (!processRef) {
+      const preserveStates = ['external', 'error', 'version_mismatch'];
       setStatus({
-        state: status.state === 'external' ? 'external' : 'stopped',
-        message: status.state === 'external' ? status.message : 'Backend is stopped.',
+        state: preserveStates.includes(status.state) ? status.state : 'stopped',
+        message: preserveStates.includes(status.state) ? status.message : 'Backend is stopped.',
         pid: null,
         ownsProcess: false,
       });
       return;
     }
 
+    appendLog('electron', `Stopping backend process (PID ${processRef.pid})...`);
     await killChildProcess(processRef);
     setStatus({
       state: 'stopped',
@@ -327,6 +408,7 @@ function createSidecar({
       pid: null,
       ownsProcess: false,
     });
+    appendLog('electron', `Backend process stopped.`);
   }
 
   function getPid() {
@@ -343,6 +425,7 @@ function createSidecar({
     getPid,
     isRunning,
     getStatus: () => ({ ...status, pid: childProcess?.pid ?? status.pid }),
+    getLogs: () => [...logBuffer],
     healthUrl,
   };
 }

@@ -139,6 +139,46 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
         self.assertTrue(data["exists"])
         self.assertEqual(data["lines"], ["two", "three"])
 
+    def test_runtime_version_endpoint(self):
+        with TestClient(server.app) as client:
+            response = client.get("/runtime/version")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["backend_version"], "0.1.0")
+        self.assertEqual(data["expected_electron_api_version"], "0.1.0")
+        self.assertEqual(data["schema_version"], 1)
+
+    def test_doctor_endpoint(self):
+        with patch("sys.platform", "linux"):
+            with TestClient(server.app) as client:
+                response = client.get("/doctor")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["health"], "active")
+        self.assertIn("stt", data)
+        self.assertIn("llm", data)
+        self.assertIn("tts", data)
+        self.assertIn("audio", data)
+        self.assertIn("recovery", data)
+
+    def test_record_runtime_error_severity(self):
+        server.record_runtime_error("stt", "failed loading model", "fatal", {"model": "base.en"})
+        with TestClient(server.app) as client:
+            response = client.get("/runtime/errors")
+        self.assertEqual(response.status_code, 200)
+        errors = response.json()["errors"]
+        target = [e for e in errors if e["message"] == "failed loading model"]
+        self.assertTrue(len(target) > 0)
+        self.assertEqual(target[0]["severity"], "fatal")
+        self.assertEqual(target[0]["details"]["model"], "base.en")
+
+    def test_refresh_audio_devices_endpoint(self):
+        with TestClient(server.app) as client:
+            response = client.post("/runtime/audio-devices/refresh")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("devices", data)
+
 
 if __name__ == "__main__":
     unittest.main()
