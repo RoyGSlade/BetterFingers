@@ -1,0 +1,10 @@
+Wayland Display Server Limitations: Under modern Linux systems running Wayland (instead of X11), key/character injection fails due to security constraints. While we've provided platform alerts and clean fallbacks to clipboard copies, this reduces the core typing-automation UX on Linux.
+Audio Query Hanging: The sounddevice library wraps PortAudio. On systems with misconfigured audio layers (such as ALSA/Jack issues on headless servers or containers), calling query_devices() can block in the underlying C library itself. Although we've cached this thread-safely in 
+
+get_audio_devices
+, a refresh request could still hang the worker thread under severely broken system configurations.
+No Ongoing Crash Detection: The Electron process registers the backend exit handler only during startup validation in 
+
+sidecar.js
+. If the Python sidecar process crashes after the initial handshake successfully resolves, Electron does not have a live listener to detect the exit immediately and update the UI state, unless it receives a failed IPC call.
+Hardcoded Configuration Values: The API port 8000 and version compatibility strings (0.1.0) are hardcoded in both the Python backend and Electron main process. In production, these should be dynamically resolved or synchronized via shared config schemas to prevent drifts during deployment.
