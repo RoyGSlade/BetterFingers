@@ -437,6 +437,18 @@ def _sanitize_profile_values(config, defaults):
         minimum=900,
         maximum=1200,
     )
+    cfg["llm_chunk_size"] = _coerce_int(
+        cfg.get("llm_chunk_size", d.get("llm_chunk_size", 750)),
+        d.get("llm_chunk_size", 750),
+        minimum=50,
+        maximum=5000,
+    )
+    cfg["whisper_chunk_size"] = _coerce_int(
+        cfg.get("whisper_chunk_size", d.get("whisper_chunk_size", 1000)),
+        d.get("whisper_chunk_size", 1000),
+        minimum=50,
+        maximum=5000,
+    )
     cfg["draft_history_limit"] = _coerce_int(
         cfg.get("draft_history_limit", d["draft_history_limit"]),
         d["draft_history_limit"],
@@ -602,6 +614,8 @@ def _profile_defaults():
         "sign_off_text": "",
         "send_mode": "review_first",
         "output_token_limit": 1100,
+        "llm_chunk_size": 750,
+        "whisper_chunk_size": 1000,
         "draft_history_limit": 80,
         "long_input_message": "It looks like you have a lot to say. Give us a second.",
         "chat_close_action": "none",

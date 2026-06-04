@@ -1,6 +1,6 @@
 const path = require('node:path');
 const { app } = require('electron');
-const { createMainWindow, focusMainWindow } = require('./windows');
+const { createMainWindow, focusMainWindow, createOverlayWindow } = require('./windows');
 const { createSidecar } = require('./sidecar');
 const { createTray } = require('./tray');
 const { registerIpc } = require('./ipc');
@@ -44,6 +44,7 @@ function bootstrapApp() {
   });
 
   mainWindow = createMainWindow();
+  createOverlayWindow();
   tray = createTray({
     getMainWindow: () => mainWindow,
     onShow: () => focusMainWindow(mainWindow),

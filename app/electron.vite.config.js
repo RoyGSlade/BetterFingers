@@ -32,6 +32,8 @@ module.exports = defineConfig({
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/renderer/index.html'),
+          overlay: resolve(__dirname, 'src/renderer/overlay.html'),
+          reviewOverlay: resolve(__dirname, 'src/renderer/review-overlay.html'),
         },
       },
     },

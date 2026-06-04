@@ -31,6 +31,7 @@ class HotkeyManager:
         on_force_stop_callback=None,
         on_manual_send_callback=None,
         on_review_tts_callback=None,
+        is_busy_callback=None,
     ):
         self.recorder = recorder
         self.on_complete = on_recording_complete_callback
@@ -38,6 +39,7 @@ class HotkeyManager:
         self.on_force_stop = on_force_stop_callback
         self.on_manual_send = on_manual_send_callback
         self.on_review_tts = on_review_tts_callback
+        self.is_busy_callback = is_busy_callback
         self.current_profile = "Default"
 
         self.state_lock = threading.RLock()
@@ -136,8 +138,10 @@ class HotkeyManager:
         else:
             self._stop_recording(reason="toggle")
 
-    # --- Shared recording ---
     def _start_recording(self, reason="manual"):
+        if self.is_busy_callback and self.is_busy_callback():
+            logging.info("Ignored recording trigger: backend is busy processing a previous draft.")
+            return
         with self.state_lock:
             if self.is_recording:
                 return

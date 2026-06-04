@@ -34,6 +34,54 @@ def _run(command, cwd=None):
     subprocess.run(command, cwd=cwd, check=True)
 
 
+def _run_optional(command):
+    print(f"+ {' '.join(str(part) for part in command)}")
+    subprocess.run(command, check=False)
+
+
+def _print_build_preflight():
+    print("Build preflight:")
+    _run_optional(["free", "-h"])
+    _run_optional(["swapon", "--show"])
+    _run_optional(["nproc"])
+    _run_optional(["pgrep", "-a", "cmake|ninja|make|cc1plus|g\\+\\+|clang\\+\\+"])
+
+
+def _has_active_build_process():
+    result = subprocess.run(
+        ["pgrep", "-a", "cmake|ninja|make|cc1plus|g\\+\\+|clang\\+\\+"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return False
+
+    current_pid = str(os.getpid())
+    lines = [line for line in result.stdout.splitlines() if line and not line.startswith(current_pid + " ")]
+    if lines:
+        print("Another build process appears to be running:")
+        for line in lines:
+            print(line)
+        return True
+    return False
+
+
+def _safe_build(command, cwd=None):
+    _print_build_preflight()
+    if _has_active_build_process():
+        raise RuntimeError("Refusing to start another llama-server build while build processes are already active.")
+
+    nice = shutil.which("nice")
+    ionice = shutil.which("ionice")
+    wrapped = list(command)
+    if ionice:
+        wrapped = [ionice, "-c2", "-n7", *wrapped]
+    if nice:
+        wrapped = [nice, "-n", "10", *wrapped]
+    _run(wrapped, cwd=cwd)
+
+
 def install_from_binary(source):
     source_path = Path(source).expanduser().resolve()
     if not source_path.exists():
@@ -67,7 +115,11 @@ def build_from_source(source, build_dir=None, cmake_args=None):
     ]
     configure_command.extend(cmake_args or [])
     _run(configure_command)
-    _run([cmake, "--build", str(resolved_build_dir), "--target", "llama-server", "-j"])
+    jobs = str(os.getenv("BUILD_JOBS", "1") or "1").strip()
+    if not jobs.isdigit() or int(jobs) < 1:
+        jobs = "1"
+    print(f"Building llama-server with BUILD_JOBS={jobs}.")
+    _safe_build([cmake, "--build", str(resolved_build_dir), "--target", "llama-server", "--parallel", jobs])
 
     candidates = [
         resolved_build_dir / "bin" / SERVER_NAME,

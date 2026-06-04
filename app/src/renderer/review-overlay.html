@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BetterFingers Review</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b111d;
+        --panel: #111a29;
+        --panel-soft: #162234;
+        --text: #f2f7ff;
+        --muted: #a8b4c7;
+        --border: rgba(168, 180, 199, 0.18);
+        --accent: #66f2c1;
+        --warning: #f6c15f;
+        --danger: #ff7c87;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          linear-gradient(140deg, rgba(102, 242, 193, 0.08), transparent 34%),
+          var(--bg);
+        color: var(--text);
+        font-family: ui-sans-serif, "Segoe UI", system-ui, sans-serif;
+        overflow: hidden;
+      }
+
+      .shell {
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        height: 100vh;
+        border: 1px solid var(--border);
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 14px;
+        background: rgba(17, 26, 41, 0.94);
+        border-bottom: 1px solid var(--border);
+        -webkit-app-region: drag;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 0.92rem;
+        letter-spacing: 0;
+      }
+
+      .status {
+        color: var(--muted);
+        font-size: 0.78rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      button,
+      textarea {
+        font: inherit;
+      }
+
+      button,
+      select {
+        -webkit-app-region: no-drag;
+      }
+
+      .icon-button {
+        width: 30px;
+        height: 30px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--text);
+        cursor: pointer;
+      }
+
+      main {
+        display: grid;
+        gap: 10px;
+        min-height: 0;
+        padding: 12px;
+      }
+
+      .text-stack {
+        display: grid;
+        grid-template-rows: minmax(56px, 0.36fr) minmax(130px, 1fr);
+        gap: 10px;
+        min-height: 0;
+      }
+
+      .raw,
+      textarea {
+        width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.045);
+        color: var(--text);
+      }
+
+      .raw {
+        padding: 10px;
+        color: var(--muted);
+        line-height: 1.38;
+        overflow: auto;
+        font-size: 0.86rem;
+      }
+
+      textarea {
+        min-height: 0;
+        resize: none;
+        padding: 11px;
+        line-height: 1.45;
+        outline: none;
+      }
+
+      textarea:focus {
+        border-color: rgba(102, 242, 193, 0.55);
+      }
+
+      .instruction-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+      }
+
+      .instruction-row.hidden {
+        display: none;
+      }
+
+      .instruction-row textarea {
+        min-height: 54px;
+      }
+
+      footer {
+        display: grid;
+        gap: 8px;
+        padding: 10px 12px 12px;
+        border-top: 1px solid var(--border);
+        background: rgba(17, 26, 41, 0.82);
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .button {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--text);
+        padding: 9px 11px;
+        cursor: pointer;
+      }
+
+      .button.primary {
+        border-color: rgba(102, 242, 193, 0.5);
+        background: rgba(102, 242, 193, 0.13);
+      }
+
+      .button.warning {
+        border-color: rgba(246, 193, 95, 0.42);
+      }
+
+      .button.danger {
+        border-color: rgba(255, 124, 135, 0.42);
+      }
+
+      .button:disabled {
+        cursor: wait;
+        opacity: 0.62;
+      }
+
+      .message {
+        min-height: 18px;
+        color: var(--muted);
+        font-size: 0.82rem;
+        line-height: 1.35;
+      }
+
+      .message[data-tone="success"] {
+        color: var(--accent);
+      }
+
+      .message[data-tone="warning"] {
+        color: var(--warning);
+      }
+
+      .message[data-tone="danger"] {
+        color: var(--danger);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <header>
+        <div>
+          <h1>Review Draft</h1>
+          <div id="status" class="status">Waiting for draft</div>
+        </div>
+        <button id="closeButton" class="icon-button" type="button" title="Close">X</button>
+      </header>
+
+      <main>
+        <div class="text-stack">
+          <div id="rawText" class="raw">No transcript yet.</div>
+          <textarea id="finalText" spellcheck="true" placeholder="Cleaned output will appear here."></textarea>
+        </div>
+        <div id="instructionRow" class="instruction-row hidden">
+          <textarea id="instructionText" placeholder="Record or type what you want changed."></textarea>
+          <button id="runInstructionButton" class="button warning" type="button">Rewrite</button>
+        </div>
+      </main>
+
+      <footer>
+        <div class="actions">
+          <button id="acceptButton" class="button primary" type="button">Accept</button>
+          <button id="changeButton" class="button" type="button">Change</button>
+          <button id="instructButton" class="button" type="button">Instruct</button>
+          <button id="readButton" class="button" type="button">Read</button>
+          <button id="cancelButton" class="button danger" type="button">Cancel</button>
+        </div>
+        <div id="message" class="message" role="status" aria-live="polite"></div>
+      </footer>
+    </div>
+
+    <script>
+      const BACKEND_ORIGIN = 'http://127.0.0.1:8000';
+      const statusEl = document.getElementById('status');
+      const rawTextEl = document.getElementById('rawText');
+      const finalTextEl = document.getElementById('finalText');
+      const messageEl = document.getElementById('message');
+      const instructionRow = document.getElementById('instructionRow');
+      const instructionTextEl = document.getElementById('instructionText');
+      const acceptButton = document.getElementById('acceptButton');
+      const changeButton = document.getElementById('changeButton');
+      const instructButton = document.getElementById('instructButton');
+      const runInstructionButton = document.getElementById('runInstructionButton');
+      const readButton = document.getElementById('readButton');
+      const cancelButton = document.getElementById('cancelButton');
+      const closeButton = document.getElementById('closeButton');
+
+      let currentDraft = null;
+      let outputSettings = null;
+
+      function setMessage(text = '', tone = '') {
+        messageEl.textContent = text;
+        if (tone) {
+          messageEl.dataset.tone = tone;
+        } else {
+          delete messageEl.dataset.tone;
+        }
+      }
+
+      async function fetchJson(url, options = {}, timeoutMs = 120000) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const response = await fetch(url, {
+            cache: 'no-store',
+            ...options,
+            signal: controller.signal,
+          });
+          if (!response.ok) {
+            throw new Error(`${url} failed with status ${response.status}`);
+          }
+          return await response.json();
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+
+      function postJson(url, payload = {}, timeoutMs = 120000) {
+        return fetchJson(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }, timeoutMs);
+      }
+
+      function defaultSendAction() {
+        if (!outputSettings?.capabilities?.supports_input_injection) {
+          return 'copy_only';
+        }
+        return outputSettings?.send_mode === 'auto_send' ? 'open_chat_then_send' : 'paste';
+      }
+
+      async function refreshOutputSettings() {
+        outputSettings = await fetchJson(`${BACKEND_ORIGIN}/runtime/output-settings`, {}, 4000);
+        return outputSettings;
+      }
+
+      function renderDraft(draft) {
+        currentDraft = draft;
+        const status = draft?.status || 'pending';
+        statusEl.textContent = draft?.id ? `Draft #${draft.id} · ${status}` : 'Waiting for draft';
+        rawTextEl.textContent = draft?.raw_text || 'No transcript yet.';
+        finalTextEl.value = draft?.final_text || '';
+        setMessage('');
+      }
+
+      async function saveEdit() {
+        if (!currentDraft?.id) return currentDraft;
+        const nextText = finalTextEl.value || '';
+        if (nextText === (currentDraft.final_text || '')) {
+          return currentDraft;
+        }
+        currentDraft = await postJson(`${BACKEND_ORIGIN}/drafts/${currentDraft.id}/edit`, { final_text: nextText }, 10000);
+        return currentDraft;
+      }
+
+      function setBusy(isBusy) {
+        for (const button of [acceptButton, changeButton, instructButton, runInstructionButton, readButton, cancelButton]) {
+          button.disabled = isBusy;
+        }
+      }
+
+      async function acceptDraft() {
+        if (!currentDraft?.id) return;
+        setBusy(true);
+        setMessage('Accepting...', 'warning');
+        try {
+          await refreshOutputSettings();
+          await saveEdit();
+          currentDraft = await postJson(`${BACKEND_ORIGIN}/drafts/${currentDraft.id}/accept`, {}, 10000);
+          if (outputSettings?.send_mode === 'auto_send') {
+            const sentDraft = await postJson(
+              `${BACKEND_ORIGIN}/drafts/${currentDraft.id}/send`,
+              { action: defaultSendAction(), open_chat: defaultSendAction() === 'open_chat_then_send' },
+              120000,
+            );
+            renderDraft(sentDraft);
+            setMessage(sentDraft.send_result?.message || 'Sent.', sentDraft.send_result?.ok ? 'success' : 'danger');
+            if (sentDraft.send_result?.ok) {
+              setTimeout(() => window.betterFingersReview?.hide?.(), 900);
+            }
+          } else {
+            renderDraft(currentDraft);
+            setMessage('Accepted. Press the primary action hotkey to send.', 'success');
+          }
+        } catch (error) {
+          setMessage(`Accept failed: ${error.message}`, 'danger');
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      async function rewriteDraft(action, customInstruction = '') {
+        if (!currentDraft?.id) return;
+        setBusy(true);
+        setMessage('Rewriting...', 'warning');
+        try {
+          await saveEdit();
+          const rewritten = await postJson(
+            `${BACKEND_ORIGIN}/drafts/${currentDraft.id}/rewrite`,
+            { action, custom_instruction: customInstruction },
+            120000,
+          );
+          if (rewritten?.ok === false) {
+            setMessage(`Rewrite failed: ${rewritten.error || 'Unknown error'}`, 'danger');
+            return;
+          }
+          renderDraft(rewritten);
+          setMessage('Rewrite ready.', 'success');
+        } catch (error) {
+          setMessage(`Rewrite failed: ${error.message}`, 'danger');
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      async function declineDraft() {
+        if (!currentDraft?.id) {
+          window.betterFingersReview?.hide?.();
+          return;
+        }
+        setBusy(true);
+        try {
+          await postJson(`${BACKEND_ORIGIN}/drafts/${currentDraft.id}/decline`, {}, 10000);
+          window.betterFingersReview?.hide?.();
+        } catch (error) {
+          setMessage(`Cancel failed: ${error.message}`, 'danger');
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      async function readDraft() {
+        if (!currentDraft?.id) return;
+        setBusy(true);
+        try {
+          await saveEdit();
+          const result = await postJson(`${BACKEND_ORIGIN}/drafts/${currentDraft.id}/tts`, { text: finalTextEl.value }, 120000);
+          setMessage(result?.message || 'Read-aloud request sent.', result?.ok === false ? 'danger' : 'success');
+        } catch (error) {
+          setMessage(`Read failed: ${error.message}`, 'danger');
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      window.betterFingersReview?.onDraft((draft) => {
+        renderDraft(draft);
+        refreshOutputSettings().catch(() => {});
+      });
+
+      acceptButton.addEventListener('click', acceptDraft);
+      changeButton.addEventListener('click', () => rewriteDraft('clearer'));
+      instructButton.addEventListener('click', () => {
+        instructionRow.classList.toggle('hidden');
+        if (!instructionRow.classList.contains('hidden')) {
+          instructionTextEl.focus();
+        }
+      });
+      runInstructionButton.addEventListener('click', () => {
+        const instruction = instructionTextEl.value.trim();
+        if (!instruction) {
+          setMessage('Add an instruction first.', 'warning');
+          return;
+        }
+        rewriteDraft('custom', instruction);
+      });
+      readButton.addEventListener('click', readDraft);
+      cancelButton.addEventListener('click', declineDraft);
+      closeButton.addEventListener('click', () => window.betterFingersReview?.hide?.());
+
+      refreshOutputSettings().catch(() => {});
+    </script>
+  </body>
+</html>

@@ -150,6 +150,7 @@ function createSidecar({
   const backendEnv = {
     ...process.env,
     BETTERFINGERS_LAZY_STARTUP: '1',
+    BETTERFINGERS_ENV: isPackaged ? 'production' : 'development',
   };
   let childProcess = null;
   let startPromise = null;

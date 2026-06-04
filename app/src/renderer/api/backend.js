@@ -18,6 +18,8 @@ const VOICE_STATUS_WS_URL = 'ws://127.0.0.1:8000/ws/voice_status';
 const DOCTOR_URL = `${BACKEND_ORIGIN}/doctor`;
 const REFRESH_AUDIO_DEVICES_URL = `${BACKEND_ORIGIN}/runtime/audio-devices/refresh`;
 const RUNTIME_VERSION_URL = `${BACKEND_ORIGIN}/runtime/version`;
+const PERSONAS_URL = `${BACKEND_ORIGIN}/personas`;
+const TTS_VOICES_URL = `${BACKEND_ORIGIN}/tts/voices`;
 
 async function fetchDoctor(refreshAudio = false, timeoutMs = 5000) {
   return fetchJson(`${DOCTOR_URL}?refresh_audio=${refreshAudio}`, timeoutMs);
@@ -131,7 +133,7 @@ async function selectLlmModel(modelId, timeoutMs = 10000) {
   return postJson(`${MODELS_LLM_URL}/select`, { model_id: modelId }, timeoutMs);
 }
 
-async function downloadLlmModel(modelId, timeoutMs = 120000) {
+async function downloadLlmModel(modelId, timeoutMs = 1800000) {
   return postJson(`${MODELS_LLM_URL}/${encodeURIComponent(modelId)}/download`, {}, timeoutMs);
 }
 
@@ -143,11 +145,11 @@ async function fetchWhisperModels(timeoutMs = 2500) {
   return fetchJson(MODELS_WHISPER_URL, timeoutMs);
 }
 
-async function downloadWhisperModel(modelSize, preferGpu = true, timeoutMs = 120000) {
+async function downloadWhisperModel(modelSize, preferGpu = true, timeoutMs = 1800000) {
   return postJson(`${MODELS_WHISPER_URL}/download`, { model_size: modelSize, prefer_gpu: preferGpu }, timeoutMs);
 }
 
-async function testWhisperModel(modelSize, preferGpu = true, timeoutMs = 120000) {
+async function testWhisperModel(modelSize, preferGpu = true, timeoutMs = 300000) {
   return postJson(`${MODELS_WHISPER_URL}/test`, { model_size: modelSize, prefer_gpu: preferGpu }, timeoutMs);
 }
 
@@ -215,6 +217,10 @@ async function declineDraft(id, timeoutMs = 2500) {
   return postJson(`${DRAFTS_URL}/${id}/decline`, {}, timeoutMs);
 }
 
+async function clearDrafts(timeoutMs = 2500) {
+  return deleteJson(DRAFTS_URL, timeoutMs);
+}
+
 async function retryDraft(id, timeoutMs = 120000) {
   return postJson(`${DRAFTS_URL}/${id}/retry`, {}, timeoutMs);
 }
@@ -245,6 +251,39 @@ async function runPrimaryAction(timeoutMs = 120000) {
 
 async function emergencyStop(timeoutMs = 10000) {
   return postJson(RUNTIME_EMERGENCY_STOP_URL, {}, timeoutMs);
+}
+
+async function fetchPersonas(timeoutMs = 2500) {
+  return fetchJson(PERSONAS_URL, timeoutMs);
+}
+
+async function fetchTtsVoices(timeoutMs = 2500) {
+  return fetchJson(TTS_VOICES_URL, timeoutMs);
+}
+
+async function savePersona(name, prompt, timeoutMs = 5000) {
+  return postJson(PERSONAS_URL, { name, prompt }, timeoutMs);
+}
+
+async function deletePersona(name, timeoutMs = 5000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(`${PERSONAS_URL}/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`DELETE ${PERSONAS_URL}/${name} failed with status ${response.status}`);
+    }
+
+    return await response.json();
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 async function warmupRuntime({ stt = false, llm = false, hotkeys = false } = {}, timeoutMs = 120000) {
@@ -384,6 +423,7 @@ export {
   deleteLlmModel,
   deleteWhisperModel,
   declineDraft,
+  clearDrafts,
   downloadLlmModel,
   downloadWhisperModel,
   editDraft,
@@ -391,6 +431,10 @@ export {
   fetchCapabilities,
   fetchDiagnosticsLogs,
   fetchDiagnosticsPaths,
+  fetchPersonas,
+  fetchTtsVoices,
+  savePersona,
+  deletePersona,
   fetchDrafts,
   fetchHealth,
   fetchLatestDraft,

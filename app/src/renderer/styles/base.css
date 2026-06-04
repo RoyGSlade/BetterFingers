@@ -269,6 +269,69 @@ h1 {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+  align-items: center;
+}
+
+.inline-send-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: min(100%, 300px);
+}
+
+.inline-send-control .status-label {
+  white-space: nowrap;
+}
+
+.compact-select {
+  min-width: 170px;
+  padding: 9px 10px;
+}
+
+.send-result-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(159, 177, 203, 0.14);
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--muted);
+}
+
+.send-result-panel strong {
+  color: var(--text);
+  line-height: 1.4;
+}
+
+.send-result-panel[data-tone='success'] {
+  border-color: rgba(102, 242, 193, 0.24);
+}
+
+.send-result-panel[data-tone='warning'] {
+  border-color: rgba(255, 200, 107, 0.34);
+}
+
+.send-result-panel[data-tone='danger'] {
+  border-color: rgba(255, 124, 135, 0.32);
+}
+
+.send-result-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(110px, 1fr));
+  gap: 8px 12px;
+}
+
+.send-result-grid span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.send-result-grid b {
+  color: var(--text);
+  font-weight: 700;
+  overflow-wrap: anywhere;
 }
 
 .review-tools {
@@ -477,6 +540,15 @@ h1 {
   .review-instruction {
     min-width: 0;
   }
+
+  .inline-send-control {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .send-result-grid {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 /* Tabs & Doctor Checkup Styles */
@@ -636,3 +708,11 @@ h1 {
   display: none !important;
 }
 
+.secondary-button.danger-button {
+  background: rgba(255, 124, 135, 0.08);
+  border-color: rgba(255, 124, 135, 0.25);
+  color: var(--danger);
+}
+.secondary-button.danger-button:hover {
+  border-color: var(--danger);
+}

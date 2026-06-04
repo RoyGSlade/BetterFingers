@@ -61,6 +61,30 @@ test.describe('BetterFingers Electron App Tests', () => {
     await expect(window.locator('#tabModels')).not.toBeVisible();
   });
 
+  test('Hotkey input records multiple keys together', async () => {
+    // Navigate to settings tab
+    await window.click('#tabButtonSettings');
+
+    const hotkeyInput = window.locator('#settingHotkey');
+    await hotkeyInput.focus();
+
+    // Hold down F8, then 4, then t
+    await window.keyboard.down('F8');
+    await window.keyboard.down('4');
+    await window.keyboard.down('t');
+
+    // Input value should be F8+4+T
+    await expect(hotkeyInput).toHaveValue('F8+4+T');
+
+    // Release keys
+    await window.keyboard.up('t');
+    await window.keyboard.up('4');
+    await window.keyboard.up('F8');
+
+    // Unfocus to complete
+    await hotkeyInput.blur();
+  });
+
   test('Diagnostics & Doctor checkup displays subsystem health', async () => {
     // Switch to Diagnostics tab
     await window.click('#tabButtonDiagnostics');

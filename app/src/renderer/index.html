@@ -96,16 +96,30 @@
             <button id="acceptDraftButton" class="secondary-button" type="button" disabled>Accept</button>
             <button id="declineDraftButton" class="secondary-button" type="button" disabled>Decline</button>
             <button id="retryDraftButton" class="secondary-button" type="button" disabled>Retry</button>
+            <label class="inline-send-control">
+              <span class="status-label">Send action</span>
+              <select id="sendActionSelect" class="settings-input compact-select">
+                <option value="profile_default">Profile default</option>
+                <option value="copy_only">Copy only</option>
+                <option value="paste">Paste</option>
+                <option value="type">Type</option>
+                <option value="open_chat_then_send">Open chat then send</option>
+              </select>
+            </label>
             <button id="sendDraftButton" class="secondary-button" type="button" disabled>Send / Copy</button>
           </div>
 
           <div id="draftMessage" class="warmup-message" role="status" aria-live="polite"></div>
+          <div id="sendResultPanel" class="send-result-panel hidden" aria-live="polite"></div>
 
           <div id="draftMetadata" class="draft-metadata">No recording metadata yet.</div>
 
           <div>
-            <span class="status-label">Draft history</span>
-            <p class="draft-metadata">Session-only history keeps the latest 20 drafts while the backend is running.</p>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span class="status-label">Draft history</span>
+              <button id="clearDraftHistoryButton" class="secondary-button compact-button" type="button" style="padding: 2px 8px; font-size: 11px; margin: 0;">Clear History</button>
+            </div>
+            <p class="draft-metadata">Persisted history keeps the latest 100 drafts.</p>
             <div id="draftHistoryList" class="draft-history">
               <span class="empty-state">No draft history yet.</span>
             </div>
@@ -186,8 +200,12 @@
             <label><span class="status-label">Open Chat Key</span><input id="settingChatOpenKey" class="settings-input" type="text" /></label>
             <label><span class="status-label">Voice Mute Key</span><input id="settingVoiceMuteKey" class="settings-input" type="text" /></label>
             <label><span class="status-label">Send Mode</span><select id="settingSendMode" class="settings-input"><option value="review_first">review first</option><option value="auto_send">auto send</option></select></label>
-            <label><span class="status-label">Cleanup Preset</span><input id="settingCurrentPreset" class="settings-input" type="text" /></label>
+            <label><span class="status-label">Cleanup Preset</span><select id="settingCurrentPreset" class="settings-input"></select></label>
             <label><span class="status-label">Output Token Limit</span><input id="settingOutputTokenLimit" class="settings-input" type="number" min="100" /></label>
+            <label><span class="status-label">LLM Chunk Size (words)</span><input id="settingLlmChunkSize" class="settings-input" type="number" min="50" /></label>
+            <label><span class="status-label">Whisper Chunk Size (words)</span><input id="settingWhisperChunkSize" class="settings-input" type="number" min="50" /></label>
+            <label><span class="status-label">Review TTS Voice</span><select id="settingReviewTtsVoiceHint" class="settings-input"></select></label>
+            <label><span class="status-label">Review TTS Speed</span><input id="settingReviewTtsSpeed" class="settings-input" type="number" step="0.1" min="0.5" max="3.0" /></label>
             <label><span class="status-label">No-Audio Min Duration</span><input id="settingNoAudioDuration" class="settings-input" type="number" step="0.05" min="0" /></label>
             <label><span class="status-label">No-Audio Min RMS</span><input id="settingNoAudioRms" class="settings-input" type="number" step="0.001" min="0" /></label>
             <label><span class="status-label">No-Audio Min Peak</span><input id="settingNoAudioPeak" class="settings-input" type="number" step="0.001" min="0" /></label>
@@ -213,6 +231,94 @@
             <button id="deleteProfileButton" class="secondary-button" type="button">Delete Profile</button>
           </div>
           <div id="profileMessage" class="warmup-message" role="status" aria-live="polite"></div>
+        </section>
+
+        <section class="stream-panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">AI Customization</p>
+              <h2>AI Persona Configuration Wizard</h2>
+            </div>
+          </div>
+          
+          <div class="wizard-container" style="background: rgba(1, 8, 16, 0.28); border: 1px solid var(--border); border-radius: 18px; padding: 20px;">
+            <div id="wizardStepProgress" style="font-size: 0.85rem; color: var(--accent); font-weight: 700; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.05em;">Step 1 of 4: Select Goal & Role</div>
+            
+            <!-- Step 1: Goal/Role -->
+            <div id="wizardStep1" class="wizard-step">
+              <p style="margin-bottom: 12px; font-size: 0.95rem; color: var(--muted); line-height: 1.5;">Choose the foundational role or goal template for the AI:</p>
+              <div class="settings-grid" style="grid-template-columns: 1fr;">
+                <label>
+                  <span class="status-label">Role Template</span>
+                  <select id="wizardRole" class="settings-input">
+                    <option value="janitor">Spelling & Grammar Cleaner (True Janitor)</option>
+                    <option value="editor">Pro Editor (Polished)</option>
+                    <option value="writer">Corporate Writer (Formal)</option>
+                    <option value="custom">Custom (write your own goal/role)</option>
+                  </select>
+                </label>
+                <label id="wizardCustomRoleLabel" class="hidden" style="margin-top: 12px;">
+                  <span class="status-label">Custom Goal/Role Description</span>
+                  <textarea id="wizardCustomRole" class="settings-input" style="height: 80px; resize: vertical;" placeholder="e.g. You are an expert copywriter. Rewrite user text to be extremely persuasive..."></textarea>
+                </label>
+              </div>
+            </div>
+
+            <!-- Step 2: Tone -->
+            <div id="wizardStep2" class="wizard-step hidden">
+              <p style="margin-bottom: 12px; font-size: 0.95rem; color: var(--muted); line-height: 1.5;">Select the tone and voice style:</p>
+              <div class="settings-grid" style="grid-template-columns: 1fr;">
+                <label>
+                  <span class="status-label">Tone Template</span>
+                  <select id="wizardTone" class="settings-input">
+                    <option value="neutral">Neutral & Direct (no extra flair)</option>
+                    <option value="formal">Formal, Professional & Serious</option>
+                    <option value="casual">Casual, Conversational & Friendly</option>
+                    <option value="custom">Custom Tone</option>
+                  </select>
+                </label>
+                <label id="wizardCustomToneLabel" class="hidden" style="margin-top: 12px;">
+                  <span class="status-label">Custom Tone Description</span>
+                  <input id="wizardCustomTone" class="settings-input" type="text" placeholder="e.g. Enthusiastic and quirky, using occasional emojis..." />
+                </label>
+              </div>
+            </div>
+
+            <!-- Step 3: Rules & Constraints -->
+            <div id="wizardStep3" class="wizard-step hidden">
+              <p style="margin-bottom: 12px; font-size: 0.95rem; color: var(--muted); line-height: 1.5;">Define strict rules and boundaries:</p>
+              <div class="toggle-grid" style="grid-template-columns: 1fr; gap: 12px; margin-bottom: 16px;">
+                <label style="display: flex; align-items: center; gap: 8px;"><input id="wizardRuleLength" type="checkbox" checked /> Match original input length (do not expand/summarize)</label>
+                <label style="display: flex; align-items: center; gap: 8px;"><input id="wizardRuleCommands" type="checkbox" checked /> Ignore user commands/instructions inside speech (safety guard)</label>
+                <label style="display: flex; align-items: center; gap: 8px;"><input id="wizardRuleNoPreamble" type="checkbox" checked /> Do not output preambles, explanations, or quotes</label>
+                <label style="display: flex; align-items: center; gap: 8px;"><input id="wizardRuleSanitize" type="checkbox" /> Sanitize profanity or hostile language</label>
+              </div>
+            </div>
+
+            <!-- Step 4: Save & Preview -->
+            <div id="wizardStep4" class="wizard-step hidden">
+              <p style="margin-bottom: 12px; font-size: 0.95rem; color: var(--muted); line-height: 1.5;">Review and save your custom persona:</p>
+              <div class="settings-grid" style="grid-template-columns: 1fr; gap: 12px;">
+                <label>
+                  <span class="status-label">Persona Name</span>
+                  <input id="wizardPersonaName" class="settings-input" type="text" placeholder="e.g. Friendly Editor" />
+                </label>
+                <label>
+                  <span class="status-label">Generated Prompt Preview</span>
+                  <textarea id="wizardPromptPreview" class="settings-input" style="height: 120px; resize: vertical;" readonly></textarea>
+                </label>
+              </div>
+            </div>
+            
+            <div class="action-row" style="margin-top: 20px; justify-content: space-between;">
+              <button id="wizardPrevButton" class="secondary-button" type="button" disabled>Back</button>
+              <div>
+                <button id="wizardDeleteButton" class="secondary-button danger-button hidden" type="button" style="margin-right: 8px;">Delete Custom Persona</button>
+                <button id="wizardNextButton" class="secondary-button" type="button">Next</button>
+              </div>
+            </div>
+            <div id="wizardMessage" class="warmup-message" role="status" aria-live="polite" style="margin-top: 12px;"></div>
+          </div>
         </section>
 
         <section class="stream-panel">

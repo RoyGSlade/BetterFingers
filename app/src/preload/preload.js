@@ -7,6 +7,18 @@ const api = {
   getSidecarStatus: () => ipcRenderer.invoke('sidecar:get-status'),
   getSidecarLogs: () => ipcRenderer.invoke('sidecar:get-logs'),
   writeClipboardText: (text) => ipcRenderer.invoke('clipboard:write-text', text),
+  updateOverlayStatus: (status) => ipcRenderer.invoke('overlay:update-status', status),
+  showReviewOverlay: (draft) => ipcRenderer.invoke('review:show', draft),
+  hideReviewOverlay: () => ipcRenderer.invoke('review:hide'),
 };
 
 contextBridge.exposeInMainWorld('betterFingers', api);
+
+contextBridge.exposeInMainWorld('betterFingersOverlay', {
+  onStatusUpdate: (callback) => ipcRenderer.on('overlay:update', (_event, status) => callback(status)),
+});
+
+contextBridge.exposeInMainWorld('betterFingersReview', {
+  hide: () => ipcRenderer.invoke('review:hide'),
+  onDraft: (callback) => ipcRenderer.on('review:draft', (_event, draft) => callback(draft)),
+});

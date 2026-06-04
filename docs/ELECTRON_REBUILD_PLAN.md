@@ -89,6 +89,26 @@ git clone https://github.com/ggml-org/llama.cpp .betterfingers/llama.cpp
 python tools/setup_linux_llama_server.py --source .betterfingers/llama.cpp
 ```
 
+### Safe local llama-server builds
+
+On Linux laptops, do not run an unbounded llama.cpp build. It can consume all CPU/RAM and freeze the desktop.
+
+The setup script now defaults to one build job:
+
+```bash
+BUILD_JOBS=1 python tools/setup_linux_llama_server.py --source .betterfingers/llama.cpp
+```
+
+If a CMake build directory already exists and you only need to resume the server target, use the safe wrapper:
+
+```bash
+BUILD_JOBS=1 tools/safe-build-llama.sh .betterfingers/llama.cpp/build llama-server
+```
+
+`BUILD_JOBS=1` is safest for low-resource machines. `BUILD_JOBS=2` may be okay on stronger machines with enough RAM and swap. Avoid higher values unless you are watching system memory and know the machine can handle it.
+
+The wrapper prints memory, swap, CPU count, and active compiler/build processes before starting. If another build is already running, it refuses to start a second one.
+
 Manual overrides are also supported:
 
 ```bash

@@ -78,10 +78,46 @@ draft_recordings = {}
 pending_manual_send_ids = []
 next_draft_id = 1
 draft_lock = threading.RLock()
-MAX_DRAFT_HISTORY = 20
+MAX_DRAFT_HISTORY = 100
+is_processing_draft = False
+cancellation_event = threading.Event()
 runtime_error_history = []
 runtime_error_lock = threading.Lock()
 MAX_RUNTIME_ERROR_HISTORY = 50
+
+def save_draft_history():
+    import json
+    history_file = os.path.join(get_user_data_path(), "draft_history.json")
+    try:
+        with draft_lock:
+            serializable_drafts = [dict(draft) for draft in draft_queue]
+        with open(history_file, "w", encoding="utf-8") as f:
+            json.dump(serializable_drafts, f, indent=2)
+    except Exception as exc:
+        logging.exception(f"Failed to save draft history to {history_file}: {exc}")
+
+def load_draft_history():
+    global next_draft_id
+    import json
+    history_file = os.path.join(get_user_data_path(), "draft_history.json")
+    if os.path.exists(history_file):
+        try:
+            with open(history_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                with draft_lock:
+                    draft_queue.clear()
+                    max_id = 0
+                    for d in data:
+                        if isinstance(d, dict) and "id" in d:
+                            draft_queue.append(d)
+                            if d["id"] > max_id:
+                                max_id = d["id"]
+                    next_draft_id = max_id + 1
+            logging.info(f"Loaded {len(draft_queue)} drafts from history, next draft ID is {next_draft_id}")
+        except Exception as exc:
+            logging.exception(f"Failed to load draft history from {history_file}: {exc}")
+
 
 
 def get_voices_dir():
@@ -271,6 +307,7 @@ def start_hotkey_manager():
         on_recording_start_callback=on_recording_start,
         on_force_stop_callback=emergency_stop_runtime,
         on_manual_send_callback=handle_primary_action,
+        is_busy_callback=lambda: is_processing_draft,
     )
     manager.start()
     hotkey_manager = manager
@@ -400,6 +437,7 @@ def create_draft(raw_text, final_text, preset="True Janitor", status="pending", 
             for removed_draft in removed:
                 draft_recordings.pop(removed_draft["id"], None)
 
+        save_draft_history()
         return dict(draft)
 
 
@@ -433,10 +471,23 @@ def get_profile_output_settings():
 def copy_text_to_clipboard(text):
     try:
         pyperclip.copy(text or "")
-        return {"ok": True, "action": "copy_only", "message": "Copied text to clipboard."}
+        return {
+            "ok": True,
+            "requested_action": "copy_only",
+            "actual_action": "copy_only",
+            "action": "copy_only",
+            "message": "Copied text to clipboard.",
+        }
     except Exception as exc:
         logging.exception("Clipboard copy failed")
-        return {"ok": False, "action": "copy_only", "message": f"Clipboard copy failed: {exc}", "error": str(exc)}
+        return {
+            "ok": False,
+            "requested_action": "copy_only",
+            "actual_action": "copy_only",
+            "action": "copy_only",
+            "message": f"Clipboard copy failed: {exc}",
+            "error": str(exc),
+        }
 
 
 def perform_output_action(text, action="copy_only", open_chat=False):
@@ -445,10 +496,19 @@ def perform_output_action(text, action="copy_only", open_chat=False):
     if requested_action not in {"copy_only", "paste", "type", "open_chat_then_send"}:
         requested_action = "copy_only"
 
+    capabilities = get_capabilities()
     payload = {
         "requested_action": requested_action,
+        "actual_action": requested_action,
         "action": requested_action,
         "fallback": False,
+        "fallback_reason": "",
+        "input_injection_supported": bool(capabilities.get("supports_input_injection", False)),
+        "platform": capabilities.get("platform", "unknown"),
+        "session_type": capabilities.get("session_type", "unknown"),
+        "open_chat_requested": bool(open_chat or requested_action == "open_chat_then_send"),
+        "clipboard_result": None,
+        "injection_attempted": False,
         "ok": False,
         "message": "",
     }
@@ -458,10 +518,11 @@ def perform_output_action(text, action="copy_only", open_chat=False):
         payload.update({"message": "No text available to send.", "error": "empty_text"})
         return payload
 
-    capabilities = get_capabilities()
     if requested_action == "copy_only":
         result = copy_text_to_clipboard(final_text)
         payload.update(result)
+        payload["actual_action"] = result.get("actual_action") or result.get("action") or "copy_only"
+        payload["clipboard_result"] = dict(result)
         return payload
 
     if not capabilities.get("supports_input_injection", False):
@@ -470,7 +531,11 @@ def perform_output_action(text, action="copy_only", open_chat=False):
         payload.update(
             {
                 "requested_action": requested_action,
+                "actual_action": "copy_only",
+                "action": "copy_only",
                 "fallback": True,
+                "fallback_reason": "input_injection_unsupported",
+                "clipboard_result": dict(result),
                 "message": (
                     "Input injection is not supported in this session; copied text to clipboard instead."
                     if result.get("ok")
@@ -481,10 +546,10 @@ def perform_output_action(text, action="copy_only", open_chat=False):
         return payload
 
     try:
-        from injector import InputInjector
-
         settings = get_profile_output_settings()
         if output_injector is None:
+            from injector import InputInjector
+
             output_injector = InputInjector(profile_name=get_last_active_profile())
         else:
             try:
@@ -493,19 +558,29 @@ def perform_output_action(text, action="copy_only", open_chat=False):
                 logging.debug(f"Failed reloading output injector config: {exc}")
         injector = output_injector
         should_open_chat = open_chat or requested_action == "open_chat_then_send"
+        payload["injection_attempted"] = True
         if should_open_chat:
             injector.open_chat()
 
         if requested_action == "type":
             injector.type_text(final_text)
+            actual_action = "type"
         else:
             injector.send_output(
                 text=final_text,
                 auto_submit=settings["auto_submit"],
                 close_action=settings["chat_close_action"],
             )
+            actual_action = "open_chat_then_send" if should_open_chat else "paste"
 
-        payload.update({"ok": True, "message": "Output sent.", "action": requested_action})
+        payload.update(
+            {
+                "ok": True,
+                "message": "Output sent.",
+                "action": actual_action,
+                "actual_action": actual_action,
+            }
+        )
         return payload
     except Exception as exc:
         logging.exception("Output action failed")
@@ -514,7 +589,11 @@ def perform_output_action(text, action="copy_only", open_chat=False):
         payload.update(
             {
                 "requested_action": requested_action,
+                "actual_action": "copy_only",
+                "action": "copy_only",
                 "fallback": True,
+                "fallback_reason": "injection_failed",
+                "clipboard_result": dict(result),
                 "message": (
                     f"Output action failed ({exc}); copied text to clipboard instead."
                     if result.get("ok")
@@ -556,6 +635,7 @@ def send_draft_by_id(draft_id, action=None, open_chat=False):
                 draft["status"] = "send_error"
                 draft["error"] = result.get("message", "Send failed.")
             response = dict(draft)
+            save_draft_history()
         else:
             response = {"id": draft_id, "send_result": result}
 
@@ -584,6 +664,16 @@ def handle_primary_action():
 
 
 def emergency_stop_runtime():
+    # Signal cancellation of draft processing
+    cancellation_event.set()
+
+    # Silence any active TTS speech
+    if tts_engine is not None:
+        try:
+            tts_engine.stop_current()
+        except Exception as exc:
+            logging.warning(f"Emergency TTS stop failed: {exc}")
+
     if hotkey_manager is not None:
         try:
             hotkey_manager.request_stop(reason="emergency_stop")
@@ -603,10 +693,20 @@ def emergency_stop_runtime():
 
 
 def process_recording_result(recording_result):
+    global is_processing_draft
+    with draft_lock:
+        is_processing_draft = True
+    cancellation_event.clear()
+
+    def check_cancelled():
+        if cancellation_event.is_set():
+            raise InterruptedError("Operation cancelled by user.")
+
     preset = "True Janitor"
     raw_text = ""
     metadata = get_recording_metadata(recording_result)
     try:
+        check_cancelled()
         broadcast_status_threadsafe("transcribing")
         trans = ensure_transcriber_initialized(preload=False)
         audio_data = getattr(recording_result, "audio_data", recording_result)
@@ -617,6 +717,7 @@ def process_recording_result(recording_result):
         else:
             raw_text = trans.transcribe(audio_data)
 
+        check_cancelled()
         blocked, reasons = should_block_for_no_audio(
             recording_result,
             raw_text,
@@ -648,10 +749,19 @@ def process_recording_result(recording_result):
             )
             return draft
 
+        check_cancelled()
         broadcast_status_threadsafe("rewriting")
         engine = get_engine()
-        final_text = engine.process_fast_lane(raw_text, preset)
+        # Retrieve llm_chunk_size from active profile
+        try:
+            config = load_profile(get_last_active_profile())
+            llm_chunk_size = config.get("llm_chunk_size", 750)
+        except Exception:
+            llm_chunk_size = 750
+        
+        final_text = engine.process_fast_lane(raw_text, preset, chunk_size=llm_chunk_size)
 
+        check_cancelled()
         draft = create_draft(
             raw_text,
             final_text,
@@ -670,6 +780,31 @@ def process_recording_result(recording_result):
                 "long_text": draft["long_text"],
             },
         )
+        return draft
+    except InterruptedError as exc:
+        logging.info("Recording processing was cancelled by the user.")
+        draft = create_draft(
+            raw_text,
+            "",
+            preset=preset,
+            status="error",
+            metadata=metadata,
+            error=str(exc),
+            recording_result=recording_result,
+        )
+        broadcast_status_threadsafe(
+            "draft_error",
+            {
+                "draft_id": draft["id"],
+                "raw_text": draft["raw_text"],
+                "final_text": draft["final_text"],
+                "error": draft["error"],
+                "token_count": draft["token_count"],
+                "token_limit": draft["token_limit"],
+                "long_text": draft["long_text"],
+            },
+        )
+        broadcast_status_threadsafe("error", {"message": str(exc), "draft_id": draft["id"]})
         return draft
     except Exception as exc:
         logging.error(f"Recording processing failed: {exc}")
@@ -698,6 +833,8 @@ def process_recording_result(recording_result):
         broadcast_status_threadsafe("error", {"message": str(exc), "draft_id": draft["id"]})
         return draft
     finally:
+        with draft_lock:
+            is_processing_draft = False
         broadcast_status_threadsafe("idle")
 
 
@@ -728,7 +865,9 @@ def on_recording_complete(recording_result):
 async def startup_event():
     global loop
     loop = asyncio.get_event_loop()
+    load_draft_history()
     lazy_startup = is_lazy_startup_enabled()
+
 
     try:
         logging.info("Initializing Transcriber...")
@@ -1046,6 +1185,35 @@ async def settings_delete_profile(profile_name: str):
     return get_active_profile_payload()
 
 
+class PersonaRequest(BaseModel):
+    name: str
+    prompt: str
+
+
+@app.get("/personas")
+async def list_personas_route():
+    from llm_engine import load_personas
+    return load_personas(force_reload=True)
+
+
+@app.post("/personas")
+async def save_persona_route(request: PersonaRequest):
+    from llm_engine import upsert_persona
+    ok, msg = upsert_persona(request.name, request.prompt)
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    return {"message": msg}
+
+
+@app.delete("/personas/{name}")
+async def delete_persona_route(name: str):
+    from llm_engine import delete_persona
+    ok, msg = delete_persona(name)
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    return {"message": msg}
+
+
 @app.get("/capabilities")
 async def capabilities():
     return get_capabilities()
@@ -1105,7 +1273,7 @@ async def select_llm_model(request: LlmModelSelectRequest):
 
 
 @app.post("/models/llm/{model_id}/download")
-async def download_llm_model(model_id: str):
+def download_llm_model(model_id: str):
     if model_id not in AVAILABLE_MODELS:
         raise HTTPException(status_code=400, detail="Unsupported LLM model")
     result = check_and_download_resources(model_id)
@@ -1137,7 +1305,7 @@ async def list_whisper_models():
 
 
 @app.post("/models/whisper/download")
-async def download_whisper(request: WhisperModelRequest):
+def download_whisper(request: WhisperModelRequest):
     result = download_whisper_model(request.model_size, prefer_gpu=request.prefer_gpu)
     return result
 
@@ -1151,7 +1319,7 @@ async def delete_whisper(model_size: str):
 
 
 @app.post("/models/whisper/test")
-async def test_whisper(request: WhisperModelRequest):
+def test_whisper(request: WhisperModelRequest):
     if request.model_size not in SUPPORTED_MODEL_SIZES:
         return {"ok": False, "message": f"Unsupported Whisper model: {request.model_size}"}
     try:
@@ -1213,6 +1381,42 @@ async def latest_draft():
         return {"draft": dict(draft_queue[-1])}
 
 
+@app.delete("/drafts")
+def clear_draft_history():
+    with draft_lock:
+        draft_queue.clear()
+        draft_recordings.clear()
+        pending_manual_send_ids.clear()
+    save_draft_history()
+    broadcast_status_threadsafe("draft_history_cleared")
+    return {"ok": True, "message": "Draft history cleared."}
+
+
+@app.post("/drafts/test-mock")
+def create_mock_draft(status: str = "pending", raw: str = "Mock raw transcript text.", final: str = "Mock cleaned and polished output."):
+    if os.getenv("BETTERFINGERS_ENV", "development") == "production":
+        raise HTTPException(status_code=403, detail="Mock endpoints are disabled in production.")
+    
+    metadata = {
+        "duration_seconds": 3.45,
+        "sample_rate": 16000,
+        "sample_count": 55200,
+        "max_amplitude": 0.35,
+        "rms_amplitude": 0.08,
+        "stop_reason": "manual"
+    }
+    draft = create_draft(raw, final, preset="True Janitor", status=status, metadata=metadata)
+    broadcast_status_threadsafe("preview_ready", {
+        "draft_id": draft["id"],
+        "raw_text": draft["raw_text"],
+        "final_text": draft["final_text"],
+        "token_count": draft["token_count"],
+        "token_limit": draft["token_limit"],
+        "long_text": draft["long_text"],
+    })
+    return draft
+
+
 @app.post("/drafts/{draft_id}/accept")
 async def accept_draft(draft_id: int):
     with draft_lock:
@@ -1221,6 +1425,7 @@ async def accept_draft(draft_id: int):
                 draft["status"] = "accepted"
                 mark_draft_pending_send(draft)
                 response = dict(draft)
+                save_draft_history()
                 broadcast_status_threadsafe("draft_accepted", {"draft_id": draft_id, "pending_send": True})
                 return response
     raise HTTPException(status_code=404, detail="Draft not found")
@@ -1236,6 +1441,7 @@ async def decline_draft(draft_id: int):
                 while draft_id in pending_manual_send_ids:
                     pending_manual_send_ids.remove(draft_id)
                 response = dict(draft)
+                save_draft_history()
                 broadcast_status_threadsafe("draft_declined", {"draft_id": draft_id})
                 return response
     raise HTTPException(status_code=404, detail="Draft not found")
@@ -1286,6 +1492,12 @@ def rewrite_draft_text(text, action, custom_instruction=""):
     if not clean_text:
         raise ValueError("No cleaned output is available to rewrite.")
 
+    try:
+        config = load_profile(get_last_active_profile())
+        llm_chunk_size = config.get("llm_chunk_size", 750)
+    except Exception:
+        llm_chunk_size = 750
+
     engine = get_engine()
     token_limit = get_active_token_limit()
     if hasattr(engine, "rewrite_text"):
@@ -1295,6 +1507,7 @@ def rewrite_draft_text(text, action, custom_instruction=""):
                 action=action_key,
                 custom_instruction=custom_instruction,
                 max_output_tokens=token_limit,
+                chunk_size=llm_chunk_size,
             )
             or clean_text
         )
@@ -1304,7 +1517,7 @@ def rewrite_draft_text(text, action, custom_instruction=""):
         "Return only the rewritten text.\n\n"
         f"Draft:\n{clean_text}"
     )
-    return engine.process_fast_lane(prompt, "True Janitor") or clean_text
+    return engine.process_fast_lane(prompt, "True Janitor", chunk_size=llm_chunk_size) or clean_text
 
 
 @app.post("/drafts/{draft_id}/edit")
@@ -1326,6 +1539,7 @@ async def edit_draft(draft_id: int, request: DraftEditRequest):
         draft["updated_at"] = datetime.now(timezone.utc).isoformat()
         update_draft_review_fields(draft)
         response = dict(draft)
+        save_draft_history()
 
     broadcast_status_threadsafe(
         "draft_updated",
@@ -1363,6 +1577,7 @@ async def rewrite_draft(draft_id: int, request: DraftRewriteRequest):
             draft["updated_at"] = datetime.now(timezone.utc).isoformat()
             update_draft_review_fields(draft)
             response = dict(draft)
+            save_draft_history()
         broadcast_status_threadsafe(
             "draft_rewritten",
             {

@@ -23,12 +23,12 @@ class EmptyTranscriber(DummyTranscriber):
 
 
 class DummyEngine:
-    def process_fast_lane(self, text, preset):
+    def process_fast_lane(self, text, preset, chunk_size=None):
         return f"{preset}: {text}"
 
 
 class DummyRewriteEngine:
-    def rewrite_text(self, text, action="clearer", custom_instruction="", max_output_tokens=None):
+    def rewrite_text(self, text, action="clearer", custom_instruction="", max_output_tokens=None, chunk_size=None):
         suffix = f" {custom_instruction}" if custom_instruction else ""
         return f"{action}: {text}{suffix}"
 
@@ -77,6 +77,17 @@ class DummyOutputInjector:
         self.released = True
 
 
+class FailingSendInjector:
+    def reload_config(self, profile_name="Default"):
+        self.profile_name = profile_name
+
+    def open_chat(self):
+        self.opened_chat = True
+
+    def send_output(self, text, auto_submit=False, close_action="none"):
+        raise RuntimeError("paste exploded")
+
+
 class DummyRecordingManager:
     def __init__(self):
         self.stop_reason = None
@@ -87,6 +98,10 @@ class DummyRecordingManager:
 
 class ServerDraftTests(unittest.TestCase):
     def setUp(self):
+        self._load_draft_patcher = patch("server.load_draft_history")
+        self._load_draft_patcher.start()
+        self._save_draft_patcher = patch("server.save_draft_history")
+        self._save_draft_patcher.start()
         self._transcriber = server.transcriber
         self._output_injector = server.output_injector
         self._hotkey_manager = server.hotkey_manager
@@ -99,6 +114,8 @@ class ServerDraftTests(unittest.TestCase):
         server.next_draft_id = 1
 
     def tearDown(self):
+        self._load_draft_patcher.stop()
+        self._save_draft_patcher.stop()
         server.transcriber = self._transcriber
         server.output_injector = self._output_injector
         server.hotkey_manager = self._hotkey_manager
@@ -122,11 +139,16 @@ class ServerDraftTests(unittest.TestCase):
         self.assertGreater(first["token_limit"], 0)
         self.assertFalse(first["long_text"])
 
-        for index in range(25):
-            server.create_draft(f"raw {index}", f"final {index}")
+        original_max = server.MAX_DRAFT_HISTORY
+        server.MAX_DRAFT_HISTORY = 25
+        try:
+            for index in range(25):
+                server.create_draft(f"raw {index}", f"final {index}")
 
-        self.assertEqual(len(server.draft_queue), server.MAX_DRAFT_HISTORY)
-        self.assertEqual(server.draft_queue[0]["id"], 7)
+            self.assertEqual(len(server.draft_queue), server.MAX_DRAFT_HISTORY)
+            self.assertEqual(server.draft_queue[0]["id"], 2)
+        finally:
+            server.MAX_DRAFT_HISTORY = original_max
 
     def test_draft_endpoints_list_latest_accept_and_decline(self):
         draft = server.create_draft("raw", "final")
@@ -309,8 +331,43 @@ class ServerDraftTests(unittest.TestCase):
         result = response.json()["send_result"]
         self.assertTrue(result["ok"])
         self.assertTrue(result["fallback"])
+        self.assertEqual(result["fallback_reason"], "input_injection_unsupported")
         self.assertEqual(result["requested_action"], "paste")
+        self.assertEqual(result["actual_action"], "copy_only")
         self.assertEqual(result["action"], "copy_only")
+        self.assertFalse(result["input_injection_supported"])
+
+    def test_send_draft_reports_injection_failure_copy_fallback(self):
+        draft = server.create_draft("raw", "final")
+        server.output_injector = FailingSendInjector()
+
+        with patch.object(server, "get_capabilities", return_value={"supports_input_injection": True, "platform": "Windows", "session_type": "desktop"}), patch.object(
+            server, "copy_text_to_clipboard", return_value={"ok": True, "action": "copy_only", "message": "copied"}
+        ):
+            with TestClient(server.app) as client:
+                response = client.post(f"/drafts/{draft['id']}/send", json={"action": "paste"})
+
+        self.assertEqual(response.status_code, 200)
+        result = response.json()["send_result"]
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["fallback"])
+        self.assertEqual(result["fallback_reason"], "injection_failed")
+        self.assertEqual(result["requested_action"], "paste")
+        self.assertEqual(result["actual_action"], "copy_only")
+        self.assertTrue(result["input_injection_supported"])
+        self.assertTrue(result["injection_attempted"])
+
+    def test_empty_send_result_fails_cleanly(self):
+        draft = server.create_draft("raw", "")
+
+        with TestClient(server.app) as client:
+            response = client.post(f"/drafts/{draft['id']}/send", json={"action": "paste"})
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "send_error")
+        self.assertEqual(data["send_result"]["error"], "empty_text")
+        self.assertFalse(data["send_result"]["ok"])
 
     def test_primary_action_sends_pending_draft_first(self):
         draft = server.create_draft("raw", "final")
@@ -349,6 +406,84 @@ class ServerDraftTests(unittest.TestCase):
         self.assertTrue(injector.stopped)
         self.assertTrue(injector.released)
         self.assertEqual(server.pending_manual_send_ids, [])
+
+    def test_clear_draft_history_route(self):
+        server.create_draft("raw text", "final text")
+        self.assertEqual(len(server.draft_queue), 1)
+
+        with patch.object(server, "save_draft_history"), patch.object(server, "broadcast_status_threadsafe") as broadcast:
+            with TestClient(server.app) as client:
+                response = client.delete("/drafts")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True, "message": "Draft history cleared."})
+        self.assertEqual(len(server.draft_queue), 0)
+        broadcast.assert_called_with("draft_history_cleared")
+
+    def test_mock_draft_production_gating(self):
+        with patch.dict(server.os.environ, {"BETTERFINGERS_ENV": "development"}), patch.object(server, "broadcast_status_threadsafe"):
+            with TestClient(server.app) as client:
+                response = client.post("/drafts/test-mock")
+                self.assertEqual(response.status_code, 200)
+
+        with patch.dict(server.os.environ, {"BETTERFINGERS_ENV": "production"}):
+            with TestClient(server.app) as client:
+                response = client.post("/drafts/test-mock")
+                self.assertEqual(response.status_code, 403)
+                self.assertIn("Mock endpoints are disabled", response.json()["detail"])
+
+    def test_draft_persistence_save_and_load(self):
+        server.create_draft("raw persist", "final persist")
+        
+        # Stop the global mock so we can test the real save function
+        self._save_draft_patcher.stop()
+        try:
+            with patch("server.get_user_data_path", return_value="/tmp"), patch("builtins.open", new_callable=unittest.mock.mock_open) as mock_file:
+                server.save_draft_history()
+                mock_file.assert_called_with("/tmp/draft_history.json", "w", encoding="utf-8")
+        finally:
+            self._save_draft_patcher.start()
+
+        import json
+        mock_data = json.dumps([
+            {
+                "id": 42,
+                "raw_text": "loaded raw",
+                "final_text": "loaded final",
+                "preset": "True Janitor",
+                "status": "pending",
+                "metadata": {},
+                "error": "",
+                "gate_reasons": [],
+                "token_count": 2,
+                "token_limit": 1000,
+                "long_text": False
+            }
+        ])
+        # Stop the global mock so we can test the real load function
+        self._load_draft_patcher.stop()
+        try:
+            with patch("server.get_user_data_path", return_value="/tmp"), patch("server.os.path.exists", return_value=True), patch("builtins.open", unittest.mock.mock_open(read_data=mock_data)):
+                server.load_draft_history()
+                self.assertEqual(len(server.draft_queue), 1)
+                self.assertEqual(server.draft_queue[0]["id"], 42)
+                self.assertEqual(server.next_draft_id, 43)
+        finally:
+            self._load_draft_patcher.start()
+
+    def test_cancellation_semantics_in_processing(self):
+        class CancellingTranscriber(DummyTranscriber):
+            def transcribe(self, audio_data):
+                server.cancellation_event.set()
+                return "raw transcript"
+
+        with patch.object(server, "Transcriber", CancellingTranscriber), patch.object(
+            server, "get_engine", side_effect=AssertionError("LLM should not run when cancelled")
+        ), patch.object(server, "broadcast_status_threadsafe"):
+            draft = server.process_recording_result(DummyRecordingResult())
+
+        self.assertEqual(draft["status"], "error")
+        self.assertIn("Operation cancelled by user", draft["error"])
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-﻿"""
+"""
 LLM Engine - llama-server Sidecar Backend
 
 Uses a local llama-server.exe subprocess for inference.
@@ -98,7 +98,8 @@ _context_rules_yaml_error_logged = False
 
 def _get_personas_path():
     """Get the path to the personas.yaml file."""
-    return os.path.join(os.getenv('APPDATA', ''), "BetterFingers", "personas.yaml")
+    from utils import get_user_data_path
+    return os.path.join(get_user_data_path(), "personas.yaml")
 
 
 def _atomic_write_yaml(path, payload):
@@ -705,6 +706,7 @@ class LLMEngine:
         true_gen=False,
         context_rules=True,
         max_output_tokens=None,
+        chunk_size=750,
     ):
         """
         Process text through the sidecar with preset-based prompts.
@@ -758,13 +760,14 @@ class LLMEngine:
 
         temperature = 0.05 if strict_janitor_mode else 0.3
 
-        # For long texts, chunk and process
-        if len(user_text) > CHUNK_SIZE:
+        # For long texts, chunk and process by word count
+        if len(user_text.split()) > chunk_size:
             return self._process_chunked(
                 user_text,
                 system_prompt,
                 temperature=temperature,
                 max_output_tokens=max_output_tokens,
+                chunk_size_words=chunk_size,
             )
 
         return self._call_api(
@@ -810,24 +813,20 @@ class LLMEngine:
             logging.error(f"API Error: {e}")
             return text
 
-    def _process_chunked(self, user_text, system_prompt, temperature=0.3, max_output_tokens=None):
-        """Process long text by chunking."""
-        logging.info(f"ðŸ“¦ Chunking {len(user_text)} chars")
+    def _process_chunked(self, user_text, system_prompt, temperature=0.3, max_output_tokens=None, chunk_size_words=750):
+        """Process long text by chunking by word count."""
+        logging.info(f"📦 Chunking {len(user_text.split())} words into chunks of {chunk_size_words}")
         
         chunks = []
         words = user_text.split()
         current_chunk = []
-        current_length = 0
         
         for word in words:
-            word_len = len(word) + 1
-            if current_length + word_len > CHUNK_SIZE and current_chunk:
+            if len(current_chunk) >= chunk_size_words:
                 chunks.append(' '.join(current_chunk))
                 current_chunk = [word]
-                current_length = word_len
             else:
                 current_chunk.append(word)
-                current_length += word_len
         
         if current_chunk:
             chunks.append(' '.join(current_chunk))
@@ -845,7 +844,7 @@ class LLMEngine:
         ]
         return ' '.join(processed)
 
-    def process_custom_prompt(self, user_text, system_prompt, max_output_tokens=None):
+    def process_custom_prompt(self, user_text, system_prompt, max_output_tokens=None, chunk_size=750):
         """
         Process text with an explicit custom system prompt.
         Useful for prompt matrix experiments outside named presets.
@@ -853,12 +852,13 @@ class LLMEngine:
         if not self.ensure_ready():
             logging.warning("LLM not ready, returning original text.")
             return user_text
-        if len(user_text) > CHUNK_SIZE:
+        if len(user_text.split()) > chunk_size:
             return self._process_chunked(
                 user_text,
                 system_prompt,
                 temperature=0.3,
                 max_output_tokens=max_output_tokens,
+                chunk_size_words=chunk_size,
             )
         return self._call_api(
             user_text,
@@ -867,12 +867,13 @@ class LLMEngine:
             max_output_tokens=max_output_tokens,
         )
 
-    def rewrite_text(self, user_text, action="rephrase", custom_instruction="", max_output_tokens=None):
+    def rewrite_text(self, user_text, action="rephrase", custom_instruction="", max_output_tokens=None, chunk_size=750):
         prompt = build_rewrite_system_prompt(action=action, custom_instruction=custom_instruction)
         return self.process_custom_prompt(
             user_text,
             prompt,
             max_output_tokens=max_output_tokens,
+            chunk_size=chunk_size,
         )
 
 
