@@ -716,3 +716,389 @@ h1 {
 .secondary-button.danger-button:hover {
   border-color: var(--danger);
 }
+
+/* ==========================================
+   Phase 4 Settings Panel Layout & Design
+   ========================================== */
+
+.settings-layout {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+  min-height: calc(100vh - 250px);
+  margin-top: 14px;
+}
+
+.settings-sidebar {
+  width: 250px;
+  flex-shrink: 0;
+  background: var(--bg-elevated);
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  backdrop-filter: blur(12px);
+  position: sticky;
+  top: 24px;
+}
+
+.settings-main {
+  flex-grow: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding-bottom: 120px; /* Space for sticky save bar */
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-nav-button {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-align: left;
+  padding: 10px 14px;
+  cursor: pointer;
+  border-radius: 12px;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.settings-nav-button:hover {
+  color: var(--text);
+  background: var(--bg-soft);
+  transform: translateX(2px);
+}
+
+.settings-nav-button.active {
+  color: var(--accent);
+  background: rgba(102, 242, 193, 0.08);
+  border: 1px solid rgba(102, 242, 193, 0.25);
+  box-shadow: 0 4px 12px rgba(102, 242, 193, 0.05);
+}
+
+.settings-section {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  padding: 28px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px);
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  animation: fadeInSettings 0.3s ease;
+}
+
+.settings-section.hidden {
+  display: none !important;
+}
+
+@keyframes fadeInSettings {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.settings-section h2 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.section-desc {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin-top: 4px;
+  margin-bottom: 8px;
+}
+
+/* Settings Groups & Rows */
+.setting-group {
+  border-top: 1px solid var(--border);
+  padding-top: 20px;
+  margin-bottom: 12px;
+}
+
+.setting-group:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+
+.setting-group h3 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin-top: 0;
+  margin-bottom: 12px;
+  color: var(--text);
+}
+
+.group-desc {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 16px;
+}
+
+.setting-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--settings-row-padding, 14px 0);
+  border-bottom: 1px solid var(--border);
+  gap: 16px;
+}
+
+.settings-section .setting-row:last-of-type {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.setting-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-grow: 1;
+  max-width: 65%;
+}
+
+.setting-desc {
+  font-size: 0.85rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.setting-control {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Custom Switch Toggle Slider Styling */
+.custom-switch-label input:checked + .custom-switch-slider {
+  background-color: var(--accent) !important;
+  border-color: var(--accent-strong) !important;
+}
+
+.custom-switch-label input:checked + .custom-switch-slider::before {
+  transform: translateX(20px);
+  background-color: #07111f !important;
+}
+
+.custom-switch-slider::before {
+  content: "";
+  position: absolute;
+  height: 16px;
+  width: 16px;
+  left: 2px;
+  bottom: 2px;
+  background-color: var(--muted);
+  transition: .2s;
+  border-radius: 50%;
+}
+
+/* Floating Save / Discard Bar */
+.save-discard-bar {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translate(-50%, 100px);
+  width: calc(100% - 80px);
+  max-width: 1040px;
+  background: rgba(11, 20, 35, 0.95);
+  border: 1px solid rgba(102, 242, 193, 0.25);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(16px);
+  border-radius: 20px;
+  padding: 14px 24px;
+  z-index: 1000;
+  opacity: 0;
+  transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.4s ease;
+}
+
+.save-discard-bar.visible {
+  transform: translate(-50%, 0);
+  opacity: 1;
+}
+
+.save-discard-bar.hidden {
+  display: none !important;
+}
+
+/* Validation warnings */
+.validation-error-text {
+  color: var(--danger);
+  font-size: 0.85rem;
+  font-weight: 500;
+  margin-top: 4px;
+  display: block;
+}
+
+.input-error {
+  border-color: var(--danger) !important;
+  box-shadow: 0 0 0 3px rgba(255, 124, 135, 0.15) !important;
+}
+
+/* Warning Badges */
+.warning-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(255, 200, 107, 0.1);
+  border: 1px solid rgba(255, 200, 107, 0.25);
+  color: var(--warning);
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+.warning-badge[data-tone="danger"] {
+  background: rgba(255, 124, 135, 0.1);
+  border-color: rgba(255, 124, 135, 0.25);
+  color: var(--danger);
+}
+
+.warning-badge[data-tone="success"] {
+  background: rgba(102, 242, 193, 0.1);
+  border-color: rgba(102, 242, 193, 0.25);
+  color: var(--accent);
+}
+
+/* Search results highlight styling */
+.search-header {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin-bottom: 12px;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Responsive sidebar */
+@media (max-width: 860px) {
+  .settings-layout {
+    flex-direction: column;
+    gap: 16px;
+  }
+  .settings-sidebar {
+    width: 100%;
+    position: static;
+  }
+  .settings-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    padding-bottom: 8px;
+    gap: 8px;
+  }
+  .settings-nav-button {
+    white-space: nowrap;
+    width: auto;
+  }
+}
+
+/* ==========================================
+   Themes, Densities, Font Scaling Override Classes
+   ========================================== */
+
+/* Light Theme Variables */
+.theme-light {
+  color-scheme: light;
+  --bg: #f3f7fa;
+  --bg-elevated: rgba(255, 255, 255, 0.95);
+  --bg-soft: rgba(0, 0, 0, 0.04);
+  --text: #1a2c40;
+  --muted: #5c6f84;
+  --border: rgba(92, 111, 132, 0.25);
+  --accent: #00a877;
+  --accent-strong: #00875e;
+  --warning: #d97706;
+  --danger: #dc2626;
+  --shadow: 0 12px 30px rgba(0, 0, 0, 0.06);
+}
+
+body.theme-light {
+  background:
+    radial-gradient(circle at top left, rgba(0, 168, 119, 0.06), transparent 30%),
+    linear-gradient(180deg, #f3f7fa 0%, #e9eff5 100%);
+}
+
+/* Curated Accent Palettes */
+.accent-purple {
+  --accent: #b468ff;
+  --accent-strong: #963eff;
+}
+.theme-light.accent-purple {
+  --accent: #7e22ce;
+  --accent-strong: #6b21a8;
+}
+
+.accent-blue {
+  --accent: #3b82f6;
+  --accent-strong: #1d4ed8;
+}
+.theme-light.accent-blue {
+  --accent: #1d4ed8;
+  --accent-strong: #1e40af;
+}
+
+.accent-gold {
+  --accent: #f59e0b;
+  --accent-strong: #d97706;
+}
+.theme-light.accent-gold {
+  --accent: #b45309;
+  --accent-strong: #92400e;
+}
+
+.accent-teal {
+  --accent: #66f2c1;
+  --accent-strong: #3dd9a6;
+}
+.theme-light.accent-teal {
+  --accent: #00a877;
+  --accent-strong: #00875e;
+}
+
+/* Font size scaling */
+html.font-small { font-size: 13px !important; }
+html.font-medium { font-size: 15px !important; }
+html.font-large { font-size: 17px !important; }
+html.font-huge { font-size: 19px !important; }
+
+/* Spacing and Spacing Densities */
+body.density-compact {
+  --settings-row-padding: 8px 0;
+  --gap-section: 14px;
+}
+body.density-compact .settings-section {
+  padding: 16px 20px;
+  gap: 16px;
+}
+
+/* High Contrast Override */
+body.high-contrast {
+  --border: rgba(255, 255, 255, 0.5);
+  --muted: #dbeafe;
+  --text: #ffffff;
+}
+body.theme-light.high-contrast {
+  --border: rgba(0, 0, 0, 0.65);
+  --muted: #1e293b;
+  --text: #000000;
+}
+

@@ -105,6 +105,22 @@ async function deleteProfile(name, timeoutMs = 10000) {
   return deleteJson(`${SETTINGS_PROFILES_URL}/${encodeURIComponent(name)}`, timeoutMs);
 }
 
+async function renameProfile(oldName, newName, timeoutMs = 10000) {
+  return postJson(`${SETTINGS_PROFILES_URL}/${encodeURIComponent(oldName)}/rename`, { new_name: newName }, timeoutMs);
+}
+
+async function duplicateProfile(oldName, newName, timeoutMs = 10000) {
+  return postJson(`${SETTINGS_PROFILES_URL}/${encodeURIComponent(oldName)}/duplicate`, { new_name: newName }, timeoutMs);
+}
+
+async function exportProfile(name, timeoutMs = 10000) {
+  return fetchJson(`${SETTINGS_PROFILES_URL}/${encodeURIComponent(name)}/export`, timeoutMs);
+}
+
+async function importProfile(name, settings, timeoutMs = 10000) {
+  return postJson(`${SETTINGS_PROFILES_URL}/import`, { name, settings }, timeoutMs);
+}
+
 async function fetchCapabilities(timeoutMs = 2500) {
   return fetchJson(CAPABILITIES_URL, timeoutMs);
 }
@@ -236,6 +252,14 @@ async function rewriteDraft(id, { action = 'clearer', customInstruction = '' } =
 async function speakDraft(id, { text = '', voiceId = 'standard_female', speed = 1.0, pitch = 1.0 } = {}, timeoutMs = 120000) {
   return postJson(
     `${DRAFTS_URL}/${id}/tts`,
+    { text, voice_id: voiceId, speed, pitch },
+    timeoutMs,
+  );
+}
+
+async function speakTts(text, voiceId = 'standard_female', speed = 1.0, pitch = 1.0, timeoutMs = 120000) {
+  return postJson(
+    `${BACKEND_ORIGIN}/tts/speak`,
     { text, voice_id: voiceId, speed, pitch },
     timeoutMs,
   );
@@ -449,9 +473,14 @@ export {
   rewriteDraft,
   runPrimaryAction,
   saveProfile,
+  renameProfile,
+  duplicateProfile,
+  exportProfile,
+  importProfile,
   sendDraft,
   selectLlmModel,
   speakDraft,
+  speakTts,
   testWhisperModel,
   unloadModel,
   warmupRuntime,

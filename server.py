@@ -262,7 +262,7 @@ def is_lazy_startup_enabled():
 def ensure_transcriber_initialized(preload=False):
     global transcriber
     if transcriber is None:
-        transcriber = Transcriber(preload=preload)
+        transcriber = Transcriber(profile_name=get_last_active_profile(), preload=preload)
     elif preload:
         transcriber.ensure_loaded()
     return transcriber
@@ -309,6 +309,10 @@ def start_hotkey_manager():
         on_manual_send_callback=handle_primary_action,
         is_busy_callback=lambda: is_processing_draft,
     )
+    try:
+        manager.update_config(get_last_active_profile())
+    except Exception as exc:
+        logging.warning(f"Failed to apply profile to hotkeys on startup: {exc}")
     manager.start()
     hotkey_manager = manager
     hotkey_recorder = recorder
@@ -1124,6 +1128,35 @@ class ProfileCreateRequest(BaseModel):
     settings: dict = {}
 
 
+class ProfileRenameRequest(BaseModel):
+    new_name: str
+
+
+class ProfileDuplicateRequest(BaseModel):
+    new_name: str
+
+
+class ProfileImportRequest(BaseModel):
+    name: str
+    settings: dict
+
+
+@app.post("/settings/profiles/import")
+async def settings_import_profile(request: ProfileImportRequest):
+    safe_name = sanitize_profile_name(request.name)
+    if safe_name in list_profiles():
+        raise HTTPException(status_code=409, detail="Profile name already exists")
+    
+    try:
+        save_runtime_profile(safe_name, request.settings)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Import failed: {e}")
+        
+    return get_active_profile_payload()
+
+
 @app.get("/settings/profiles")
 async def settings_profiles():
     return get_active_profile_payload()
@@ -1142,7 +1175,12 @@ async def settings_profile(profile_name: str):
 @app.post("/settings/profiles/{profile_name}")
 async def settings_save_profile(profile_name: str, request: ProfileSaveRequest):
     safe_name = sanitize_profile_name(profile_name)
-    save_runtime_profile(safe_name, request.settings)
+    try:
+        save_runtime_profile(safe_name, request.settings)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Save failed: {e}")
     if safe_name == get_last_active_profile():
         apply_active_profile_runtime(safe_name)
     return {
@@ -1159,7 +1197,12 @@ async def settings_create_profile(request: ProfileCreateRequest):
         raise HTTPException(status_code=409, detail="Profile already exists")
     base = load_profile(get_last_active_profile())
     base.update(request.settings or {})
-    save_runtime_profile(safe_name, base)
+    try:
+        save_runtime_profile(safe_name, base)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Create failed: {e}")
     return {"profile": safe_name, "settings": load_profile(safe_name), "profiles": list_profiles()}
 
 
@@ -1179,10 +1222,76 @@ async def settings_delete_profile(profile_name: str):
     profile_path = Path(get_profiles_dir()) / f"{safe_name}.yaml"
     if not profile_path.exists():
         raise HTTPException(status_code=404, detail="Profile not found")
+    
+    # Check active status before unlinking the file
+    was_active = (get_last_active_profile() == safe_name)
     profile_path.unlink()
-    if get_last_active_profile() == safe_name:
+    
+    if was_active:
         apply_active_profile_runtime("Default")
     return get_active_profile_payload()
+
+
+@app.post("/settings/profiles/{profile_name}/rename")
+async def settings_rename_profile(profile_name: str, request: ProfileRenameRequest):
+    safe_old = sanitize_profile_name(profile_name)
+    safe_new = sanitize_profile_name(request.new_name)
+    if safe_old == "Default":
+        raise HTTPException(status_code=400, detail="Default profile cannot be renamed")
+    if safe_new in list_profiles():
+        raise HTTPException(status_code=409, detail="Profile already exists")
+    
+    old_path = Path(get_profiles_dir()) / f"{safe_old}.yaml"
+    if not old_path.exists():
+        raise HTTPException(status_code=404, detail="Profile not found")
+        
+    # Load and save under new name
+    data = load_profile(safe_old)
+    try:
+        save_runtime_profile(safe_new, data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Rename failed during save: {e}")
+        
+    # Check active status before unlinking the file
+    was_active = (get_last_active_profile() == safe_old)
+    old_path.unlink()
+    
+    # If old was active, activate new
+    if was_active:
+        apply_active_profile_runtime(safe_new)
+        
+    return get_active_profile_payload()
+
+
+@app.post("/settings/profiles/{profile_name}/duplicate")
+async def settings_duplicate_profile(profile_name: str, request: ProfileDuplicateRequest):
+    safe_old = sanitize_profile_name(profile_name)
+    safe_new = sanitize_profile_name(request.new_name)
+    if safe_new in list_profiles():
+        raise HTTPException(status_code=409, detail="Profile already exists")
+        
+    if safe_old not in list_profiles():
+        raise HTTPException(status_code=404, detail="Source profile not found")
+        
+    data = load_profile(safe_old)
+    try:
+        save_runtime_profile(safe_new, data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Duplication failed: {e}")
+        
+    return get_active_profile_payload()
+
+
+@app.get("/settings/profiles/{profile_name}/export")
+async def settings_export_profile(profile_name: str):
+    safe_name = sanitize_profile_name(profile_name)
+    if safe_name not in list_profiles():
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return load_profile(safe_name)
 
 
 class PersonaRequest(BaseModel):

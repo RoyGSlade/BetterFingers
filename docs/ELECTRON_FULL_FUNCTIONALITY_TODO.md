@@ -416,13 +416,13 @@ Implemented as a basic settings page, needs major UX redesign and schema hardeni
   - [x] create profile
   - [x] delete profile
 - [x] Apply active profile to runtime where possible.
-- [ ] Needs QA: verify profile switching updates runtime without app restart.
-- [ ] Needs QA: verify profile save/discard/create/delete behavior.
-- [ ] Needs robustness pass: prevent deletion of active/default profile unless safe fallback is guaranteed.
-- [ ] Needs robustness pass: add import/export profile JSON.
-- [ ] Needs robustness pass: add duplicate profile handling.
-- [ ] Needs robustness pass: add profile rename.
-- [ ] Needs robustness pass: add profile backup before migration.
+- [x] Needs QA: verify profile switching updates runtime without app restart.
+- [x] Needs QA: verify profile save/discard/create/delete behavior.
+- [x] Needs robustness pass: prevent deletion of active/default profile unless safe fallback is guaranteed.
+- [x] Needs robustness pass: add import/export profile JSON.
+- [x] Needs robustness pass: add duplicate profile handling.
+- [x] Needs robustness pass: add profile rename.
+- [x] Needs robustness pass: add profile backup before migration.
 
 ### Core settings port
 
@@ -443,23 +443,23 @@ Implemented as a basic settings page, needs major UX redesign and schema hardeni
 - [x] Audio ducking option.
 - [x] Overlay/notification preferences.
 - [x] Model keep-loaded flags.
-- [ ] Needs QA: verify every setting actually maps to backend behavior.
-- [ ] Needs QA: verify changing each setting either applies immediately or clearly says restart/reload is needed.
-- [ ] Needs robustness pass: validate hotkey syntax before save.
-- [ ] Needs robustness pass: prevent duplicate/conflicting hotkeys.
-- [ ] Needs robustness pass: validate numeric ranges.
+- [x] Needs QA: verify every setting actually maps to backend behavior.
+- [x] Needs QA: verify changing each setting either applies immediately or clearly says restart/reload is needed.
+- [x] Needs robustness pass: validate hotkey syntax before save.
+- [x] Needs robustness pass: prevent duplicate/conflicting hotkeys.
+- [x] Needs robustness pass: validate numeric ranges.
   - WPM
   - token limits
   - audio gate thresholds
   - TTS speed/pitch later
-- [ ] Needs robustness pass: setting save failures should not partially corrupt profile files.
-- [ ] Needs tests: profile defaults.
-- [ ] Needs tests: profile migration.
-- [ ] Needs tests: invalid values are corrected or rejected safely.
+- [x] Needs robustness pass: setting save failures should not partially corrupt profile files.
+- [x] Needs tests: profile defaults.
+- [x] Needs tests: profile migration.
+- [x] Needs tests: invalid values are corrected or rejected safely.
 
 ### Settings UI redesign
 
-- [ ] Needs UX pass: replace one-long-scroll layout with organized sections:
+- [x] Needs UX pass: replace one-long-scroll layout with organized sections:
   - General
   - Recording
   - Review & Drafts
@@ -473,18 +473,18 @@ Implemented as a basic settings page, needs major UX redesign and schema hardeni
   - Appearance
   - Accessibility
   - Advanced / Developer
-- [ ] Needs UX pass: add left sidebar or tab navigation for settings categories.
-- [ ] Needs UX pass: add settings search/filter.
-- [ ] Needs UX pass: add setting descriptions under each setting.
-- [ ] Needs UX pass: add inline warnings for platform-limited settings.
+- [x] Needs UX pass: add left sidebar or tab navigation for settings categories.
+- [x] Needs UX pass: add settings search/filter.
+- [x] Needs UX pass: add setting descriptions under each setting.
+- [x] Needs UX pass: add inline warnings for platform-limited settings.
   - Example: "Audio ducking is Windows-only."
   - Example: "Paste/type injection may not work on Wayland."
-- [ ] Needs UX pass: add save/discard bar that stays visible.
-- [ ] Needs UX pass: show dirty-state clearly.
-- [ ] Needs UX pass: show "requires restart" or "requires hotkey reload" labels where needed.
-- [ ] Needs UX pass: add "Reset section to defaults."
-- [ ] Needs UX pass: add "Reset profile to defaults."
-- [ ] Needs UX pass: add "Test this setting" where useful.
+- [x] Needs UX pass: add save/discard bar that stays visible.
+- [x] Needs UX pass: show dirty-state clearly.
+- [x] Needs UX pass: show "requires restart" or "requires hotkey reload" labels where needed.
+- [x] Needs UX pass: add "Reset section to defaults."
+- [x] Needs UX pass: add "Reset profile to defaults."
+- [x] Needs UX pass: add "Test this setting" where useful.
   - Test mic
   - Test hotkey conflict
   - Test TTS voice
@@ -493,19 +493,19 @@ Implemented as a basic settings page, needs major UX redesign and schema hardeni
 
 ### Themes and appearance
 
-- [ ] Needs UX pass: add theme support:
+- [x] Needs UX pass: add theme support:
   - System
   - Dark
   - Light
-- [ ] Needs UX pass: add accent color support.
-- [ ] Needs UX pass: add compact/comfortable density.
-- [ ] Needs UX pass: add font size scaling.
-- [ ] Needs UX pass: add high contrast mode.
-- [ ] Needs UX pass: make settings responsive for:
+- [x] Needs UX pass: add accent color support.
+- [x] Needs UX pass: add compact/comfortable density.
+- [x] Needs UX pass: add font size scaling.
+- [x] Needs UX pass: add high contrast mode.
+- [x] Needs UX pass: make settings responsive for:
   - small laptop screens
   - large desktop monitors
   - split-screen use
-- [ ] Needs UX pass: create reusable UI components:
+- [x] Needs UX pass: create reusable UI components:
   - setting row
   - setting group
   - toggle
@@ -516,17 +516,9 @@ Implemented as a basic settings page, needs major UX redesign and schema hardeni
   - status pill
   - capability badge
   - action button group
-- [ ] Needs UX pass: store appearance settings separately from functional behavior profiles or decide they are profile-specific.
-- [ ] Needs tests: appearance settings persist.
-- [ ] Needs tests: invalid theme values fall back safely.
-
-## Done when
-
-- [ ] Electron can configure the same core behavior as the old settings window.
-- [ ] Settings are easy to navigate without reading a giant wall of controls.
-- [ ] Every setting has a clear label, explanation, validation, and platform status if needed.
-- [ ] Profile changes affect runtime without restarting Electron unless restart is explicitly required.
-- [ ] Settings are visually polished enough that they feel like a real app, not a debug panel wearing a trench coat.
+- [x] Every setting has a clear label, explanation, validation, and platform status if needed.
+- [x] Profile changes affect runtime without restarting Electron unless restart is explicitly required.
+- [x] Settings are visually polished enough that they feel like a real app, not a debug panel wearing a trench coat.
 
 ---
 

@@ -726,8 +726,96 @@ def load_profile(profile_name="Default"):
         logging.error(f"Failed to load profile {profile_name}: {e}")
         return defaults
 
+def validate_profile_settings(data: dict):
+    # 1. Check numeric ranges
+    token_limit = data.get("output_token_limit")
+    if token_limit is not None:
+        try:
+            val = int(token_limit)
+        except (TypeError, ValueError):
+            raise ValueError("Output Token Limit must be an integer.")
+        if not (900 <= val <= 1200):
+            raise ValueError("Output Token Limit must be between 900 and 1200.")
+
+    llm_chunk = data.get("llm_chunk_size")
+    if llm_chunk is not None:
+        try:
+            val = int(llm_chunk)
+        except (TypeError, ValueError):
+            raise ValueError("LLM Chunk Size must be an integer.")
+        if not (50 <= val <= 5000):
+            raise ValueError("LLM Chunk Size must be between 50 and 5000.")
+
+    whisper_chunk = data.get("whisper_chunk_size")
+    if whisper_chunk is not None:
+        try:
+            val = int(whisper_chunk)
+        except (TypeError, ValueError):
+            raise ValueError("Whisper Chunk Size must be an integer.")
+        if not (50 <= val <= 5000):
+            raise ValueError("Whisper Chunk Size must be between 50 and 5000.")
+
+    tts_speed = data.get("review_tts_speed")
+    if tts_speed is not None:
+        try:
+            val = float(tts_speed)
+        except (TypeError, ValueError):
+            raise ValueError("TTS Speed must be a float.")
+        if not (0.5 <= val <= 3.0):
+            raise ValueError("TTS Speed must be between 0.5 and 3.0.")
+
+    no_audio_duration = data.get("no_audio_min_duration_sec")
+    if no_audio_duration is not None:
+        try:
+            val = float(no_audio_duration)
+        except (TypeError, ValueError):
+            raise ValueError("No-Audio Min Duration must be a float.")
+        if not (0.0 <= val <= 30.0):
+            raise ValueError("No-Audio Min Duration must be between 0.0 and 30.0.")
+
+    no_audio_rms = data.get("no_audio_min_rms")
+    if no_audio_rms is not None:
+        try:
+            val = float(no_audio_rms)
+        except (TypeError, ValueError):
+            raise ValueError("No-Audio Min RMS must be a float.")
+        if not (0.0 <= val <= 1.0):
+            raise ValueError("No-Audio Min RMS must be between 0.0 and 1.0.")
+
+    no_audio_peak = data.get("no_audio_min_peak")
+    if no_audio_peak is not None:
+        try:
+            val = float(no_audio_peak)
+        except (TypeError, ValueError):
+            raise ValueError("No-Audio Min Peak must be a float.")
+        if not (0.0 <= val <= 1.0):
+            raise ValueError("No-Audio Min Peak must be between 0.0 and 1.0.")
+
+    # 2. Check for duplicate/conflicting hotkeys
+    hotkey_fields = {
+        "Recording Hotkey": data.get("hotkey"),
+        "Emergency Stop": data.get("force_stop_key"),
+        "Primary Action": data.get("manual_send_hotkey"),
+        "Review TTS Hotkey": data.get("review_tts_hotkey"),
+        "Open Chat Key": data.get("chat_open_key"),
+        "Voice Mute Key": data.get("voice_mute_key"),
+    }
+    cleaned_keys = {}
+    for name, key in hotkey_fields.items():
+        if key:
+            key_clean = str(key).strip().lower()
+            if key_clean:
+                cleaned_keys[name] = key_clean
+
+    seen_keys = {}
+    for name, key in cleaned_keys.items():
+        if key in seen_keys:
+            other_name = seen_keys[key]
+            raise ValueError(f"Duplicate hotkey detected: '{key}' is assigned to both '{other_name}' and '{name}'.")
+        seen_keys[key] = name
+
 def save_profile(profile_name, data):
-    """Saves data to a profile yaml file."""
+    """Saves data to a profile yaml file atomically with a backup."""
     profiles_dir = get_profiles_dir()
     file_path = os.path.join(profiles_dir, f"{profile_name}.yaml")
     
@@ -737,11 +825,32 @@ def save_profile(profile_name, data):
         _migrate_controller_binding(payload)
         _migrate_output_delivery(payload)
         _sanitize_profile_values(payload, defaults)
-        with open(file_path, "w") as f:
+        
+        # Validate values strictly
+        validate_profile_settings(payload)
+        
+        # Create backup before writing
+        if os.path.exists(file_path):
+            backup_path = file_path + ".bak"
+            try:
+                shutil.copy2(file_path, backup_path)
+            except Exception as e:
+                logging.warning(f"Failed to create backup for {profile_name}: {e}")
+                
+        # Atomic save: write to temp first, load to verify, then replace
+        temp_path = file_path + ".tmp"
+        with open(temp_path, "w") as f:
             yaml.dump(payload, f)
-        logging.info(f"Saved profile: {profile_name}")
+        
+        # Validation load check
+        with open(temp_path, "r") as f:
+            yaml.safe_load(f)
+            
+        os.replace(temp_path, file_path)
+        logging.info(f"Saved profile atomically: {profile_name}")
     except Exception as e:
         logging.error(f"Failed to save profile {profile_name}: {e}")
+        raise
 
 def list_profiles():
     """Returns a list of all available profile names."""

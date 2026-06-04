@@ -33,6 +33,7 @@ import {
   sendDraft,
   selectLlmModel,
   speakDraft,
+  speakTts,
   testWhisperModel,
   unloadModel,
   warmupRuntime,
@@ -43,6 +44,10 @@ import {
   fetchTtsVoices,
   savePersona,
   deletePersona,
+  renameProfile,
+  duplicateProfile,
+  exportProfile,
+  importProfile,
 } from './api/backend.js';
 
 const backendStatusEl = document.getElementById('backendStatus');
@@ -807,7 +812,13 @@ function fillSelect(selectEl, options, selectedValue, labelFor = (item) => item)
 function renderProfileSettings(settings) {
   activeProfileSettings = { ...(settings ?? {}) };
   profileDirty = false;
-for (const [key, el] of Object.entries(settingEls)) {
+
+  // Clear all validation errors
+  for (const key of Object.keys(settingEls)) {
+    clearValidationError(key);
+  }
+
+  for (const [key, el] of Object.entries(settingEls)) {
     if (!el) {
       continue;
     }
@@ -817,11 +828,28 @@ for (const [key, el] of Object.entries(settingEls)) {
       el.value = activeProfileSettings[key] ?? '';
     }
   }
+
+  // Hide the save bar
+  const saveBar = document.getElementById('settingsSaveBar');
+  if (saveBar) {
+    saveBar.classList.remove('visible');
+    setTimeout(() => {
+      if (!profileDirty) saveBar.classList.add('hidden');
+    }, 300);
+  }
 }
 
 function markProfileDirty() {
   profileDirty = true;
   setMessage(profileMessageEl, 'Unsaved profile changes.', 'warning');
+  
+  const saveBar = document.getElementById('settingsSaveBar');
+  if (saveBar) {
+    saveBar.classList.remove('hidden');
+    requestAnimationFrame(() => {
+      saveBar.classList.add('visible');
+    });
+  }
 }
 
 function collectProfileSettings() {
@@ -1184,6 +1212,7 @@ async function refreshCapabilities() {
     'supports_llm',
     'supports_tts',
   ]);
+  updatePlatformWarnings(capabilities);
   return capabilities;
 }
 
@@ -1325,12 +1354,8 @@ function summarizeWarmupResult(result, requestedPayload) {
     stt: 'STT',
     llm: 'LLM',
     hotkeys: 'Hotkeys',
-};
+  };
 
-for (const el of Object.values(settingEls)) {
-  el?.addEventListener('input', markProfileDirty);
-  el?.addEventListener('change', markProfileDirty);
-}
   const errors = [];
   const successes = [];
 
@@ -1354,6 +1379,425 @@ for (const el of Object.values(settingEls)) {
 
   return { errors, successes };
 }
+
+/* ==========================================
+   Validation, Search, Warnings & Appearance
+   ========================================== */
+
+let validationErrors = new Map();
+
+function setValidationError(fieldKey, message) {
+  const el = settingEls[fieldKey];
+  if (!el) return;
+
+  el.classList.add('input-error');
+  validationErrors.set(fieldKey, message);
+
+  const row = el.closest('.setting-row');
+  if (row) {
+    let msgEl = row.querySelector('.validation-error-text');
+    if (!msgEl) {
+      msgEl = document.createElement('div');
+      msgEl.className = 'validation-error-text';
+      const info = row.querySelector('.setting-info');
+      if (info) {
+        info.appendChild(msgEl);
+      } else {
+        row.appendChild(msgEl);
+      }
+    }
+    msgEl.textContent = message;
+    msgEl.classList.remove('hidden');
+  }
+
+  updateSaveButtonState();
+}
+
+function clearValidationError(fieldKey) {
+  const el = settingEls[fieldKey];
+  if (!el) return;
+
+  el.classList.remove('input-error');
+  validationErrors.delete(fieldKey);
+
+  const row = el.closest('.setting-row');
+  if (row) {
+    const msgEl = row.querySelector('.validation-error-text');
+    if (msgEl) {
+      msgEl.textContent = '';
+      msgEl.classList.add('hidden');
+    }
+  }
+
+  updateSaveButtonState();
+}
+
+function updateSaveButtonState() {
+  if (saveProfileButton) {
+    if (validationErrors.size > 0) {
+      saveProfileButton.disabled = true;
+      saveProfileButton.title = "Please fix validation errors before saving.";
+      saveProfileButton.style.opacity = '0.5';
+      saveProfileButton.style.cursor = 'not-allowed';
+    } else {
+      saveProfileButton.disabled = false;
+      saveProfileButton.title = "";
+      saveProfileButton.style.opacity = '';
+      saveProfileButton.style.cursor = '';
+    }
+  }
+}
+
+function runValidation() {
+  // 1. Output Token Limit (900 - 1200)
+  const tokenLimitEl = settingEls.output_token_limit;
+  if (tokenLimitEl) {
+    const val = parseInt(tokenLimitEl.value, 10);
+    if (isNaN(val) || val < 900 || val > 1200) {
+      setValidationError('output_token_limit', 'Token limit must be between 900 and 1200.');
+    } else {
+      clearValidationError('output_token_limit');
+    }
+  }
+
+  // 2. LLM Chunk Size (50 - 5000)
+  const llmChunkEl = settingEls.llm_chunk_size;
+  if (llmChunkEl) {
+    const val = parseInt(llmChunkEl.value, 10);
+    if (isNaN(val) || val < 50 || val > 5000) {
+      setValidationError('llm_chunk_size', 'LLM chunk size must be between 50 and 5000.');
+    } else {
+      clearValidationError('llm_chunk_size');
+    }
+  }
+
+  // 3. Whisper Chunk Size (50 - 5000)
+  const whisperChunkEl = settingEls.whisper_chunk_size;
+  if (whisperChunkEl) {
+    const val = parseInt(whisperChunkEl.value, 10);
+    if (isNaN(val) || val < 50 || val > 5000) {
+      setValidationError('whisper_chunk_size', 'Whisper chunk size must be between 50 and 5000.');
+    } else {
+      clearValidationError('whisper_chunk_size');
+    }
+  }
+
+  // 4. TTS Speed (0.5 - 3.0)
+  const ttsSpeedEl = settingEls.review_tts_speed;
+  if (ttsSpeedEl) {
+    const val = parseFloat(ttsSpeedEl.value);
+    if (isNaN(val) || val < 0.5 || val > 3.0) {
+      setValidationError('review_tts_speed', 'TTS speed must be between 0.5 and 3.0.');
+    } else {
+      clearValidationError('review_tts_speed');
+    }
+  }
+
+  // 5. Min Duration (0.0 - 30.0)
+  const durationEl = settingEls.no_audio_min_duration_sec;
+  if (durationEl) {
+    const val = parseFloat(durationEl.value);
+    if (isNaN(val) || val < 0.0 || val > 30.0) {
+      setValidationError('no_audio_min_duration_sec', 'Min duration must be between 0.0 and 30.0s.');
+    } else {
+      clearValidationError('no_audio_min_duration_sec');
+    }
+  }
+
+  // 6. Min RMS (0.0 - 1.0)
+  const rmsEl = settingEls.no_audio_min_rms;
+  if (rmsEl) {
+    const val = parseFloat(rmsEl.value);
+    if (isNaN(val) || val < 0.0 || val > 1.0) {
+      setValidationError('no_audio_min_rms', 'Min RMS must be between 0.0 and 1.0.');
+    } else {
+      clearValidationError('no_audio_min_rms');
+    }
+  }
+
+  // 7. Min Peak (0.0 - 1.0)
+  const peakEl = settingEls.no_audio_min_peak;
+  if (peakEl) {
+    const val = parseFloat(peakEl.value);
+    if (isNaN(val) || val < 0.0 || val > 1.0) {
+      setValidationError('no_audio_min_peak', 'Min Peak must be between 0.0 and 1.0.');
+    } else {
+      clearValidationError('no_audio_min_peak');
+    }
+  }
+
+  // 8. Hotkeys Collision Detection
+  const hotkeyFields = [
+    'hotkey',
+    'force_stop_key',
+    'manual_send_hotkey',
+    'review_tts_hotkey',
+    'chat_open_key',
+    'voice_mute_key'
+  ];
+
+  const keysMap = new Map();
+  hotkeyFields.forEach(field => {
+    const el = settingEls[field];
+    if (el) {
+      const val = el.value.trim().toLowerCase();
+      if (val) {
+        if (!keysMap.has(val)) {
+          keysMap.set(val, []);
+        }
+        keysMap.get(val).push(field);
+      }
+    }
+  });
+
+  hotkeyFields.forEach(field => {
+    if (validationErrors.has(field) && validationErrors.get(field).includes('collision')) {
+      clearValidationError(field);
+    }
+  });
+
+  for (const [key, fields] of keysMap.entries()) {
+    if (fields.length > 1) {
+      fields.forEach(field => {
+        const otherLabels = fields.filter(f => f !== field).map(f => {
+          const labelEl = document.querySelector(`label[for="${settingEls[f].id}"]`);
+          return labelEl ? labelEl.textContent.trim() : f;
+        }).join(', ');
+        setValidationError(field, `Hotkey collision: '${key}' is also used by ${otherLabels}.`);
+      });
+    }
+  }
+}
+
+function filterSettings(query) {
+  const q = query.trim().toLowerCase();
+  const searchHeader = document.getElementById('settingsSearchHeader');
+  const emptyState = document.getElementById('settingsEmptyState');
+  const sidebarNavButtons = document.querySelectorAll('.settings-nav-button');
+  const sections = document.querySelectorAll('.settings-section');
+
+  if (!q) {
+    if (searchHeader) searchHeader.classList.add('hidden');
+    if (emptyState) emptyState.classList.add('hidden');
+
+    let activeSectionName = 'general';
+    sidebarNavButtons.forEach(btn => {
+      btn.disabled = false;
+      if (btn.classList.contains('active')) {
+        activeSectionName = btn.dataset.section;
+      }
+    });
+
+    sections.forEach(section => {
+      if (section.dataset.section === activeSectionName) {
+        section.classList.remove('hidden');
+        section.classList.add('active');
+      } else {
+        section.classList.add('hidden');
+        section.classList.remove('active');
+      }
+      section.querySelectorAll('.setting-group').forEach(group => group.classList.remove('hidden'));
+      section.querySelectorAll('.setting-row').forEach(row => row.classList.remove('hidden'));
+    });
+    return;
+  }
+
+  if (searchHeader) searchHeader.classList.remove('hidden');
+
+  let totalMatches = 0;
+
+  sections.forEach(section => {
+    let sectionMatches = 0;
+
+    section.querySelectorAll('.setting-group').forEach(group => {
+      let groupMatches = 0;
+
+      group.querySelectorAll('.setting-row').forEach(row => {
+        const text = row.textContent.toLowerCase();
+        const inputs = Array.from(row.querySelectorAll('input, select, textarea')).map(input => {
+          return (input.id || '') + ' ' + (input.name || '') + ' ' + (input.placeholder || '');
+        }).join(' ').toLowerCase();
+
+        const isMatch = text.includes(q) || inputs.includes(q);
+
+        if (isMatch) {
+          row.classList.remove('hidden');
+          groupMatches++;
+          sectionMatches++;
+          totalMatches++;
+        } else {
+          row.classList.add('hidden');
+        }
+      });
+
+      if (groupMatches > 0) {
+        group.classList.remove('hidden');
+      } else {
+        group.classList.add('hidden');
+      }
+    });
+
+    if (sectionMatches > 0) {
+      section.classList.remove('hidden');
+      section.classList.add('active');
+    } else {
+      section.classList.add('hidden');
+      section.classList.remove('active');
+    }
+  });
+
+  if (totalMatches === 0) {
+    if (emptyState) emptyState.classList.remove('hidden');
+  } else {
+    if (emptyState) emptyState.classList.add('hidden');
+  }
+}
+
+function updatePlatformWarnings(capabilities) {
+  const isWayland = capabilities.is_wayland;
+  const isLinux = capabilities.is_linux;
+  const isWindows = capabilities.is_windows;
+
+  const waylandHotkeyWarning = document.getElementById('waylandHotkeyWarning');
+  if (waylandHotkeyWarning) {
+    if (isLinux && isWayland) {
+      waylandHotkeyWarning.classList.remove('hidden');
+    } else {
+      waylandHotkeyWarning.classList.add('hidden');
+    }
+  }
+
+  const waylandInjectionWarning = document.getElementById('waylandInjectionWarning');
+  if (waylandInjectionWarning) {
+    if (isLinux && isWayland) {
+      waylandInjectionWarning.classList.remove('hidden');
+    } else {
+      waylandInjectionWarning.classList.add('hidden');
+    }
+  }
+
+  const audioDuckingWarning = document.getElementById('audioDuckingWarning');
+  if (audioDuckingWarning) {
+    if (isWindows) {
+      audioDuckingWarning.classList.add('hidden');
+    } else {
+      audioDuckingWarning.classList.remove('hidden');
+      audioDuckingWarning.innerHTML = '<strong>Audio Ducking Warning:</strong> Dynamic volume ducking is only supported on Windows.';
+    }
+  }
+
+  addPlatformBadge('settingAudioDucking', isWindows ? 'Windows' : 'Windows Only', isWindows ? 'success' : 'danger');
+  addPlatformBadge('settingInstantTyping', (isLinux && isWayland) ? 'Wayland Limitation' : '', 'danger');
+  addPlatformBadge('settingHotkey', (isLinux && isWayland) ? 'Global shortcut depends on Wayland compositor' : '', 'danger');
+}
+
+function addPlatformBadge(settingId, text, tone) {
+  const input = document.getElementById(settingId);
+  if (!input) return;
+
+  const row = input.closest('.setting-row');
+  if (!row) return;
+
+  const info = row.querySelector('.setting-info');
+  if (!info) return;
+
+  const label = info.querySelector('.status-label');
+  if (!label) return;
+
+  let badge = label.querySelector('.warning-badge');
+  if (badge) {
+    badge.remove();
+  }
+
+  if (text) {
+    badge = document.createElement('span');
+    badge.className = 'warning-badge';
+    badge.dataset.tone = tone;
+    badge.textContent = text;
+    label.appendChild(badge);
+  }
+}
+
+// Appearance preferences
+const themeSelect = document.getElementById('settingTheme');
+const accentSelect = document.getElementById('settingAccentColor');
+const densitySelect = document.getElementById('settingDensity');
+const fontSizeSelect = document.getElementById('settingFontSize');
+const highContrastCheck = document.getElementById('settingHighContrast');
+
+function applyAppearance() {
+  const theme = localStorage.getItem('pref_theme') || 'system';
+  const accent = localStorage.getItem('pref_accent') || 'teal';
+  const density = localStorage.getItem('pref_density') || 'comfortable';
+  const fontSize = localStorage.getItem('pref_font_size') || 'medium';
+  const highContrast = localStorage.getItem('pref_high_contrast') === 'true';
+
+  document.body.classList.remove('theme-light', 'theme-dark');
+  if (theme === 'light') {
+    document.body.classList.add('theme-light');
+  } else if (theme === 'dark') {
+    document.body.classList.add('theme-dark');
+  } else {
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    document.body.classList.add(prefersDark ? 'theme-dark' : 'theme-light');
+  }
+
+  document.body.classList.remove('accent-teal', 'accent-purple', 'accent-blue', 'accent-gold');
+  document.body.classList.add(`accent-${accent}`);
+
+  document.body.classList.remove('density-compact', 'density-comfortable');
+  document.body.classList.add(`density-${density}`);
+
+  document.documentElement.className = '';
+  document.documentElement.classList.add(`font-${fontSize}`);
+
+  if (highContrast) {
+    document.body.classList.add('high-contrast');
+  } else {
+    document.body.classList.remove('high-contrast');
+  }
+
+  if (themeSelect) themeSelect.value = theme;
+  if (accentSelect) accentSelect.value = accent;
+  if (densitySelect) densitySelect.value = density;
+  if (fontSizeSelect) fontSizeSelect.value = fontSize;
+  if (highContrastCheck) highContrastCheck.checked = highContrast;
+}
+
+// Microphone live level test
+const micMeterBar = document.getElementById('micMeterBar');
+const micMeterFill = document.getElementById('micMeterFill');
+let micStream = null;
+let audioContext = null;
+let analyser = null;
+let micInterval = null;
+
+function stopMicTest() {
+  if (micInterval) {
+    cancelAnimationFrame(micInterval);
+    micInterval = null;
+  }
+  if (micStream) {
+    micStream.getTracks().forEach(track => track.stop());
+    micStream = null;
+  }
+  if (audioContext) {
+    audioContext.close();
+    audioContext = null;
+  }
+  const testMicButton = document.getElementById('testMicButton');
+  if (testMicButton) {
+    testMicButton.textContent = 'Test Microphone Level';
+    testMicButton.classList.remove('danger-button');
+  }
+  if (micMeterBar) {
+    micMeterBar.classList.add('hidden');
+  }
+  if (micMeterFill) {
+    micMeterFill.style.width = '0%';
+  }
+}
+
 
 async function runWarmup(button, payload) {
   if (!button) {
@@ -1607,6 +2051,193 @@ async function bootstrap() {
   });
 
   initWizard();
+  initSettingsPanel();
+}
+
+function initSettingsPanel() {
+  for (const el of Object.values(settingEls)) {
+    if (!el) continue;
+    el.addEventListener('input', () => {
+      markProfileDirty();
+      runValidation();
+    });
+    el.addEventListener('change', () => {
+      markProfileDirty();
+      runValidation();
+    });
+  }
+
+  document.querySelectorAll('.setting-row').forEach((row) => {
+    const input = row.querySelector('.hotkey-input');
+    const clearBtn = row.querySelector('.clear-hotkey-btn');
+    if (input && clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        input.value = '';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    }
+  });
+
+  const categoryButtons = document.querySelectorAll('.settings-nav-button');
+  const settingsSections = document.querySelectorAll('.settings-section');
+  const settingsSearchInput = document.getElementById('settingsSearchInput');
+
+  categoryButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const sectionName = btn.dataset.section;
+
+      if (settingsSearchInput) {
+        settingsSearchInput.value = '';
+      }
+
+      categoryButtons.forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+
+      settingsSections.forEach((section) => {
+        if (section.dataset.section === sectionName) {
+          section.classList.remove('hidden');
+          section.classList.add('active');
+        } else {
+          section.classList.add('hidden');
+          section.classList.remove('active');
+        }
+        section.querySelectorAll('.setting-group').forEach(group => group.classList.remove('hidden'));
+        section.querySelectorAll('.setting-row').forEach(row => row.classList.remove('hidden'));
+      });
+
+      const searchHeader = document.getElementById('settingsSearchHeader');
+      const emptyState = document.getElementById('settingsEmptyState');
+      if (searchHeader) searchHeader.classList.add('hidden');
+      if (emptyState) emptyState.classList.add('hidden');
+    });
+  });
+
+  settingsSearchInput?.addEventListener('input', (e) => {
+    filterSettings(e.target.value);
+  });
+
+  const testMicButton = document.getElementById('testMicButton');
+  testMicButton?.addEventListener('click', async () => {
+    if (micStream) {
+      stopMicTest();
+      return;
+    }
+
+    testMicButton.textContent = 'Stop Mic Test';
+    testMicButton.classList.add('danger-button');
+    micMeterBar?.classList.remove('hidden');
+
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const source = audioContext.createMediaStreamSource(micStream);
+      analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+
+      function updateMeter() {
+        if (!micStream || !analyser) return;
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < bufferLength; i++) {
+          sum += dataArray[i];
+        }
+        const average = sum / bufferLength;
+        const percentage = Math.min(100, Math.round((average / 128) * 100));
+        if (micMeterFill) {
+          micMeterFill.style.width = `${percentage}%`;
+        }
+        micInterval = requestAnimationFrame(updateMeter);
+      }
+      updateMeter();
+    } catch (error) {
+      setMessage(profileMessageEl, `Microphone test failed: ${error.message}. Please check permissions.`, 'danger');
+      stopMicTest();
+    }
+  });
+
+  const testTtsButton = document.getElementById('testTtsButton');
+  testTtsButton?.addEventListener('click', async () => {
+    const text = "This is a test of the BetterFingers text to speech voice synthesis.";
+    const voiceId = settingEls.review_tts_voice_hint?.value || 'standard_female';
+    const speed = parseFloat(settingEls.review_tts_speed?.value || '1.0');
+
+    testTtsButton.disabled = true;
+    testTtsButton.textContent = 'Speaking...';
+
+    try {
+      const res = await speakTts(text, voiceId, speed);
+      setMessage(profileMessageEl, `TTS Audition: ${res.message}`, 'success');
+    } catch (error) {
+      setMessage(profileMessageEl, `TTS Audition failed: ${error.message}`, 'danger');
+    } finally {
+      testTtsButton.disabled = false;
+      testTtsButton.textContent = 'Test TTS Voice';
+    }
+  });
+
+  const testPasteCopyButton = document.getElementById('testPasteCopyButton');
+  testPasteCopyButton?.addEventListener('click', async () => {
+    const testText = "BetterFingers Paste Test Success!";
+    try {
+      await window.betterFingers?.writeClipboardText?.(testText);
+      setMessage(profileMessageEl, 'Test text copied to clipboard! Try pasting it in any text field.', 'success');
+    } catch (error) {
+      setMessage(profileMessageEl, `Paste/Copy test failed: ${error.message}`, 'danger');
+    }
+  });
+
+  const testModelLoadButton = document.getElementById('testModelLoadButton');
+  testModelLoadButton?.addEventListener('click', async () => {
+    testModelLoadButton.disabled = true;
+    testModelLoadButton.textContent = 'Loading...';
+    try {
+      const res = await warmupRuntime({ llm: true });
+      if (res?.llm?.ok === false) {
+        setMessage(profileMessageEl, `Model load failed: ${res.llm.error || 'Unknown error'}`, 'danger');
+      } else {
+        setMessage(profileMessageEl, 'Model loaded successfully!', 'success');
+      }
+    } catch (error) {
+      setMessage(profileMessageEl, `Model load test failed: ${error.message}`, 'danger');
+    } finally {
+      testModelLoadButton.disabled = false;
+      testModelLoadButton.textContent = 'Test Model Load';
+    }
+  });
+
+  themeSelect?.addEventListener('change', (e) => {
+    localStorage.setItem('pref_theme', e.target.value);
+    applyAppearance();
+  });
+  accentSelect?.addEventListener('change', (e) => {
+    localStorage.setItem('pref_accent', e.target.value);
+    applyAppearance();
+  });
+  densitySelect?.addEventListener('change', (e) => {
+    localStorage.setItem('pref_density', e.target.value);
+    applyAppearance();
+  });
+  fontSizeSelect?.addEventListener('change', (e) => {
+    localStorage.setItem('pref_font_size', e.target.value);
+    applyAppearance();
+  });
+  highContrastCheck?.addEventListener('change', (e) => {
+    localStorage.setItem('pref_high_contrast', e.target.checked);
+    applyAppearance();
+  });
+
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    if ((localStorage.getItem('pref_theme') || 'system') === 'system') {
+      applyAppearance();
+    }
+  });
+
+  applyAppearance();
 }
 
 quitButton?.addEventListener('click', () => {
@@ -1710,6 +2341,12 @@ saveProfileButton?.addEventListener('click', async () => {
   if (!name) {
     return;
   }
+
+  if (validationErrors.size > 0) {
+    setMessage(profileMessageEl, 'Cannot save settings: please fix validation errors first.', 'danger');
+    return;
+  }
+
   try {
     const payload = await saveProfile(name, collectProfileSettings());
     renderProfileSettings(payload.settings ?? {});
@@ -1726,14 +2363,105 @@ createProfileButton?.addEventListener('click', async () => {
     setMessage(profileMessageEl, 'Enter a profile name first.', 'warning');
     return;
   }
+
+  if (validationErrors.size > 0) {
+    setMessage(profileMessageEl, 'Cannot create profile: please fix validation errors first.', 'danger');
+    return;
+  }
+
   try {
     const payload = await createProfile(name, collectProfileSettings());
     fillSelect(profileSelectEl, payload.profiles ?? [], payload.profile);
     renderProfileSettings(payload.settings ?? {});
     setMessage(profileMessageEl, `Created ${payload.profile}. Activate it when ready.`, 'success');
+    newProfileNameEl.value = '';
   } catch (error) {
     setMessage(profileMessageEl, `Create failed: ${error.message}`, 'danger');
   }
+});
+
+renameProfileButton?.addEventListener('click', async () => {
+  const oldName = profileSelectEl?.value;
+  const newName = newProfileNameEl?.value?.trim();
+  if (!oldName || !newName) {
+    setMessage(profileMessageEl, 'Select a profile and enter a new name.', 'warning');
+    return;
+  }
+  if (oldName === 'Default') {
+    setMessage(profileMessageEl, 'Default profile cannot be renamed.', 'warning');
+    return;
+  }
+  try {
+    const payload = await renameProfile(oldName, newName);
+    fillSelect(profileSelectEl, payload.profiles ?? [], payload.active_profile);
+    renderProfileSettings(payload.settings ?? {});
+    setMessage(profileMessageEl, `Renamed profile to ${payload.active_profile}.`, 'success');
+    newProfileNameEl.value = '';
+  } catch (error) {
+    setMessage(profileMessageEl, `Rename failed: ${error.message}`, 'danger');
+  }
+});
+
+duplicateProfileButton?.addEventListener('click', async () => {
+  const oldName = profileSelectEl?.value;
+  const newName = newProfileNameEl?.value?.trim();
+  if (!oldName || !newName) {
+    setMessage(profileMessageEl, 'Select a profile and enter a name for the duplicate.', 'warning');
+    return;
+  }
+  try {
+    const payload = await duplicateProfile(oldName, newName);
+    fillSelect(profileSelectEl, payload.profiles ?? [], payload.active_profile);
+    renderProfileSettings(payload.settings ?? {});
+    setMessage(profileMessageEl, `Duplicated profile as ${payload.active_profile}.`, 'success');
+    newProfileNameEl.value = '';
+  } catch (error) {
+    setMessage(profileMessageEl, `Duplicate failed: ${error.message}`, 'danger');
+  }
+});
+
+exportProfileButton?.addEventListener('click', async () => {
+  const name = profileSelectEl?.value;
+  if (!name) return;
+  try {
+    const data = await exportProfile(name);
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${name}_profile.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setMessage(profileMessageEl, `Exported profile ${name} successfully.`, 'success');
+  } catch (error) {
+    setMessage(profileMessageEl, `Export failed: ${error.message}`, 'danger');
+  }
+});
+
+const importProfileFileEl = document.getElementById('importProfileFile');
+importProfileFileEl?.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = async (event) => {
+    try {
+      const parsed = JSON.parse(event.target.result);
+      const profileName = file.name.replace('_profile.json', '').replace('.json', '');
+      const settings = parsed.settings || parsed;
+
+      const payload = await importProfile(profileName, settings);
+      fillSelect(profileSelectEl, payload.profiles ?? [], payload.active_profile);
+      renderProfileSettings(payload.settings ?? {});
+      setMessage(profileMessageEl, `Imported profile ${payload.active_profile} successfully.`, 'success');
+    } catch (error) {
+      setMessage(profileMessageEl, `Import failed: ${error.message}`, 'danger');
+    }
+    importProfileFileEl.value = '';
+  };
+  reader.readAsText(file);
 });
 
 discardProfileChangesButton?.addEventListener('click', async () => {
