@@ -49,12 +49,18 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, onQuit, 
   });
 
   ipcMain.handle('overlay:update-status', (_event, update) => {
-    const { getOverlayWindow } = require('./windows');
+    const { getOverlayWindow, getReviewWindow } = require('./windows');
     const overlay = getOverlayWindow();
-    if (!overlay) return false;
+    const review = getReviewWindow();
 
     const payload = typeof update === 'string' ? { status: update } : { ...(update ?? {}) };
     const status = String(payload.status ?? 'unknown');
+
+    if (review && !review.isDestroyed() && review.isVisible()) {
+      review.webContents.send('review:status', payload);
+    }
+
+    if (!overlay) return false;
     const transientStatuses = new Set([
       'preview_ready',
       'draft_blocked',

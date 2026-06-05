@@ -21,4 +21,5 @@ contextBridge.exposeInMainWorld('betterFingersOverlay', {
 contextBridge.exposeInMainWorld('betterFingersReview', {
   hide: () => ipcRenderer.invoke('review:hide'),
   onDraft: (callback) => ipcRenderer.on('review:draft', (_event, draft) => callback(draft)),
+  onStatus: (callback) => ipcRenderer.on('review:status', (_event, status) => callback(status)),
 });

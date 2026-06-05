@@ -201,6 +201,51 @@
       .message[data-tone="danger"] {
         color: var(--danger);
       }
+
+      .status-badge {
+        display: inline-block;
+        padding: 3px 6px;
+        border-radius: 4px;
+        font-size: 0.72rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .state-pending { background: rgba(168, 180, 199, 0.15); color: var(--muted); }
+      .state-rewriting { background: rgba(246, 193, 95, 0.15); color: var(--warning); }
+      .state-rewritten { background: rgba(102, 242, 193, 0.15); color: var(--accent); }
+      .state-speaking { background: rgba(102, 242, 193, 0.25); color: var(--accent); animation: pulse 1.5s infinite; }
+      .state-accepted { background: rgba(102, 242, 193, 0.15); color: var(--accent); }
+      .state-sent { background: rgba(102, 242, 193, 0.3); color: var(--accent); }
+      .state-copied { background: rgba(246, 193, 95, 0.2); color: var(--warning); }
+      .state-declined { background: rgba(255, 124, 135, 0.15); color: var(--danger); }
+      .state-error { background: rgba(255, 124, 135, 0.25); color: var(--danger); }
+      .state-stopped { background: rgba(255, 124, 135, 0.2); color: var(--danger); }
+
+      .tts-backend-badge {
+        font-size: 0.72rem;
+        color: var(--muted);
+        border: 1px solid var(--border);
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .tts-backend-badge.success {
+        color: var(--accent);
+        border-color: rgba(102, 242, 193, 0.4);
+      }
+      .tts-backend-badge.danger {
+        color: var(--danger);
+        border-color: rgba(255, 124, 135, 0.4);
+      }
+
+      @keyframes pulse {
+        0% { opacity: 0.6; }
+        50% { opacity: 1; }
+        100% { opacity: 0.6; }
+      }
     </style>
   </head>
   <body>
@@ -208,7 +253,11 @@
       <header>
         <div>
           <h1>Review Draft</h1>
-          <div id="status" class="status">Waiting for draft</div>
+          <div id="status" class="status" style="display:none;">Waiting for draft</div>
+          <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
+            <span id="statusBadge" class="status-badge state-pending">Draft Pending</span>
+            <span id="ttsBackendBadge" class="tts-backend-badge">TTS: Loading...</span>
+          </div>
         </div>
         <button id="closeButton" class="icon-button" type="button" title="Close">X</button>
       </header>
@@ -254,6 +303,7 @@
 
       let currentDraft = null;
       let outputSettings = null;
+      let currentState = 'pending';
 
       function setMessage(text = '', tone = '') {
         messageEl.textContent = text;
@@ -261,6 +311,90 @@
           messageEl.dataset.tone = tone;
         } else {
           delete messageEl.dataset.tone;
+        }
+      }
+
+      function setOverlayState(state, customMessage = '', tone = '') {
+        currentState = state;
+        const statusBadge = document.getElementById('statusBadge');
+        if (!statusBadge) return;
+        
+        statusBadge.className = `status-badge state-${state}`;
+        
+        const labels = {
+          'pending': 'Draft Pending',
+          'rewriting': 'Rewriting',
+          'rewritten': 'Rewritten',
+          'speaking': 'Speaking',
+          'accepted': 'Accepted',
+          'sent': 'Sent',
+          'copied': 'Copied Fallback',
+          'declined': 'Declined',
+          'error': 'Error',
+          'stopped': 'Stopped'
+        };
+        
+        statusBadge.textContent = labels[state] || state;
+        
+        // Update Read button text and styling based on speaking state
+        if (state === 'speaking') {
+          readButton.textContent = 'Stop';
+          readButton.style.borderColor = 'rgba(255, 124, 135, 0.5)';
+          readButton.style.backgroundColor = 'rgba(255, 124, 135, 0.13)';
+        } else {
+          readButton.textContent = 'Read';
+          readButton.style.borderColor = '';
+          readButton.style.backgroundColor = '';
+        }
+        
+        if (customMessage) {
+          let messageTone = tone;
+          if (!messageTone) {
+            if (state === 'error' || state === 'stopped') {
+              messageTone = 'danger';
+            } else if (state === 'rewriting') {
+              messageTone = 'warning';
+            } else if (state === 'sent' || state === 'rewritten' || state === 'accepted' || state === 'copied') {
+              messageTone = 'success';
+            } else {
+              messageTone = '';
+            }
+          }
+          setMessage(customMessage, messageTone);
+        }
+      }
+
+      async function updateTtsStatusBadge() {
+        const ttsBadge = document.getElementById('ttsBackendBadge');
+        if (!ttsBadge) return;
+        try {
+          const status = await fetchJson(`${BACKEND_ORIGIN}/runtime/tts-status`, {}, 5000);
+          if (status.ok) {
+            ttsBadge.textContent = `TTS: ${status.backend}`;
+            ttsBadge.className = 'tts-backend-badge success';
+            ttsBadge.style.borderColor = 'rgba(102, 242, 193, 0.4)';
+            ttsBadge.title = status.message || '';
+          } else {
+            ttsBadge.textContent = `TTS: ${status.backend}`;
+            ttsBadge.className = 'tts-backend-badge danger';
+            ttsBadge.style.borderColor = 'rgba(255, 124, 135, 0.4)';
+            ttsBadge.title = status.message || '';
+            if (status.libsndfile_missing) {
+              setOverlayState('error', status.message);
+            }
+          }
+        } catch (error) {
+          ttsBadge.textContent = 'TTS: unavailable';
+          ttsBadge.className = 'tts-backend-badge danger';
+          ttsBadge.style.borderColor = 'rgba(255, 124, 135, 0.4)';
+          ttsBadge.title = `Failed to fetch TTS status: ${error.message}`;
+        }
+      }
+
+      function stopTtsIfSpeaking() {
+        if (currentState === 'speaking') {
+          postJson(`${BACKEND_ORIGIN}/tts/stop`, {}, 2000).catch(() => {});
+          setOverlayState('pending');
         }
       }
 
@@ -305,10 +439,30 @@
       function renderDraft(draft) {
         currentDraft = draft;
         const status = draft?.status || 'pending';
-        statusEl.textContent = draft?.id ? `Draft #${draft.id} · ${status}` : 'Waiting for draft';
+        statusEl.textContent = draft?.id ? `Draft #${draft.id}` : 'Waiting for draft';
         rawTextEl.textContent = draft?.raw_text || 'No transcript yet.';
         finalTextEl.value = draft?.final_text || '';
-        setMessage('');
+        
+        const stateMap = {
+          'pending': 'pending',
+          'accepted': 'accepted',
+          'declined': 'declined',
+          'sent': 'sent',
+          'send_error': 'error',
+          'error': 'error'
+        };
+        
+        let targetState = stateMap[status] || 'pending';
+        if (targetState === 'sent' && draft?.send_result?.fallback) {
+          targetState = 'copied';
+        }
+        setOverlayState(targetState);
+        
+        if (draft?.error) {
+          setMessage(draft.error, 'danger');
+        } else {
+          setMessage('');
+        }
       }
 
       async function saveEdit() {
@@ -322,36 +476,42 @@
       }
 
       function setBusy(isBusy) {
-        for (const button of [acceptButton, changeButton, instructButton, runInstructionButton, readButton, cancelButton]) {
+        for (const button of [acceptButton, changeButton, instructButton, runInstructionButton, cancelButton]) {
           button.disabled = isBusy;
         }
       }
 
       async function acceptDraft() {
         if (!currentDraft?.id) return;
+        stopTtsIfSpeaking();
         setBusy(true);
-        setMessage('Accepting...', 'warning');
+        setOverlayState('accepted', 'Accepting...');
         try {
           await refreshOutputSettings();
           await saveEdit();
           currentDraft = await postJson(`${BACKEND_ORIGIN}/drafts/${currentDraft.id}/accept`, {}, 10000);
           if (outputSettings?.send_mode === 'auto_send') {
+            const action = defaultSendAction();
             const sentDraft = await postJson(
               `${BACKEND_ORIGIN}/drafts/${currentDraft.id}/send`,
-              { action: defaultSendAction(), open_chat: defaultSendAction() === 'open_chat_then_send' },
+              { action: action, open_chat: action === 'open_chat_then_send' },
               120000,
             );
             renderDraft(sentDraft);
-            setMessage(sentDraft.send_result?.message || 'Sent.', sentDraft.send_result?.ok ? 'success' : 'danger');
+            
+            const isFallback = Boolean(sentDraft.send_result?.fallback);
             if (sentDraft.send_result?.ok) {
-              setTimeout(() => window.betterFingersReview?.hide?.(), 900);
+              setOverlayState(isFallback ? 'copied' : 'sent', sentDraft.send_result?.message || 'Sent.');
+              setTimeout(() => window.betterFingersReview?.hide?.(), 1200);
+            } else {
+              setOverlayState('error', sentDraft.send_result?.message || 'Send failed.');
             }
           } else {
             renderDraft(currentDraft);
-            setMessage('Accepted. Press the primary action hotkey to send.', 'success');
+            setOverlayState('accepted', 'Accepted. Press the primary action hotkey to send.');
           }
         } catch (error) {
-          setMessage(`Accept failed: ${error.message}`, 'danger');
+          setOverlayState('error', `Accept failed: ${error.message}`);
         } finally {
           setBusy(false);
         }
@@ -359,8 +519,9 @@
 
       async function rewriteDraft(action, customInstruction = '') {
         if (!currentDraft?.id) return;
+        stopTtsIfSpeaking();
         setBusy(true);
-        setMessage('Rewriting...', 'warning');
+        setOverlayState('rewriting', 'Rewriting...');
         try {
           await saveEdit();
           const rewritten = await postJson(
@@ -369,29 +530,31 @@
             120000,
           );
           if (rewritten?.ok === false) {
-            setMessage(`Rewrite failed: ${rewritten.error || 'Unknown error'}`, 'danger');
+            setOverlayState('error', `Rewrite failed: ${rewritten.error || 'Unknown error'}`);
             return;
           }
           renderDraft(rewritten);
-          setMessage('Rewrite ready.', 'success');
+          setOverlayState('rewritten', 'Rewrite ready.');
         } catch (error) {
-          setMessage(`Rewrite failed: ${error.message}`, 'danger');
+          setOverlayState('error', `Rewrite failed: ${error.message}`);
         } finally {
           setBusy(false);
         }
       }
 
       async function declineDraft() {
+        stopTtsIfSpeaking();
         if (!currentDraft?.id) {
           window.betterFingersReview?.hide?.();
           return;
         }
         setBusy(true);
+        setOverlayState('declined', 'Cancelling...');
         try {
           await postJson(`${BACKEND_ORIGIN}/drafts/${currentDraft.id}/decline`, {}, 10000);
           window.betterFingersReview?.hide?.();
         } catch (error) {
-          setMessage(`Cancel failed: ${error.message}`, 'danger');
+          setOverlayState('error', `Cancel failed: ${error.message}`);
         } finally {
           setBusy(false);
         }
@@ -399,27 +562,50 @@
 
       async function readDraft() {
         if (!currentDraft?.id) return;
-        setBusy(true);
         try {
           await saveEdit();
           const voiceId = outputSettings?.review_tts_voice_hint || 'standard_female';
           const speed = parseFloat(outputSettings?.review_tts_speed || '1.0');
+          
+          setOverlayState('speaking', 'Speaking...');
+          
           const result = await postJson(`${BACKEND_ORIGIN}/drafts/${currentDraft.id}/tts`, {
             text: finalTextEl.value,
             voice_id: voiceId,
             speed: speed
           }, 120000);
-          setMessage(result?.message || 'Read-aloud request sent.', result?.ok === false ? 'danger' : 'success');
+          
+          if (result?.ok === false) {
+            setOverlayState('error', result?.message || 'Read failed.');
+          }
         } catch (error) {
-          setMessage(`Read failed: ${error.message}`, 'danger');
-        } finally {
-          setBusy(false);
+          setOverlayState('error', `Read failed: ${error.message}`);
         }
       }
 
       window.betterFingersReview?.onDraft((draft) => {
         renderDraft(draft);
         refreshOutputSettings().catch(() => {});
+        updateTtsStatusBadge().catch(() => {});
+      });
+
+      window.betterFingersReview?.onStatus((statusUpdate) => {
+        const status = statusUpdate?.status;
+        if (status === 'draft_tts_started') {
+          setOverlayState('speaking', 'Speaking...');
+        } else if (status === 'draft_tts_stopped') {
+          if (currentState === 'speaking') {
+            setOverlayState('pending', 'TTS playback completed.');
+          }
+        } else if (status === 'emergency_stop') {
+          setOverlayState('stopped', statusUpdate?.message || 'Emergency stopped.');
+        } else if (status === 'draft_sent') {
+          const isFallback = Boolean(statusUpdate?.send_result?.fallback);
+          setOverlayState(isFallback ? 'copied' : 'sent', statusUpdate?.send_result?.message || 'Sent.');
+          setTimeout(() => window.betterFingersReview?.hide?.(), 1200);
+        } else if (status === 'draft_send_error') {
+          setOverlayState('error', statusUpdate?.error || 'Send failed.');
+        }
       });
 
       acceptButton.addEventListener('click', acceptDraft);
@@ -438,11 +624,25 @@
         }
         rewriteDraft('custom', instruction);
       });
-      readButton.addEventListener('click', readDraft);
+      readButton.addEventListener('click', async () => {
+        if (currentState === 'speaking') {
+          try {
+            await postJson(`${BACKEND_ORIGIN}/tts/stop`, {}, 5000);
+          } catch (error) {
+            setOverlayState('error', `Failed to stop TTS: ${error.message}`);
+          }
+        } else {
+          await readDraft();
+        }
+      });
       cancelButton.addEventListener('click', declineDraft);
-      closeButton.addEventListener('click', () => window.betterFingersReview?.hide?.());
+      closeButton.addEventListener('click', () => {
+        stopTtsIfSpeaking();
+        window.betterFingersReview?.hide?.();
+      });
 
       refreshOutputSettings().catch(() => {});
+      updateTtsStatusBadge().catch(() => {});
     </script>
   </body>
 </html>

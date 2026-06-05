@@ -1030,6 +1030,15 @@ def ensure_tts_initialized():
         try:
             from tts_engine import ReviewTTSEngine
             tts_engine = ReviewTTSEngine()
+            
+            def tts_start_callback(text):
+                broadcast_status_threadsafe("draft_tts_started", {"text": text})
+                
+            def tts_stop_callback():
+                broadcast_status_threadsafe("draft_tts_stopped", {})
+                
+            tts_engine.on_start = tts_start_callback
+            tts_engine.on_stop = tts_stop_callback
         except Exception as e:
             logging.error(f"Failed to load ReviewTTSEngine: {e}")
             record_runtime_error("tts", str(e))
@@ -2080,6 +2089,74 @@ async def tts_speak(request: TTSRequest):
     result = engine.speak(text, speed=speed, voice_hint=voice_id)
     result["status"] = "success" if result.get("ok") else "error"
     return result
+
+@app.post("/tts/stop")
+async def stop_tts_route():
+    global tts_engine
+    if tts_engine is not None:
+        try:
+            tts_engine.stop_current()
+            broadcast_status_threadsafe("draft_tts_stopped", {"message": "TTS stopped manually."})
+            return {"ok": True, "message": "TTS playback stopped."}
+        except Exception as e:
+            return {"ok": False, "message": f"Failed to stop TTS: {e}"}
+    return {"ok": True, "message": "TTS engine not active."}
+
+@app.get("/runtime/tts-status")
+async def get_tts_status():
+    global tts_engine
+    engine = ensure_tts_initialized()
+    
+    import platform
+    is_linux = (platform.system().lower() == "linux")
+    libsndfile_missing = False
+    libsndfile_error = ""
+    
+    try:
+        import sounddevice as sd
+    except Exception as e:
+        if is_linux and ("sndfile" in str(e).lower() or "libsndfile" in str(e).lower() or "not found" in str(e).lower() or "cannot open shared object file" in str(e).lower()):
+            libsndfile_missing = True
+        libsndfile_error = str(e)
+        
+    if engine is None:
+        msg = f"Failed to instantiate TTS engine: {libsndfile_error}" if libsndfile_error else "TTS engine is not available."
+        if libsndfile_missing:
+            msg = f"Linux system package dependency failure: libsndfile1 is missing ({libsndfile_error}). Run 'sudo apt-get install libsndfile1' to resolve."
+        return {
+            "ok": False,
+            "backend": "unavailable",
+            "fallback": False,
+            "message": msg,
+            "libsndfile_missing": libsndfile_missing,
+            "libsndfile_error": libsndfile_error
+        }
+
+    status = engine.ensure_loaded()
+    backend_val = engine.backend()
+    
+    backend_name = "unavailable"
+    if backend_val == "kokoro":
+        backend_name = "Kokoro"
+    elif backend_val == "kokoro_onnx":
+        backend_name = "ONNX"
+    elif backend_val == "sapi":
+        backend_name = "SAPI fallback"
+        
+    msg = engine._status_message
+    if libsndfile_missing:
+        msg = f"Linux system package dependency failure: libsndfile1 is missing ({libsndfile_error}). Run 'sudo apt-get install libsndfile1' to resolve."
+        backend_name = "unavailable"
+        
+    return {
+        "ok": engine.is_loaded() and not libsndfile_missing,
+        "backend": backend_name,
+        "raw_backend": backend_val,
+        "fallback": engine._fallback,
+        "message": msg,
+        "libsndfile_missing": libsndfile_missing,
+        "libsndfile_error": libsndfile_error if libsndfile_missing else None
+    }
 
 @app.post("/tts/clone")
 async def tts_clone(file: UploadFile = File(...), name: str = "My Voice"):

@@ -51,6 +51,9 @@ class ReviewTTSEngine:
         self._worker: Optional[threading.Thread] = None
         self._worker_running = False
 
+        self.on_start = None
+        self.on_stop = None
+
         self._loaded = False
         self._backend = "none"
         self._fallback = False
@@ -193,7 +196,18 @@ class ReviewTTSEngine:
                 # Move to end (LRU)
                 self._audio_cache.move_to_end(cache_key)
                 self.stop_current() # Stop any current playback before playing from cache
+                if self.on_start:
+                    try:
+                        self.on_start(text)
+                    except Exception as e:
+                        logging.warning(f"Failed to run TTS on_start callback: {e}")
                 sd.play(audio, rate)
+                if self.on_stop:
+                    try:
+                        duration = len(audio) / rate
+                        threading.Timer(duration, lambda: self.on_stop() if (hasattr(self, "on_stop") and self.on_stop) else None).start()
+                    except Exception as e:
+                        logging.warning(f"Failed to schedule TTS on_stop callback: {e}")
                 self._current_playback = text
                 return {
                     "ok": True,
@@ -317,9 +331,33 @@ class ReviewTTSEngine:
                         continue
                     backend = self.backend()
                 if backend in {"kokoro", "kokoro_onnx"}:
-                    self._speak_kokoro_chunked(text=text, speed=speed, voice_hint=voice_hint)
+                    if self.on_start:
+                        try:
+                            self.on_start(text)
+                        except Exception as e:
+                            logging.warning(f"TTS on_start callback error: {e}")
+                    try:
+                        self._speak_kokoro_chunked(text=text, speed=speed, voice_hint=voice_hint)
+                    finally:
+                        if self.on_stop:
+                            try:
+                                self.on_stop()
+                            except Exception as e:
+                                logging.warning(f"TTS on_stop callback error: {e}")
                 elif backend == "sapi":
-                    self._speak_sapi(text=text, speed=speed, voice_hint=voice_hint)
+                    if self.on_start:
+                        try:
+                            self.on_start(text)
+                        except Exception as e:
+                            logging.warning(f"TTS on_start callback error: {e}")
+                    try:
+                        self._speak_sapi(text=text, speed=speed, voice_hint=voice_hint)
+                    finally:
+                        if self.on_stop:
+                            try:
+                                self.on_stop()
+                            except Exception as e:
+                                logging.warning(f"TTS on_stop callback error: {e}")
                 else:
                     logging.error("TTS backend unavailable at playback time.")
             except Exception as exc:
