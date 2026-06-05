@@ -1,10 +1,13 @@
 const path = require('node:path');
 const fs = require('node:fs');
+const { randomUUID } = require('node:crypto');
 const { app } = require('electron');
 const { createMainWindow, focusMainWindow, createOverlayWindow } = require('./windows');
 const { createSidecar } = require('./sidecar');
 const { createTray } = require('./tray');
 const { registerIpc } = require('./ipc');
+
+const authToken = randomUUID();
 
 let mainWindow = null;
 let tray = null;
@@ -49,6 +52,7 @@ function bootstrapApp() {
   sidecar = createSidecar({
     host: '127.0.0.1',
     port: 8000,
+    authToken,
     devCommand: resolveDevPythonCommand(),
     devArgs: [
       'server.py',
@@ -59,20 +63,21 @@ function bootstrapApp() {
     ],
   });
 
+  registerIpc({
+    getMainWindow: () => mainWindow,
+    getSidecarStatus: () => sidecar?.getStatus?.() ?? { state: 'unknown', message: 'Sidecar is unavailable.' },
+    getSidecarLogs: () => sidecar?.getLogs?.() ?? [],
+    getAuthToken: () => authToken,
+    onQuit: requestQuit,
+    onShow: () => focusMainWindow(mainWindow),
+  });
+
   mainWindow = createMainWindow();
   createOverlayWindow();
   tray = createTray({
     getMainWindow: () => mainWindow,
     onShow: () => focusMainWindow(mainWindow),
     onQuit: requestQuit,
-  });
-
-  registerIpc({
-    getMainWindow: () => mainWindow,
-    getSidecarStatus: () => sidecar?.getStatus?.() ?? { state: 'unknown', message: 'Sidecar is unavailable.' },
-    getSidecarLogs: () => sidecar?.getLogs?.() ?? [],
-    onQuit: requestQuit,
-    onShow: () => focusMainWindow(mainWindow),
   });
 
   sidecar.start().catch((error) => {

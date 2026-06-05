@@ -153,11 +153,9 @@ class InputInjector:
     def send_output(
         self,
         text: str,
-        send_method: str = "paste",
         auto_submit: bool = False,
         close_action: str = "none",
     ):
-        del send_method  # Legacy argument retained for compatibility with older callers.
         if bool(self.config.get("instant_typing", False)):
             self.type_text(text)
         else:

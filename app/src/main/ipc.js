@@ -2,7 +2,11 @@ const { clipboard, ipcMain } = require('electron');
 
 let overlayHideTimer = null;
 
-function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, onQuit, onShow } = {}) {
+function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthToken, onQuit, onShow } = {}) {
+  ipcMain.on('app:get-auth-token-sync', (event) => {
+    event.returnValue = typeof getAuthToken === 'function' ? getAuthToken() : '';
+  });
+
   ipcMain.handle('app:quit', async () => {
     if (onQuit) {
       await onQuit();
@@ -53,11 +57,22 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, onQuit, 
     const overlay = getOverlayWindow();
     const review = getReviewWindow();
 
+    if (!update || (typeof update !== 'string' && typeof update !== 'object')) {
+      return false;
+    }
+
     const payload = typeof update === 'string' ? { status: update } : { ...(update ?? {}) };
     const status = String(payload.status ?? 'unknown');
+    const durationMs = payload.durationMs !== undefined ? Number(payload.durationMs) : 2600;
+
+    const safePayload = {
+      status,
+      message: payload.message ? String(payload.message) : '',
+      durationMs: isNaN(durationMs) ? 2600 : durationMs,
+    };
 
     if (review && !review.isDestroyed() && review.isVisible()) {
-      review.webContents.send('review:status', payload);
+      review.webContents.send('review:status', safePayload);
     }
 
     if (!overlay) return false;
@@ -88,14 +103,14 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, onQuit, 
       if (!overlay.isVisible()) {
         overlay.showInactive();
       }
-      overlay.webContents.send('overlay:update', payload);
+      overlay.webContents.send('overlay:update', safePayload);
       if (transientStatuses.has(status)) {
         overlayHideTimer = setTimeout(() => {
           if (!overlay.isDestroyed() && overlay.isVisible()) {
             overlay.hide();
           }
           overlayHideTimer = null;
-        }, Number(payload.durationMs ?? 2600));
+        }, safePayload.durationMs);
       }
     } else {
       if (overlay.isVisible()) {

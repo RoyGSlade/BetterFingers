@@ -1,6 +1,9 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+const authToken = ipcRenderer.sendSync('app:get-auth-token-sync');
+
 const api = {
+  authToken,
   quitApp: () => ipcRenderer.invoke('app:quit'),
   showApp: () => ipcRenderer.invoke('app:show'),
   getAppState: () => ipcRenderer.invoke('app:get-state'),

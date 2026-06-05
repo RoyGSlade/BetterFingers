@@ -67,6 +67,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from fastapi import Request
+from starlette.responses import JSONResponse
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    expected_token = os.getenv("BETTERFINGERS_AUTH_TOKEN")
+    if expected_token and not request.url.path.startswith("/ws/"):
+        if request.method != "OPTIONS":
+            auth_header = request.headers.get("Authorization")
+            if not auth_header or not auth_header.startswith("Bearer ") or auth_header.split(" ")[1] != expected_token:
+                return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+    return await call_next(request)
+
 # Global Instances
 transcriber = None
 hotkey_manager = None
@@ -1005,8 +1018,14 @@ async def startup_event():
 def shutdown_event():
     stop_hotkey_manager()
 
+from fastapi import Query, status
+
 @app.websocket("/ws/voice_status")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
+    expected_token = os.getenv("BETTERFINGERS_AUTH_TOKEN")
+    if expected_token and token != expected_token:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
     await websocket.accept()
     active_websockets.append(websocket)
     try:
@@ -1668,6 +1687,7 @@ def create_mock_draft(status: str = "pending", raw: str = "Mock raw transcript t
         "long_text": draft["long_text"],
     })
     return draft
+
 
 
 @app.post("/drafts/{draft_id}/accept")

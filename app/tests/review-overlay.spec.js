@@ -47,7 +47,11 @@ test.describe('BetterFingers Review Overlay Tests', () => {
 
   test('Review overlay opens and displays correct elements when mock draft is triggered', async () => {
     // Trigger a mock draft via FastAPI endpoint
-    const response = await fetch('http://127.0.0.1:8000/drafts/test-mock', { method: 'POST' });
+    const token = await mainWindow.evaluate(() => window.betterFingers.authToken);
+    const response = await fetch('http://127.0.0.1:8000/drafts/test-mock', { 
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
     expect(response.ok).toBe(true);
 
     // Wait for review window to open

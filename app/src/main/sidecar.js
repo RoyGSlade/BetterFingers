@@ -142,6 +142,7 @@ function killChildProcess(child) {
 function createSidecar({
   host = '127.0.0.1',
   port = 8000,
+  authToken = '',
   devCommand = 'python',
   devArgs = [],
 } = {}) {
@@ -151,6 +152,7 @@ function createSidecar({
     ...process.env,
     BETTERFINGERS_LAZY_STARTUP: '1',
     BETTERFINGERS_ENV: isPackaged ? 'production' : 'development',
+    BETTERFINGERS_AUTH_TOKEN: authToken,
   };
   let childProcess = null;
   let startPromise = null;

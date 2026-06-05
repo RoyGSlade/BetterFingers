@@ -21,6 +21,15 @@ const REFRESH_AUDIO_DEVICES_URL = `${BACKEND_ORIGIN}/runtime/audio-devices/refre
 const RUNTIME_VERSION_URL = `${BACKEND_ORIGIN}/runtime/version`;
 const PERSONAS_URL = `${BACKEND_ORIGIN}/personas`;
 const TTS_VOICES_URL = `${BACKEND_ORIGIN}/tts/voices`;
+const AUTH_TOKEN = window.betterFingers?.authToken || '';
+
+function getHeaders() {
+  const headers = { 'Content-Type': 'application/json' };
+  if (AUTH_TOKEN) {
+    headers['Authorization'] = `Bearer ${AUTH_TOKEN}`;
+  }
+  return headers;
+}
 
 async function fetchDoctor(refreshAudio = false, timeoutMs = 5000) {
   return fetchJson(`${DOCTOR_URL}?refresh_audio=${refreshAudio}`, timeoutMs);
@@ -41,6 +50,7 @@ async function fetchHealth(timeoutMs = 2500) {
   try {
     const response = await fetch(HEALTH_URL, {
       cache: 'no-store',
+      headers: getHeaders(),
       signal: controller.signal,
     });
 
@@ -61,6 +71,7 @@ async function fetchJson(url, timeoutMs = 2500) {
   try {
     const response = await fetch(url, {
       cache: 'no-store',
+      headers: getHeaders(),
       signal: controller.signal,
     });
 
@@ -189,9 +200,7 @@ async function postJson(url, payload = {}, timeoutMs = 2500) {
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: getHeaders(),
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
@@ -213,6 +222,7 @@ async function deleteJson(url, timeoutMs = 2500) {
   try {
     const response = await fetch(url, {
       method: 'DELETE',
+      headers: getHeaders(),
       signal: controller.signal,
     });
 
@@ -301,6 +311,7 @@ async function deletePersona(name, timeoutMs = 5000) {
   try {
     const response = await fetch(`${PERSONAS_URL}/${encodeURIComponent(name)}`, {
       method: 'DELETE',
+      headers: getHeaders(),
       cache: 'no-store',
       signal: controller.signal,
     });
@@ -322,9 +333,7 @@ async function warmupRuntime({ stt = false, llm = false, hotkeys = false } = {},
   try {
     const response = await fetch(RUNTIME_WARMUP_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: getHeaders(),
       body: JSON.stringify({ stt, llm, hotkeys }),
       signal: controller.signal,
     });
@@ -384,7 +393,10 @@ function connectVoiceStatus({
     attempt += 1;
     notifyConnectionChange('connecting', `Attempt ${attempt}`);
 
-    socket = new WebSocket(VOICE_STATUS_WS_URL);
+    const wsUrl = AUTH_TOKEN 
+      ? `${VOICE_STATUS_WS_URL}?token=${encodeURIComponent(AUTH_TOKEN)}`
+      : VOICE_STATUS_WS_URL;
+    socket = new WebSocket(wsUrl);
 
     socket.addEventListener('open', () => {
       attempt = 0;
