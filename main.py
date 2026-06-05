@@ -1349,15 +1349,26 @@ class App:
             self._safe_after(0, self._handle_review_tts_hotkey)
 
     def _handle_review_tts_hotkey(self):
-        if not self.preview_overlay or not self.preview_overlay.is_review_active():
-            if self.notification_overlay and self.notification_overlay_enabled:
-                self.notification_overlay.show_message("No review draft is currently open.", 1800)
-            else:
-                logging.info("No review draft is currently open.")
+        if self.preview_overlay and self.preview_overlay.is_review_active():
+            text = self.preview_overlay.get_selected_or_full_text()
+            self._speak_review_text(text, source="shortcut")
             return
 
-        text = self.preview_overlay.get_selected_or_full_text()
-        self._speak_review_text(text, source="shortcut")
+        capture_result = capture_selection_text_with_restore(timeout_ms=350, poll_ms=25)
+        if not capture_result.get("ok", False):
+            message = capture_result.get("message", "No readable selected/copied text found.")
+            if self.notification_overlay and self.notification_overlay_enabled:
+                self.notification_overlay.show_message(message, 1800)
+            else:
+                logging.info(message)
+            return
+
+        if capture_result.get("used_fallback", False):
+            logging.info("Review TTS hotkey using clipboard fallback text.")
+        else:
+            logging.info("Review TTS hotkey captured selected text.")
+
+        self._speak_review_text(capture_result.get("text", ""), source="review_hotkey")
 
     def _speak_review_text(self, text, source="button"):
         phrase = (text or "").strip()

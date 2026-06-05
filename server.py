@@ -314,6 +314,7 @@ def start_hotkey_manager():
         on_recording_start_callback=on_recording_start,
         on_force_stop_callback=emergency_stop_runtime,
         on_manual_send_callback=handle_primary_action,
+        on_review_tts_callback=handle_review_tts_shortcut,
         is_busy_callback=lambda: is_processing_draft,
     )
     try:
@@ -656,6 +657,64 @@ def send_draft_by_id(draft_id, action=None, open_chat=False):
     return response
 
 
+def speak_text_aloud(text: str):
+    phrase = (text or "").strip()
+    if not phrase:
+        return
+
+    profile_name = get_last_active_profile()
+    try:
+        config = load_profile(profile_name)
+    except Exception:
+        config = {}
+
+    if not bool(config.get("review_tts_enabled", True)):
+        logging.info("TTS playback skipped: review_tts_enabled is False in settings.")
+        return
+
+    voice_id = normalize_tts_voice_id(config.get("review_tts_voice_hint") or "standard_female")
+    speed = max(0.5, min(3.0, float(config.get("review_tts_speed") or 1.0)))
+
+    engine = ensure_tts_initialized()
+    if engine is not None:
+        logging.info(f"Speaking text aloud: '{phrase[:30]}...' (voice={voice_id}, speed={speed}x)")
+        engine.speak(phrase, speed=speed, voice_hint=voice_id)
+
+
+def handle_review_tts_shortcut():
+    if hotkey_manager is not None and bool(getattr(hotkey_manager, "is_recording", False)):
+        logging.info("Ignored review TTS hotkey while recording is active.")
+        return
+    if is_processing_draft:
+        logging.info("Ignored review TTS hotkey while draft processing is active.")
+        return
+
+    active_draft = None
+    with draft_lock:
+        if pending_manual_send_ids:
+            active_draft = get_draft_by_id(pending_manual_send_ids[0])
+        elif draft_queue and draft_queue[-1].get("status") in {"pending", "awaiting_manual_send"}:
+            active_draft = draft_queue[-1]
+
+    if active_draft:
+        text = active_draft.get("final_text", "").strip()
+        if text:
+            speak_text_aloud(text)
+            return
+
+    try:
+        from clipboard_capture import capture_selection_text_with_restore
+        result = capture_selection_text_with_restore(timeout_ms=350, poll_ms=25)
+    except Exception as exc:
+        logging.exception("Review TTS shortcut selection capture failed")
+        result = {"ok": False, "text": "", "message": f"Selection capture failed: {exc}"}
+
+    if result.get("ok"):
+        text = result.get("text", "").strip()
+        if text:
+            speak_text_aloud(text)
+
+
 def handle_primary_action():
     if hotkey_manager is not None and bool(getattr(hotkey_manager, "is_recording", False)):
         logging.info("Ignored primary action while recording is active.")
@@ -678,6 +737,11 @@ def handle_primary_action():
     except Exception as exc:
         logging.exception("Primary action selection capture failed")
         result = {"ok": False, "text": "", "message": f"Selection capture failed: {exc}", "error": str(exc)}
+
+    if result.get("ok"):
+        text = result.get("text", "").strip()
+        if text:
+            speak_text_aloud(text)
 
     broadcast_status_threadsafe("selection_captured" if result.get("ok") else "selection_capture_failed", result)
     return result
