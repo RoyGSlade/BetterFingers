@@ -5,6 +5,7 @@
 - [ ] Start from repo root with `.venv` active.
 - [ ] Run `cd app`.
 - [ ] Run `BETTERFINGERS_PYTHON=../.venv/bin/python npm run dev`.
+- [ ] If `.venv` is missing, confirm the launcher warns and falls back to `python3` instead of failing with `ENOENT`.
 - [ ] Confirm Electron window opens.
 - [ ] Confirm backend card becomes `active`.
 - [ ] Confirm sidecar diagnostics show `ready` or clearly explain external backend/port conflict.
@@ -38,6 +39,7 @@
 
 - [ ] Run `npm run dev` from `app/`.
 - [ ] Confirm dev Python resolves to `python` unless `BETTERFINGERS_PYTHON` is set.
+- [ ] Confirm a missing `BETTERFINGERS_PYTHON` file path falls back to `python` instead of failing with `ENOENT`.
 - [ ] Confirm dashboard opens and backend starts.
 - [ ] Confirm Windows model manager still uses `llama-server.exe`.
 - [ ] Confirm existing Windows LLM download flow is still available.

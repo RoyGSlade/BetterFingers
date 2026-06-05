@@ -116,8 +116,10 @@ class ServerLazyStartupTests(unittest.TestCase):
     def test_lazy_health_runtime_and_warmup(self):
         engine_holder = {}
 
-        def _get_engine():
+        def _get_engine(model_id=None):
             engine_holder["engine"] = DummyEngine()
+            if model_id and hasattr(engine_holder["engine"], "set_model_id"):
+                engine_holder["engine"].set_model_id(model_id)
             return engine_holder["engine"]
 
         def _get_engine_if_initialized():

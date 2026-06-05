@@ -395,130 +395,54 @@ Implemented at backend level, needs platform QA and safety hardening.
 
 Replace the legacy settings window with a robust, attractive, searchable, responsive Electron settings experience.
 
-The current Electron settings area works as a first pass, but it is too basic: a long scroll through many settings with limited hierarchy, limited explanation, no themes, no responsive design polish, and not enough validation.
-
 ## Current status
 
-Implemented as a basic settings page, needs major UX redesign and schema hardening.
+Redesigned tabbed settings panel, CSS extraction, frontend name/enum validations, dynamic platform-aware capability handling, schema versioning, and backend-frontend integrations are **Implemented and Unit Tested**.
 
-## Checklist
+> [!NOTE]
+> **LocalStorage Appearance Separation**: Appearance settings (Theme, Accent, Density, FontSize, HighContrast) are intentionally saved in `localStorage` rather than server-side settings profiles. This ensures that visual/accessibility preferences remain local to the device (e.g. laptop vs large screen) while functional preferences remain synced to backend profiles.
 
-### Profile endpoints and behavior
+---
 
-- [x] Add Electron settings page.
-  - Current detail: settings are visible in the dashboard as a large section.
-  - Remaining detail: should become a proper settings route/page or tabbed panel.
-- [x] Expose profile endpoints:
-  - [x] list profiles
-  - [x] get active profile
-  - [x] save profile
-  - [x] switch profile
-  - [x] create profile
-  - [x] delete profile
-- [x] Apply active profile to runtime where possible.
-- [x] Needs QA: verify profile switching updates runtime without app restart.
-- [x] Needs QA: verify profile save/discard/create/delete behavior.
-- [x] Needs robustness pass: prevent deletion of active/default profile unless safe fallback is guaranteed.
-- [x] Needs robustness pass: add import/export profile JSON.
-- [x] Needs robustness pass: add duplicate profile handling.
-- [x] Needs robustness pass: add profile rename.
-- [x] Needs robustness pass: add profile backup before migration.
+## Technical Implementations & Unit Tested Status
 
-### Core settings port
+- [x] **Redesigned Tabbed Sidebar Layout** (Sidebar navigation, CSS-driven sections, responsive viewport scaling, search/filter input)
+- [x] **Backend & Frontend Versioned Schema** (Export and import structures enforce `kind: "profile"` and `schema_version: 1`, upgrading older formats gracefully)
+- [x] **Automated Profile Renaming, Creation, Duplication, and Import/Export**
+- [x] **Frontend Validation & Recovery** (Strict regex name check `^[a-zA-Z0-9_\-]+$`, reserved word blocks like `Default` or `import`, and fallback defaults for enum validation on load/apply)
+- [x] **Capabilities Integration & Dynamic Disabling** (Disables Audio Ducking on non-Windows; disables Instant Typing on Linux Wayland. Displays capability warnings dynamically)
+- [x] **UI Indicators & Actions** (Wayland session indicator moved to Hotkeys group, labels corrected to "Test Browser Microphone Access" and "Audition Voice / Test TTS API")
 
-- [x] Recording hotkey.
-- [x] Record mode:
-  - toggle
-  - push-to-talk
-- [x] Emergency stop.
-- [x] Primary action hotkey.
-- [x] Review TTS hotkey.
-- [x] Open chat hotkey.
-- [x] Voice mute key.
-- [x] Send mode.
-- [x] Auto-submit.
-- [x] Current cleanup preset.
-- [x] WPM / typing behavior.
-- [x] Audio gate thresholds.
-- [x] Audio ducking option.
-- [x] Overlay/notification preferences.
-- [x] Model keep-loaded flags.
-- [x] Needs QA: verify every setting actually maps to backend behavior.
-- [x] Needs QA: verify changing each setting either applies immediately or clearly says restart/reload is needed.
-- [x] Needs robustness pass: validate hotkey syntax before save.
-- [x] Needs robustness pass: prevent duplicate/conflicting hotkeys.
-- [x] Needs robustness pass: validate numeric ranges.
-  - WPM
-  - token limits
-  - audio gate thresholds
-  - TTS speed/pitch later
-- [x] Needs robustness pass: setting save failures should not partially corrupt profile files.
-- [x] Needs tests: profile defaults.
-- [x] Needs tests: profile migration.
-- [x] Needs tests: invalid values are corrected or rejected safely.
+---
 
-### Settings UI redesign
+## Phase 4 Manual QA Checklist & Verification Logs
 
-- [x] Needs UX pass: replace one-long-scroll layout with organized sections:
-  - General
-  - Recording
-  - Review & Drafts
-  - AI Cleanup
-  - Send & Injection
-  - Hotkeys
-  - Audio Devices
-  - TTS / Read-Aloud
-  - Models
-  - Notifications & Status UI
-  - Appearance
-  - Accessibility
-  - Advanced / Developer
-- [x] Needs UX pass: add left sidebar or tab navigation for settings categories.
-- [x] Needs UX pass: add settings search/filter.
-- [x] Needs UX pass: add setting descriptions under each setting.
-- [x] Needs UX pass: add inline warnings for platform-limited settings.
-  - Example: "Audio ducking is Windows-only."
-  - Example: "Paste/type injection may not work on Wayland."
-- [x] Needs UX pass: add save/discard bar that stays visible.
-- [x] Needs UX pass: show dirty-state clearly.
-- [x] Needs UX pass: show "requires restart" or "requires hotkey reload" labels where needed.
-- [x] Needs UX pass: add "Reset section to defaults."
-- [x] Needs UX pass: add "Reset profile to defaults."
-- [x] Needs UX pass: add "Test this setting" where useful.
-  - Test mic
-  - Test hotkey conflict
-  - Test TTS voice
-  - Test paste/copy behavior
-  - Test model load
+The following manual QA checks must be validated on physical/target machines before Phase 4 is considered fully complete.
 
-### Themes and appearance
+### 1. Functional Profile Operations (Manual Validation)
+- [ ] **Profile switching**: Confirm switching updates settings values and applies hotkeys without restarting the app.
+- [ ] **Create/Delete profiles**: Verify you cannot delete the default active profile.
+- [ ] **Export/Import**: Export a profile to a JSON file, rename it manually, import it back, and verify settings are exactly preserved.
+- [ ] **Reserved Names**: Try renaming a profile to `Default`, `default`, `import`, or `export`. Verify that the UI blocks the action and shows a clear validation message.
+- [ ] **Illegal Characters**: Try creating a profile named `My Profile!` or `Profile#1`. Verify the UI blocks it and enforces regex `^[a-zA-Z0-9_\-]+$`.
 
-- [x] Needs UX pass: add theme support:
-  - System
-  - Dark
-  - Light
-- [x] Needs UX pass: add accent color support.
-- [x] Needs UX pass: add compact/comfortable density.
-- [x] Needs UX pass: add font size scaling.
-- [x] Needs UX pass: add high contrast mode.
-- [x] Needs UX pass: make settings responsive for:
-  - small laptop screens
-  - large desktop monitors
-  - split-screen use
-- [x] Needs UX pass: create reusable UI components:
-  - setting row
-  - setting group
-  - toggle
-  - select
-  - text input
-  - hotkey recorder input
-  - warning callout
-  - status pill
-  - capability badge
-  - action button group
-- [x] Every setting has a clear label, explanation, validation, and platform status if needed.
-- [x] Profile changes affect runtime without restarting Electron unless restart is explicitly required.
-- [x] Settings are visually polished enough that they feel like a real app, not a debug panel wearing a trench coat.
+### 2. Device-Specific Capability Verification
+- [ ] **Linux Wayland**: Start Electron under Wayland. Verify the Hotkeys group shows `Wayland Session` and disables `Instant Typing (Injection)` with a clear warning explaining clipboard fallbacks.
+- [ ] **Linux X11**: Start Electron under X11. Verify the session indicator displays X11 and enables typing injection.
+- [ ] **Windows**: Run the application on Windows. Verify that `Audio Ducking` is editable.
+- [ ] **Non-Windows**: Run on Linux. Verify `Audio Ducking` is disabled and shows a warning that ducking is a Windows-only capability.
+
+### 3. Local Appearance Settings Verification
+- [ ] **Theme switching**: Change theme to Light/Dark/System. Inspect `localStorage` values. Ensure settings apply instantly.
+- [ ] **Accent changes**: Switch accent palette. Verify CSS classes change on body/html immediately.
+- [ ] **Accessibility / High Contrast**: Toggle High Contrast. Verify text contrast changes immediately.
+- [ ] **Persistence**: Reload/restart the application. Ensure local storage appearance settings are preserved, even if backend active profile is switched.
+
+### 4. Verification Logs
+| Date | Tester | Platform | Test Group | Status / Result | Notes |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| 2026-06-04 | Antigravity | Linux X11 | Redesign CSS & HTML | Passed | All inline styles removed and utility classes applied. |
+| 2026-06-04 | Antigravity | Linux X11 | Redesign Unit Tests | Passed | Passed all automated validation, duplicate hotkeys, and API rename/duplication/export tests. |
 
 ---
 

@@ -66,6 +66,12 @@
             <div class="connection-pill" id="draftStatus">No draft yet</div>
           </div>
 
+          <div class="recording-controls" aria-label="Recording controls">
+            <button id="toggleRecordingButton" class="secondary-button primary-button" type="button">Start Recording</button>
+            <button id="dashboardEmergencyStopButton" class="secondary-button" type="button">Emergency Stop</button>
+            <span id="recordingControlStatus" class="draft-metadata">Use this if global hotkeys are unavailable.</span>
+          </div>
+
           <div class="draft-preview">
             <div class="draft-column">
               <span class="status-label">Raw transcript</span>
@@ -149,10 +155,10 @@
         <div class="settings-layout">
           <!-- Sidebar for Categories & Search -->
           <aside class="settings-sidebar">
-            <div class="search-container" style="margin-bottom: 14px;">
-              <input id="settingsSearchInput" type="text" class="settings-input" placeholder="Search settings..." style="padding: 10px 14px; border-radius: 12px; font-size: 0.9rem;" />
+            <div class="search-container">
+              <input id="settingsSearchInput" type="text" class="settings-input" placeholder="Search settings..." />
             </div>
-            <nav class="settings-nav" aria-label="Settings Categories" style="display: flex; flex-direction: column; gap: 6px;">
+            <nav class="settings-nav" aria-label="Settings Categories">
               <button class="settings-nav-button active" type="button" data-section="general">General</button>
               <button class="settings-nav-button" type="button" data-section="recording">Recording</button>
               <button class="settings-nav-button" type="button" data-section="hotkeys">Hotkeys</button>
@@ -170,47 +176,47 @@
           <!-- Main Settings Area -->
           <main class="settings-main">
             <!-- Search Results Header -->
-            <div id="settingsSearchHeader" class="search-header hidden" style="font-size: 1.1rem; font-weight: 700; margin-bottom: 12px; color: var(--accent);">Search Results</div>
+            <div id="settingsSearchHeader" class="search-header hidden">Search Results</div>
             
-            <div id="settingsEmptyState" class="empty-state hidden" style="padding: 24px; text-align: center; color: var(--muted);">No settings match your search query.</div>
+            <div id="settingsEmptyState" class="empty-state hidden">No settings match your search query.</div>
 
             <!-- Section: General -->
             <div class="settings-section active" data-section="general">
               <h2>General Settings</h2>
-              <p class="section-desc" style="color: var(--muted); font-size: 0.9rem; margin-top: 4px; margin-bottom: 16px;">Manage your profile, exports, and switching profiles.</p>
+              <p class="section-desc">Manage your profile, exports, and switching profiles.</p>
               
-              <div class="setting-group" style="margin-bottom: 24px;">
+              <div class="setting-group">
                 <h3>Profile Management</h3>
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="profileSelect" style="font-weight: 700;">Active Profile</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Switch between different configuration presets.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="profileSelect">Active Profile</label>
+                    <span class="setting-desc">Switch between different configuration presets.</span>
                   </div>
                   <div class="setting-control">
-                    <select id="profileSelect" class="settings-input" style="min-width: 200px;"></select>
+                    <select id="profileSelect" class="settings-input min-w-200"></select>
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; flex-direction: column; gap: 12px; padding: 14px 0;">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <span class="status-label" style="font-weight: 700;">Profile Operations</span>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Create new, duplicate, rename, delete, import, or export profiles.</span>
+                <div class="setting-row flex-column-gap12">
+                  <div class="setting-info">
+                    <span class="status-label">Profile Operations</span>
+                    <span class="setting-desc">Create new, duplicate, rename, delete, import, or export profiles.</span>
                   </div>
-                  <div class="setting-control" style="display: flex; flex-direction: column; gap: 10px; width: 100%;">
-                    <input id="newProfileName" class="settings-input" type="text" placeholder="Profile name action target" style="max-width: 320px;" />
-                    <div style="display: flex; flex-wrap: wrap; gap: 8px;">
-                      <button id="activateProfileButton" class="secondary-button" type="button" style="padding: 8px 14px; font-size: 0.88rem;">Activate</button>
-                      <button id="createProfileButton" class="secondary-button" type="button" style="padding: 8px 14px; font-size: 0.88rem;">Create New</button>
-                      <button id="renameProfileButton" class="secondary-button" type="button" style="padding: 8px 14px; font-size: 0.88rem;">Rename Profile</button>
-                      <button id="duplicateProfileButton" class="secondary-button" type="button" style="padding: 8px 14px; font-size: 0.88rem;">Duplicate Profile</button>
+                  <div class="setting-control flex-column-gap10 w-full">
+                    <input id="newProfileName" class="settings-input max-w-320" type="text" placeholder="Profile name action target" />
+                    <div class="flex-wrap-gap8">
+                      <button id="activateProfileButton" class="secondary-button settings-btn" type="button">Activate</button>
+                      <button id="createProfileButton" class="secondary-button settings-btn" type="button">Create New</button>
+                      <button id="renameProfileButton" class="secondary-button settings-btn" type="button">Rename Profile</button>
+                      <button id="duplicateProfileButton" class="secondary-button settings-btn" type="button">Duplicate Profile</button>
                     </div>
-                    <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px;">
-                      <button id="exportProfileButton" class="secondary-button" type="button" style="padding: 8px 14px; font-size: 0.88rem;">Export Profile</button>
-                      <label class="secondary-button" style="padding: 8px 14px; font-size: 0.88rem; cursor: pointer; display: inline-flex; align-items: center;">
+                    <div class="flex-wrap-gap8 mt-4">
+                      <button id="exportProfileButton" class="secondary-button settings-btn" type="button">Export Profile</button>
+                      <label class="secondary-button settings-btn cursor-pointer-flex-center">
                         Import Profile
                         <input id="importProfileFile" type="file" accept=".json" style="display: none;" />
                       </label>
-                      <button id="deleteProfileButton" class="secondary-button danger-button" type="button" style="padding: 8px 14px; font-size: 0.88rem;">Delete Profile</button>
+                      <button id="deleteProfileButton" class="secondary-button danger-button settings-btn" type="button">Delete Profile</button>
                     </div>
                   </div>
                 </div>
@@ -220,17 +226,17 @@
             <!-- Section: Recording -->
             <div class="settings-section hidden" data-section="recording">
               <h2>Recording & Gate Settings</h2>
-              <p class="section-desc" style="color: var(--muted); font-size: 0.9rem; margin-top: 4px; margin-bottom: 16px;">Configure silence detection thresholds and record triggers.</p>
+              <p class="section-desc">Configure silence detection thresholds and record triggers.</p>
               
-              <div class="setting-group" style="margin-bottom: 24px;">
+              <div class="setting-group">
                 <h3>Recording Behavior</h3>
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingRecordingMode" style="font-weight: 700;">Record Mode</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Toggle (press to start/stop) or Push-To-Talk (hold to record).</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingRecordingMode">Record Mode</label>
+                    <span class="setting-desc">Toggle (press to start/stop) or Push-To-Talk (hold to record).</span>
                   </div>
                   <div class="setting-control">
-                    <select id="settingRecordingMode" class="settings-input" style="min-width: 200px;">
+                    <select id="settingRecordingMode" class="settings-input min-w-200">
                       <option value="toggle">toggle</option>
                       <option value="ptt">push-to-talk</option>
                     </select>
@@ -238,37 +244,37 @@
                 </div>
               </div>
 
-              <div class="setting-group" style="margin-bottom: 24px;">
+              <div class="setting-group">
                 <h3>Silence Gate Thresholds</h3>
-                <p class="group-desc" style="font-size: 0.85rem; color: var(--muted); margin-bottom: 12px;">Prevent silent or blank audio from trigger post-processing cleanup.</p>
+                <p class="group-desc">Prevent silent or blank audio from trigger post-processing cleanup.</p>
                 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingNoAudioDuration" style="font-weight: 700;">Min Duration (sec)</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Ignored if duration is shorter than this limit (0.0 to 30.0s).</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingNoAudioDuration">Min Duration (sec)</label>
+                    <span class="setting-desc">Ignored if duration is shorter than this limit (0.0 to 30.0s).</span>
                   </div>
                   <div class="setting-control">
-                    <input id="settingNoAudioDuration" class="settings-input" type="number" step="0.05" min="0" max="30" style="width: 120px;" />
+                    <input id="settingNoAudioDuration" class="settings-input w-120" type="number" step="0.05" min="0" max="30" />
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingNoAudioRms" style="font-weight: 700;">Min RMS Amplitude</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Threshold average signal power (0.0 to 1.0).</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingNoAudioRms">Min RMS Amplitude</label>
+                    <span class="setting-desc">Threshold average signal power (0.0 to 1.0).</span>
                   </div>
                   <div class="setting-control">
-                    <input id="settingNoAudioRms" class="settings-input" type="number" step="0.001" min="0" max="1" style="width: 120px;" />
+                    <input id="settingNoAudioRms" class="settings-input w-120" type="number" step="0.001" min="0" max="1" />
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0;">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingNoAudioPeak" style="font-weight: 700;">Min Peak Amplitude</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Absolute peak sound level required (0.0 to 1.0).</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingNoAudioPeak">Min Peak Amplitude</label>
+                    <span class="setting-desc">Absolute peak sound level required (0.0 to 1.0).</span>
                   </div>
                   <div class="setting-control">
-                    <input id="settingNoAudioPeak" class="settings-input" type="number" step="0.001" min="0" max="1" style="width: 120px;" />
+                    <input id="settingNoAudioPeak" class="settings-input w-120" type="number" step="0.001" min="0" max="1" />
                   </div>
                 </div>
               </div>
@@ -277,77 +283,82 @@
             <!-- Section: Hotkeys -->
             <div class="settings-section hidden" data-section="hotkeys">
               <h2>Hotkey Configuration</h2>
-              <p class="section-desc" style="color: var(--muted); font-size: 0.9rem; margin-top: 4px; margin-bottom: 16px;">Click any input box to start recording. Press escape or clear to remove.</p>
+              <p class="section-desc">Click any input box to start recording. Press escape or clear to remove.</p>
               
-              <div class="setting-group" style="margin-bottom: 24px;">
-                <h3>System Hotkeys</h3>
+              <div class="setting-group">
+                <h3>System Hotkeys & Session Info</h3>
                 
+                <div class="detail-row" id="hotkeySessionIndicatorRow" style="margin-bottom: 14px;">
+                  <span class="detail-label">Active Session Type</span>
+                  <span class="detail-value" id="hotkeySessionIndicator">Checking...</span>
+                </div>
+
                 <div class="warning-banner inline-warning" id="waylandHotkeyWarning" style="margin-bottom: 14px;">
-                  <strong>Linux Wayland Warning:</strong> Global hotkey monitoring may have compositor restrictions in Wayland sessions.
+                  <strong>Linux Wayland Warning:</strong> Global hotkey monitoring may have compositor restrictions in Wayland sessions. Fallback/Recovery: Global hotkeys may not be captured globally. Set shortcut manually or run BetterFingers in XWayland/X11 if possible, or trigger recording directly from the main interface.
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingHotkey" style="font-weight: 700;">Recording Hotkey</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Global shortcut to start/end voice recording.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingHotkey">Recording Hotkey</label>
+                    <span class="setting-desc">Global shortcut to start/end voice recording.</span>
                   </div>
-                  <div class="setting-control" style="display: flex; gap: 8px; align-items: center;">
-                    <input id="settingHotkey" class="settings-input hotkey-input" type="text" placeholder="Click to record..." readonly style="width: 180px; text-align: center; cursor: pointer; caret-color: transparent;" />
+                  <div class="setting-control">
+                    <input id="settingHotkey" class="settings-input hotkey-input w-180" type="text" placeholder="Click to record..." readonly style="text-align: center; cursor: pointer; caret-color: transparent;" />
                     <button class="secondary-button clear-hotkey-btn" type="button" style="padding: 6px 12px; font-size: 0.8rem;">Clear</button>
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingForceStopKey" style="font-weight: 700;">Emergency Stop</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Instantly stops any background transcription, typing, or TTS.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingForceStopKey">Emergency Stop</label>
+                    <span class="setting-desc">Instantly stops any background transcription, typing, or TTS.</span>
                   </div>
-                  <div class="setting-control" style="display: flex; gap: 8px; align-items: center;">
-                    <input id="settingForceStopKey" class="settings-input hotkey-input" type="text" placeholder="Click to record..." readonly style="width: 180px; text-align: center; cursor: pointer; caret-color: transparent;" />
+                  <div class="setting-control">
+                    <input id="settingForceStopKey" class="settings-input hotkey-input w-180" type="text" placeholder="Click to record..." readonly style="text-align: center; cursor: pointer; caret-color: transparent;" />
                     <button class="secondary-button clear-hotkey-btn" type="button" style="padding: 6px 12px; font-size: 0.8rem;">Clear</button>
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingManualSendHotkey" style="font-weight: 700;">Primary Action</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Pastes draft if pending; reads highlighted screen text if idle.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingManualSendHotkey">Primary Action</label>
+                    <span class="setting-desc">Pastes draft if pending; reads highlighted screen text if idle.</span>
                   </div>
-                  <div class="setting-control" style="display: flex; gap: 8px; align-items: center;">
-                    <input id="settingManualSendHotkey" class="settings-input hotkey-input" type="text" placeholder="Click to record..." readonly style="width: 180px; text-align: center; cursor: pointer; caret-color: transparent;" />
+                  <div class="setting-control">
+                    <input id="settingManualSendHotkey" class="settings-input hotkey-input w-180" type="text" placeholder="Click to record..." readonly style="text-align: center; cursor: pointer; caret-color: transparent;" />
                     <button class="secondary-button clear-hotkey-btn" type="button" style="padding: 6px 12px; font-size: 0.8rem;">Clear</button>
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingReviewTtsHotkey" style="font-weight: 700;">Review TTS Hotkey</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Triggers TTS playback for the currently loaded draft.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingReviewTtsHotkey">Review TTS Hotkey</label>
+                    <span class="setting-desc">Triggers TTS playback for the currently loaded draft.</span>
                   </div>
-                  <div class="setting-control" style="display: flex; gap: 8px; align-items: center;">
-                    <input id="settingReviewTtsHotkey" class="settings-input hotkey-input" type="text" placeholder="Click to record..." readonly style="width: 180px; text-align: center; cursor: pointer; caret-color: transparent;" />
+                  <div class="setting-control">
+                    <input id="settingReviewTtsHotkey" class="settings-input hotkey-input w-180" type="text" placeholder="Click to record..." readonly style="text-align: center; cursor: pointer; caret-color: transparent;" />
                     <button class="secondary-button clear-hotkey-btn" type="button" style="padding: 6px 12px; font-size: 0.8rem;">Clear</button>
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingChatOpenKey" style="font-weight: 700;">Open Chat Key</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Optional target app shortcut simulated before pasting.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingChatOpenKey">Open Chat Key</label>
+                    <span class="setting-desc">Optional target app shortcut simulated before pasting.</span>
                   </div>
-                  <div class="setting-control" style="display: flex; gap: 8px; align-items: center;">
-                    <input id="settingChatOpenKey" class="settings-input hotkey-input" type="text" placeholder="Click to record..." readonly style="width: 180px; text-align: center; cursor: pointer; caret-color: transparent;" />
+                  <div class="setting-control">
+                    <input id="settingChatOpenKey" class="settings-input hotkey-input w-180" type="text" placeholder="Click to record..." readonly style="text-align: center; cursor: pointer; caret-color: transparent;" />
                     <button class="secondary-button clear-hotkey-btn" type="button" style="padding: 6px 12px; font-size: 0.8rem;">Clear</button>
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0;">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingVoiceMuteKey" style="font-weight: 700;">Voice Mute Key</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Optional global key to mute system mic channels while recording.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingVoiceMuteKey">Voice Mute Key</label>
+                    <span class="setting-desc">Optional global key to mute system mic channels while recording.</span>
                   </div>
-                  <div class="setting-control" style="display: flex; gap: 8px; align-items: center;">
-                    <input id="settingVoiceMuteKey" class="settings-input hotkey-input" type="text" placeholder="Click to record..." readonly style="width: 180px; text-align: center; cursor: pointer; caret-color: transparent;" />
+                  <div class="setting-control">
+                    <input id="settingVoiceMuteKey" class="settings-input hotkey-input w-180" type="text" placeholder="Click to record..." readonly style="text-align: center; cursor: pointer; caret-color: transparent;" />
                     <button class="secondary-button clear-hotkey-btn" type="button" style="padding: 6px 12px; font-size: 0.8rem;">Clear</button>
                   </div>
                 </div>
@@ -357,56 +368,56 @@
             <!-- Section: Review & Drafts -->
             <div class="settings-section hidden" data-section="review-drafts">
               <h2>Review & Draft Settings</h2>
-              <p class="section-desc" style="color: var(--muted); font-size: 0.9rem; margin-top: 4px; margin-bottom: 16px;">Configure how draft reviews and queues operate.</p>
+              <p class="section-desc">Configure how draft reviews and queues operate.</p>
               
-              <div class="setting-group" style="margin-bottom: 24px;">
+              <div class="setting-group">
                 <h3>Review Behavior</h3>
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingSendMode" style="font-weight: 700;">Send Mode</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Review First displays drafts for acceptance. Auto Send pastes immediately.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingSendMode">Send Mode</label>
+                    <span class="setting-desc">Review First displays drafts for acceptance. Auto Send pastes immediately.</span>
                   </div>
                   <div class="setting-control">
-                    <select id="settingSendMode" class="settings-input" style="min-width: 200px;">
+                    <select id="settingSendMode" class="settings-input min-w-200">
                       <option value="review_first">review first</option>
                       <option value="auto_send">auto send</option>
                     </select>
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingAutoSubmit" style="font-weight: 700;">Auto-submit</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Automatically hit Enter in the target application after sending.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingAutoSubmit">Auto-submit</label>
+                    <span class="setting-desc">Automatically hit Enter in the target application after sending.</span>
                   </div>
                   <div class="setting-control">
-                    <label class="custom-switch-label" style="display: inline-block; position: relative; width: 44px; height: 22px;">
-                      <input id="settingAutoSubmit" type="checkbox" style="opacity: 0; width: 0; height: 0;" />
-                      <span class="custom-switch-slider" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255,255,255,0.08); border: 1px solid var(--border); transition: .2s; border-radius: 34px;"></span>
+                    <label class="custom-switch-label">
+                      <input id="settingAutoSubmit" type="checkbox" />
+                      <span class="custom-switch-slider"></span>
                     </label>
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingInstantTyping" style="font-weight: 700;">Instant Typing</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Simulate keyboard typing instead of clipboard pasting.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingInstantTyping">Instant Typing</label>
+                    <span class="setting-desc">Simulate keyboard typing instead of clipboard pasting.</span>
                   </div>
                   <div class="setting-control">
-                    <label class="custom-switch-label" style="display: inline-block; position: relative; width: 44px; height: 22px;">
-                      <input id="settingInstantTyping" type="checkbox" style="opacity: 0; width: 0; height: 0;" />
-                      <span class="custom-switch-slider" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255,255,255,0.08); border: 1px solid var(--border); transition: .2s; border-radius: 34px;"></span>
+                    <label class="custom-switch-label">
+                      <input id="settingInstantTyping" type="checkbox" />
+                      <span class="custom-switch-slider"></span>
                     </label>
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0;">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingDraftHistoryLimit" style="font-weight: 700;">Draft History Limit</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Maximum count of drafts retained in session memory (10 - 500).</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingDraftHistoryLimit">Draft History Limit</label>
+                    <span class="setting-desc">Maximum count of drafts retained in session memory (10 - 500).</span>
                   </div>
                   <div class="setting-control">
-                    <input id="settingDraftHistoryLimit" class="settings-input" type="number" min="10" max="500" style="width: 120px;" />
+                    <input id="settingDraftHistoryLimit" class="settings-input w-120" type="number" min="10" max="500" />
                   </div>
                 </div>
               </div>
@@ -415,60 +426,60 @@
             <!-- Section: AI Cleanup -->
             <div class="settings-section hidden" data-section="ai-cleanup">
               <h2>AI Cleanup & Personas</h2>
-              <p class="section-desc" style="color: var(--muted); font-size: 0.9rem; margin-top: 4px; margin-bottom: 16px;">Configure LLM prompts, token cutoffs, and preset characters.</p>
+              <p class="section-desc">Configure LLM prompts, token cutoffs, and preset characters.</p>
               
-              <div class="setting-group" style="margin-bottom: 24px;">
+              <div class="setting-group">
                 <h3>Inference Configurations</h3>
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingCurrentPreset" style="font-weight: 700;">Cleanup Preset</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Currently selected active LLM personality.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingCurrentPreset">Cleanup Preset</label>
+                    <span class="setting-desc">Currently selected active LLM personality.</span>
                   </div>
                   <div class="setting-control">
-                    <select id="settingCurrentPreset" class="settings-input" style="min-width: 200px;"></select>
+                    <select id="settingCurrentPreset" class="settings-input min-w-200"></select>
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingOutputTokenLimit" style="font-weight: 700;">Output Token Limit</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Hard ceiling for LLM completion tokens (900 - 1200).</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingOutputTokenLimit">Output Token Limit</label>
+                    <span class="setting-desc">Hard ceiling for LLM completion tokens (900 - 1200).</span>
                   </div>
                   <div class="setting-control">
-                    <input id="settingOutputTokenLimit" class="settings-input" type="number" min="900" max="1200" style="width: 120px;" />
+                    <input id="settingOutputTokenLimit" class="settings-input w-120" type="number" min="900" max="1200" />
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingLlmChunkSize" style="font-weight: 700;">LLM Chunk Size (words)</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Word count threshold before splitting LLM requests (50 - 5000).</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingLlmChunkSize">LLM Chunk Size (words)</label>
+                    <span class="setting-desc">Word count threshold before splitting LLM requests (50 - 5000).</span>
                   </div>
                   <div class="setting-control">
-                    <input id="settingLlmChunkSize" class="settings-input" type="number" min="50" max="5000" style="width: 120px;" />
+                    <input id="settingLlmChunkSize" class="settings-input w-120" type="number" min="50" max="5000" />
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0;">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingWhisperChunkSize" style="font-weight: 700;">Whisper Chunk Size (words)</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Audio snippet boundary split threshold (50 - 5000).</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingWhisperChunkSize">Whisper Chunk Size (words)</label>
+                    <span class="setting-desc">Audio snippet boundary split threshold (50 - 5000).</span>
                   </div>
                   <div class="setting-control">
-                    <input id="settingWhisperChunkSize" class="settings-input" type="number" min="50" max="5000" style="width: 120px;" />
+                    <input id="settingWhisperChunkSize" class="settings-input w-120" type="number" min="50" max="5000" />
                   </div>
                 </div>
               </div>
 
               <!-- Wizard Container -->
-              <div class="setting-group" style="margin-bottom: 24px;">
+              <div class="setting-group">
                 <h3>AI Persona Configuration Wizard</h3>
-                <div class="wizard-container" style="background: rgba(1, 8, 16, 0.28); border: 1px solid var(--border); border-radius: 18px; padding: 20px;">
-                  <div id="wizardStepProgress" style="font-size: 0.85rem; color: var(--accent); font-weight: 700; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.05em;">Step 1 of 4: Select Goal & Role</div>
+                <div class="wizard-container">
+                  <div id="wizardStepProgress" class="wizard-progress">Step 1 of 4: Select Goal & Role</div>
                   
                   <div id="wizardStep1" class="wizard-step">
-                    <p style="margin-bottom: 12px; font-size: 0.95rem; color: var(--muted); line-height: 1.5;">Choose the foundational role or goal template for the AI:</p>
-                    <div class="settings-grid" style="grid-template-columns: 1fr;">
+                    <p class="wizard-desc">Choose the foundational role or goal template for the AI:</p>
+                    <div class="settings-grid grid-cols-1">
                       <label>
                         <span class="status-label">Role Template</span>
                         <select id="wizardRole" class="settings-input">
@@ -478,16 +489,16 @@
                           <option value="custom">Custom (write your own goal/role)</option>
                         </select>
                       </label>
-                      <label id="wizardCustomRoleLabel" class="hidden" style="margin-top: 12px;">
+                      <label id="wizardCustomRoleLabel" class="hidden mt-12">
                         <span class="status-label">Custom Goal/Role Description</span>
-                        <textarea id="wizardCustomRole" class="settings-input" style="height: 80px; resize: vertical;" placeholder="e.g. You are an expert copywriter. Rewrite user text to be extremely persuasive..."></textarea>
+                        <textarea id="wizardCustomRole" class="settings-input textarea-small" placeholder="e.g. You are an expert copywriter. Rewrite user text to be extremely persuasive..."></textarea>
                       </label>
                     </div>
                   </div>
 
                   <div id="wizardStep2" class="wizard-step hidden">
-                    <p style="margin-bottom: 12px; font-size: 0.95rem; color: var(--muted); line-height: 1.5;">Select the tone and voice style:</p>
-                    <div class="settings-grid" style="grid-template-columns: 1fr;">
+                    <p class="wizard-desc">Select the tone and voice style:</p>
+                    <div class="settings-grid grid-cols-1">
                       <label>
                         <span class="status-label">Tone Template</span>
                         <select id="wizardTone" class="settings-input">
@@ -497,7 +508,7 @@
                           <option value="custom">Custom Tone</option>
                         </select>
                       </label>
-                      <label id="wizardCustomToneLabel" class="hidden" style="margin-top: 12px;">
+                      <label id="wizardCustomToneLabel" class="hidden mt-12">
                         <span class="status-label">Custom Tone Description</span>
                         <input id="wizardCustomTone" class="settings-input" type="text" placeholder="e.g. Enthusiastic and quirky, using occasional emojis..." />
                       </label>
@@ -505,37 +516,37 @@
                   </div>
 
                   <div id="wizardStep3" class="wizard-step hidden">
-                    <p style="margin-bottom: 12px; font-size: 0.95rem; color: var(--muted); line-height: 1.5;">Define strict rules and boundaries:</p>
-                    <div class="toggle-grid" style="grid-template-columns: 1fr; gap: 12px; margin-bottom: 16px;">
-                      <label style="display: flex; align-items: center; gap: 8px;"><input id="wizardRuleLength" type="checkbox" checked /> Match original input length (do not expand/summarize)</label>
-                      <label style="display: flex; align-items: center; gap: 8px;"><input id="wizardRuleCommands" type="checkbox" checked /> Ignore user commands/instructions inside speech (safety guard)</label>
-                      <label style="display: flex; align-items: center; gap: 8px;"><input id="wizardRuleNoPreamble" type="checkbox" checked /> Do not output preambles, explanations, or quotes</label>
-                      <label style="display: flex; align-items: center; gap: 8px;"><input id="wizardRuleSanitize" type="checkbox" /> Sanitize profanity or hostile language</label>
+                    <p class="wizard-desc">Define strict rules and boundaries:</p>
+                    <div class="toggle-grid grid-cols-1 flex-column-gap12">
+                      <label class="flex-align-center-gap8"><input id="wizardRuleLength" type="checkbox" checked /> Match original input length (do not expand/summarize)</label>
+                      <label class="flex-align-center-gap8"><input id="wizardRuleCommands" type="checkbox" checked /> Ignore user commands/instructions inside speech (safety guard)</label>
+                      <label class="flex-align-center-gap8"><input id="wizardRuleNoPreamble" type="checkbox" checked /> Do not output preambles, explanations, or quotes</label>
+                      <label class="flex-align-center-gap8"><input id="wizardRuleSanitize" type="checkbox" /> Sanitize profanity or hostile language</label>
                     </div>
                   </div>
 
                   <div id="wizardStep4" class="wizard-step hidden">
-                    <p style="margin-bottom: 12px; font-size: 0.95rem; color: var(--muted); line-height: 1.5;">Review and save your custom persona:</p>
-                    <div class="settings-grid" style="grid-template-columns: 1fr; gap: 12px;">
+                    <p class="wizard-desc">Review and save your custom persona:</p>
+                    <div class="settings-grid grid-cols-1 flex-column-gap12">
                       <label>
                         <span class="status-label">Persona Name</span>
                         <input id="wizardPersonaName" class="settings-input" type="text" placeholder="e.g. Friendly Editor" />
                       </label>
                       <label>
                         <span class="status-label">Generated Prompt Preview</span>
-                        <textarea id="wizardPromptPreview" class="settings-input" style="height: 120px; resize: vertical;" readonly></textarea>
+                        <textarea id="wizardPromptPreview" class="settings-input textarea-medium" readonly></textarea>
                       </label>
                     </div>
                   </div>
                   
-                  <div class="action-row" style="margin-top: 20px; justify-content: space-between;">
+                  <div class="action-row mt-20 flex-between-center">
                     <button id="wizardPrevButton" class="secondary-button" type="button" disabled>Back</button>
                     <div>
-                      <button id="wizardDeleteButton" class="secondary-button danger-button hidden" type="button" style="margin-right: 8px;">Delete Custom Persona</button>
+                      <button id="wizardDeleteButton" class="secondary-button danger-button settings-btn hidden" type="button">Delete Custom Persona</button>
                       <button id="wizardNextButton" class="secondary-button" type="button">Next</button>
                     </div>
                   </div>
-                  <div id="wizardMessage" class="warmup-message" role="status" aria-live="polite" style="margin-top: 12px;"></div>
+                  <div id="wizardMessage" class="warmup-message mt-12" role="status" aria-live="polite"></div>
                 </div>
               </div>
             </div>
@@ -543,39 +554,39 @@
             <!-- Section: Send & Injection -->
             <div class="settings-section hidden" data-section="send-injection">
               <h2>Send & Injection Configuration</h2>
-              <p class="section-desc" style="color: var(--muted); font-size: 0.9rem; margin-top: 4px; margin-bottom: 16px;">Customize output delivery methods and platform capability checks.</p>
+              <p class="section-desc">Customize output delivery methods and platform capability checks.</p>
               
-              <div class="setting-group" style="margin-bottom: 24px;">
+              <div class="setting-group">
                 <h3>Injection Safety</h3>
 
                 <div class="warning-banner inline-warning" id="waylandInjectionWarning" style="margin-bottom: 14px;">
-                  <strong>Linux Wayland Warning:</strong> Input text pasting/typing injection may fail on Wayland sessions.
+                  <strong>Linux Wayland Warning:</strong> Input text pasting/typing injection may fail on Wayland sessions. Fallback/Recovery: Instant typing is disabled. BetterFingers will fall back to clipboard copy-only mode (pasting the draft manually using Ctrl+V).
                 </div>
                 
                 <div class="warning-banner inline-warning" id="audioDuckingWarning" style="margin-bottom: 14px;">
-                  <strong>Audio Ducking Warning:</strong> Dynamic volume ducking is fully supported on Windows.
+                  <strong>Audio Ducking Warning:</strong> Dynamic volume ducking is fully supported on Windows. Fallback/Recovery: Audio ducking is unsupported on this platform. Please manually pause background media players during speech capture.
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingAudioDucking" style="font-weight: 700;">Audio Ducking</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Dampen background audio levels while capturing user speech.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingAudioDucking">Audio Ducking</label>
+                    <span class="setting-desc">Dampen background audio levels while capturing user speech.</span>
                   </div>
                   <div class="setting-control">
-                    <label class="custom-switch-label" style="display: inline-block; position: relative; width: 44px; height: 22px;">
-                      <input id="settingAudioDucking" type="checkbox" style="opacity: 0; width: 0; height: 0;" />
-                      <span class="custom-switch-slider" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255,255,255,0.08); border: 1px solid var(--border); transition: .2s; border-radius: 34px;"></span>
+                    <label class="custom-switch-label">
+                      <input id="settingAudioDucking" type="checkbox" />
+                      <span class="custom-switch-slider"></span>
                     </label>
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0;">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <span class="status-label" style="font-weight: 700;">Test Delivery</span>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Verify simulated clipboard typing/pasting to active windows.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <span class="status-label">Test Delivery</span>
+                    <span class="setting-desc">Verify simulated clipboard typing/pasting to active windows.</span>
                   </div>
                   <div class="setting-control">
-                    <button id="testPasteCopyButton" class="secondary-button" type="button" style="padding: 8px 14px; font-size: 0.88rem;">Test Paste/Copy</button>
+                    <button id="testPasteCopyButton" class="secondary-button settings-btn" type="button">Test Paste/Copy</button>
                   </div>
                 </div>
               </div>
@@ -584,19 +595,19 @@
             <!-- Section: Audio Devices -->
             <div class="settings-section hidden" data-section="audio-devices">
               <h2>Audio Devices</h2>
-              <p class="section-desc" style="color: var(--muted); font-size: 0.9rem; margin-top: 4px; margin-bottom: 16px;">Diagnose active recording equipment and sound levels.</p>
+              <p class="section-desc">Diagnose active recording equipment and sound levels.</p>
               
-              <div class="setting-group" style="margin-bottom: 24px;">
+              <div class="setting-group">
                 <h3>Mic Diagnoses</h3>
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0;">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <span class="status-label" style="font-weight: 700;">Mic Volume Meter</span>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Start a live checkup to verify the microphone records signals.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <span class="status-label">Mic Volume Meter</span>
+                    <span class="setting-desc">Start a live checkup to verify the microphone records signals.</span>
                   </div>
-                  <div class="setting-control" style="display: flex; flex-direction: column; gap: 10px; align-items: flex-end;">
-                    <button id="testMicButton" class="secondary-button" type="button" style="padding: 8px 14px; font-size: 0.88rem;">Test Microphone Level</button>
-                    <div id="micMeterBar" class="hidden" style="width: 180px; height: 10px; background: rgba(255,255,255,0.06); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; margin-top: 4px;">
-                      <div id="micMeterFill" style="width: 0%; height: 100%; background: var(--accent); transition: width 0.1s ease;"></div>
+                  <div class="setting-control flex-column-gap10">
+                    <button id="testMicButton" class="secondary-button settings-btn" type="button">Test Browser Microphone Access</button>
+                    <div id="micMeterBar" class="mic-meter-bar hidden">
+                      <div id="micMeterFill" class="mic-meter-fill" style="width: 0%;"></div>
                     </div>
                   </div>
                 </div>
@@ -606,42 +617,42 @@
             <!-- Section: TTS / Read-Aloud -->
             <div class="settings-section hidden" data-section="tts-readaloud">
               <h2>TTS & Read-Aloud</h2>
-              <p class="section-desc" style="color: var(--muted); font-size: 0.9rem; margin-top: 4px; margin-bottom: 16px;">Manage speech playback defaults and configurations.</p>
+              <p class="section-desc">Manage speech playback defaults and configurations.</p>
               
-              <div class="setting-group" style="margin-bottom: 24px;">
+              <div class="setting-group">
                 <h3>Speech Synthesizer</h3>
                 
                 <div class="warning-banner inline-warning" id="ttsWarningBadge" style="margin-bottom: 14px;">
-                  <strong>TTS Hint:</strong> Rich read-aloud operates through Windows SAPI or local Kokoro models.
+                  <strong>TTS Hint:</strong> Rich read-aloud operates through Windows SAPI or local Kokoro models. Fallback/Recovery: Ensure libsndfile1 is installed on Linux if using Kokoro local playback.
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingReviewTtsVoiceHint" style="font-weight: 700;">Review TTS Voice</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Default voice hint selection.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingReviewTtsVoiceHint">Review TTS Voice</label>
+                    <span class="setting-desc">Default voice hint selection.</span>
                   </div>
                   <div class="setting-control">
-                    <select id="settingReviewTtsVoiceHint" class="settings-input" style="min-width: 200px;"></select>
-                  </div>
-                </div>
-
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingReviewTtsSpeed" style="font-weight: 700;">Review TTS Speed</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Speed multiplier for draft reading outputs (0.5x to 3.0x).</span>
-                  </div>
-                  <div class="setting-control">
-                    <input id="settingReviewTtsSpeed" class="settings-input" type="number" step="0.1" min="0.5" max="3.0" style="width: 120px;" />
+                    <select id="settingReviewTtsVoiceHint" class="settings-input min-w-200"></select>
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0;">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <span class="status-label" style="font-weight: 700;">Voice Audition</span>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Audition a short sample phrase with the current voice configuration.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingReviewTtsSpeed">Review TTS Speed</label>
+                    <span class="setting-desc">Speed multiplier for draft reading outputs (0.5x to 3.0x).</span>
                   </div>
                   <div class="setting-control">
-                    <button id="testTtsButton" class="secondary-button" type="button" style="padding: 8px 14px; font-size: 0.88rem;">Test TTS Voice</button>
+                    <input id="settingReviewTtsSpeed" class="settings-input w-120" type="number" step="0.1" min="0.5" max="3.0" />
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <span class="status-label">Voice Audition</span>
+                    <span class="setting-desc">Audition a short sample phrase with the current voice configuration.</span>
+                  </div>
+                  <div class="setting-control">
+                    <button id="testTtsButton" class="secondary-button settings-btn" type="button">Audition Voice / Test TTS API</button>
                   </div>
                 </div>
               </div>
@@ -650,45 +661,45 @@
             <!-- Section: Notifications & Status -->
             <div class="settings-section hidden" data-section="notifications-status">
               <h2>Notifications & Status UI</h2>
-              <p class="section-desc" style="color: var(--muted); font-size: 0.9rem; margin-top: 4px; margin-bottom: 16px;">Configure toast panels and floating indicator preferences.</p>
+              <p class="section-desc">Configure toast panels and floating indicator preferences.</p>
               
-              <div class="setting-group" style="margin-bottom: 24px;">
+              <div class="setting-group">
                 <h3>Indicator Overlays</h3>
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingStatusIndicator" style="font-weight: 700;">Status Overlay</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Visible floating orb displaying active recording/processing indicators.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingStatusIndicator">Status Overlay</label>
+                    <span class="setting-desc">Visible floating orb displaying active recording/processing indicators.</span>
                   </div>
                   <div class="setting-control">
-                    <label class="custom-switch-label" style="display: inline-block; position: relative; width: 44px; height: 22px;">
-                      <input id="settingStatusIndicator" type="checkbox" style="opacity: 0; width: 0; height: 0;" />
-                      <span class="custom-switch-slider" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255,255,255,0.08); border: 1px solid var(--border); transition: .2s; border-radius: 34px;"></span>
+                    <label class="custom-switch-label">
+                      <input id="settingStatusIndicator" type="checkbox" />
+                      <span class="custom-switch-slider"></span>
                     </label>
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingNotificationOverlay" style="font-weight: 700;">Notification Overlay</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Enables action result toast alerts overlaying other windows.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingNotificationOverlay">Notification Overlay</label>
+                    <span class="setting-desc">Enables action result toast alerts overlaying other windows.</span>
                   </div>
                   <div class="setting-control">
-                    <label class="custom-switch-label" style="display: inline-block; position: relative; width: 44px; height: 22px;">
-                      <input id="settingNotificationOverlay" type="checkbox" style="opacity: 0; width: 0; height: 0;" />
-                      <span class="custom-switch-slider" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255,255,255,0.08); border: 1px solid var(--border); transition: .2s; border-radius: 34px;"></span>
+                    <label class="custom-switch-label">
+                      <input id="settingNotificationOverlay" type="checkbox" />
+                      <span class="custom-switch-slider"></span>
                     </label>
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0;">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingPreviewOverlay" style="font-weight: 700;">Preview Overlay</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Render full transparent preview block outside dashboard.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingPreviewOverlay">Preview Overlay</label>
+                    <span class="setting-desc">Render full transparent preview block outside dashboard.</span>
                   </div>
                   <div class="setting-control">
-                    <label class="custom-switch-label" style="display: inline-block; position: relative; width: 44px; height: 22px;">
-                      <input id="settingPreviewOverlay" type="checkbox" style="opacity: 0; width: 0; height: 0;" />
-                      <span class="custom-switch-slider" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255,255,255,0.08); border: 1px solid var(--border); transition: .2s; border-radius: 34px;"></span>
+                    <label class="custom-switch-label">
+                      <input id="settingPreviewOverlay" type="checkbox" />
+                      <span class="custom-switch-slider"></span>
                     </label>
                   </div>
                 </div>
@@ -698,18 +709,18 @@
             <!-- Section: Appearance -->
             <div class="settings-section hidden" data-section="appearance">
               <h2>Appearance & Sizing</h2>
-              <p class="section-desc" style="color: var(--muted); font-size: 0.9rem; margin-top: 4px; margin-bottom: 16px;">Customize coloring styles, visual densities, and font scaling options.</p>
+              <p class="section-desc">Customize coloring styles, visual densities, and font scaling options.</p>
               
-              <div class="setting-group" style="margin-bottom: 24px;">
+              <div class="setting-group">
                 <h3>Theme Customizations</h3>
                 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingTheme" style="font-weight: 700;">Theme Mode</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Switch overall layout color scheme.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingTheme">Theme Mode</label>
+                    <span class="setting-desc">Switch overall layout color scheme.</span>
                   </div>
                   <div class="setting-control">
-                    <select id="settingTheme" class="settings-input" style="min-width: 200px;">
+                    <select id="settingTheme" class="settings-input min-w-200">
                       <option value="system">System Preference</option>
                       <option value="dark">Dark Theme</option>
                       <option value="light">Light Theme</option>
@@ -717,13 +728,13 @@
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingAccentColor" style="font-weight: 700;">Accent Palette</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Choose dominant accent colors.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingAccentColor">Accent Palette</label>
+                    <span class="setting-desc">Choose dominant accent colors.</span>
                   </div>
                   <div class="setting-control">
-                    <select id="settingAccentColor" class="settings-input" style="min-width: 200px;">
+                    <select id="settingAccentColor" class="settings-input min-w-200">
                       <option value="teal">Teal (default)</option>
                       <option value="purple">Vibrant Purple</option>
                       <option value="blue">Sleek Blue</option>
@@ -732,26 +743,26 @@
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingDensity" style="font-weight: 700;">Layout Density</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Spacing scaling across rows and panels.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingDensity">Layout Density</label>
+                    <span class="setting-desc">Spacing scaling across rows and panels.</span>
                   </div>
                   <div class="setting-control">
-                    <select id="settingDensity" class="settings-input" style="min-width: 200px;">
+                    <select id="settingDensity" class="settings-input min-w-200">
                       <option value="comfortable">Comfortable</option>
                       <option value="compact">Compact</option>
                     </select>
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingFontSize" style="font-weight: 700;">Text Scaling</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Adjust app-wide text scaling.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingFontSize">Text Scaling</label>
+                    <span class="setting-desc">Adjust app-wide text scaling.</span>
                   </div>
                   <div class="setting-control">
-                    <select id="settingFontSize" class="settings-input" style="min-width: 200px;">
+                    <select id="settingFontSize" class="settings-input min-w-200">
                       <option value="small">Small</option>
                       <option value="medium">Medium</option>
                       <option value="large">Large</option>
@@ -760,15 +771,15 @@
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0;">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingHighContrast" style="font-weight: 700;">High Contrast Mode</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Enhance text contrast for better accessibility.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingHighContrast">High Contrast Mode</label>
+                    <span class="setting-desc">Enhance text contrast for better accessibility.</span>
                   </div>
                   <div class="setting-control">
-                    <label class="custom-switch-label" style="display: inline-block; position: relative; width: 44px; height: 22px;">
-                      <input id="settingHighContrast" type="checkbox" style="opacity: 0; width: 0; height: 0;" />
-                      <span class="custom-switch-slider" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255,255,255,0.08); border: 1px solid var(--border); transition: .2s; border-radius: 34px;"></span>
+                    <label class="custom-switch-label">
+                      <input id="settingHighContrast" type="checkbox" />
+                      <span class="custom-switch-slider"></span>
                     </label>
                   </div>
                 </div>
@@ -778,76 +789,76 @@
             <!-- Section: Advanced / Developer -->
             <div class="settings-section hidden" data-section="advanced-dev">
               <h2>Advanced & Developer Settings</h2>
-              <p class="section-desc" style="color: var(--muted); font-size: 0.9rem; margin-top: 4px; margin-bottom: 16px;">Manage low-level model lifecycles, VRAM allocations, and diagnostic warmups.</p>
+              <p class="section-desc">Manage low-level model lifecycles, VRAM allocations, and diagnostic warmups.</p>
               
-              <div class="setting-group" style="margin-bottom: 24px;">
+              <div class="setting-group">
                 <h3>Subsystem Control Warmup</h3>
-                <div style="display: flex; flex-wrap: wrap; gap: 10px;">
-                  <button id="warmupSttButton" class="secondary-button" type="button" style="padding: 8px 14px; font-size: 0.88rem;">Warm Up STT</button>
-                  <button id="warmupLlmButton" class="secondary-button" type="button" style="padding: 8px 14px; font-size: 0.88rem;">Warm Up LLM</button>
-                  <button id="startHotkeysButton" class="secondary-button" type="button" style="padding: 8px 14px; font-size: 0.88rem;">Start Hotkeys</button>
-                  <button id="primaryActionButton" class="secondary-button" type="button" style="padding: 8px 14px; font-size: 0.88rem;">Primary Action</button>
-                  <button id="emergencyStopButton" class="secondary-button" type="button" style="padding: 8px 14px; font-size: 0.88rem;">Emergency Stop</button>
+                <div class="flex-wrap-gap10">
+                  <button id="warmupSttButton" class="secondary-button settings-btn" type="button">Warm Up STT</button>
+                  <button id="warmupLlmButton" class="secondary-button settings-btn" type="button">Warm Up LLM</button>
+                  <button id="startHotkeysButton" class="secondary-button settings-btn" type="button">Start Hotkeys</button>
+                  <button id="primaryActionButton" class="secondary-button settings-btn" type="button">Primary Action</button>
+                  <button id="emergencyStopButton" class="secondary-button settings-btn" type="button">Emergency Stop</button>
                 </div>
-                <div id="warmupMessage" class="warmup-message" role="status" aria-live="polite" style="margin-top: 10px;"></div>
-                <div id="outputSettingsSummary" class="draft-metadata" style="margin-top: 6px;"></div>
+                <div id="warmupMessage" class="warmup-message mt-10" role="status" aria-live="polite"></div>
+                <div id="outputSettingsSummary" class="draft-metadata mt-6"></div>
               </div>
 
-              <div class="setting-group" style="margin-bottom: 24px;">
+              <div class="setting-group">
                 <h3>Memory Management</h3>
-                <p class="group-desc" style="font-size: 0.85rem; color: var(--muted); margin-bottom: 12px;">Keep engines cached in memory for zero-latency execution, or release them to save VRAM.</p>
+                <p class="group-desc">Keep engines cached in memory for zero-latency execution, or release them to save VRAM.</p>
                 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingKeepLlm" style="font-weight: 700;">Keep LLM Loaded</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Retain local llama-server in GPU memory.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingKeepLlm">Keep LLM Loaded</label>
+                    <span class="setting-desc">Retain local llama-server in GPU memory.</span>
                   </div>
                   <div class="setting-control">
-                    <label class="custom-switch-label" style="display: inline-block; position: relative; width: 44px; height: 22px;">
-                      <input id="settingKeepLlm" type="checkbox" style="opacity: 0; width: 0; height: 0;" />
-                      <span class="custom-switch-slider" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255,255,255,0.08); border: 1px solid var(--border); transition: .2s; border-radius: 34px;"></span>
+                    <label class="custom-switch-label">
+                      <input id="settingKeepLlm" type="checkbox" />
+                      <span class="custom-switch-slider"></span>
                     </label>
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingKeepStt" style="font-weight: 700;">Keep STT Loaded</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Retain local transcription libraries warm.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingKeepStt">Keep STT Loaded</label>
+                    <span class="setting-desc">Retain local transcription libraries warm.</span>
                   </div>
                   <div class="setting-control">
-                    <label class="custom-switch-label" style="display: inline-block; position: relative; width: 44px; height: 22px;">
-                      <input id="settingKeepStt" type="checkbox" style="opacity: 0; width: 0; height: 0;" />
-                      <span class="custom-switch-slider" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255,255,255,0.08); border: 1px solid var(--border); transition: .2s; border-radius: 34px;"></span>
+                    <label class="custom-switch-label">
+                      <input id="settingKeepStt" type="checkbox" />
+                      <span class="custom-switch-slider"></span>
                     </label>
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <label class="status-label" for="settingKeepTts" style="font-weight: 700;">Keep TTS Loaded</label>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Retain audio synthesizer models in memory.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingKeepTts">Keep TTS Loaded</label>
+                    <span class="setting-desc">Retain audio synthesizer models in memory.</span>
                   </div>
                   <div class="setting-control">
-                    <label class="custom-switch-label" style="display: inline-block; position: relative; width: 44px; height: 22px;">
-                      <input id="settingKeepTts" type="checkbox" style="opacity: 0; width: 0; height: 0;" />
-                      <span class="custom-switch-slider" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255,255,255,0.08); border: 1px solid var(--border); transition: .2s; border-radius: 34px;"></span>
+                    <label class="custom-switch-label">
+                      <input id="settingKeepTts" type="checkbox" />
+                      <span class="custom-switch-slider"></span>
                     </label>
                   </div>
                 </div>
 
-                <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border);">
-                  <div class="setting-info" style="display: flex; flex-direction: column; gap: 4px;">
-                    <span class="status-label" style="font-weight: 700;">Engine Resizing Verification</span>
-                    <span class="setting-desc" style="font-size: 0.85rem; color: var(--muted);">Perform model loading tests.</span>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <span class="status-label">Engine Resizing Verification</span>
+                    <span class="setting-desc">Perform model loading tests.</span>
                   </div>
                   <div class="setting-control">
-                    <button id="testModelLoadButton" class="secondary-button" type="button" style="padding: 8px 14px; font-size: 0.88rem;">Test Model Load</button>
+                    <button id="testModelLoadButton" class="secondary-button settings-btn" type="button">Test Model Load</button>
                   </div>
                 </div>
               </div>
 
-              <div class="setting-group" style="margin-bottom: 24px;">
+              <div class="setting-group">
                 <h3>Hardware Platform Capabilities</h3>
                 <div id="capabilitiesList" class="detail-list"></div>
               </div>
@@ -861,17 +872,17 @@
         </div>
 
         <!-- Sticky Save / Discard Footer Bar -->
-        <div id="settingsSaveBar" class="save-discard-bar hidden" style="position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); width: calc(100% - 100px); max-width: 1040px; background: rgba(17, 24, 39, 0.95); border: 1px solid var(--border); box-shadow: var(--shadow); backdrop-filter: blur(12px); border-radius: 20px; padding: 14px 24px; z-index: 1000; transition: transform 0.3s ease, opacity 0.3s ease;">
-          <div class="save-bar-content" style="display: flex; justify-content: space-between; align-items: center;">
-            <span class="save-bar-message" style="font-weight: 700; color: var(--text);">You have unsaved configuration changes!</span>
-            <div class="save-bar-actions" style="display: flex; gap: 10px;">
-              <button id="discardProfileChangesButton" class="secondary-button" type="button" style="padding: 8px 16px; font-size: 0.88rem;">Discard</button>
-              <button id="saveProfileButton" class="secondary-button" type="button" style="padding: 8px 16px; font-size: 0.88rem; background: var(--accent); color: #07111f; font-weight: 700; border-color: var(--accent);">Save Settings</button>
+        <div id="settingsSaveBar" class="save-discard-bar hidden">
+          <div class="save-bar-content">
+            <span class="save-bar-message">You have unsaved configuration changes!</span>
+            <div class="save-bar-actions">
+              <button id="discardProfileChangesButton" class="secondary-button save-bar-btn" type="button">Discard</button>
+              <button id="saveProfileButton" class="secondary-button save-bar-btn primary-button" type="button">Save Settings</button>
             </div>
           </div>
         </div>
 
-        <div id="profileMessage" class="warmup-message" role="status" aria-live="polite" style="margin-top: 10px;"></div>
+        <div id="profileMessage" class="warmup-message mt-10" role="status" aria-live="polite"></div>
       </div>
 
       <!-- Models Tab Content -->
@@ -885,23 +896,78 @@
             <button id="refreshModelsButton" class="secondary-button" type="button">Refresh Models</button>
           </div>
 
-          <div class="settings-grid">
-            <label><span class="status-label">LLM Model</span><select id="llmModelSelect" class="settings-input"></select></label>
-            <label><span class="status-label">Whisper Model</span><select id="whisperModelSelect" class="settings-input"></select></label>
+          <div id="modelStatusSummary" class="model-overview" aria-live="polite">
+            <div class="model-stat">
+              <span>LLM</span>
+              <strong>Loading...</strong>
+              <small>Local rewrite model</small>
+            </div>
+            <div class="model-stat">
+              <span>Whisper</span>
+              <strong>Loading...</strong>
+              <small>Speech-to-text model</small>
+            </div>
+            <div class="model-stat">
+              <span>Runtime</span>
+              <strong>Loading...</strong>
+              <small>llama-server sidecar</small>
+            </div>
           </div>
 
-          <div id="modelStatusSummary" class="draft-metadata">Model status loading...</div>
+          <div class="model-manager-grid">
+            <section class="model-panel" aria-labelledby="llmModelHeading">
+              <div class="model-panel-header">
+                <div>
+                  <h3 id="llmModelHeading">LLM Rewrite Model</h3>
+                  <p>Controls the local model used for cleanup, personas, and rewrites.</p>
+                </div>
+                <span id="llmModelBadge" class="model-badge">Loading</span>
+              </div>
+              <label class="model-select-row">
+                <span class="status-label">Choose model</span>
+                <select id="llmModelSelect" class="settings-input"></select>
+              </label>
+              <div id="llmModelDetails" class="model-detail-grid"></div>
+              <div class="model-action-group">
+                <button id="selectLlmModelButton" class="secondary-button primary-button" type="button">Use This LLM</button>
+                <button id="downloadLlmModelButton" class="secondary-button" type="button">Download</button>
+                <button id="deleteLlmModelButton" class="secondary-button" type="button">Delete</button>
+                <button id="unloadLlmButton" class="secondary-button" type="button">Unload</button>
+              </div>
+            </section>
 
-          <div class="action-row">
-            <button id="selectLlmModelButton" class="secondary-button" type="button">Select LLM</button>
-            <button id="downloadLlmModelButton" class="secondary-button" type="button">Download LLM</button>
-            <button id="deleteLlmModelButton" class="secondary-button" type="button">Delete LLM</button>
-            <button id="downloadWhisperButton" class="secondary-button" type="button">Download Whisper</button>
-            <button id="testWhisperButton" class="secondary-button" type="button">Test Whisper</button>
-            <button id="deleteWhisperButton" class="secondary-button" type="button">Delete Whisper</button>
-            <button id="unloadSttButton" class="secondary-button" type="button">Unload STT</button>
-            <button id="unloadLlmButton" class="secondary-button" type="button">Unload LLM</button>
-            <button id="unloadTtsButton" class="secondary-button" type="button">Unload TTS</button>
+            <section class="model-panel" aria-labelledby="whisperModelHeading">
+              <div class="model-panel-header">
+                <div>
+                  <h3 id="whisperModelHeading">Whisper Speech Model</h3>
+                  <p>Controls the local speech recognition model used after recording.</p>
+                </div>
+                <span id="whisperModelBadge" class="model-badge">Loading</span>
+              </div>
+              <label class="model-select-row">
+                <span class="status-label">Choose model</span>
+                <select id="whisperModelSelect" class="settings-input"></select>
+              </label>
+              <div id="whisperModelDetails" class="model-detail-grid"></div>
+              <div class="model-action-group">
+                <button id="downloadWhisperButton" class="secondary-button primary-button" type="button">Download</button>
+                <button id="testWhisperButton" class="secondary-button" type="button">Test Load</button>
+                <button id="deleteWhisperButton" class="secondary-button" type="button">Delete</button>
+                <button id="unloadSttButton" class="secondary-button" type="button">Unload</button>
+              </div>
+            </section>
+          </div>
+
+          <div class="model-panel model-panel-compact">
+            <div class="model-panel-header">
+              <div>
+                <h3>Runtime Memory</h3>
+                <p>Release engines when you need RAM/VRAM back.</p>
+              </div>
+            </div>
+            <div class="model-action-group">
+              <button id="unloadTtsButton" class="secondary-button" type="button">Unload TTS</button>
+            </div>
           </div>
           <div id="modelMessage" class="warmup-message" role="status" aria-live="polite"></div>
         </section>

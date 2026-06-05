@@ -1,4 +1,5 @@
 const path = require('node:path');
+const fs = require('node:fs');
 const { app } = require('electron');
 const { createMainWindow, focusMainWindow, createOverlayWindow } = require('./windows');
 const { createSidecar } = require('./sidecar');
@@ -10,23 +11,38 @@ let tray = null;
 let sidecar = null;
 let isQuitting = false;
 
-function resolveDevPythonCommand() {
-  if (process.env.BETTERFINGERS_PYTHON) {
-    const pythonPath = process.env.BETTERFINGERS_PYTHON;
-    if (path.isAbsolute(pythonPath)) {
-      return pythonPath;
-    }
-    if (/[\\/]/.test(pythonPath)) {
-      return path.resolve(process.cwd(), pythonPath);
-    }
-    return pythonPath;
-  }
-
+function getDefaultDevPythonCommand() {
   if (process.platform === 'win32') {
     return 'python';
   }
 
   return 'python3';
+}
+
+function resolveDevPythonCommand() {
+  const fallbackCommand = getDefaultDevPythonCommand();
+
+  if (process.env.BETTERFINGERS_PYTHON) {
+    const pythonPath = process.env.BETTERFINGERS_PYTHON;
+    if (path.isAbsolute(pythonPath)) {
+      if (!fs.existsSync(pythonPath)) {
+        console.warn(`BETTERFINGERS_PYTHON points to a missing file: ${pythonPath}. Falling back to ${fallbackCommand}.`);
+        return fallbackCommand;
+      }
+      return pythonPath;
+    }
+    if (/[\\/]/.test(pythonPath)) {
+      const resolvedPath = path.resolve(process.cwd(), pythonPath);
+      if (!fs.existsSync(resolvedPath)) {
+        console.warn(`BETTERFINGERS_PYTHON points to a missing file: ${resolvedPath}. Falling back to ${fallbackCommand}.`);
+        return fallbackCommand;
+      }
+      return resolvedPath;
+    }
+    return pythonPath;
+  }
+
+  return fallbackCommand;
 }
 
 function bootstrapApp() {
@@ -86,21 +102,21 @@ app.setAppUserModelId('com.betterfingers.desktop');
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
-}
+} else {
+  app.whenReady().then(bootstrapApp);
 
-app.whenReady().then(bootstrapApp);
+  app.on('second-instance', () => {
+    focusMainWindow(mainWindow);
+  });
 
-app.on('second-instance', () => {
-  focusMainWindow(mainWindow);
-});
-
-app.on('window-all-closed', () => {
-  requestQuit();
-});
-
-app.on('before-quit', (event) => {
-  if (!isQuitting) {
-    event.preventDefault();
+  app.on('window-all-closed', () => {
     requestQuit();
-  }
-});
+  });
+
+  app.on('before-quit', (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      requestQuit();
+    }
+  });
+}

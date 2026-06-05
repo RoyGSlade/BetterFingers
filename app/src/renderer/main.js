@@ -35,6 +35,7 @@ import {
   speakDraft,
   speakTts,
   testWhisperModel,
+  toggleRecording,
   unloadModel,
   warmupRuntime,
   fetchDoctor,
@@ -88,6 +89,9 @@ const retryDraftButton = document.getElementById('retryDraftButton');
 const sendActionSelectEl = document.getElementById('sendActionSelect');
 const sendDraftButton = document.getElementById('sendDraftButton');
 const draftMessageEl = document.getElementById('draftMessage');
+const toggleRecordingButton = document.getElementById('toggleRecordingButton');
+const dashboardEmergencyStopButton = document.getElementById('dashboardEmergencyStopButton');
+const recordingControlStatusEl = document.getElementById('recordingControlStatus');
 const sendResultPanelEl = document.getElementById('sendResultPanel');
 const draftMetadataEl = document.getElementById('draftMetadata');
 const draftHistoryListEl = document.getElementById('draftHistoryList');
@@ -111,6 +115,10 @@ const llmModelSelectEl = document.getElementById('llmModelSelect');
 const whisperModelSelectEl = document.getElementById('whisperModelSelect');
 const modelStatusSummaryEl = document.getElementById('modelStatusSummary');
 const modelMessageEl = document.getElementById('modelMessage');
+const llmModelBadgeEl = document.getElementById('llmModelBadge');
+const whisperModelBadgeEl = document.getElementById('whisperModelBadge');
+const llmModelDetailsEl = document.getElementById('llmModelDetails');
+const whisperModelDetailsEl = document.getElementById('whisperModelDetails');
 const selectLlmModelButton = document.getElementById('selectLlmModelButton');
 const downloadLlmModelButton = document.getElementById('downloadLlmModelButton');
 const deleteLlmModelButton = document.getElementById('deleteLlmModelButton');
@@ -351,6 +359,121 @@ function renderDetailList(container, values, preferredKeys = []) {
   }
 }
 
+function setModelBadge(el, installed, selected = false) {
+  if (!el) {
+    return;
+  }
+  if (installed) {
+    el.textContent = selected ? 'Selected + installed' : 'Installed';
+    el.dataset.tone = 'success';
+    return;
+  }
+  el.textContent = selected ? 'Selected but missing' : 'Missing';
+  el.dataset.tone = selected ? 'danger' : 'warning';
+}
+
+function renderModelDetailGrid(container, rows) {
+  if (!container) {
+    return;
+  }
+  container.innerHTML = '';
+  for (const row of rows) {
+    const item = document.createElement('div');
+    item.className = 'model-detail';
+
+    const label = document.createElement('span');
+    label.textContent = row.label;
+
+    const value = document.createElement('strong');
+    value.textContent = formatValue(row.value);
+    if (row.tone) {
+      value.dataset.tone = row.tone;
+    }
+
+    item.append(label, value);
+    container.append(item);
+  }
+}
+
+function renderModelOverview(llmPayload, whisperPayload, selectedLlm, installedWhisper) {
+  if (!modelStatusSummaryEl) {
+    return;
+  }
+  modelStatusSummaryEl.innerHTML = '';
+
+  const stats = [
+    {
+      label: 'LLM',
+      value: selectedLlm?.installed ? 'Ready' : 'Needs download',
+      detail: selectedLlm?.name ?? llmPayload.selected_model_id ?? 'Unknown model',
+      tone: selectedLlm?.installed ? 'success' : 'danger',
+    },
+    {
+      label: 'Whisper',
+      value: installedWhisper.length ? `${installedWhisper.length} installed` : 'None installed',
+      detail: `Selected: ${whisperPayload.selected_model_size ?? 'unknown'}`,
+      tone: installedWhisper.length ? 'success' : 'warning',
+    },
+    {
+      label: 'Runtime',
+      value: llmPayload.llama_server_exists ? 'llama-server found' : 'llama-server missing',
+      detail: llmPayload.llama_server_path ?? 'No runtime path reported',
+      tone: llmPayload.llama_server_exists ? 'success' : 'danger',
+    },
+  ];
+
+  for (const stat of stats) {
+    const card = document.createElement('div');
+    card.className = 'model-stat';
+
+    const label = document.createElement('span');
+    label.textContent = stat.label;
+
+    const value = document.createElement('strong');
+    value.textContent = stat.value;
+    value.dataset.tone = stat.tone;
+
+    const detail = document.createElement('small');
+    detail.textContent = stat.detail;
+
+    card.append(label, value, detail);
+    modelStatusSummaryEl.append(card);
+  }
+}
+
+function renderModelPanels() {
+  const llmPayload = llmModelsPayload;
+  const whisperPayload = whisperModelsPayload;
+  if (!llmPayload || !whisperPayload) {
+    return;
+  }
+
+  const llmSelected = (llmPayload.models ?? []).find((model) => model.id === llmPayload.selected_model_id);
+  const llmVisible = (llmPayload.models ?? []).find((model) => model.id === llmModelSelectEl?.value) || llmSelected;
+  const installedWhisper = (whisperPayload.models ?? []).filter((model) => model.installed).map((model) => model.model_size);
+  const visibleWhisperSize = whisperModelSelectEl?.value || whisperPayload.selected_model_size;
+  const visibleWhisper = (whisperPayload.models ?? []).find((model) => model.model_size === visibleWhisperSize);
+  const estimateMb = Number(llmVisible?.size_mb || 0);
+
+  setModelBadge(llmModelBadgeEl, Boolean(llmVisible?.installed), llmVisible?.id === llmPayload.selected_model_id);
+  setModelBadge(whisperModelBadgeEl, Boolean(visibleWhisper?.installed), visibleWhisperSize === whisperPayload.selected_model_size);
+  renderModelOverview(llmPayload, whisperPayload, llmSelected, installedWhisper);
+  renderModelDetailGrid(llmModelDetailsEl, [
+    { label: 'Selected model', value: llmPayload.selected_model_id },
+    { label: 'Viewing', value: llmVisible?.name ?? llmVisible?.id ?? 'unknown' },
+    { label: 'Install state', value: llmVisible?.installed ? 'installed' : 'missing', tone: llmVisible?.installed ? 'success' : 'danger' },
+    { label: 'Approx size', value: estimateMb ? `${estimateMb.toLocaleString()} MB` : 'unknown' },
+    { label: 'Runtime', value: llmPayload.llama_server_exists ? 'found' : 'missing', tone: llmPayload.llama_server_exists ? 'success' : 'danger' },
+  ]);
+  renderModelDetailGrid(whisperModelDetailsEl, [
+    { label: 'Selected model', value: whisperPayload.selected_model_size },
+    { label: 'Viewing', value: visibleWhisperSize },
+    { label: 'Install state', value: visibleWhisper?.installed ? 'installed' : 'missing', tone: visibleWhisper?.installed ? 'success' : 'warning' },
+    { label: 'Installed models', value: installedWhisper.length ? installedWhisper.join(', ') : 'none' },
+    { label: 'Download state', value: whisperPayload.download_state?.status ?? 'unknown' },
+  ]);
+}
+
 function getTranscriberRuntimeState(runtime) {
   if (runtime?.transcriber_loaded) {
     return { text: 'loaded', tone: 'success' };
@@ -381,6 +504,22 @@ function updateRuntimeTopCards(runtime) {
 
   setBadgeState(transcriberStatusEl, transcriber.text, transcriber.tone);
   setBadgeState(llmStatusEl, llm.text, llm.tone);
+
+  const recording = Boolean(runtime?.recording_active);
+  if (toggleRecordingButton) {
+    toggleRecordingButton.textContent = recording ? 'Stop Recording' : 'Start Recording';
+    toggleRecordingButton.dataset.recording = recording ? 'true' : 'false';
+  }
+  if (recordingControlStatusEl) {
+    const hookErrors = Array.isArray(runtime?.hotkey_keyboard_hook_errors) ? runtime.hotkey_keyboard_hook_errors : [];
+    if (recording) {
+      recordingControlStatusEl.textContent = 'Recording now. Press Stop Recording when finished.';
+    } else if (hookErrors.length) {
+      recordingControlStatusEl.textContent = `Global hotkeys unavailable: ${hookErrors[0]}`;
+    } else {
+      recordingControlStatusEl.textContent = 'Ready. Hotkeys or the dashboard button can start recording.';
+    }
+  }
 }
 
 function setWarmupMessage(message = '', tone = '') {
@@ -776,6 +915,8 @@ async function refreshRuntime() {
     'llm_initialized',
     'llm_ready',
     'hotkey_manager_started',
+    'hotkey_keyboard_hooks_ok',
+    'recording_active',
   ]);
   return runtime;
 }
@@ -823,7 +964,7 @@ function renderProfileSettings(settings) {
       continue;
     }
     if (el.type === 'checkbox') {
-      el.checked = Boolean(activeProfileSettings[key]);
+      el.checked = el.disabled ? false : Boolean(activeProfileSettings[key]);
     } else {
       el.value = activeProfileSettings[key] ?? '';
     }
@@ -859,7 +1000,7 @@ function collectProfileSettings() {
       continue;
     }
     if (el.type === 'checkbox') {
-      next[key] = Boolean(el.checked);
+      next[key] = el.disabled ? false : Boolean(el.checked);
     } else if (el.type === 'number') {
       next[key] = Number(el.value);
     } else {
@@ -1157,17 +1298,7 @@ async function refreshModels() {
   );
   fillSelect(whisperModelSelectEl, whisperPayload.supported ?? [], whisperPayload.selected_model_size);
 
-  if (modelStatusSummaryEl) {
-    const llmSelected = (llmPayload.models ?? []).find((model) => model.id === llmPayload.selected_model_id);
-    const installedWhisper = (whisperPayload.models ?? []).filter((model) => model.installed).map((model) => model.model_size);
-    const estimateMb = Number(llmSelected?.size_mb || 0);
-    modelStatusSummaryEl.textContent = [
-      `LLM: ${llmSelected?.name ?? llmPayload.selected_model_id ?? 'unknown'} (${llmSelected?.installed ? 'installed' : 'missing'})`,
-      `approx model size: ${estimateMb ? `${estimateMb} MB` : 'unknown'}`,
-      `llama-server: ${llmPayload.llama_server_exists ? 'found' : 'missing'}`,
-      `Whisper installed: ${installedWhisper.length ? installedWhisper.join(', ') : 'none'}`,
-    ].join(' · ');
-  }
+  renderModelPanels();
   return { llmPayload, whisperPayload };
 }
 
@@ -1197,6 +1328,15 @@ async function refreshCapabilities() {
     const session = capabilities.session_type ?? 'unknown';
     capabilitiesSummaryEl.textContent = `${platform} · ${session}`;
   }
+
+  // Update Hotkeys session indicator element
+  const hotkeySessionIndicator = document.getElementById('hotkeySessionIndicator');
+  if (hotkeySessionIndicator) {
+    const platform = capabilities.platform ?? 'unknown';
+    const session = capabilities.session_type ?? 'unknown';
+    hotkeySessionIndicator.textContent = `${platform} (${session})`;
+  }
+
   renderDetailList(capabilitiesListEl, capabilities, [
     'platform',
     'session_type',
@@ -1385,6 +1525,21 @@ function summarizeWarmupResult(result, requestedPayload) {
    ========================================== */
 
 let validationErrors = new Map();
+
+function validateProfileName(name) {
+  const trimmed = name?.trim();
+  if (!trimmed) {
+    return 'Profile name cannot be empty.';
+  }
+  if (!/^[a-zA-Z0-9_\-]+$/.test(trimmed)) {
+    return 'Profile name can only contain letters, numbers, underscores, and hyphens.';
+  }
+  const lower = trimmed.toLowerCase();
+  if (lower === 'default' || lower === 'import') {
+    return `"${trimmed}" is a reserved profile name.`;
+  }
+  return null;
+}
 
 function setValidationError(fieldKey, message) {
   const el = settingEls[fieldKey];
@@ -1682,7 +1837,32 @@ function updatePlatformWarnings(capabilities) {
       audioDuckingWarning.classList.add('hidden');
     } else {
       audioDuckingWarning.classList.remove('hidden');
-      audioDuckingWarning.innerHTML = '<strong>Audio Ducking Warning:</strong> Dynamic volume ducking is only supported on Windows.';
+      audioDuckingWarning.innerHTML = '<strong>Audio Ducking Warning:</strong> Dynamic volume ducking is only supported on Windows. Please manually pause background media players during speech capture.';
+    }
+  }
+
+  // Enforce disabling of platform-unsupported controls dynamically
+  const audioDuckingInput = settingEls.audio_ducking;
+  if (audioDuckingInput) {
+    if (!isWindows) {
+      audioDuckingInput.checked = false;
+      audioDuckingInput.disabled = true;
+      audioDuckingInput.title = "Audio ducking is only supported on Windows.";
+    } else {
+      audioDuckingInput.disabled = false;
+      audioDuckingInput.title = "";
+    }
+  }
+
+  const instantTypingInput = settingEls.instant_typing;
+  if (instantTypingInput) {
+    if (isLinux && isWayland) {
+      instantTypingInput.checked = false;
+      instantTypingInput.disabled = true;
+      instantTypingInput.title = "Instant typing is not supported on Linux Wayland. BetterFingers will fall back to clipboard copy-only mode.";
+    } else {
+      instantTypingInput.disabled = false;
+      instantTypingInput.title = "";
     }
   }
 
@@ -1725,11 +1905,36 @@ const densitySelect = document.getElementById('settingDensity');
 const fontSizeSelect = document.getElementById('settingFontSize');
 const highContrastCheck = document.getElementById('settingHighContrast');
 
+const VALID_THEMES = ['system', 'dark', 'light'];
+const VALID_ACCENTS = ['teal', 'purple', 'blue', 'gold'];
+const VALID_DENSITIES = ['comfortable', 'compact'];
+const VALID_FONT_SIZES = ['small', 'medium', 'large', 'huge'];
+
 function applyAppearance() {
-  const theme = localStorage.getItem('pref_theme') || 'system';
-  const accent = localStorage.getItem('pref_accent') || 'teal';
-  const density = localStorage.getItem('pref_density') || 'comfortable';
-  const fontSize = localStorage.getItem('pref_font_size') || 'medium';
+  let theme = localStorage.getItem('pref_theme') || 'system';
+  if (!VALID_THEMES.includes(theme)) {
+    theme = 'system';
+    localStorage.setItem('pref_theme', theme);
+  }
+
+  let accent = localStorage.getItem('pref_accent') || 'teal';
+  if (!VALID_ACCENTS.includes(accent)) {
+    accent = 'teal';
+    localStorage.setItem('pref_accent', accent);
+  }
+
+  let density = localStorage.getItem('pref_density') || 'comfortable';
+  if (!VALID_DENSITIES.includes(density)) {
+    density = 'comfortable';
+    localStorage.setItem('pref_density', density);
+  }
+
+  let fontSize = localStorage.getItem('pref_font_size') || 'medium';
+  if (!VALID_FONT_SIZES.includes(fontSize)) {
+    fontSize = 'medium';
+    localStorage.setItem('pref_font_size', fontSize);
+  }
+
   const highContrast = localStorage.getItem('pref_high_contrast') === 'true';
 
   document.body.classList.remove('theme-light', 'theme-dark');
@@ -1787,7 +1992,7 @@ function stopMicTest() {
   }
   const testMicButton = document.getElementById('testMicButton');
   if (testMicButton) {
-    testMicButton.textContent = 'Test Microphone Level';
+    testMicButton.textContent = 'Test Browser Microphone Access';
     testMicButton.classList.remove('danger-button');
   }
   if (micMeterBar) {
@@ -1978,7 +2183,9 @@ async function runDraftTts(selectedOnly = false) {
 
   try {
     await saveCurrentDraftEdit({ silent: true });
-    const result = await speakDraft(latestDraft.id, { text });
+    const voiceId = settingEls.review_tts_voice_hint?.value || 'standard_female';
+    const speed = parseFloat(settingEls.review_tts_speed?.value || '1.0');
+    const result = await speakDraft(latestDraft.id, { text, voiceId, speed });
     setMessage(draftMessageEl, result?.message || 'Draft read-aloud request sent.', result?.ok === false ? 'warning' : 'success');
   } catch (error) {
     setMessage(draftMessageEl, `Read aloud failed: ${error.message}`, 'danger');
@@ -2176,7 +2383,7 @@ function initSettingsPanel() {
       setMessage(profileMessageEl, `TTS Audition failed: ${error.message}`, 'danger');
     } finally {
       testTtsButton.disabled = false;
-      testTtsButton.textContent = 'Test TTS Voice';
+      testTtsButton.textContent = 'Audition Voice / Test TTS API';
     }
   });
 
@@ -2211,23 +2418,43 @@ function initSettingsPanel() {
   });
 
   themeSelect?.addEventListener('change', (e) => {
-    localStorage.setItem('pref_theme', e.target.value);
+    const val = e.target.value;
+    if (VALID_THEMES.includes(val)) {
+      localStorage.setItem('pref_theme', val);
+    } else {
+      localStorage.setItem('pref_theme', 'system');
+    }
     applyAppearance();
   });
   accentSelect?.addEventListener('change', (e) => {
-    localStorage.setItem('pref_accent', e.target.value);
+    const val = e.target.value;
+    if (VALID_ACCENTS.includes(val)) {
+      localStorage.setItem('pref_accent', val);
+    } else {
+      localStorage.setItem('pref_accent', 'teal');
+    }
     applyAppearance();
   });
   densitySelect?.addEventListener('change', (e) => {
-    localStorage.setItem('pref_density', e.target.value);
+    const val = e.target.value;
+    if (VALID_DENSITIES.includes(val)) {
+      localStorage.setItem('pref_density', val);
+    } else {
+      localStorage.setItem('pref_density', 'comfortable');
+    }
     applyAppearance();
   });
   fontSizeSelect?.addEventListener('change', (e) => {
-    localStorage.setItem('pref_font_size', e.target.value);
+    const val = e.target.value;
+    if (VALID_FONT_SIZES.includes(val)) {
+      localStorage.setItem('pref_font_size', val);
+    } else {
+      localStorage.setItem('pref_font_size', 'medium');
+    }
     applyAppearance();
   });
   highContrastCheck?.addEventListener('change', (e) => {
-    localStorage.setItem('pref_high_contrast', e.target.checked);
+    localStorage.setItem('pref_high_contrast', e.target.checked === true);
     applyAppearance();
   });
 
@@ -2265,6 +2492,39 @@ warmupLlmButton?.addEventListener('click', () => {
 
 startHotkeysButton?.addEventListener('click', () => {
   runWarmup(startHotkeysButton, { hotkeys: true });
+});
+
+toggleRecordingButton?.addEventListener('click', async () => {
+  toggleRecordingButton.disabled = true;
+  const previousText = toggleRecordingButton.textContent;
+  toggleRecordingButton.textContent = 'Working...';
+  try {
+    const result = await toggleRecording();
+    setMessage(draftMessageEl, result?.message || 'Recording toggled.', result?.ok ? 'success' : 'warning');
+    await Promise.all([refreshRuntime(), refreshDrafts()]);
+  } catch (error) {
+    setMessage(draftMessageEl, `Recording failed: ${error.message}`, 'danger');
+  } finally {
+    toggleRecordingButton.disabled = false;
+    if (toggleRecordingButton.textContent === 'Working...') {
+      toggleRecordingButton.textContent = previousText;
+    }
+  }
+});
+
+dashboardEmergencyStopButton?.addEventListener('click', async () => {
+  dashboardEmergencyStopButton.disabled = true;
+  dashboardEmergencyStopButton.textContent = 'Stopping...';
+  try {
+    const result = await emergencyStop();
+    setMessage(draftMessageEl, result?.message || 'Emergency stop completed.', result?.ok ? 'success' : 'warning');
+    await Promise.all([refreshRuntime(), refreshOutputSettings()]);
+  } catch (error) {
+    setMessage(draftMessageEl, `Emergency stop failed: ${error.message}`, 'danger');
+  } finally {
+    dashboardEmergencyStopButton.textContent = 'Emergency Stop';
+    dashboardEmergencyStopButton.disabled = false;
+  }
 });
 
 primaryActionButton?.addEventListener('click', async () => {
@@ -2359,8 +2619,9 @@ saveProfileButton?.addEventListener('click', async () => {
 
 createProfileButton?.addEventListener('click', async () => {
   const name = newProfileNameEl?.value?.trim();
-  if (!name) {
-    setMessage(profileMessageEl, 'Enter a profile name first.', 'warning');
+  const nameError = validateProfileName(name);
+  if (nameError) {
+    setMessage(profileMessageEl, nameError, 'danger');
     return;
   }
 
@@ -2383,12 +2644,17 @@ createProfileButton?.addEventListener('click', async () => {
 renameProfileButton?.addEventListener('click', async () => {
   const oldName = profileSelectEl?.value;
   const newName = newProfileNameEl?.value?.trim();
-  if (!oldName || !newName) {
-    setMessage(profileMessageEl, 'Select a profile and enter a new name.', 'warning');
+  if (!oldName) {
+    setMessage(profileMessageEl, 'Select a profile first.', 'warning');
     return;
   }
   if (oldName === 'Default') {
     setMessage(profileMessageEl, 'Default profile cannot be renamed.', 'warning');
+    return;
+  }
+  const nameError = validateProfileName(newName);
+  if (nameError) {
+    setMessage(profileMessageEl, nameError, 'danger');
     return;
   }
   try {
@@ -2405,8 +2671,13 @@ renameProfileButton?.addEventListener('click', async () => {
 duplicateProfileButton?.addEventListener('click', async () => {
   const oldName = profileSelectEl?.value;
   const newName = newProfileNameEl?.value?.trim();
-  if (!oldName || !newName) {
-    setMessage(profileMessageEl, 'Select a profile and enter a name for the duplicate.', 'warning');
+  if (!oldName) {
+    setMessage(profileMessageEl, 'Select a profile first.', 'warning');
+    return;
+  }
+  const nameError = validateProfileName(newName);
+  if (nameError) {
+    setMessage(profileMessageEl, nameError, 'danger');
     return;
   }
   try {
@@ -2448,11 +2719,30 @@ importProfileFileEl?.addEventListener('change', (e) => {
   const reader = new FileReader();
   reader.onload = async (event) => {
     try {
-      const parsed = JSON.parse(event.target.result);
-      const profileName = file.name.replace('_profile.json', '').replace('.json', '');
-      const settings = parsed.settings || parsed;
+      let parsed = JSON.parse(event.target.result);
+      
+      // Gracefully upgrade legacy flat or un-versioned profile structures
+      if (!parsed || parsed.kind !== 'betterfingers_profile') {
+        const settings = parsed.settings || parsed;
+        const profileName = parsed.name || file.name.replace('_profile.json', '').replace('.json', '');
+        parsed = {
+          kind: 'betterfingers_profile',
+          schema_version: 1,
+          name: profileName,
+          settings: settings
+        };
+      }
 
-      const payload = await importProfile(profileName, settings);
+      if (parsed.schema_version !== 1) {
+        throw new Error(`Unsupported profile schema version: ${parsed.schema_version}`);
+      }
+
+      const nameError = validateProfileName(parsed.name);
+      if (nameError) {
+        throw new Error(`Invalid imported profile name: ${nameError}`);
+      }
+
+      const payload = await importProfile(parsed);
       fillSelect(profileSelectEl, payload.profiles ?? [], payload.active_profile);
       renderProfileSettings(payload.settings ?? {});
       setMessage(profileMessageEl, `Imported profile ${payload.active_profile} successfully.`, 'success');
@@ -2497,6 +2787,14 @@ deleteProfileButton?.addEventListener('click', async () => {
 
 refreshModelsButton?.addEventListener('click', () => {
   refreshModels().catch((error) => setMessage(modelMessageEl, `Refresh failed: ${error.message}`, 'danger'));
+});
+
+llmModelSelectEl?.addEventListener('change', () => {
+  renderModelPanels();
+});
+
+whisperModelSelectEl?.addEventListener('change', () => {
+  renderModelPanels();
 });
 
 selectLlmModelButton?.addEventListener('click', () => {
@@ -2829,7 +3127,7 @@ async function refreshDoctor(refreshAudio = false) {
         if (!sub.data.llama_server_exists) {
           recoveryTriggers.push('missing_llama_server');
         }
-        if (!isInit && sub.data.llama_server_exists) {
+        if (!isInit && sub.data.llama_server_exists && !sub.data.model_exists) {
           recoveryTriggers.push('missing_model');
         }
       } else if (sub.id === 'tts') {
@@ -2838,7 +3136,7 @@ async function refreshDoctor(refreshAudio = false) {
         badge.textContent = isLoaded ? 'Active' : isInit ? 'Offline' : 'Error';
         badge.dataset.tone = isLoaded ? 'success' : isInit ? 'warning' : 'danger';
         detailsText = `Provider: ${sub.data.backend}\nLoaded: ${isLoaded ? 'Yes' : 'No'}\nStatus: ${sub.data.status_message}\nFallback Active: ${sub.data.fallback ? 'Yes' : 'No'}`;
-        if (sub.data.backend === 'none') {
+        if (sub.data.backend === 'none' && sub.data.status_message !== 'TTS is not loaded.') {
           recoveryTriggers.push('failed_tts_dependency');
         }
       } else if (sub.id === 'hotkeys') {

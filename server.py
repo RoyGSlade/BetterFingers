@@ -4,6 +4,7 @@ import logging
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 import pyperclip
 from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,6 +29,7 @@ from model_manager import (
     get_repo_local_server_path,
     get_server_path,
     is_ready as is_llm_model_ready,
+    check_model_exists,
 )
 # Configure Logging
 from transcriber import (
@@ -281,6 +283,11 @@ def get_runtime_status_snapshot():
         "transcriber_initialized": transcriber is not None,
         "llm_initialized": engine is not None,
         "hotkey_manager_started": hotkey_manager_started,
+        "hotkey_keyboard_hooks_ok": bool(
+            hotkey_manager is not None and not getattr(hotkey_manager, "keyboard_hook_errors", [])
+        ) if hotkey_manager_started else False,
+        "hotkey_keyboard_hook_errors": list(getattr(hotkey_manager, "keyboard_hook_errors", [])) if hotkey_manager else [],
+        "recording_active": bool(getattr(hotkey_manager, "is_recording", False)) if hotkey_manager else False,
         "transcriber_loaded": bool(getattr(transcriber, "model", None)),
         "llm_ready": engine_ready,
     }
@@ -469,6 +476,8 @@ def get_profile_output_settings():
         "auto_submit": bool(config.get("auto_submit", False)),
         "chat_close_action": str(config.get("chat_close_action", "none") or "none").strip().lower(),
         "instant_typing": bool(config.get("instant_typing", False)),
+        "review_tts_voice_hint": str(config.get("review_tts_voice_hint", "english") or "english").strip(),
+        "review_tts_speed": float(config.get("review_tts_speed", 1.5)),
     }
 
 
@@ -648,6 +657,13 @@ def send_draft_by_id(draft_id, action=None, open_chat=False):
 
 
 def handle_primary_action():
+    if hotkey_manager is not None and bool(getattr(hotkey_manager, "is_recording", False)):
+        logging.info("Ignored primary action while recording is active.")
+        return {"ok": False, "message": "Recording is active; primary action ignored."}
+    if is_processing_draft:
+        logging.info("Ignored primary action while draft processing is active.")
+        return {"ok": False, "message": "Draft processing is active; primary action ignored."}
+
     while pending_manual_send_ids:
         draft_id = pending_manual_send_ids.pop(0)
         draft = get_draft_by_id(draft_id)
@@ -694,6 +710,21 @@ def emergency_stop_runtime():
     pending_manual_send_ids.clear()
     broadcast_status_threadsafe("emergency_stop", {"message": "Emergency stop completed."})
     return {"ok": True, "message": "Emergency stop completed."}
+
+
+def toggle_recording_runtime():
+    manager = start_hotkey_manager()
+    if manager is None:
+        raise HTTPException(status_code=500, detail="Recording runtime is unavailable.")
+
+    was_recording = bool(getattr(manager, "is_recording", False))
+    manager.request_toggle(reason="dashboard_button")
+    is_recording = bool(getattr(manager, "is_recording", False))
+    if is_recording:
+        return {"ok": True, "recording": True, "message": "Recording started."}
+    if was_recording:
+        return {"ok": True, "recording": False, "message": "Recording stopped. Processing audio..."}
+    return {"ok": False, "recording": False, "message": "Recording did not start. Check microphone permissions/device."}
 
 
 def process_recording_result(recording_result):
@@ -755,7 +786,7 @@ def process_recording_result(recording_result):
 
         check_cancelled()
         broadcast_status_threadsafe("rewriting")
-        engine = get_engine()
+        engine = get_selected_llm_engine()
         # Retrieve llm_chunk_size from active profile
         try:
             config = load_profile(get_last_active_profile())
@@ -887,15 +918,21 @@ async def startup_event():
 
     try:
         logging.info("Warming up LLM Engine...")
-        get_engine()
+        get_selected_llm_engine()
         logging.info("LLM Engine ready.")
     except Exception as e:
         logging.error(f"LLM Engine startup failure: {e}")
         record_runtime_error("llm", str(e))
 
     try:
-        start_hotkey_manager()
-        logging.info("Hotkey Manager started.")
+        manager = start_hotkey_manager()
+        hook_errors = list(getattr(manager, "keyboard_hook_errors", [])) if manager else []
+        if hook_errors:
+            message = "Hotkey Manager started, but keyboard hooks are unavailable: " + "; ".join(hook_errors)
+            logging.warning(message)
+            record_runtime_error("hotkeys", message, {"action": "startup", "degraded": True})
+        else:
+            logging.info("Hotkey Manager started.")
     except Exception as e:
         logging.error(f"Hotkey Manager startup failure: {e}")
         record_runtime_error("hotkeys", str(e))
@@ -933,6 +970,17 @@ def ensure_tts_initialized():
             logging.error(f"Failed to load ReviewTTSEngine: {e}")
             record_runtime_error("tts", str(e))
     return tts_engine
+
+
+def normalize_tts_voice_id(voice_id):
+    value = str(voice_id or "").strip()
+    aliases = {
+        "standard_female": "af_heart",
+        "standard_male": "am_puck",
+        "female": "af_heart",
+        "male": "am_puck",
+    }
+    return aliases.get(value.lower(), value or "english")
 
 
 cached_audio_devices = None
@@ -1016,12 +1064,14 @@ async def run_doctor(refresh_audio: bool = False):
     }
 
     # LLM details
+    selected_model_id = model_id or get_selected_llm_model_id()
     llm_info = {
         "initialized": engine is not None,
         "ready": engine_ready,
-        "model_id": model_id or get_selected_llm_model_id(),
+        "model_id": selected_model_id,
         "llama_server_path": str(get_server_path()),
         "llama_server_exists": os.path.exists(get_server_path()),
+        "model_exists": check_model_exists(selected_model_id),
     }
 
     # TTS details
@@ -1038,6 +1088,8 @@ async def run_doctor(refresh_audio: bool = False):
     hotkeys_info = {
         "started": hotkey_manager_started,
         "active": hotkey_manager is not None and getattr(hotkey_manager, "_running", False),
+        "keyboard_hooks_ok": bool(hotkey_manager is not None and not getattr(hotkey_manager, "keyboard_hook_errors", [])),
+        "keyboard_hook_errors": list(getattr(hotkey_manager, "keyboard_hook_errors", [])) if hotkey_manager else [],
     }
 
     # Models dir
@@ -1084,11 +1136,8 @@ async def health_check():
 
     engine_ready = False
     try:
-        if is_lazy_startup_enabled():
-            engine = get_engine_if_initialized()
-            engine_ready = bool(getattr(engine, "_ready", False)) if engine else False
-        else:
-            engine_ready = get_engine()._ready
+        engine = get_engine_if_initialized()
+        engine_ready = bool(getattr(engine, "_ready", False)) if engine else False
     except Exception:
         pass
         
@@ -1137,12 +1186,19 @@ class ProfileDuplicateRequest(BaseModel):
 
 
 class ProfileImportRequest(BaseModel):
+    kind: str = "betterfingers_profile"
+    schema_version: int = 1
     name: str
     settings: dict
 
 
 @app.post("/settings/profiles/import")
 async def settings_import_profile(request: ProfileImportRequest):
+    if request.kind != "betterfingers_profile":
+        raise HTTPException(status_code=400, detail="Invalid profile format: missing 'betterfingers_profile' kind.")
+    if request.schema_version != 1:
+        raise HTTPException(status_code=400, detail=f"Unsupported profile schema version: {request.schema_version}")
+
     safe_name = sanitize_profile_name(request.name)
     if safe_name in list_profiles():
         raise HTTPException(status_code=409, detail="Profile name already exists")
@@ -1291,7 +1347,12 @@ async def settings_export_profile(profile_name: str):
     safe_name = sanitize_profile_name(profile_name)
     if safe_name not in list_profiles():
         raise HTTPException(status_code=404, detail="Profile not found")
-    return load_profile(safe_name)
+    return {
+        "kind": "betterfingers_profile",
+        "schema_version": 1,
+        "name": safe_name,
+        "settings": load_profile(safe_name),
+    }
 
 
 class PersonaRequest(BaseModel):
@@ -1340,6 +1401,16 @@ class WhisperModelRequest(BaseModel):
 def get_selected_llm_model_id():
     cfg = load_profile(get_last_active_profile())
     return str(cfg.get("llm_model_id", DEFAULT_MODEL) or DEFAULT_MODEL).strip()
+
+
+def get_selected_llm_engine():
+    selected_model_id = get_selected_llm_model_id()
+    engine = get_engine(selected_model_id)
+    loaded_model_id = str(getattr(engine, "_loaded_model_id", "") or "").strip()
+    if loaded_model_id and loaded_model_id != selected_model_id and hasattr(engine, "reload_model"):
+        engine.set_model_id(selected_model_id)
+        engine.reload_model()
+    return engine
 
 
 @app.get("/models/llm")
@@ -1578,9 +1649,9 @@ class DraftRewriteRequest(BaseModel):
 
 class DraftTtsRequest(BaseModel):
     text: str = ""
-    voice_id: str = "standard_female"
-    speed: float = 1.0
-    pitch: float = 1.0
+    voice_id: Optional[str] = None
+    speed: Optional[float] = None
+    pitch: Optional[float] = None
 
 
 def get_rewrite_instruction(action, custom_instruction=""):
@@ -1607,7 +1678,7 @@ def rewrite_draft_text(text, action, custom_instruction=""):
     except Exception:
         llm_chunk_size = 750
 
-    engine = get_engine()
+    engine = get_selected_llm_engine()
     token_limit = get_active_token_limit()
     if hasattr(engine, "rewrite_text"):
         return (
@@ -1725,19 +1796,45 @@ async def speak_draft(draft_id: int, request: DraftTtsRequest):
     if not text:
         return {"ok": False, "draft_id": draft_id, "message": "No draft text is available to read aloud.", "error": "empty_text"}
 
-    logging.info(f"Draft TTS Request: draft={draft_id} '{text[:20]}...' | Voice: {request.voice_id} | Speed: {request.speed}x")
-    voice_path = get_voices_dir() / f"{request.voice_id}.npy"
-    if request.voice_id.startswith("cloned_") and not os.path.exists(voice_path):
-        logging.warning(f"Voice {request.voice_id} not found, using default.")
+    profile_name = get_last_active_profile()
+    try:
+        config = load_profile(profile_name)
+    except Exception:
+        config = {}
 
-    result = {
-        "ok": True,
-        "status": "success",
-        "draft_id": draft_id,
-        "message": "Draft text sent to TTS.",
-        "mock_url": "/audio/placeholder.wav",
-        "text_length": len(text),
-    }
+    req_voice = request.voice_id
+    if req_voice is None:
+        req_voice = config.get("review_tts_voice_hint") or "standard_female"
+
+    req_speed = request.speed
+    if req_speed is None:
+        req_speed = config.get("review_tts_speed") or 1.0
+
+    voice_id = normalize_tts_voice_id(req_voice)
+    speed = max(0.5, min(3.0, float(req_speed)))
+    logging.info(f"Draft TTS Request: draft={draft_id} '{text[:20]}...' | Voice: {voice_id} | Speed: {speed}x")
+
+    engine = ensure_tts_initialized()
+    if engine is None:
+        result = {
+            "ok": False,
+            "status": "error",
+            "draft_id": draft_id,
+            "message": "TTS engine is not available.",
+            "error": "tts_unavailable",
+            "text_length": len(text),
+        }
+        record_runtime_error("tts", result["message"], {"action": "draft_tts", "draft_id": draft_id})
+        return result
+
+    result = engine.speak(text, speed=speed, voice_hint=voice_id)
+    result.update(
+        {
+            "status": "success" if result.get("ok") else "error",
+            "draft_id": draft_id,
+            "text_length": len(text),
+        }
+    )
     broadcast_status_threadsafe("draft_tts_requested", {"draft_id": draft_id, "text_length": len(text)})
     return result
 
@@ -1760,6 +1857,11 @@ async def runtime_primary_action():
 @app.post("/runtime/emergency-stop")
 async def runtime_emergency_stop():
     return emergency_stop_runtime()
+
+
+@app.post("/runtime/recording/toggle")
+async def runtime_recording_toggle():
+    return toggle_recording_runtime()
 
 
 @app.post("/runtime/warmup")
@@ -1786,7 +1888,7 @@ async def runtime_warmup(request: RuntimeWarmupRequest):
 
     if request.llm:
         try:
-            engine = get_engine()
+            engine = get_selected_llm_engine()
             result["llm"] = {
                 "ok": True,
                 "initialized": engine is not None,
@@ -1806,9 +1908,16 @@ async def runtime_warmup(request: RuntimeWarmupRequest):
     if request.hotkeys:
         try:
             manager = start_hotkey_manager()
+            hook_errors = list(getattr(manager, "keyboard_hook_errors", [])) if manager else []
+            if hook_errors:
+                message = "Keyboard hooks are unavailable: " + "; ".join(hook_errors)
+                record_runtime_error("hotkeys", message, {"action": "warmup", "degraded": True})
             result["hotkeys"] = {
-                "ok": True,
+                "ok": not hook_errors,
                 "started": manager is not None and hotkey_manager_started,
+                "keyboard_hooks_ok": not hook_errors,
+                "keyboard_hook_errors": hook_errors,
+                "error": "; ".join(hook_errors) if hook_errors else "",
             }
         except Exception as e:
             logging.exception("Hotkey warmup failure")
@@ -1830,7 +1939,7 @@ class LLMRequest(BaseModel):
 @app.post("/llm/process")
 async def process_llm(request: LLMRequest):
     try:
-        engine = get_engine()
+        engine = get_selected_llm_engine()
         result = engine.process_fast_lane(
             request.text,
             request.preset,
@@ -1870,23 +1979,43 @@ async def transcribe_audio(file: UploadFile = File(...)):
 
 class TTSRequest(BaseModel):
     text: str
-    voice_id: str = "standard_female"
-    speed: float = 1.0
-    pitch: float = 1.0
+    voice_id: Optional[str] = None
+    speed: Optional[float] = None
+    pitch: Optional[float] = None
 
 @app.post("/tts/speak")
 async def tts_speak(request: TTSRequest):
-    logging.info(f"TTS Request: '{request.text[:20]}...' | Voice: {request.voice_id} | Speed: {request.speed}x")
-    
-    # MOCK: Return a static placeholder audio or just verify flow
-    # In real impl, we would run Lux inference here
-    
-    # Verify voice exists
-    voice_path = get_voices_dir() / f"{request.voice_id}.npy"
-    if request.voice_id.startswith("cloned_") and not os.path.exists(voice_path):
-        logging.warning(f"Voice {request.voice_id} not found, using default.")
-        
-    return {"status": "success", "message": "Audio generated", "mock_url": "/audio/placeholder.wav"}
+    text = (request.text or "").strip()
+    if not text:
+        return {"ok": False, "status": "error", "message": "No text to speak.", "error": "empty_text"}
+
+    profile_name = get_last_active_profile()
+    try:
+        config = load_profile(profile_name)
+    except Exception:
+        config = {}
+
+    req_voice = request.voice_id
+    if req_voice is None:
+        req_voice = config.get("review_tts_voice_hint") or "standard_female"
+
+    req_speed = request.speed
+    if req_speed is None:
+        req_speed = config.get("review_tts_speed") or 1.0
+
+    voice_id = normalize_tts_voice_id(req_voice)
+    speed = max(0.5, min(3.0, float(req_speed)))
+    logging.info(f"TTS Request: '{text[:20]}...' | Voice: {voice_id} | Speed: {speed}x")
+
+    engine = ensure_tts_initialized()
+    if engine is None:
+        message = "TTS engine is not available."
+        record_runtime_error("tts", message, {"action": "tts_speak"})
+        return {"ok": False, "status": "error", "message": message, "error": "tts_unavailable"}
+
+    result = engine.speak(text, speed=speed, voice_hint=voice_id)
+    result["status"] = "success" if result.get("ok") else "error"
+    return result
 
 @app.post("/tts/clone")
 async def tts_clone(file: UploadFile = File(...), name: str = "My Voice"):
@@ -1917,8 +2046,16 @@ async def list_voices():
                 cloned.append({"id": f.split('.')[0], "name": f.split('.')[0].replace("cloned_", "").replace("_", " ")})
                 
     defaults = [
-        {"id": "standard_female", "name": "Standard Female (Lux)"},
-        {"id": "standard_male", "name": "Standard Male (Lux)"}
+        {"id": "af_heart", "name": "Kokoro Heart"},
+        {"id": "af_bella", "name": "Kokoro Bella"},
+        {"id": "af_nicole", "name": "Kokoro Nicole"},
+        {"id": "af_sarah", "name": "Kokoro Sarah"},
+        {"id": "am_puck", "name": "Kokoro Puck"},
+        {"id": "am_michael", "name": "Kokoro Michael"},
+        {"id": "bf_emma", "name": "Kokoro Emma"},
+        {"id": "bm_george", "name": "Kokoro George"},
+        {"id": "standard_female", "name": "Standard Female (Kokoro Heart)"},
+        {"id": "standard_male", "name": "Standard Male (Kokoro Puck)"},
     ]
     
     return {"defaults": defaults, "cloned": cloned}
@@ -1988,7 +2125,7 @@ class PlanRequest(BaseModel):
 
 @app.post("/llm/generate_plan")
 async def generate_plan(request: PlanRequest):
-    engine = get_engine()
+    engine = get_selected_llm_engine()
     prompt = f"Goal: {request.goal}"
     
     # Generate text

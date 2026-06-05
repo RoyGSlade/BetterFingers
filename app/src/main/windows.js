@@ -49,7 +49,7 @@ function createMainWindow() {
 }
 
 function focusMainWindow(window = mainWindow) {
-  if (!window) {
+  if (!window || window.isDestroyed()) {
     return;
   }
 

@@ -101,6 +101,33 @@ class HotkeyManagerTTSTests(unittest.TestCase):
         manager.stop()
         self.assertGreaterEqual(remove_hotkey.call_count, 1)
 
+    @patch("hotkey_manager.keyboard.remove_hotkey")
+    @patch("hotkey_manager.keyboard.add_hotkey")
+    @patch("hotkey_manager.load_profile")
+    @patch("hotkey_manager.PYGAME_AVAILABLE", False)
+    def test_normalizes_uppercase_hotkey_letters_before_hooking(
+        self,
+        load_profile,
+        add_hotkey,
+        remove_hotkey,
+    ):
+        load_profile.return_value = self._config(review_key="ctrl+shift+A", manual_key="ctrl+shift+X")
+        load_profile.return_value["hotkey"] = "ctrl+shift+Z"
+        add_hotkey.side_effect = ["toggle_handle", "manual_handle", "tts_handle"]
+
+        manager = HotkeyManager(
+            recorder=_DummyRecorder(),
+            on_recording_complete_callback=lambda _result: None,
+            on_recording_start_callback=lambda: None,
+        )
+
+        manager.start()
+        hooked_keys = [call.args[0] for call in add_hotkey.call_args_list if call.args]
+        self.assertEqual(hooked_keys, ["ctrl+shift+z", "ctrl+shift+x", "ctrl+shift+a"])
+
+        manager.stop()
+        self.assertGreaterEqual(remove_hotkey.call_count, 1)
+
     @patch("hotkey_manager.load_profile")
     def test_update_config_restarts_for_review_tts_hotkey_change(self, load_profile):
         load_profile.side_effect = [
@@ -113,6 +140,7 @@ class HotkeyManagerTTSTests(unittest.TestCase):
             on_recording_complete_callback=lambda _result: None,
             on_recording_start_callback=lambda: None,
         )
+        manager._running = True
 
         with patch.object(manager, "stop") as stop_mock, patch.object(manager, "start") as start_mock:
             manager.update_config("Default")

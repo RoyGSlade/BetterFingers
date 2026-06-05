@@ -336,20 +336,17 @@ class ReviewTTSEngine:
         voice_hint: str = "english",
         prefer_gpu: bool = True,
     ) -> Tuple[bool, str]:
-        onnx_first_msg = ""
-        if prefer_gpu:
-            onnx_ok, onnx_msg = self._load_kokoro_onnx_backend(
-                voice_hint=voice_hint,
-                prefer_gpu=prefer_gpu,
-            )
-            if onnx_ok:
-                return True, onnx_msg
-            onnx_first_msg = onnx_msg
+        onnx_ok, onnx_msg = self._load_kokoro_onnx_backend(
+            voice_hint=voice_hint,
+            prefer_gpu=prefer_gpu,
+        )
+        if onnx_ok:
+            return True, onnx_msg
 
         native_msg = ""
         try:
             kokoro = importlib.import_module("kokoro")
-        except Exception as exc:
+        except BaseException as exc:
             if isinstance(exc, ModuleNotFoundError):
                 if sys.version_info >= (3, 13):
                     native_msg = (
@@ -374,23 +371,10 @@ class ReviewTTSEngine:
                     self._kokoro_runtime = "native"
                     self._kokoro_voice = self._resolve_kokoro_voice(voice_hint)
                     return True, "Kokoro backend loaded."
-                except Exception as exc:
+                except BaseException as exc:
                     self._kokoro_pipeline = None
                     native_msg = f"Kokoro load failed ({exc})."
 
-        onnx_msg = ""
-        if not prefer_gpu:
-            onnx_ok, onnx_msg = self._load_kokoro_onnx_backend(
-                voice_hint=voice_hint,
-                prefer_gpu=prefer_gpu,
-            )
-            if onnx_ok:
-                if native_msg:
-                    return True, f"{native_msg} Using kokoro-onnx backend."
-                return True, onnx_msg
-
-        if prefer_gpu:
-            return False, f"{onnx_first_msg} {native_msg}".strip()
         if native_msg:
             return False, f"{native_msg} {onnx_msg}".strip()
         return False, onnx_msg

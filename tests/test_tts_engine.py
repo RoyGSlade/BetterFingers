@@ -39,6 +39,20 @@ class TTSEngineTests(unittest.TestCase):
             engine.set_prefer_gpu(False)
             unload_mock.assert_called_once()
 
+    def test_kokoro_loader_prefers_onnx_even_when_gpu_disabled(self):
+        engine = ReviewTTSEngine()
+        with patch.object(
+            engine,
+            "_load_kokoro_onnx_backend",
+            return_value=(True, "onnx ready"),
+        ) as onnx_mock, patch("tts_engine.importlib.import_module") as import_mock:
+            ok, message = engine._load_kokoro_backend(voice_hint="english", prefer_gpu=False)
+
+        self.assertTrue(ok)
+        self.assertEqual(message, "onnx ready")
+        onnx_mock.assert_called_once_with(voice_hint="english", prefer_gpu=False)
+        import_mock.assert_not_called()
+
     @patch("tts_engine.importlib.import_module")
     def test_resolve_onnx_providers_prefers_cuda_when_available(self, import_module):
         fake_ort = Mock()

@@ -7,7 +7,7 @@ import server
 
 
 class DummyTranscriber:
-    def __init__(self, preload=False):
+    def __init__(self, preload=False, profile_name=None, *args, **kwargs):
         self.preload = preload
         self.calls = []
 
@@ -31,6 +31,15 @@ class DummyRewriteEngine:
     def rewrite_text(self, text, action="clearer", custom_instruction="", max_output_tokens=None, chunk_size=None):
         suffix = f" {custom_instruction}" if custom_instruction else ""
         return f"{action}: {text}{suffix}"
+
+
+class DummyTTSEngine:
+    def __init__(self):
+        self.calls = []
+
+    def speak(self, text, speed=1.0, voice_hint="english"):
+        self.calls.append({"text": text, "speed": speed, "voice_hint": voice_hint})
+        return {"ok": True, "backend": "kokoro_onnx", "fallback": False, "message": "queued"}
 
 
 class DummyRecordingResult:
@@ -294,16 +303,40 @@ class ServerDraftTests(unittest.TestCase):
     def test_draft_tts_uses_selected_text_payload(self):
         draft = server.create_draft("raw", "final")
         statuses = []
+        tts = DummyTTSEngine()
 
-        with patch.object(server, "broadcast_status_threadsafe", side_effect=lambda status, data=None: statuses.append((status, data or {}))):
+        with patch.object(server, "ensure_tts_initialized", return_value=tts), patch.object(
+            server, "broadcast_status_threadsafe", side_effect=lambda status, data=None: statuses.append((status, data or {}))
+        ):
             with TestClient(server.app) as client:
-                response = client.post(f"/drafts/{draft['id']}/tts", json={"text": "selected words"})
+                response = client.post(
+                    f"/drafts/{draft['id']}/tts",
+                    json={"text": "selected words", "voice_id": "standard_female", "speed": 1.4},
+                )
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertTrue(data["ok"])
+        self.assertEqual(data["backend"], "kokoro_onnx")
         self.assertEqual(data["text_length"], len("selected words"))
+        self.assertEqual(tts.calls[0], {"text": "selected words", "speed": 1.4, "voice_hint": "af_heart"})
         self.assertEqual(statuses[0][0], "draft_tts_requested")
+
+    def test_tts_speak_calls_runtime_engine(self):
+        tts = DummyTTSEngine()
+
+        with patch.object(server, "ensure_tts_initialized", return_value=tts):
+            with TestClient(server.app) as client:
+                response = client.post(
+                    "/tts/speak",
+                    json={"text": "hello there", "voice_id": "standard_male", "speed": 1.2},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(tts.calls[0], {"text": "hello there", "speed": 1.2, "voice_hint": "am_puck"})
 
     def test_send_draft_copy_only_marks_sent(self):
         draft = server.create_draft("raw", "final")

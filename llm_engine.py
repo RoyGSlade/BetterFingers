@@ -461,25 +461,32 @@ class LLMEngine:
     _process_pid = None  # Track PID for targeted shutdown
     _owns_process = False
     _ready = False
+    _stderr_log = None
+    _loaded_model_id = None
     
-    def __new__(cls):
+    def __new__(cls, *args, **kwargs):
         if cls._instance is None:
             with _init_lock:
                 if cls._instance is None:
                     cls._instance = super().__new__(cls)
         return cls._instance
     
-    def __init__(self):
+    def __init__(self, model_id=None):
         # Double-checked locking
         if LLMEngine._initialized:
+            if model_id:
+                self.set_model_id(model_id)
             return
             
         with _init_lock:
             if LLMEngine._initialized:
+                if model_id:
+                    self.set_model_id(model_id)
                 return
                 
             self.port = SIDECAR_PORT
             self.api_url = f"http://127.0.0.1:{self.port}"
+            self.model_id = model_id
             
             self._setup_server()
             LLMEngine._initialized = True
@@ -503,6 +510,7 @@ class LLMEngine:
                 LLMEngine._process_pid = None
                 logging.info(f"âœ… Reusing existing llama-server on port {self.port}")
             LLMEngine._ready = True
+            LLMEngine._loaded_model_id = getattr(self, "model_id", None)
             return
         
         # STEP 2: Ensure resources exist
@@ -540,8 +548,10 @@ class LLMEngine:
             server_exe,
             "--model", model_path,
             "--port", str(self.port),
-            "--ctx-size", "8192",
-            "--n-gpu-layers", "99",
+            "--ctx-size", os.getenv("BETTERFINGERS_LLM_CTX_SIZE", "4096"),
+            "--n-gpu-layers", os.getenv("BETTERFINGERS_LLM_GPU_LAYERS", "99"),
+            "--threads", os.getenv("BETTERFINGERS_LLM_THREADS", str(max(1, min(os.cpu_count() or 4, 8)))),
+            "--batch-size", os.getenv("BETTERFINGERS_LLM_BATCH_SIZE", "512"),
             "--parallel", "1",
         ]
         cmd.extend(get_model_server_args(model_id))
@@ -555,10 +565,17 @@ class LLMEngine:
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             startupinfo.wShowWindow = 0
 
+        if LLMEngine._stderr_log:
+            try:
+                LLMEngine._stderr_log.close()
+            except Exception:
+                pass
+        LLMEngine._stderr_log = tempfile.TemporaryFile()
+
         LLMEngine._process = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stderr=LLMEngine._stderr_log,
             startupinfo=startupinfo
         )
         
@@ -578,17 +595,20 @@ class LLMEngine:
                 if response.status_code == 200:
                     logging.info("âœ… llama-server is READY!")
                     LLMEngine._ready = True
+                    LLMEngine._loaded_model_id = getattr(self, "model_id", None)
                     return
             except Exception:
                 pass
             time.sleep(1)
         
         logging.error("âŒ llama-server timed out!")
-        if LLMEngine._process and LLMEngine._process.stderr:
+        if LLMEngine._stderr_log:
             try:
-                err = LLMEngine._process.stderr.read(2000).decode('utf-8', errors='ignore')
+                LLMEngine._stderr_log.flush()
+                LLMEngine._stderr_log.seek(0)
+                err = LLMEngine._stderr_log.read(4000).decode('utf-8', errors='ignore')
                 if err:
-                    logging.error(f"Server stderr: {err[:500]}")
+                    logging.error(f"Server stderr: {err[:1200]}")
             except Exception:
                 pass
         self.shutdown()
@@ -605,6 +625,7 @@ class LLMEngine:
             LLMEngine._process_pid = None
             LLMEngine._owns_process = False
             LLMEngine._ready = False
+            LLMEngine._loaded_model_id = None
             return
 
         if not process and not pid and LLMEngine._ready and is_server_running():
@@ -633,6 +654,7 @@ class LLMEngine:
                         LLMEngine._process_pid = None
                         LLMEngine._owns_process = False
                         LLMEngine._ready = False
+                        LLMEngine._loaded_model_id = None
                         return
                     except subprocess.TimeoutExpired:
                         pass
@@ -648,6 +670,7 @@ class LLMEngine:
                 LLMEngine._process_pid = None
                 LLMEngine._owns_process = False
                 LLMEngine._ready = False
+                LLMEngine._loaded_model_id = None
                 return
             except subprocess.TimeoutExpired:
                 try:
@@ -674,6 +697,13 @@ class LLMEngine:
         LLMEngine._process_pid = None
         LLMEngine._owns_process = False
         LLMEngine._ready = False
+        LLMEngine._loaded_model_id = None
+        if LLMEngine._stderr_log:
+            try:
+                LLMEngine._stderr_log.close()
+            except Exception:
+                pass
+            LLMEngine._stderr_log = None
 
     def reload_model(self):
         """
@@ -881,13 +911,15 @@ class LLMEngine:
 _engine_instance = None
 _get_engine_lock = threading.Lock()
 
-def get_engine():
+def get_engine(model_id=None):
     """Thread-safe access to the singleton LLM Engine."""
     global _engine_instance
     if _engine_instance is None:
         with _get_engine_lock:
             if _engine_instance is None:
-                _engine_instance = LLMEngine()
+                _engine_instance = LLMEngine(model_id)
+    elif model_id:
+        _engine_instance.set_model_id(model_id)
     return _engine_instance
 
 

@@ -16,10 +16,11 @@ BETTERFINGERS_PYTHON=../.venv/bin/python npm run dev
 ```
 
 If you are already inside `app/`, use `../requirements.txt` instead of `requirements.txt`.
+If you prefer to use your system Python during development, run `npm run dev`; Linux defaults to `python3` and Windows defaults to `python`.
 
 ## Notes
 
-- `BETTERFINGERS_PYTHON` overrides the default Python executable used by the Electron dev launcher.
+- `BETTERFINGERS_PYTHON` overrides the default Python executable used by the Electron dev launcher. If it points to a missing file, the launcher warns and falls back to the platform default.
 - `npm run fix:electron` forces Electron's Linux binary download if npm's install script approval does not run it automatically.
 - The Electron shell starts the existing FastAPI backend automatically on port `8000`.
 - The legacy Python/PyInstaller app at the repository root is unchanged.

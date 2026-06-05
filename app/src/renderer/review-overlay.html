@@ -402,7 +402,13 @@
         setBusy(true);
         try {
           await saveEdit();
-          const result = await postJson(`${BACKEND_ORIGIN}/drafts/${currentDraft.id}/tts`, { text: finalTextEl.value }, 120000);
+          const voiceId = outputSettings?.review_tts_voice_hint || 'standard_female';
+          const speed = parseFloat(outputSettings?.review_tts_speed || '1.0');
+          const result = await postJson(`${BACKEND_ORIGIN}/drafts/${currentDraft.id}/tts`, {
+            text: finalTextEl.value,
+            voice_id: voiceId,
+            speed: speed
+          }, 120000);
           setMessage(result?.message || 'Read-aloud request sent.', result?.ok === false ? 'danger' : 'success');
         } catch (error) {
           setMessage(`Read failed: ${error.message}`, 'danger');

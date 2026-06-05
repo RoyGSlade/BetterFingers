@@ -155,15 +155,33 @@ class SettingsRedesignTests(unittest.TestCase):
                     export_res = client.get("/settings/profiles/CustomDev_Renamed/export")
                     self.assertEqual(export_res.status_code, 200)
                     exported_data = export_res.json()
-                    self.assertEqual(exported_data["output_token_limit"], 1100)
+                    self.assertEqual(exported_data["kind"], "betterfingers_profile")
+                    self.assertEqual(exported_data["schema_version"], 1)
+                    self.assertEqual(exported_data["name"], "CustomDev_Renamed")
+                    self.assertEqual(exported_data["settings"]["output_token_limit"], 1100)
 
                     # 5. Import profile
-                    import_res = client.post("/settings/profiles/import", json={
+                    import_body = {
+                        "kind": "betterfingers_profile",
+                        "schema_version": 1,
                         "name": "ImportedProfile",
-                        "settings": exported_data
-                    })
+                        "settings": exported_data["settings"]
+                    }
+                    import_res = client.post("/settings/profiles/import", json=import_body)
                     self.assertEqual(import_res.status_code, 200)
                     self.assertIn("ImportedProfile", import_res.json()["profiles"])
+
+                    # Try importing invalid kind
+                    invalid_kind_body = import_body.copy()
+                    invalid_kind_body["kind"] = "invalid_kind"
+                    bad_kind_res = client.post("/settings/profiles/import", json=invalid_kind_body)
+                    self.assertEqual(bad_kind_res.status_code, 400)
+
+                    # Try importing invalid schema version
+                    invalid_version_body = import_body.copy()
+                    invalid_version_body["schema_version"] = 999
+                    bad_version_res = client.post("/settings/profiles/import", json=invalid_version_body)
+                    self.assertEqual(bad_version_res.status_code, 400)
 
                     # 6. Safe Delete and Protection
                     # Try to delete Default profile

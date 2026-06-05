@@ -23,6 +23,14 @@ class HotkeyManager:
             return value.strip().lower() in {"1", "true", "yes", "on"}
         return bool(value)
 
+    @staticmethod
+    def _normalize_hotkey(value, default=""):
+        hotkey = str(value or default or "").strip().lower()
+        if not hotkey:
+            return ""
+        parts = [part.strip() for part in hotkey.split("+") if part.strip()]
+        return "+".join(parts)
+
     def __init__(
         self,
         recorder,
@@ -61,6 +69,7 @@ class HotkeyManager:
         self.last_stop_reason = "manual"
 
         self.keyboard_hooks = []
+        self.keyboard_hook_errors = []
         self.toggle_hotkey_handle = None
         self.force_stop_handle = None
         self.manual_send_handle = None
@@ -70,6 +79,7 @@ class HotkeyManager:
         self.stop_threads = False
         self.controller_thread = None
         self.joysticks = {}
+        self._running = False
 
         self.controller_pressed_tokens = set()
         self.axis_active = {}
@@ -89,10 +99,10 @@ class HotkeyManager:
         self.mapping_chord_peak = set()
 
     def _load_runtime_config(self, config):
-        self.hotkey = config.get("hotkey", "f8")
-        self.force_stop_key = config.get("force_stop_key", "")
-        self.manual_send_hotkey = (config.get("manual_send_hotkey", "f9") or "").strip()
-        self.review_tts_hotkey = (config.get("review_tts_hotkey", "ctrl+shift+space") or "").strip()
+        self.hotkey = self._normalize_hotkey(config.get("hotkey"), "f8")
+        self.force_stop_key = self._normalize_hotkey(config.get("force_stop_key"), "")
+        self.manual_send_hotkey = self._normalize_hotkey(config.get("manual_send_hotkey"), "f9")
+        self.review_tts_hotkey = self._normalize_hotkey(config.get("review_tts_hotkey"), "ctrl+shift+space")
         self.mode = config.get("recording_mode", "toggle")
         self.controller_enabled = self._coerce_bool(
             config.get("controller_enabled", config.get("controller_ptt", False))
@@ -128,6 +138,7 @@ class HotkeyManager:
 
     # --- Toggle ---
     def _toggle(self):
+        logging.info("Recording hotkey triggered.")
         now = time.time()
         if now - self.last_toggle_time < 0.20:
             return
@@ -139,6 +150,7 @@ class HotkeyManager:
             self._stop_recording(reason="toggle")
 
     def _start_recording(self, reason="manual"):
+        logging.info("Recording trigger received (%s)", reason)
         if self.is_busy_callback and self.is_busy_callback():
             logging.info("Ignored recording trigger: backend is busy processing a previous draft.")
             return
@@ -178,6 +190,12 @@ class HotkeyManager:
 
     def request_stop(self, reason="manual"):
         self._stop_recording(reason=reason)
+
+    def request_toggle(self, reason="manual_button"):
+        if self.is_recording:
+            self._stop_recording(reason=reason)
+        else:
+            self._start_recording(reason=reason)
 
     # --- Mapping ---
     def start_mapping(self, callback, style="single", timeout_ms=2500, activity_callback=None):
@@ -551,6 +569,9 @@ class HotkeyManager:
             self.on_force_stop()
 
     def _manual_send_trigger(self):
+        if self.is_recording:
+            logging.info("Ignored manual send hotkey while recording.")
+            return
         logging.info("Manual send hotkey triggered.")
         if self.on_manual_send:
             self.on_manual_send()
@@ -561,6 +582,10 @@ class HotkeyManager:
             self.on_review_tts()
 
     def start(self):
+        if self._running:
+            logging.info("Hotkey listener already running; restart skipped.")
+            return
+        self.keyboard_hook_errors = []
         logging.info(
             "Hotkey listener start: "
             f"hotkey='{self.hotkey}' force_stop='{self.force_stop_key}' "
@@ -575,7 +600,9 @@ class HotkeyManager:
             else:
                 self.toggle_hotkey_handle = keyboard.add_hotkey(self.hotkey, self._toggle, suppress=False)
         except Exception as exc:
-            logging.error(f"Failed to hook hotkey '{self.hotkey}': {exc}")
+            message = f"Failed to hook hotkey '{self.hotkey}': {exc}"
+            self.keyboard_hook_errors.append(message)
+            logging.error(message)
 
         if self.force_stop_key:
             try:
@@ -583,7 +610,9 @@ class HotkeyManager:
                     self.force_stop_key, self._force_stop_trigger, suppress=False
                 )
             except Exception as exc:
-                logging.error(f"Failed to hook force stop key '{self.force_stop_key}': {exc}")
+                message = f"Failed to hook force stop key '{self.force_stop_key}': {exc}"
+                self.keyboard_hook_errors.append(message)
+                logging.error(message)
 
         if self.manual_send_hotkey:
             try:
@@ -591,7 +620,9 @@ class HotkeyManager:
                     self.manual_send_hotkey, self._manual_send_trigger, suppress=False
                 )
             except Exception as exc:
-                logging.error(f"Failed to hook manual send key '{self.manual_send_hotkey}': {exc}")
+                message = f"Failed to hook manual send key '{self.manual_send_hotkey}': {exc}"
+                self.keyboard_hook_errors.append(message)
+                logging.error(message)
 
         self.review_tts_deduped = False
         if self.review_tts_hotkey:
@@ -608,12 +639,16 @@ class HotkeyManager:
                         self.review_tts_hotkey, self._review_tts_trigger, suppress=False
                     )
                 except Exception as exc:
-                    logging.error(f"Failed to hook review TTS key '{self.review_tts_hotkey}': {exc}")
+                    message = f"Failed to hook review TTS key '{self.review_tts_hotkey}': {exc}"
+                    self.keyboard_hook_errors.append(message)
+                    logging.error(message)
 
         if self.controller_enabled:
             self._ensure_controller_thread()
+        self._running = True
 
     def stop(self):
+        self._running = False
         self.stop_threads = True
         if self.controller_thread:
             self.controller_thread.join(timeout=1.0)
@@ -697,7 +732,7 @@ class HotkeyManager:
         )
         controller_state_changed = old_controller_enabled != self.controller_enabled
 
-        if keyboard_needs_restart:
+        if keyboard_needs_restart and self._running:
             self.stop()
             self.start()
             return

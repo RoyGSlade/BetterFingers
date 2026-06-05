@@ -28,6 +28,28 @@ function isElectronInstalled() {
   return fs.existsSync(electronPathFile) && fs.existsSync(executablePath);
 }
 
+function getInstalledElectronVersion() {
+  if (!isElectronInstalled()) {
+    return null;
+  }
+
+  const executablePath = path.join(electronDist, platformExecutableName());
+  const env = { ...process.env };
+  delete env.ELECTRON_RUN_AS_NODE;
+
+  const result = spawnSync(executablePath, ['--version'], {
+    cwd: appRoot,
+    env,
+    encoding: 'utf8',
+  });
+
+  if (result.status !== 0) {
+    return null;
+  }
+
+  return String(result.stdout || '').trim().replace(/^v/, '');
+}
+
 function run(command, args) {
   const result = spawnSync(command, args, {
     cwd: appRoot,
@@ -44,12 +66,16 @@ async function main() {
     throw new Error('Electron is not installed. Run npm install first.');
   }
 
-  if (isElectronInstalled()) {
-    console.log('Electron binary is already installed.');
+  const electronPackage = require(electronPackagePath);
+  const installedVersion = getInstalledElectronVersion();
+  if (installedVersion === electronPackage.version) {
+    console.log(`Electron ${installedVersion} binary is already installed.`);
     return;
   }
+  if (installedVersion) {
+    console.log(`Electron binary version ${installedVersion} does not match package version ${electronPackage.version}; repairing.`);
+  }
 
-  const electronPackage = require(electronPackagePath);
   const checksumsPath = path.join(electronRoot, 'checksums.json');
   const zipPath = await downloadArtifact({
     version: electronPackage.version,

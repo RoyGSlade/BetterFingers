@@ -27,8 +27,10 @@ npm run dist:linux
 `npm run dev` starts Electron and launches the backend with:
 
 ```bash
-python server.py --host 127.0.0.1 --port 8000
+python3 server.py --host 127.0.0.1 --port 8000
 ```
+
+On Windows the default command is `python`. Set `BETTERFINGERS_PYTHON` to use a specific interpreter or virtual environment; missing file paths fall back to the platform default with a warning.
 
 The dashboard waits for `GET http://127.0.0.1:8000/health` before marking the backend ready.
 
