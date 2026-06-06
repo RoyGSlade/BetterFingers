@@ -42,6 +42,14 @@ AVAILABLE_MODELS = {
         "family": "gemma-4",
         "server_args": ["--jinja", "--chat-template-kwargs", '{"enable_thinking":false}'],
     },
+    "gemma-4-12b-q4": {
+        "name": "Gemma 4 12B (Q4_K_M)",
+        "filename": "gemma-4-12b-it-Q4_K_M.gguf",
+        "url": "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-Q4_K_M.gguf",
+        "size_mb": 6792,
+        "family": "gemma-4",
+        "server_args": ["--jinja", "--chat-template-kwargs", '{"enable_thinking":false}'],
+    },
     "gemma-4-26b-a4b-q4": {
         "name": "Gemma 4 26B-A4B MoE (UD-Q4_K_M)",
         "filename": "gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",

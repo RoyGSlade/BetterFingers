@@ -13,9 +13,15 @@ async function waitForHealthy(url, timeoutMs = 30000) {
 
   while (Date.now() - startedAt < timeoutMs) {
     try {
-      const response = await fetch(url, { cache: 'no-store' });
-      if (response.ok) {
-        return await response.json();
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 3000);
+      try {
+        const response = await fetch(url, { cache: 'no-store', signal: controller.signal });
+        if (response.ok) {
+          return await response.json();
+        }
+      } finally {
+        clearTimeout(tid);
       }
     } catch (error) {
       // The backend is still booting. Keep polling.
@@ -50,14 +56,18 @@ function isTcpPortOpen(host, port, timeoutMs = 800) {
 }
 
 async function tryReadHealth(url) {
+  const controller = new AbortController();
+  const tid = setTimeout(() => controller.abort(), 3000);
   try {
-    const response = await fetch(url, { cache: 'no-store' });
+    const response = await fetch(url, { cache: 'no-store', signal: controller.signal });
     if (!response.ok) {
       return null;
     }
     return await response.json();
   } catch (error) {
     return null;
+  } finally {
+    clearTimeout(tid);
   }
 }
 
@@ -336,7 +346,14 @@ function createSidecar({
         const expectedVersion = '0.1.0';
         let versionPayload = null;
         try {
-          const res = await fetch(versionUrl, { cache: 'no-store' });
+          const versionController = new AbortController();
+          const versionTid = setTimeout(() => versionController.abort(), 3000);
+          let res;
+          try {
+            res = await fetch(versionUrl, { cache: 'no-store', signal: versionController.signal });
+          } finally {
+            clearTimeout(versionTid);
+          }
           if (res.ok) {
             versionPayload = await res.json();
           }

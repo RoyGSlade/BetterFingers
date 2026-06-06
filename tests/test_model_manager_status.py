@@ -14,6 +14,7 @@ class ModelManagerStatusTests(unittest.TestCase):
             "gemma-4-e2b-q8",
             "gemma-4-e4b-q4",
             "gemma-4-e4b-q8",
+            "gemma-4-12b-q4",
             "gemma-4-26b-a4b-q4",
             "gemma-4-31b-q4",
         }

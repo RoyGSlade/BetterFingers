@@ -70,12 +70,14 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthT
 
     const payload = typeof update === 'string' ? { status: update } : { ...(update ?? {}) };
     const status = String(payload.status ?? 'unknown');
-    const durationMs = payload.durationMs !== undefined ? Number(payload.durationMs) : 2600;
+    const MAX_DURATION_MS = 30000;
+    const rawDuration = payload.durationMs !== undefined ? Number(payload.durationMs) : 2600;
+    const safeDuration = isNaN(rawDuration) || rawDuration < 0 || rawDuration > MAX_DURATION_MS ? 2600 : rawDuration;
 
     const safePayload = {
       status,
       message: payload.message ? String(payload.message) : '',
-      durationMs: isNaN(durationMs) ? 2600 : durationMs,
+      durationMs: safeDuration,
     };
 
     if (review && !review.isDestroyed() && review.isVisible()) {

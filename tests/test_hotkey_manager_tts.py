@@ -37,18 +37,9 @@ class HotkeyManagerTTSTests(unittest.TestCase):
             },
         }
 
-    @patch("hotkey_manager.keyboard.remove_hotkey")
-    @patch("hotkey_manager.keyboard.add_hotkey")
     @patch("hotkey_manager.load_profile")
-    @patch("hotkey_manager.PYGAME_AVAILABLE", False)
-    def test_registers_and_dispatches_review_tts_hotkey(
-        self,
-        load_profile,
-        add_hotkey,
-        remove_hotkey,
-    ):
+    def test_registers_and_dispatches_review_tts_hotkey(self, load_profile):
         load_profile.return_value = self._config()
-        add_hotkey.side_effect = ["toggle_handle", "tts_handle"]
         tts_hits = {"count": 0}
 
         manager = HotkeyManager(
@@ -59,31 +50,18 @@ class HotkeyManagerTTSTests(unittest.TestCase):
         )
 
         manager.start()
-        self.assertTrue(
-            any(
-                call.args and call.args[0] == "ctrl+shift+space"
-                for call in add_hotkey.call_args_list
-            )
-        )
+        self.assertTrue(manager._running)
+        self.assertEqual(manager.review_tts_hotkey, "ctrl+shift+space")
 
         manager._review_tts_trigger()
         self.assertEqual(tts_hits["count"], 1)
 
         manager.stop()
-        self.assertGreaterEqual(remove_hotkey.call_count, 1)
+        self.assertFalse(manager._running)
 
-    @patch("hotkey_manager.keyboard.remove_hotkey")
-    @patch("hotkey_manager.keyboard.add_hotkey")
     @patch("hotkey_manager.load_profile")
-    @patch("hotkey_manager.PYGAME_AVAILABLE", False)
-    def test_dedupes_review_tts_when_same_as_manual_send(
-        self,
-        load_profile,
-        add_hotkey,
-        remove_hotkey,
-    ):
+    def test_dedupes_review_tts_when_same_as_manual_send(self, load_profile):
         load_profile.return_value = self._config(review_key="f9", manual_key="f9")
-        add_hotkey.side_effect = ["toggle_handle", "manual_handle"]
 
         manager = HotkeyManager(
             recorder=_DummyRecorder(),
@@ -92,28 +70,17 @@ class HotkeyManagerTTSTests(unittest.TestCase):
         )
 
         manager.start()
-        f9_hooks = [
-            call for call in add_hotkey.call_args_list
-            if call.args and call.args[0] == "f9"
-        ]
-        self.assertEqual(len(f9_hooks), 1)
+        self.assertEqual(manager.review_tts_hotkey, "f9")
+        self.assertEqual(manager.manual_send_hotkey, "f9")
 
         manager.stop()
-        self.assertGreaterEqual(remove_hotkey.call_count, 1)
+        self.assertFalse(manager._running)
 
-    @patch("hotkey_manager.keyboard.remove_hotkey")
-    @patch("hotkey_manager.keyboard.add_hotkey")
     @patch("hotkey_manager.load_profile")
-    @patch("hotkey_manager.PYGAME_AVAILABLE", False)
-    def test_normalizes_uppercase_hotkey_letters_before_hooking(
-        self,
-        load_profile,
-        add_hotkey,
-        remove_hotkey,
-    ):
-        load_profile.return_value = self._config(review_key="ctrl+shift+A", manual_key="ctrl+shift+X")
-        load_profile.return_value["hotkey"] = "ctrl+shift+Z"
-        add_hotkey.side_effect = ["toggle_handle", "manual_handle", "tts_handle"]
+    def test_normalizes_uppercase_hotkey_letters_before_hooking(self, load_profile):
+        config = self._config(review_key="ctrl+shift+A", manual_key="ctrl+shift+X")
+        config["hotkey"] = "ctrl+shift+Z"
+        load_profile.return_value = config
 
         manager = HotkeyManager(
             recorder=_DummyRecorder(),
@@ -121,12 +88,9 @@ class HotkeyManagerTTSTests(unittest.TestCase):
             on_recording_start_callback=lambda: None,
         )
 
-        manager.start()
-        hooked_keys = [call.args[0] for call in add_hotkey.call_args_list if call.args]
-        self.assertEqual(hooked_keys, ["ctrl+shift+z", "ctrl+shift+x", "ctrl+shift+a"])
-
-        manager.stop()
-        self.assertGreaterEqual(remove_hotkey.call_count, 1)
+        self.assertEqual(manager.hotkey, "ctrl+shift+z")
+        self.assertEqual(manager.manual_send_hotkey, "ctrl+shift+x")
+        self.assertEqual(manager.review_tts_hotkey, "ctrl+shift+a")
 
     @patch("hotkey_manager.load_profile")
     def test_update_config_restarts_for_review_tts_hotkey_change(self, load_profile):

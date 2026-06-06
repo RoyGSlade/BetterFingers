@@ -53,7 +53,7 @@ class SettingsExternalUrlTests(unittest.TestCase):
         self.assertEqual(args, ("https://ko-fi.com/democratizegm",))
 
     @patch("settings.webbrowser.open", return_value=True)
-    @patch("settings.os.startfile", side_effect=OSError("blocked"))  # type: ignore[attr-defined]
+    @patch("settings.os.startfile", side_effect=OSError("blocked"), create=True)  # type: ignore[attr-defined]
     @patch("asyncio.run", side_effect=RuntimeError("loop unavailable"))
     def test_falls_back_to_webbrowser_when_legacy_async_launch_cannot_schedule(
         self,

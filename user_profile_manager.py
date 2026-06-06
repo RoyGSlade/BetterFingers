@@ -37,8 +37,10 @@ class UserProfileManager:
             "voice_pitch": 1.0
         }
 
+    _ALLOWED_KEYS = {"vibe", "work_style", "hobbies", "voice_speed", "voice_pitch"}
+
     def save_profile(self, data: dict):
-        self.profile.update(data)
+        self.profile.update({k: v for k, v in data.items() if k in self._ALLOWED_KEYS})
         try:
             os.makedirs(os.path.dirname(self.profile_path), exist_ok=True)
             with open(self.profile_path, 'w') as f:

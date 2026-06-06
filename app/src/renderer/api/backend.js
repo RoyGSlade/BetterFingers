@@ -173,6 +173,10 @@ async function downloadLlmModel(modelId, timeoutMs = 1800000) {
   return postJson(`${MODELS_LLM_URL}/${encodeURIComponent(modelId)}/download`, {}, timeoutMs);
 }
 
+async function fetchLlmDownloadState(modelId, timeoutMs = 2500) {
+  return fetchJson(`${MODELS_LLM_URL}/${encodeURIComponent(modelId)}/download-state`, timeoutMs);
+}
+
 async function deleteLlmModel(modelId, timeoutMs = 10000) {
   return deleteJson(`${MODELS_LLM_URL}/${encodeURIComponent(modelId)}`, timeoutMs);
 }
@@ -449,6 +453,39 @@ function connectVoiceStatus({
   };
 }
 
+// --- Studio Mode API ---
+const STUDIO_URL = `${BACKEND_ORIGIN}/studio`;
+
+async function studioCreateProject(projectName, timeoutMs = 10000) {
+  return postJson(`${STUDIO_URL}/project/create`, { project_name: projectName }, timeoutMs);
+}
+
+async function studioLoadProject(projectName, timeoutMs = 10000) {
+  return postJson(`${STUDIO_URL}/project/load`, { project_name: projectName }, timeoutMs);
+}
+
+async function studioRunWorkflow(projectName, seedText, timeoutMs = 120000) {
+  return postJson(`${STUDIO_URL}/workflow/run`, { project_name: projectName, seed_text: seedText }, timeoutMs);
+}
+
+async function studioRunStage(projectName, stage, seedText = null, timeoutMs = 60000) {
+  const body = { project_name: projectName, stage };
+  if (seedText) body.seed_text = seedText;
+  return postJson(`${STUDIO_URL}/workflow/stage`, body, timeoutMs);
+}
+
+async function studioGetPanels(projectName, projectId, timeoutMs = 10000) {
+  return fetchJson(`${STUDIO_URL}/project/${encodeURIComponent(projectName)}/${projectId}/panels`, timeoutMs);
+}
+
+async function studioApproveItem(projectName, projectId, itemType, itemId, approved, timeoutMs = 10000) {
+  return postJson(`${STUDIO_URL}/project/approve`, { project_name: projectName, project_id: projectId, item_type: itemType, item_id: itemId, approved }, timeoutMs);
+}
+
+async function studioResolveWarning(projectName, warningId, timeoutMs = 10000) {
+  return postJson(`${STUDIO_URL}/project/warning/resolve`, { project_name: projectName, warning_id: warningId }, timeoutMs);
+}
+
 export {
   BACKEND_ORIGIN,
   CAPABILITIES_URL,
@@ -488,6 +525,7 @@ export {
   fetchDrafts,
   fetchHealth,
   fetchLatestDraft,
+  fetchLlmDownloadState,
   fetchLlmModels,
   fetchOutputSettings,
   fetchProfile,
@@ -515,4 +553,11 @@ export {
   fetchDoctor,
   refreshAudioDevices,
   fetchVersion,
+  studioCreateProject,
+  studioLoadProject,
+  studioRunWorkflow,
+  studioRunStage,
+  studioGetPanels,
+  studioApproveItem,
+  studioResolveWarning,
 };

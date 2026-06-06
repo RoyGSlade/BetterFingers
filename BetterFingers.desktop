@@ -2,9 +2,9 @@
 Type=Application
 Name=BetterFingers
 Comment=Restart BetterFingers with Linux keyboard hook permissions
-Exec=/home/roygslade/Desktop/BetterFingers/scripts/start-betterfingers-linux.sh
-Path=/home/roygslade/Desktop/BetterFingers
-Icon=/home/roygslade/Desktop/BetterFingers/images/BetterFingers.ico
-Terminal=true
+Exec=/home/donaven/Desktop/BetterFingers-1/scripts/launch-betterfingers-linux.sh
+Path=/home/donaven/Desktop/BetterFingers-1
+Icon=/home/donaven/Desktop/BetterFingers-1/images/BetterFingers.ico
+Terminal=false
 Categories=Utility;Accessibility;
 StartupNotify=true

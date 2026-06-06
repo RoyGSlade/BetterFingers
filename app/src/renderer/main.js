@@ -18,6 +18,7 @@ import {
   fetchDrafts,
   fetchHealth,
   fetchLatestDraft,
+  fetchLlmDownloadState,
   fetchLlmModels,
   fetchOutputSettings,
   fetchProfile,
@@ -49,6 +50,12 @@ import {
   duplicateProfile,
   exportProfile,
   importProfile,
+  studioCreateProject,
+  studioLoadProject,
+  studioRunWorkflow,
+  studioGetPanels,
+  studioApproveItem,
+  studioResolveWarning,
 } from './api/backend.js';
 
 const backendStatusEl = document.getElementById('backendStatus');
@@ -119,6 +126,11 @@ const llmModelBadgeEl = document.getElementById('llmModelBadge');
 const whisperModelBadgeEl = document.getElementById('whisperModelBadge');
 const llmModelDetailsEl = document.getElementById('llmModelDetails');
 const whisperModelDetailsEl = document.getElementById('whisperModelDetails');
+const llmDownloadProgressEl = document.getElementById('llmDownloadProgress');
+const llmDownloadProgressLabelEl = document.getElementById('llmDownloadProgressLabel');
+const llmDownloadProgressPercentEl = document.getElementById('llmDownloadProgressPercent');
+const llmDownloadProgressFillEl = document.getElementById('llmDownloadProgressFill');
+const llmDownloadProgressBytesEl = document.getElementById('llmDownloadProgressBytes');
 const selectLlmModelButton = document.getElementById('selectLlmModelButton');
 const downloadLlmModelButton = document.getElementById('downloadLlmModelButton');
 const deleteLlmModelButton = document.getElementById('deleteLlmModelButton');
@@ -323,6 +335,54 @@ function formatValue(value) {
   return String(value);
 }
 
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return '';
+  }
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let size = bytes;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  return `${size.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function renderLlmDownloadProgress(state = null, model = null) {
+  if (!llmDownloadProgressEl) {
+    return;
+  }
+
+  const status = String(state?.status || '').toLowerCase();
+  const show = ['starting', 'downloading', 'complete', 'ready', 'already_installed', 'error'].includes(status);
+  llmDownloadProgressEl.hidden = !show;
+  if (!show) {
+    return;
+  }
+
+  const percent = Math.max(0, Math.min(100, Number(state?.percent || 0)));
+  const rounded = Math.round(percent);
+  const message = state?.message || (model?.name ? `${model.name} download status` : 'Download status');
+  const downloaded = formatBytes(state?.downloaded_bytes);
+  const total = formatBytes(state?.total_bytes);
+
+  if (llmDownloadProgressLabelEl) {
+    llmDownloadProgressLabelEl.textContent = message;
+  }
+  if (llmDownloadProgressPercentEl) {
+    llmDownloadProgressPercentEl.textContent = `${rounded}%`;
+  }
+  if (llmDownloadProgressFillEl) {
+    llmDownloadProgressFillEl.style.width = `${percent}%`;
+    llmDownloadProgressFillEl.dataset.tone = status === 'error' ? 'danger' : status === 'complete' || status === 'ready' || status === 'already_installed' ? 'success' : 'active';
+  }
+  if (llmDownloadProgressBytesEl) {
+    llmDownloadProgressBytesEl.textContent = downloaded && total ? `${downloaded} of ${total}` : downloaded;
+  }
+}
+
 function renderDetailList(container, values, preferredKeys = []) {
   if (!container) {
     return;
@@ -465,6 +525,7 @@ function renderModelPanels() {
     { label: 'Approx size', value: estimateMb ? `${estimateMb.toLocaleString()} MB` : 'unknown' },
     { label: 'Runtime', value: llmPayload.llama_server_exists ? 'found' : 'missing', tone: llmPayload.llama_server_exists ? 'success' : 'danger' },
   ]);
+  renderLlmDownloadProgress(llmPayload.download_state, llmVisible);
   renderModelDetailGrid(whisperModelDetailsEl, [
     { label: 'Selected model', value: whisperPayload.selected_model_size },
     { label: 'Viewing', value: visibleWhisperSize },
@@ -1321,6 +1382,53 @@ async function runModelAction(button, label, action) {
   } finally {
     button.textContent = previous;
     button.disabled = false;
+  }
+}
+
+async function runLlmDownloadAction() {
+  const modelId = llmModelSelectEl?.value;
+  if (!modelId || !downloadLlmModelButton) {
+    return;
+  }
+
+  const previous = downloadLlmModelButton.textContent;
+  const visibleModel = (llmModelsPayload?.models ?? []).find((model) => model.id === modelId);
+  let stopped = false;
+  downloadLlmModelButton.disabled = true;
+  downloadLlmModelButton.textContent = 'Downloading...';
+  renderLlmDownloadProgress({ status: 'starting', percent: 0, message: `Starting ${visibleModel?.name ?? modelId} download.` }, visibleModel);
+
+  const poll = async () => {
+    if (stopped) {
+      return;
+    }
+    try {
+      const state = await fetchLlmDownloadState(modelId);
+      renderLlmDownloadProgress(state, visibleModel);
+    } catch (_error) {
+      // The main download request is the source of truth; progress polling is best-effort.
+    }
+  };
+
+  const pollTimer = window.setInterval(poll, 900);
+  try {
+    await poll();
+    const result = await downloadLlmModel(modelId);
+    stopped = true;
+    window.clearInterval(pollTimer);
+    renderLlmDownloadProgress({ status: result?.ok === false ? 'error' : 'ready', percent: result?.ok === false ? 0 : 100, message: result?.message || 'Download complete.' }, visibleModel);
+    setMessage(modelMessageEl, result?.message || 'LLM download completed.', result?.ok === false ? 'danger' : 'success');
+    await Promise.all([refreshModels(), refreshRuntime()]);
+  } catch (error) {
+    stopped = true;
+    window.clearInterval(pollTimer);
+    renderLlmDownloadProgress({ status: 'error', percent: 0, message: `Download failed: ${error.message}` }, visibleModel);
+    setMessage(modelMessageEl, `Download LLM failed: ${error.message}`, 'danger');
+  } finally {
+    stopped = true;
+    window.clearInterval(pollTimer);
+    downloadLlmModelButton.textContent = previous;
+    downloadLlmModelButton.disabled = false;
   }
 }
 
@@ -2815,8 +2923,7 @@ selectLlmModelButton?.addEventListener('click', () => {
 });
 
 downloadLlmModelButton?.addEventListener('click', () => {
-  const modelId = llmModelSelectEl?.value;
-  runModelAction(downloadLlmModelButton, 'Download LLM', () => downloadLlmModel(modelId));
+  runLlmDownloadAction();
 });
 
 deleteLlmModelButton?.addEventListener('click', () => {
@@ -3237,7 +3344,11 @@ async function refreshDoctor(refreshAudio = false) {
 
   } catch (error) {
     if (doctorCardsGrid) {
-      doctorCardsGrid.innerHTML = `<span class="empty-state" data-tone="danger">Doctor check failed: ${error.message}. Is the backend running?</span>`;
+      const errSpan = document.createElement('span');
+      errSpan.className = 'empty-state';
+      errSpan.dataset.tone = 'danger';
+      errSpan.textContent = `Doctor check failed: ${error.message}. Is the backend running?`;
+      doctorCardsGrid.replaceChildren(errSpan);
     }
     doctorRecoveryPanel?.classList.add('hidden');
   } finally {

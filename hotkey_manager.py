@@ -592,8 +592,6 @@ class HotkeyManager:
         )
         # Native hooks removed
 
-        if self.controller_enabled:
-
         self.review_tts_deduped = False
 
         if self.controller_enabled:

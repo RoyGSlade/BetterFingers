@@ -1,5 +1,7 @@
 import os
+import re
 import shutil
+import tempfile
 import logging
 import threading
 from datetime import datetime, timezone
@@ -8,7 +10,7 @@ from typing import Optional
 import pyperclip
 from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from llm_engine import get_engine, get_engine_if_initialized
 from transcriber import Transcriber
 from hotkey_manager import HotkeyManager
@@ -18,6 +20,7 @@ from intent_engine import intent_engine, IntentState
 from project_generator import project_generator
 from platform_capabilities import get_capabilities
 from platform_paths import ensure_app_dirs, get_app_data_dir, get_config_dir
+import studio_memory
 from model_manager import (
     DEFAULT_MODEL,
     AVAILABLE_MODELS,
@@ -75,8 +78,9 @@ async def auth_middleware(request: Request, call_next):
     expected_token = os.getenv("BETTERFINGERS_AUTH_TOKEN")
     if expected_token and not request.url.path.startswith("/ws/"):
         if request.method != "OPTIONS":
-            auth_header = request.headers.get("Authorization")
-            if not auth_header or not auth_header.startswith("Bearer ") or auth_header.split(" ")[1] != expected_token:
+            auth_header = request.headers.get("Authorization", "")
+            parts = auth_header.split(" ", 1)
+            if len(parts) != 2 or parts[0] != "Bearer" or parts[1] != expected_token:
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
     return await call_next(request)
 
@@ -364,14 +368,15 @@ async def broadcast_status(status: str, data: dict = None):
         message.update(data)
     
     to_remove = []
-    for ws in active_websockets:
+    for ws in list(active_websockets):
         try:
             await ws.send_json(message)
         except Exception:
             to_remove.append(ws)
-    
+
     for ws in to_remove:
-        active_websockets.remove(ws)
+        if ws in active_websockets:
+            active_websockets.remove(ws)
 
 
 def broadcast_status_threadsafe(status: str, data: dict = None):
@@ -1490,6 +1495,248 @@ class WhisperModelRequest(BaseModel):
     prefer_gpu: bool = True
 
 
+class StudioProjectRequest(BaseModel):
+    name: str
+    preferences: dict = Field(default_factory=dict)
+
+
+class StudioBibleRequest(BaseModel):
+    content: dict
+
+
+class StudioCharacterRequest(BaseModel):
+    name: str
+    description: str = ""
+    role: str = ""
+    archetype: str = ""
+    status: str = "draft"
+    metadata: dict = Field(default_factory=dict)
+
+
+class StudioEpisodeRequest(BaseModel):
+    name: str
+    summary: str = ""
+    metadata: dict = Field(default_factory=dict)
+
+
+class StudioMinuteRequest(BaseModel):
+    episode_id: int
+    minute_number: int
+    summary: str = ""
+    metadata: dict = Field(default_factory=dict)
+
+
+class StudioPanelRequest(BaseModel):
+    minute_id: int
+    panel_number: int
+    visual_description: str = ""
+    style_prompt: str = ""
+    metadata: dict = Field(default_factory=dict)
+
+
+class StudioContinuityWarningRequest(BaseModel):
+    target_type: str
+    target_id: Optional[int] = None
+    severity: str
+    message: str
+    metadata: dict = Field(default_factory=dict)
+
+
+class StudioApprovalRequest(BaseModel):
+    item_type: str
+    item_id: int
+    approved: bool
+    approved_by: str = "User"
+    note: str = ""
+
+
+def _load_studio_project(project_name: str):
+    try:
+        project = studio_memory.get_project_by_name(project_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not project:
+        raise HTTPException(status_code=404, detail="Studio project not found")
+    return project
+
+
+@app.post("/studio/projects")
+async def create_studio_project(request: StudioProjectRequest):
+    try:
+        project = studio_memory.create_project(request.name, preferences=request.preferences)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "project": project, "asset_dirs": list(studio_memory.PROJECT_ASSET_DIRS)}
+
+
+@app.get("/studio/projects/{project_name}")
+async def load_studio_project(project_name: str):
+    project = _load_studio_project(project_name)
+    return {
+        "ok": True,
+        "project": project,
+        "bible": studio_memory.get_bible(project["name"], project["id"]),
+        "characters": studio_memory.get_characters(project["name"], project["id"]),
+        "episodes": studio_memory.get_episodes(project["name"], project["id"]),
+        "minutes": studio_memory.get_minutes(project["name"], project["id"]),
+        "panels": studio_memory.get_panels(project["name"], project["id"]),
+        "continuity_warnings": studio_memory.get_continuity_warnings(project["name"], project["id"]),
+    }
+
+
+@app.get("/studio/projects/{project_name}/bible")
+async def get_studio_bible(project_name: str):
+    project = _load_studio_project(project_name)
+    return {"ok": True, "project_id": project["id"], "bible": studio_memory.get_bible(project["name"], project["id"])}
+
+
+@app.post("/studio/projects/{project_name}/bible")
+async def save_studio_bible(project_name: str, request: StudioBibleRequest):
+    project = _load_studio_project(project_name)
+    try:
+        studio_memory.save_bible(project["name"], project["id"], request.content)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "project_id": project["id"], "bible": studio_memory.get_bible(project["name"], project["id"])}
+
+
+@app.post("/studio/projects/{project_name}/characters")
+async def create_studio_character(project_name: str, request: StudioCharacterRequest):
+    project = _load_studio_project(project_name)
+    try:
+        character_id = studio_memory.add_character(
+            project["name"],
+            project["id"],
+            request.name,
+            request.description,
+            request.role,
+            request.archetype,
+            status=request.status,
+            metadata=request.metadata,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "character": studio_memory.get_character(project["name"], project["id"], character_id)}
+
+
+@app.put("/studio/projects/{project_name}/characters/{character_id}")
+async def update_studio_character(project_name: str, character_id: int, request: StudioCharacterRequest):
+    project = _load_studio_project(project_name)
+    try:
+        character = studio_memory.update_character(
+            project["name"],
+            project["id"],
+            character_id,
+            name=request.name,
+            description=request.description,
+            role=request.role,
+            archetype=request.archetype,
+            status=request.status,
+            metadata=request.metadata,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not character:
+        raise HTTPException(status_code=404, detail="Character not found")
+    return {"ok": True, "character": character}
+
+
+@app.post("/studio/projects/{project_name}/episodes")
+async def create_studio_episode(project_name: str, request: StudioEpisodeRequest):
+    project = _load_studio_project(project_name)
+    try:
+        episode_id = studio_memory.add_episode(project["name"], project["id"], request.name, request.summary, metadata=request.metadata)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "episode_id": episode_id, "episodes": studio_memory.get_episodes(project["name"], project["id"])}
+
+
+@app.post("/studio/projects/{project_name}/minutes")
+async def create_studio_minute(project_name: str, request: StudioMinuteRequest):
+    project = _load_studio_project(project_name)
+    try:
+        minute_id = studio_memory.add_minute(
+            project["name"],
+            project["id"],
+            request.episode_id,
+            request.minute_number,
+            request.summary,
+            metadata=request.metadata,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "minute_id": minute_id, "minutes": studio_memory.get_minutes(project["name"], project["id"])}
+
+
+@app.post("/studio/projects/{project_name}/panels")
+async def create_studio_panel(project_name: str, request: StudioPanelRequest):
+    project = _load_studio_project(project_name)
+    try:
+        panel_id = studio_memory.add_panel(
+            project["name"],
+            project["id"],
+            request.minute_id,
+            request.panel_number,
+            request.visual_description,
+            request.style_prompt,
+            metadata=request.metadata,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "panel_id": panel_id, "panels": studio_memory.get_panels(project["name"], project["id"])}
+
+
+@app.get("/studio/projects/{project_name}/panels")
+async def list_studio_panels(project_name: str, minute_id: Optional[int] = None):
+    project = _load_studio_project(project_name)
+    return {"ok": True, "panels": studio_memory.get_panels(project["name"], project["id"], minute_id=minute_id)}
+
+
+@app.post("/studio/projects/{project_name}/continuity-warnings")
+async def save_studio_continuity_warning(project_name: str, request: StudioContinuityWarningRequest):
+    project = _load_studio_project(project_name)
+    try:
+        warning_id = studio_memory.add_continuity_warning(
+            project["name"],
+            project["id"],
+            request.target_type,
+            request.target_id,
+            request.severity,
+            request.message,
+            metadata=request.metadata,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "warning_id": warning_id, "warnings": studio_memory.get_continuity_warnings(project["name"], project["id"])}
+
+
+@app.post("/studio/projects/{project_name}/approvals")
+async def approve_studio_item(project_name: str, request: StudioApprovalRequest):
+    project = _load_studio_project(project_name)
+    try:
+        approval_id = studio_memory.record_approval(
+            project["name"],
+            project["id"],
+            request.item_type,
+            request.item_id,
+            request.approved,
+            approved_by=request.approved_by,
+            note=request.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "approval_id": approval_id, "approvals": studio_memory.get_approvals(project["name"], project["id"])}
+
+
+@app.get("/studio/projects/{project_name}/export")
+async def export_studio_project(project_name: str):
+    project = _load_studio_project(project_name)
+    payload = studio_memory.export_project_json(project["name"], project["id"])
+    if not payload:
+        raise HTTPException(status_code=404, detail="Studio project not found")
+    return payload
+
+
 def get_selected_llm_model_id():
     cfg = load_profile(get_last_active_profile())
     return str(cfg.get("llm_model_id", DEFAULT_MODEL) or DEFAULT_MODEL).strip()
@@ -2055,26 +2302,21 @@ async def transcribe_audio(file: UploadFile = File(...)):
     if not transcriber:
         raise HTTPException(status_code=503, detail="Transcriber not initialized")
     
-    # Save Upload to Temp
-    temp_filename = f"temp_{file.filename}"
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    temp_filename = tmp.name
     try:
-        with open(temp_filename, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        
-        # Transcribe (pass filename string, supported by faster-whisper wrapper)
+        with tmp:
+            shutil.copyfileobj(file.file, tmp)
         text = transcriber.transcribe(temp_filename)
         return {"text": text}
-        
     except Exception as e:
         logging.error(f"Transcription Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Transcription failed")
     finally:
-        # Cleanup
-        if os.path.exists(temp_filename):
-            try:
-                os.remove(temp_filename)
-            except Exception:
-                pass
+        try:
+            os.remove(temp_filename)
+        except OSError:
+            pass
 
 class TTSRequest(BaseModel):
     text: str
@@ -2233,23 +2475,21 @@ async def ocr_extract(file: UploadFile = File(...)):
         import pytesseract
         from PIL import Image
         
-        # Save temp file
-        temp_filename = f"temp_ocr_{file.filename}"
-        with open(temp_filename, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-            
+        tmp_ocr = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+        temp_filename = tmp_ocr.name
         try:
-            # Attempt OCR
-            # Requires Tesseract installed on system and in PATH
-            # If on Windows, you might need: pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+            with tmp_ocr:
+                shutil.copyfileobj(file.file, tmp_ocr)
             text = pytesseract.image_to_string(Image.open(temp_filename))
             return {"text": text.strip()}
         except Exception as e:
             logging.error(f"Tesseract Error: {e}")
             return {"text": "[Error: Tesseract not found or failed. Please ensure Tesseract-OCR is installed.]"}
         finally:
-            if os.path.exists(temp_filename):
+            try:
                 os.remove(temp_filename)
+            except OSError:
+                pass
                 
     except ImportError:
          return {"text": "[Error: pytesseract library not installed on backend.]"}
@@ -2351,7 +2591,8 @@ async def export_project(request: ExportRequest):
         # Actually, let's stick to the "server saves to desktop" or "downloads folder" approach for this local app.
         
         # For this specific task constraints, let's save to the Desktop for easy verification.
-        export_path = os.path.join(os.path.expanduser("~"), "Desktop", f"{request.title.replace(' ', '_')}_Export.zip")
+        safe_title = re.sub(r"[^\w\-]", "_", request.title)[:60] or "export"
+        export_path = os.path.join(os.path.expanduser("~"), "Desktop", f"{safe_title}_Export.zip")
         with open(export_path, "wb") as f:
             f.write(zip_buffer.getvalue())
             
@@ -2396,6 +2637,224 @@ async def generate_project(data: dict):
     
     success, msg = project_generator.generate_project(plan, path)
     return {"status": "success" if success else "error", "message": msg}
+
+
+# --- Studio Mode Endpoints (Agent 2) ---
+
+class StudioCreateProjectRequest(BaseModel):
+    project_name: str
+
+class StudioLoadProjectRequest(BaseModel):
+    project_name: str
+
+class StudioRunWorkflowRequest(BaseModel):
+    project_name: str
+    seed_text: str
+
+class StudioRunStageRequest(BaseModel):
+    project_name: str
+    stage: str
+    seed_text: Optional[str] = None
+    input_data: Optional[dict] = None
+
+class StudioWarningResolveRequest(BaseModel):
+    project_name: str
+    warning_id: int
+
+class StudioApproveRequest(BaseModel):
+    project_name: str
+    project_id: int
+    item_type: str
+    item_id: int
+    approved: bool
+    approved_by: Optional[str] = "User"
+
+@app.post("/studio/project/create")
+async def studio_create_project(request: StudioCreateProjectRequest):
+    import studio_memory as memory
+    try:
+        project_id = memory.init_project_db(request.project_name)
+        return {"status": "success", "project_id": project_id, "project_name": request.project_name}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"Studio create project failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/studio/project/load")
+async def studio_load_project(request: StudioLoadProjectRequest):
+    import studio_memory as memory
+    try:
+        proj = memory.get_project_by_name(request.project_name)
+        if not proj:
+            raise HTTPException(status_code=404, detail="Project not found")
+        project_id = proj["id"]
+        data = memory.export_project_json(request.project_name, project_id)
+        return {"status": "success", "project": proj, "data": data}
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"Studio load project failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/studio/workflow/run")
+async def studio_run_workflow(request: StudioRunWorkflowRequest):
+    from studio_workflow import StudioWorkflowRunner
+    try:
+        runner = StudioWorkflowRunner(request.project_name)
+        result = runner.run_full_pipeline(request.seed_text)
+        if result.get("ok"):
+            return result
+        else:
+            raise HTTPException(status_code=500, detail=result.get("error"))
+    except Exception as e:
+        logging.error(f"Studio workflow run failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/studio/workflow/stage")
+async def studio_run_stage(request: StudioRunStageRequest):
+    from studio_workflow import StudioWorkflowRunner
+    import studio_memory as memory
+    try:
+        runner = StudioWorkflowRunner(request.project_name)
+        stage_name = request.stage.lower().strip()
+        
+        # Determine inputs based on stage
+        premise = memory.get_bible(request.project_name, runner.project_id).get("premise")
+        world = memory.get_bible(request.project_name, runner.project_id).get("world")
+        characters = memory.get_characters(request.project_name, runner.project_id)
+        
+        if stage_name == "intake":
+            if not request.seed_text:
+                raise HTTPException(status_code=400, detail="seed_text is required for intake stage")
+            data = runner.run_intake(request.seed_text)
+            return {"status": "success", "stage": "intake", "data": data}
+            
+        elif stage_name == "world_building":
+            if not premise:
+                raise HTTPException(status_code=400, detail="No premise found in memory. Run intake first.")
+            data = runner.run_world_building(premise)
+            return {"status": "success", "stage": "world_building", "data": data}
+            
+        elif stage_name == "character_building":
+            if not premise or not world:
+                raise HTTPException(status_code=400, detail="No premise/world found in memory. Run world building first.")
+            data = runner.run_character_building(premise, world)
+            return {"status": "success", "stage": "character_building", "data": data}
+            
+        elif stage_name == "story_planning":
+            if not premise or not world or not characters:
+                raise HTTPException(status_code=400, detail="Missing premise, world, or characters. Run prior stages first.")
+            story_plan, ep_id = runner.run_story_planning(premise, world, characters)
+            return {"status": "success", "stage": "story_planning", "data": story_plan, "episode_id": ep_id}
+            
+        elif stage_name == "panel_planning" or stage_name == "dialogue":
+            episodes = memory.get_episodes(request.project_name, runner.project_id)
+            if not episodes:
+                raise HTTPException(status_code=400, detail="No episode found in memory. Run story planning first.")
+            ep_id = episodes[0]["id"]
+            story_plan = {
+                "summary": episodes[0]["summary"],
+                "episodes": [{"name": m["summary"].split(":")[0], "summary": m["summary"].split(":")[1] if ":" in m["summary"] else m["summary"]} for m in memory.get_minutes(request.project_name, runner.project_id)],
+                "canon_events": [{"description": c["description"], "time_index": c["time_index"]} for c in memory.get_canon_events(request.project_name, runner.project_id)]
+            }
+            data = runner.run_dialogue_and_panels(premise, world, characters, story_plan, ep_id)
+            return {"status": "success", "stage": stage_name, "data": data}
+            
+        elif stage_name == "approval_ready":
+            panels = memory.get_panels(request.project_name, runner.project_id)
+            # Add dialogue/text back into panels for audit input format compatibility
+            dialogue_lines = {d["panel_id"]: d for d in memory.get_dialogue_lines(request.project_name, runner.project_id)}
+            audit_panels = []
+            for p in panels:
+                d_line = dialogue_lines.get(p["id"], {})
+                audit_panels.append({
+                    "panel_number": p["panel_number"],
+                    "visual_description": p["visual_description"],
+                    "style_prompt": p["style_prompt"],
+                    "speaker": d_line.get("speaker", "Narrator"),
+                    "text": d_line.get("text", "")
+                })
+            data = runner.run_continuity_audit(premise, world, characters, audit_panels)
+            return {"status": "success", "stage": "approval_ready", "data": data}
+            
+        else:
+            raise HTTPException(status_code=400, detail=f"Invalid stage name: {stage_name}")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Studio workflow stage failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/studio/project/{project_name}/{project_id}/panels")
+async def studio_get_project_panels(project_name: str, project_id: int):
+    import studio_memory as memory
+    try:
+        panels = memory.get_panels(project_name, project_id)
+        dialogue = memory.get_dialogue_lines(project_name, project_id)
+        # Zip panels and dialogue
+        dial_dict = {d["panel_id"]: d for d in dialogue}
+        zipped = []
+        for p in panels:
+            d = dial_dict.get(p["id"], {})
+            zipped.append({
+                "id": p["id"],
+                "panel_number": p["panel_number"],
+                "visual_description": p["visual_description"],
+                "style_prompt": p["style_prompt"],
+                "approved": p["approved"],
+                "dialogue": {
+                    "id": d.get("id"),
+                    "speaker": d.get("speaker", "Narrator"),
+                    "text": d.get("text", ""),
+                    "audio_path": d.get("audio_path"),
+                    "approved": d.get("approved", 0)
+                }
+            })
+        return {"status": "success", "panels": zipped}
+    except Exception as e:
+        logging.error(f"Studio get panels failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/studio/project/warning/resolve")
+async def studio_resolve_warning(request: StudioWarningResolveRequest):
+    import studio_memory as memory
+    try:
+        memory.resolve_continuity_warning(request.project_name, request.warning_id)
+        return {"status": "success", "warning_id": request.warning_id}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"Studio resolve warning failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/studio/project/approve")
+async def studio_approve_item(request: StudioApproveRequest):
+    import studio_memory as memory
+    try:
+        memory.record_approval(
+            request.project_name, 
+            request.project_id, 
+            request.item_type, 
+            request.item_id, 
+            request.approved, 
+            request.approved_by
+        )
+        return {
+            "status": "success", 
+            "item_type": request.item_type, 
+            "item_id": request.item_id, 
+            "approved": request.approved
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"Studio approve item failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 if __name__ == "__main__":
     import argparse

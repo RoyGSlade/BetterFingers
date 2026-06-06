@@ -114,9 +114,11 @@ class ServerDraftTests(unittest.TestCase):
         self._transcriber = server.transcriber
         self._output_injector = server.output_injector
         self._hotkey_manager = server.hotkey_manager
+        self._tts_engine = server.tts_engine
         server.transcriber = None
         server.output_injector = None
         server.hotkey_manager = None
+        server.tts_engine = None
         server.draft_queue.clear()
         server.draft_recordings.clear()
         server.pending_manual_send_ids.clear()
@@ -128,6 +130,7 @@ class ServerDraftTests(unittest.TestCase):
         server.transcriber = self._transcriber
         server.output_injector = self._output_injector
         server.hotkey_manager = self._hotkey_manager
+        server.tts_engine = self._tts_engine
         server.draft_queue.clear()
         server.draft_recordings.clear()
         server.pending_manual_send_ids.clear()
@@ -297,8 +300,9 @@ class ServerDraftTests(unittest.TestCase):
         data = response.json()
         self.assertEqual(data["final_text"], "custom: final make it cozy")
         self.assertEqual(data["status"], "pending")
-        self.assertEqual([status for status, _payload in statuses], ["draft_rewriting", "draft_rewritten"])
-        self.assertEqual(statuses[1][1]["draft_id"], draft["id"])
+        rewrite_statuses = [(status, payload) for status, payload in statuses if status.startswith("draft_rewrit")]
+        self.assertEqual([status for status, _payload in rewrite_statuses], ["draft_rewriting", "draft_rewritten"])
+        self.assertEqual(rewrite_statuses[1][1]["draft_id"], draft["id"])
 
     def test_draft_tts_uses_selected_text_payload(self):
         draft = server.create_draft("raw", "final")

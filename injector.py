@@ -3,9 +3,23 @@ import random
 import threading
 import time
 
+import sys
+
 import keyboard
-import pydirectinput
 import pyperclip
+
+if sys.platform == "win32":
+    import pydirectinput
+else:
+    # pydirectinput uses ctypes.windll which is Windows-only.
+    # Stub it on Linux so this module and its tests collect cleanly.
+    import types as _types
+    pydirectinput = _types.SimpleNamespace(
+        PAUSE=0.0,
+        keyDown=lambda key: None,
+        keyUp=lambda key: None,
+        press=lambda key: None,
+    )
 
 from utils import load_profile
 

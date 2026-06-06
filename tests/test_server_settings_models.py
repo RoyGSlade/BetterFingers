@@ -92,6 +92,7 @@ class ServerSettingsModelsTests(unittest.TestCase):
                     listed = client.get("/models/llm")
                     selected = client.post("/models/llm/select", json={"model_id": "gemma-3-4b-q6"})
                     downloaded = client.post("/models/llm/gemma-3-4b-q6/download")
+                    download_state = client.get("/models/llm/gemma-3-4b-q6/download-state")
                     deleted = client.delete("/models/llm/gemma-3-4b-q6")
                     unloaded = client.post("/models/unload/llm")
 
@@ -99,6 +100,7 @@ class ServerSettingsModelsTests(unittest.TestCase):
         self.assertEqual(selected.status_code, 200)
         self.assertEqual(engine.model_id, "gemma-3-4b-q6")
         self.assertTrue(downloaded.json()["ok"])
+        self.assertEqual(download_state.status_code, 200)
         self.assertTrue(deleted.json()["ok"])
         self.assertTrue(unloaded.json()["ok"])
         self.assertTrue(engine.shutdown_called)

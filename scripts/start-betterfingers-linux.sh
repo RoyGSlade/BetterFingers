@@ -21,7 +21,25 @@ resolve_python() {
   command -v python3
 }
 
+resolve_node() {
+  if command -v node >/dev/null 2>&1; then
+    command -v node
+    return
+  fi
+
+  local node_bin
+  node_bin="$(find "$HOME/.nvm/versions/node" -path '*/bin/node' -type f -executable 2>/dev/null | sort -V | tail -n 1 || true)"
+  if [[ -n "$node_bin" ]]; then
+    printf '%s\n' "$node_bin"
+    return
+  fi
+
+  printf 'node'
+}
+
 PYTHON_BIN="${BETTERFINGERS_PYTHON:-$(resolve_python)}"
+NODE_BIN="${BETTERFINGERS_NODE:-$(resolve_node)}"
+NODE_BIN_DIR="$(dirname "$NODE_BIN")"
 BACKEND_LOG="$LOG_DIR/backend-$RUN_ID.log"
 ELECTRON_LOG="$LOG_DIR/electron-$RUN_ID.log"
 
@@ -167,13 +185,14 @@ fi
 printf 'BetterFingers Linux launcher\n'
 printf 'App: %s\n' "$APP_DIR"
 printf 'Python: %s\n' "$PYTHON_BIN"
+printf 'Node: %s\n' "$NODE_BIN"
 printf 'Logs: %s\n\n' "$LOG_DIR"
 
 printf 'Requesting sudo now so Linux keyboard hooks can access input devices...\n'
 sudo -v
 
 kill_previous_launch
-trap cleanup_this_launch EXIT INT TERM
+trap cleanup_this_launch EXIT INT TERM HUP
 
 PYTHONPATH_EXTRA="$(user_site_pythonpath)"
 if [[ -n "${PYTHONPATH:-}" ]]; then
@@ -210,7 +229,8 @@ printf 'Starting Electron UI from current code...\n'
     BETTERFINGERS_PYTHON="$PYTHON_BIN" \
     BETTERFINGERS_HOST="$HOST" \
     BETTERFINGERS_PORT="$PORT" \
-    npm run dev
+    PATH="$NODE_BIN_DIR:$PATH" \
+    "$NODE_BIN" scripts/dev.js
 ) >>"$ELECTRON_LOG" 2>&1 &
 ELECTRON_PID=$!
 write_state

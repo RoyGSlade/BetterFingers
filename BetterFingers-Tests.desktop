@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=BetterFingers Tests
+Comment=Run the BetterFingers pytest suite in the project virtual environment
+Exec=/home/donaven/Desktop/BetterFingers-1/scripts/launch-betterfingers-tests-linux.sh
+Path=/home/donaven/Desktop/BetterFingers-1
+Icon=/home/donaven/Desktop/BetterFingers-1/images/BetterFingers.ico
+Terminal=false
+Categories=Development;
+StartupNotify=true
