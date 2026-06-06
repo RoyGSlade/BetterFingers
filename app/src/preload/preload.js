@@ -13,6 +13,7 @@ const api = {
   updateOverlayStatus: (status) => ipcRenderer.invoke('overlay:update-status', status),
   showReviewOverlay: (draft) => ipcRenderer.invoke('review:show', draft),
   hideReviewOverlay: () => ipcRenderer.invoke('review:hide'),
+  updateHotkeys: (config) => ipcRenderer.send('update-hotkeys', config),
 };
 
 contextBridge.exposeInMainWorld('betterFingers', api);

@@ -98,11 +98,19 @@ async function fetchProfiles(timeoutMs = 2500) {
 }
 
 async function fetchProfile(name, timeoutMs = 2500) {
-  return fetchJson(`${SETTINGS_PROFILES_URL}/${encodeURIComponent(name)}`, timeoutMs);
+  const data = await fetchJson(`${SETTINGS_PROFILES_URL}/${encodeURIComponent(name)}`, timeoutMs);
+  if (data && data.active && data.settings && typeof window !== 'undefined' && window.betterFingers?.updateHotkeys) {
+    window.betterFingers.updateHotkeys(data.settings);
+  }
+  return data;
 }
 
 async function saveProfile(name, settings, timeoutMs = 10000) {
-  return postJson(`${SETTINGS_PROFILES_URL}/${encodeURIComponent(name)}`, { settings }, timeoutMs);
+  const data = await postJson(`${SETTINGS_PROFILES_URL}/${encodeURIComponent(name)}`, { settings }, timeoutMs);
+  if (data && data.active && data.settings && typeof window !== 'undefined' && window.betterFingers?.updateHotkeys) {
+    window.betterFingers.updateHotkeys(data.settings);
+  }
+  return data;
 }
 
 async function createProfile(name, settings = {}, timeoutMs = 10000) {

@@ -2,8 +2,6 @@ import logging
 import threading
 import time
 
-import keyboard
-
 from input_binding import InputBinding
 from utils import load_profile
 
@@ -590,58 +588,13 @@ class HotkeyManager:
             "Hotkey listener start: "
             f"hotkey='{self.hotkey}' force_stop='{self.force_stop_key}' "
             f"manual_send='{self.manual_send_hotkey}' review_tts='{self.review_tts_hotkey}' "
-            f"mode='{self.mode}'"
+            f"mode='{self.mode}' (Note: Native keyboard hooks disabled; running via Electron IPC)"
         )
-        try:
-            if self.mode == "ptt":
-                h1 = keyboard.on_press_key(self.hotkey, self._on_ptt_press, suppress=False)
-                h2 = keyboard.on_release_key(self.hotkey, self._on_ptt_release, suppress=False)
-                self.keyboard_hooks.extend([h1, h2])
-            else:
-                self.toggle_hotkey_handle = keyboard.add_hotkey(self.hotkey, self._toggle, suppress=False)
-        except Exception as exc:
-            message = f"Failed to hook hotkey '{self.hotkey}': {exc}"
-            self.keyboard_hook_errors.append(message)
-            logging.error(message)
+        # Native hooks removed
 
-        if self.force_stop_key:
-            try:
-                self.force_stop_handle = keyboard.add_hotkey(
-                    self.force_stop_key, self._force_stop_trigger, suppress=False
-                )
-            except Exception as exc:
-                message = f"Failed to hook force stop key '{self.force_stop_key}': {exc}"
-                self.keyboard_hook_errors.append(message)
-                logging.error(message)
-
-        if self.manual_send_hotkey:
-            try:
-                self.manual_send_handle = keyboard.add_hotkey(
-                    self.manual_send_hotkey, self._manual_send_trigger, suppress=False
-                )
-            except Exception as exc:
-                message = f"Failed to hook manual send key '{self.manual_send_hotkey}': {exc}"
-                self.keyboard_hook_errors.append(message)
-                logging.error(message)
+        if self.controller_enabled:
 
         self.review_tts_deduped = False
-        if self.review_tts_hotkey:
-            manual_key = (self.manual_send_hotkey or "").strip().lower()
-            review_key = (self.review_tts_hotkey or "").strip().lower()
-            if manual_key and manual_key == review_key:
-                self.review_tts_deduped = True
-                logging.info(
-                    "Review TTS hotkey matches primary action hotkey; skipping duplicate hook."
-                )
-            else:
-                try:
-                    self.review_tts_handle = keyboard.add_hotkey(
-                        self.review_tts_hotkey, self._review_tts_trigger, suppress=False
-                    )
-                except Exception as exc:
-                    message = f"Failed to hook review TTS key '{self.review_tts_hotkey}': {exc}"
-                    self.keyboard_hook_errors.append(message)
-                    logging.error(message)
 
         if self.controller_enabled:
             self._ensure_controller_thread()
@@ -654,60 +607,11 @@ class HotkeyManager:
             self.controller_thread.join(timeout=1.0)
             self.controller_thread = None
 
-        for hook in self.keyboard_hooks:
-            try:
-                keyboard.unhook(hook)
-            except Exception:
-                pass
         self.keyboard_hooks = []
-
-        if self.toggle_hotkey_handle is not None:
-            try:
-                keyboard.remove_hotkey(self.toggle_hotkey_handle)
-            except Exception:
-                pass
-            self.toggle_hotkey_handle = None
-        else:
-            try:
-                keyboard.remove_hotkey(self.hotkey)
-            except Exception:
-                pass
-
-        if self.force_stop_handle is not None:
-            try:
-                keyboard.remove_hotkey(self.force_stop_handle)
-            except Exception:
-                pass
-            self.force_stop_handle = None
-        elif self.force_stop_key:
-            try:
-                keyboard.remove_hotkey(self.force_stop_key)
-            except Exception:
-                pass
-
-        if self.manual_send_handle is not None:
-            try:
-                keyboard.remove_hotkey(self.manual_send_handle)
-            except Exception:
-                pass
-            self.manual_send_handle = None
-        elif self.manual_send_hotkey:
-            try:
-                keyboard.remove_hotkey(self.manual_send_hotkey)
-            except Exception:
-                pass
-
-        if self.review_tts_handle is not None:
-            try:
-                keyboard.remove_hotkey(self.review_tts_handle)
-            except Exception:
-                pass
-            self.review_tts_handle = None
-        elif self.review_tts_hotkey and not self.review_tts_deduped:
-            try:
-                keyboard.remove_hotkey(self.review_tts_hotkey)
-            except Exception:
-                pass
+        self.toggle_hotkey_handle = None
+        self.force_stop_handle = None
+        self.manual_send_handle = None
+        self.review_tts_handle = None
         self.review_tts_deduped = False
 
     def update_config(self, profile_name):

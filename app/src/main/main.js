@@ -6,6 +6,7 @@ const { createMainWindow, focusMainWindow, createOverlayWindow } = require('./wi
 const { createSidecar } = require('./sidecar');
 const { createTray } = require('./tray');
 const { registerIpc } = require('./ipc');
+const { unregisterAllHotkeys } = require('./hotkeys');
 
 const authToken = randomUUID();
 
@@ -96,6 +97,7 @@ async function requestQuit() {
     if (sidecar) {
       await sidecar.stop();
     }
+    unregisterAllHotkeys();
   } catch (error) {
     console.error('Failed to stop backend cleanly:', error);
   } finally {

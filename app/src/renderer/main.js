@@ -1070,6 +1070,9 @@ async function refreshProfiles() {
   fillSelect(profileSelectEl, payload.profiles ?? [], payload.active_profile);
   renderProfileSettings(payload.settings ?? {});
   setMessage(profileMessageEl, `Active profile: ${payload.active_profile}`, 'success');
+  if (payload.settings && typeof window !== 'undefined' && window.betterFingers?.updateHotkeys) {
+    window.betterFingers.updateHotkeys(payload.settings);
+  }
   return payload;
 }
 
@@ -2589,6 +2592,9 @@ activateProfileButton?.addEventListener('click', async () => {
     const payload = await activateProfile(name);
     fillSelect(profileSelectEl, payload.profiles ?? [], payload.active_profile);
     renderProfileSettings(payload.settings ?? {});
+    if (payload.settings && typeof window !== 'undefined' && window.betterFingers?.updateHotkeys) {
+      window.betterFingers.updateHotkeys(payload.settings);
+    }
     await Promise.all([refreshRuntime(), refreshOutputSettings()]);
     setMessage(profileMessageEl, `Activated ${payload.active_profile}.`, 'success');
   } catch (error) {
@@ -2745,6 +2751,9 @@ importProfileFileEl?.addEventListener('change', (e) => {
       const payload = await importProfile(parsed);
       fillSelect(profileSelectEl, payload.profiles ?? [], payload.active_profile);
       renderProfileSettings(payload.settings ?? {});
+      if (payload.settings && typeof window !== 'undefined' && window.betterFingers?.updateHotkeys) {
+        window.betterFingers.updateHotkeys(payload.settings);
+      }
       setMessage(profileMessageEl, `Imported profile ${payload.active_profile} successfully.`, 'success');
     } catch (error) {
       setMessage(profileMessageEl, `Import failed: ${error.message}`, 'danger');
@@ -2778,6 +2787,9 @@ deleteProfileButton?.addEventListener('click', async () => {
     const payload = await deleteProfile(name);
     fillSelect(profileSelectEl, payload.profiles ?? [], payload.active_profile);
     renderProfileSettings(payload.settings ?? {});
+    if (payload.settings && typeof window !== 'undefined' && window.betterFingers?.updateHotkeys) {
+      window.betterFingers.updateHotkeys(payload.settings);
+    }
     await Promise.all([refreshRuntime(), refreshOutputSettings()]);
     setMessage(profileMessageEl, `Deleted ${name}.`, 'success');
   } catch (error) {

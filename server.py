@@ -1957,6 +1957,12 @@ async def runtime_recording_toggle():
     return toggle_recording_runtime()
 
 
+@app.post("/runtime/tts/toggle")
+async def runtime_tts_toggle():
+    handle_review_tts_shortcut()
+    return {"ok": True, "message": "Review TTS shortcut triggered."}
+
+
 @app.post("/runtime/warmup")
 async def runtime_warmup(request: RuntimeWarmupRequest):
     result = {"requested": request.dict()}

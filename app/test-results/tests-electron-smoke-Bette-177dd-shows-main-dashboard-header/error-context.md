@@ -12,35 +12,27 @@
 # Error details
 
 ```
-Error: electron.launch: Target page, context or browser has been closed
-Browser logs:
-
-<launching> /home/roygslade/Desktop/BetterFingers/app/node_modules/electron/dist/electron -r /home/roygslade/Desktop/BetterFingers/app/node_modules/playwright-core/lib/server/electron/loader.js --no-sandbox --inspect=0 --remote-debugging-port=0 .
-<launched> pid=34121
-[pid=34121][err] Debugger listening on ws://127.0.0.1:44805/d4622c42-785e-4bf7-b792-961cdae7869e
-[pid=34121][err] For help, see: https://nodejs.org/en/docs/inspector
-[pid=34121][err] Debugger attached.
-[pid=34121][err] 
-[pid=34121][err] DevTools listening on ws://127.0.0.1:40703/devtools/browser/56869a2f-0d4b-48e5-8e15-eeac26ec091c
+Error: electron.launch: WebSocket error: read ECONNRESET
 Call log:
   - <launching> /home/roygslade/Desktop/BetterFingers/app/node_modules/electron/dist/electron -r /home/roygslade/Desktop/BetterFingers/app/node_modules/playwright-core/lib/server/electron/loader.js --no-sandbox --inspect=0 --remote-debugging-port=0 .
-  - <launched> pid=34121
-  - [pid=34121][err] Debugger listening on ws://127.0.0.1:44805/d4622c42-785e-4bf7-b792-961cdae7869e
-  - [pid=34121][err] For help, see: https://nodejs.org/en/docs/inspector
-  - <ws connecting> ws://127.0.0.1:44805/d4622c42-785e-4bf7-b792-961cdae7869e
-  - <ws connected> ws://127.0.0.1:44805/d4622c42-785e-4bf7-b792-961cdae7869e
-  - [pid=34121][err] Debugger attached.
-  - [pid=34121][err]
-  - [pid=34121][err] DevTools listening on ws://127.0.0.1:40703/devtools/browser/56869a2f-0d4b-48e5-8e15-eeac26ec091c
-  - <ws connecting> ws://127.0.0.1:40703/devtools/browser/56869a2f-0d4b-48e5-8e15-eeac26ec091c
-  - <ws connected> ws://127.0.0.1:40703/devtools/browser/56869a2f-0d4b-48e5-8e15-eeac26ec091c
-  - <ws disconnected> ws://127.0.0.1:44805/d4622c42-785e-4bf7-b792-961cdae7869e code=1005 reason=
-  - <ws disconnected> ws://127.0.0.1:40703/devtools/browser/56869a2f-0d4b-48e5-8e15-eeac26ec091c code=1006 reason=
-  - [pid=34121] <kill>
-  - [pid=34121] <will force kill>
-  - [pid=34121] <process did exit: exitCode=0, signal=null>
-  - [pid=34121] starting temporary directories cleanup
-  - [pid=34121] finished temporary directories cleanup
+  - <launched> pid=45981
+  - [pid=45981][err] Debugger listening on ws://127.0.0.1:33945/df397c01-348d-4d9a-a904-82e8b14543ee
+  - [pid=45981][err] For help, see: https://nodejs.org/en/docs/inspector
+  - <ws connecting> ws://127.0.0.1:33945/df397c01-348d-4d9a-a904-82e8b14543ee
+  - <ws connected> ws://127.0.0.1:33945/df397c01-348d-4d9a-a904-82e8b14543ee
+  - [pid=45981][err] Debugger attached.
+  - [pid=45981][err]
+  - [pid=45981][err] DevTools listening on ws://127.0.0.1:42997/devtools/browser/67a94882-78de-4ef4-84a8-5146b5b8e63e
+  - <ws connecting> ws://127.0.0.1:42997/devtools/browser/67a94882-78de-4ef4-84a8-5146b5b8e63e
+  - <ws disconnected> ws://127.0.0.1:33945/df397c01-348d-4d9a-a904-82e8b14543ee code=1005 reason=
+  - <ws error> ws://127.0.0.1:42997/devtools/browser/67a94882-78de-4ef4-84a8-5146b5b8e63e error read ECONNRESET
+  - <ws connect error> ws://127.0.0.1:42997/devtools/browser/67a94882-78de-4ef4-84a8-5146b5b8e63e read ECONNRESET
+  - <ws disconnected> ws://127.0.0.1:42997/devtools/browser/67a94882-78de-4ef4-84a8-5146b5b8e63e code=1006 reason=
+  - [pid=45981] <kill>
+  - [pid=45981] <will force kill>
+  - [pid=45981] <process did exit: exitCode=0, signal=null>
+  - [pid=45981] starting temporary directories cleanup
+  - [pid=45981] finished temporary directories cleanup
 
 ```
 
@@ -58,7 +50,7 @@ Call log:
   9   |   test.beforeAll(async () => {
   10  |     // Launch Electron app
 > 11  |     app = await electron.launch({
-      |           ^ Error: electron.launch: Target page, context or browser has been closed
+      |           ^ Error: electron.launch: WebSocket error: read ECONNRESET
   12  |       cwd: path.resolve(__dirname, '..'),
   13  |       args: ['.'],
   14  |       env: {

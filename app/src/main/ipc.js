@@ -14,6 +14,13 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthT
     return true;
   });
 
+  ipcMain.on('update-hotkeys', (_event, config) => {
+    const { registerHotkeys } = require('./hotkeys');
+    const token = typeof getAuthToken === 'function' ? getAuthToken() : null;
+    registerHotkeys(config, token);
+  });
+
+
   ipcMain.handle('app:show', () => {
     const window = getMainWindow?.();
     if (window && onShow) {
