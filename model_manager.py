@@ -106,12 +106,18 @@ AVAILABLE_MODELS = {
 
 DEFAULT_MODEL = "gemma-3-4b-q4"
 
-SERVER_FILENAME = "llama-server.exe"
-SERVER_ZIP_NAME = "server-cuda-bin.zip"
-CUDA_ZIP_NAME = "cuda-libs.zip"
-
-SERVER_BIN_URL = "https://github.com/ggml-org/llama.cpp/releases/download/b7870/llama-b7870-bin-win-cuda-12.4-x64.zip"
-CUDA_LIB_URL = "https://github.com/ggml-org/llama.cpp/releases/download/b7870/cudart-llama-bin-win-cuda-12.4-x64.zip"
+if sys.platform.startswith("win"):
+    SERVER_FILENAME = "llama-server.exe"
+    SERVER_ARCHIVE_NAME = "server-cuda-bin.zip"
+    CUDA_ARCHIVE_NAME = "cuda-libs.zip"
+    SERVER_BIN_URL = "https://github.com/ggml-org/llama.cpp/releases/download/b7870/llama-b7870-bin-win-cuda-12.4-x64.zip"
+    CUDA_LIB_URL = "https://github.com/ggml-org/llama.cpp/releases/download/b7870/cudart-llama-bin-win-cuda-12.4-x64.zip"
+else:
+    SERVER_FILENAME = "llama-server"
+    SERVER_ARCHIVE_NAME = "server-ubuntu-vulkan-bin.tar.gz"
+    CUDA_ARCHIVE_NAME = None
+    SERVER_BIN_URL = "https://github.com/ggml-org/llama.cpp/releases/download/b7870/llama-b7870-bin-ubuntu-vulkan-x64.tar.gz"
+    CUDA_LIB_URL = None
 
 _download_state_lock = threading.Lock()
 _download_state = {}
@@ -354,48 +360,48 @@ def check_and_download_resources(model_id=None, progress_callback=None):
 
     server_path = get_server_path()
     if not os.path.exists(server_path):
-        if not sys.platform.startswith("win"):
-            repo_local_path = get_repo_local_server_path()
-            message = (
-                "llama-server is not configured for this platform. "
-                "Install a local llama-server binary at "
-                f"{repo_local_path} or set BETTERFINGERS_LLAMA_SERVER to its path."
-            )
-            logging.warning(message)
-            report({"key": target_model_id, "status": "error", "percent": 0.0, "message": message})
-            return {"ok": False, "model_id": target_model_id, "message": message}
-
         logging.info("llama-server not found. Downloading binaries...")
 
-        bin_zip = os.path.join(models_dir, SERVER_ZIP_NAME)
+        bin_archive = os.path.join(models_dir, SERVER_ARCHIVE_NAME)
         try:
             download_file(
                 SERVER_BIN_URL,
-                bin_zip,
-                "llama-server (AVX2)",
+                bin_archive,
+                "llama-server",
                 progress_callback=report,
                 progress_key=f"{target_model_id}:server",
             )
-            with zipfile.ZipFile(bin_zip, "r") as archive:
-                archive.extractall(models_dir)
+            if SERVER_ARCHIVE_NAME.endswith(".zip"):
+                with zipfile.ZipFile(bin_archive, "r") as archive:
+                    archive.extractall(models_dir)
+            elif SERVER_ARCHIVE_NAME.endswith(".tar.gz"):
+                import tarfile
+                with tarfile.open(bin_archive, "r:gz") as archive:
+                    for member in archive.getmembers():
+                        if member.isfile():
+                            member.name = os.path.basename(member.name)
+                            archive.extract(member, path=models_dir)
+                if os.path.exists(server_path):
+                    os.chmod(server_path, 0o755)
         finally:
-            if os.path.exists(bin_zip):
-                os.remove(bin_zip)
+            if os.path.exists(bin_archive):
+                os.remove(bin_archive)
 
-        cuda_zip = os.path.join(models_dir, CUDA_ZIP_NAME)
-        try:
-            download_file(
-                CUDA_LIB_URL,
-                cuda_zip,
-                "CUDA 12.4 Runtime",
-                progress_callback=report,
-                progress_key=f"{target_model_id}:cuda",
-            )
-            with zipfile.ZipFile(cuda_zip, "r") as archive:
-                archive.extractall(models_dir)
-            os.remove(cuda_zip)
-        except Exception as exc:
-            logging.warning("Failed to download CUDA libs: %s. Server will run on CPU.", exc)
+        if CUDA_LIB_URL and CUDA_ARCHIVE_NAME:
+            cuda_archive = os.path.join(models_dir, CUDA_ARCHIVE_NAME)
+            try:
+                download_file(
+                    CUDA_LIB_URL,
+                    cuda_archive,
+                    "CUDA Runtime",
+                    progress_callback=report,
+                    progress_key=f"{target_model_id}:cuda",
+                )
+                with zipfile.ZipFile(cuda_archive, "r") as archive:
+                    archive.extractall(models_dir)
+                os.remove(cuda_archive)
+            except Exception as exc:
+                logging.warning("Failed to download CUDA libs: %s. Server will run on CPU.", exc)
     else:
         logging.info("llama-server exists.")
 

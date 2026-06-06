@@ -1,4 +1,4 @@
-const { clipboard, ipcMain } = require('electron');
+const { clipboard, ipcMain, shell } = require('electron');
 
 let overlayHideTimer = null;
 
@@ -20,6 +20,15 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthT
     registerHotkeys(config, token);
   });
 
+
+  ipcMain.handle('shell:open-path', async (_event, targetPath) => {
+    // Open an exported file/folder (e.g. the reel.html preview) in the OS default app.
+    if (typeof targetPath !== 'string' || !targetPath) {
+      return { ok: false, error: 'No path provided' };
+    }
+    const error = await shell.openPath(targetPath);
+    return { ok: !error, error: error || null };
+  });
 
   ipcMain.handle('app:show', () => {
     const window = getMainWindow?.();

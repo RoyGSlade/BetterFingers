@@ -16,6 +16,14 @@
 | P-005 | Gemma 4 12B catalog + download progress bar | ✅ Complete | main | Added Hugging Face GGUF entry and visible LLM download progress polling |
 | P-006 | Agent 1 Source Arcanum Studio memory foundation | ✅ Complete | main | SQLite memory kernel, Studio endpoints, JSON export, tests |
 | P-007 | Agent 1 Source Arcanum Studio memory hardening | ✅ Complete | main | SQLite WAL/busy-timeout, validation guardrails, API 400 handling, tests |
+| P-008 | Studio Mode create/load UI wiring | ✅ Complete | main | Create Project now advances to seed flow; pipeline/approval render wired |
+| P-009 | Keep-loaded startup + Studio model telemetry | ✅ Complete | main | Startup honors model residency flags; Studio reports local LLM vs fallback |
+| P-010 | Studio project dropdown | ✅ Complete | main | Load Existing Project lists saved projects instead of requiring typed names |
+| P-011 | Studio rerun panel collision fix | ✅ Complete | main | Production reruns no longer collide with existing panel numbers |
+| P-012 | Studio brief check gate | ✅ Complete | main | Model asks its guess/questions before full production |
+| P-013 | Director Phase 1 exploration registry | ✅ Complete | main | Read-only paginated Studio capabilities for regions, skins, POIs, and actions |
+| P-014 | Director Phase 2 casting integration | ✅ Complete | main | Full production now runs registry-grounded casting before world/character planning |
+| P-015 | Director Phase 3 scene-spec planning | ✅ Complete | main | Director now emits structured scene specs and commits them through Scene Builder into GEST |
 
 ---
 
@@ -149,6 +157,209 @@
 #### Blockers / Handoffs
 - @Agent 2: Existing workflow compatibility remains green; continue passing real parent IDs into memory writes.
 - @Agent 3: Surface Studio endpoint 400 `detail` strings in the UI for easier project repair.
+
+---
+
+### [P-008] Studio Mode Create Project UI Wiring
+- **Date**: 2026-06-06
+- **Scope**: Fix the Studio Mode start screen so the Create Project button actually creates a project and advances the user into the project flow.
+
+#### What was done
+- Added renderer DOM bindings and state for Studio start, seed, pipeline, and approval views.
+- Wired `studioCreateProjectButton`, load project, Enter-key submit, back/new-project navigation, run pipeline, and approval dashboard click handling.
+- Rendered generated premise, world bible, characters, panels, dialogue, and continuity warnings from workflow export data.
+- Added panel approve/reject backend calls and local premise/world approval badges.
+- Improved renderer API error parsing so FastAPI `detail` messages appear in the UI.
+- Narrowed one draft-status test assertion to ignore `draft_tts_stopped` lifecycle noise, matching the existing status-broadcast behavior.
+
+#### Test runs
+| Command | Outcome | Passed / Total | Issues |
+| :------ | :------ | :------------- | :----- |
+| `npm run build` from `app/` | PASS | — | Electron main/preload/renderer bundles built successfully. |
+| `.venv/bin/python -m pytest tests/test_studio_memory.py tests/test_server_studio.py tests/test_studio_workflow.py -q` | PASS | 11 / 11 | Studio backend flow still green. |
+| `.venv/bin/python -m pytest` | PASS | 233 / 233 passed, 1 skipped | Full suite green. |
+
+#### Blockers / Handoffs
+- @Agent 3: The Studio UI flow is now interactive and ready for visual polish/edit/regenerate work.
+
+---
+
+### [P-009] Keep-Loaded Startup + Studio Model Telemetry
+- **Date**: 2026-06-06
+- **Scope**: Fix IDE missing-import diagnostics, make keep-loaded model settings actually preload on startup, and make Studio disclose whether it used the local model.
+
+#### What was done
+- Added `pyrefly.toml` with `python-interpreter-path = ".venv/bin/python"` and workspace VS Code interpreter settings.
+- Added backend model residency helpers so `model_keep_llm_loaded`, `model_keep_stt_loaded`, and `model_keep_tts_loaded` control actual startup warm/loading.
+- Adjusted lazy startup so explicit keep-loaded model flags still warm models, while hotkeys remain deferred.
+- Added Studio workflow `model_status` with `llm_attempted`, `llm_ready`, `used_fallback`, `model_id`, and diagnostic messages.
+- Surfaced Studio model/fallback status in the renderer after production completes.
+- Added startup residency tests and Studio model telemetry assertions.
+
+#### Test runs
+| Command | Outcome | Passed / Total | Issues |
+| :------ | :------ | :------------- | :----- |
+| `.venv/bin/python -m py_compile server.py studio_workflow.py` | PASS | — | Syntax valid. |
+| `.venv/bin/python -m pytest tests/test_server_lazy_startup.py tests/test_studio_workflow.py -q` | PASS | 16 / 16 | Focused startup + Studio tests green. |
+| `npm run build` from `app/` | PASS | — | Electron main/preload/renderer bundles built successfully. |
+| `.venv/bin/python -m pytest` | PASS | 239 / 239 passed, 1 skipped | Full suite green. |
+
+#### Blockers / Handoffs
+- Reload VS Code/Pyrefly so the new interpreter config is picked up.
+- Restart BetterFingers so startup residency and Studio model-status UI are active.
+
+---
+
+### [P-010] Studio Project Dropdown
+- **Date**: 2026-06-06
+- **Scope**: Make Load Existing Project use a dropdown of saved local Studio projects.
+
+#### What was done
+- Added `studio_memory.list_projects()` to scan `studio_projects/*/studio.db` without creating new projects.
+- Added project-list endpoints at `/studio/projects` and `/studio/project/list`.
+- Replaced the Studio load-project text input with a `<select>` dropdown.
+- Added renderer API support and refresh behavior on app bootstrap, Studio tab open, and project creation.
+- Auto-selects newly created projects in the dropdown.
+- Added memory/API tests for project listing.
+
+#### Test runs
+| Command | Outcome | Passed / Total | Issues |
+| :------ | :------ | :------------- | :----- |
+| `.venv/bin/python -m py_compile studio_memory.py server.py` | PASS | — | Syntax valid. |
+| `.venv/bin/python -m pytest tests/test_studio_memory.py tests/test_server_studio.py tests/test_studio_workflow.py -q` | PASS | 15 / 15 | Studio project listing and workflow tests green. |
+| `npm run build` from `app/` | PASS | — | Electron bundles built successfully. |
+| `.venv/bin/python -m pytest` | PASS | 239 / 239 passed, 1 skipped | Full suite green. |
+
+#### Blockers / Handoffs
+- Restart BetterFingers so the renderer picks up the dropdown.
+
+---
+
+### [P-011] Studio Rerun Panel Collision Fix
+- **Date**: 2026-06-06
+- **Scope**: Fix Studio production reruns failing with duplicate panel numbers and make project-list API fallback more robust.
+
+#### What was done
+- Scoped `run_dialogue_and_panels()` to the current episode's minutes, avoiding old project minutes from previous runs.
+- Reused an existing panel row when rerunning against the same episode/minute/panel number instead of crashing.
+- Added a regression test that runs the full Studio pipeline twice on the same project.
+- Made `studioListProjects()` fall back from `/studio/project/list` to `/studio/projects` when the legacy route reports Not Found.
+
+#### Test runs
+| Command | Outcome | Passed / Total | Issues |
+| :------ | :------ | :------------- | :----- |
+| `.venv/bin/python -m py_compile studio_workflow.py` | PASS | — | Syntax valid. |
+| `.venv/bin/python -m pytest tests/test_studio_workflow.py tests/test_server_studio.py -q` | PASS | 13 / 13 | Studio rerun/list tests green. |
+| `npm run build` from `app/` | PASS | — | Electron bundles built successfully. |
+| `.venv/bin/python -m pytest` | PASS | 240 / 240 passed, 1 skipped | Full suite green. |
+
+#### Blockers / Handoffs
+- Restart BetterFingers so the running backend and renderer both use this fix.
+
+---
+
+### [P-012] Studio Brief Check Before Production
+- **Date**: 2026-06-06
+- **Scope**: Slow Studio down by asking the local model for an understanding check before full production.
+
+#### What was done
+- Added `StudioWorkflowRunner.run_brief_review()` to generate a concise guess, open-ended questions, small-fix suggestions, confidence, and model-status metadata.
+- Added `POST /studio/workflow/brief`.
+- Added a Brief Check panel in Studio Mode with:
+  - model guess,
+  - open questions,
+  - small-fix suggestions,
+  - freeform changes/additions box,
+  - Accept & Continue,
+  - Retry Guess.
+- Changed the seed action from immediate production to `Check Understanding` until the brief is accepted.
+- Folded accepted freeform changes into the final production seed.
+- Added workflow and API tests for the brief review path.
+
+#### Test runs
+| Command | Outcome | Passed / Total | Issues |
+| :------ | :------ | :------------- | :----- |
+| `.venv/bin/python -m py_compile studio_workflow.py server.py` | PASS | — | Syntax valid. |
+| `.venv/bin/python -m pytest tests/test_studio_workflow.py tests/test_server_studio.py -q` | PASS | 14 / 14 | Studio brief/review tests green. |
+| `npm run build` from `app/` | PASS | — | Electron bundles built successfully. |
+| `.venv/bin/python -m pytest` | PASS | 241 / 241 passed, 1 skipped | Full suite green. |
+
+#### Blockers / Handoffs
+- Restart BetterFingers so the running backend and renderer pick up the brief-check gate.
+
+---
+
+### [P-013] Director Phase 1 Exploration Registry
+- **Date**: 2026-06-06
+- **Scope**: Begin Phase 1 from `docs/TheagentPrompts.md`: Director Exploration using read-only, paginated tools for Studio capabilities.
+
+#### What was done
+- Added `studio_capabilities.py` as a deterministic registry for regions, character skins, points of interest, and action chains.
+- Added read-only FastAPI endpoints under `/studio/capabilities` with category listing, pagination, query filtering, single capability lookup, and valid next-action lookup.
+- Added `StudioWorkflowRunner.run_director_exploration()` and `POST /studio/workflow/explore` so the Director has an explicit Phase 1 workflow step before casting or scene planning.
+- Stored the explored registry version in project preferences for auditability.
+- Added focused API/workflow tests covering the registry, route behavior, and exploration snapshot.
+
+#### Test runs
+| Command | Outcome | Passed / Total | Issues |
+| :------ | :------ | :------------- | :----- |
+| `.venv/bin/python -m py_compile studio_capabilities.py studio_workflow.py server.py` | PASS | — | Syntax valid. |
+| `.venv/bin/python -m pytest tests/test_server_studio.py tests/test_studio_workflow.py -q` | PASS | 17 / 17 | Studio capability and exploration tests green. |
+| `.venv/bin/python -m pytest` | PASS | 244 / 244 passed, 1 skipped | Full suite green. |
+
+#### Blockers / Handoffs
+- @Claude / @Gemini: Phase 1 now has deterministic exploration tools. Next phases can build casting and scene planning against this registry instead of letting the LLM free-invent simulator state.
+
+---
+
+### [P-014] Director Phase 2 Casting Integration
+- **Date**: 2026-06-06
+- **Scope**: Work Phase 2 from `docs/TheagentPrompts.md`: make Director Casting part of the main production path.
+
+#### What was done
+- Audited Claude's additive Phase 2 casting work already in the tree: registry validation, deterministic fallback, `/studio/workflow/cast`, and casting tests.
+- Integrated `run_director_casting()` into `run_full_pipeline()` immediately after intake so full production now explores/casts before world, character, story, panel, and continuity stages.
+- Returned the casting payload from full production results.
+- Fed the saved Director casting anchor into character-building prompts.
+- Made no-LLM fallback character building use the cast member names, roles, and `skin_id` metadata instead of unrelated placeholder leads.
+- Added regression assertions proving the full pipeline persists casting to the bible and character metadata.
+
+#### Test runs
+| Command | Outcome | Passed / Total | Issues |
+| :------ | :------ | :------------- | :----- |
+| `.venv/bin/python -m py_compile studio_workflow.py studio_capabilities.py server.py` | PASS | — | Syntax valid. |
+| `.venv/bin/python -m pytest tests/test_studio_workflow.py tests/test_server_studio.py -q` | PASS | 19 / 19 | Studio workflow/API tests green. |
+| `.venv/bin/python -m pytest` | PASS | 247 / 247 passed, 1 skipped | Full suite green. |
+
+#### Blockers / Handoffs
+- @Agent 3: Studio UI can surface the chosen cast/region from the workflow result or bible `casting` field.
+- @Claude / @Gemini: Phase 3 scene planning can assume `bible.casting`, anchored `locations`, and character `metadata.skin_id` exist after a normal production run.
+
+---
+
+### [P-015] Director Phase 3 Scene-Spec Planning
+- **Date**: 2026-06-06
+- **Scope**: Work Phase 3 from `docs/TheagentPrompts.md`: Director scene planning that delegates an isolated scene to the deterministic Scene Builder.
+
+#### What was done
+- Added `StudioWorkflowRunner.run_director_scene_planning()` to generate a structured `scene_spec` from premise/world/story plan/casting/registry context.
+- Added a deterministic `_default_scene_spec()` fallback that always produces a tiny valid scene for the selected cast region.
+- The Director scene planner now calls `run_scene_round(scene_spec)`, so accepted specs land in GEST and invalid specs are rejected and repaired before commit.
+- Integrated Director scene planning into `run_full_pipeline()` after story planning and before panel/dialogue generation.
+- Added a `/studio/workflow/stage` alias for `scene_planning` / `director_scene_planning`.
+- Persisted the accepted scene spec to the bible and project preferences for audit/export.
+- Added regression tests for standalone Director scene planning, stage-based scene planning, and full-pipeline GEST generation.
+
+#### Test runs
+| Command | Outcome | Passed / Total | Issues |
+| :------ | :------ | :------------- | :----- |
+| `.venv/bin/python -m py_compile studio_workflow.py studio_scene.py server.py` | PASS | — | Syntax valid. |
+| `.venv/bin/python -m pytest tests/test_studio_workflow.py tests/test_studio_scene.py tests/test_server_studio.py -q` | PASS | 28 / 28 | Director scene planning + Scene Builder tests green. |
+| `.venv/bin/python -m pytest` | PASS | 256 / 256 passed, 1 skipped | Full suite green. |
+
+#### Blockers / Handoffs
+- @Claude / @Gemini: Phase 4 finalization can now assume normal production creates `bible.scene_spec` and at least one GEST scene chain.
+- @Agent 3: UI can show the generated scene spec and GEST node/edge counts from the workflow result/export.
 
 ---
 

@@ -76,7 +76,7 @@ async function fetchJson(url, timeoutMs = 2500) {
     });
 
     if (!response.ok) {
-      throw new Error(`${url} failed with status ${response.status}`);
+      throw new Error(await getResponseErrorMessage(response, url));
     }
 
     return await response.json();
@@ -218,7 +218,7 @@ async function postJson(url, payload = {}, timeoutMs = 2500) {
     });
 
     if (!response.ok) {
-      throw new Error(`${url} failed with status ${response.status}`);
+      throw new Error(await getResponseErrorMessage(response, url));
     }
 
     return await response.json();
@@ -239,13 +239,29 @@ async function deleteJson(url, timeoutMs = 2500) {
     });
 
     if (!response.ok) {
-      throw new Error(`${url} failed with status ${response.status}`);
+      throw new Error(await getResponseErrorMessage(response, url));
     }
 
     return await response.json();
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+async function getResponseErrorMessage(response, url) {
+  try {
+    const payload = await response.json();
+    const detail = payload?.detail || payload?.message || payload?.error;
+    if (Array.isArray(detail)) {
+      return detail.map((item) => item?.msg || JSON.stringify(item)).join('; ');
+    }
+    if (detail) {
+      return String(detail);
+    }
+  } catch (_error) {
+    // Fall through to the generic status message.
+  }
+  return `${url} failed with status ${response.status}`;
 }
 
 async function acceptDraft(id, timeoutMs = 2500) {
@@ -464,8 +480,31 @@ async function studioLoadProject(projectName, timeoutMs = 10000) {
   return postJson(`${STUDIO_URL}/project/load`, { project_name: projectName }, timeoutMs);
 }
 
-async function studioRunWorkflow(projectName, seedText, timeoutMs = 120000) {
-  return postJson(`${STUDIO_URL}/workflow/run`, { project_name: projectName, seed_text: seedText }, timeoutMs);
+async function studioListProjects(timeoutMs = 10000) {
+  try {
+    return await fetchJson(`${STUDIO_URL}/project/list`, timeoutMs);
+  } catch (error) {
+    if (!String(error.message || '').toLowerCase().includes('not found')) {
+      throw error;
+    }
+    return fetchJson(`${STUDIO_URL}/projects`, timeoutMs);
+  }
+}
+
+async function studioIntakeTurn(projectName, chatHistory, timeoutMs = 60000) {
+  return postJson(`${STUDIO_URL}/workflow/intake/turn`, { project_name: projectName, chat_history: chatHistory }, timeoutMs);
+}
+
+async function studioRunWorkflow(projectName, seedText, mode = 'seed', sourceStory = null, timeoutMs = 180000) {
+  const body = { project_name: projectName, seed_text: seedText, mode };
+  if (sourceStory) body.source_story = sourceStory;
+  return postJson(`${STUDIO_URL}/workflow/run`, body, timeoutMs);
+}
+
+async function studioBriefReview(projectName, seedText, mode = 'seed', sourceStory = null, userNotes = '', timeoutMs = 120000) {
+  const body = { project_name: projectName, seed_text: seedText, mode, user_notes: userNotes };
+  if (sourceStory) body.source_story = sourceStory;
+  return postJson(`${STUDIO_URL}/workflow/brief`, body, timeoutMs);
 }
 
 async function studioRunStage(projectName, stage, seedText = null, timeoutMs = 60000) {
@@ -478,12 +517,35 @@ async function studioGetPanels(projectName, projectId, timeoutMs = 10000) {
   return fetchJson(`${STUDIO_URL}/project/${encodeURIComponent(projectName)}/${projectId}/panels`, timeoutMs);
 }
 
-async function studioApproveItem(projectName, projectId, itemType, itemId, approved, timeoutMs = 10000) {
-  return postJson(`${STUDIO_URL}/project/approve`, { project_name: projectName, project_id: projectId, item_type: itemType, item_id: itemId, approved }, timeoutMs);
+async function studioApproveItem(projectName, projectId, itemType, itemId, approved, feedback = null, timeoutMs = 20000) {
+  return postJson(`${STUDIO_URL}/project/approve`, { project_name: projectName, project_id: projectId, item_type: itemType, item_id: itemId, approved, feedback }, timeoutMs);
+}
+
+async function studioDeleteProject(projectName, timeoutMs = 10000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${STUDIO_URL}/project/${encodeURIComponent(projectName)}`, {
+      method: 'DELETE',
+      headers: getHeaders(),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => null);
+      throw new Error(errorData?.detail || `HTTP error ${response.status}`);
+    }
+    return await response.json();
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 async function studioResolveWarning(projectName, warningId, timeoutMs = 10000) {
   return postJson(`${STUDIO_URL}/project/warning/resolve`, { project_name: projectName, warning_id: warningId }, timeoutMs);
+}
+
+async function studioExportReel(projectName, projectId = null, timeoutMs = 60000) {
+  return postJson(`${STUDIO_URL}/project/export-reel`, { project_name: projectName, project_id: projectId }, timeoutMs);
 }
 
 export {
@@ -554,10 +616,15 @@ export {
   refreshAudioDevices,
   fetchVersion,
   studioCreateProject,
+  studioListProjects,
   studioLoadProject,
+  studioIntakeTurn,
   studioRunWorkflow,
   studioRunStage,
   studioGetPanels,
   studioApproveItem,
+  studioBriefReview,
   studioResolveWarning,
+  studioDeleteProject,
+  studioExportReel,
 };

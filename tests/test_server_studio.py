@@ -5,6 +5,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import server
+import studio_capabilities
 import studio_memory
 
 
@@ -17,6 +18,8 @@ class ServerStudioTests(unittest.TestCase):
                     self.assertEqual(created.status_code, 200)
                     project = created.json()["project"]
                     project_name = project["name"]
+                    listed = client.get("/studio/projects")
+                    legacy_listed = client.get("/studio/project/list")
 
                     bible = client.post(
                         f"/studio/projects/{project_name}/bible",
@@ -80,6 +83,10 @@ class ServerStudioTests(unittest.TestCase):
                     exported = client.get(f"/studio/projects/{project_name}/export")
 
         self.assertEqual(bible.status_code, 200)
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(listed.json()["projects"][0]["name"], "Arcanum Pilot")
+        self.assertEqual(legacy_listed.status_code, 200)
+        self.assertEqual(legacy_listed.json()["projects"][0]["name"], "Arcanum Pilot")
         self.assertEqual(character.status_code, 200)
         self.assertEqual(updated.json()["character"]["name"], "Mara Vale")
         self.assertEqual(panels.status_code, 200)
@@ -119,3 +126,31 @@ class ServerStudioTests(unittest.TestCase):
         self.assertEqual(blank_character.status_code, 400)
         self.assertEqual(orphan_minute.status_code, 400)
         self.assertEqual(bad_warning.status_code, 400)
+
+    def test_studio_capability_exploration_endpoints_are_paginated_and_read_only(self):
+        with TestClient(server.app) as client:
+            categories = client.get("/studio/capabilities")
+            self.assertEqual(categories.status_code, 200)
+            self.assertEqual(categories.json()["registry_version"], studio_capabilities.REGISTRY_VERSION)
+            self.assertIn("regions", [item["category"] for item in categories.json()["categories"]])
+
+            regions = client.get("/studio/capabilities/regions?page=1&page_size=2")
+            self.assertEqual(regions.status_code, 200)
+            self.assertEqual(regions.json()["category"], "regions")
+            self.assertEqual(len(regions.json()["items"]), 2)
+            self.assertGreaterEqual(regions.json()["total"], 3)
+
+            archive = client.get("/studio/capabilities/pois?query=archive")
+            self.assertEqual(archive.status_code, 200)
+            self.assertTrue(all("archive" in (item["id"] + item["name"]).lower() for item in archive.json()["items"]))
+
+            action = client.get("/studio/capabilities/actions/stand_at")
+            self.assertEqual(action.status_code, 200)
+            self.assertEqual(action.json()["capability"]["id"], "stand_at")
+
+            next_actions = client.get("/studio/capabilities/actions/stand_at/next")
+            self.assertEqual(next_actions.status_code, 200)
+            self.assertGreater(len(next_actions.json()["next_actions"]), 0)
+
+            invalid = client.get("/studio/capabilities/vehicles")
+            self.assertEqual(invalid.status_code, 400)

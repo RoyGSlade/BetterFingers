@@ -51,11 +51,15 @@ import {
   exportProfile,
   importProfile,
   studioCreateProject,
+  studioIntakeTurn,
+  studioListProjects,
   studioLoadProject,
   studioRunWorkflow,
   studioGetPanels,
   studioApproveItem,
   studioResolveWarning,
+  studioDeleteProject,
+  studioExportReel,
 } from './api/backend.js';
 
 const backendStatusEl = document.getElementById('backendStatus');
@@ -140,6 +144,52 @@ const deleteWhisperButton = document.getElementById('deleteWhisperButton');
 const unloadSttButton = document.getElementById('unloadSttButton');
 const unloadLlmButton = document.getElementById('unloadLlmButton');
 const unloadTtsButton = document.getElementById('unloadTtsButton');
+const studioViewStartEl = document.getElementById('studioViewStart');
+const studioViewSeedEl = document.getElementById('studioViewSeed');
+const studioViewPipelineEl = document.getElementById('studioViewPipeline');
+const studioViewApprovalEl = document.getElementById('studioViewApproval');
+const studioNewProjectNameEl = document.getElementById('studioNewProjectName');
+const studioCreateProjectButton = document.getElementById('studioCreateProjectButton');
+const studioCreateMessageEl = document.getElementById('studioCreateMessage');
+const studioLoadProjectNameEl = document.getElementById('studioLoadProjectName');
+const studioLoadProjectButton = document.getElementById('studioLoadProjectButton');
+const studioLoadMessageEl = document.getElementById('studioLoadMessage');
+const studioSeedProjectLabelEl = document.getElementById('studioSeedProjectLabel');
+const studioBackToStartButton = document.getElementById('studioBackToStartButton');
+const studioSeedInputEl = document.getElementById('studioSeedInput');
+const studioSeedInputLabelEl = document.getElementById('studioSeedInputLabel');
+const studioSeedLedeEl = document.getElementById('studioSeedLede');
+const studioModeOptionEls = document.querySelectorAll('.studio-mode-option');
+const studioStoryFileInputEl = document.getElementById('studioStoryFileInput');
+const studioLoadStoryFileButton = document.getElementById('studioLoadStoryFileButton');
+const studioStoryMetaEl = document.getElementById('studioStoryMeta');
+const studioRunPipelineButton = document.getElementById('studioRunPipelineButton');
+const studioPipelineMessageEl = document.getElementById('studioPipelineMessage');
+const studioBriefReviewPanelEl = document.getElementById('studioBriefReviewPanel');
+const studioBriefConfidenceEl = document.getElementById('studioBriefConfidence');
+const studioBriefGuessEl = document.getElementById('studioBriefGuess');
+const studioBriefQuestionsEl = document.getElementById('studioBriefQuestions');
+const studioBriefSuggestionsEl = document.getElementById('studioBriefSuggestions');
+const studioBriefFeedbackEl = document.getElementById('studioBriefFeedback');
+const studioBriefAcceptButton = document.getElementById('studioBriefAcceptButton');
+const studioBriefRetryButton = document.getElementById('studioBriefRetryButton');
+const studioPipelineProjectLabelEl = document.getElementById('studioPipelineProjectLabel');
+const studioPipelineStatusTextEl = document.getElementById('studioPipelineStatusText');
+const studioApprovalProjectLabelEl = document.getElementById('studioApprovalProjectLabel');
+const studioNewProjectFromApprovalButton = document.getElementById('studioNewProjectFromApprovalButton');
+const studioApprovalMessageEl = document.getElementById('studioApprovalMessage');
+const studioContinuityWarningsEl = document.getElementById('studioContinuityWarnings');
+const studioWarningsListEl = document.getElementById('studioWarningsList');
+const studioPremiseBadgeEl = document.getElementById('studioPremiseBadge');
+const studioPremiseTitleEl = document.getElementById('studioPremiseTitle');
+const studioPremiseThemeEl = document.getElementById('studioPremiseTheme');
+const studioPremiseTextEl = document.getElementById('studioPremiseText');
+const studioWorldBadgeEl = document.getElementById('studioWorldBadge');
+const studioWorldSettingEl = document.getElementById('studioWorldSetting');
+const studioWorldAestheticEl = document.getElementById('studioWorldAesthetic');
+const studioWorldRulesEl = document.getElementById('studioWorldRules');
+const studioCharactersListEl = document.getElementById('studioCharactersList');
+const studioPanelsGridEl = document.getElementById('studioPanelsGrid');
 
 const wizardStepProgress = document.getElementById('wizardStepProgress');
 const wizardPrevButton = document.getElementById('wizardPrevButton');
@@ -178,6 +228,41 @@ let activeProfileSettings = null;
 let profileDirty = false;
 let llmModelsPayload = null;
 let whisperModelsPayload = null;
+let studioState = {
+  projectName: '',
+  projectId: null,
+  data: null,
+  sectionApprovals: {},
+  mode: 'seed',
+  briefAccepted: false,
+  briefReview: null,
+  productionSeed: '',
+};
+
+// Copy shown for each production style in the seed view.
+const STUDIO_MODE_COPY = {
+  seed: {
+    lede: 'Tell the studio what your story is about. A sentence or two is enough — the production pipeline handles the rest.',
+    label: 'Your story seed',
+    placeholder: "e.g. A disgraced knight discovers the kingdom's sacred relic is a lie — and the real power has been buried under the city for 500 years.",
+    button: 'Begin Production',
+    showFile: false,
+  },
+  adapt: {
+    lede: "Drop or paste a story you've already written. The studio will storyboard it faithfully — extracting your premise, world, cast, and arc.",
+    label: 'Paste or drop your story',
+    placeholder: 'Paste your full story here, or drag a .txt / .md file onto this box…',
+    button: 'Storyboard My Story',
+    showFile: true,
+  },
+  continue: {
+    lede: "Drop or paste your existing story. The studio treats it as canon and produces what happens next — same characters, same world.",
+    label: 'Paste or drop your story (canon)',
+    placeholder: 'Paste the story so far here, or drag a .txt / .md file onto this box…',
+    button: 'Continue My Story',
+    showFile: true,
+  },
+};
 
 const settingEls = {
   hotkey: document.getElementById('settingHotkey'),
@@ -606,6 +691,665 @@ function setMessage(el, message = '', tone = '') {
     el.dataset.tone = tone;
   } else {
     delete el.dataset.tone;
+  }
+}
+
+function setStudioView(viewName) {
+  const views = {
+    start: studioViewStartEl,
+    seed: studioViewSeedEl,
+    pipeline: studioViewPipelineEl,
+    approval: studioViewApprovalEl,
+  };
+  for (const [name, el] of Object.entries(views)) {
+    if (!el) {
+      continue;
+    }
+    if (name === viewName) {
+      el.classList.remove('hidden');
+    } else {
+      el.classList.add('hidden');
+    }
+  }
+}
+
+function setStudioProject(projectName, projectId = null, data = null) {
+  studioState = {
+    ...studioState,
+    projectName: projectName || '',
+    projectId: projectId ?? studioState.projectId,
+    data: data ?? studioState.data,
+  };
+  const label = studioState.projectName ? `Project: ${studioState.projectName}` : 'Project';
+  if (studioSeedProjectLabelEl) studioSeedProjectLabelEl.textContent = label;
+  if (studioPipelineProjectLabelEl) studioPipelineProjectLabelEl.textContent = label;
+  if (studioApprovalProjectLabelEl) studioApprovalProjectLabelEl.textContent = label;
+}
+
+function setStudioButtonBusy(button, busy, busyText = 'Working...') {
+  if (!button) {
+    return () => {};
+  }
+  const previousText = button.textContent;
+  button.disabled = busy;
+  if (busy) {
+    button.textContent = busyText;
+  }
+  return () => {
+    button.disabled = false;
+    button.textContent = previousText;
+  };
+}
+
+function setStudioPipelineStage(activeStage = '') {
+  const stages = ['intake', 'world_building', 'character_building', 'story_planning', 'dialogue', 'approval_ready'];
+  const activeIndex = stages.indexOf(activeStage);
+  document.querySelectorAll('.studio-stage-step').forEach((step) => {
+    const stage = step.dataset.stage;
+    const index = stages.indexOf(stage);
+    if (activeIndex >= 0 && index < activeIndex) {
+      step.dataset.state = 'done';
+    } else if (stage === activeStage) {
+      step.dataset.state = 'active';
+    } else {
+      delete step.dataset.state;
+    }
+  });
+}
+
+function completeStudioPipelineStages() {
+  document.querySelectorAll('.studio-stage-step').forEach((step) => {
+    step.dataset.state = 'done';
+  });
+}
+
+function getStudioExportData(payload) {
+  return payload?.data || payload?.project?.data || payload || {};
+}
+
+function getStudioBible(data) {
+  return data?.bible || data?.data?.bible || {};
+}
+
+function renderStudioBadge(el, approved) {
+  if (!el) {
+    return;
+  }
+  el.textContent = approved ? 'Approved' : 'Pending';
+  el.dataset.state = approved ? 'approved' : 'pending';
+}
+
+function renderStudioApproval(data) {
+  const exportData = getStudioExportData(data);
+  const bible = getStudioBible(exportData);
+  const premise = bible.premise || {};
+  const world = bible.world || {};
+  const characters = exportData.characters || [];
+  const panels = exportData.panels || [];
+  const dialogueLines = exportData.dialogue_lines || [];
+  const warnings = exportData.continuity_warnings || [];
+  const dialogueByPanel = new Map(dialogueLines.map((line) => [line.panel_id, line]));
+
+  studioState.data = exportData;
+  renderStudioBadge(studioPremiseBadgeEl, Boolean(studioState.sectionApprovals.premise));
+  renderStudioBadge(studioWorldBadgeEl, Boolean(studioState.sectionApprovals.world));
+
+  if (studioPremiseTitleEl) studioPremiseTitleEl.textContent = premise.title || exportData.project?.name || studioState.projectName || '-';
+  if (studioPremiseThemeEl) studioPremiseThemeEl.textContent = premise.theme || '-';
+  if (studioPremiseTextEl) studioPremiseTextEl.textContent = premise.premise || '-';
+  if (studioWorldSettingEl) studioWorldSettingEl.textContent = world.setting || '-';
+  if (studioWorldAestheticEl) studioWorldAestheticEl.textContent = world.aesthetic || '-';
+
+  if (studioWorldRulesEl) {
+    studioWorldRulesEl.innerHTML = '';
+    const rules = Array.isArray(world.rules) ? world.rules : [];
+    if (!rules.length) {
+      const item = document.createElement('li');
+      item.textContent = 'No world rules generated yet.';
+      studioWorldRulesEl.append(item);
+    } else {
+      for (const rule of rules) {
+        const item = document.createElement('li');
+        item.textContent = rule;
+        studioWorldRulesEl.append(item);
+      }
+    }
+  }
+
+  if (studioCharactersListEl) {
+    studioCharactersListEl.innerHTML = '';
+    if (!characters.length) {
+      studioCharactersListEl.innerHTML = '<span class="empty-state">No characters generated yet.</span>';
+    } else {
+      for (const character of characters) {
+        const card = document.createElement('article');
+        card.className = 'studio-character-card';
+        const name = document.createElement('h4');
+        name.className = 'studio-character-name';
+        name.textContent = character.name || 'Unnamed character';
+        const meta = document.createElement('p');
+        meta.className = 'studio-character-meta';
+        meta.innerHTML = `<strong>${character.role || 'Role'}</strong> · ${character.archetype || 'Archetype'}`;
+        const description = document.createElement('p');
+        description.className = 'studio-character-desc';
+        description.textContent = character.description || '';
+        card.append(name, meta, description);
+        studioCharactersListEl.append(card);
+      }
+    }
+  }
+
+  if (studioPanelsGridEl) {
+    studioPanelsGridEl.innerHTML = '';
+    if (!panels.length) {
+      studioPanelsGridEl.innerHTML = '<span class="empty-state">No panels generated yet.</span>';
+    } else {
+      for (const panel of panels) {
+        const dialogue = dialogueByPanel.get(panel.id) || panel.dialogue || {};
+        const card = document.createElement('article');
+        card.className = 'studio-panel-card';
+        const approved = Boolean(panel.approved);
+        // Panel planning metadata (camera, composition, cast, timing) may arrive as a
+        // JSON string or an object depending on the endpoint; normalize before reading.
+        let meta = panel.metadata || {};
+        if (typeof meta === 'string') {
+          try { meta = JSON.parse(meta); } catch { meta = {}; }
+        }
+        const cam = meta.camera ? String(meta.camera) : '';
+        const dur = meta.duration_seconds ? `${meta.duration_seconds}s` : '';
+        const cast = Array.isArray(meta.visible_characters) ? meta.visible_characters.join(', ') : '';
+        const chips = [cam, dur, cast].filter(Boolean).join('  ·  ');
+        card.innerHTML = `
+          <div class="studio-panel-header">
+            <span class="studio-panel-number">Panel ${panel.panel_number ?? panel.id}</span>
+            <span class="studio-panel-approved-pill" data-state="${approved ? 'approved' : 'pending'}">${approved ? 'Approved' : 'Pending'}</span>
+          </div>
+          <div class="studio-panel-body">
+            <p class="studio-panel-meta" style="font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:var(--text-muted,#8b93a3);margin:0 0 6px;"></p>
+            <p class="studio-panel-visual"></p>
+            <p class="studio-panel-dialogue"><span class="studio-panel-speaker"></span><span class="studio-panel-text"></span></p>
+          </div>
+          <div class="studio-panel-controls">
+            <button class="secondary-button studio-approve-btn" type="button" data-panel-id="${panel.id}" data-approved="true">Approve</button>
+            <button class="secondary-button studio-reject-btn" type="button" data-panel-id="${panel.id}" data-approved="false">Reject</button>
+          </div>
+        `;
+        card.querySelector('.studio-panel-meta').textContent = chips;
+        card.querySelector('.studio-panel-visual').textContent = panel.visual_description || '-';
+        card.querySelector('.studio-panel-speaker').textContent = `${dialogue.speaker || 'Narrator'}: `;
+        card.querySelector('.studio-panel-text').textContent = dialogue.text || '';
+        studioPanelsGridEl.append(card);
+      }
+    }
+  }
+
+  if (studioContinuityWarningsEl && studioWarningsListEl) {
+    studioWarningsListEl.innerHTML = '';
+    const unresolved = warnings.filter((warning) => !warning.resolved);
+    studioContinuityWarningsEl.classList.toggle('hidden', unresolved.length === 0);
+    for (const warning of unresolved) {
+      const item = document.createElement('div');
+      item.className = 'studio-warning-item';
+      item.innerHTML = `<strong>${warning.severity || 'warning'}</strong><span class="studio-warning-text"></span>`;
+      item.querySelector('.studio-warning-text').textContent = warning.message || '';
+      studioWarningsListEl.append(item);
+    }
+  }
+}
+
+async function handleStudioCreateProject() {
+  const projectName = studioNewProjectNameEl?.value?.trim();
+  if (!projectName) {
+    setMessage(studioCreateMessageEl, 'Project name is required.', 'danger');
+    studioNewProjectNameEl?.focus();
+    return;
+  }
+
+  const restoreButton = setStudioButtonBusy(studioCreateProjectButton, true, 'Creating...');
+  setMessage(studioCreateMessageEl, 'Creating project...', 'warning');
+  try {
+    const result = await studioCreateProject(projectName);
+    const createdName = result?.project_name || result?.project?.name || projectName;
+    const projectId = result?.project_id || result?.project?.id || null;
+    setStudioProject(createdName, projectId, null);
+    studioState.sectionApprovals = {};
+    resetStudioBriefReview();
+    setMessage(studioCreateMessageEl, `Created "${createdName}".`, 'success');
+    setMessage(studioPipelineMessageEl, '');
+    await refreshStudioProjectList();
+    if (studioLoadProjectNameEl) {
+      studioLoadProjectNameEl.value = createdName;
+    }
+    setStudioView('seed');
+    studioSeedInputEl?.focus();
+  } catch (error) {
+    setMessage(studioCreateMessageEl, `Create failed: ${error.message}`, 'danger');
+  } finally {
+    restoreButton();
+  }
+}
+
+async function handleStudioLoadProject() {
+  const projectName = studioLoadProjectNameEl?.value?.trim();
+  if (!projectName) {
+    setMessage(studioLoadMessageEl, 'Project name is required.', 'danger');
+    studioLoadProjectNameEl?.focus();
+    return;
+  }
+
+  const restoreButton = setStudioButtonBusy(studioLoadProjectButton, true, 'Loading...');
+  setMessage(studioLoadMessageEl, 'Loading project...', 'warning');
+  try {
+    const result = await studioLoadProject(projectName);
+    const project = result?.project || {};
+    setStudioProject(project.name || projectName, project.id || null, result?.data || null);
+    resetStudioBriefReview();
+    if (studioLoadProjectNameEl) {
+      studioLoadProjectNameEl.value = studioState.projectName;
+    }
+    studioState.sectionApprovals = {};
+    setMessage(studioLoadMessageEl, `Loaded "${studioState.projectName}".`, 'success');
+    if ((result?.data?.panels || []).length) {
+      renderStudioApproval(result.data);
+      setStudioView('approval');
+    } else {
+      setStudioView('seed');
+      studioSeedInputEl?.focus();
+    }
+  } catch (error) {
+    setMessage(studioLoadMessageEl, `Load failed: ${error.message}`, 'danger');
+  } finally {
+    restoreButton();
+  }
+}
+
+const MAX_STUDIO_STORY_CHARS = 200000;
+
+function setStudioMode(mode) {
+  const copy = STUDIO_MODE_COPY[mode] ? mode : 'seed';
+  studioState.mode = copy;
+  resetStudioBriefReview();
+  const text = STUDIO_MODE_COPY[copy];
+  studioModeOptionEls.forEach((option) => {
+    const active = option.dataset.mode === copy;
+    option.classList.toggle('active', active);
+    option.setAttribute('aria-checked', active ? 'true' : 'false');
+  });
+  if (studioSeedLedeEl) studioSeedLedeEl.textContent = text.lede;
+  if (studioSeedInputLabelEl) studioSeedInputLabelEl.textContent = text.label;
+  if (studioSeedInputEl) {
+    studioSeedInputEl.placeholder = text.placeholder;
+    studioSeedInputEl.rows = copy === 'seed' ? 3 : 15;
+  }
+  
+  if (studioRunPipelineButton) {
+    studioRunPipelineButton.textContent = copy === 'seed' ? 'Send Message' : 'Begin Production';
+  }
+  
+  const chatContainer = document.getElementById('studioIntakeChatContainer');
+  if (chatContainer) {
+    chatContainer.style.display = copy === 'seed' ? 'block' : 'none';
+  }
+
+  if (studioLoadStoryFileButton) studioLoadStoryFileButton.classList.toggle('hidden', !text.showFile);
+  if (!text.showFile && studioStoryMetaEl) studioStoryMetaEl.textContent = '';
+}
+
+function updateStudioStoryMeta() {
+  if (!studioStoryMetaEl) return;
+  const length = studioSeedInputEl?.value?.length || 0;
+  if (studioState.mode !== 'seed' && length > 0) {
+    studioStoryMetaEl.textContent = `${length.toLocaleString()} characters`;
+  } else {
+    studioStoryMetaEl.textContent = '';
+  }
+}
+
+async function loadStudioStoryFromFile(file) {
+  if (!file) return;
+  try {
+    const text = await file.text();
+    if (studioSeedInputEl) {
+      studioSeedInputEl.value = text.slice(0, MAX_STUDIO_STORY_CHARS);
+    }
+    updateStudioStoryMeta();
+    resetStudioBriefReview();
+    setMessage(studioPipelineMessageEl, `Loaded "${file.name}".`, 'success');
+  } catch (error) {
+    setMessage(studioPipelineMessageEl, `Could not read file: ${error.message}`, 'danger');
+  }
+}
+
+let studioIntakeChat = [];
+
+function appendChatMessage(role, content) {
+  const container = document.getElementById('studioIntakeChatHistory');
+  if (!container) return;
+  const wrapper = document.createElement('div');
+  wrapper.className = `chat-message ${role}-message`;
+  wrapper.style.alignSelf = role === 'user' ? 'flex-end' : 'flex-start';
+  wrapper.style.background = role === 'user' ? 'var(--primary-button-bg, #007bff)' : 'var(--bg-hover)';
+  wrapper.style.color = role === 'user' ? '#fff' : 'var(--text-color)';
+  wrapper.style.padding = '10px 14px';
+  wrapper.style.borderRadius = '8px';
+  wrapper.style.maxWidth = '85%';
+  
+  const bubble = document.createElement('div');
+  bubble.className = 'message-bubble';
+  bubble.textContent = content;
+  wrapper.append(bubble);
+  container.append(wrapper);
+  container.scrollTop = container.scrollHeight;
+}
+
+async function handleStudioRunPipeline() {
+  const messageText = studioSeedInputEl?.value?.trim();
+  const mode = studioState.mode || 'seed';
+  
+  if (!studioState.projectName) {
+    setMessage(studioPipelineMessageEl, 'Create or load a project first.', 'danger');
+    setStudioView('start');
+    return;
+  }
+  if (!messageText) {
+    setMessage(studioPipelineMessageEl, mode === 'seed' ? 'Type a message first.' : 'Paste your story first.', 'danger');
+    studioSeedInputEl?.focus();
+    return;
+  }
+
+  // Bypass chat for adapt/continue modes
+  if (mode !== 'seed') {
+    studioState.productionSeed = messageText;
+    await startProductionWorkflow(studioState.productionSeed);
+    return;
+  }
+
+  // Append user message (Seed Mode Only)
+  appendChatMessage('user', messageText);
+  studioIntakeChat.push({ role: 'user', content: messageText });
+  if (studioSeedInputEl) studioSeedInputEl.value = '';
+
+  const restoreButton = setStudioButtonBusy(studioRunPipelineButton, true, 'Sending...');
+  setMessage(studioPipelineMessageEl, 'Intake Agent is typing...', 'warning');
+
+  try {
+    const result = await studioIntakeTurn(studioState.projectName, studioIntakeChat);
+    const reply = result?.data?.response_text || "I'm having trouble understanding. Can you say that again?";
+    
+    appendChatMessage('assistant', reply);
+    studioIntakeChat.push({ role: 'assistant', content: reply });
+    
+    if (result?.data?.is_complete) {
+      setMessage(studioPipelineMessageEl, 'Intake complete! Starting production...', 'success');
+      studioState.productionSeed = JSON.stringify(result?.data?.draft_premise);
+      await startProductionWorkflow(studioState.productionSeed);
+    } else {
+      setMessage(studioPipelineMessageEl, '', 'success');
+    }
+  } catch (error) {
+    setMessage(studioPipelineMessageEl, `Intake failed: ${error.message}`, 'danger');
+  } finally {
+    restoreButton();
+  }
+}
+
+async function startProductionWorkflow(productionSeed) {
+  setStudioView('pipeline');
+  setStudioPipelineStage('intake');
+  if (studioPipelineStatusTextEl) {
+    studioPipelineStatusTextEl.textContent = 'Building premise, world, characters, panels, and continuity checks...';
+  }
+
+  const stages = ['world_building', 'character_building', 'story_planning', 'dialogue', 'approval_ready'];
+  let stageIndex = 0;
+  const stageTimer = window.setInterval(() => {
+    setStudioPipelineStage(stages[Math.min(stageIndex, stages.length - 1)]);
+    stageIndex += 1;
+  }, 2200);
+
+  try {
+    const mode = studioState.mode || 'seed';
+    const result = await studioRunWorkflow(studioState.projectName, productionSeed, mode, null);
+    window.clearInterval(stageTimer);
+    completeStudioPipelineStages();
+    if (studioPipelineStatusTextEl) {
+      studioPipelineStatusTextEl.textContent = 'Production plan ready for review.';
+    }
+    setStudioProject(result?.project_name || studioState.projectName, result?.project_id || studioState.projectId, result?.data || null);
+    renderStudioApproval(result?.data || result);
+    setStudioView('approval');
+    setMessage(studioApprovalMessageEl, `Production plan is ready for review.`, 'success');
+  } catch (error) {
+    window.clearInterval(stageTimer);
+    setStudioView('seed');
+    setMessage(studioPipelineMessageEl, `Production failed: ${error.message}`, 'danger');
+  }
+}
+
+async function handleStudioPanelApproval(button) {
+  const panelId = Number(button?.dataset.panelId || 0);
+  const approved = button?.dataset.approved === 'true';
+  if (!studioState.projectName || !studioState.projectId || !panelId) {
+    setMessage(studioApprovalMessageEl, 'Project or panel state is missing.', 'danger');
+    return;
+  }
+
+  let feedback = null;
+  if (!approved) {
+    feedback = prompt("Why are you rejecting this panel? What should the agent change?");
+    if (!feedback) {
+      setMessage(studioApprovalMessageEl, 'Correction cancelled. You must provide feedback to reject a panel.', 'warning');
+      return;
+    }
+  }
+
+  const restoreButton = setStudioButtonBusy(button, true, approved ? 'Approving...' : 'Correcting panel...');
+  try {
+    setMessage(studioApprovalMessageEl, approved ? 'Approving...' : 'Agent is writing a correction based on your feedback...', 'warning');
+    await studioApproveItem(studioState.projectName, studioState.projectId, 'panel', panelId, approved, feedback);
+    const loaded = await studioLoadProject(studioState.projectName);
+    setStudioProject(studioState.projectName, studioState.projectId, loaded?.data || null);
+    renderStudioApproval(loaded?.data || {});
+    setMessage(studioApprovalMessageEl, approved ? 'Panel approved.' : 'Panel corrected successfully!', 'success');
+  } catch (error) {
+    setMessage(studioApprovalMessageEl, `Action failed: ${error.message}`, 'danger');
+  } finally {
+    restoreButton();
+  }
+}
+
+async function handleStudioDeleteProject() {
+  const projectName = document.getElementById('studioLoadProjectName')?.value;
+  if (!projectName) return;
+  
+  const confirmDelete = confirm(`Are you sure you want to permanently delete the project "${projectName}"? This cannot be undone.`);
+  if (!confirmDelete) return;
+
+  const button = document.getElementById('studioDeleteProjectButton');
+  const restoreButton = setStudioButtonBusy(button, true, 'Deleting...');
+  try {
+    await studioDeleteProject(projectName);
+    setMessage(document.getElementById('studioLoadMessage'), `Project "${projectName}" deleted.`, 'success');
+    await renderStudioStartMenu();
+  } catch (error) {
+    setMessage(document.getElementById('studioLoadMessage'), `Failed to delete project: ${error.message}`, 'danger');
+  } finally {
+    restoreButton();
+  }
+}
+
+async function handleStudioExportReel() {
+  if (!studioState.projectName) {
+    setMessage(studioApprovalMessageEl, 'Load or generate a project before exporting.', 'danger');
+    return;
+  }
+  const button = document.getElementById('studioExportReelButton');
+  const openButton = document.getElementById('studioOpenReelButton');
+  const resultEl = document.getElementById('studioExportResult');
+  const restoreButton = setStudioButtonBusy(button, true, 'Exporting…');
+  try {
+    const result = await studioExportReel(studioState.projectName, studioState.projectId);
+    const fileList = (result.files || []).join(', ');
+    if (resultEl) {
+      resultEl.innerHTML = `Exported <strong>${result.panel_count}</strong> panels to <code>${result.export_dir}</code>.<br>`
+        + `Package: ${fileList}<br>ZIP: <code>${result.zip_path}</code>`;
+    }
+    setMessage(studioApprovalMessageEl, `Comic reel exported (${result.panel_count} panels). Open reel.html to view.`, 'success');
+    if (openButton && result.reel_html) {
+      openButton.style.display = '';
+      openButton.onclick = () => {
+        // Prefer the Electron shell opener; fall back to a file:// link.
+        if (window.betterFingers?.openPath) {
+          window.betterFingers.openPath(result.reel_html);
+        } else {
+          window.open(`file://${result.reel_html}`, '_blank');
+        }
+      };
+    }
+  } catch (error) {
+    setMessage(studioApprovalMessageEl, `Export failed: ${error.message}`, 'danger');
+  } finally {
+    restoreButton();
+  }
+}
+
+function handleStudioSectionApproval(button) {
+  const section = button?.dataset.section;
+  const action = button?.dataset.action;
+  if (!section) {
+    return;
+  }
+  studioState.sectionApprovals[section] = action === 'approve';
+  renderStudioBadge(section === 'premise' ? studioPremiseBadgeEl : studioWorldBadgeEl, action === 'approve');
+  setMessage(studioApprovalMessageEl, `${section === 'premise' ? 'Premise' : 'World bible'} ${action === 'approve' ? 'approved' : 'marked for changes'}.`, action === 'approve' ? 'success' : 'warning');
+}
+
+function formatStudioModelStatus(status = {}) {
+  if (!status.llm_attempted) {
+    return 'Local model was not attempted.';
+  }
+  const model = status.model_id ? ` (${status.model_id})` : '';
+  if (status.llm_ready && !status.used_fallback) {
+    return `Local model used${model}.`;
+  }
+  if (status.llm_ready && status.used_fallback) {
+    return `Local model started${model}, but at least one stage fell back after an LLM response problem.`;
+  }
+  const detail = Array.isArray(status.messages) && status.messages.length ? ` ${status.messages[0]}` : '';
+  return `Fallback used; local model was not ready${model}.${detail}`;
+}
+
+function renderListItems(container, values = [], emptyText = 'None yet.') {
+  if (!container) {
+    return;
+  }
+  container.innerHTML = '';
+  const items = Array.isArray(values) ? values.filter(Boolean) : [];
+  if (!items.length) {
+    const item = document.createElement('li');
+    item.textContent = emptyText;
+    container.append(item);
+    return;
+  }
+  for (const value of items) {
+    const item = document.createElement('li');
+    item.textContent = String(value);
+    container.append(item);
+  }
+}
+
+function resetStudioBriefReview() {
+  studioState.briefAccepted = false;
+  studioState.briefReview = null;
+  studioState.productionSeed = '';
+  studioBriefReviewPanelEl?.classList.add('hidden');
+  if (studioBriefFeedbackEl) {
+    studioBriefFeedbackEl.value = '';
+  }
+  if (studioRunPipelineButton) {
+    studioRunPipelineButton.textContent = 'Check Understanding';
+  }
+}
+
+function renderStudioBriefReview(review = {}) {
+  studioState.briefReview = review;
+  studioState.briefAccepted = false;
+  studioBriefReviewPanelEl?.classList.remove('hidden');
+  if (studioBriefGuessEl) {
+    studioBriefGuessEl.textContent = review.guess || '-';
+  }
+  if (studioBriefConfidenceEl) {
+    const confidence = review.confidence || 'medium';
+    studioBriefConfidenceEl.textContent = `Confidence: ${confidence}`;
+    studioBriefConfidenceEl.dataset.state = confidence === 'high' ? 'approved' : confidence === 'low' ? 'rejected' : 'pending';
+  }
+  renderListItems(studioBriefQuestionsEl, review.open_questions, 'No questions.');
+  renderListItems(studioBriefSuggestionsEl, review.small_fix_suggestions, 'No small fixes suggested.');
+  if (studioRunPipelineButton) {
+    studioRunPipelineButton.textContent = 'Accept First';
+  }
+}
+
+function buildStudioProductionSeed(seedText) {
+  const feedback = studioBriefFeedbackEl?.value?.trim();
+  if (!feedback) {
+    return seedText;
+  }
+  return `${seedText}\n\nUSER CHANGES / ADDITIONS BEFORE PRODUCTION:\n${feedback}`;
+}
+
+function renderStudioProjectOptions(projects = []) {
+  if (!studioLoadProjectNameEl) {
+    return;
+  }
+  const previous = studioLoadProjectNameEl.value;
+  studioLoadProjectNameEl.innerHTML = '';
+
+  if (!projects.length) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'No saved projects found';
+    studioLoadProjectNameEl.append(option);
+    studioLoadProjectButton.disabled = true;
+    return;
+  }
+
+  for (const project of projects) {
+    const option = document.createElement('option');
+    option.value = project.name;
+    option.textContent = project.name;
+    if (project.updated_at) {
+      option.title = `Updated ${project.updated_at}`;
+    }
+    studioLoadProjectNameEl.append(option);
+  }
+
+  if (previous && projects.some((project) => project.name === previous)) {
+    studioLoadProjectNameEl.value = previous;
+  } else if (studioState.projectName && projects.some((project) => project.name === studioState.projectName)) {
+    studioLoadProjectNameEl.value = studioState.projectName;
+  }
+  studioLoadProjectButton.disabled = false;
+}
+
+async function refreshStudioProjectList() {
+  if (!studioLoadProjectNameEl) {
+    return [];
+  }
+  try {
+    const result = await studioListProjects();
+    const projects = Array.isArray(result?.projects) ? result.projects : [];
+    renderStudioProjectOptions(projects);
+    if (!projects.length) {
+      setMessage(studioLoadMessageEl, 'No saved Studio projects yet.', 'warning');
+    } else if (studioLoadMessageEl?.textContent === 'No saved Studio projects yet.') {
+      setMessage(studioLoadMessageEl, '');
+    }
+    return projects;
+  } catch (error) {
+    renderStudioProjectOptions([]);
+    setMessage(studioLoadMessageEl, `Project list failed: ${error.message}`, 'danger');
+    return [];
   }
 }
 
@@ -2346,6 +3090,7 @@ async function bootstrap() {
     refreshModels().catch((error) => {
       setMessage(modelMessageEl, `Models unavailable: ${error.message}`, 'danger');
     }),
+    refreshStudioProjectList().catch(() => {}),
     refreshDiagnostics().catch(() => {}),
     refreshDoctor().catch(() => {}),
     refreshSidecarLogs().catch(() => {}),
@@ -2958,6 +3703,108 @@ unloadTtsButton?.addEventListener('click', () => {
   runModelAction(unloadTtsButton, 'Unload TTS', () => unloadModel('tts'));
 });
 
+studioCreateProjectButton?.addEventListener('click', handleStudioCreateProject);
+studioLoadProjectButton?.addEventListener('click', handleStudioLoadProject);
+document.getElementById('studioDeleteProjectButton')?.addEventListener('click', handleStudioDeleteProject);
+document.getElementById('studioExportReelButton')?.addEventListener('click', handleStudioExportReel);
+studioRunPipelineButton?.addEventListener('click', handleStudioRunPipeline);
+studioBriefAcceptButton?.addEventListener('click', () => {
+  const seedText = studioSeedInputEl?.value?.trim();
+  if (!seedText) {
+    setMessage(studioPipelineMessageEl, 'Story seed is required.', 'danger');
+    return;
+  }
+  studioState.briefAccepted = true;
+  studioState.productionSeed = buildStudioProductionSeed(seedText);
+  if (studioRunPipelineButton) {
+    studioRunPipelineButton.textContent = 'Begin Production';
+  }
+  setMessage(studioPipelineMessageEl, 'Brief accepted. Production will use your seed plus any changes you typed.', 'success');
+});
+studioBriefRetryButton?.addEventListener('click', () => {
+  handleStudioBriefReview({ retry: true });
+});
+
+studioModeOptionEls.forEach((option) => {
+  option.addEventListener('click', () => {
+    setStudioMode(option.dataset.mode);
+    setMessage(studioPipelineMessageEl, '');
+    studioSeedInputEl?.focus();
+  });
+});
+
+studioLoadStoryFileButton?.addEventListener('click', () => studioStoryFileInputEl?.click());
+
+studioStoryFileInputEl?.addEventListener('change', (event) => {
+  const file = event.target?.files?.[0];
+  if (file) loadStudioStoryFromFile(file);
+  if (studioStoryFileInputEl) studioStoryFileInputEl.value = '';
+});
+
+studioSeedInputEl?.addEventListener('input', () => {
+  updateStudioStoryMeta();
+  if (studioState.briefReview || studioState.briefAccepted) {
+    resetStudioBriefReview();
+  }
+});
+
+studioSeedInputEl?.addEventListener('dragover', (event) => {
+  if (studioState.mode === 'seed') return;
+  event.preventDefault();
+  studioSeedInputEl.classList.add('studio-drop-active');
+});
+
+studioSeedInputEl?.addEventListener('dragleave', () => {
+  studioSeedInputEl.classList.remove('studio-drop-active');
+});
+
+studioSeedInputEl?.addEventListener('drop', (event) => {
+  studioSeedInputEl.classList.remove('studio-drop-active');
+  if (studioState.mode === 'seed') return;
+  const file = event.dataTransfer?.files?.[0];
+  if (file) {
+    event.preventDefault();
+    loadStudioStoryFromFile(file);
+  }
+});
+
+studioBackToStartButton?.addEventListener('click', () => {
+  setStudioView('start');
+  setMessage(studioPipelineMessageEl, '');
+});
+
+studioNewProjectFromApprovalButton?.addEventListener('click', () => {
+  setStudioView('start');
+  setMessage(studioApprovalMessageEl, '');
+});
+
+studioNewProjectNameEl?.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    handleStudioCreateProject();
+  }
+});
+
+studioLoadProjectNameEl?.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    handleStudioLoadProject();
+  }
+});
+
+studioViewApprovalEl?.addEventListener('click', (event) => {
+  const panelButton = event.target.closest('button[data-panel-id]');
+  if (panelButton) {
+    handleStudioPanelApproval(panelButton);
+    return;
+  }
+
+  const sectionButton = event.target.closest('button[data-section]');
+  if (sectionButton) {
+    handleStudioSectionApproval(sectionButton);
+  }
+});
+
 saveDraftEditButton?.addEventListener('click', async () => {
   if (!latestDraft?.id) {
     return;
@@ -3158,6 +4005,8 @@ tabButtons.forEach((button) => {
     if (targetTab === 'diagnostics') {
       refreshDiagnostics().catch(() => {});
       refreshDoctor().catch(() => {});
+    } else if (targetTab === 'studio') {
+      refreshStudioProjectList().catch(() => {});
     }
   });
 });

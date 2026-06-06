@@ -45,6 +45,8 @@ class StudioMemoryTests(unittest.TestCase):
                     "continuity_warnings",
                     "approvals",
                     "tool_calls",
+                    "gest_nodes",
+                    "gest_edges",
                 }
                 self.assertTrue(expected_tables.issubset(tables))
 
@@ -61,8 +63,10 @@ class StudioMemoryTests(unittest.TestCase):
                 tool_call_id = studio_memory.log_tool_call(project_name, project_id, "mock_tool", {"a": 1}, {"ok": True})
 
                 export = studio_memory.export_project_json(project_name, project_id)
+                listed = studio_memory.list_projects()
 
                 self.assertEqual(character["description"], "Lead archivist")
+                self.assertEqual(listed[0]["name"], project_name)
                 self.assertEqual(export["spec"], studio_memory.STUDIO_SPEC_TITLE)
                 self.assertEqual(export["user_preferences"]["tone"], "noir")
                 self.assertEqual(export["bible"]["world"]["rule"], "canon matters")
@@ -112,3 +116,60 @@ class StudioMemoryTests(unittest.TestCase):
 
                 with self.assertRaises(ValueError):
                     studio_memory.record_approval(project_name, project_id, "panel", 999, True)
+
+    def test_gest_graph_nodes_edges_and_temporal_cycle_detection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(studio_memory, "get_user_data_path", return_value=tmp):
+                project = studio_memory.create_project("GEST Graph")
+                project_name = project["name"]
+                project_id = project["id"]
+
+                a = studio_memory.add_gest_node(project_name, project_id, "event", "Mara enters the archive")
+                b = studio_memory.add_gest_node(project_name, project_id, "event", "Mara opens the vault")
+                c = studio_memory.add_gest_node(project_name, project_id, "event", "The rival arrives")
+
+                # Invalid node type is rejected.
+                with self.assertRaises(ValueError):
+                    studio_memory.add_gest_node(project_name, project_id, "teleport", "bad node")
+
+                # Temporal ordering A before B, B before C.
+                studio_memory.add_gest_edge(project_name, project_id, a, b, "before")
+                studio_memory.add_gest_edge(project_name, project_id, b, c, "before")
+                # A logical relation derives its class automatically.
+                causal = studio_memory.add_gest_edge(project_name, project_id, b, c, "causes")
+                self.assertGreater(causal, 0)
+
+                # Unknown relation and self-loops are rejected.
+                with self.assertRaises(ValueError):
+                    studio_memory.add_gest_edge(project_name, project_id, a, c, "teleports_to")
+                with self.assertRaises(ValueError):
+                    studio_memory.add_gest_edge(project_name, project_id, a, a, "before")
+                # Mismatched relation_class is rejected.
+                with self.assertRaises(ValueError):
+                    studio_memory.add_gest_edge(project_name, project_id, a, c, "before", relation_class="logical")
+
+                # Closing the loop (C before A) would create a temporal cycle -> rejected.
+                with self.assertRaises(ValueError):
+                    studio_memory.add_gest_edge(project_name, project_id, c, a, "before")
+                # The same cycle expressed via 'after' (A after C) is also rejected.
+                with self.assertRaises(ValueError):
+                    studio_memory.add_gest_edge(project_name, project_id, a, c, "after")
+
+                graph = studio_memory.get_gest_graph(project_name, project_id)
+                self.assertEqual(len(graph["nodes"]), 3)
+                # before, before, causes committed; the cycle attempts did not.
+                self.assertEqual(len(graph["edges"]), 3)
+                relations = {edge["relation"] for edge in graph["edges"]}
+                self.assertEqual(relations, {"before", "causes"})
+
+                export = studio_memory.export_project_json(project_name, project_id)
+                self.assertEqual(len(export["gest"]["nodes"]), 3)
+
+                # The temporal timeline is a valid topological order: a before b before c.
+                timeline = studio_memory.compute_gest_timeline(project_name, project_id)
+                self.assertTrue(timeline["valid"])
+                self.assertFalse(timeline["has_cycle"])
+                self.assertEqual(timeline["node_count"], 3)
+                order = timeline["order"]
+                self.assertLess(order.index(a), order.index(b))
+                self.assertLess(order.index(b), order.index(c))

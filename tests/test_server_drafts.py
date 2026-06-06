@@ -249,7 +249,8 @@ class ServerDraftTests(unittest.TestCase):
         self.assertEqual(draft["status"], "error")
         self.assertEqual(draft["raw_text"], "raw transcript")
         self.assertIn("llm offline", draft["error"])
-        self.assertEqual([status for status, _data in statuses], ["transcribing", "rewriting", "draft_error", "error", "idle"])
+        draft_statuses = [status for status, _data in statuses if status != "draft_tts_stopped"]
+        self.assertEqual(draft_statuses, ["transcribing", "rewriting", "draft_error", "error", "idle"])
 
     def test_retry_endpoint_reprocesses_stored_recording(self):
         with patch.object(server, "Transcriber", DummyTranscriber), patch.object(

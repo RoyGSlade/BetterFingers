@@ -1084,8 +1084,11 @@
                 <span class="status-label">Load Existing Project</span>
                 <p class="setting-desc">Continue a project that's already been started.</p>
                 <div class="studio-input-row">
-                  <input id="studioLoadProjectName" class="settings-input" type="text" placeholder="Project name" />
-                  <button id="studioLoadProjectButton" class="secondary-button" type="button">Load Project</button>
+                  <select id="studioLoadProjectName" class="settings-input">
+                    <option value="">No saved projects found</option>
+                  </select>
+                  <button id="studioLoadProjectButton" class="secondary-button" type="button">Load</button>
+                  <button id="studioDeleteProjectButton" class="secondary-button" type="button" style="color: var(--error-color); border-color: var(--error-color);">Delete</button>
                 </div>
                 <div id="studioLoadMessage" class="warmup-message" role="status" aria-live="polite"></div>
               </div>
@@ -1103,12 +1106,46 @@
               </div>
               <button id="studioBackToStartButton" class="secondary-button" type="button">← Back</button>
             </div>
-            <p class="lede" style="margin-bottom: 20px;">Tell the studio what your story is about. A sentence or two is enough — the production pipeline handles the rest.</p>
+            <p class="lede" id="studioSeedLede" style="margin-bottom: 20px;">Tell the studio what your story is about. A sentence or two is enough — the production pipeline handles the rest.</p>
+
             <div class="setting-group">
-              <label class="status-label" for="studioSeedInput">Your story seed</label>
-              <textarea id="studioSeedInput" class="settings-input studio-seed-textarea" rows="5" placeholder="e.g. A disgraced knight discovers the kingdom's sacred relic is a lie — and the real power has been buried under the city for 500 years."></textarea>
+              <label class="status-label">Production style</label>
+              <div class="studio-mode-toggle" role="radiogroup" aria-label="Production style">
+                <button type="button" class="studio-mode-option active" data-mode="seed" role="radio" aria-checked="true">
+                  <span class="studio-mode-title">Start fresh</span>
+                  <span class="studio-mode-desc">Invent a new story from a short idea</span>
+                </button>
+                <button type="button" class="studio-mode-option" data-mode="adapt" role="radio" aria-checked="false">
+                  <span class="studio-mode-title">Adapt my story</span>
+                  <span class="studio-mode-desc">Storyboard a story you've already written</span>
+                </button>
+                <button type="button" class="studio-mode-option" data-mode="continue" role="radio" aria-checked="false">
+                  <span class="studio-mode-title">Continue my story</span>
+                  <span class="studio-mode-desc">Pick up where your story leaves off</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="setting-group">
+              <div class="studio-seed-label-row">
+                <label class="status-label" for="studioSeedInput" id="studioSeedInputLabel">Your story seed</label>
+                <div class="studio-seed-actions">
+                  <input type="file" id="studioStoryFileInput" accept=".txt,.md,.markdown,.text" class="hidden" />
+                  <button type="button" id="studioLoadStoryFileButton" class="secondary-button hidden">Load file…</button>
+                  <span id="studioStoryMeta" class="studio-story-meta"></span>
+                </div>
+              </div>
+              <div id="studioIntakeChatContainer" class="studio-chat-container" style="margin-top: 16px; margin-bottom: 16px;">
+                <div id="studioIntakeChatHistory" class="studio-chat-history" style="max-height: 350px; overflow-y: auto; border: 1px solid var(--border-color); padding: 12px; border-radius: 6px; display: flex; flex-direction: column; gap: 10px;">
+                  <div class="chat-message assistant-message" style="align-self: flex-start; background: var(--bg-hover); padding: 10px 14px; border-radius: 8px; max-width: 85%;">
+                    <div class="message-bubble">Hello! I'm the Source Arcanum Intake Agent. What is your story idea? We are building a 60-second comic reel, so keep the scope tight (1-2 locations, 2-3 characters max).</div>
+                  </div>
+                </div>
+              </div>
+              <textarea id="studioSeedInput" class="settings-input studio-seed-textarea" rows="3" placeholder="Type your idea or response here..."></textarea>
+              
               <div class="action-row" style="margin-top: 16px;">
-                <button id="studioRunPipelineButton" class="secondary-button primary-button studio-begin-btn" type="button">Begin Production</button>
+                <button id="studioRunPipelineButton" class="secondary-button primary-button studio-begin-btn" type="button">Send Message</button>
               </div>
               <div id="studioPipelineMessage" class="warmup-message" role="status" aria-live="polite"></div>
             </div>
@@ -1259,11 +1296,12 @@
                 <span class="studio-section-icon">📤</span>
                 <h3>Export</h3>
               </div>
-              <p class="setting-desc">Export your approved comic reel as a scrolling panel sequence. Voice lines and image prompts are included for downstream rendering.</p>
+              <p class="setting-desc">Export your comic reel as a local production package — a self-contained scrolling <strong>reel.html</strong> preview, series/world/character/style bibles, a panel-by-panel script, timed subtitles (.srt), an export report, and a shareable ZIP. Everything stays on your machine.</p>
               <div class="action-row" style="margin-top: 14px;">
-                <button id="studioExportReelButton" class="secondary-button primary-button" type="button" disabled>Export Comic Reel (Coming Soon)</button>
+                <button id="studioExportReelButton" class="secondary-button primary-button" type="button">Export Comic Reel</button>
+                <button id="studioOpenReelButton" class="secondary-button" type="button" style="display:none;">Open Reel Preview</button>
               </div>
-              <p class="draft-metadata" style="margin-top: 8px;">Rendering pipeline is reserved for a future release. Your story data is already saved locally.</p>
+              <p id="studioExportResult" class="draft-metadata" style="margin-top: 8px;">Bibles, script, subtitles, and a scrolling reel preview are written into your project's <code>exports/</code> folder.</p>
             </div>
 
             <div id="studioApprovalMessage" class="warmup-message" role="status" aria-live="polite"></div>

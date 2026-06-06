@@ -14,6 +14,7 @@ const api = {
   showReviewOverlay: (draft) => ipcRenderer.invoke('review:show', draft),
   hideReviewOverlay: () => ipcRenderer.invoke('review:hide'),
   updateHotkeys: (config) => ipcRenderer.send('update-hotkeys', config),
+  openPath: (targetPath) => ipcRenderer.invoke('shell:open-path', targetPath),
 };
 
 contextBridge.exposeInMainWorld('betterFingers', api);

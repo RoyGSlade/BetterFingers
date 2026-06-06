@@ -78,9 +78,16 @@ class ServerLazyStartupTests(unittest.TestCase):
         server.loop = None
 
     def test_lazy_startup_skips_llm_and_hotkeys(self):
+        profile = {
+            "model_keep_llm_loaded": False,
+            "model_keep_stt_loaded": False,
+            "model_keep_tts_loaded": False,
+        }
         with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
             server, "Transcriber", DummyTranscriber
-        ), patch.object(server, "get_engine", side_effect=AssertionError("get_engine should not run")), patch.object(
+        ), patch.object(server, "load_profile", return_value=profile), patch.object(
+            server, "get_engine", side_effect=AssertionError("get_engine should not run")
+        ), patch.object(
             server, "HotkeyManager", side_effect=AssertionError("HotkeyManager should not start")
         ):
             asyncio.run(server.startup_event())
@@ -113,8 +120,65 @@ class ServerLazyStartupTests(unittest.TestCase):
         self.assertIs(server.hotkey_manager, started)
         self.assertFalse(started.started)
 
+    def test_startup_respects_keep_loaded_flags_when_disabled(self):
+        started = DummyHotkeyManager()
+
+        def _start_hotkey_manager():
+            server.hotkey_manager_started = True
+            server.hotkey_manager = started
+            return started
+
+        profile = {
+            "model_keep_llm_loaded": False,
+            "model_keep_stt_loaded": False,
+            "model_keep_tts_loaded": False,
+        }
+
+        with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": ""}, clear=False), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ), patch.object(server, "load_profile", return_value=profile), patch.object(
+            server, "get_engine", side_effect=AssertionError("LLM should not warm when keep-loaded is off")
+        ), patch.object(
+            server, "ensure_tts_initialized", side_effect=AssertionError("TTS should not warm when keep-loaded is off")
+        ), patch.object(
+            server, "start_hotkey_manager", side_effect=_start_hotkey_manager
+        ):
+            asyncio.run(server.startup_event())
+
+        self.assertEqual(len(DummyTranscriber.instances), 1)
+        self.assertFalse(DummyTranscriber.instances[0].preload)
+        self.assertFalse(DummyTranscriber.instances[0].loaded)
+        self.assertTrue(server.hotkey_manager_started)
+
+    def test_lazy_startup_still_warms_keep_loaded_models(self):
+        profile = {
+            "model_keep_llm_loaded": True,
+            "model_keep_stt_loaded": True,
+            "model_keep_tts_loaded": False,
+        }
+
+        with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ), patch.object(server, "load_profile", return_value=profile), patch.object(
+            server, "get_engine", return_value=DummyEngine()
+        ) as engine_mock, patch.object(
+            server, "HotkeyManager", side_effect=AssertionError("HotkeyManager should not start in lazy startup")
+        ):
+            asyncio.run(server.startup_event())
+
+        self.assertEqual(len(DummyTranscriber.instances), 1)
+        self.assertTrue(DummyTranscriber.instances[0].preload)
+        self.assertTrue(DummyTranscriber.instances[0].loaded)
+        self.assertTrue(engine_mock.called)
+        self.assertFalse(server.hotkey_manager_started)
+
     def test_lazy_health_runtime_and_warmup(self):
         engine_holder = {}
+        profile = {
+            "model_keep_llm_loaded": False,
+            "model_keep_stt_loaded": False,
+            "model_keep_tts_loaded": False,
+        }
 
         def _get_engine(model_id=None):
             engine_holder["engine"] = DummyEngine()
@@ -127,7 +191,9 @@ class ServerLazyStartupTests(unittest.TestCase):
 
         with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
             server, "Transcriber", DummyTranscriber
-        ), patch.object(server, "get_engine", side_effect=_get_engine), patch.object(
+        ), patch.object(server, "load_profile", return_value=profile), patch.object(
+            server, "get_engine", side_effect=_get_engine
+        ), patch.object(
             server, "get_engine_if_initialized", side_effect=_get_engine_if_initialized
         ):
             asyncio.run(server.startup_event())

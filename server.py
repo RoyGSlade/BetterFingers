@@ -20,6 +20,7 @@ from intent_engine import intent_engine, IntentState
 from project_generator import project_generator
 from platform_capabilities import get_capabilities
 from platform_paths import ensure_app_dirs, get_app_data_dir, get_config_dir
+import studio_capabilities
 import studio_memory
 from model_manager import (
     DEFAULT_MODEL,
@@ -278,6 +279,20 @@ def is_lazy_startup_enabled():
     return os.getenv("BETTERFINGERS_LAZY_STARTUP") == "1"
 
 
+def get_model_residency_settings():
+    try:
+        config = load_profile(get_last_active_profile())
+    except Exception as exc:
+        logging.warning(f"Failed loading active profile for model residency settings: {exc}")
+        config = {}
+
+    return {
+        "llm": bool(config.get("model_keep_llm_loaded", True)),
+        "stt": bool(config.get("model_keep_stt_loaded", True)),
+        "tts": bool(config.get("model_keep_tts_loaded", False)),
+    }
+
+
 def ensure_transcriber_initialized(preload=False):
     global transcriber
     if transcriber is None:
@@ -285,6 +300,58 @@ def ensure_transcriber_initialized(preload=False):
     elif preload:
         transcriber.ensure_loaded()
     return transcriber
+
+
+def warm_start_resident_models(settings=None):
+    settings = settings or get_model_residency_settings()
+    results = {}
+
+    if settings.get("stt"):
+        try:
+            logging.info("Preloading STT because keep-loaded is enabled.")
+            trans = ensure_transcriber_initialized(preload=True)
+            results["stt"] = {"ok": True, "loaded": bool(getattr(trans, "model", None))}
+        except Exception as exc:
+            logging.error(f"STT keep-loaded startup failure: {exc}")
+            record_runtime_error("stt", str(exc), {"action": "keep_loaded_startup"})
+            results["stt"] = {"ok": False, "error": str(exc)}
+
+    if settings.get("llm"):
+        try:
+            logging.info("Starting selected LLM because keep-loaded is enabled.")
+            engine = get_selected_llm_engine()
+            ready = bool(getattr(engine, "_ready", False))
+            results["llm"] = {
+                "ok": ready,
+                "ready": ready,
+                "model_id": getattr(engine, "model_id", None),
+            }
+        except Exception as exc:
+            logging.error(f"LLM keep-loaded startup failure: {exc}")
+            record_runtime_error("llm", str(exc), {"action": "keep_loaded_startup"})
+            results["llm"] = {"ok": False, "ready": False, "error": str(exc)}
+
+    if settings.get("tts"):
+        try:
+            logging.info("Loading review TTS because keep-loaded is enabled.")
+            config = load_profile(get_last_active_profile())
+            voice_hint = normalize_tts_voice_id(config.get("review_tts_voice_hint", "english"))
+            engine = ensure_tts_initialized()
+            if engine:
+                engine.set_keep_loaded(True)
+                load_result = engine.ensure_loaded(voice_hint=voice_hint)
+                results["tts"] = {
+                    "ok": bool(load_result.get("ok")),
+                    "loaded": engine.is_loaded(),
+                    "backend": engine.backend(),
+                    "message": load_result.get("message", ""),
+                }
+        except Exception as exc:
+            logging.error(f"TTS keep-loaded startup failure: {exc}")
+            record_runtime_error("tts", str(exc), {"action": "keep_loaded_startup"})
+            results["tts"] = {"ok": False, "loaded": False, "error": str(exc)}
+
+    return results
 
 
 def get_runtime_status_snapshot():
@@ -984,27 +1051,28 @@ async def startup_event():
     loop = asyncio.get_event_loop()
     load_draft_history()
     lazy_startup = is_lazy_startup_enabled()
+    residency_settings = get_model_residency_settings()
 
+    def background_warmup():
+        try:
+            logging.info("Initializing Transcriber...")
+            ensure_transcriber_initialized(preload=bool(residency_settings.get("stt")))
+            logging.info("Transcriber initialized successfully.")
+        except Exception as e:
+            logging.error(f"Transcriber startup failure: {e}")
+            record_runtime_error("stt", str(e))
 
-    try:
-        logging.info("Initializing Transcriber...")
-        ensure_transcriber_initialized(preload=not lazy_startup)
-        logging.info("Transcriber initialized successfully.")
-    except Exception as e:
-        logging.error(f"Transcriber startup failure: {e}")
-        record_runtime_error("stt", str(e))
+        if any(residency_settings.values()):
+            warm_results = warm_start_resident_models(residency_settings)
+            logging.info(f"Keep-loaded startup results: {warm_results}")
+        else:
+            logging.info("No keep-loaded model residency flags are enabled; model startup is deferred.")
+
+    threading.Thread(target=background_warmup, daemon=True, name="betterfingers-warmup").start()
 
     if lazy_startup:
-        logging.info("Lazy startup enabled; deferring LLM warmup and Hotkey Manager startup.")
+        logging.info("Lazy startup enabled; deferring Hotkey Manager startup.")
         return
-
-    try:
-        logging.info("Warming up LLM Engine...")
-        get_selected_llm_engine()
-        logging.info("LLM Engine ready.")
-    except Exception as e:
-        logging.error(f"LLM Engine startup failure: {e}")
-        record_runtime_error("llm", str(e))
 
     try:
         manager = start_hotkey_manager()
@@ -1550,6 +1618,43 @@ class StudioApprovalRequest(BaseModel):
     note: str = ""
 
 
+@app.get("/studio/capabilities")
+async def list_studio_capability_categories():
+    return {
+        "ok": True,
+        "registry_version": studio_capabilities.REGISTRY_VERSION,
+        "categories": studio_capabilities.list_categories(),
+    }
+
+
+@app.get("/studio/capabilities/{category}")
+async def list_studio_capabilities(category: str, page: int = 1, page_size: int = 20, query: Optional[str] = None):
+    try:
+        payload = studio_capabilities.list_capabilities(category, page=page, page_size=page_size, query=query)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, **payload}
+
+
+@app.get("/studio/capabilities/{category}/{capability_id}")
+async def get_studio_capability(category: str, capability_id: str):
+    try:
+        capability = studio_capabilities.get_capability(category, capability_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not capability:
+        raise HTTPException(status_code=404, detail="Studio capability not found")
+    return {"ok": True, "category": category, "capability": capability}
+
+
+@app.get("/studio/capabilities/actions/{action_id}/next")
+async def list_studio_next_actions(action_id: str):
+    action = studio_capabilities.get_capability("actions", action_id)
+    if not action:
+        raise HTTPException(status_code=404, detail="Studio action not found")
+    return {"ok": True, "action": action, "next_actions": studio_capabilities.get_next_actions(action_id)}
+
+
 def _load_studio_project(project_name: str):
     try:
         project = studio_memory.get_project_by_name(project_name)
@@ -1567,6 +1672,15 @@ async def create_studio_project(request: StudioProjectRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True, "project": project, "asset_dirs": list(studio_memory.PROJECT_ASSET_DIRS)}
+
+
+@app.get("/studio/projects")
+async def list_studio_projects():
+    try:
+        projects = studio_memory.list_projects()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "projects": projects}
 
 
 @app.get("/studio/projects/{project_name}")
@@ -2650,12 +2764,41 @@ class StudioLoadProjectRequest(BaseModel):
 class StudioRunWorkflowRequest(BaseModel):
     project_name: str
     seed_text: str
+    # Production style: "seed" (invent new), "adapt"/"start" (storyboard an existing story),
+    # or "continue" (generate what happens next from an existing story).
+    mode: Optional[str] = "seed"
+    # Full text of an existing story (for adapt/continue). May also be supplied via seed_text.
+    # Full text of an existing story (for adapt/continue). May also be supplied via seed_text.
+    source_story: Optional[str] = None
+
+class StudioIntakeTurnRequest(BaseModel):
+    project_name: str
+    chat_history: list = Field(default_factory=list)
+
+class StudioBriefReviewRequest(BaseModel):
+    project_name: str
+    seed_text: str
+    mode: Optional[str] = "seed"
+    source_story: Optional[str] = None
+    user_notes: Optional[str] = ""
 
 class StudioRunStageRequest(BaseModel):
     project_name: str
     stage: str
     seed_text: Optional[str] = None
+    mode: Optional[str] = "seed"
+    source_story: Optional[str] = None
     input_data: Optional[dict] = None
+
+class StudioSceneRequest(BaseModel):
+    project_name: str
+    # Deterministic scene spec: {region_id?, actors:[...], chains:[{actor, poi?, actions:[...]}]}
+    scene: dict = Field(default_factory=dict)
+
+class StudioFinalizeRequest(BaseModel):
+    project_name: str
+    # Optional explicit scene ordering; defaults to scene creation order.
+    scene_order: Optional[list] = None
 
 class StudioWarningResolveRequest(BaseModel):
     project_name: str
@@ -2668,6 +2811,7 @@ class StudioApproveRequest(BaseModel):
     item_id: int
     approved: bool
     approved_by: Optional[str] = "User"
+    feedback: Optional[str] = None
 
 @app.post("/studio/project/create")
 async def studio_create_project(request: StudioCreateProjectRequest):
@@ -2679,6 +2823,15 @@ async def studio_create_project(request: StudioCreateProjectRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logging.error(f"Studio create project failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/studio/project/list")
+async def studio_list_projects():
+    import studio_memory as memory
+    try:
+        return {"status": "success", "projects": memory.list_projects()}
+    except Exception as e:
+        logging.error(f"Studio list projects failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/studio/project/load")
@@ -2704,13 +2857,124 @@ async def studio_run_workflow(request: StudioRunWorkflowRequest):
     from studio_workflow import StudioWorkflowRunner
     try:
         runner = StudioWorkflowRunner(request.project_name)
-        result = runner.run_full_pipeline(request.seed_text)
+        result = runner.run_full_pipeline(request.seed_text, mode=request.mode, source_story=request.source_story)
         if result.get("ok"):
             return result
         else:
             raise HTTPException(status_code=500, detail=result.get("error"))
     except Exception as e:
         logging.error(f"Studio workflow run failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/studio/workflow/intake/turn")
+async def studio_intake_turn(request: StudioIntakeTurnRequest):
+    from studio_workflow import StudioWorkflowRunner
+    try:
+        runner = StudioWorkflowRunner(request.project_name)
+        data = runner.run_intake_interview_turn(request.chat_history)
+        return {"status": "success", "data": data}
+    except Exception as e:
+        logging.error(f"Studio intake turn failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/studio/workflow/brief")
+async def studio_brief_review(request: StudioBriefReviewRequest):
+    from studio_workflow import StudioWorkflowRunner
+    try:
+        runner = StudioWorkflowRunner(request.project_name)
+        data = runner.run_brief_review(
+            request.seed_text,
+            mode=request.mode,
+            source_story=request.source_story,
+            user_notes=request.user_notes or "",
+        )
+        return {"status": "success", "project_id": runner.project_id, "project_name": request.project_name, "data": data}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"Studio brief review failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/studio/workflow/explore")
+async def studio_director_explore(request: StudioCreateProjectRequest):
+    from studio_workflow import StudioWorkflowRunner
+    try:
+        runner = StudioWorkflowRunner(request.project_name)
+        result = runner.run_director_exploration()
+        return {
+            "status": "success",
+            "project_id": runner.project_id,
+            "project_name": request.project_name,
+            **result,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"Studio director exploration failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/studio/workflow/cast")
+async def studio_director_cast(request: StudioCreateProjectRequest):
+    from studio_workflow import StudioWorkflowRunner
+    try:
+        runner = StudioWorkflowRunner(request.project_name)
+        result = runner.run_director_casting()
+        return {
+            "status": "success",
+            "project_id": runner.project_id,
+            "project_name": request.project_name,
+            **result,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"Studio director casting failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/studio/workflow/scene")
+async def studio_scene_round(request: StudioSceneRequest):
+    from studio_workflow import StudioWorkflowRunner
+    try:
+        runner = StudioWorkflowRunner(request.project_name)
+        result = runner.run_scene_round(request.scene)
+        if result.get("ok"):
+            return {
+                "status": "success",
+                "project_id": runner.project_id,
+                "project_name": request.project_name,
+                **result,
+            }
+        # A rejected scene spec is a client error (invalid action chain), not a server fault.
+        raise HTTPException(status_code=400, detail=result.get("error"))
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"Studio scene round failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/studio/workflow/finalize")
+async def studio_finalize(request: StudioFinalizeRequest):
+    from studio_workflow import StudioWorkflowRunner
+    try:
+        runner = StudioWorkflowRunner(request.project_name)
+        result = runner.run_finalization(scene_order=request.scene_order)
+        if result.get("ok"):
+            return {
+                "status": "success",
+                "project_id": runner.project_id,
+                "project_name": request.project_name,
+                **result,
+            }
+        raise HTTPException(status_code=400, detail=result.get("error"))
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"Studio finalization failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/studio/workflow/stage")
@@ -2720,16 +2984,40 @@ async def studio_run_stage(request: StudioRunStageRequest):
     try:
         runner = StudioWorkflowRunner(request.project_name)
         stage_name = request.stage.lower().strip()
-        
+
+        # Recover the production mode / dropped story from memory so stages run after intake
+        # (in separate requests) stay grounded on the same canon.
+        runner._load_source()
+
         # Determine inputs based on stage
         premise = memory.get_bible(request.project_name, runner.project_id).get("premise")
         world = memory.get_bible(request.project_name, runner.project_id).get("world")
         characters = memory.get_characters(request.project_name, runner.project_id)
         
-        if stage_name == "intake":
-            if not request.seed_text:
+        if stage_name in ("exploration", "director_exploration"):
+            data = runner.run_director_exploration()
+            return {"status": "success", "stage": "exploration", "data": data["data"]}
+
+        elif stage_name in ("casting", "director_casting"):
+            data = runner.run_director_casting(premise_data=premise)
+            return {"status": "success", "stage": "casting", "data": data["data"]}
+
+        elif stage_name in ("scene_planning", "director_scene_planning"):
+            story_plan = request.input_data or None
+            data = runner.run_director_scene_planning(premise= premise, world=world, characters=characters, story_plan=story_plan)
+            if not data.get("ok"):
+                raise HTTPException(status_code=400, detail=data.get("error"))
+            return {"status": "success", "stage": "scene_planning", "data": data}
+
+        elif stage_name in ("finalization", "finalize"):
+            scene_order = (request.input_data or {}).get("scene_order")
+            data = runner.run_finalization(scene_order=scene_order)
+            return {"status": "success", "stage": "finalization", "data": data["data"]}
+
+        elif stage_name == "intake":
+            if not request.seed_text and not request.source_story:
                 raise HTTPException(status_code=400, detail="seed_text is required for intake stage")
-            data = runner.run_intake(request.seed_text)
+            data = runner.run_intake(request.seed_text, mode=request.mode, source_story=request.source_story)
             return {"status": "success", "stage": "intake", "data": data}
             
         elif stage_name == "world_building":
@@ -2834,15 +3122,22 @@ async def studio_resolve_warning(request: StudioWarningResolveRequest):
 @app.post("/studio/project/approve")
 async def studio_approve_item(request: StudioApproveRequest):
     import studio_memory as memory
+    from studio_workflow import StudioWorkflowRunner
     try:
         memory.record_approval(
-            request.project_name, 
-            request.project_id, 
-            request.item_type, 
-            request.item_id, 
-            request.approved, 
+            request.project_name,
+            request.project_id,
+            request.item_type,
+            request.item_id,
+            request.approved,
             request.approved_by
         )
+
+        # Phase 5: Trigger Agentic Correction if rejected and feedback is provided
+        if not request.approved and request.feedback:
+            workflow = StudioWorkflowRunner(request.project_name)
+            workflow.run_correction_turn(request.item_type, request.item_id, request.feedback)
+            
         return {
             "status": "success", 
             "item_type": request.item_type, 
@@ -2853,6 +3148,37 @@ async def studio_approve_item(request: StudioApproveRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logging.error(f"Studio approve item failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class StudioExportReelRequest(BaseModel):
+    project_name: str
+    project_id: Optional[int] = None
+
+
+@app.post("/studio/project/export-reel")
+async def studio_export_reel(request: StudioExportReelRequest):
+    """Build the full local export package (bibles, script, subtitles, reel.html, ZIP)."""
+    import studio_export
+    try:
+        result = studio_export.export_project(request.project_name, request.project_id)
+        return {"status": "success", **result}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"Studio export reel failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/studio/project/{project_name}")
+async def studio_delete_project(project_name: str):
+    import studio_memory as memory
+    try:
+        success = memory.delete_project(project_name)
+        if not success:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return {"status": "success", "message": f"Project '{project_name}' deleted."}
+    except Exception as e:
+        logging.error(f"Studio delete project failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

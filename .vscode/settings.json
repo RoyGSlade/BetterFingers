@@ -1,5 +1,10 @@
 {
     "connectphone.workspaceRoot": "/home/roygslade/Desktop/BetterFingers",
     "connectphone.chatProfile": "codex",
-    "connectphone.cdpPort": 9000
+    "connectphone.cdpPort": 9000,
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+    "python.terminal.activateEnvironment": true,
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}"
+    ]
 }
