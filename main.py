@@ -591,6 +591,7 @@ class App:
         self.review_tts_voice_hint = (
             config.get("review_tts_voice_hint", "english") or "english"
         ).strip() or "english"
+        self.kokoro_quantization = str(config.get("kokoro_quantization", "fp32") or "fp32").strip()
         self.use_gpu = bool(config.get("use_gpu", True))
 
         self.model_keep_llm_loaded = bool(config.get("model_keep_llm_loaded", True))
@@ -611,6 +612,7 @@ class App:
             try:
                 self.tts_engine.set_prefer_gpu(self.use_gpu)
                 self.tts_engine.set_keep_loaded(self.model_keep_tts_loaded)
+                self.tts_engine._kokoro_quantization = self.kokoro_quantization
             except Exception as exc:
                 logging.error(f"Failed to apply TTS runtime preference: {exc}")
 
@@ -889,7 +891,7 @@ class App:
             logging.error("Failed uninstalling Whisper model '%s': %s", selected, exc)
             return {"ok": False, "message": f"Uninstall failed: {exc}"}
 
-    def on_settings_tts_preview(self, text, speed, voice_hint):
+    def on_settings_tts_preview(self, text, speed, voice_hint, quantization="fp32"):
         phrase = (text or "").strip()
         if not phrase:
             return {
@@ -909,6 +911,8 @@ class App:
 
         safe_speed = max(0.5, min(3.0, float(speed)))
         hint = (voice_hint or "english").strip() or "english"
+        quant = (quantization or "fp32").strip()
+        self.tts_engine._kokoro_quantization = quant
         result = self.tts_engine.speak(phrase, speed=safe_speed, voice_hint=hint)
         if result.get("fallback", False):
             if self.notification_overlay and self.notification_overlay_enabled:

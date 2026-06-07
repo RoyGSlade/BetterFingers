@@ -31,6 +31,14 @@ function getHeaders() {
   return headers;
 }
 
+function getAuthHeaders() {
+  const headers = {};
+  if (AUTH_TOKEN) {
+    headers['Authorization'] = `Bearer ${AUTH_TOKEN}`;
+  }
+  return headers;
+}
+
 async function fetchDoctor(refreshAudio = false, timeoutMs = 5000) {
   return fetchJson(`${DOCTOR_URL}?refresh_audio=${refreshAudio}`, timeoutMs);
 }
@@ -517,6 +525,18 @@ async function studioGetPanels(projectName, projectId, timeoutMs = 10000) {
   return fetchJson(`${STUDIO_URL}/project/${encodeURIComponent(projectName)}/${projectId}/panels`, timeoutMs);
 }
 
+async function studioCreatePage(projectName, episodeId, pageNumber, title = '', summary = '', timeoutMs = 10000) {
+  return postJson(
+    `${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/pages`,
+    { episode_id: episodeId, page_number: pageNumber, title, summary },
+    timeoutMs
+  );
+}
+
+async function studioCreatePanel(projectName, panel, timeoutMs = 10000) {
+  return postJson(`${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/panels`, panel, timeoutMs);
+}
+
 async function studioApproveItem(projectName, projectId, itemType, itemId, approved, feedback = null, timeoutMs = 20000) {
   return postJson(`${STUDIO_URL}/project/approve`, { project_name: projectName, project_id: projectId, item_type: itemType, item_id: itemId, approved, feedback }, timeoutMs);
 }
@@ -544,8 +564,41 @@ async function studioResolveWarning(projectName, warningId, timeoutMs = 10000) {
   return postJson(`${STUDIO_URL}/project/warning/resolve`, { project_name: projectName, warning_id: warningId }, timeoutMs);
 }
 
+async function studioUploadPanelImage(projectName, projectId, panelId, file, timeoutMs = 60000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const form = new FormData();
+  form.append('project_name', projectName);
+  form.append('project_id', String(projectId));
+  form.append('panel_id', String(panelId));
+  form.append('file', file);
+
+  try {
+    const response = await fetch(`${STUDIO_URL}/project/panel-image`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: form,
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(await getResponseErrorMessage(response, `${STUDIO_URL}/project/panel-image`));
+    }
+    return await response.json();
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function studioExportReel(projectName, projectId = null, timeoutMs = 60000) {
   return postJson(`${STUDIO_URL}/project/export-reel`, { project_name: projectName, project_id: projectId }, timeoutMs);
+}
+
+async function studioPrepareAudio(projectName, text, profileName = "default") {
+  return postJson(`${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/audio/prepare`, { text, profile_name: profileName });
+}
+
+async function studioRenderAudio(projectName, chunks) {
+  return postJson(`${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/audio/render`, { chunks });
 }
 
 export {
@@ -622,9 +675,14 @@ export {
   studioRunWorkflow,
   studioRunStage,
   studioGetPanels,
+  studioCreatePage,
+  studioCreatePanel,
   studioApproveItem,
   studioBriefReview,
   studioResolveWarning,
+  studioUploadPanelImage,
   studioDeleteProject,
   studioExportReel,
+  studioPrepareAudio,
+  studioRenderAudio,
 };

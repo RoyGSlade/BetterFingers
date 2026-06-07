@@ -240,12 +240,13 @@ class SettingsTourMixin:
             return
         speed = self._safe_float(self._controls["review_tts_speed"].value, 1.5, minimum=0.5, maximum=3.0)
         voice = (self._controls["review_tts_voice_hint"].value or "english").strip() or "english"
+        quant = (self._controls.get("kokoro_quantization", ft.Control()).value or "fp32").strip()
         narration = step.narration
         action_hint = str(getattr(step, "action_hint", "") or "").strip()
         if action_hint:
             narration = f"{narration} Try this: {action_hint}."
         try:
-            self.on_tts_preview(narration, speed, voice)
+            self.on_tts_preview(narration, speed, voice, quant)
         except Exception as exc:
             logging.error("Tutorial TTS playback failed: %s", exc)
 

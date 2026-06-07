@@ -129,6 +129,7 @@ class ReviewTTSEngine:
             kokoro_ok, kokoro_msg = self._load_kokoro_backend(
                 voice_hint=voice_hint,
                 prefer_gpu=self._prefer_gpu,
+                quantization=getattr(self, "_kokoro_quantization", "fp32"),
             )
             if kokoro_ok:
                 self._loaded = True
@@ -373,10 +374,12 @@ class ReviewTTSEngine:
         self,
         voice_hint: str = "english",
         prefer_gpu: bool = True,
+        quantization: str = "fp32",
     ) -> Tuple[bool, str]:
         onnx_ok, onnx_msg = self._load_kokoro_onnx_backend(
             voice_hint=voice_hint,
             prefer_gpu=prefer_gpu,
+            quantization=quantization,
         )
         if onnx_ok:
             return True, onnx_msg
@@ -421,6 +424,7 @@ class ReviewTTSEngine:
         self,
         voice_hint: str = "english",
         prefer_gpu: bool = True,
+        quantization: str = "fp32",
     ) -> Tuple[bool, str]:
         try:
             kokoro_onnx = importlib.import_module("kokoro_onnx")
@@ -431,14 +435,22 @@ class ReviewTTSEngine:
         if kokoro_cls is None:
             return False, "kokoro-onnx runtime found but Kokoro class is unavailable."
 
+        quant_norm = (quantization or "fp32").lower()
+        if quant_norm == "fp16" or quant_norm == "16":
+            model_filename = "kokoro-v1.0.fp16.onnx"
+        elif quant_norm == "int8" or quant_norm == "8":
+            model_filename = "kokoro-v1.0.int8.onnx"
+        else:
+            model_filename = "kokoro-v1.0.onnx"
+
         base_dir = os.path.join(get_user_data_path(), "tts", "kokoro_onnx")
         os.makedirs(base_dir, exist_ok=True)
-        model_path = os.path.join(base_dir, "kokoro-v1.0.onnx")
+        model_path = os.path.join(base_dir, model_filename)
         voices_path = os.path.join(base_dir, "voices-v1.0.bin")
 
         model_url = (
             "https://github.com/thewh1teagle/kokoro-onnx/releases/download/"
-            "model-files-v1.0/kokoro-v1.0.onnx"
+            f"model-files-v1.0/{model_filename}"
         )
         voices_url = (
             "https://github.com/thewh1teagle/kokoro-onnx/releases/download/"
@@ -812,6 +824,39 @@ class ReviewTTSEngine:
         if current:
             chunks.append(current)
         return chunks or [phrase]
+
+    def render_prepared_chunks(self, chunks: list, export_dir: str) -> list:
+        """
+        Render audio for each chunk and save to export_dir.
+        chunks: [{"text": "...", "voice": "...", "speed": 0.95}, ...]
+        Returns list of generated file paths.
+        """
+        import os
+        import soundfile as sf
+        
+        os.makedirs(export_dir, exist_ok=True)
+        saved_files = []
+        
+        for idx, chunk in enumerate(chunks):
+            text = chunk.get("text", "")
+            voice = chunk.get("voice", "af_heart")
+            speed = float(chunk.get("speed", 0.95))
+            
+            if not text:
+                continue
+                
+            try:
+                audio_tuple = self._generate_kokoro_audio(text, speed, voice)
+                if audio_tuple:
+                    audio_data, sample_rate = audio_tuple
+                    filename = f"chunk_{idx+1:04d}.wav"
+                    filepath = os.path.join(export_dir, filename)
+                    sf.write(filepath, audio_data, sample_rate)
+                    saved_files.append(filepath)
+            except Exception as exc:
+                logging.error(f"Failed to render chunk {idx}: {exc}")
+                
+        return saved_files
 
     def _speak_kokoro_chunked(self, text: str, speed: float, voice_hint: str):
         """Speak text with concurrent generation and playback to avoid pauses between chunks."""

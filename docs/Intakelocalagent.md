@@ -1,0 +1,9 @@
+Hello! I'm the Source Arcanum Intake Agent. What is your story idea? We are building a 60-second comic reel, so keep the scope tight (1-2 locations, 2-3 characters max).
+I want a story about this guy Roy who is killed tragically as hes walking out of a game store he sees a mugger and stops him but the mugger shoots him while running away. This beautiful girl that he thought he was protecting is like you dummy there was only 20 dollars in there. He thinks shes an angel but his last words are I just wanted to play my new game. Then there is a loading screen Heavenly Edition unlocked achievements GED.....Number 1 Player in mmorpg.... Saved a Life...
+That's a very high-concept, darkly comedic premise! To nail the 60-second reel, we need to lock down the visual style. Are you leaning towards a gritty, hyper-realistic cinematic style, a stylized 2D cartoon aesthetic (like a modern indie game), or something more surreal and painterly? Which aesthetic best captures the 'Heavenly Edition unlocked achievements' vibe?
+Just An anime style video gamey overlay over a normal slice of life anime art style
+That's a fantastic blend—slice-of-life anime grounded by sharp, gamey overlays. To solidify the character concepts, how should Roy look? Is he a typical anime protagonist (maybe slightly clumsy, earnest, or cool under pressure)? And what is the *exact* tone we are aiming for? Is it purely dark comedy, bittersweet tragedy, or leaning more into the absurd irony of the 'achievement' text?
+He is goofy looking nerdy kid with dark comedy outrageous goof ball vibe
+This sounds incredibly fun. To finalize the 60-second vision, should the focus be more on the tragic action sequence, or on the absurd, triumphant 'achievement' screen that plays over the final moments? Should the reel end on the death, or on the loading screen montage?
+
+Then it got stuck on continuity and failed to produce anything

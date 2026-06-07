@@ -1,3 +1,4 @@
+import io
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -55,10 +56,16 @@ class ServerStudioTests(unittest.TestCase):
                         json={"episode_id": episode_id, "minute_number": 1, "summary": "Opening minute"},
                     )
                     minute_id = minute.json()["minute_id"]
+                    page = client.post(
+                        f"/studio/projects/{project_name}/pages",
+                        json={"episode_id": episode_id, "page_number": 1, "title": "Page 1", "summary": "Opening page"},
+                    )
+                    page_id = page.json()["page_id"]
                     panel = client.post(
                         f"/studio/projects/{project_name}/panels",
                         json={
                             "minute_id": minute_id,
+                            "page_id": page_id,
                             "panel_number": 1,
                             "visual_description": "Mara opens a glowing vault.",
                             "style_prompt": "comic noir",
@@ -79,6 +86,11 @@ class ServerStudioTests(unittest.TestCase):
                         f"/studio/projects/{project_name}/approvals",
                         json={"item_type": "panel", "item_id": panel_id, "approved": True, "approved_by": "Tester"},
                     )
+                    image_upload = client.post(
+                        "/studio/project/panel-image",
+                        data={"project_name": project_name, "project_id": project["id"], "panel_id": panel_id},
+                        files={"file": ("panel.png", io.BytesIO(b"\x89PNG\r\n\x1a\n"), "image/png")},
+                    )
                     loaded = client.get(f"/studio/projects/{project_name}")
                     exported = client.get(f"/studio/projects/{project_name}/export")
 
@@ -89,12 +101,18 @@ class ServerStudioTests(unittest.TestCase):
         self.assertEqual(legacy_listed.json()["projects"][0]["name"], "Arcanum Pilot")
         self.assertEqual(character.status_code, 200)
         self.assertEqual(updated.json()["character"]["name"], "Mara Vale")
+        self.assertEqual(page.status_code, 200)
         self.assertEqual(panels.status_code, 200)
         self.assertEqual(panels.json()["panels"][0]["panel_number"], 1)
         self.assertEqual(warning.status_code, 200)
         self.assertEqual(approval.status_code, 200)
+        self.assertEqual(image_upload.status_code, 200)
         self.assertTrue(approval.json()["approvals"][0]["approved"])
         self.assertEqual(loaded.json()["bible"]["premise"], "A local-first story engine.")
+        self.assertEqual(exported.json()["pages"][0]["title"], "Page 1")
+        self.assertEqual(exported.json()["panels"][0]["page_id"], page_id)
+        self.assertEqual(exported.json()["panels"][0]["metadata"]["image_source"], "user_upload")
+        self.assertEqual(exported.json()["assets"][0]["metadata"]["panel_id"], panel_id)
         self.assertEqual(exported.json()["spec"], studio_memory.STUDIO_SPEC_TITLE)
 
     def test_studio_project_endpoint_validation_errors_are_400(self):

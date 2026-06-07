@@ -2042,10 +2042,43 @@ body.theme-light.high-contrast {
 
 /* 12-panel comic reel grid */
 .studio-panels-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 16px;
   margin-bottom: 14px;
+}
+
+.studio-page-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.studio-page-title {
+  align-items: baseline;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  padding-bottom: 8px;
+}
+
+.studio-page-title h4 {
+  color: var(--text);
+  font-size: 0.95rem;
+  margin: 0;
+}
+
+.studio-page-title p {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin: 0;
+}
+
+.studio-page-panels-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
 }
 
 .studio-panel-card {
@@ -2100,6 +2133,23 @@ body.theme-light.high-contrast {
   flex: 1;
 }
 
+.studio-panel-image-slot {
+  aspect-ratio: 16 / 9;
+  background: rgba(255, 255, 255, 0.035);
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  display: grid;
+  font-size: 0.78rem;
+  place-items: center;
+}
+
+.studio-panel-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
 .studio-panel-visual {
   font-size: 0.88rem;
   line-height: 1.5;
@@ -2122,6 +2172,36 @@ body.theme-light.high-contrast {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   margin-bottom: 3px;
+}
+
+.studio-panel-prompt {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  overflow: hidden;
+}
+
+.studio-panel-prompt summary {
+  cursor: pointer;
+  padding: 7px 9px;
+}
+
+.studio-panel-prompt pre {
+  border-top: 1px solid var(--border);
+  color: var(--text);
+  font-family: inherit;
+  line-height: 1.45;
+  margin: 0;
+  max-height: 140px;
+  overflow: auto;
+  padding: 9px;
+  white-space: pre-wrap;
+}
+
+.studio-upload-image-label {
+  cursor: pointer;
+  text-align: center;
 }
 
 .studio-panel-text {

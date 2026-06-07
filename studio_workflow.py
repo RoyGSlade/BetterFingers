@@ -1329,9 +1329,18 @@ class StudioWorkflowRunner:
             # Map panels across minutes (4 panels per minute beat)
             min_id = minutes[0]["id"]
 
+        page_id = memory.ensure_page(
+            self.project_name,
+            self.project_id,
+            ep_id,
+            1,
+            title="Page 1",
+            summary=story_plan.get("summary", "Opening storyboard page") if isinstance(story_plan, dict) else "Opening storyboard page",
+            metadata={"source": "panel_planning", "panel_target": len(panels_list)},
+        )
         saved_panels = []
         existing_panels = {
-            (panel["minute_id"], panel["panel_number"]): panel
+            (panel.get("page_id"), panel["panel_number"]): panel
             for panel in memory.get_panels(self.project_name, self.project_id)
         }
         for p in panels_list:
@@ -1353,10 +1362,10 @@ class StudioWorkflowRunner:
                 "image_prompt": f"{p.get('visual_description', '')}. {p.get('style_prompt', '')}".strip(),
             }
 
-            existing = existing_panels.get((curr_min_id, p_num))
+            existing = existing_panels.get((page_id, p_num))
             if existing:
                 panel_id = existing["id"]
-                memory.update_panel(self.project_name, self.project_id, panel_id, p["visual_description"], panel_meta)
+                memory.update_panel(self.project_name, self.project_id, panel_id, p["visual_description"], panel_meta, page_id=page_id)
             else:
                 panel_id = memory.add_panel(
                     self.project_name,
@@ -1366,6 +1375,7 @@ class StudioWorkflowRunner:
                     p["visual_description"],
                     p["style_prompt"],
                     metadata=panel_meta,
+                    page_id=page_id,
                 )
 
             memory.add_dialogue_line(

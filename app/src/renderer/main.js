@@ -56,8 +56,11 @@ import {
   studioLoadProject,
   studioRunWorkflow,
   studioGetPanels,
+  studioCreatePage,
+  studioCreatePanel,
   studioApproveItem,
   studioResolveWarning,
+  studioUploadPanelImage,
   studioDeleteProject,
   studioExportReel,
 } from './api/backend.js';
@@ -779,12 +782,200 @@ function renderStudioBadge(el, approved) {
   el.dataset.state = approved ? 'approved' : 'pending';
 }
 
+function getStudioPanelPrompt(panel, meta = {}) {
+  const imagePrompt = meta.image_prompt || '';
+  const stylePrompt = panel.style_prompt || meta.style_prompt || '';
+  const visual = panel.visual_description || '';
+  const negative = meta.negative_prompt ? `\n\nNegative prompt: ${meta.negative_prompt}` : '';
+  return [imagePrompt, visual, stylePrompt].filter(Boolean).join('\n\n') + negative;
+}
+
+function getStudioPanelImageSrc(projectPath, meta = {}) {
+  const imagePath = meta.image_path || '';
+  if (!projectPath || !imagePath) {
+    return '';
+  }
+  if (/^[a-z]+:\/\//i.test(imagePath) || imagePath.startsWith('/')) {
+    return imagePath.startsWith('/') ? `file://${imagePath}` : imagePath;
+  }
+  const joined = `${projectPath.replace(/\/$/, '')}/${imagePath.replace(/^\/+/, '')}`;
+  return `file://${joined}`;
+}
+
+async function copyStudioPanelPrompt(button) {
+  const promptText = button?.dataset.prompt || '';
+  if (!promptText) {
+    setMessage(studioApprovalMessageEl, 'No image prompt is available for this panel.', 'warning');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(promptText);
+    setMessage(studioApprovalMessageEl, 'Panel image prompt copied.', 'success');
+  } catch (error) {
+    setMessage(studioApprovalMessageEl, `Copy failed: ${error.message}`, 'danger');
+  }
+}
+
+async function uploadStudioPanelImage(input) {
+  const panelId = Number(input?.dataset.panelId || 0);
+  const file = input?.files?.[0];
+  if (!studioState.projectName || !studioState.projectId || !panelId || !file) {
+    return;
+  }
+  try {
+    setMessage(studioApprovalMessageEl, `Attaching image to Panel ${panelId}...`, 'warning');
+    await studioUploadPanelImage(studioState.projectName, studioState.projectId, panelId, file);
+    const loaded = await studioLoadProject(studioState.projectName);
+    setStudioProject(studioState.projectName, studioState.projectId, loaded?.data || null);
+    renderStudioApproval(loaded?.data || {});
+    setMessage(studioApprovalMessageEl, `Image attached to Panel ${panelId}.`, 'success');
+  } catch (error) {
+    setMessage(studioApprovalMessageEl, `Image upload failed: ${error.message}`, 'danger');
+  } finally {
+    if (input) input.value = '';
+  }
+}
+
+async function handleStudioAddPage() {
+  const data = studioState.data || {};
+  const episodes = data.episodes || [];
+  const pages = data.pages || [];
+  const episode = episodes[0];
+  if (!studioState.projectName || !episode?.id) {
+    setMessage(studioApprovalMessageEl, 'Create a story plan before adding pages.', 'warning');
+    return;
+  }
+  const nextPageNumber = pages.reduce((max, page) => Math.max(max, Number(page.page_number || 0)), 0) + 1;
+  try {
+    setMessage(studioApprovalMessageEl, `Adding Page ${nextPageNumber}...`, 'warning');
+    await studioCreatePage(
+      studioState.projectName,
+      episode.id,
+      nextPageNumber,
+      `Page ${nextPageNumber}`,
+      ''
+    );
+    const loaded = await studioLoadProject(studioState.projectName);
+    setStudioProject(studioState.projectName, studioState.projectId, loaded?.data || null);
+    renderStudioApproval(loaded?.data || {});
+    setMessage(studioApprovalMessageEl, `Page ${nextPageNumber} added.`, 'success');
+  } catch (error) {
+    setMessage(studioApprovalMessageEl, `Add page failed: ${error.message}`, 'danger');
+  }
+}
+
+async function handleStudioAddPanel(button) {
+  const pageId = Number(button?.dataset.pageId || 0);
+  const data = studioState.data || {};
+  const minutes = data.minutes || [];
+  const panels = data.panels || [];
+  const minute = minutes[0];
+  if (!studioState.projectName || !pageId || !minute?.id) {
+    setMessage(studioApprovalMessageEl, 'Create a story plan before adding panels.', 'warning');
+    return;
+  }
+  const pagePanels = panels.filter((panel) => Number(panel.page_id || 0) === pageId);
+  const nextPanelNumber = pagePanels.reduce((max, panel) => Math.max(max, Number(panel.panel_number || 0)), 0) + 1;
+  const visual = prompt(`Describe Page ${button.dataset.pageNumber || ''}, Panel ${nextPanelNumber}`);
+  if (!visual) {
+    return;
+  }
+  const style = prompt('Optional image style prompt for this panel') || '';
+  const metadata = {
+    image_prompt: [visual, style].filter(Boolean).join('. '),
+    style_prompt: style,
+    duration_seconds: 5,
+    source: 'user_added_panel',
+  };
+  try {
+    setMessage(studioApprovalMessageEl, `Adding Panel ${nextPanelNumber}...`, 'warning');
+    await studioCreatePanel(studioState.projectName, {
+      minute_id: minute.id,
+      page_id: pageId,
+      panel_number: nextPanelNumber,
+      visual_description: visual,
+      style_prompt: style,
+      metadata,
+    });
+    const loaded = await studioLoadProject(studioState.projectName);
+    setStudioProject(studioState.projectName, studioState.projectId, loaded?.data || null);
+    renderStudioApproval(loaded?.data || {});
+    setMessage(studioApprovalMessageEl, `Panel ${nextPanelNumber} added.`, 'success');
+  } catch (error) {
+    setMessage(studioApprovalMessageEl, `Add panel failed: ${error.message}`, 'danger');
+  }
+}
+
+function renderStudioPanelCard(panel, dialogue, projectPath) {
+  const card = document.createElement('article');
+  card.className = 'studio-panel-card';
+  const approved = Boolean(panel.approved);
+  let meta = panel.metadata || {};
+  if (typeof meta === 'string') {
+    try { meta = JSON.parse(meta); } catch { meta = {}; }
+  }
+  const cam = meta.camera ? String(meta.camera) : '';
+  const dur = meta.duration_seconds ? `${meta.duration_seconds}s` : '';
+  const cast = Array.isArray(meta.visible_characters) ? meta.visible_characters.join(', ') : '';
+  const chips = [cam, dur, cast].filter(Boolean).join('  ·  ');
+  const promptText = getStudioPanelPrompt(panel, meta);
+  const imageSrc = getStudioPanelImageSrc(projectPath, meta);
+  card.innerHTML = `
+    <div class="studio-panel-header">
+      <span class="studio-panel-number">Panel ${panel.panel_number ?? panel.id}</span>
+      <span class="studio-panel-approved-pill" data-state="${approved ? 'approved' : 'pending'}">${approved ? 'Approved' : 'Pending'}</span>
+    </div>
+    <div class="studio-panel-image-slot"></div>
+    <div class="studio-panel-body">
+      <p class="studio-panel-meta" style="font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:var(--text-muted,#8b93a3);margin:0 0 6px;"></p>
+      <p class="studio-panel-visual"></p>
+      <p class="studio-panel-dialogue"><span class="studio-panel-speaker"></span><span class="studio-panel-text"></span></p>
+      <details class="studio-panel-prompt">
+        <summary>Image prompt</summary>
+        <pre></pre>
+      </details>
+    </div>
+    <div class="studio-panel-controls">
+      <button class="secondary-button studio-copy-prompt-btn" type="button">Copy Prompt</button>
+      <label class="secondary-button studio-upload-image-label">
+        Attach Image
+        <input class="studio-panel-image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-panel-id="${panel.id}" hidden />
+      </label>
+      <button class="secondary-button studio-approve-btn" type="button" data-panel-id="${panel.id}" data-approved="true">Approve</button>
+      <button class="secondary-button studio-reject-btn" type="button" data-panel-id="${panel.id}" data-approved="false">Reject</button>
+    </div>
+  `;
+  const imageSlot = card.querySelector('.studio-panel-image-slot');
+  if (imageSrc && imageSlot) {
+    const image = document.createElement('img');
+    image.className = 'studio-panel-image';
+    image.src = imageSrc;
+    image.alt = `Panel ${panel.panel_number ?? panel.id} attached image`;
+    imageSlot.append(image);
+  } else if (imageSlot) {
+    imageSlot.textContent = 'No image attached';
+  }
+  card.querySelector('.studio-panel-meta').textContent = chips;
+  card.querySelector('.studio-panel-visual').textContent = panel.visual_description || '-';
+  card.querySelector('.studio-panel-speaker').textContent = `${dialogue.speaker || 'Narrator'}: `;
+  card.querySelector('.studio-panel-text').textContent = dialogue.text || '';
+  card.querySelector('.studio-panel-prompt pre').textContent = promptText || 'No image prompt generated.';
+  const copyButton = card.querySelector('.studio-copy-prompt-btn');
+  if (copyButton) {
+    copyButton.dataset.prompt = promptText;
+    copyButton.disabled = !promptText;
+  }
+  return card;
+}
+
 function renderStudioApproval(data) {
   const exportData = getStudioExportData(data);
   const bible = getStudioBible(exportData);
+  const projectPath = exportData.project?.path || '';
   const premise = bible.premise || {};
   const world = bible.world || {};
   const characters = exportData.characters || [];
+  const pages = exportData.pages || [];
   const panels = exportData.panels || [];
   const dialogueLines = exportData.dialogue_lines || [];
   const warnings = exportData.continuity_warnings || [];
@@ -844,41 +1035,45 @@ function renderStudioApproval(data) {
     if (!panels.length) {
       studioPanelsGridEl.innerHTML = '<span class="empty-state">No panels generated yet.</span>';
     } else {
+      const panelsByPage = new Map();
       for (const panel of panels) {
-        const dialogue = dialogueByPanel.get(panel.id) || panel.dialogue || {};
-        const card = document.createElement('article');
-        card.className = 'studio-panel-card';
-        const approved = Boolean(panel.approved);
-        // Panel planning metadata (camera, composition, cast, timing) may arrive as a
-        // JSON string or an object depending on the endpoint; normalize before reading.
-        let meta = panel.metadata || {};
-        if (typeof meta === 'string') {
-          try { meta = JSON.parse(meta); } catch { meta = {}; }
+        const key = panel.page_id || 'unassigned';
+        if (!panelsByPage.has(key)) panelsByPage.set(key, []);
+        panelsByPage.get(key).push(panel);
+      }
+      const orderedPages = [
+        ...pages.map((page) => ({ ...page, _key: page.id })),
+        ...(panelsByPage.has('unassigned') ? [{ id: 'unassigned', _key: 'unassigned', page_number: '?', title: 'Unassigned Panels' }] : []),
+      ];
+      for (const page of orderedPages) {
+        const pagePanels = panelsByPage.get(page._key) || [];
+        const section = document.createElement('section');
+        section.className = 'studio-page-group';
+        const title = document.createElement('div');
+        title.className = 'studio-page-title';
+        const heading = document.createElement('h4');
+        heading.textContent = `${page.title || `Page ${page.page_number}`} (${pagePanels.length} panels)`;
+        const summary = document.createElement('p');
+        summary.textContent = page.summary || '';
+        title.append(heading);
+        if (summary.textContent) title.append(summary);
+        if (page.id !== 'unassigned') {
+          const addPanelButton = document.createElement('button');
+          addPanelButton.className = 'secondary-button studio-add-panel-btn';
+          addPanelButton.type = 'button';
+          addPanelButton.dataset.pageId = page.id;
+          addPanelButton.dataset.pageNumber = page.page_number;
+          addPanelButton.textContent = 'Add Panel';
+          title.append(addPanelButton);
         }
-        const cam = meta.camera ? String(meta.camera) : '';
-        const dur = meta.duration_seconds ? `${meta.duration_seconds}s` : '';
-        const cast = Array.isArray(meta.visible_characters) ? meta.visible_characters.join(', ') : '';
-        const chips = [cam, dur, cast].filter(Boolean).join('  ·  ');
-        card.innerHTML = `
-          <div class="studio-panel-header">
-            <span class="studio-panel-number">Panel ${panel.panel_number ?? panel.id}</span>
-            <span class="studio-panel-approved-pill" data-state="${approved ? 'approved' : 'pending'}">${approved ? 'Approved' : 'Pending'}</span>
-          </div>
-          <div class="studio-panel-body">
-            <p class="studio-panel-meta" style="font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:var(--text-muted,#8b93a3);margin:0 0 6px;"></p>
-            <p class="studio-panel-visual"></p>
-            <p class="studio-panel-dialogue"><span class="studio-panel-speaker"></span><span class="studio-panel-text"></span></p>
-          </div>
-          <div class="studio-panel-controls">
-            <button class="secondary-button studio-approve-btn" type="button" data-panel-id="${panel.id}" data-approved="true">Approve</button>
-            <button class="secondary-button studio-reject-btn" type="button" data-panel-id="${panel.id}" data-approved="false">Reject</button>
-          </div>
-        `;
-        card.querySelector('.studio-panel-meta').textContent = chips;
-        card.querySelector('.studio-panel-visual').textContent = panel.visual_description || '-';
-        card.querySelector('.studio-panel-speaker').textContent = `${dialogue.speaker || 'Narrator'}: `;
-        card.querySelector('.studio-panel-text').textContent = dialogue.text || '';
-        studioPanelsGridEl.append(card);
+        const grid = document.createElement('div');
+        grid.className = 'studio-page-panels-grid';
+        for (const panel of pagePanels.sort((a, b) => (a.panel_number || 0) - (b.panel_number || 0))) {
+          const dialogue = dialogueByPanel.get(panel.id) || panel.dialogue || {};
+          grid.append(renderStudioPanelCard(panel, dialogue, projectPath));
+        }
+        section.append(title, grid);
+        studioPanelsGridEl.append(section);
       }
     }
   }
@@ -3707,6 +3902,23 @@ studioCreateProjectButton?.addEventListener('click', handleStudioCreateProject);
 studioLoadProjectButton?.addEventListener('click', handleStudioLoadProject);
 document.getElementById('studioDeleteProjectButton')?.addEventListener('click', handleStudioDeleteProject);
 document.getElementById('studioExportReelButton')?.addEventListener('click', handleStudioExportReel);
+document.getElementById('studioAddPageButton')?.addEventListener('click', handleStudioAddPage);
+studioPanelsGridEl?.addEventListener('click', (event) => {
+  const addPanelButton = event.target.closest('.studio-add-panel-btn');
+  if (addPanelButton) {
+    handleStudioAddPanel(addPanelButton);
+    return;
+  }
+  const copyButton = event.target.closest('.studio-copy-prompt-btn');
+  if (copyButton) {
+    copyStudioPanelPrompt(copyButton);
+  }
+});
+studioPanelsGridEl?.addEventListener('change', (event) => {
+  if (event.target.matches('.studio-panel-image-input')) {
+    uploadStudioPanelImage(event.target);
+  }
+});
 studioRunPipelineButton?.addEventListener('click', handleStudioRunPipeline);
 studioBriefAcceptButton?.addEventListener('click', () => {
   const seedText = studioSeedInputEl?.value?.trim();

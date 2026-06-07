@@ -49,6 +49,7 @@ def _as_dict(value):
 def _ordered_panels(payload):
     """Return panels in narrative order with their dialogue + metadata attached."""
     minute_order = {m["id"]: m.get("minute_number", 0) for m in payload.get("minutes", [])}
+    page_order = {p["id"]: p.get("page_number", 0) for p in payload.get("pages", [])}
     dialogue_by_panel = {}
     for line in payload.get("dialogue_lines", []):
         dialogue_by_panel.setdefault(line["panel_id"], []).append(line)
@@ -58,13 +59,14 @@ def _ordered_panels(payload):
         meta = _as_dict(panel.get("metadata"))
         panels.append({
             "panel_number": panel.get("panel_number", 0),
+            "page_number": page_order.get(panel.get("page_id"), 0),
             "minute_number": minute_order.get(panel.get("minute_id"), 0),
             "visual_description": panel.get("visual_description", ""),
             "style_prompt": panel.get("style_prompt") or meta.get("style_prompt", ""),
             "meta": meta,
             "dialogue": dialogue_by_panel.get(panel.get("id"), []),
         })
-    panels.sort(key=lambda p: (p["minute_number"], p["panel_number"]))
+    panels.sort(key=lambda p: (p["page_number"], p["minute_number"], p["panel_number"]))
     return panels
 
 
@@ -160,7 +162,7 @@ def _style_bible_md(payload, panels):
         "",
         "## Per-Panel Image Prompts",
         "",
-        "| # | Camera | Image Prompt | Negative Prompt |",
+        "| Page/Panel | Camera | Image Prompt | Negative Prompt |",
         "| - | ------ | ------------ | --------------- |",
     ]
     for p in panels:
@@ -170,7 +172,8 @@ def _style_bible_md(payload, panels):
         cam = meta.get("camera", "")
         prompt = prompt.replace("|", "/").replace("\n", " ")
         neg = neg.replace("|", "/")
-        lines.append(f"| {p['panel_number']} | {cam} | {prompt} | {neg} |")
+        panel_label = f"P{p['page_number']}-{p['panel_number']}" if p.get("page_number") else str(p["panel_number"])
+        lines.append(f"| {panel_label} | {cam} | {prompt} | {neg} |")
     return _join(lines)
 
 
@@ -190,7 +193,8 @@ def _script_md(payload, panels):
         meta = p["meta"]
         cam = meta.get("camera", "")
         dur = meta.get("duration_seconds", 5)
-        lines.append(f"## Panel {p['panel_number']}  ·  {cam}  ·  {dur}s")
+        page_label = f"Page {p['page_number']} · " if p.get("page_number") else ""
+        lines.append(f"## {page_label}Panel {p['panel_number']}  ·  {cam}  ·  {dur}s")
         lines.append(f"**Visual:** {p['visual_description']}")
         visible = meta.get("visible_characters") or []
         if visible:
@@ -316,6 +320,7 @@ def _export_report_md(payload, panels, model_status=None):
         "",
         f"- **Project:** {project.get('name', '—')}",
         f"- **Exported:** {datetime.now(timezone.utc).isoformat()}",
+        f"- **Pages:** {len(payload.get('pages', []))}",
         f"- **Panels:** {len(panels)}",
         f"- **Characters:** {len(chars)}",
         f"- **Approx. runtime:** {total_seconds:.0f}s",

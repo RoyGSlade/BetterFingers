@@ -23,7 +23,7 @@ PROJECT_ASSET_DIRS = (
 )
 
 VALID_ASSET_TYPES = {"image", "audio", "video", "reference", "export", "other"}
-VALID_APPROVAL_ITEM_TYPES = {"panel", "dialogue", "dialogue_line", "character", "episode", "minute", "asset"}
+VALID_APPROVAL_ITEM_TYPES = {"panel", "dialogue", "dialogue_line", "character", "episode", "page", "minute", "asset"}
 VALID_WARNING_SEVERITIES = {"low", "medium", "high", "critical"}
 
 # --- GEST (Graph of Events in Space and Time) vocabulary ---
@@ -276,10 +276,26 @@ def init_project_db(project_name, preferences=None):
             FOREIGN KEY(episode_id) REFERENCES episodes(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS pages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            episode_id INTEGER NOT NULL,
+            page_number INTEGER NOT NULL,
+            title TEXT,
+            summary TEXT,
+            status TEXT NOT NULL DEFAULT 'draft',
+            metadata TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+            FOREIGN KEY(episode_id) REFERENCES episodes(id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS panels (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             project_id INTEGER NOT NULL,
             minute_id INTEGER NOT NULL,
+            page_id INTEGER,
             panel_number INTEGER NOT NULL,
             visual_description TEXT,
             style_prompt TEXT,
@@ -288,7 +304,8 @@ def init_project_db(project_name, preferences=None):
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
-            FOREIGN KEY(minute_id) REFERENCES minutes(id) ON DELETE CASCADE
+            FOREIGN KEY(minute_id) REFERENCES minutes(id) ON DELETE CASCADE,
+            FOREIGN KEY(page_id) REFERENCES pages(id) ON DELETE SET NULL
         );
 
         CREATE TABLE IF NOT EXISTS dialogue_lines (
@@ -364,6 +381,17 @@ def init_project_db(project_name, preferences=None):
             FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS pronunciations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            word TEXT NOT NULL,
+            phonemes TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(project_id, word),
+            FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
         -- GEST: Graph of Events in Space and Time (directed graph G = (V, E)).
         -- Nodes are the "Exists" anchors (actors/objects/locations), actions, and events;
         -- edges carry Allen's-interval temporal relations plus logical/semantic relations.
@@ -401,13 +429,16 @@ def init_project_db(project_name, preferences=None):
         CREATE INDEX IF NOT EXISTS idx_locations_project ON locations(project_id, name);
         CREATE INDEX IF NOT EXISTS idx_episodes_project ON episodes(project_id, id);
         CREATE INDEX IF NOT EXISTS idx_minutes_episode ON minutes(project_id, episode_id, minute_number);
+        CREATE INDEX IF NOT EXISTS idx_pages_episode ON pages(project_id, episode_id, page_number);
         CREATE INDEX IF NOT EXISTS idx_panels_minute ON panels(project_id, minute_id, panel_number);
+        CREATE INDEX IF NOT EXISTS idx_panels_page ON panels(project_id, page_id, panel_number);
         CREATE INDEX IF NOT EXISTS idx_dialogue_panel ON dialogue_lines(project_id, panel_id);
         CREATE INDEX IF NOT EXISTS idx_assets_project ON assets(project_id, type);
         CREATE INDEX IF NOT EXISTS idx_canon_project ON canon_events(project_id, time_index);
         CREATE INDEX IF NOT EXISTS idx_warnings_project ON continuity_warnings(project_id, resolved, severity);
         CREATE INDEX IF NOT EXISTS idx_approvals_item ON approvals(project_id, item_type, item_id);
         CREATE INDEX IF NOT EXISTS idx_tool_calls_project ON tool_calls(project_id, timestamp);
+        CREATE INDEX IF NOT EXISTS idx_pronunciations_project ON pronunciations(project_id, word);
         CREATE INDEX IF NOT EXISTS idx_character_assets_character ON character_assets(project_id, character_id);
         CREATE INDEX IF NOT EXISTS idx_gest_nodes_project ON gest_nodes(project_id, episode_id, node_type);
         CREATE INDEX IF NOT EXISTS idx_gest_edges_project ON gest_edges(project_id, source_id, target_id);
@@ -422,6 +453,11 @@ def init_project_db(project_name, preferences=None):
         cursor.execute("ALTER TABLE characters ADD COLUMN primary_image_path TEXT;")
     if "voice_profile" not in column_names:
         cursor.execute("ALTER TABLE characters ADD COLUMN voice_profile TEXT;")
+
+    panel_columns_query = cursor.execute("PRAGMA table_info(panels)").fetchall()
+    panel_column_names = [col["name"] for col in panel_columns_query]
+    if "page_id" not in panel_column_names:
+        cursor.execute("ALTER TABLE panels ADD COLUMN page_id INTEGER;")
 
     now = utc_now()
     row = cursor.execute("SELECT id FROM projects WHERE name = ?", (safe_name,)).fetchone()
@@ -722,25 +758,91 @@ def get_minutes(project_name, project_id):
     return _rows_to_dicts(rows)
 
 
-def add_panel(project_name, project_id, minute_id, panel_number, visual_description="", style_prompt="", metadata=None):
+def add_page(project_name, project_id, episode_id, page_number, title="", summary="", status="draft", metadata=None):
     conn = get_connection(project_name)
     project_id = _require_project(conn, project_id)
-    minute_id = _require_row(conn, "minutes", project_id, minute_id, "minute_id")
-    panel_number = _require_int(panel_number, "panel_number")
+    episode_id = _require_row(conn, "episodes", project_id, episode_id, "episode_id")
+    page_number = _require_int(page_number, "page_number")
     duplicate = conn.execute(
-        "SELECT id FROM panels WHERE project_id = ? AND minute_id = ? AND panel_number = ?",
-        (project_id, minute_id, panel_number),
+        "SELECT id FROM pages WHERE project_id = ? AND episode_id = ? AND page_number = ?",
+        (project_id, episode_id, page_number),
     ).fetchone()
     if duplicate:
         conn.close()
-        raise ValueError("A panel with that number already exists for this minute.")
+        raise ValueError("A page with that number already exists for this episode.")
     now = utc_now()
     cursor = conn.execute(
         """
-        INSERT INTO panels (project_id, minute_id, panel_number, visual_description, style_prompt, metadata, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO pages (project_id, episode_id, page_number, title, summary, status, metadata, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (project_id, minute_id, panel_number, visual_description, style_prompt, _json_dumps(metadata), now, now),
+        (project_id, episode_id, page_number, title, summary, _require_text(status, "Page status"), _json_dumps(metadata), now, now),
+    )
+    _touch_project(conn, project_id)
+    conn.commit()
+    page_id = cursor.lastrowid
+    conn.close()
+    return page_id
+
+
+def get_pages(project_name, project_id, episode_id=None):
+    conn = get_connection(project_name)
+    if episode_id is None:
+        rows = conn.execute(
+            "SELECT * FROM pages WHERE project_id = ? ORDER BY episode_id ASC, page_number ASC",
+            (project_id,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM pages WHERE project_id = ? AND episode_id = ? ORDER BY page_number ASC",
+            (project_id, episode_id),
+        ).fetchall()
+    conn.close()
+    return _rows_to_dicts(rows)
+
+
+def ensure_page(project_name, project_id, episode_id, page_number, title="", summary="", metadata=None):
+    conn = get_connection(project_name)
+    project_id = _require_project(conn, project_id)
+    episode_id = _require_row(conn, "episodes", project_id, episode_id, "episode_id")
+    page_number = _require_int(page_number, "page_number")
+    row = conn.execute(
+        "SELECT id FROM pages WHERE project_id = ? AND episode_id = ? AND page_number = ?",
+        (project_id, episode_id, page_number),
+    ).fetchone()
+    if row:
+        conn.close()
+        return row["id"]
+    conn.close()
+    return add_page(project_name, project_id, episode_id, page_number, title=title, summary=summary, metadata=metadata)
+
+
+def add_panel(project_name, project_id, minute_id, panel_number, visual_description="", style_prompt="", metadata=None, page_id=None):
+    conn = get_connection(project_name)
+    project_id = _require_project(conn, project_id)
+    minute_id = _require_row(conn, "minutes", project_id, minute_id, "minute_id")
+    if page_id is not None:
+        page_id = _require_row(conn, "pages", project_id, page_id, "page_id")
+    panel_number = _require_int(panel_number, "panel_number")
+    duplicate = conn.execute(
+        """
+        SELECT id FROM panels
+        WHERE project_id = ?
+          AND panel_number = ?
+          AND ((page_id IS NOT NULL AND page_id = ?) OR (page_id IS NULL AND minute_id = ?))
+        """,
+        (project_id, panel_number, page_id, minute_id),
+    ).fetchone()
+    if duplicate:
+        conn.close()
+        raise ValueError("A panel with that number already exists for this page/minute.")
+    now = utc_now()
+    cursor = conn.execute(
+        """
+        INSERT INTO panels (project_id, minute_id, page_id, panel_number, visual_description, style_prompt, metadata, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (project_id, minute_id, page_id, panel_number, visual_description, style_prompt, _json_dumps(metadata), now, now),
     )
     _touch_project(conn, project_id)
     conn.commit()
@@ -748,7 +850,7 @@ def add_panel(project_name, project_id, minute_id, panel_number, visual_descript
     conn.close()
     return panel_id
 
-def update_panel(project_name, project_id, panel_id, visual_description=None, metadata=None):
+def update_panel(project_name, project_id, panel_id, visual_description=None, metadata=None, page_id=None):
     conn = get_connection(project_name)
     project_id = _require_project(conn, project_id)
     panel_id = _require_row(conn, "panels", project_id, panel_id, "panel_id")
@@ -763,6 +865,10 @@ def update_panel(project_name, project_id, panel_id, visual_description=None, me
     if metadata is not None:
         updates.append("metadata = ?")
         params.append(_json_dumps(metadata))
+    if page_id is not None:
+        page_id = _require_row(conn, "pages", project_id, page_id, "page_id")
+        updates.append("page_id = ?")
+        params.append(page_id)
         
     params.extend([project_id, panel_id])
     
@@ -785,10 +891,22 @@ def clear_dialogue_lines(project_name, project_id, panel_id):
     conn.close()
 
 
-def get_panels(project_name, project_id, minute_id=None):
+def get_panels(project_name, project_id, minute_id=None, page_id=None):
     conn = get_connection(project_name)
-    if minute_id is None:
-        rows = conn.execute("SELECT * FROM panels WHERE project_id = ? ORDER BY minute_id ASC, panel_number ASC", (project_id,)).fetchall()
+    if page_id is not None:
+        rows = conn.execute(
+            "SELECT * FROM panels WHERE project_id = ? AND page_id = ? ORDER BY panel_number ASC",
+            (project_id, page_id),
+        ).fetchall()
+    elif minute_id is None:
+        rows = conn.execute(
+            """
+            SELECT * FROM panels
+            WHERE project_id = ?
+            ORDER BY COALESCE(page_id, 0) ASC, minute_id ASC, panel_number ASC
+            """,
+            (project_id,),
+        ).fetchall()
     else:
         rows = conn.execute(
             "SELECT * FROM panels WHERE project_id = ? AND minute_id = ? ORDER BY panel_number ASC",
@@ -942,6 +1060,8 @@ def record_approval(project_name, project_id, item_type, item_id, approved, appr
         _require_row(conn, "characters", project_id, item_id, "item_id")
     elif item_type == "episode":
         _require_row(conn, "episodes", project_id, item_id, "item_id")
+    elif item_type == "page":
+        _require_row(conn, "pages", project_id, item_id, "item_id")
     elif item_type == "minute":
         _require_row(conn, "minutes", project_id, item_id, "item_id")
     elif item_type == "asset":
@@ -1181,6 +1301,48 @@ def compute_gest_timeline(project_name, project_id):
     return {"valid": valid, "has_cycle": not valid, "order": order, "node_count": len(ids)}
 
 
+def set_pronunciation(project_name, project_id, word, phonemes):
+    conn = get_connection(project_name)
+    project_id = _require_project(conn, project_id)
+    word = _require_text(word, "word")
+    phonemes = _require_text(phonemes, "phonemes")
+    now = utc_now()
+    conn.execute(
+        """
+        INSERT INTO pronunciations (project_id, word, phonemes, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(project_id, word) DO UPDATE SET phonemes = excluded.phonemes, updated_at = excluded.updated_at
+        """,
+        (project_id, word, phonemes, now, now),
+    )
+    _touch_project(conn, project_id)
+    conn.commit()
+    conn.close()
+
+
+def get_pronunciations(project_name, project_id):
+    conn = get_connection(project_name)
+    rows = conn.execute("SELECT * FROM pronunciations WHERE project_id = ? ORDER BY word ASC", (project_id,)).fetchall()
+    conn.close()
+    return _rows_to_dicts(rows)
+
+
+def get_pronunciation_dict(project_name, project_id):
+    conn = get_connection(project_name)
+    rows = conn.execute("SELECT word, phonemes FROM pronunciations WHERE project_id = ?", (project_id,)).fetchall()
+    conn.close()
+    return {row["word"]: row["phonemes"] for row in rows}
+
+
+def delete_pronunciation(project_name, project_id, word):
+    conn = get_connection(project_name)
+    project_id = _require_project(conn, project_id)
+    conn.execute("DELETE FROM pronunciations WHERE project_id = ? AND word = ?", (project_id, word))
+    _touch_project(conn, project_id)
+    conn.commit()
+    conn.close()
+
+
 def export_project_json(project_name, project_id):
     project = get_project_by_id(project_name, project_id)
     if not project:
@@ -1194,6 +1356,7 @@ def export_project_json(project_name, project_id):
         "character_assets": get_character_assets(project_name, project_id),
         "locations": get_locations(project_name, project_id),
         "episodes": get_episodes(project_name, project_id),
+        "pages": get_pages(project_name, project_id),
         "minutes": get_minutes(project_name, project_id),
         "panels": get_panels(project_name, project_id),
         "dialogue_lines": get_dialogue_lines(project_name, project_id),
@@ -1202,5 +1365,6 @@ def export_project_json(project_name, project_id):
         "continuity_warnings": get_continuity_warnings(project_name, project_id),
         "approvals": get_approvals(project_name, project_id),
         "tool_calls": get_tool_calls(project_name, project_id),
+        "pronunciations": get_pronunciations(project_name, project_id),
         "gest": get_gest_graph(project_name, project_id),
     }

@@ -261,7 +261,7 @@ class SettingsWindow(
         root,
         hotkey_manager,
         on_save_callback,
-        on_tts_preview_callback: Optional[Callable[[str, float, str], dict]] = None,
+        on_tts_preview_callback: Optional[Callable[[str, float, str, str], dict]] = None,
         on_tts_stop_callback: Optional[Callable[[], None]] = None,
         get_tts_voice_options_callback: Optional[Callable[[], list]] = None,
         get_whisper_download_status_callback: Optional[Callable[[], dict]] = None,
@@ -556,11 +556,13 @@ class SettingsWindow(
         controls = self._controls or {}
         speed_control = controls.get("review_tts_speed")
         voice_control = controls.get("review_tts_voice_hint")
-        speed = _safe_float(getattr(speed_control, "value", 1.3), 1.3, minimum=0.5, maximum=3.0)
+        quant_control = controls.get("kokoro_quantization")
+        speed = _safe_float(getattr(speed_control, "value", 0.95), 0.95, minimum=0.5, maximum=3.0)
         voice = (getattr(voice_control, "value", "english") or "english").strip() or "english"
+        quant = (getattr(quant_control, "value", "fp32") or "fp32").strip()
         narration = f"{str(title or '').strip()}. {str(body or '').strip()}"
         try:
-            self.on_tts_preview(narration, speed, voice)
+            self.on_tts_preview(narration, speed, voice, quant)
         except Exception as exc:
             logging.debug("Help TTS playback failed: %s", exc)
 

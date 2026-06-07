@@ -444,8 +444,12 @@ class SettingsControlsMixin:
         c["review_tts_enabled"] = ft.Switch(label="Enable Review TTS")
         # review_tts_hotkey created via _hotkey_row
         c["review_tts_voice_hint"] = ft.Dropdown(label="Voice Model")
+        c["kokoro_quantization"] = ft.Dropdown(
+            label="Kokoro Quantization (ONNX)",
+            options=self._options(["fp32", "fp16", "int8"]),
+        )
         c["review_tts_speed"] = ft.Slider(min=0.5, max=3.0, divisions=50, label="{value:.2f}x")
-        c["review_tts_speed_value"] = self._centered_value_text("1.50x")
+        c["review_tts_speed_value"] = self._centered_value_text("0.95x")
         c["review_tts_sample_text"] = ft.Dropdown(
             label="TTS Sample Text",
             options=self._options(self.SAMPLE_TTS_TEXTS),
@@ -741,6 +745,7 @@ class SettingsControlsMixin:
                             "review_tts_shortcut",
                         ),
                         c["review_tts_voice_hint"],
+                        c["kokoro_quantization"],
                         ft.Text("Playback Speed"),
                         self._with_help(
                             self._slider_with_value("review_tts_speed", "review_tts_speed_value"),
@@ -1557,11 +1562,12 @@ class SettingsControlsMixin:
 
         text = (self._controls["review_tts_sample_text"].value or self.SAMPLE_TTS_TEXTS[0]).strip()
         voice_hint = (self._controls["review_tts_voice_hint"].value or "english").strip() or "english"
-        speed = self._safe_float(self._controls["review_tts_speed"].value, 1.5, minimum=0.5, maximum=3.0)
+        speed = self._safe_float(self._controls["review_tts_speed"].value, 0.95, minimum=0.5, maximum=3.0)
         self._controls["review_tts_speed"].value = speed
+        quant = (getattr(self._controls.get("kokoro_quantization"), "value", "fp32") or "fp32").strip()
 
         try:
-            result = self.on_tts_preview(text, speed, voice_hint) or {}
+            result = self.on_tts_preview(text, speed, voice_hint, quant) or {}
         except Exception as exc:
             self._controls["tts_status"].value = f"TTS sample failed: {exc}"
             self._safe_update()

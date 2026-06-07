@@ -150,6 +150,8 @@ class SettingsPersistenceMixin:
         c["true_gen"].value = bool(cfg.get("true_gen", False))
         c["model_size"].value = cfg.get("model_size", "base.en")
         c["quantization"].value = cfg.get("quantization", "int8")
+        if "kokoro_quantization" in c:
+            c["kokoro_quantization"].value = cfg.get("kokoro_quantization", "fp32")
         c["model_keep_llm_loaded"].value = bool(cfg.get("model_keep_llm_loaded", True))
         c["model_keep_stt_loaded"].value = bool(cfg.get("model_keep_stt_loaded", True))
         c["model_keep_tts_loaded"].value = bool(cfg.get("model_keep_tts_loaded", False))
@@ -347,6 +349,8 @@ class SettingsPersistenceMixin:
         cfg["quantization"] = c["quantization"].value or "int8"
         cfg["model_size"] = c["model_size"].value or "base.en"
         cfg["llm_model_id"] = c["llm_model_id"].value or "gemma-3-4b-q4"
+        if "kokoro_quantization" in c:
+            cfg["kokoro_quantization"] = c["kokoro_quantization"].value or "fp32"
 
         save_profile(self.current_profile, cfg)
         try:

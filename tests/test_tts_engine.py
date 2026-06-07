@@ -50,7 +50,7 @@ class TTSEngineTests(unittest.TestCase):
 
         self.assertTrue(ok)
         self.assertEqual(message, "onnx ready")
-        onnx_mock.assert_called_once_with(voice_hint="english", prefer_gpu=False)
+        onnx_mock.assert_called_once_with(voice_hint="english", prefer_gpu=False, quantization="fp32")
         import_mock.assert_not_called()
 
     @patch("tts_engine.importlib.import_module")

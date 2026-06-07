@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 import pyperclip
-from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from llm_engine import get_engine, get_engine_if_initialized
@@ -563,7 +563,8 @@ def get_profile_output_settings():
         "chat_close_action": str(config.get("chat_close_action", "none") or "none").strip().lower(),
         "instant_typing": bool(config.get("instant_typing", False)),
         "review_tts_voice_hint": str(config.get("review_tts_voice_hint", "english") or "english").strip(),
-        "review_tts_speed": float(config.get("review_tts_speed", 1.5)),
+        "kokoro_quantization": str(config.get("kokoro_quantization", "fp32") or "fp32").strip(),
+        "review_tts_speed": float(config.get("review_tts_speed", 0.95)),
     }
 
 
@@ -758,11 +759,13 @@ def speak_text_aloud(text: str):
         return
 
     voice_id = normalize_tts_voice_id(config.get("review_tts_voice_hint") or "standard_female")
-    speed = max(0.5, min(3.0, float(config.get("review_tts_speed") or 1.0)))
+    quantization = str(config.get("kokoro_quantization", "fp32") or "fp32").strip()
+    speed = max(0.5, min(3.0, float(config.get("review_tts_speed") or 0.95)))
 
     engine = ensure_tts_initialized()
     if engine is not None:
-        logging.info(f"Speaking text aloud: '{phrase[:30]}...' (voice={voice_id}, speed={speed}x)")
+        engine._kokoro_quantization = quantization
+        logging.info(f"Speaking text aloud: '{phrase[:30]}...' (voice={voice_id}, speed={speed}x, quant={quantization})")
         engine.speak(phrase, speed=speed, voice_hint=voice_id)
 
 
@@ -1594,8 +1597,18 @@ class StudioMinuteRequest(BaseModel):
     metadata: dict = Field(default_factory=dict)
 
 
+class StudioPageRequest(BaseModel):
+    episode_id: int
+    page_number: int
+    title: str = ""
+    summary: str = ""
+    status: str = "draft"
+    metadata: dict = Field(default_factory=dict)
+
+
 class StudioPanelRequest(BaseModel):
     minute_id: int
+    page_id: Optional[int] = None
     panel_number: int
     visual_description: str = ""
     style_prompt: str = ""
@@ -1616,6 +1629,17 @@ class StudioApprovalRequest(BaseModel):
     approved: bool
     approved_by: str = "User"
     note: str = ""
+
+
+class StudioAudioPrepareRequest(BaseModel):
+    text: str
+    profile_name: Optional[str] = "default"
+    fallback_voice: str = "af_heart"
+    fallback_speed: float = 0.95
+
+
+class StudioAudioRenderRequest(BaseModel):
+    chunks: list[dict]
 
 
 @app.get("/studio/capabilities")
@@ -1692,6 +1716,7 @@ async def load_studio_project(project_name: str):
         "bible": studio_memory.get_bible(project["name"], project["id"]),
         "characters": studio_memory.get_characters(project["name"], project["id"]),
         "episodes": studio_memory.get_episodes(project["name"], project["id"]),
+        "pages": studio_memory.get_pages(project["name"], project["id"]),
         "minutes": studio_memory.get_minutes(project["name"], project["id"]),
         "panels": studio_memory.get_panels(project["name"], project["id"]),
         "continuity_warnings": studio_memory.get_continuity_warnings(project["name"], project["id"]),
@@ -1782,6 +1807,31 @@ async def create_studio_minute(project_name: str, request: StudioMinuteRequest):
     return {"ok": True, "minute_id": minute_id, "minutes": studio_memory.get_minutes(project["name"], project["id"])}
 
 
+@app.post("/studio/projects/{project_name}/pages")
+async def create_studio_page(project_name: str, request: StudioPageRequest):
+    project = _load_studio_project(project_name)
+    try:
+        page_id = studio_memory.add_page(
+            project["name"],
+            project["id"],
+            request.episode_id,
+            request.page_number,
+            title=request.title,
+            summary=request.summary,
+            status=request.status,
+            metadata=request.metadata,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "page_id": page_id, "pages": studio_memory.get_pages(project["name"], project["id"])}
+
+
+@app.get("/studio/projects/{project_name}/pages")
+async def list_studio_pages(project_name: str, episode_id: Optional[int] = None):
+    project = _load_studio_project(project_name)
+    return {"ok": True, "pages": studio_memory.get_pages(project["name"], project["id"], episode_id=episode_id)}
+
+
 @app.post("/studio/projects/{project_name}/panels")
 async def create_studio_panel(project_name: str, request: StudioPanelRequest):
     project = _load_studio_project(project_name)
@@ -1794,6 +1844,7 @@ async def create_studio_panel(project_name: str, request: StudioPanelRequest):
             request.visual_description,
             request.style_prompt,
             metadata=request.metadata,
+            page_id=request.page_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -1801,9 +1852,9 @@ async def create_studio_panel(project_name: str, request: StudioPanelRequest):
 
 
 @app.get("/studio/projects/{project_name}/panels")
-async def list_studio_panels(project_name: str, minute_id: Optional[int] = None):
+async def list_studio_panels(project_name: str, minute_id: Optional[int] = None, page_id: Optional[int] = None):
     project = _load_studio_project(project_name)
-    return {"ok": True, "panels": studio_memory.get_panels(project["name"], project["id"], minute_id=minute_id)}
+    return {"ok": True, "panels": studio_memory.get_panels(project["name"], project["id"], minute_id=minute_id, page_id=page_id)}
 
 
 @app.post("/studio/projects/{project_name}/continuity-warnings")
@@ -1840,6 +1891,46 @@ async def approve_studio_item(project_name: str, request: StudioApprovalRequest)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True, "approval_id": approval_id, "approvals": studio_memory.get_approvals(project["name"], project["id"])}
+
+
+@app.post("/studio/projects/{project_name}/audio/prepare")
+async def prepare_studio_audio(project_name: str, request: StudioAudioPrepareRequest):
+    project = _load_studio_project(project_name)
+    from kokoro_sound_engineer import KokoroSoundEngineer
+    engineer = KokoroSoundEngineer(project_name=project["name"])
+    try:
+        import studio_memory
+        pronunciations = studio_memory.get_pronunciation_dict(project["name"], project["id"])
+        engineer.load_project_memory(pronunciations)
+    except Exception as exc:
+        logging.error(f"Failed to load pronunciation memory: {exc}")
+        
+    chunks = engineer.prepare_text(
+        request.text, 
+        profile_name=request.profile_name,
+        fallback_voice=request.fallback_voice,
+        fallback_speed=request.fallback_speed
+    )
+    return {"ok": True, "chunks": chunks}
+
+
+@app.post("/studio/projects/{project_name}/audio/render")
+async def render_studio_audio(project_name: str, request: StudioAudioRenderRequest):
+    project = _load_studio_project(project_name)
+    engine = ensure_tts_initialized()
+    if not engine:
+        raise HTTPException(status_code=500, detail="TTS Engine not available")
+        
+    import os
+    from utils import get_user_data_path
+    export_dir = os.path.join(get_user_data_path(), "studio", project["name"], "audio_renders")
+    
+    try:
+        saved_files = engine.render_prepared_chunks(request.chunks, export_dir)
+        return {"ok": True, "files": saved_files}
+    except Exception as exc:
+        logging.error(f"Audio render failed: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.get("/studio/projects/{project_name}/export")
@@ -3090,6 +3181,7 @@ async def studio_get_project_panels(project_name: str, project_id: int):
             d = dial_dict.get(p["id"], {})
             zipped.append({
                 "id": p["id"],
+                "page_id": p.get("page_id"),
                 "panel_number": p["panel_number"],
                 "visual_description": p["visual_description"],
                 "style_prompt": p["style_prompt"],
@@ -3149,6 +3241,75 @@ async def studio_approve_item(request: StudioApproveRequest):
     except Exception as e:
         logging.error(f"Studio approve item failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/studio/project/panel-image")
+async def studio_upload_panel_image(
+    project_name: str = Form(...),
+    project_id: int = Form(...),
+    panel_id: int = Form(...),
+    file: UploadFile = File(...),
+):
+    """Attach a user-provided image to a storyboard panel."""
+    import studio_memory as memory
+    try:
+        project = memory.get_project_by_id(project_name, project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        panels = memory.get_panels(project_name, project_id)
+        panel = next((row for row in panels if int(row["id"]) == int(panel_id)), None)
+        if not panel:
+            raise HTTPException(status_code=404, detail="Panel not found")
+
+        raw_name = Path(file.filename or "panel-image").name
+        suffix = Path(raw_name).suffix.lower()
+        if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+            raise HTTPException(status_code=400, detail="Upload a PNG, JPG, WEBP, or GIF image.")
+
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw_name).strip("._") or f"panel_{panel_id}{suffix}"
+        target_name = f"panel_{panel_id}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{safe_name}"
+        project_dir = Path(memory.get_project_dir(project_name)).resolve()
+        image_path = project_dir / "assets" / "images" / target_name
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with image_path.open("wb") as handle:
+            shutil.copyfileobj(file.file, handle)
+
+        asset_id = memory.add_asset(
+            project_name,
+            project_id,
+            "image",
+            image_path,
+            metadata={"panel_id": panel_id, "source": "user_upload", "filename": raw_name},
+        )
+
+        metadata = panel.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        relative_path = str(image_path.relative_to(project_dir))
+        metadata.update({
+            "image_asset_id": asset_id,
+            "image_path": relative_path,
+            "image_source": "user_upload",
+        })
+        memory.update_panel(project_name, project_id, panel_id, metadata=metadata)
+
+        return {
+            "status": "success",
+            "asset_id": asset_id,
+            "panel_id": panel_id,
+            "path": relative_path,
+            "absolute_path": str(image_path),
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"Studio panel image upload failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 class StudioExportReelRequest(BaseModel):
     project_name: str

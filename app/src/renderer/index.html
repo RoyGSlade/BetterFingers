@@ -1285,7 +1285,8 @@
             <div class="studio-approval-section" id="studioPanelsSection">
               <div class="studio-section-title">
                 <span class="studio-section-icon">🎬</span>
-                <h3>Comic Reel — 12 Panels</h3>
+                <h3>Comic Pages</h3>
+                <button id="studioAddPageButton" class="secondary-button" type="button">Add Page</button>
               </div>
               <div id="studioPanelsGrid" class="studio-panels-grid"></div>
             </div>
@@ -1297,10 +1298,20 @@
                 <h3>Export</h3>
               </div>
               <p class="setting-desc">Export your comic reel as a local production package — a self-contained scrolling <strong>reel.html</strong> preview, series/world/character/style bibles, a panel-by-panel script, timed subtitles (.srt), an export report, and a shareable ZIP. Everything stays on your machine.</p>
-              <div class="action-row" style="margin-top: 14px;">
+              
+              <div class="studio-pipeline-actions">
+                <button id="studioPrepareAudioButton" class="secondary-button" type="button">Prepare Audio</button>
                 <button id="studioExportReelButton" class="secondary-button primary-button" type="button">Export Comic Reel</button>
                 <button id="studioOpenReelButton" class="secondary-button" type="button" style="display:none;">Open Reel Preview</button>
               </div>
+              
+              <div id="studioAudioSection" class="studio-approval-section hidden">
+                <h3>Audio Rendering</h3>
+                <div id="studioAudioChunksList" class="studio-audio-chunks-list" style="margin-bottom: 12px;"></div>
+                <button id="studioRenderAudioButton" class="secondary-button primary-button" type="button">Render Audio Files</button>
+                <div id="studioAudioMessage" class="warmup-message" role="status" aria-live="polite"></div>
+              </div>
+
               <p id="studioExportResult" class="draft-metadata" style="margin-top: 8px;">Bibles, script, subtitles, and a scrolling reel preview are written into your project's <code>exports/</code> folder.</p>
             </div>
 
