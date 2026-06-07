@@ -289,6 +289,20 @@ class TestStudioWorkflowAndMemory(unittest.TestCase):
         bible = memory.get_bible(self.project_name, runner.project_id)
         self.assertEqual(bible["scene_spec"]["region_id"], "archive_hall")
 
+    def test_story_planning_falls_back_when_model_returns_list_shape(self):
+        runner = StudioWorkflowRunner(self.project_name)
+        premise = {"title": "Broken Shape", "premise": "A malformed model response should not crash."}
+        world = {"setting": "Test", "aesthetic": "Test", "rules": []}
+        characters = [{"id": 1, "name": "Mara"}]
+
+        with patch.object(runner, "_call_llm_with_fallback", return_value=[{"bad": "shape"}]):
+            story_plan, episode_id = runner.run_story_planning(premise, world, characters)
+
+        self.assertIsInstance(story_plan, dict)
+        self.assertIn("summary", story_plan)
+        self.assertGreater(episode_id, 0)
+        self.assertTrue(runner.model_status["used_fallback"])
+
     def test_adapt_mode_grounds_on_source_story(self):
         # "Start from" an existing story: source text should be persisted and threaded through stages.
         with patch("studio_workflow.get_engine_if_initialized", return_value=None), \

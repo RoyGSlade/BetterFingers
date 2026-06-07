@@ -60,6 +60,9 @@ import {
   studioCreatePanel,
   studioApproveItem,
   studioResolveWarning,
+  studioRepairPropose,
+  studioAssetUrl,
+  fetchStudioBlackboard,
   studioUploadPanelImage,
   studioDeleteProject,
   studioExportReel,
@@ -151,6 +154,7 @@ const studioViewStartEl = document.getElementById('studioViewStart');
 const studioViewSeedEl = document.getElementById('studioViewSeed');
 const studioViewPipelineEl = document.getElementById('studioViewPipeline');
 const studioViewApprovalEl = document.getElementById('studioViewApproval');
+const studioViewRepairEl = document.getElementById('studioViewRepair');
 const studioNewProjectNameEl = document.getElementById('studioNewProjectName');
 const studioCreateProjectButton = document.getElementById('studioCreateProjectButton');
 const studioCreateMessageEl = document.getElementById('studioCreateMessage');
@@ -703,6 +707,7 @@ function setStudioView(viewName) {
     seed: studioViewSeedEl,
     pipeline: studioViewPipelineEl,
     approval: studioViewApprovalEl,
+    repair: studioViewRepairEl,
   };
   for (const [name, el] of Object.entries(views)) {
     if (!el) {
@@ -790,16 +795,19 @@ function getStudioPanelPrompt(panel, meta = {}) {
   return [imagePrompt, visual, stylePrompt].filter(Boolean).join('\n\n') + negative;
 }
 
-function getStudioPanelImageSrc(projectPath, meta = {}) {
+function getStudioPanelImageSrc(projectName, meta = {}) {
   const imagePath = meta.image_path || '';
-  if (!projectPath || !imagePath) {
+  if (!projectName || !imagePath) {
     return '';
   }
-  if (/^[a-z]+:\/\//i.test(imagePath) || imagePath.startsWith('/')) {
-    return imagePath.startsWith('/') ? `file://${imagePath}` : imagePath;
+  // Already an absolute http(s) URL? Use as-is. Otherwise serve via the backend so the
+  // image loads from the renderer's http:// origin (file:// would be blocked).
+  if (/^https?:\/\//i.test(imagePath)) {
+    return imagePath;
   }
-  const joined = `${projectPath.replace(/\/$/, '')}/${imagePath.replace(/^\/+/, '')}`;
-  return `file://${joined}`;
+  // image_asset_id changes on every re-upload, so it doubles as a cache-buster.
+  const version = meta.image_asset_id != null ? String(meta.image_asset_id) : '';
+  return studioAssetUrl(projectName, imagePath, version);
 }
 
 async function copyStudioPanelPrompt(button) {
@@ -906,7 +914,7 @@ async function handleStudioAddPanel(button) {
   }
 }
 
-function renderStudioPanelCard(panel, dialogue, projectPath) {
+function renderStudioPanelCard(panel, dialogue) {
   const card = document.createElement('article');
   card.className = 'studio-panel-card';
   const approved = Boolean(panel.approved);
@@ -919,7 +927,7 @@ function renderStudioPanelCard(panel, dialogue, projectPath) {
   const cast = Array.isArray(meta.visible_characters) ? meta.visible_characters.join(', ') : '';
   const chips = [cam, dur, cast].filter(Boolean).join('  ·  ');
   const promptText = getStudioPanelPrompt(panel, meta);
-  const imageSrc = getStudioPanelImageSrc(projectPath, meta);
+  const imageSrc = getStudioPanelImageSrc(studioState.projectName, meta);
   card.innerHTML = `
     <div class="studio-panel-header">
       <span class="studio-panel-number">Panel ${panel.panel_number ?? panel.id}</span>
@@ -971,7 +979,6 @@ function renderStudioPanelCard(panel, dialogue, projectPath) {
 function renderStudioApproval(data) {
   const exportData = getStudioExportData(data);
   const bible = getStudioBible(exportData);
-  const projectPath = exportData.project?.path || '';
   const premise = bible.premise || {};
   const world = bible.world || {};
   const characters = exportData.characters || [];
@@ -1070,7 +1077,7 @@ function renderStudioApproval(data) {
         grid.className = 'studio-page-panels-grid';
         for (const panel of pagePanels.sort((a, b) => (a.panel_number || 0) - (b.panel_number || 0))) {
           const dialogue = dialogueByPanel.get(panel.id) || panel.dialogue || {};
-          grid.append(renderStudioPanelCard(panel, dialogue, projectPath));
+          grid.append(renderStudioPanelCard(panel, dialogue));
         }
         section.append(title, grid);
         studioPanelsGridEl.append(section);
@@ -1288,24 +1295,100 @@ async function handleStudioRunPipeline() {
   }
 }
 
+// The agents the Producer runs, in order, mapped to the visual pipeline track + a friendly
+// label. Order/ids must match studio_agents.build_registry().
+const STUDIO_AGENT_FLOW = [
+  { id: 'intake', stage: 'intake', label: 'Reading your story' },
+  { id: 'casting', stage: 'intake', label: 'Casting the scene' },
+  { id: 'world', stage: 'world_building', label: 'Building the world' },
+  { id: 'characters', stage: 'character_building', label: 'Writing the characters' },
+  { id: 'treatment', stage: 'character_building', label: 'Shaping the story spine' },
+  { id: 'planner', stage: 'story_planning', label: 'Planning the beats' },
+  { id: 'scene', stage: 'story_planning', label: 'Blocking the scene' },
+  { id: 'panels', stage: 'dialogue', label: 'Drawing panels & writing dialogue' },
+  { id: 'continuity', stage: 'approval_ready', label: 'Checking continuity' },
+];
+const STUDIO_AGENT_TOTAL = STUDIO_AGENT_FLOW.length;
+
+function formatElapsed(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(total / 60);
+  const s = String(total % 60).padStart(2, '0');
+  return `${m}:${s}`;
+}
+
+// Turn the blackboard posts into a friendly status the user understands.
+function summarizeStudioProgress(posts) {
+  const doneIds = new Set(posts.filter((p) => p.status === 'done').map((p) => p.agent));
+  // Newest meaningful post wins (posts come back oldest-first).
+  let current = null;
+  for (let i = posts.length - 1; i >= 0; i -= 1) {
+    if (posts[i].status === 'progress' || posts[i].status === 'running') { current = posts[i]; break; }
+  }
+  const flow = current ? STUDIO_AGENT_FLOW.find((a) => a.id === current.agent) : null;
+  let detail;
+  if (current?.status === 'progress') {
+    detail = current.detail || (flow ? flow.label : 'Working...');
+  } else if (current?.status === 'running') {
+    detail = flow ? flow.label : (current.topic || 'Working...');
+  } else {
+    detail = 'Starting production...';
+  }
+  return {
+    stage: flow ? flow.stage : 'intake',
+    detail,
+    doneCount: STUDIO_AGENT_FLOW.filter((a) => doneIds.has(a.id)).length,
+  };
+}
+
+function renderStudioPipelineProgress(summary, elapsedMs) {
+  const stepEl = document.getElementById('studioPipelineStep');
+  const elapsedEl = document.getElementById('studioPipelineElapsed');
+  const fillEl = document.getElementById('studioPipelineProgressFill');
+  const detailEl = document.getElementById('studioPipelineDetail');
+  if (summary) {
+    setStudioPipelineStage(summary.stage);
+    if (studioPipelineStatusTextEl) studioPipelineStatusTextEl.textContent = summary.detail;
+    if (stepEl) stepEl.textContent = `Step ${Math.min(summary.doneCount + 1, STUDIO_AGENT_TOTAL)} of ${STUDIO_AGENT_TOTAL}`;
+    if (fillEl) fillEl.style.width = `${Math.round((summary.doneCount / STUDIO_AGENT_TOTAL) * 100)}%`;
+    if (detailEl && summary.detail) detailEl.textContent = `${summary.detail} — the local AI is working; CPU-only runs can take several minutes.`;
+  }
+  if (elapsedEl) elapsedEl.textContent = `${formatElapsed(elapsedMs)} elapsed`;
+}
+
 async function startProductionWorkflow(productionSeed) {
   setStudioView('pipeline');
   setStudioPipelineStage('intake');
   if (studioPipelineStatusTextEl) {
-    studioPipelineStatusTextEl.textContent = 'Building premise, world, characters, panels, and continuity checks...';
+    studioPipelineStatusTextEl.textContent = 'Starting production...';
   }
+  renderStudioPipelineProgress({ stage: 'intake', detail: 'Starting production...', doneCount: 0 }, 0);
 
-  const stages = ['world_building', 'character_building', 'story_planning', 'dialogue', 'approval_ready'];
-  let stageIndex = 0;
-  const stageTimer = window.setInterval(() => {
-    setStudioPipelineStage(stages[Math.min(stageIndex, stages.length - 1)]);
-    stageIndex += 1;
-  }, 2200);
+  // Poll the production blackboard so the user sees the real agent the model is working on,
+  // plus elapsed time — instead of a fake spinner that means nothing.
+  const startedAt = Date.now();
+  const poll = window.setInterval(async () => {
+    try {
+      const board = await fetchStudioBlackboard(studioState.projectName);
+      renderStudioPipelineProgress(summarizeStudioProgress(board?.posts || []), Date.now() - startedAt);
+    } catch {
+      // Backend busy/not ready yet — just keep the elapsed clock moving.
+      renderStudioPipelineProgress(null, Date.now() - startedAt);
+    }
+  }, 1500);
 
   try {
     const mode = studioState.mode || 'seed';
     const result = await studioRunWorkflow(studioState.projectName, productionSeed, mode, null);
-    window.clearInterval(stageTimer);
+    window.clearInterval(poll);
+
+    // A recoverable rejection comes back with a repair report instead of a plan.
+    if (result?.status === 'rejected' || result?.needs_repair || result?.repair) {
+      studioState.productionSeed = productionSeed;
+      openStudioRepair(result.repair, result.error);
+      return;
+    }
+
     completeStudioPipelineStages();
     if (studioPipelineStatusTextEl) {
       studioPipelineStatusTextEl.textContent = 'Production plan ready for review.';
@@ -1315,7 +1398,7 @@ async function startProductionWorkflow(productionSeed) {
     setStudioView('approval');
     setMessage(studioApprovalMessageEl, `Production plan is ready for review.`, 'success');
   } catch (error) {
-    window.clearInterval(stageTimer);
+    window.clearInterval(poll);
     setStudioView('seed');
     setMessage(studioPipelineMessageEl, `Production failed: ${error.message}`, 'danger');
   }
@@ -1350,6 +1433,131 @@ async function handleStudioPanelApproval(button) {
     setMessage(studioApprovalMessageEl, `Action failed: ${error.message}`, 'danger');
   } finally {
     restoreButton();
+  }
+}
+
+// --- Repair / Rebuild flow ---
+// studioState.repair holds { report, selectedResolution } for the active rejection.
+function openStudioRepair(report, errorText) {
+  studioState.repair = { report: report || {}, selectedResolution: null };
+  const problemEl = document.getElementById('studioRepairProblem');
+  const errorEl = document.getElementById('studioRepairError');
+  const questionEl = document.getElementById('studioRepairQuestion');
+  const noteEl = document.getElementById('studioRepairNote');
+  const diagnosisWrap = document.getElementById('studioRepairDiagnosis');
+  const proposalsEl = document.getElementById('studioRepairProposals');
+  const freeformEl = document.getElementById('studioRepairFreeform');
+  const rebuildBtn = document.getElementById('studioRepairRebuildButton');
+
+  if (problemEl) problemEl.textContent = report?.problem || 'A production step was rejected.';
+  if (errorEl) errorEl.textContent = report?.error || errorText || '';
+  if (questionEl) questionEl.textContent = report?.question || 'What were you going for here?';
+  if (noteEl) noteEl.value = '';
+  if (diagnosisWrap) diagnosisWrap.classList.add('hidden');
+  if (proposalsEl) proposalsEl.innerHTML = '';
+  if (freeformEl) { freeformEl.value = ''; freeformEl.classList.add('hidden'); }
+  if (rebuildBtn) rebuildBtn.disabled = true;
+  setMessage(document.getElementById('studioRepairMessage'), '', 'success');
+
+  setStudioView('repair');
+}
+
+async function handleStudioRepairPropose() {
+  const button = document.getElementById('studioRepairProposeButton');
+  const note = document.getElementById('studioRepairNote')?.value?.trim() || '';
+  const report = studioState.repair?.report || {};
+  const messageEl = document.getElementById('studioRepairMessage');
+
+  const restore = setStudioButtonBusy(button, true, 'Thinking...');
+  try {
+    setMessage(messageEl, 'The director is reading your notes and proposing fixes...', 'warning');
+    const result = await studioRepairPropose(studioState.projectName, report, note);
+    renderStudioRepairProposals(result?.diagnosis, result?.proposals || []);
+    setMessage(messageEl, 'Pick a suggestion or write your own, then rebuild.', 'success');
+  } catch (error) {
+    setMessage(messageEl, `Could not get suggestions: ${error.message}`, 'danger');
+  } finally {
+    restore();
+  }
+}
+
+function renderStudioRepairProposals(diagnosis, proposals) {
+  const diagnosisWrap = document.getElementById('studioRepairDiagnosis');
+  const diagnosisText = document.getElementById('studioRepairDiagnosisText');
+  const proposalsEl = document.getElementById('studioRepairProposals');
+  const freeformEl = document.getElementById('studioRepairFreeform');
+  const rebuildBtn = document.getElementById('studioRepairRebuildButton');
+  if (!proposalsEl) return;
+
+  if (diagnosis && diagnosisWrap && diagnosisText) {
+    diagnosisText.textContent = diagnosis;
+    diagnosisWrap.classList.remove('hidden');
+  }
+
+  proposalsEl.innerHTML = '';
+  studioState.repair.selectedResolution = null;
+  if (freeformEl) freeformEl.classList.add('hidden');
+  if (rebuildBtn) rebuildBtn.disabled = true;
+
+  for (const proposal of proposals) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'studio-repair-proposal';
+    const label = document.createElement('strong');
+    label.textContent = proposal.label || 'Fix';
+    const desc = document.createElement('span');
+    desc.textContent = proposal.description || '';
+    card.append(label, desc);
+
+    card.addEventListener('click', () => {
+      proposalsEl.querySelectorAll('.studio-repair-proposal').forEach((el) => el.classList.remove('selected'));
+      card.classList.add('selected');
+      studioState.repair.selectedResolution = proposal.resolution || { type: 'freeform' };
+      const isFreeform = (proposal.resolution?.type || 'freeform') === 'freeform';
+      if (freeformEl) freeformEl.classList.toggle('hidden', !isFreeform);
+      if (rebuildBtn) rebuildBtn.disabled = false;
+    });
+    proposalsEl.append(card);
+  }
+}
+
+async function handleStudioRepairRebuild() {
+  const resolution = studioState.repair?.selectedResolution;
+  const messageEl = document.getElementById('studioRepairMessage');
+  if (!resolution) {
+    setMessage(messageEl, 'Choose a fix first.', 'warning');
+    return;
+  }
+
+  // Turn the chosen fix into a guidance line appended to the seed, then re-run
+  // production. Grounded "set" picks name the exact valid option; freeform uses the
+  // user's own words (plus their original note for context).
+  const note = document.getElementById('studioRepairNote')?.value?.trim() || '';
+  const freeform = document.getElementById('studioRepairFreeform')?.value?.trim() || '';
+  let guidance;
+  if (resolution.type === 'set') {
+    guidance = `For the rejected ${resolution.field}, use "${resolution.value}".`;
+  } else if (resolution.type === 'relink') {
+    guidance = 'Re-order the scenes into a simple forward timeline with no loops.';
+  } else {
+    guidance = freeform || note;
+  }
+  if (!guidance) {
+    setMessage(messageEl, 'Add a short description of the fix before rebuilding.', 'warning');
+    return;
+  }
+
+  const baseSeed = studioState.productionSeed || '';
+  const repairedSeed = `${baseSeed}\n\n[Director fix] ${guidance}`.trim();
+  const button = document.getElementById('studioRepairRebuildButton');
+  const restore = setStudioButtonBusy(button, true, 'Rebuilding...');
+  try {
+    setMessage(messageEl, 'Rebuilding production with your fix...', 'warning');
+    await startProductionWorkflow(repairedSeed);
+  } catch (error) {
+    setMessage(messageEl, `Rebuild failed: ${error.message}`, 'danger');
+  } finally {
+    restore();
   }
 }
 
@@ -3920,6 +4128,9 @@ studioPanelsGridEl?.addEventListener('change', (event) => {
   }
 });
 studioRunPipelineButton?.addEventListener('click', handleStudioRunPipeline);
+document.getElementById('studioRepairProposeButton')?.addEventListener('click', handleStudioRepairPropose);
+document.getElementById('studioRepairRebuildButton')?.addEventListener('click', handleStudioRepairRebuild);
+document.getElementById('studioRepairBackButton')?.addEventListener('click', () => setStudioView('seed'));
 studioBriefAcceptButton?.addEventListener('click', () => {
   const seedText = studioSeedInputEl?.value?.trim();
   if (!seedText) {
@@ -4269,7 +4480,8 @@ async function refreshDoctor(refreshAudio = false) {
       { id: 'hotkeys', name: 'Hotkey Manager', data: doctor.hotkeys },
       { id: 'models', name: 'Model Paths', data: doctor.models },
       { id: 'audio', name: 'Audio System', data: doctor.audio },
-      { id: 'platform', name: 'Platform Capabilities', data: doctor.platform }
+      { id: 'platform', name: 'Platform Capabilities', data: doctor.platform },
+      { id: 'hardware', name: 'Hardware & Model Fit', data: { hardware: doctor.hardware, fit: doctor.model_fit } }
     ];
 
     let recoveryTriggers = [];
@@ -4355,6 +4567,46 @@ async function refreshDoctor(refreshAudio = false) {
         detailsText = `Platform: ${sub.data.platform}\nSession: ${sub.data.session_type}\nInput Injection: ${injection ? 'Yes' : 'No'}\nGlobal Hotkeys: ${sub.data.supports_global_hotkeys ? 'Yes' : 'No'}`;
         if (sub.data.is_wayland && !injection) {
           recoveryTriggers.push('unsupported_wayland_injection');
+        }
+      } else if (sub.id === 'hardware') {
+        const hw = sub.data.hardware ?? {};
+        const fit = sub.data.fit ?? {};
+        const verdict = fit.verdict ?? 'unknown';
+        const verdictMap = {
+          good: { label: 'Good Fit', tone: 'success' },
+          tight: { label: 'Tight', tone: 'warning' },
+          insufficient: { label: 'Insufficient', tone: 'danger' },
+          unknown: { label: 'Unknown', tone: 'warning' }
+        };
+        const v = verdictMap[verdict] ?? verdictMap.unknown;
+        badge.textContent = v.label;
+        badge.dataset.tone = v.tone;
+
+        if (!hw.available) {
+          detailsText = hw.error ?? 'Hardware metrics unavailable.';
+        } else {
+          const cpu = hw.cpu ?? {};
+          const mem = hw.memory ?? {};
+          const swap = hw.swap ?? {};
+          const gpu = hw.gpu ?? {};
+          const gb = (mb) => (typeof mb === 'number' ? `${(mb / 1024).toFixed(1)} GB` : '—');
+          const gpuText = gpu.accelerated
+            ? `${gpu.name ?? 'GPU'} (${gb(gpu.vram_mb)} VRAM)`
+            : `${gpu.name ?? 'None'} — CPU-only`;
+          const lines = [
+            `CPU: ${cpu.model ?? 'Unknown'} (${cpu.physical_cores ?? '?'}c / ${cpu.logical_threads ?? '?'}t)`,
+            `RAM: ${gb(mem.available_mb)} free of ${gb(mem.total_mb)} (${mem.used_percent ?? '?'}% used)`,
+            `Swap: ${gb(swap.used_mb)} / ${gb(swap.total_mb)} used`,
+            `GPU: ${gpuText}`,
+            ``,
+            `Model: ${fit.model_name ?? '—'}`,
+            `Needs ~${gb(fit.estimated_runtime_mb)} RAM`,
+            fit.recommendation ? `\n${fit.recommendation}` : ''
+          ];
+          if (Array.isArray(fit.reasons) && fit.reasons.length) {
+            lines.push('', ...fit.reasons.map((r) => `• ${r}`));
+          }
+          detailsText = lines.join('\n');
         }
       }
 

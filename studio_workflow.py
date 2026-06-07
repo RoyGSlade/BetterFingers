@@ -6,6 +6,10 @@ from datetime import datetime, timezone
 import studio_capabilities
 import studio_memory as memory
 import studio_analyzer
+import studio_repair
+import studio_generation
+import studio_visual
+import studio_blackboard
 from llm_engine import get_engine, get_engine_if_initialized
 
 logger = logging.getLogger("studio_workflow")
@@ -32,6 +36,14 @@ AGENTIC_CONSTRAINTS = (
     "4. FAILURE FALLBACK: If you cannot fulfill the request due to logical conflicts, output an empty object {}."
 )
 
+# Structured-bible schemas. Each stage asks for one small piece of these shapes; the
+# required-keys list is what _generate_structured validates (and retries) against. Richer,
+# named fields here are what give downstream dialogue and image prompts something concrete
+# to anchor on, instead of a 1-sentence blob.
+WORLD_CORE_KEYS = ["setting", "genre_rules", "tone_rules", "palette", "lighting", "danger_level"]
+WORLD_LOCATION_KEYS = ["name", "visual_prompt", "mood"]
+CHARACTER_BIBLE_KEYS = ["personality", "goals", "speech_style", "visual", "voice_profile"]
+
 
 class StudioWorkflowRunner:
     def __init__(self, project_name):
@@ -49,6 +61,31 @@ class StudioWorkflowRunner:
             "model_id": None,
             "messages": [],
         }
+        self._profile = None
+
+    @property
+    def profile(self):
+        """Model-aware generation profile (batch sizes + token budgets). Computed lazily so
+        it reflects whichever LLM model is actually selected/loaded for this run."""
+        if self._profile is None:
+            model_id = self.model_status.get("model_id")
+            if not model_id:
+                try:
+                    engine = get_engine_if_initialized()
+                    model_id = getattr(engine, "model_id", None) if engine else None
+                except Exception:
+                    model_id = None
+            self._profile = studio_generation.get_generation_profile(model_id)
+        return self._profile
+
+    def _progress(self, agent, message):
+        """Post a human-readable progress note to the blackboard so the UI can show, live,
+        what the model is chewing on (e.g. 'Writing character 2 of 3'). Best-effort: never
+        let a progress post break a production run."""
+        try:
+            studio_blackboard.post(self.project_name, self.project_id, agent, "progress", agent, message)
+        except Exception:
+            pass
 
     def _log_step(self, stage, status, message, details=None):
         entry = {
@@ -155,7 +192,7 @@ class StudioWorkflowRunner:
         self._analysis_cache = result
         return result
 
-    def _call_llm_with_fallback(self, prompt, system_prompt, fallback_data_func):
+    def _call_llm_with_fallback(self, prompt, system_prompt, fallback_data_func, max_output_tokens=None):
         """Thin adapter that calls LLMEngine and falls back gracefully to mocks if needed."""
         if "AGENTIC CONSTRAINTS" not in system_prompt:
             system_prompt += AGENTIC_CONSTRAINTS
@@ -199,7 +236,7 @@ class StudioWorkflowRunner:
                 raw_response = engine.process_custom_prompt(
                     user_text=prompt,
                     system_prompt=active_system_prompt,
-                    max_output_tokens=1500
+                    max_output_tokens=int(max_output_tokens or 1500)
                 )
 
                 if len(raw_response or "") > 32_000:
@@ -221,6 +258,82 @@ class StudioWorkflowRunner:
         self.model_status["used_fallback"] = True
         self._log_step("llm_adapter", "error", "Failed to get valid JSON from LLM after retries. Using mock fallback.")
         return fallback_data_func()
+
+    def _generate_structured(self, prompt, system_prompt, fallback_data_func,
+                             required_keys=None, shape="medium", item_keys=None):
+        """Model-aware, schema-checked generation for one small piece of the pipeline.
+
+        Asks the LLM for a small structured object/list using the token budget for the
+        current model tier, then validates the shape:
+          - `required_keys`: keys a dict result must contain (non-empty).
+          - `item_keys`: when the result is a list, keys each item must contain.
+        If the first result is the wrong shape, retry once with a targeted nudge naming the
+        missing fields before giving up to the deterministic fallback. Keeping each ask
+        small + schema-checked is what stops a small local model collapsing to mock data.
+        """
+        max_tokens = studio_generation.max_tokens_for(self.profile, shape)
+
+        def _shape_ok(result):
+            if required_keys is not None:
+                return studio_generation.ensure_keys(result, required_keys)
+            if item_keys is not None:
+                return isinstance(result, list) and all(
+                    studio_generation.ensure_keys(item, item_keys) for item in result
+                ) and len(result) > 0
+            return result is not None
+
+        result = self._call_llm_with_fallback(prompt, system_prompt, fallback_data_func, max_tokens)
+        if _shape_ok(result):
+            return result
+
+        # One targeted repair attempt: tell the model exactly which fields were wrong.
+        if required_keys:
+            missing = studio_generation.missing_keys(result, required_keys)
+            nudge = f"\n\nYour previous answer was missing required fields: {missing}. Return ALL fields."
+        else:
+            nudge = "\n\nReturn a non-empty JSON list where every item has all required fields."
+        retry = self._call_llm_with_fallback(prompt, system_prompt + nudge, fallback_data_func, max_tokens)
+        if _shape_ok(retry):
+            return retry
+
+        self.model_status["used_fallback"] = True
+        return fallback_data_func()
+
+    def _batched(self, items, fn, batch_size):
+        """Thin wrapper over studio_generation.run_batched (stitches batched LLM output)."""
+        return studio_generation.run_batched(items, fn, batch_size)
+
+    def propose_repairs(self, report, user_note=""):
+        """
+        Given a repair report and the user's explanation of intent, ask the LLM to
+        diagnose the core issue and propose grounded, selectable fixes. Falls back to
+        deterministic registry-grounded proposals when the LLM is unavailable.
+        """
+        report = report or {}
+        prompt, system_prompt = studio_repair.build_proposal_prompt(report, user_note)
+
+        def fallback():
+            return {
+                "diagnosis": report.get("problem", "This step was rejected."),
+                "proposals": studio_repair.deterministic_proposals(report),
+            }
+
+        parsed = self._call_llm_with_fallback(prompt, system_prompt, fallback)
+        proposals = parsed.get("proposals") if isinstance(parsed, dict) else None
+        if not proposals:
+            return fallback()
+
+        # Always keep a freeform escape hatch so the user can override the AI picks.
+        if not any((p or {}).get("resolution", {}).get("type") == "freeform" for p in proposals):
+            proposals.append({
+                "label": "Describe the fix myself",
+                "description": "Write what this beat should be; the AI will rebuild it from your description.",
+                "resolution": {"type": "freeform"},
+            })
+        return {
+            "diagnosis": parsed.get("diagnosis", report.get("problem", "")),
+            "proposals": proposals,
+        }
 
     def _extract_and_parse_json(self, text):
         if not text:
@@ -396,7 +509,10 @@ class StudioWorkflowRunner:
                 all_edges += result.get("edges", [])
         except SceneError as e:
             self._log_step("scene_planning", "error", f"Scene round rejected: {e}")
-            return {"ok": False, "phase": "scene_planning", "error": str(e)}
+            repair = studio_repair.build_repair_report(
+                "scene_planning", e, {"region_id": region_id, "scene_id": scene_id},
+            )
+            return {"ok": False, "phase": "scene_planning", "error": str(e), "repair": repair}
 
         self._log_step(
             "scene_planning", "complete",
@@ -483,11 +599,20 @@ class StudioWorkflowRunner:
             f"Linked {len(ordered)} scene(s); added {len(edges_added)} cross-scene edge(s); timeline valid={timeline['valid']}.",
             {"scene_order": ordered, "edges_added": edges_added},
         )
-        return {
-            "ok": True,
+        result = {
+            "ok": timeline.get("valid", True),
             "phase": "finalization",
             "data": {"scenes": ordered, "edges_added": edges_added, "timeline": timeline},
         }
+        if not timeline.get("valid", True):
+            # A cyclic/unsatisfiable timeline is a continuity rejection: offer repair
+            # instead of returning a quietly-invalid "complete" result.
+            self._log_step("finalization", "error", "Timeline is invalid (continuity cycle); offering repair.")
+            result["error"] = timeline.get("error") or "Scenes form a temporal cycle; the timeline can't be ordered."
+            result["repair"] = studio_repair.build_repair_report(
+                "finalization", result["error"], {"scene_order": ordered},
+            )
+        return result
 
     def _scene_actor_id(self, value):
         text = re.sub(r"[^a-z0-9_]+", "_", str(value or "").strip().lower())
@@ -627,7 +752,13 @@ class StudioWorkflowRunner:
             return {"ok": True, "phase": "director_scene_planning", "scene_spec": raw_spec, "data": result["data"]}
 
         self._log_step("director_scene_planning", "error", f"Fallback scene spec failed: {result.get('error')}")
-        return {"ok": False, "phase": "director_scene_planning", "scene_spec": raw_spec, "error": result.get("error")}
+        return {
+            "ok": False,
+            "phase": "director_scene_planning",
+            "scene_spec": raw_spec,
+            "error": result.get("error"),
+            "repair": result.get("repair"),
+        }
 
     def run_brief_review(self, seed_text, mode=MODE_SEED, source_story=None, user_notes=""):
         """Ask the local model for an understanding check before full production."""
@@ -849,70 +980,128 @@ class StudioWorkflowRunner:
         return data
 
     def run_world_building(self, premise_data, mode=None, source_story=None):
-        """Stage 2: World Building. Extracts an existing story's world, or invents one for seeds."""
+        """Stage 2: World Building (World Builder agent).
+
+        Produces a *structured* world bible in two small, schema-checked calls instead of one
+        vague blob: (1) the world core (setting, genre/tone rules, palette, lighting, danger,
+        factions, materials) and (2) a short list of named locations with their own visual
+        prompts. The named palette/lighting/locations are what later let image prompts be
+        specific instead of "cinematic comic panel, high detail" boilerplate.
+        """
         mode = self._normalize_mode(mode) if mode is not None else self.mode
         source_story = source_story if source_story is not None else self.source_story
         self.state = "world_building"
-        self._log_step("world_building", "start", "Generating world bible...")
+        self._log_step("world_building", "start", "Generating structured world bible...")
 
+        grounding = ""
         if source_story and mode in (MODE_ADAPT, MODE_CONTINUE):
-            verb = "Extract" if mode == MODE_ADAPT else "Extract and preserve"
-            system_prompt = (
-                f"You are a world-builder architect. {verb} the setting, aesthetic tone, and key world rules that are "
-                "actually present in the supplied story. Do NOT contradict or invent elements the story does not support. "
-                "Output MUST be a single valid JSON block: "
-                '{"setting": "Setting description", "aesthetic": "Visual tone / style description", "rules": ["rule 1", "rule 2"]}'
-            )
-            prompt = f"Premise: {json.dumps(premise_data)}{self._canon_block(source_story)}"
-
-            def fallback():
-                analysis = self._analysis(source_story)
-                if analysis:
-                    places = analysis["locations"]
-                    place_names = ", ".join(p["name"] for p in places[:4])
-                    setting = (
-                        f"The world established in the supplied story"
-                        + (f", centered on {place_names}. " if place_names else ". ")
-                        + (places[0]["description"] if places else analysis["summary"])
-                    )
-                    rules = ["Established canon from the source story is preserved without contradiction."]
-                    for p in places[:3]:
-                        rules.append(f"{p['name']} is a fixed location from the source and must stay consistent.")
-                    return {
-                        "setting": setting,
-                        "aesthetic": analysis["aesthetic"],
-                        "rules": rules,
-                    }
-                snippet = (source_story or "").strip()
-                return {
-                    "setting": f"The world as established in the supplied story. {snippet[:160]}",
-                    "aesthetic": "Visual tone matched faithfully to the source story's mood.",
-                    "rules": ["Established canon from the source story is preserved without contradiction."]
-                }
+            grounding = self._canon_block(source_story)
+            stance = ("Extract the world that is ACTUALLY present in the story; do not invent "
+                      "elements it does not support." if mode == MODE_ADAPT else
+                      "Preserve the established world and extend it forward consistently.")
         else:
-            system_prompt = (
-                "You are a world-builder architect. Generate setting rules, aesthetic tone, and world key facts based on the premise. "
-                "Output MUST be a single valid JSON block: "
-                '{"setting": "Setting description", "aesthetic": "Visual tone / style description", "rules": ["rule 1", "rule 2"]}'
-            )
-            prompt = f"Premise: {json.dumps(premise_data)}"
+            stance = "Invent a vivid, internally consistent world that fits the premise."
 
-            def fallback():
+        # --- Call 1: world core ---
+        core_system = (
+            "You are the World Builder, a specialist who designs the rules and look of a world. "
+            + stance + " Output ONLY a JSON object with these fields: "
+            '{"setting": "2-3 sentence setting", "genre_rules": ["..."], "tone_rules": ["..."], '
+            '"palette": "named colors that define the look", "materials": "key textures/materials", '
+            '"lighting": "how scenes are lit", "factions": ["group: one-line role"], '
+            '"danger_level": "low|medium|high with a why"}'
+        )
+        core_prompt = f"Premise: {json.dumps(premise_data)}{grounding}"
+
+        def core_fallback():
+            analysis = self._analysis(source_story) if source_story else None
+            if analysis:
+                places = ", ".join(p["name"] for p in analysis["locations"][:4])
+                setting = studio_generation.sentence_safe_trim(
+                    (f"The world of the supplied story, centered on {places}. " if places else "")
+                    + (analysis["summary"] or ""), 260)
                 return {
-                    "setting": "A mysterious steampunk metropolis built atop ancient subterranean arcane ruins.",
-                    "aesthetic": "Neo-Gothic Steampunk Noir. Moody lightning, copper piping, and glowing blue magic vapors.",
-                    "rules": [
-                        "Magic vapor is highly volatile and tightly controlled by the Iron Guild.",
-                        "The lower ruins are strictly forbidden to citizens."
-                    ]
+                    "setting": setting or "The world as established in the supplied story.",
+                    "genre_rules": ["Honor the source story's established facts without contradiction."],
+                    "tone_rules": [f"Maintain a {analysis['tone']} tone throughout."],
+                    "palette": analysis["aesthetic"],
+                    "materials": "Textures consistent with the source story's setting.",
+                    "lighting": f"Lighting that reinforces the {analysis['tone']} mood.",
+                    "factions": [],
+                    "danger_level": "medium — driven by the story's central conflict.",
                 }
+            return {
+                "setting": "A neon-soaked harbor city where old money and new crime share the same fog.",
+                "genre_rules": ["Grounded noir: no magic; consequences are physical and social."],
+                "tone_rules": ["Wry, tense, intimate. Let silence do work."],
+                "palette": "Sodium amber, rain-slick black, bruised teal, cigarette red.",
+                "materials": "Wet asphalt, brushed brass, worn leather, frosted glass.",
+                "lighting": "Low-key, single-source practical lights and hard shadows.",
+                "factions": ["Dockside crew: small-time operators", "The Office: the people who collect"],
+                "danger_level": "high — debts come due in person.",
+            }
 
-        data = self._call_llm_with_fallback(prompt, system_prompt, fallback)
+        world = self._generate_structured(
+            core_prompt, core_system, core_fallback,
+            required_keys=WORLD_CORE_KEYS, shape="medium",
+        )
+
+        # --- Call 2: named locations (their own visual prompts) ---
+        loc_system = (
+            "You are the World Builder's location designer. Given the world, list 2-4 concrete "
+            "locations where scenes happen. Output ONLY a JSON list: "
+            '[{"name": "Place Name", "visual_prompt": "what an artist would draw: architecture, '
+            'props, atmosphere", "mood": "one or two mood words"}]'
+        )
+        loc_prompt = f"World: {json.dumps(world)}\nPremise: {json.dumps(premise_data)}{grounding}"
+
+        def loc_fallback():
+            analysis = self._analysis(source_story) if source_story else None
+            if analysis and analysis["locations"]:
+                return [
+                    {
+                        "name": p["name"],
+                        "visual_prompt": studio_generation.sentence_safe_trim(
+                            p.get("description") or f"{p['name']}, a location from the story.", 180),
+                        "mood": analysis["tone"],
+                    }
+                    for p in analysis["locations"][:4]
+                ]
+            return [
+                {"name": "The Back Room", "visual_prompt": "A windowless basement club, low brass lamps, "
+                 "cigarette haze, a battered piano in the corner.", "mood": "smoky, watchful"},
+                {"name": "The Waterfront", "visual_prompt": "Fog over black water, shipping containers, "
+                 "a single buzzing dock light, gulls.", "mood": "cold, exposed"},
+            ]
+
+        locations = self._generate_structured(
+            loc_prompt, loc_system, loc_fallback, item_keys=WORLD_LOCATION_KEYS, shape="medium",
+        )
+        world["locations"] = locations
+        # Keep a legacy `aesthetic` string so older readers/exports still work.
+        world.setdefault("aesthetic", world.get("palette", ""))
+        data = world
 
         # Merge with current bible memory
         current_bible = memory.get_bible(self.project_name, self.project_id)
         current_bible["world"] = data
         memory.save_bible(self.project_name, self.project_id, current_bible)
+
+        # Persist the structured locations as reusable location assets (for seed mode too).
+        try:
+            existing = {loc["name"].lower() for loc in memory.get_locations(self.project_name, self.project_id)}
+            for place in locations:
+                nm = str(place.get("name") or "").strip()
+                if not nm or nm.lower() in existing:
+                    continue
+                memory.add_location(
+                    self.project_name, self.project_id, nm,
+                    studio_generation.sentence_safe_trim(place.get("visual_prompt") or nm, 240),
+                    metadata={"source": "world_builder", "mood": place.get("mood", "")},
+                )
+                existing.add(nm.lower())
+        except Exception as e:
+            logger.warning(f"Could not persist world locations: {e}")
 
         # For adapt/continue, persist the manuscript's real places as reusable location
         # assets so the locations table reflects the actual story, not just the cast region.
@@ -936,133 +1125,222 @@ class StudioWorkflowRunner:
         self._log_step("world_building", "complete", "Generated and stored world bible.", data)
         return data
 
+    def _character_roster(self, mode, source_story, casting):
+        """Decide WHO is in the cast before fleshing anyone out.
+
+        Returns a list of lightweight seeds: {name, role, skin_id, grounding}. The roster is
+        derived deterministically (from the source story's real cast, or the Director casting
+        anchor) so the expensive per-character expansion stays focused and grounded.
+        """
+        cast = casting.get("cast") or []
+        seeds = []
+
+        if source_story and mode in (MODE_ADAPT, MODE_CONTINUE):
+            analysis = self._analysis(source_story)
+            roles = ["lead", "rival", "supporting", "supporting"]
+            people = (analysis or {}).get("characters") or []
+            for i, person in enumerate(people[:4]):
+                seeds.append({
+                    "name": person["name"],
+                    "role": roles[i] if i < len(roles) else "supporting",
+                    "skin_id": cast[i]["skin_id"] if i < len(cast) else None,
+                    # Grounding is the character's real sample line — used to EXPAND a voice,
+                    # never to be stored verbatim as the description.
+                    "grounding": (person.get("sample_line") or person.get("description") or "").strip(),
+                })
+            if seeds:
+                return seeds
+
+        # Director casting anchor (seed mode or no analyzable source).
+        for member in cast:
+            seeds.append({
+                "name": member["character_name"],
+                "role": member.get("role", "supporting"),
+                "skin_id": member.get("skin_id"),
+                "grounding": member.get("skin_name", ""),
+            })
+        if seeds:
+            return seeds
+
+        # Last resort: two unnamed leads the expansion step will name via premise context.
+        return [
+            {"name": "Lead", "role": "protagonist", "skin_id": None, "grounding": ""},
+            {"name": "Foil", "role": "deuteragonist", "skin_id": None, "grounding": ""},
+        ]
+
+    def _expand_character(self, seed, premise_data, world_data, mode, source_story):
+        """Expand one roster seed into a full structured character bible via a single small,
+        schema-checked LLM call (with a structured deterministic fallback)."""
+        stance = ("Stay faithful to how this character appears in the source story."
+                  if source_story and mode in (MODE_ADAPT, MODE_CONTINUE)
+                  else "Invent a distinctive, premise-appropriate character.")
+        system_prompt = (
+            "You are the Character Creator, a specialist who writes one character bible at a time. "
+            + stance + " Expand the seed into a real, specific person — do NOT echo the seed text "
+            "back verbatim. Output ONLY a JSON object: "
+            '{"name": "...", "role": "...", "archetype": "...", "personality": "2-3 traits with edge", '
+            '"goals": "what they want now", "fears": "what they avoid", "secrets": "what they hide", '
+            '"relationships": "who matters to them and how", '
+            '"speech_style": "how they talk: rhythm, vocabulary, verbal tics", '
+            '"visual": {"face": "...", "hair": "...", "build": "...", "outfit": "...", "palette": "signature colors"}, '
+            '"voice_profile": {"tone": "...", "pace": "...", "accent": "..."}}'
+        )
+        grounding = f"\nHow they appear in the source: {seed['grounding']}" if seed.get("grounding") else ""
+        prompt = (
+            f"Seed: name={seed['name']}, role={seed['role']}\n"
+            f"Premise: {json.dumps(premise_data)}\nWorld palette/tone: "
+            f"{json.dumps({k: world_data.get(k) for k in ('palette', 'tone_rules', 'setting')})}"
+            f"{grounding}"
+        )
+
+        def fallback():
+            tone = (self._analysis(source_story) or {}).get("tone", "grounded") if source_story else "grounded"
+            return {
+                "name": seed["name"],
+                "role": seed["role"],
+                "archetype": "Lead" if "lead" in seed["role"].lower() or "protagon" in seed["role"].lower() else "Supporting",
+                "personality": "Guarded, quick-witted, carries more weight than they show.",
+                "goals": "Get through the next hour without losing what little they have left.",
+                "fears": "Being seen as expendable.",
+                "secrets": "Owes someone dangerous and can't pay.",
+                "relationships": "Bound to the others by obligation more than trust.",
+                "speech_style": studio_generation.sentence_safe_trim(
+                    seed.get("grounding") or "Clipped, dry, says less than they mean.", 140),
+                "visual": {
+                    "face": "lived-in, alert eyes", "hair": "unfussed, practical",
+                    "build": "average, tense", "outfit": "worn everyday clothes that fit the world",
+                    "palette": world_data.get("palette", "muted, low-key"),
+                },
+                "voice_profile": {"tone": tone, "pace": "measured", "accent": "local"},
+            }
+
+        bible = self._generate_structured(
+            prompt, system_prompt, fallback, required_keys=CHARACTER_BIBLE_KEYS, shape="medium",
+        )
+        bible.setdefault("name", seed["name"])
+        bible.setdefault("role", seed["role"])
+        bible["skin_id"] = seed.get("skin_id")
+        return bible
+
     def run_character_building(self, premise_data, world_data, mode=None, source_story=None):
-        """Stage 3: Character Building. Extracts the cast of an existing story, or invents one for seeds."""
+        """Stage 3: Character Building (Character Creator agent).
+
+        Two steps: (1) deterministically decide the roster, then (2) expand each character into
+        a full structured bible in its own small call (batched by the model tier). This replaces
+        the old single blob that stored 1-sentence excerpts like 'Speaks like: "..."'.
+        """
         mode = self._normalize_mode(mode) if mode is not None else self.mode
         source_story = source_story if source_story is not None else self.source_story
         self.state = "character_building"
-        self._log_step("character_building", "start", "Generating main characters...")
+        self._log_step("character_building", "start", "Building structured character bibles...")
         casting = memory.get_bible(self.project_name, self.project_id).get("casting") or {}
-        casting_prompt = f"\nDirector casting anchor: {json.dumps(casting)}" if casting else ""
 
-        if source_story and mode in (MODE_ADAPT, MODE_CONTINUE):
-            system_prompt = (
-                "You are a character designer. Identify the principal characters that ACTUALLY appear in the supplied story "
-                "(2 to 4 of them). Use their real names and traits from the text — do NOT invent new leads. "
-                "If a Director casting anchor is present, preserve the cast member names and roles unless they contradict the source story. "
-                "Output MUST be a single valid JSON list of character objects: "
-                '[{"name": "Name", "description": "1-sentence desc", "role": "Role in story", "archetype": "Archetype"}]'
-            )
-            prompt = (
-                f"Premise: {json.dumps(premise_data)}\nWorld: {json.dumps(world_data)}"
-                f"{casting_prompt}{self._canon_block(source_story)}"
-            )
+        seeds = self._character_roster(mode, source_story, casting)
+        total = len(seeds)
+        progress = {"n": 0}
 
-            def fallback():
-                analysis = self._analysis(source_story)
-                if analysis and analysis["characters"]:
-                    cast_skins = casting.get("cast") or []
-                    roles = ["lead", "rival", "supporting", "supporting"]
-                    archetypes = ["Protagonist", "Antagonist", "Ally", "Ally"]
-                    out = []
-                    for i, person in enumerate(analysis["characters"][:4]):
-                        # Anchor each real character onto an available registry skin so the
-                        # Scene/GEST system still has a valid visual id to render against.
-                        skin_id = cast_skins[i]["skin_id"] if i < len(cast_skins) else None
-                        desc = person.get("description") or person.get("first_sentence") or ""
-                        if person.get("sample_line"):
-                            desc = f'{desc} Speaks like: "{person["sample_line"][:80]}"'
-                        out.append({
-                            "name": person["name"],
-                            "description": (desc or f"{person['name']}, a key figure in the source story.")[:240],
-                            "role": roles[i] if i < len(roles) else "supporting",
-                            "archetype": archetypes[i] if i < len(archetypes) else "Supporting",
-                            "skin_id": skin_id,
-                        })
-                    return out
-                if casting.get("cast"):
-                    return [
-                        {
-                            "name": member["character_name"],
-                            "description": f"{member['skin_name']} anchored from the Director casting pass.",
-                            "role": member["role"],
-                            "archetype": "Cast Anchor",
-                            "skin_id": member["skin_id"],
-                        }
-                        for member in casting["cast"]
-                    ]
-                return [
-                    {
-                        "name": "Protagonist",
-                        "description": "The central figure carried over from the supplied story.",
-                        "role": "Protagonist",
-                        "archetype": "The Hero"
-                    },
-                    {
-                        "name": "Supporting Lead",
-                        "description": "A key ally or rival established in the supplied story.",
-                        "role": "Deuteragonist",
-                        "archetype": "The Companion"
-                    }
-                ]
-        else:
-            system_prompt = (
-                "You are a character designer. Generate exactly two main characters based on the premise and world setting. "
-                "If a Director casting anchor is present, use its character names, roles, and skin anchors. "
-                "Output MUST be a single valid JSON list of character objects: "
-                '[{"name": "Name", "description": "1-sentence desc", "role": "Role in story", "archetype": "Archetype"}]'
-            )
-            prompt = f"Premise: {json.dumps(premise_data)}\nWorld: {json.dumps(world_data)}{casting_prompt}"
+        def expand_batch(batch):
+            out = []
+            for s in batch:
+                progress["n"] += 1
+                self._progress("characters", f"Writing character {progress['n']} of {total}: {s.get('name', '')}")
+                out.append(self._expand_character(s, premise_data, world_data, mode, source_story))
+            return out
 
-            def fallback():
-                if casting.get("cast"):
-                    return [
-                        {
-                            "name": member["character_name"],
-                            "description": f"{member['skin_name']} anchored from the Director casting pass.",
-                            "role": member["role"],
-                            "archetype": "Cast Anchor",
-                            "skin_id": member["skin_id"],
-                        }
-                        for member in casting["cast"]
-                    ]
-                return [
-                    {
-                        "name": "Silas Vance",
-                        "description": "A clever, cynical grease-monkey rogue carrying a mechanical mechanical pocket watch key.",
-                        "role": "Protagonist / Thief",
-                        "archetype": "The Scoundrel"
-                    },
-                    {
-                        "name": "Lady Vivienne",
-                        "description": "An aristocratic scholar who secretly studies outlawed technomancy.",
-                        "role": "Deuteragonist / Scholar",
-                        "archetype": "The Maverick Sage"
-                    }
-                ]
+        bibles = self._batched(seeds, expand_batch, self.profile["characters_per_call"])
 
-        char_list = self._call_llm_with_fallback(prompt, system_prompt, fallback)
-
-        # Save each character to database
         saved_chars = []
-        for char in char_list:
+        for bible in bibles:
+            # A short synthesized description for legacy list/card displays; the rich data lives
+            # in metadata["bible"] and voice_profile.
+            description = studio_generation.sentence_safe_trim(
+                f"{bible.get('personality', '')} {bible.get('goals', '')}".strip()
+                or f"{bible.get('name')} — {bible.get('role')}", 200)
             char_id = memory.add_character(
                 self.project_name,
                 self.project_id,
-                char["name"],
-                char["description"],
-                char["role"],
-                char["archetype"],
+                bible["name"],
+                description,
+                bible.get("role", ""),
+                bible.get("archetype", ""),
+                voice_profile=bible.get("voice_profile"),
                 metadata={
-                    "skin_id": char.get("skin_id"),
-                    "source": "director_casting" if char.get("skin_id") else "character_building",
-                }
+                    "skin_id": bible.get("skin_id"),
+                    # A character anchored to a Director casting skin keeps that provenance;
+                    # otherwise it was authored fresh by the Character Creator.
+                    "source": "director_casting" if bible.get("skin_id") else "character_creator",
+                    "bible": bible,
+                    "visual": bible.get("visual"),
+                    "speech_style": bible.get("speech_style"),
+                },
             )
-            char["id"] = char_id
-            saved_chars.append(char)
+            record = dict(bible)
+            record["id"] = char_id
+            record["description"] = description
+            saved_chars.append(record)
 
-        self._log_step("character_building", "complete", f"Generated and stored {len(saved_chars)} characters.", {"characters": saved_chars})
+        self._log_step("character_building", "complete", f"Built {len(saved_chars)} character bibles.", {"characters": saved_chars})
         return saved_chars
+
+    def run_treatment(self, premise_data, world_data, characters, mode=None, source_story=None):
+        """Stage 3.5: Treatment (Story Editor agent).
+
+        Expands the thin 2-sentence premise into a short treatment — logline, synopsis,
+        central conflict, intended ending, theme, tone — that every downstream agent reads.
+        This is the "interpret + expand" step that turns a seed into a story with a spine,
+        instead of asking the planner to invent everything from two sentences.
+        """
+        mode = self._normalize_mode(mode) if mode is not None else self.mode
+        source_story = source_story if source_story is not None else self.source_story
+        self.state = "treatment"
+        self._log_step("treatment", "start", "Expanding premise into a treatment...")
+
+        if source_story and mode in (MODE_ADAPT, MODE_CONTINUE):
+            stance = ("Summarize the supplied story's actual spine — do not invent a new plot."
+                      if mode == MODE_ADAPT else
+                      "Describe the spine of what happens NEXT, after the supplied story ends.")
+            grounding = self._canon_block(source_story)
+        else:
+            stance = "Expand the premise into a focused 60-second spine with a clear ending."
+            grounding = ""
+
+        system_prompt = (
+            "You are the Story Editor. " + stance + " Keep it tight: this is a 60-second reel. "
+            "Output ONLY a JSON object: "
+            '{"logline": "one vivid sentence", "synopsis": "3-4 sentence spine with a beginning, '
+            'turn, and ending", "central_conflict": "the core tension", "ending": "how it lands", '
+            '"theme": "what it is really about", "tone": "the felt mood"}'
+        )
+        cast = ", ".join(c.get("name", "") for c in characters if c.get("name"))
+        prompt = (
+            f"Premise: {json.dumps(premise_data)}\n"
+            f"World: {json.dumps({k: world_data.get(k) for k in ('setting', 'tone_rules')})}\n"
+            f"Cast: {cast}{grounding}"
+        )
+
+        def fallback():
+            analysis = self._analysis(source_story) if source_story else None
+            lead = characters[0]["name"] if characters else "the lead"
+            synopsis = (analysis or {}).get("summary") or premise_data.get("premise", "")
+            return {
+                "logline": premise_data.get("premise", f"{lead} faces a decisive hour."),
+                "synopsis": studio_generation.sentence_safe_trim(synopsis, 320)
+                            or f"{lead} is pulled into a conflict, forced to choose, and pays the cost.",
+                "central_conflict": "What the lead wants collides with what the situation demands.",
+                "ending": "A decisive, earned beat that lands the theme.",
+                "theme": premise_data.get("theme", "consequence"),
+                "tone": (analysis or {}).get("tone", "grounded"),
+            }
+
+        treatment = self._generate_structured(
+            prompt, system_prompt, fallback,
+            required_keys=["logline", "synopsis", "ending"], shape="medium",
+        )
+        current_bible = memory.get_bible(self.project_name, self.project_id)
+        current_bible["treatment"] = treatment
+        memory.save_bible(self.project_name, self.project_id, current_bible)
+        self._log_step("treatment", "complete", "Stored story treatment.", treatment)
+        return treatment
 
     def run_story_planning(self, premise_data, world_data, characters, mode=None, source_story=None):
         """Stage 4: Story Planning (60-Second Episode Plan).
@@ -1075,6 +1353,10 @@ class StudioWorkflowRunner:
         source_story = source_story if source_story is not None else self.source_story
         self.state = "story_planning"
         self._log_step("story_planning", "start", "Creating 60-second episode plan...")
+
+        # The treatment (if present) is the spine the beats must serve.
+        treatment = memory.get_bible(self.project_name, self.project_id).get("treatment") or {}
+        spine = f"\nTreatment spine (follow this): {json.dumps(treatment)}" if treatment else ""
 
         if source_story and mode == MODE_ADAPT:
             system_prompt = (
@@ -1108,6 +1390,8 @@ class StudioWorkflowRunner:
                 '"canon_events": [{"description": "Event detail", "time_index": "0:XX"}]}'
             )
             prompt = f"Premise: {json.dumps(premise_data)}\nWorld: {json.dumps(world_data)}\nCharacters: {json.dumps(characters)}"
+
+        prompt += spine
 
         def fallback():
             if source_story and mode in (MODE_ADAPT, MODE_CONTINUE):
@@ -1157,6 +1441,11 @@ class StudioWorkflowRunner:
             }
 
         story_data = self._call_llm_with_fallback(prompt, system_prompt, fallback)
+        if not self._is_valid_story_plan(story_data):
+            self.model_status["used_fallback"] = True
+            self.model_status["messages"].append("Story planning returned malformed JSON shape; fallback used.")
+            self._log_step("story_planning", "warning", "Story planning returned malformed JSON shape; using deterministic fallback.")
+            story_data = fallback()
 
         # Save Episode
         ep_id = memory.add_episode(self.project_name, self.project_id, premise_data.get("title", "Episode 1"), story_data["summary"])
@@ -1172,6 +1461,25 @@ class StudioWorkflowRunner:
         self._log_step("story_planning", "complete", "Created and stored story plan.", story_data)
         return story_data, ep_id
 
+    def _is_valid_story_plan(self, value):
+        if not isinstance(value, dict):
+            return False
+        if not isinstance(value.get("summary"), str) or not value.get("summary").strip():
+            return False
+        episodes = value.get("episodes")
+        canon_events = value.get("canon_events")
+        if not isinstance(episodes, list) or not episodes:
+            return False
+        if not isinstance(canon_events, list) or not canon_events:
+            return False
+        for beat in episodes:
+            if not isinstance(beat, dict) or not str(beat.get("name") or "").strip() or not str(beat.get("summary") or "").strip():
+                return False
+        for event in canon_events:
+            if not isinstance(event, dict) or not str(event.get("description") or "").strip():
+                return False
+        return True
+
     # Camera language cycled across panels so a 12-panel reel reads cinematically
     # instead of 12 identical medium shots.
     _CAMERA_CYCLE = [
@@ -1183,136 +1491,272 @@ class StudioWorkflowRunner:
         ("dutch angle", "tilted horizon, unease and tension"),
     ]
 
-    def _faithful_panels(self, premise_data, world_data, characters, story_plan, source_story):
-        """Build a faithful 12-panel reel from the manuscript itself.
+    def _distribute_dialogue(self, source_story, n):
+        """Distribute up to n real quoted lines from the source across the reel, in order.
 
-        Beats drive the visuals (panels 1-4 -> beat 1, 5-8 -> beat 2, 9-12 -> beat 3),
-        and the story's *real quoted dialogue* is distributed in order across the panels,
-        attributed to the speakers the analyzer detected. Each panel carries rich planning
-        metadata (camera, composition, visible characters, duration, negative prompt) per
-        the Comic Panel System spec, so the reel is production-ready, not placeholder text.
+        Reserves roughly half the slots for the named cast (not just the narrator) and fills
+        the rest with narration, then restores document order so the reel reads in sequence.
+        Returns a list of {speaker, text} (possibly shorter than n).
         """
         analysis = self._analysis(source_story) or {}
-        beats = analysis.get("beats") or story_plan.get("episodes", []) or []
         dialogue = [d for d in (analysis.get("dialogue") or []) if d.get("text")]
-        aesthetic = world_data.get("aesthetic", "Comic style")
-        char_names = [c.get("name") for c in characters if c.get("name")]
-        known_speakers = {n.lower(): n for n in char_names}
+        if not dialogue:
+            return []
+        named_idx = [i for i, d in enumerate(dialogue) if (d.get("speaker") or "Narrator") != "Narrator"]
+        narr_idx = [i for i, d in enumerate(dialogue) if (d.get("speaker") or "Narrator") == "Narrator"]
 
-        # Select up to 12 real lines that (a) span the whole story chronologically and
-        # (b) let the named cast actually speak, not just the first-person narrator.
-        # We reserve roughly half the panels for attributed (named) lines and fill the
-        # rest with narration, then restore document order so the reel reads in sequence.
-        picked = []
-        if dialogue:
-            named_idx = [i for i, d in enumerate(dialogue) if (d.get("speaker") or "Narrator") != "Narrator"]
-            narr_idx = [i for i, d in enumerate(dialogue) if (d.get("speaker") or "Narrator") == "Narrator"]
+        def _even(indices, k):
+            if not indices or k <= 0:
+                return []
+            step = max(1, len(indices) / k)
+            return [indices[min(len(indices) - 1, int(j * step))] for j in range(k)]
 
-            def _even(indices, k):
-                if not indices or k <= 0:
-                    return []
-                step = max(1, len(indices) / k)
-                return [indices[min(len(indices) - 1, int(j * step))] for j in range(k)]
+        chosen = set(_even(named_idx, min(len(named_idx), n // 2)))
+        chosen |= set(_even(narr_idx, n - len(chosen)))
+        for i in range(len(dialogue)):
+            if len(chosen) >= n:
+                break
+            chosen.add(i)
+        return [{"speaker": dialogue[i].get("speaker") or "Narrator", "text": dialogue[i]["text"]}
+                for i in sorted(chosen)][:n]
 
-            want_named = min(len(named_idx), 6)
-            chosen = set(_even(named_idx, want_named))
-            chosen |= set(_even(narr_idx, 12 - len(chosen)))
-            # Top up if rounding left us short.
-            for i in range(len(dialogue)):
-                if len(chosen) >= 12:
-                    break
-                chosen.add(i)
-            picked = [dialogue[i] for i in sorted(chosen)][:12]
+    def run_shot_list(self, premise_data, world_data, characters, story_plan, mode=None, source_story=None):
+        """Stage 5a: Shot List (Shot Designer agent).
+
+        For each story beat, ask the model for a few concrete SHOTS — what is on screen, who
+        is in it, the camera, and the continuity state — batched one beat at a time so a small
+        model never has to invent a whole reel in one breath. Returns a flat, ordered list of
+        shot dicts tagged with their beat. The deterministic fallback grounds shots in the
+        beat summary (and, for adaptations, the manuscript) without ever truncating mid-word.
+        """
+        mode = self._normalize_mode(mode) if mode is not None else self.mode
+        source_story = source_story if source_story is not None else self.source_story
+        beats = (story_plan or {}).get("episodes") or []
+        if not beats:
+            beats = [{"name": "Scene", "summary": premise_data.get("premise", "")}]
+        cast_names = [c.get("name") for c in characters if c.get("name")]
+        locations = [loc.get("name") for loc in world_data.get("locations", []) if loc.get("name")]
+        # Enough shots to fill a 12-panel reel without padding-duplication: the tier's
+        # shots_per_beat is a floor, but we raise it so beats * shots covers all 12 panels.
+        shots_per_beat = max(self.profile["shots_per_beat"], -(-12 // max(1, len(beats))))
+
+        system_prompt = (
+            "You are the Shot Designer. Turn ONE story beat into concrete comic shots. "
+            f"Use ONLY these characters when present: {cast_names or ['the lead']}. "
+            f"Prefer these locations: {locations or ['the main location']}. "
+            "Each shot is a single moment a reader could draw. Output ONLY a JSON list of "
+            f"{shots_per_beat} shots: "
+            '[{"subject": "what the shot is OF", "action": "what is happening", '
+            '"location_ref": "place name", "characters_present": ["Name"], '
+            '"camera": "shot type", "composition": "framing", '
+            '"continuity_state": {"outfit": "", "props": "", "injury": "", "lighting": "", "mood": ""}}]'
+        )
+
+        def make_beat_shots(beat, beat_index):
+            self._progress("panels", f"Designing shots for beat {beat_index + 1} of {len(beats)}: {beat.get('name', 'Scene')}")
+            prompt = (
+                f"Beat {beat_index + 1}: {beat.get('name', 'Scene')} — {beat.get('summary', '')}\n"
+                f"World tone: {json.dumps({k: world_data.get(k) for k in ('palette', 'lighting', 'tone_rules')})}"
+            )
+
+            def fallback():
+                summary = studio_generation.sentence_safe_trim(beat.get("summary", "") or premise_data.get("premise", ""), 200)
+                loc = locations[beat_index % len(locations)] if locations else "the main location"
+                # Vary the angle of approach per shot so the beat doesn't read as one frozen frame.
+                angles = ["establishing the moment", "the key action", "the reaction"]
+                out = []
+                for s in range(shots_per_beat):
+                    who = cast_names[s % len(cast_names)] if cast_names else "the lead"
+                    out.append({
+                        "subject": f"{who} — {angles[s % len(angles)]}",
+                        "action": summary,
+                        "location_ref": loc,
+                        "characters_present": [who] if cast_names else [],
+                        "camera": self._CAMERA_CYCLE[s % len(self._CAMERA_CYCLE)][0],
+                        "composition": self._CAMERA_CYCLE[s % len(self._CAMERA_CYCLE)][1],
+                        "continuity_state": {"outfit": "", "props": "", "injury": "",
+                                             "lighting": world_data.get("lighting", ""),
+                                             "mood": beat.get("name", "")},
+                    })
+                return out
+
+            shots = self._generate_structured(
+                prompt, system_prompt, fallback,
+                item_keys=["subject", "action"], shape="medium",
+            )
+            for shot in shots:
+                shot["beat"] = beat.get("name", "Scene")
+                shot["beat_index"] = beat_index
+            return shots
+
+        # Batch the beats per the model tier; each beat still yields its own focused call.
+        indexed = list(enumerate(beats))
+        return self._batched(
+            indexed,
+            lambda batch: [s for (idx, beat) in batch for s in make_beat_shots(beat, idx)],
+            self.profile["beats_per_call"],
+        )
+
+    def assemble_panels(self, shots, world_data, characters, premise_data, story_plan, source_story=None, mode=None):
+        """Stage 5b: deterministic panel assembly (system, not LLM).
+
+        Turns the shot list into exactly 12 ordered panels: evenly samples/pads shots to 12,
+        cycles camera language only where a shot didn't specify it, carries continuity state
+        forward, and distributes real source dialogue (for adaptations) or beat narration.
+        Image/negative prompts are filled by the Visual Prompt agent in a later step; here we
+        seed a basic prompt so the panel is never empty. No mid-word truncation anywhere.
+        """
+        mode = self._normalize_mode(mode) if mode is not None else self.mode
+        source_story = source_story if source_story is not None else self.source_story
+        target = 12
+        shots = list(shots or [])
+        cast_names = [c.get("name") for c in characters if c.get("name")]
+
+        # Even selection to exactly `target` panels (sample down or pad up by cycling).
+        if shots:
+            if len(shots) >= target:
+                step = len(shots) / target
+                chosen = [shots[min(len(shots) - 1, int(i * step))] for i in range(target)]
+            else:
+                chosen = [shots[i % len(shots)] for i in range(target)]
+        else:
+            chosen = [{"subject": "Scene", "action": premise_data.get("premise", ""),
+                       "beat": "Scene"} for _ in range(target)]
+
+        dialogue = self._distribute_dialogue(source_story, target) if (
+            source_story and mode in (MODE_ADAPT, MODE_CONTINUE)) else []
+        palette = world_data.get("palette") or world_data.get("aesthetic", "comic style")
 
         panels = []
-        for i in range(12):
-            beat = beats[min(i // 4, len(beats) - 1)] if beats else {"name": "Scene", "summary": premise_data.get("premise", "")}
-            cam_name, cam_comp = self._CAMERA_CYCLE[i % len(self._CAMERA_CYCLE)]
-            line = picked[i] if i < len(picked) else None
-            if line:
-                raw_speaker = (line.get("speaker") or "Narrator").strip()
-                speaker = known_speakers.get(raw_speaker.lower(), raw_speaker if raw_speaker != "Narrator" else "Narrator")
-                text = line["text"]
+        for i, shot in enumerate(chosen):
+            cam_name = shot.get("camera") or self._CAMERA_CYCLE[i % len(self._CAMERA_CYCLE)][0]
+            cam_comp = shot.get("composition") or self._CAMERA_CYCLE[i % len(self._CAMERA_CYCLE)][1]
+            subject = studio_generation.sentence_safe_trim(
+                f"{shot.get('subject', '')}: {shot.get('action', '')}".strip(" :"), 220)
+            present = shot.get("characters_present") or cast_names[:1]
+            if dialogue:
+                line = dialogue[i] if i < len(dialogue) else {"speaker": "Narrator", "text": ""}
+                speaker, text = line["speaker"], line["text"]
             else:
-                speaker = "Narrator"
-                text = beat.get("summary", "")[:160]
-            visible = [s for s in [speaker] if s != "Narrator"] or char_names[:1]
-            visual = f"{beat.get('name', 'Scene')} — {cam_name}: {beat.get('summary', '')[:120]}"
+                speaker, text = "Narrator", studio_generation.sentence_safe_trim(shot.get("action", ""), 160)
+            style_prompt = f"{palette}, {cam_comp}, cinematic comic panel"
             panels.append({
                 "panel_number": i + 1,
-                "visual_description": visual,
-                "style_prompt": f"{aesthetic}, {cam_comp}, cinematic comic panel, high detail, cell shaded",
-                "negative_prompt": "blurry, deformed hands, extra limbs, watermark, text artifacts, melted faces",
+                "visual_description": subject or "Scene",
+                "style_prompt": style_prompt,
+                # Placeholder image/negative prompts; the Visual Prompt agent overwrites these.
+                "image_prompt": f"{subject}. {style_prompt}".strip(". "),
+                "negative_prompt": "",
                 "speaker": speaker,
                 "text": text,
                 "camera": cam_name,
                 "composition": cam_comp,
-                "visible_characters": visible,
+                "visible_characters": present,
                 "duration_seconds": 5,
-                "beat": beat.get("name", "Scene"),
+                "beat": shot.get("beat", "Scene"),
+                "location_ref": shot.get("location_ref", ""),
+                "continuity_state": shot.get("continuity_state", {}),
             })
         return panels
 
+    def _apply_visual_prompts(self, panels, world_data, characters):
+        """Visual Prompt agent: assemble each panel's image_prompt + negative_prompt from the
+        structured world + character bibles (deterministic; see studio_visual)."""
+        by_name = studio_visual.index_characters(characters)
+        for p in panels:
+            image_prompt, negative_prompt = studio_visual.build_image_prompt(p, world_data, by_name)
+            p["image_prompt"] = image_prompt
+            p["negative_prompt"] = negative_prompt
+        return panels
+
+    @staticmethod
+    def _estimate_line_duration(text):
+        """Rough spoken duration from word count (~2.5 words/sec), floored at 2s."""
+        words = len((text or "").split())
+        return max(2, min(8, round(words / 2.5)))
+
+    def _apply_dialogue(self, panels, world_data, characters, story_plan, mode, source_story):
+        """Dialogue agent: rewrite each panel's line in the speaker's voice and attach emotion,
+        delivery, and duration. Batched per the model tier; on medium/large a second punch-up
+        pass tightens the lines. Falls back to the assembly-assigned line when the LLM is off."""
+        by_name = {}
+        for ch in characters:
+            if isinstance(ch, dict) and ch.get("name"):
+                by_name[str(ch["name"]).lower()] = ch
+
+        def voice_batch(batch):
+            briefs = []
+            for p in batch:
+                speaker = p.get("speaker", "Narrator")
+                ch = by_name.get(str(speaker).lower())
+                style = (ch or {}).get("speech_style") or (
+                    "Spare, atmospheric narration." if speaker == "Narrator" else "Natural, in-character.")
+                briefs.append({
+                    "panel_number": p["panel_number"],
+                    "speaker": speaker,
+                    "on_screen": studio_generation.sentence_safe_trim(p.get("visual_description", ""), 120),
+                    "beat": p.get("beat", ""),
+                    "draft": studio_generation.sentence_safe_trim(p.get("text", ""), 160),
+                    "voice": style,
+                })
+            system_prompt = (
+                "You are the Dialogue & Performance writer. Rewrite each panel's single line so it "
+                "sounds like the named speaker (use their voice), fits what is on screen, and reads "
+                "punchy — not generic AI mush. Narrator lines are spare and atmospheric. Keep each "
+                "line short (a comic balloon). Output ONLY a JSON list, one object per panel: "
+                '[{"panel_number": N, "speaker": "...", "line": "...", "emotion": "one word", '
+                '"delivery_note": "short performance note"}]'
+            )
+            prompt = "Panels to voice:\n" + json.dumps(briefs)
+            nums = [b["panel_number"] for b in briefs]
+            self._progress("panels", f"Writing dialogue for panel(s) {min(nums)}–{max(nums)} of {len(panels)}")
+
+            def fallback():
+                return [{
+                    "panel_number": b["panel_number"], "speaker": b["speaker"],
+                    "line": b["draft"], "emotion": "neutral", "delivery_note": "",
+                } for b in briefs]
+
+            lines = self._generate_structured(
+                prompt, system_prompt, fallback,
+                item_keys=["panel_number", "line"], shape="medium",
+            )
+            return lines
+
+        voiced = self._batched(panels, voice_batch, self.profile["panels_per_call"])
+        by_num = {int(v["panel_number"]): v for v in voiced if isinstance(v, dict) and "panel_number" in v}
+
+        for p in panels:
+            v = by_num.get(int(p["panel_number"]))
+            if v:
+                if v.get("speaker"):
+                    p["speaker"] = v["speaker"]
+                p["text"] = v.get("line") or p.get("text", "")
+                p["emotion"] = v.get("emotion", "neutral")
+                p["delivery_note"] = v.get("delivery_note", "")
+            p["duration_seconds"] = self._estimate_line_duration(p.get("text", ""))
+        return panels
+
     def run_dialogue_and_panels(self, premise_data, world_data, characters, story_plan, ep_id, mode=None, source_story=None):
-        """Stage 5 & 6: Dialogue & Panel Planning (12 Panels & Lines)"""
+        """Stage 5 & 6: Shot list -> deterministic 12-panel assembly -> persist.
+
+        The visuals come from per-beat shots (run_shot_list) assembled deterministically
+        (assemble_panels); image prompts and dialogue are then enriched by the Visual Prompt
+        and Dialogue agents. This replaces the old single 12-panel LLM blob that overloaded
+        small models and collapsed to a hardcoded steampunk mock.
+        """
         mode = self._normalize_mode(mode) if mode is not None else self.mode
         source_story = source_story if source_story is not None else self.source_story
         self.state = "panel_planning"
-        self._log_step("panel_planning", "start", "Generating 12 visual panels and dialogue scripts...")
+        self._log_step("panel_planning", "start", "Building shot list and assembling 12 panels...")
 
-        grounding = ""
-        if source_story and mode in (MODE_ADAPT, MODE_CONTINUE):
-            voice_note = (
-                "Keep every character voice and visual detail consistent with the canon story below. "
-                if mode == MODE_CONTINUE else
-                "Render the panels and dialogue faithfully from the canon story below. "
-            )
-            grounding = " " + voice_note
-        system_prompt = (
-            "You are a comic storyboard artist. Generate exactly 12 panels for a 60-second comic reel. "
-            "Each panel must specify a number (1-12), visual description, style prompt, and single dialogue/narration line."
-            + grounding +
-            "Output MUST be a single valid JSON list of panels: "
-            '[{"panel_number": 1, "visual_description": "visual desc", "style_prompt": "prompt style details", '
-            '"speaker": "Character Name or Narrator", "text": "spoken dialogue text"}]'
+        shots = self.run_shot_list(premise_data, world_data, characters, story_plan, mode, source_story)
+        panels_list = self.assemble_panels(
+            shots, world_data, characters, premise_data, story_plan, source_story=source_story, mode=mode,
         )
-        canon = self._canon_block(source_story, label="CANON STORY") if mode in (MODE_ADAPT, MODE_CONTINUE) else ""
-        prompt = (
-            f"Premise: {json.dumps(premise_data)}\nWorld: {json.dumps(world_data)}\n"
-            f"Characters: {json.dumps(characters)}\nPlan: {json.dumps(story_plan)}{canon}"
-        )
-
-        def fallback():
-            panels_mock = []
-            scenes = [
-                ("Silas dodging steam vents in a dark hallway.", "Steam pipes, copper valves, silhouette.", "Narrator", "Midnight in the Iron Guild vaults. Silas Vance steps into the forbidden steam shafts."),
-                ("Silas using a pick-tool on a large gear-lock.", "Close-up on gloved fingers, clockwork gears.", "Silas Vance", "Just one more gear, and this lock is history."),
-                ("Vivienne holding a glowing lantern, whispering warnings.", "Warm lantern light, brass spectacles.", "Lady Vivienne", "Hurry, Silas! The steam patrols cycle every three minutes."),
-                ("The large vault door grinding open.", "Heavy steel hatch opening, steam blasting.", "Narrator", "With a heavy metal groan, the iron seals break."),
-                ("Entering a massive chamber filled with ticking machinery.", "Grand vault, colossal pendulum swinging.", "Narrator", "Inside lies the legendary Core Vault, ticking in perfect sync."),
-                ("A glowing blue sphere floating on a brass pedestal.", "Vibrant blue light, floating artifact.", "Lady Vivienne", "The Core Engine Key... it is more beautiful than the bibles described."),
-                ("Silas reaching out to grab the key.", "Tense reaching hand, electrical sparks.", "Silas Vance", "Let's grab it and get out. I don't like these sparks."),
-                ("The pedestal glowing red, red lights flashing.", "Alarms sounding, red emergency lighting.", "Narrator", "But the pedestal detects the weight change. The trap springs."),
-                ("Steam sentinels emerging from wall docks.", "Automaton soldiers, glowing brass optics.", "Narrator", "Steam sentinels deploy from the vault walls."),
-                ("Vivienne casting a blue energy barrier.", "Technomancy barrier, blue sparks.", "Lady Vivienne", "Silas, get behind me! I'll hold the bulkhead!"),
-                ("Silas smashing a copper steam pipe with a wrench.", "Pipe bursting, heavy steam cloud.", "Silas Vance", "Let's see how these iron buckets handle hot pressure!"),
-                ("Silas and Vivienne running down a pipe corridor.", "Running away, steam engulfing path.", "Narrator", "They plunge into the exhaust tubes, escaping with the key as the vault seals.")
-            ]
-            # For adapt/continue, derive faithful panels from the actual manuscript:
-            # real beats drive the visuals and real quoted dialogue drives the lines.
-            if source_story and mode in (MODE_ADAPT, MODE_CONTINUE):
-                return self._faithful_panels(premise_data, world_data, characters, story_plan, source_story)
-            for i, scene in enumerate(scenes):
-                panels_mock.append({
-                    "panel_number": i + 1,
-                    "visual_description": scene[0],
-                    "style_prompt": f"Steampunk comic, {scene[1]}, high detail, comic style, cell shaded",
-                    "speaker": scene[2],
-                    "text": scene[3]
-                })
-            return panels_mock
-
-        panels_list = self._call_llm_with_fallback(prompt, system_prompt, fallback)
+        # Enrich image prompts (Visual Prompt agent) and dialogue (Dialogue agent).
+        panels_list = self._apply_visual_prompts(panels_list, world_data, characters)
+        panels_list = self._apply_dialogue(panels_list, world_data, characters, story_plan, mode, source_story)
 
         # Use only the minutes created for this episode. Older project runs may already
         # have panel 1/2/3... on earlier minutes, so using all project minutes can
@@ -1359,7 +1803,11 @@ class StudioWorkflowRunner:
                 "visible_characters": p.get("visible_characters", []),
                 "duration_seconds": p.get("duration_seconds", 5),
                 "beat": p.get("beat"),
-                "image_prompt": f"{p.get('visual_description', '')}. {p.get('style_prompt', '')}".strip(),
+                "location_ref": p.get("location_ref", ""),
+                "continuity_state": p.get("continuity_state", {}),
+                # The Visual Prompt agent's structured prompt (set by _apply_visual_prompts);
+                # fall back to a simple concat only if it is somehow missing.
+                "image_prompt": p.get("image_prompt") or f"{p.get('visual_description', '')}. {p.get('style_prompt', '')}".strip(),
             }
 
             existing = existing_panels.get((page_id, p_num))
@@ -1384,7 +1832,11 @@ class StudioWorkflowRunner:
                 panel_id,
                 p["speaker"],
                 p["text"],
-                metadata={"duration_seconds": p.get("duration_seconds", 5)},
+                metadata={
+                    "duration_seconds": p.get("duration_seconds", 5),
+                    "emotion": p.get("emotion", "neutral"),
+                    "delivery_note": p.get("delivery_note", ""),
+                },
             )
             p["id"] = panel_id
             saved_panels.append(p)
@@ -1539,31 +1991,13 @@ class StudioWorkflowRunner:
             mode, source_story = self._resolve_source(seed_text, mode, source_story)
             self._log_step("pipeline", "start", f"Executing Source Arcanum Studio pipeline (mode={mode})...")
 
-            premise = self.run_intake(seed_text, mode=mode, source_story=source_story)
-            casting = self.run_director_casting(premise_data=premise)
-            world = self.run_world_building(premise, mode=mode, source_story=source_story)
-            characters = self.run_character_building(premise, world, mode=mode, source_story=source_story)
-            story_plan, ep_id = self.run_story_planning(premise, world, characters, mode=mode, source_story=source_story)
-            scene = self.run_director_scene_planning(premise, world, characters, story_plan)
-            panels = self.run_dialogue_and_panels(premise, world, characters, story_plan, ep_id, mode=mode, source_story=source_story)
-            warnings = self.run_continuity_audit(premise, world, characters, panels, mode=mode, source_story=source_story)
-
-            # Export final result
-            final_data = memory.export_project_json(self.project_name, self.project_id)
-
-            self._log_step("pipeline", "complete", "Successfully generated and stored comic reel plan.", {"project_id": self.project_id})
-            self.state = "complete"
-
-            return {
-                "ok": True,
-                "project_id": self.project_id,
-                "project_name": self.project_name,
-                "mode": mode,
-                "casting": casting["data"],
-                "scene": scene,
-                "data": final_data,
-                "model_status": self.model_status,
-            }
+            # The Producer (Headmaster) drives the specialist agents through the shared
+            # blackboard: each agent runs once its dependencies are published, and a rejected
+            # stage routes to the repair flow. The agents wrap the structured stage methods
+            # above, so this keeps the generation logic and adds explicit roles + scheduling.
+            import studio_agents
+            producer = studio_agents.Producer(self)
+            return producer.run(seed_text, mode, source_story)
         except Exception as e:
             logger.exception("Source Arcanum pipeline crashed")
             self._log_step("pipeline", "failed", f"Pipeline aborted due to crash: {e}")

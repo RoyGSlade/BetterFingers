@@ -897,6 +897,73 @@ h1 {
   gap: 10px;
 }
 
+/* --- Studio repair / rebuild panel --- */
+.studio-repair-problem,
+.studio-repair-step,
+.studio-repair-diagnosis,
+.studio-repair-actions {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.studio-repair-error {
+  white-space: pre-wrap;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 124, 135, 0.06);
+  border: 1px solid rgba(255, 124, 135, 0.18);
+}
+
+.studio-repair-error:empty {
+  display: none;
+}
+
+.studio-repair-diagnosis {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(102, 242, 193, 0.06);
+  border: 1px solid rgba(102, 242, 193, 0.2);
+}
+
+.studio-repair-proposals {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.studio-repair-proposal {
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--surface, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.studio-repair-proposal:hover {
+  border-color: var(--accent);
+}
+
+.studio-repair-proposal.selected {
+  border-color: var(--accent-strong);
+  background: rgba(102, 242, 193, 0.08);
+}
+
+.studio-repair-proposal strong {
+  color: var(--accent);
+}
+
+.studio-repair-proposal span {
+  font-size: 0.85rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
 .recovery-item {
   font-size: 0.92rem;
   line-height: 1.5;
@@ -1817,6 +1884,41 @@ body.theme-light.high-contrast {
   flex-shrink: 0;
 }
 
+.studio-pipeline-progress {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.studio-progress-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--bg-soft, rgba(255, 255, 255, 0.06));
+  overflow: hidden;
+}
+
+.studio-progress-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+
+.studio-pipeline-progress-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.studio-pipeline-detail {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
 @keyframes studio-spin {
   to { transform: rotate(360deg); }
 }
@@ -2134,19 +2236,24 @@ body.theme-light.high-contrast {
 }
 
 .studio-panel-image-slot {
-  aspect-ratio: 16 / 9;
+  /* Min height keeps the empty-state legible; max height caps very tall uploads.
+     The slot grows to the image's natural aspect instead of forcing a 16:9 crop. */
+  min-height: 160px;
+  max-height: 420px;
   background: rgba(255, 255, 255, 0.035);
   border-bottom: 1px solid var(--border);
   color: var(--muted);
   display: grid;
   font-size: 0.78rem;
   place-items: center;
+  overflow: hidden;
 }
 
 .studio-panel-image {
   width: 100%;
-  height: 100%;
-  object-fit: cover;
+  max-height: 420px;
+  /* contain (not cover) so tall/wide panels are shown whole, never cropped or squished. */
+  object-fit: contain;
   display: block;
 }
 

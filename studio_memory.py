@@ -425,6 +425,31 @@ def init_project_db(project_name, preferences=None):
             FOREIGN KEY(target_id) REFERENCES gest_nodes(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS blackboard_artifacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            key TEXT NOT NULL,
+            produced_by TEXT,
+            status TEXT NOT NULL DEFAULT 'ready',
+            content TEXT NOT NULL DEFAULT '{}',
+            version INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(project_id, key),
+            FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS blackboard_posts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            agent TEXT NOT NULL,
+            status TEXT NOT NULL,
+            topic TEXT,
+            detail TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
         CREATE INDEX IF NOT EXISTS idx_characters_project ON characters(project_id, name);
         CREATE INDEX IF NOT EXISTS idx_locations_project ON locations(project_id, name);
         CREATE INDEX IF NOT EXISTS idx_episodes_project ON episodes(project_id, id);

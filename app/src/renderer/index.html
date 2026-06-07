@@ -1191,6 +1191,54 @@
               <span class="studio-spinner"></span>
               <span id="studioPipelineStatusText">Starting production...</span>
             </div>
+            <div class="studio-pipeline-progress">
+              <div class="studio-progress-track" aria-hidden="true">
+                <div id="studioPipelineProgressFill" class="studio-progress-fill"></div>
+              </div>
+              <div class="studio-pipeline-progress-row">
+                <span id="studioPipelineStep" class="studio-progress-step">Step 0 of 9</span>
+                <span id="studioPipelineElapsed" class="studio-progress-elapsed">0:00 elapsed</span>
+              </div>
+              <p id="studioPipelineDetail" class="studio-pipeline-detail">The local AI writes your story step by step. On a CPU-only machine this can take several minutes — it is working even when this looks still.</p>
+            </div>
+          </section>
+        </div>
+
+        <!-- View: Repair / Rebuild -->
+        <div id="studioViewRepair" class="studio-view hidden">
+          <section class="stream-panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow" id="studioRepairProjectLabel">Repair</p>
+                <h2>Let's fix what got rejected</h2>
+              </div>
+              <button id="studioRepairBackButton" class="secondary-button" type="button">← Back to seed</button>
+            </div>
+
+            <div class="studio-repair-problem">
+              <span class="status-label">What went wrong</span>
+              <p id="studioRepairProblem" class="studio-prose">—</p>
+              <pre id="studioRepairError" class="doctor-card-detail studio-repair-error"></pre>
+            </div>
+
+            <div class="studio-repair-step">
+              <label class="status-label" for="studioRepairNote" id="studioRepairQuestion">What were you going for here?</label>
+              <textarea id="studioRepairNote" class="settings-input" rows="3" placeholder="Describe what this beat should be, or what you wanted to happen..."></textarea>
+              <button id="studioRepairProposeButton" class="secondary-button primary-button" type="button">Get AI suggestions</button>
+            </div>
+
+            <div id="studioRepairDiagnosis" class="studio-repair-diagnosis hidden">
+              <span class="status-label">AI diagnosis</span>
+              <p id="studioRepairDiagnosisText" class="studio-prose">—</p>
+            </div>
+
+            <div id="studioRepairProposals" class="studio-repair-proposals"></div>
+
+            <div class="studio-repair-actions">
+              <textarea id="studioRepairFreeform" class="settings-input hidden" rows="2" placeholder="Write your own fix here..."></textarea>
+              <button id="studioRepairRebuildButton" class="secondary-button primary-button" type="button" disabled>Rebuild with this fix</button>
+            </div>
+            <div id="studioRepairMessage" class="warmup-message" role="status" aria-live="polite"></div>
           </section>
         </div>
 

@@ -88,6 +88,8 @@ async function fetchJson(url, timeoutMs = 2500) {
     }
 
     return await response.json();
+  } catch (error) {
+    throw normalizeFetchError(error, timeoutMs);
   } finally {
     clearTimeout(timeoutId);
   }
@@ -230,6 +232,8 @@ async function postJson(url, payload = {}, timeoutMs = 2500) {
     }
 
     return await response.json();
+  } catch (error) {
+    throw normalizeFetchError(error, timeoutMs);
   } finally {
     clearTimeout(timeoutId);
   }
@@ -251,9 +255,19 @@ async function deleteJson(url, timeoutMs = 2500) {
     }
 
     return await response.json();
+  } catch (error) {
+    throw normalizeFetchError(error, timeoutMs);
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+function normalizeFetchError(error, timeoutMs) {
+  const message = String(error?.message || error || '');
+  if (error?.name === 'AbortError' || message.toLowerCase().includes('aborted')) {
+    return new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds. The local model may still be loading or generating.`);
+  }
+  return error;
 }
 
 async function getResponseErrorMessage(response, url) {
@@ -480,6 +494,18 @@ function connectVoiceStatus({
 // --- Studio Mode API ---
 const STUDIO_URL = `${BACKEND_ORIGIN}/studio`;
 
+// Build an HTTP URL for a file inside a project's folder. The renderer runs from an
+// http:// origin, so file:// URLs are blocked; assets must be served by the backend.
+// `version` cache-busts so a freshly uploaded image replaces the old one.
+function studioAssetUrl(projectName, relPath, version = '') {
+  if (!projectName || !relPath) {
+    return '';
+  }
+  const encoded = String(relPath).split('/').map(encodeURIComponent).join('/');
+  const base = `${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/assets/${encoded}`;
+  return version ? `${base}?v=${encodeURIComponent(version)}` : base;
+}
+
 async function studioCreateProject(projectName, timeoutMs = 10000) {
   return postJson(`${STUDIO_URL}/project/create`, { project_name: projectName }, timeoutMs);
 }
@@ -499,23 +525,23 @@ async function studioListProjects(timeoutMs = 10000) {
   }
 }
 
-async function studioIntakeTurn(projectName, chatHistory, timeoutMs = 60000) {
+async function studioIntakeTurn(projectName, chatHistory, timeoutMs = 240000) {
   return postJson(`${STUDIO_URL}/workflow/intake/turn`, { project_name: projectName, chat_history: chatHistory }, timeoutMs);
 }
 
-async function studioRunWorkflow(projectName, seedText, mode = 'seed', sourceStory = null, timeoutMs = 180000) {
+async function studioRunWorkflow(projectName, seedText, mode = 'seed', sourceStory = null, timeoutMs = 600000) {
   const body = { project_name: projectName, seed_text: seedText, mode };
   if (sourceStory) body.source_story = sourceStory;
   return postJson(`${STUDIO_URL}/workflow/run`, body, timeoutMs);
 }
 
-async function studioBriefReview(projectName, seedText, mode = 'seed', sourceStory = null, userNotes = '', timeoutMs = 120000) {
+async function studioBriefReview(projectName, seedText, mode = 'seed', sourceStory = null, userNotes = '', timeoutMs = 300000) {
   const body = { project_name: projectName, seed_text: seedText, mode, user_notes: userNotes };
   if (sourceStory) body.source_story = sourceStory;
   return postJson(`${STUDIO_URL}/workflow/brief`, body, timeoutMs);
 }
 
-async function studioRunStage(projectName, stage, seedText = null, timeoutMs = 60000) {
+async function studioRunStage(projectName, stage, seedText = null, timeoutMs = 240000) {
   const body = { project_name: projectName, stage };
   if (seedText) body.seed_text = seedText;
   return postJson(`${STUDIO_URL}/workflow/stage`, body, timeoutMs);
@@ -562,6 +588,14 @@ async function studioDeleteProject(projectName, timeoutMs = 10000) {
 
 async function studioResolveWarning(projectName, warningId, timeoutMs = 10000) {
   return postJson(`${STUDIO_URL}/project/warning/resolve`, { project_name: projectName, warning_id: warningId }, timeoutMs);
+}
+
+async function studioRepairPropose(projectName, report, userNote = '', timeoutMs = 240000) {
+  return postJson(`${STUDIO_URL}/workflow/repair/propose`, { project_name: projectName, report, user_note: userNote }, timeoutMs);
+}
+
+async function fetchStudioBlackboard(projectName, timeoutMs = 5000) {
+  return fetchJson(`${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/blackboard`, timeoutMs);
 }
 
 async function studioUploadPanelImage(projectName, projectId, panelId, file, timeoutMs = 60000) {
@@ -680,6 +714,9 @@ export {
   studioApproveItem,
   studioBriefReview,
   studioResolveWarning,
+  studioRepairPropose,
+  studioAssetUrl,
+  fetchStudioBlackboard,
   studioUploadPanelImage,
   studioDeleteProject,
   studioExportReel,

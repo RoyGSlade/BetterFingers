@@ -19,6 +19,7 @@ from user_profile_manager import profile_manager
 from intent_engine import intent_engine, IntentState
 from project_generator import project_generator
 from platform_capabilities import get_capabilities
+from hardware_report import get_hardware_report, assess_model_fit
 from platform_paths import ensure_app_dirs, get_app_data_dir, get_config_dir
 import studio_capabilities
 import studio_memory
@@ -72,7 +73,7 @@ app.add_middleware(
 )
 
 from fastapi import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, FileResponse
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
@@ -1275,6 +1276,10 @@ async def run_doctor(refresh_audio: bool = False):
     # Capabilities
     platform_info = get_capabilities()
 
+    # Hardware specs + model-fit assessment for the selected LLM
+    hardware_info = get_hardware_report()
+    model_fit_info = assess_model_fit(selected_model_id, report=hardware_info)
+
     # Recovery instructions
     recovery_guidelines = {
         "missing_model": "Go to the Models screen to download the recommended LLM or Whisper models, or verify that the GGUF/Whisper files exist in the models directory.",
@@ -1295,6 +1300,8 @@ async def run_doctor(refresh_audio: bool = False):
         "models": model_path_info,
         "audio": audio_info,
         "platform": platform_info,
+        "hardware": hardware_info,
+        "model_fit": model_fit_info,
         "recovery": recovery_guidelines,
     }
 
@@ -1727,6 +1734,22 @@ async def load_studio_project(project_name: str):
 async def get_studio_bible(project_name: str):
     project = _load_studio_project(project_name)
     return {"ok": True, "project_id": project["id"], "bible": studio_memory.get_bible(project["name"], project["id"])}
+
+
+@app.get("/studio/projects/{project_name}/blackboard")
+async def get_studio_blackboard(project_name: str):
+    """Surface the production blackboard: which agent produced what, and the status log.
+
+    Lets the UI show a studio-dashboard view of agent activity instead of a black box.
+    """
+    import studio_blackboard
+    project = _load_studio_project(project_name)
+    return {
+        "ok": True,
+        "project_id": project["id"],
+        "artifacts": studio_blackboard.list_artifacts(project["name"], project["id"]),
+        "posts": studio_blackboard.get_posts(project["name"], project["id"]),
+    }
 
 
 @app.post("/studio/projects/{project_name}/bible")
@@ -2895,6 +2918,13 @@ class StudioWarningResolveRequest(BaseModel):
     project_name: str
     warning_id: int
 
+class StudioRepairProposeRequest(BaseModel):
+    project_name: str
+    # The repair report returned by a rejected stage (scene/finalize).
+    report: dict = Field(default_factory=dict)
+    # The user's plain-language explanation of what they intended.
+    user_note: Optional[str] = ""
+
 class StudioApproveRequest(BaseModel):
     project_name: str
     project_id: int
@@ -2946,13 +2976,23 @@ async def studio_load_project(request: StudioLoadProjectRequest):
 @app.post("/studio/workflow/run")
 async def studio_run_workflow(request: StudioRunWorkflowRequest):
     from studio_workflow import StudioWorkflowRunner
+    from fastapi.concurrency import run_in_threadpool
     try:
         runner = StudioWorkflowRunner(request.project_name)
-        result = runner.run_full_pipeline(request.seed_text, mode=request.mode, source_story=request.source_story)
+        # Run the long, blocking pipeline in a worker thread so the event loop stays free to
+        # serve concurrent /blackboard progress polls during the (potentially minutes-long) run.
+        result = await run_in_threadpool(
+            runner.run_full_pipeline, request.seed_text, request.mode, request.source_story
+        )
         if result.get("ok"):
             return result
-        else:
-            raise HTTPException(status_code=500, detail=result.get("error"))
+        # A rejection that carries a repair report is recoverable: return it (200) so
+        # the UI opens the repair/rebuild panel instead of showing a hard failure.
+        if result.get("needs_repair") or result.get("repair"):
+            return {"status": "rejected", **result}
+        raise HTTPException(status_code=500, detail=result.get("error"))
+    except HTTPException:
+        raise
     except Exception as e:
         logging.error(f"Studio workflow run failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -3036,8 +3076,14 @@ async def studio_scene_round(request: StudioSceneRequest):
                 "project_name": request.project_name,
                 **result,
             }
-        # A rejected scene spec is a client error (invalid action chain), not a server fault.
-        raise HTTPException(status_code=400, detail=result.get("error"))
+        # A rejected scene spec carries a structured repair report; return it (200) so the
+        # UI can open the repair/rebuild panel instead of losing it to an HTTP error body.
+        return {
+            "status": "rejected",
+            "project_id": runner.project_id,
+            "project_name": request.project_name,
+            **result,
+        }
     except HTTPException:
         raise
     except ValueError as e:
@@ -3059,13 +3105,39 @@ async def studio_finalize(request: StudioFinalizeRequest):
                 "project_name": request.project_name,
                 **result,
             }
-        raise HTTPException(status_code=400, detail=result.get("error"))
+        # An invalid timeline carries a repair report; return it (200) for the repair panel.
+        return {
+            "status": "rejected",
+            "project_id": runner.project_id,
+            "project_name": request.project_name,
+            **result,
+        }
     except HTTPException:
         raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logging.error(f"Studio finalization failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/studio/workflow/repair/propose")
+async def studio_repair_propose(request: StudioRepairProposeRequest):
+    """Read the user's explanation of a rejected step and propose grounded fixes."""
+    from studio_workflow import StudioWorkflowRunner
+    try:
+        runner = StudioWorkflowRunner(request.project_name)
+        result = runner.propose_repairs(request.report, request.user_note)
+        return {
+            "status": "success",
+            "project_id": runner.project_id,
+            "project_name": request.project_name,
+            "diagnosis": result.get("diagnosis", ""),
+            "proposals": result.get("proposals", []),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"Studio repair propose failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/studio/workflow/stage")
@@ -3309,6 +3381,31 @@ async def studio_upload_panel_image(
     except Exception as e:
         logging.error(f"Studio panel image upload failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/studio/projects/{project_name}/assets/{rel_path:path}")
+async def studio_get_project_asset(project_name: str, rel_path: str):
+    """Serve a file from a project's folder over HTTP.
+
+    The renderer runs from an http:// origin (Electron dev server), so file:// image
+    URLs are blocked by Chromium. Serving assets through the backend makes panel images
+    load in both dev and packaged builds. Resolves under the project dir and rejects any
+    path that escapes it (traversal guard mirrors the upload handler).
+    """
+    import studio_memory as memory
+    try:
+        project_dir = Path(memory.get_project_dir(project_name)).resolve()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    target = (project_dir / rel_path).resolve()
+    try:
+        target.relative_to(project_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid asset path.")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="Asset not found.")
+    return FileResponse(str(target))
 
 
 class StudioExportReelRequest(BaseModel):
