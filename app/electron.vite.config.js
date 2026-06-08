@@ -35,6 +35,7 @@ module.exports = defineConfig({
           index: resolve(__dirname, 'src/renderer/index.html'),
           overlay: resolve(__dirname, 'src/renderer/overlay.html'),
           reviewOverlay: resolve(__dirname, 'src/renderer/review-overlay.html'),
+          cinema: resolve(__dirname, 'src/renderer/cinema.html'),
         },
       },
     },

@@ -56,11 +56,19 @@ import {
   studioLoadProject,
   studioRunWorkflow,
   studioGetPanels,
+  studioRunScenes,
+  studioGetScenes,
+  studioRunCinematicStage,
+  studioRenderImages,
+  studioVoiceScenes,
+  studioSceneContinuity,
   studioCreatePage,
   studioCreatePanel,
   studioApproveItem,
   studioResolveWarning,
   studioRepairPropose,
+  studioUpdateStoryboard,
+  studioTranscribeEdit,
   studioAssetUrl,
   fetchStudioBlackboard,
   studioUploadPanelImage,
@@ -150,6 +158,7 @@ const deleteWhisperButton = document.getElementById('deleteWhisperButton');
 const unloadSttButton = document.getElementById('unloadSttButton');
 const unloadLlmButton = document.getElementById('unloadLlmButton');
 const unloadTtsButton = document.getElementById('unloadTtsButton');
+const studioModelRoleMapEl = document.getElementById('studioModelRoleMap');
 const studioViewStartEl = document.getElementById('studioViewStart');
 const studioViewSeedEl = document.getElementById('studioViewSeed');
 const studioViewPipelineEl = document.getElementById('studioViewPipeline');
@@ -196,6 +205,12 @@ const studioWorldSettingEl = document.getElementById('studioWorldSetting');
 const studioWorldAestheticEl = document.getElementById('studioWorldAesthetic');
 const studioWorldRulesEl = document.getElementById('studioWorldRules');
 const studioCharactersListEl = document.getElementById('studioCharactersList');
+const studioStoryboardBadgeEl = document.getElementById('studioStoryboardBadge');
+const studioStoryboardSummaryEl = document.getElementById('studioStoryboardSummary');
+const studioStoryboardBeatsEl = document.getElementById('studioStoryboardBeats');
+const studioStoryboardSaveButton = document.getElementById('studioStoryboardSaveButton');
+const studioStoryboardVoiceInputEl = document.getElementById('studioStoryboardVoiceInput');
+const studioStoryboardVoiceButton = document.getElementById('studioStoryboardVoiceButton');
 const studioPanelsGridEl = document.getElementById('studioPanelsGrid');
 
 const wizardStepProgress = document.getElementById('wizardStepProgress');
@@ -235,6 +250,7 @@ let activeProfileSettings = null;
 let profileDirty = false;
 let llmModelsPayload = null;
 let whisperModelsPayload = null;
+let llmDownloadPollTimer = null;
 let studioState = {
   projectName: '',
   projectId: null,
@@ -298,6 +314,14 @@ const settingEls = {
   model_keep_llm_loaded: document.getElementById('settingKeepLlm'),
   model_keep_stt_loaded: document.getElementById('settingKeepStt'),
   model_keep_tts_loaded: document.getElementById('settingKeepTts'),
+  studio_resource_profile: document.getElementById('settingStudioResourceProfile'),
+  studio_dispatcher_model_id: document.getElementById('settingStudioDispatcherModel'),
+  studio_writer_model_id: document.getElementById('settingStudioWriterModel'),
+  studio_voice_engine: document.getElementById('settingStudioVoiceEngine'),
+  studio_image_backend: document.getElementById('settingStudioImageBackend'),
+  studio_music_engine: document.getElementById('settingStudioMusicEngine'),
+  studio_ambience_engine: document.getElementById('settingStudioAmbienceEngine'),
+  studio_vram_cap_mb: document.getElementById('settingStudioVramCap'),
 };
 
 function setupHotkeyRecording(inputEl) {
@@ -362,9 +386,9 @@ function setupHotkeyRecording(inputEl) {
       if (!accumulatedKeys.includes(standardName)) {
         accumulatedKeys.push(standardName);
       }
-      
+
       inputEl.value = accumulatedKeys.join('+');
-      
+
       // Mark profile dirty
       inputEl.dispatchEvent(new Event('input', { bubbles: true }));
     }
@@ -448,7 +472,7 @@ function renderLlmDownloadProgress(state = null, model = null) {
   }
 
   const status = String(state?.status || '').toLowerCase();
-  const show = ['starting', 'downloading', 'complete', 'ready', 'already_installed', 'error'].includes(status);
+  const show = ['queued', 'starting', 'downloading', 'complete', 'ready', 'already_installed', 'error'].includes(status) || Boolean(state?.active || state?.resumable);
   llmDownloadProgressEl.hidden = !show;
   if (!show) {
     return;
@@ -457,7 +481,7 @@ function renderLlmDownloadProgress(state = null, model = null) {
   const percent = Math.max(0, Math.min(100, Number(state?.percent || 0)));
   const rounded = Math.round(percent);
   const message = state?.message || (model?.name ? `${model.name} download status` : 'Download status');
-  const downloaded = formatBytes(state?.downloaded_bytes);
+  const downloaded = formatBytes(state?.downloaded_bytes || state?.partial_bytes);
   const total = formatBytes(state?.total_bytes);
 
   if (llmDownloadProgressLabelEl) {
@@ -471,7 +495,18 @@ function renderLlmDownloadProgress(state = null, model = null) {
     llmDownloadProgressFillEl.dataset.tone = status === 'error' ? 'danger' : status === 'complete' || status === 'ready' || status === 'already_installed' ? 'success' : 'active';
   }
   if (llmDownloadProgressBytesEl) {
-    llmDownloadProgressBytesEl.textContent = downloaded && total ? `${downloaded} of ${total}` : downloaded;
+    const parts = [];
+    if (downloaded && total) {
+      parts.push(`${downloaded} of ${total}`);
+    } else if (downloaded) {
+      parts.push(`${downloaded} saved`);
+    }
+    if (state?.resumable && status === 'error') {
+      parts.push('partial kept; next download will resume');
+    } else if (state?.active) {
+      parts.push('running in background');
+    }
+    llmDownloadProgressBytesEl.textContent = parts.join(' · ');
   }
 }
 
@@ -593,6 +628,107 @@ function renderModelOverview(llmPayload, whisperPayload, selectedLlm, installedW
   }
 }
 
+function findModelsForRole(models, role) {
+  return (models ?? []).filter((model) => Array.isArray(model.roles) && model.roles.includes(role));
+}
+
+function preferredModel(models, ids = []) {
+  for (const id of ids) {
+    const found = (models ?? []).find((model) => model.id === id);
+    if (found) {
+      return found;
+    }
+  }
+  return (models ?? [])[0] || null;
+}
+
+function renderStudioModelRoleMap(llmPayload, whisperPayload) {
+  if (!studioModelRoleMapEl) {
+    return;
+  }
+
+  const models = llmPayload?.models ?? [];
+  const dispatcher = preferredModel(findModelsForRole(models, 'dispatcher'), ['gemma-4-e4b-q4', 'gemma-4-e2b-q4']);
+  const writer = preferredModel(findModelsForRole(models, 'writer'), ['gemma-4-12b-q4', 'gemma-3-12b-q4']);
+  const whisperInstalled = (whisperPayload?.models ?? []).some((model) => model.installed);
+
+  const roles = [
+    {
+      label: 'Dispatcher',
+      value: dispatcher?.name || 'Gemma 4 E4B',
+      detail: 'Small always-on Studio floor manager, pinned to CPU/RAM.',
+      state: dispatcher?.installed ? 'Ready' : dispatcher?.resumable ? 'Partial' : 'Needs download',
+      tone: dispatcher?.installed ? 'success' : dispatcher?.resumable ? 'warning' : 'danger',
+    },
+    {
+      label: 'Smart Writer',
+      value: writer?.name || 'Gemma 4 12B',
+      detail: 'Showrunner, scriptwriter, lore, and project intelligence.',
+      state: writer?.installed ? 'Ready' : writer?.resumable ? 'Partial' : 'Needs download',
+      tone: writer?.installed ? 'success' : writer?.resumable ? 'warning' : 'danger',
+    },
+    {
+      label: 'Voice',
+      value: 'Kokoro default · Chatterbox premium',
+      detail: 'Kokoro is the bulk local voice path; Chatterbox is the expressive premium lane.',
+      state: 'Configurable',
+      tone: 'warning',
+    },
+    {
+      label: 'Image',
+      value: 'Diffusers / SDXL / FLUX',
+      detail: 'Scene image prompts are ready; checkpoint downloads/render backend are the next media step.',
+      state: 'Not configured',
+      tone: 'warning',
+    },
+    {
+      label: 'Music',
+      value: 'ACE-Step',
+      detail: 'Per-reel or per-act scoring lane from tone and emotional arc.',
+      state: 'Planned',
+      tone: 'warning',
+    },
+    {
+      label: 'Ambience',
+      value: 'Stable Audio Open',
+      detail: 'Scene loops for locations, mood, and room tone.',
+      state: 'Planned',
+      tone: 'warning',
+    },
+    {
+      label: 'Speech Input',
+      value: `Whisper ${whisperPayload?.selected_model_size ?? ''}`.trim(),
+      detail: 'BetterFingers voice intake and Studio producer conversations.',
+      state: whisperInstalled ? 'Ready' : 'Needs download',
+      tone: whisperInstalled ? 'success' : 'warning',
+    },
+  ];
+
+  studioModelRoleMapEl.innerHTML = '';
+  for (const role of roles) {
+    const card = document.createElement('div');
+    card.className = 'studio-model-role-card';
+
+    const head = document.createElement('div');
+    head.className = 'studio-model-role-head';
+    const label = document.createElement('span');
+    label.textContent = role.label;
+    const state = document.createElement('strong');
+    state.textContent = role.state;
+    state.dataset.tone = role.tone;
+    head.append(label, state);
+
+    const value = document.createElement('b');
+    value.textContent = role.value;
+
+    const detail = document.createElement('small');
+    detail.textContent = role.detail;
+
+    card.append(head, value, detail);
+    studioModelRoleMapEl.append(card);
+  }
+}
+
 function renderModelPanels() {
   const llmPayload = llmModelsPayload;
   const whisperPayload = whisperModelsPayload;
@@ -610,14 +746,32 @@ function renderModelPanels() {
   setModelBadge(llmModelBadgeEl, Boolean(llmVisible?.installed), llmVisible?.id === llmPayload.selected_model_id);
   setModelBadge(whisperModelBadgeEl, Boolean(visibleWhisper?.installed), visibleWhisperSize === whisperPayload.selected_model_size);
   renderModelOverview(llmPayload, whisperPayload, llmSelected, installedWhisper);
+  renderStudioModelRoleMap(llmPayload, whisperPayload);
   renderModelDetailGrid(llmModelDetailsEl, [
     { label: 'Selected model', value: llmPayload.selected_model_id },
     { label: 'Viewing', value: llmVisible?.name ?? llmVisible?.id ?? 'unknown' },
     { label: 'Install state', value: llmVisible?.installed ? 'installed' : 'missing', tone: llmVisible?.installed ? 'success' : 'danger' },
     { label: 'Approx size', value: estimateMb ? `${estimateMb.toLocaleString()} MB` : 'unknown' },
+    { label: 'Role', value: (llmVisible?.roles ?? []).join(', ') || 'rewrite' },
+    { label: 'Lane', value: llmVisible?.lane || 'gpu' },
     { label: 'Runtime', value: llmPayload.llama_server_exists ? 'found' : 'missing', tone: llmPayload.llama_server_exists ? 'success' : 'danger' },
   ]);
-  renderLlmDownloadProgress(llmPayload.download_state, llmVisible);
+  renderLlmDownloadProgress(llmVisible?.download_state || llmPayload.download_state, llmVisible);
+  if (llmVisible?.download_active && !llmDownloadPollTimer) {
+    llmDownloadPollTimer = window.setInterval(async () => {
+      try {
+        const state = await fetchLlmDownloadState(llmVisible.id);
+        renderLlmDownloadProgress(state, llmVisible);
+        if (!state?.active) {
+          window.clearInterval(llmDownloadPollTimer);
+          llmDownloadPollTimer = null;
+          await Promise.all([refreshModels(), refreshRuntime()]);
+        }
+      } catch (_error) {
+        // Keep the visible saved state; the next refresh will reconnect.
+      }
+    }, 1200);
+  }
   renderModelDetailGrid(whisperModelDetailsEl, [
     { label: 'Selected model', value: whisperPayload.selected_model_size },
     { label: 'Viewing', value: visibleWhisperSize },
@@ -736,7 +890,7 @@ function setStudioProject(projectName, projectId = null, data = null) {
 
 function setStudioButtonBusy(button, busy, busyText = 'Working...') {
   if (!button) {
-    return () => {};
+    return () => { };
   }
   const previousText = button.textContent;
   button.disabled = busy;
@@ -976,6 +1130,115 @@ function renderStudioPanelCard(panel, dialogue) {
   return card;
 }
 
+function getStudioStoryboard(data = {}) {
+  const bible = getStudioBible(data);
+  if (bible.storyboard?.episodes?.length) {
+    return bible.storyboard;
+  }
+  const minutes = data.minutes || [];
+  const canonEvents = data.canon_events || [];
+  const episodes = minutes.map((minute) => {
+    const raw = minute.summary || '';
+    const splitAt = raw.indexOf(':');
+    return {
+      name: splitAt > 0 ? raw.slice(0, splitAt).trim() : `Beat ${minute.minute_number || ''}`.trim(),
+      summary: splitAt > 0 ? raw.slice(splitAt + 1).trim() : raw,
+    };
+  });
+  return {
+    summary: (data.episodes || [])[0]?.summary || '',
+    episodes,
+    canon_events: canonEvents.map((event) => ({ description: event.description || '', time_index: event.time_index || '' })),
+  };
+}
+
+function renderStudioStoryboard(data = {}) {
+  const storyboard = getStudioStoryboard(data);
+  if (studioStoryboardSummaryEl) {
+    studioStoryboardSummaryEl.value = storyboard.summary || '';
+  }
+  if (studioStoryboardBeatsEl) {
+    studioStoryboardBeatsEl.innerHTML = '';
+    const beats = Array.isArray(storyboard.episodes) ? storyboard.episodes : [];
+    if (!beats.length) {
+      studioStoryboardBeatsEl.innerHTML = '<span class="empty-state">No storyboard beats generated yet.</span>';
+    } else {
+      beats.forEach((beat, index) => {
+        const row = document.createElement('div');
+        row.className = 'studio-storyboard-beat';
+        row.innerHTML = `
+          <label class="status-label">Beat ${index + 1}</label>
+          <input class="settings-input studio-storyboard-beat-name" value="" />
+          <textarea class="settings-input studio-storyboard-beat-summary" rows="3"></textarea>
+        `;
+        row.querySelector('.studio-storyboard-beat-name').value = beat.name || `Beat ${index + 1}`;
+        row.querySelector('.studio-storyboard-beat-summary').value = beat.summary || '';
+        studioStoryboardBeatsEl.append(row);
+      });
+    }
+  }
+  if (studioStoryboardBadgeEl) {
+    renderStudioBadge(studioStoryboardBadgeEl, Boolean(storyboard.summary && (storyboard.episodes || []).length));
+  }
+}
+
+function collectStudioStoryboardEdits() {
+  const beats = [...(studioStoryboardBeatsEl?.querySelectorAll('.studio-storyboard-beat') || [])].map((row, index) => ({
+    name: row.querySelector('.studio-storyboard-beat-name')?.value?.trim() || `Beat ${index + 1}`,
+    summary: row.querySelector('.studio-storyboard-beat-summary')?.value?.trim() || '',
+  })).filter((beat) => beat.name || beat.summary);
+  return {
+    summary: studioStoryboardSummaryEl?.value?.trim() || '',
+    episodes: beats,
+    canon_events: getStudioStoryboard(studioState.data || {}).canon_events || [],
+  };
+}
+
+async function handleStudioStoryboardSave(note = 'Typed storyboard edit') {
+  if (!studioState.projectName || !studioState.projectId) {
+    setMessage(studioApprovalMessageEl, 'Load a Studio project before editing beats.', 'warning');
+    return;
+  }
+  const storyboard = collectStudioStoryboardEdits();
+  if (!storyboard.summary || !storyboard.episodes.length) {
+    setMessage(studioApprovalMessageEl, 'Storyboard needs a summary and at least one beat.', 'warning');
+    return;
+  }
+  const restoreButton = setStudioButtonBusy(studioStoryboardSaveButton, true, 'Saving...');
+  try {
+    const result = await studioUpdateStoryboard(studioState.projectName, studioState.projectId, storyboard, note);
+    studioState.data = result.project || studioState.data;
+    renderStudioApproval(studioState.data);
+    setMessage(studioApprovalMessageEl, 'Storyboard beats saved. Later agents will use this edited structure.', 'success');
+  } catch (error) {
+    setMessage(studioApprovalMessageEl, `Saving storyboard failed: ${error.message}`, 'danger');
+  } finally {
+    restoreButton();
+  }
+}
+
+async function handleStudioStoryboardVoice() {
+  const file = studioStoryboardVoiceInputEl?.files?.[0];
+  if (!file) {
+    setMessage(studioApprovalMessageEl, 'Choose an audio file for the voice fix first.', 'warning');
+    return;
+  }
+  const restoreButton = setStudioButtonBusy(studioStoryboardVoiceButton, true, 'Transcribing...');
+  try {
+    const result = await studioTranscribeEdit(studioState.projectName, studioState.projectId, 'storyboard', null, file);
+    const transcript = result.text || '';
+    const current = studioStoryboardSummaryEl?.value?.trim() || '';
+    if (studioStoryboardSummaryEl && transcript) {
+      studioStoryboardSummaryEl.value = [current, `Voice note: ${transcript}`].filter(Boolean).join('\n\n');
+    }
+    setMessage(studioApprovalMessageEl, 'Voice fix transcribed into the storyboard summary. Save beats when it looks right.', 'success');
+  } catch (error) {
+    setMessage(studioApprovalMessageEl, `Voice transcription failed: ${error.message}`, 'danger');
+  } finally {
+    restoreButton();
+  }
+}
+
 function renderStudioApproval(data) {
   const exportData = getStudioExportData(data);
   const bible = getStudioBible(exportData);
@@ -1036,6 +1299,8 @@ function renderStudioApproval(data) {
       }
     }
   }
+
+  renderStudioStoryboard(exportData);
 
   if (studioPanelsGridEl) {
     studioPanelsGridEl.innerHTML = '';
@@ -1183,11 +1448,11 @@ function setStudioMode(mode) {
     studioSeedInputEl.placeholder = text.placeholder;
     studioSeedInputEl.rows = copy === 'seed' ? 3 : 15;
   }
-  
+
   if (studioRunPipelineButton) {
     studioRunPipelineButton.textContent = copy === 'seed' ? 'Send Message' : 'Begin Production';
   }
-  
+
   const chatContainer = document.getElementById('studioIntakeChatContainer');
   if (chatContainer) {
     chatContainer.style.display = copy === 'seed' ? 'block' : 'none';
@@ -1235,7 +1500,7 @@ function appendChatMessage(role, content) {
   wrapper.style.padding = '10px 14px';
   wrapper.style.borderRadius = '8px';
   wrapper.style.maxWidth = '85%';
-  
+
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble';
   bubble.textContent = content;
@@ -1247,7 +1512,7 @@ function appendChatMessage(role, content) {
 async function handleStudioRunPipeline() {
   const messageText = studioSeedInputEl?.value?.trim();
   const mode = studioState.mode || 'seed';
-  
+
   if (!studioState.projectName) {
     setMessage(studioPipelineMessageEl, 'Create or load a project first.', 'danger');
     setStudioView('start');
@@ -1277,10 +1542,10 @@ async function handleStudioRunPipeline() {
   try {
     const result = await studioIntakeTurn(studioState.projectName, studioIntakeChat);
     const reply = result?.data?.response_text || "I'm having trouble understanding. Can you say that again?";
-    
+
     appendChatMessage('assistant', reply);
     studioIntakeChat.push({ role: 'assistant', content: reply });
-    
+
     if (result?.data?.is_complete) {
       setMessage(studioPipelineMessageEl, 'Intake complete! Starting production...', 'success');
       studioState.productionSeed = JSON.stringify(result?.data?.draft_premise);
@@ -1564,7 +1829,7 @@ async function handleStudioRepairRebuild() {
 async function handleStudioDeleteProject() {
   const projectName = document.getElementById('studioLoadProjectName')?.value;
   if (!projectName) return;
-  
+
   const confirmDelete = confirm(`Are you sure you want to permanently delete the project "${projectName}"? This cannot be undone.`);
   if (!confirmDelete) return;
 
@@ -1614,6 +1879,154 @@ async function handleStudioExportReel() {
   } finally {
     restoreButton();
   }
+}
+
+async function handleStudioGenerateScenes() {
+  if (!studioState.projectName) {
+    setMessage(studioApprovalMessageEl, 'Load or generate a project before writing scenes.', 'danger');
+    return;
+  }
+  const button = document.getElementById('studioGenerateScenesButton');
+  const restoreButton = setStudioButtonBusy(button, true, 'Writing scenes…');
+  try {
+    const result = await studioRunScenes(studioState.projectName);
+    const count = result?.data?.scenes?.length || 0;
+    setMessage(studioApprovalMessageEl,
+      `Wrote ${count} cinematic scene${count === 1 ? '' : 's'}. Open the Cinematic Player to watch.`, 'success');
+    await refreshCinemaStatus();
+  } catch (error) {
+    setMessage(studioApprovalMessageEl, `Scene generation failed: ${error.message}`, 'danger');
+  } finally {
+    restoreButton();
+  }
+}
+
+function handleStudioPlayCinema() {
+  if (!studioState.projectName) {
+    setMessage(studioApprovalMessageEl, 'Load or generate a project before opening the player.', 'danger');
+    return;
+  }
+  const url = `cinema.html?project=${encodeURIComponent(studioState.projectName)}`;
+  // Open the standalone cinematic player. Prefer a real window; the renderer origin is
+  // http://, so a relative URL resolves against the served renderer.
+  window.open(url, 'studioCinema', 'width=1280,height=800');
+}
+
+// --- Cinematic production desk (Piece 9) ---
+function cinemaMsg(text, type = 'info') {
+  setMessage(document.getElementById('studioCinemaMessage') || studioApprovalMessageEl, text, type);
+}
+
+async function runCinemaStage(fn, buttonId, busyText, doneText) {
+  if (!studioState.projectName) { cinemaMsg('Load or generate a project first.', 'danger'); return null; }
+  const button = document.getElementById(buttonId);
+  const restore = setStudioButtonBusy(button, true, busyText);
+  try {
+    const result = await fn(studioState.projectName);
+    cinemaMsg(typeof doneText === 'function' ? doneText(result) : doneText, 'success');
+    await refreshCinemaStatus();
+    return result;
+  } catch (error) {
+    cinemaMsg(`${busyText.replace('…', '')} failed: ${error.message}`, 'danger');
+    return null;
+  } finally {
+    restore();
+  }
+}
+
+async function handleStudioBlueprint() {
+  const r = await runCinemaStage(
+    (p) => studioRunCinematicStage(p, 'showrunner'),
+    'studioBlueprintButton', 'Breaking into scenes…',
+    (res) => {
+      const n = res?.data?.blueprint?.scene_count || res?.data?.blueprint?.scenes?.length || 0;
+      return `Blueprint ready: ${n} scenes. Review/edit the Storyboard, then Approve.`;
+    });
+  if (r) {
+    studioState.blueprintApproved = false;
+    const gen = document.getElementById('studioGenerateScenesButton');
+    if (gen) gen.disabled = true;
+  }
+}
+
+function handleStudioApproveBlueprint() {
+  if (!studioState.projectName) { cinemaMsg('Load a project first.', 'danger'); return; }
+  studioState.blueprintApproved = true;
+  const gen = document.getElementById('studioGenerateScenesButton');
+  if (gen) gen.disabled = false;
+  cinemaMsg('Blueprint approved — you can now Generate Scenes.', 'success');
+}
+
+function handleStudioRenderImages() {
+  return runCinemaStage((p) => studioRenderImages(p), 'studioRenderImagesButton', 'Rendering images…',
+    (res) => {
+      const d = res?.data || {};
+      return d.renderer_available
+        ? `Rendered ${d.counts?.done || 0} scene image(s).`
+        : 'No image generator configured — scenes keep their atmospheric gradient.';
+    });
+}
+
+function handleStudioVoiceScenes() {
+  return runCinemaStage((p) => studioVoiceScenes(p), 'studioVoiceScenesButton', 'Voicing narration…',
+    (res) => {
+      const d = res?.data || {};
+      return d.synth_available
+        ? `Voiced ${d.done || 0}/${d.total || 0} beats.`
+        : 'No local TTS available — the player will read with browser speech.';
+    });
+}
+
+function handleStudioContinuity() {
+  return runCinemaStage((p) => studioSceneContinuity(p), 'studioContinuityButton', 'Auditing continuity…',
+    (res) => {
+      const warns = res?.data?.warnings || [];
+      renderCinemaWarnings(warns);
+      const high = warns.filter((w) => w.severity === 'high').length;
+      return warns.length
+        ? `${warns.length} continuity note(s), ${high} high (unpaid setups).`
+        : 'Continuity clean — every planted setup pays off.';
+    });
+}
+
+function renderCinemaWarnings(warns) {
+  const el = document.getElementById('studioCinemaWarnings');
+  if (!el) return;
+  if (!warns || !warns.length) { el.innerHTML = ''; return; }
+  const icon = { high: '🔴', medium: '🟠', low: '🟡' };
+  el.innerHTML = warns.slice(0, 12).map((w) =>
+    `<div>${icon[w.severity] || '•'} <strong>${escapeHtml(w.scene_id || '')}</strong> ${escapeHtml(w.message || '')}` +
+    (w.suggestion ? ` <em>— ${escapeHtml(w.suggestion)}</em>` : '') + `</div>`).join('');
+}
+
+async function refreshCinemaStatus() {
+  const el = document.getElementById('studioCinemaStatus');
+  if (!el || !studioState.projectName) return;
+  try {
+    const data = await studioGetScenes(studioState.projectName);
+    const scenes = data.scenes || [];
+    const bp = data.blueprint || {};
+    const sceneCount = bp.scene_count || (bp.scenes ? bp.scenes.length : 0);
+    const written = scenes.filter((s) => (s.narration_script || []).length).length;
+    const grounding = data.grounding || 'none';
+    const live = ['map-reduce', 'map-reduce (partial)', 'invented'].includes(grounding);
+    const rows = [];
+    rows.push(`<strong>Blueprint:</strong> ${sceneCount ? sceneCount + ' scenes' : '—'}` +
+      (studioState.blueprintApproved ? ' ✓ approved' : (sceneCount ? ' · awaiting approval' : '')));
+    rows.push(`<strong>Scenes written:</strong> ${written}/${sceneCount || '—'}`);
+    rows.push(`<strong>Images:</strong> ${data.image_done || 0}/${scenes.length || '—'}`);
+    rows.push(`<strong>Voice:</strong> ${data.audio_done || 0}/${data.audio_total || '—'} beats`);
+    rows.push(`<strong>Source:</strong> ${live ? '🟢 live model' :
+      '⚠ procedural fallback (no live LLM — fix the model for real prose)'}`);
+    el.innerHTML = rows.join('<br>');
+  } catch (error) {
+    el.textContent = `Status unavailable: ${error.message}`;
+  }
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
 function handleStudioSectionApproval(button) {
@@ -2159,7 +2572,17 @@ function fillSelect(selectEl, options, selectedValue, labelFor = (item) => item)
 }
 
 function renderProfileSettings(settings) {
-  activeProfileSettings = { ...(settings ?? {}) };
+  activeProfileSettings = {
+    studio_resource_profile: 'saver',
+    studio_dispatcher_model_id: 'gemma-4-e4b-q4',
+    studio_writer_model_id: 'gemma-4-12b-q4',
+    studio_voice_engine: 'kokoro',
+    studio_image_backend: 'off',
+    studio_music_engine: 'off',
+    studio_ambience_engine: 'off',
+    studio_vram_cap_mb: 14336,
+    ...(settings ?? {}),
+  };
   profileDirty = false;
 
   // Clear all validation errors
@@ -2191,7 +2614,7 @@ function renderProfileSettings(settings) {
 function markProfileDirty() {
   profileDirty = true;
   setMessage(profileMessageEl, 'Unsaved profile changes.', 'warning');
-  
+
   const saveBar = document.getElementById('settingsSaveBar');
   if (saveBar) {
     saveBar.classList.remove('hidden');
@@ -2246,7 +2669,7 @@ async function refreshPersonasAndVoices() {
     if (voiceSelect) {
       const currentSelected = voiceSelect.value;
       voiceSelect.innerHTML = '';
-      
+
       if (Array.isArray(voicesData.defaults)) {
         for (const voice of voicesData.defaults) {
           const option = document.createElement('option');
@@ -2273,7 +2696,7 @@ async function refreshPersonasAndVoices() {
 }
 
 async function refreshProfiles() {
-  await refreshPersonasAndVoices().catch(() => {});
+  await refreshPersonasAndVoices().catch(() => { });
   const payload = await fetchProfiles();
   fillSelect(profileSelectEl, payload.profiles ?? [], payload.active_profile);
   renderProfileSettings(payload.settings ?? {});
@@ -2300,7 +2723,7 @@ function initWizard() {
         }
       }
     }
-    
+
     if (wizardStepProgress) {
       const titles = [
         "Select Goal & Role",
@@ -2431,9 +2854,9 @@ function initWizard() {
       try {
         const res = await savePersona(name, prompt);
         setMessage(wizardMessage, res.message || "Persona saved successfully!", "success");
-        
+
         await refreshPersonasAndVoices();
-        
+
         const presetSelect = settingEls.current_preset;
         if (presetSelect) {
           presetSelect.value = name;
@@ -2477,7 +2900,7 @@ function initWizard() {
     try {
       const res = await deletePersona(name);
       setMessage(wizardMessage, res.message || "Persona deleted successfully!", "success");
-      
+
       await refreshPersonasAndVoices();
 
       setTimeout(() => {
@@ -2503,7 +2926,12 @@ async function refreshModels() {
 
   fillSelect(
     llmModelSelectEl,
-    (llmPayload.models ?? []).map((model) => ({ value: model.id, label: `${model.name} ${model.installed ? '(installed)' : ''}` })),
+    (llmPayload.models ?? []).map((model) => {
+      const group = model.group === 'studio' ? 'Studio' : 'BetterFingers';
+      const roles = Array.isArray(model.roles) && model.roles.length ? ` · ${model.roles.join('/')}` : '';
+      const state = model.installed ? 'installed' : model.resumable ? 'partial' : 'missing';
+      return { value: model.id, label: `${group}: ${model.name}${roles} (${state})` };
+    }),
     llmPayload.selected_model_id,
     (item) => item.label,
   );
@@ -2542,7 +2970,7 @@ async function runLlmDownloadAction() {
   const visibleModel = (llmModelsPayload?.models ?? []).find((model) => model.id === modelId);
   let stopped = false;
   downloadLlmModelButton.disabled = true;
-  downloadLlmModelButton.textContent = 'Downloading...';
+  downloadLlmModelButton.textContent = 'Starting...';
   renderLlmDownloadProgress({ status: 'starting', percent: 0, message: `Starting ${visibleModel?.name ?? modelId} download.` }, visibleModel);
 
   const poll = async () => {
@@ -2552,28 +2980,42 @@ async function runLlmDownloadAction() {
     try {
       const state = await fetchLlmDownloadState(modelId);
       renderLlmDownloadProgress(state, visibleModel);
+      const status = String(state?.status || '').toLowerCase();
+      if (!state?.active && ['ready', 'complete', 'already_installed', 'error'].includes(status)) {
+        stopped = true;
+        window.clearInterval(pollTimer);
+        if (llmDownloadPollTimer === pollTimer) {
+          llmDownloadPollTimer = null;
+        }
+        downloadLlmModelButton.textContent = previous;
+        downloadLlmModelButton.disabled = false;
+        await Promise.all([refreshModels(), refreshRuntime()]);
+      }
     } catch (_error) {
       // The main download request is the source of truth; progress polling is best-effort.
     }
   };
 
+  if (llmDownloadPollTimer) {
+    window.clearInterval(llmDownloadPollTimer);
+    llmDownloadPollTimer = null;
+  }
   const pollTimer = window.setInterval(poll, 900);
+  llmDownloadPollTimer = pollTimer;
   try {
     await poll();
     const result = await downloadLlmModel(modelId);
-    stopped = true;
-    window.clearInterval(pollTimer);
-    renderLlmDownloadProgress({ status: result?.ok === false ? 'error' : 'ready', percent: result?.ok === false ? 0 : 100, message: result?.message || 'Download complete.' }, visibleModel);
-    setMessage(modelMessageEl, result?.message || 'LLM download completed.', result?.ok === false ? 'danger' : 'success');
-    await Promise.all([refreshModels(), refreshRuntime()]);
+    downloadLlmModelButton.textContent = 'Downloading...';
+    setMessage(modelMessageEl, result?.message || 'LLM download started in the background.', result?.ok === false ? 'danger' : 'success');
+    await poll();
   } catch (error) {
     stopped = true;
     window.clearInterval(pollTimer);
+    if (llmDownloadPollTimer === pollTimer) {
+      llmDownloadPollTimer = null;
+    }
     renderLlmDownloadProgress({ status: 'error', percent: 0, message: `Download failed: ${error.message}` }, visibleModel);
     setMessage(modelMessageEl, `Download LLM failed: ${error.message}`, 'danger');
-  } finally {
-    stopped = true;
-    window.clearInterval(pollTimer);
     downloadLlmModelButton.textContent = previous;
     downloadLlmModelButton.disabled = false;
   }
@@ -2642,7 +3084,7 @@ function renderRuntimeErrors(payload) {
     severityPill.style.fontSize = '0.75rem';
     severityPill.style.padding = '2px 6px';
     severityPill.textContent = error.severity ?? 'recoverable';
-    
+
     if (error.severity === 'fatal') {
       severityPill.dataset.tone = 'danger';
     } else if (error.severity === 'warning') {
@@ -2681,7 +3123,7 @@ async function refreshSidecarStatus() {
     `pid: ${status.pid ?? 'none'}`,
     status.message ?? '',
   ].filter(Boolean).join('\n');
-  
+
   if (status.state === 'error') {
     sidecarStatusEl.dataset.tone = 'danger';
   } else if (status.state === 'ready') {
@@ -2701,7 +3143,7 @@ async function refreshSidecarStatus() {
   }
 
   if (status.state === 'error' || status.state === 'stopped') {
-    refreshSidecarLogs().catch(() => {});
+    refreshSidecarLogs().catch(() => { });
   }
 
   return status;
@@ -2939,7 +3381,18 @@ function runValidation() {
     }
   }
 
-  // 8. Hotkeys Collision Detection
+  // 8. Studio VRAM budget cap
+  const studioVramEl = settingEls.studio_vram_cap_mb;
+  if (studioVramEl) {
+    const val = parseInt(studioVramEl.value, 10);
+    if (isNaN(val) || val < 2048 || val > 65536) {
+      setValidationError('studio_vram_cap_mb', 'Studio VRAM cap must be between 2048 and 65536 MB.');
+    } else {
+      clearValidationError('studio_vram_cap_mb');
+    }
+  }
+
+  // 9. Hotkeys Collision Detection
   const hotkeyFields = [
     'hotkey',
     'force_stop_key',
@@ -3283,7 +3736,7 @@ async function runWarmup(button, payload) {
       return;
     }
     setWarmupMessage(summary.successes.length ? summary.successes.join(' · ') : 'Warmup request completed.', 'success');
-    await refreshOutputSettings().catch(() => {});
+    await refreshOutputSettings().catch(() => { });
   } catch (error) {
     setWarmupMessage(`Warmup failed: ${error.message}`, 'danger');
     button.textContent = previousText;
@@ -3333,17 +3786,17 @@ function updateVoiceStatus(message) {
       message.status === 'preview_ready' ? 'New draft ready for review.' : message.error || 'Draft needs attention.',
       message.status === 'preview_ready' ? 'success' : 'danger',
     );
-    refreshDrafts().catch(() => {});
+    refreshDrafts().catch(() => { });
   }
 
   if (['draft_accepted', 'draft_declined'].includes(message.status)) {
-    refreshDrafts().catch(() => {});
-    refreshOutputSettings().catch(() => {});
+    refreshDrafts().catch(() => { });
+    refreshOutputSettings().catch(() => { });
   }
 
   if (message.status === 'draft_history_cleared') {
     renderDraft(null);
-    refreshDrafts().catch(() => {});
+    refreshDrafts().catch(() => { });
   }
 
   if (['draft_updated', 'draft_rewriting', 'draft_rewritten', 'draft_rewrite_error', 'draft_tts_requested'].includes(message.status)) {
@@ -3357,9 +3810,9 @@ function updateVoiceStatus(message) {
       setMessage(draftMessageEl, message.status === 'draft_rewritten' ? 'Rewrite complete.' : 'Draft edit saved.', 'success');
     }
     if (message.status === 'draft_rewritten' || message.status === 'draft_updated') {
-      refreshLatestDraft().then(showReviewOverlayDraft).catch(() => {});
+      refreshLatestDraft().then(showReviewOverlayDraft).catch(() => { });
     }
-    refreshDrafts().catch(() => {});
+    refreshDrafts().catch(() => { });
   }
 
   if (['draft_sent', 'draft_send_error', 'selection_captured', 'selection_capture_failed', 'emergency_stop'].includes(message.status)) {
@@ -3370,8 +3823,8 @@ function updateVoiceStatus(message) {
     if (message.status === 'draft_sent' || message.status === 'emergency_stop') {
       hideReviewOverlay();
     }
-    refreshDrafts().catch(() => {});
-    refreshOutputSettings().catch(() => {});
+    refreshDrafts().catch(() => { });
+    refreshOutputSettings().catch(() => { });
   }
 }
 
@@ -3493,15 +3946,15 @@ async function bootstrap() {
     refreshModels().catch((error) => {
       setMessage(modelMessageEl, `Models unavailable: ${error.message}`, 'danger');
     }),
-    refreshStudioProjectList().catch(() => {}),
-    refreshDiagnostics().catch(() => {}),
-    refreshDoctor().catch(() => {}),
-    refreshSidecarLogs().catch(() => {}),
+    refreshStudioProjectList().catch(() => { }),
+    refreshDiagnostics().catch(() => { }),
+    refreshDoctor().catch(() => { }),
+    refreshSidecarLogs().catch(() => { }),
   ]);
 
   healthRefreshTimer = setInterval(() => {
     refreshHealth();
-    refreshSidecarStatus().catch(() => {});
+    refreshSidecarStatus().catch(() => { });
     refreshRuntime().catch(() => {
       setBadgeState(transcriberStatusEl, 'offline', 'danger');
       setBadgeState(llmStatusEl, 'offline', 'danger');
@@ -3982,7 +4435,7 @@ importProfileFileEl?.addEventListener('change', (e) => {
   reader.onload = async (event) => {
     try {
       let parsed = JSON.parse(event.target.result);
-      
+
       // Gracefully upgrade legacy flat or un-versioned profile structures
       if (!parsed || parsed.kind !== 'betterfingers_profile') {
         const settings = parsed.settings || parsed;
@@ -4110,7 +4563,17 @@ studioCreateProjectButton?.addEventListener('click', handleStudioCreateProject);
 studioLoadProjectButton?.addEventListener('click', handleStudioLoadProject);
 document.getElementById('studioDeleteProjectButton')?.addEventListener('click', handleStudioDeleteProject);
 document.getElementById('studioExportReelButton')?.addEventListener('click', handleStudioExportReel);
+document.getElementById('studioGenerateScenesButton')?.addEventListener('click', handleStudioGenerateScenes);
+document.getElementById('studioPlayCinemaButton')?.addEventListener('click', handleStudioPlayCinema);
+document.getElementById('studioBlueprintButton')?.addEventListener('click', handleStudioBlueprint);
+document.getElementById('studioApproveBlueprintButton')?.addEventListener('click', handleStudioApproveBlueprint);
+document.getElementById('studioRenderImagesButton')?.addEventListener('click', handleStudioRenderImages);
+document.getElementById('studioVoiceScenesButton')?.addEventListener('click', handleStudioVoiceScenes);
+document.getElementById('studioContinuityButton')?.addEventListener('click', handleStudioContinuity);
+document.getElementById('studioCinemaRefreshButton')?.addEventListener('click', () => refreshCinemaStatus());
 document.getElementById('studioAddPageButton')?.addEventListener('click', handleStudioAddPage);
+studioStoryboardSaveButton?.addEventListener('click', () => handleStudioStoryboardSave());
+studioStoryboardVoiceButton?.addEventListener('click', handleStudioStoryboardVoice);
 studioPanelsGridEl?.addEventListener('click', (event) => {
   const addPanelButton = event.target.closest('.studio-add-panel-btn');
   if (addPanelButton) {
@@ -4426,10 +4889,10 @@ tabButtons.forEach((button) => {
     });
 
     if (targetTab === 'diagnostics') {
-      refreshDiagnostics().catch(() => {});
-      refreshDoctor().catch(() => {});
+      refreshDiagnostics().catch(() => { });
+      refreshDoctor().catch(() => { });
     } else if (targetTab === 'studio') {
-      refreshStudioProjectList().catch(() => {});
+      refreshStudioProjectList().catch(() => { });
     }
   });
 });
@@ -4462,7 +4925,7 @@ async function refreshDoctor(refreshAudio = false) {
   if (!doctorCardsGrid) {
     return;
   }
-  
+
   if (refreshDoctorButton) {
     refreshDoctorButton.disabled = true;
     refreshDoctorButton.textContent = 'Running check...';
@@ -4470,9 +4933,9 @@ async function refreshDoctor(refreshAudio = false) {
 
   try {
     const doctor = await fetchDoctor(refreshAudio);
-    
+
     doctorCardsGrid.innerHTML = '';
-    
+
     const subsystems = [
       { id: 'stt', name: 'STT (Transcriber)', data: doctor.stt },
       { id: 'llm', name: 'LLM Engine', data: doctor.llm },
@@ -4492,7 +4955,7 @@ async function refreshDoctor(refreshAudio = false) {
 
       const header = document.createElement('div');
       header.className = 'doctor-card-header';
-      
+
       const title = document.createElement('span');
       title.textContent = sub.name;
 
@@ -4500,7 +4963,7 @@ async function refreshDoctor(refreshAudio = false) {
       badge.className = 'doctor-card-status';
 
       let detailsText = '';
-      
+
       if (sub.id === 'stt') {
         const isLoaded = sub.data.loaded;
         const isInit = sub.data.initialized;
@@ -4549,7 +5012,7 @@ async function refreshDoctor(refreshAudio = false) {
         const hasDevices = Array.isArray(sub.data.devices) && sub.data.devices.length > 0;
         badge.textContent = hasDevices ? 'Available' : 'No Mics';
         badge.dataset.tone = hasDevices ? 'success' : 'danger';
-        
+
         let micNames = 'No devices detected.';
         if (hasDevices) {
           const defaultInIdx = sub.data.default_input_device;
@@ -4611,7 +5074,7 @@ async function refreshDoctor(refreshAudio = false) {
       }
 
       header.append(title, badge);
-      
+
       const detail = document.createElement('pre');
       detail.className = 'doctor-card-detail';
       detail.textContent = detailsText;
@@ -4623,7 +5086,7 @@ async function refreshDoctor(refreshAudio = false) {
     if (doctorRecoveryPanel && doctorRecoveryList) {
       doctorRecoveryList.innerHTML = '';
       const uniqueTriggers = [...new Set(recoveryTriggers)];
-      
+
       if (uniqueTriggers.length > 0) {
         doctorRecoveryPanel.classList.remove('hidden');
         for (const trigger of uniqueTriggers) {
@@ -4631,7 +5094,7 @@ async function refreshDoctor(refreshAudio = false) {
           if (recommendation) {
             const item = document.createElement('div');
             item.className = 'recovery-item';
-            
+
             const labelMap = {
               missing_model: 'Model Download Needed',
               missing_llama_server: 'llama-server Required',
@@ -4673,7 +5136,7 @@ async function refreshDoctor(refreshAudio = false) {
 }
 
 refreshDoctorButton?.addEventListener('click', () => {
-  refreshDoctor(true).catch(() => {});
+  refreshDoctor(true).catch(() => { });
 });
 
 window.addEventListener('beforeunload', () => {

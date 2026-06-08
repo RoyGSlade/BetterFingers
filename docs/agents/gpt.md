@@ -410,6 +410,37 @@
 
 ---
 
+### [P-016] Studio Storyboard Memory & Edit Checkpoint
+- **Date**: 2026-06-07
+- **Scope**: Correct Studio weak points around storyboard editing, agent memory refresh, visual continuity, Whisper edit input, and orchestrator data flow.
+
+#### What was done
+- Added a durable `bible.storyboard`/blackboard storyboard artifact and `/studio/workflow/storyboard` endpoint so user-edited beats are saved back into episode/minute state before downstream generation.
+- Added `/studio/workflow/transcribe-edit` so Whisper can transcribe spoken Studio fix notes and feed the same edit path users can type into.
+- Refreshed world, character, storyboard, and visual-guide memory before dialogue and visual prompt generation; visual prompt generation now updates a persisted `visual_consistency_guide`.
+- Added an editable Storyboard Beats panel in the Electron approval dashboard.
+- Fixed `studio_agents.py` registry drift from `cinematics/scenes` back to `panels`, matching the runner/export/tests.
+
+#### Files changed
+- `studio_workflow.py` — storyboard artifact persistence, user edit application, context refresh, visual consistency guide updates, clean dialogue overwrite on panel regeneration.
+- `studio_memory.py` — episode/minute update helpers.
+- `server.py` — storyboard update and Whisper-backed Studio edit transcription endpoints.
+- `app/src/renderer/index.html`, `app/src/renderer/main.js`, `app/src/renderer/api/backend.js` — Storyboard Beats editor and API wiring.
+- `studio_agents.py` — restored panel agent contract.
+- `tests/test_server_studio.py` — regression test for persisted storyboard edits.
+
+#### Test runs
+| Command | Outcome | Passed / Total | Issues |
+| :------ | :------ | :------------- | :----- |
+| `.venv/bin/python -m pytest tests/test_server_studio.py tests/test_studio_workflow.py tests/test_studio_agents.py -q` | PASS | 28 / 28 | Existing FastAPI/pygame deprecation warnings only. |
+| `npm --prefix app run build` | PASS | — | Electron/Vite build succeeded. |
+
+#### Blockers / Handoffs
+- @Gemini: The UI now has typed and file-based voice transcription for storyboard fixes; live microphone capture could be layered on top of the same endpoint.
+- @Claude: Storyboard edits persist to the current episode/minute rows and bible; broader pipeline pausing/approval policy can build on `storyboard_review.status`.
+
+---
+
 ## Domain Ownership
 
 GPT owns implementation and test coverage for changes touching:

@@ -34,6 +34,79 @@ class ModelManagerStatusTests(unittest.TestCase):
         self.assertIn("--jinja", args)
         self.assertIn("--chat-template-kwargs", args)
 
+    def test_models_expose_studio_and_betterfingers_roles(self):
+        dispatcher = model_manager.AVAILABLE_MODELS["gemma-4-e4b-q4"]
+        writer = model_manager.AVAILABLE_MODELS["gemma-4-12b-q4"]
+        rewrite = model_manager.AVAILABLE_MODELS["gemma-3-4b-q4"]
+
+        self.assertEqual(dispatcher["group"], "studio")
+        self.assertIn("dispatcher", dispatcher["roles"])
+        self.assertEqual(dispatcher["lane"], "cpu")
+        self.assertIn("writer", writer["roles"])
+        self.assertEqual(writer["lane"], "gpu-transient")
+        self.assertEqual(rewrite["group"], "betterfingers")
+        self.assertIn("rewrite", rewrite["roles"])
+
+    def test_download_file_resumes_partial_and_promotes_atomically(self):
+        class FakeResponse:
+            status_code = 206
+            headers = {"content-length": "5", "content-range": "bytes 5-9/10"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, chunk_size=8192):
+                yield b"fghij"
+
+        progress = []
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = os.path.join(tmp, "model.gguf")
+            with open(f"{dest}.part", "wb") as handle:
+                handle.write(b"abcde")
+
+            with patch("model_manager.requests.get", return_value=FakeResponse()) as get:
+                model_manager.download_file("https://example.test/model", dest, "Model", progress_callback=progress.append)
+
+            self.assertTrue(os.path.exists(dest))
+            self.assertFalse(os.path.exists(f"{dest}.part"))
+            with open(dest, "rb") as handle:
+                self.assertEqual(handle.read(), b"abcdefghij")
+            self.assertEqual(get.call_args.kwargs["headers"], {"Range": "bytes=5-"})
+            self.assertEqual(progress[-1]["status"], "complete")
+
+    def test_download_file_keeps_partial_on_failure(self):
+        class BrokenResponse:
+            status_code = 200
+            headers = {"content-length": "10"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, chunk_size=8192):
+                yield b"abc"
+                raise RuntimeError("connection dropped")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = os.path.join(tmp, "model.gguf")
+            with patch("model_manager.requests.get", return_value=BrokenResponse()):
+                with self.assertRaises(RuntimeError):
+                    model_manager.download_file("https://example.test/model", dest, "Model")
+
+            self.assertFalse(os.path.exists(dest))
+            self.assertTrue(os.path.exists(f"{dest}.part"))
+
     def test_linux_runtime_tar_symlinks_are_preserved_and_repaired(self):
         with tempfile.TemporaryDirectory() as tmp:
             archive_path = os.path.join(tmp, "runtime.tar.gz")

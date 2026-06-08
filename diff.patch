@@ -1,0 +1,3300 @@
+diff --git a/app/electron.vite.config.js b/app/electron.vite.config.js
+index 35dff83..02b80be 100644
+--- a/app/electron.vite.config.js
++++ b/app/electron.vite.config.js
+@@ -35,6 +35,7 @@ module.exports = defineConfig({
+           index: resolve(__dirname, 'src/renderer/index.html'),
+           overlay: resolve(__dirname, 'src/renderer/overlay.html'),
+           reviewOverlay: resolve(__dirname, 'src/renderer/review-overlay.html'),
++          cinema: resolve(__dirname, 'src/renderer/cinema.html'),
+         },
+       },
+     },
+diff --git a/app/src/renderer/api/backend.js b/app/src/renderer/api/backend.js
+index fae34a0..419e42d 100644
+--- a/app/src/renderer/api/backend.js
++++ b/app/src/renderer/api/backend.js
+@@ -179,7 +179,7 @@ async function selectLlmModel(modelId, timeoutMs = 10000) {
+   return postJson(`${MODELS_LLM_URL}/select`, { model_id: modelId }, timeoutMs);
+ }
+ 
+-async function downloadLlmModel(modelId, timeoutMs = 1800000) {
++async function downloadLlmModel(modelId, timeoutMs = 10000) {
+   return postJson(`${MODELS_LLM_URL}/${encodeURIComponent(modelId)}/download`, {}, timeoutMs);
+ }
+ 
+@@ -551,6 +551,51 @@ async function studioGetPanels(projectName, projectId, timeoutMs = 10000) {
+   return fetchJson(`${STUDIO_URL}/project/${encodeURIComponent(projectName)}/${projectId}/panels`, timeoutMs);
+ }
+ 
++// --- Cinematic scene player (Phase 4) ---
++async function studioGetScenes(projectName, timeoutMs = 15000) {
++  return fetchJson(`${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/scenes`, timeoutMs);
++}
++
++// Write every scene (script + image) from the approved blueprint. Long-running.
++async function studioRunScenes(projectName, timeoutMs = 600000) {
++  return postJson(`${STUDIO_URL}/workflow/stage`,
++    { project_name: projectName, stage: 'scenes' }, timeoutMs);
++}
++
++// Per-scene reject/refine. target: 'script' | 'image' | 'all'.
++async function studioRegenerateScene(projectName, sceneId, target = 'all', feedback = '', timeoutMs = 240000) {
++  return postJson(`${STUDIO_URL}/workflow/scene/regenerate`,
++    { project_name: projectName, scene_id: sceneId, target, feedback }, timeoutMs);
++}
++
++// Cinematic stages (thin wrappers over the unified stage endpoint).
++async function studioRunCinematicStage(projectName, stage, timeoutMs = 600000) {
++  return postJson(`${STUDIO_URL}/workflow/stage`, { project_name: projectName, stage }, timeoutMs);
++}
++async function studioRenderImages(projectName, timeoutMs = 600000) {
++  return studioRunCinematicStage(projectName, 'render', timeoutMs);
++}
++async function studioVoiceScenes(projectName, timeoutMs = 600000) {
++  return studioRunCinematicStage(projectName, 'voice', timeoutMs);
++}
++async function studioSceneContinuity(projectName, timeoutMs = 240000) {
++  return studioRunCinematicStage(projectName, 'scene_continuity', timeoutMs);
++}
++async function studioRenderStatus(projectName, timeoutMs = 15000) {
++  return fetchJson(`${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/render-status`, timeoutMs);
++}
++
++// In-process image model catalog + download (Studio downloads + runs the model itself).
++async function studioListImageModels(timeoutMs = 10000) {
++  return fetchJson(`${STUDIO_URL}/models/image`, timeoutMs);
++}
++async function studioDownloadImageModel(modelKey, timeoutMs = 15000) {
++  return postJson(`${STUDIO_URL}/models/image/${encodeURIComponent(modelKey)}/download`, {}, timeoutMs);
++}
++async function studioImageModelDownloadState(modelKey, timeoutMs = 10000) {
++  return fetchJson(`${STUDIO_URL}/models/image/${encodeURIComponent(modelKey)}/download-state`, timeoutMs);
++}
++
+ async function studioCreatePage(projectName, episodeId, pageNumber, title = '', summary = '', timeoutMs = 10000) {
+   return postJson(
+     `${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/pages`,
+@@ -594,6 +639,42 @@ async function studioRepairPropose(projectName, report, userNote = '', timeoutMs
+   return postJson(`${STUDIO_URL}/workflow/repair/propose`, { project_name: projectName, report, user_note: userNote }, timeoutMs);
+ }
+ 
++async function studioUpdateStoryboard(projectName, projectId, storyboard, note = '', timeoutMs = 20000) {
++  return postJson(
++    `${STUDIO_URL}/workflow/storyboard`,
++    { project_name: projectName, project_id: projectId, storyboard, note },
++    timeoutMs,
++  );
++}
++
++async function studioTranscribeEdit(projectName, projectId, targetType, targetId, file, timeoutMs = 180000) {
++  const controller = new AbortController();
++  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
++  const form = new FormData();
++  form.append('project_name', projectName);
++  if (projectId) form.append('project_id', String(projectId));
++  form.append('target_type', targetType || 'storyboard');
++  if (targetId) form.append('target_id', String(targetId));
++  form.append('file', file);
++
++  try {
++    const response = await fetch(`${STUDIO_URL}/workflow/transcribe-edit`, {
++      method: 'POST',
++      headers: getAuthHeaders(),
++      body: form,
++      signal: controller.signal,
++    });
++    if (!response.ok) {
++      throw new Error(await getResponseErrorMessage(response, `${STUDIO_URL}/workflow/transcribe-edit`));
++    }
++    return await response.json();
++  } catch (error) {
++    throw normalizeFetchError(error, timeoutMs);
++  } finally {
++    clearTimeout(timeoutId);
++  }
++}
++
+ async function fetchStudioBlackboard(projectName, timeoutMs = 5000) {
+   return fetchJson(`${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/blackboard`, timeoutMs);
+ }
+@@ -709,12 +790,25 @@ export {
+   studioRunWorkflow,
+   studioRunStage,
+   studioGetPanels,
++  studioGetScenes,
++  studioRunScenes,
++  studioRegenerateScene,
++  studioRunCinematicStage,
++  studioRenderImages,
++  studioVoiceScenes,
++  studioSceneContinuity,
++  studioRenderStatus,
++  studioListImageModels,
++  studioDownloadImageModel,
++  studioImageModelDownloadState,
+   studioCreatePage,
+   studioCreatePanel,
+   studioApproveItem,
+   studioBriefReview,
+   studioResolveWarning,
+   studioRepairPropose,
++  studioUpdateStoryboard,
++  studioTranscribeEdit,
+   studioAssetUrl,
+   fetchStudioBlackboard,
+   studioUploadPanelImage,
+diff --git a/app/src/renderer/index.html b/app/src/renderer/index.html
+index 853d774..970a8f1 100644
+--- a/app/src/renderer/index.html
++++ b/app/src/renderer/index.html
+@@ -859,6 +859,118 @@
+                 </div>
+               </div>
+ 
++              <div class="setting-group">
++                <h3>Studio Media Engine</h3>
++                <p class="group-desc">Local-first model lanes for cinematic Studio projects. Keep the dispatcher small and resident; let heavy media workers load only when their queue runs.</p>
++
++                <div class="setting-row">
++                  <div class="setting-info">
++                    <label class="status-label" for="settingStudioResourceProfile">Resource Profile</label>
++                    <span class="setting-desc">Background saver unloads workers after jobs; speedy keeps compatible workers warm.</span>
++                  </div>
++                  <div class="setting-control">
++                    <select id="settingStudioResourceProfile" class="settings-input min-w-200">
++                      <option value="saver">Background VRAM Saver</option>
++                      <option value="speedy">Speedy Pipeline</option>
++                    </select>
++                  </div>
++                </div>
++
++                <div class="setting-row">
++                  <div class="setting-info">
++                    <label class="status-label" for="settingStudioDispatcherModel">Dispatcher Model</label>
++                    <span class="setting-desc">Small always-on Studio coordinator. Keep this on CPU/RAM.</span>
++                  </div>
++                  <div class="setting-control">
++                    <select id="settingStudioDispatcherModel" class="settings-input min-w-200">
++                      <option value="gemma-4-e4b-q4">Gemma 4 E4B Q4 (default)</option>
++                      <option value="gemma-4-e2b-q4">Gemma 4 E2B Q4 (low RAM)</option>
++                      <option value="gemma-4-e4b-q8">Gemma 4 E4B Q8</option>
++                    </select>
++                  </div>
++                </div>
++
++                <div class="setting-row">
++                  <div class="setting-info">
++                    <label class="status-label" for="settingStudioWriterModel">Smart Writer Model</label>
++                    <span class="setting-desc">Larger transient model for lore, showrunning, scriptwriting, and project intelligence.</span>
++                  </div>
++                  <div class="setting-control">
++                    <select id="settingStudioWriterModel" class="settings-input min-w-200">
++                      <option value="gemma-4-12b-q4">Gemma 4 12B Q4 (default)</option>
++                      <option value="gemma-4-e4b-q8">Gemma 4 E4B Q8</option>
++                      <option value="gemma-3-12b-q4">Gemma 3 12B Q4</option>
++                      <option value="gemma-4-26b-a4b-q4">Gemma 4 26B-A4B Q4</option>
++                      <option value="gemma-4-31b-q4">Gemma 4 31B Q4</option>
++                    </select>
++                  </div>
++                </div>
++
++                <div class="setting-row">
++                  <div class="setting-info">
++                    <label class="status-label" for="settingStudioVoiceEngine">Studio Voice Engine</label>
++                    <span class="setting-desc">Kokoro is the default bulk voice engine; Chatterbox is the premium expressive lane.</span>
++                  </div>
++                  <div class="setting-control">
++                    <select id="settingStudioVoiceEngine" class="settings-input min-w-200">
++                      <option value="kokoro">Kokoro</option>
++                      <option value="chatterbox">Chatterbox</option>
++                      <option value="off">Off</option>
++                    </select>
++                  </div>
++                </div>
++
++                <div class="setting-row">
++                  <div class="setting-info">
++                    <label class="status-label" for="settingStudioImageBackend">Image Backend</label>
++                    <span class="setting-desc">Scene image rendering backend. Off keeps the cinematic player's gradient fallback.</span>
++                  </div>
++                  <div class="setting-control">
++                    <select id="settingStudioImageBackend" class="settings-input min-w-200">
++                      <option value="off">Off / fallback</option>
++                      <option value="diffusers">In-process Diffusers</option>
++                      <option value="comfyui">ComfyUI URL</option>
++                    </select>
++                  </div>
++                </div>
++
++                <div class="setting-row">
++                  <div class="setting-info">
++                    <label class="status-label" for="settingStudioMusicEngine">Music Engine</label>
++                    <span class="setting-desc">Score generation for reels or acts.</span>
++                  </div>
++                  <div class="setting-control">
++                    <select id="settingStudioMusicEngine" class="settings-input min-w-200">
++                      <option value="off">Off</option>
++                      <option value="ace-step">ACE-Step</option>
++                    </select>
++                  </div>
++                </div>
++
++                <div class="setting-row">
++                  <div class="setting-info">
++                    <label class="status-label" for="settingStudioAmbienceEngine">Ambience Engine</label>
++                    <span class="setting-desc">Scene ambience and room-tone loops.</span>
++                  </div>
++                  <div class="setting-control">
++                    <select id="settingStudioAmbienceEngine" class="settings-input min-w-200">
++                      <option value="off">Off</option>
++                      <option value="stable-audio-open">Stable Audio Open</option>
++                    </select>
++                  </div>
++                </div>
++
++                <div class="setting-row">
++                  <div class="setting-info">
++                    <label class="status-label" for="settingStudioVramCap">VRAM Budget Cap (MB)</label>
++                    <span class="setting-desc">Soft cap used by Studio queue planning and future ModelHost scheduling.</span>
++                  </div>
++                  <div class="setting-control">
++                    <input id="settingStudioVramCap" class="settings-input w-120" type="number" min="2048" max="65536" step="512" />
++                  </div>
++                </div>
++              </div>
++
+               <div class="setting-group">
+                 <h3>Hardware Platform Capabilities</h3>
+                 <div id="capabilitiesList" class="detail-list"></div>
+@@ -919,8 +1031,8 @@
+             <section class="model-panel" aria-labelledby="llmModelHeading">
+               <div class="model-panel-header">
+                 <div>
+-                  <h3 id="llmModelHeading">LLM Rewrite Model</h3>
+-                  <p>Controls the local model used for cleanup, personas, and rewrites.</p>
++                  <h3 id="llmModelHeading">BetterFingers Core LLM</h3>
++                  <p>Used for dictation cleanup, personas, rewrites, and any selected smart-text task.</p>
+                 </div>
+                 <span id="llmModelBadge" class="model-badge">Loading</span>
+               </div>
+@@ -969,6 +1081,20 @@
+             </section>
+           </div>
+ 
++          <section class="model-panel studio-model-panel" aria-labelledby="studioModelHeading">
++            <div class="model-panel-header">
++              <div>
++                <h3 id="studioModelHeading">Studio Media Engine</h3>
++                <p>Dispatcher, writer, voice, image, music, and ambience lanes for cinematic Studio projects.</p>
++              </div>
++              <span class="model-badge" data-tone="warning">Local-first</span>
++            </div>
++            <div class="studio-model-note">
++              Downloads run in the background and resume from partial files after a connection drop, app restart, or power loss. Heavy Studio workers should stay unloaded until their queue needs them.
++            </div>
++            <div id="studioModelRoleMap" class="studio-model-role-grid" aria-live="polite"></div>
++          </section>
++
+           <div class="model-panel model-panel-compact">
+             <div class="model-panel-header">
+               <div>
+@@ -1339,6 +1465,30 @@
+               <div id="studioPanelsGrid" class="studio-panels-grid"></div>
+             </div>
+ 
++            <!-- Cinematic Production (scene-based reel) -->
++            <div class="studio-approval-section" id="studioCinematicSection">
++              <div class="studio-section-title">
++                <span class="studio-section-icon">🎞️</span>
++                <h3>Cinematic Production</h3>
++                <button id="studioCinemaRefreshButton" class="secondary-button" type="button" title="Refresh status">↻</button>
++              </div>
++              <p class="setting-desc">A scene-based cinematic reel: a dynamic scene blueprint you approve, then authored narration, evocative imagery, and local voice — played back as a scrolling, narrated reel you refine scene by scene.</p>
++
++              <div id="studioCinemaStatus" class="draft-metadata" style="margin:8px 0; line-height:1.7;">No cinematic run yet — start with <strong>Blueprint</strong>.</div>
++
++              <div class="studio-pipeline-actions">
++                <button id="studioBlueprintButton" class="secondary-button" type="button" title="Break the story into a scene blueprint (read or invented)">1 · Blueprint</button>
++                <button id="studioApproveBlueprintButton" class="secondary-button" type="button" title="Approve the scene list before generating">2 · Approve</button>
++                <button id="studioGenerateScenesButton" class="secondary-button primary-button" type="button" title="Write narration + imagery for each scene">3 · Generate Scenes</button>
++                <button id="studioRenderImagesButton" class="secondary-button" type="button" title="Render an image per scene (if a generator is configured)">Render Images</button>
++                <button id="studioVoiceScenesButton" class="secondary-button" type="button" title="Voice the narration locally">Voice</button>
++                <button id="studioContinuityButton" class="secondary-button" type="button" title="Audit continuity + verify setups pay off">Continuity</button>
++                <button id="studioPlayCinemaButton" class="secondary-button primary-button" type="button" title="Play the cinematic reel">▶ Player</button>
++              </div>
++              <div id="studioCinemaWarnings" class="draft-metadata" style="margin-top:8px;"></div>
++              <div id="studioCinemaMessage" class="warmup-message" role="status" aria-live="polite"></div>
++            </div>
++
+             <!-- Export Placeholder -->
+             <div class="studio-approval-section studio-export-section">
+               <div class="studio-section-title">
+diff --git a/app/src/renderer/main.js b/app/src/renderer/main.js
+index 4e4ddcb..0d89c61 100644
+--- a/app/src/renderer/main.js
++++ b/app/src/renderer/main.js
+@@ -56,11 +56,19 @@ import {
+   studioLoadProject,
+   studioRunWorkflow,
+   studioGetPanels,
++  studioRunScenes,
++  studioGetScenes,
++  studioRunCinematicStage,
++  studioRenderImages,
++  studioVoiceScenes,
++  studioSceneContinuity,
+   studioCreatePage,
+   studioCreatePanel,
+   studioApproveItem,
+   studioResolveWarning,
+   studioRepairPropose,
++  studioUpdateStoryboard,
++  studioTranscribeEdit,
+   studioAssetUrl,
+   fetchStudioBlackboard,
+   studioUploadPanelImage,
+@@ -150,6 +158,7 @@ const deleteWhisperButton = document.getElementById('deleteWhisperButton');
+ const unloadSttButton = document.getElementById('unloadSttButton');
+ const unloadLlmButton = document.getElementById('unloadLlmButton');
+ const unloadTtsButton = document.getElementById('unloadTtsButton');
++const studioModelRoleMapEl = document.getElementById('studioModelRoleMap');
+ const studioViewStartEl = document.getElementById('studioViewStart');
+ const studioViewSeedEl = document.getElementById('studioViewSeed');
+ const studioViewPipelineEl = document.getElementById('studioViewPipeline');
+@@ -196,6 +205,12 @@ const studioWorldSettingEl = document.getElementById('studioWorldSetting');
+ const studioWorldAestheticEl = document.getElementById('studioWorldAesthetic');
+ const studioWorldRulesEl = document.getElementById('studioWorldRules');
+ const studioCharactersListEl = document.getElementById('studioCharactersList');
++const studioStoryboardBadgeEl = document.getElementById('studioStoryboardBadge');
++const studioStoryboardSummaryEl = document.getElementById('studioStoryboardSummary');
++const studioStoryboardBeatsEl = document.getElementById('studioStoryboardBeats');
++const studioStoryboardSaveButton = document.getElementById('studioStoryboardSaveButton');
++const studioStoryboardVoiceInputEl = document.getElementById('studioStoryboardVoiceInput');
++const studioStoryboardVoiceButton = document.getElementById('studioStoryboardVoiceButton');
+ const studioPanelsGridEl = document.getElementById('studioPanelsGrid');
+ 
+ const wizardStepProgress = document.getElementById('wizardStepProgress');
+@@ -235,6 +250,7 @@ let activeProfileSettings = null;
+ let profileDirty = false;
+ let llmModelsPayload = null;
+ let whisperModelsPayload = null;
++let llmDownloadPollTimer = null;
+ let studioState = {
+   projectName: '',
+   projectId: null,
+@@ -298,6 +314,14 @@ const settingEls = {
+   model_keep_llm_loaded: document.getElementById('settingKeepLlm'),
+   model_keep_stt_loaded: document.getElementById('settingKeepStt'),
+   model_keep_tts_loaded: document.getElementById('settingKeepTts'),
++  studio_resource_profile: document.getElementById('settingStudioResourceProfile'),
++  studio_dispatcher_model_id: document.getElementById('settingStudioDispatcherModel'),
++  studio_writer_model_id: document.getElementById('settingStudioWriterModel'),
++  studio_voice_engine: document.getElementById('settingStudioVoiceEngine'),
++  studio_image_backend: document.getElementById('settingStudioImageBackend'),
++  studio_music_engine: document.getElementById('settingStudioMusicEngine'),
++  studio_ambience_engine: document.getElementById('settingStudioAmbienceEngine'),
++  studio_vram_cap_mb: document.getElementById('settingStudioVramCap'),
+ };
+ 
+ function setupHotkeyRecording(inputEl) {
+@@ -362,9 +386,9 @@ function setupHotkeyRecording(inputEl) {
+       if (!accumulatedKeys.includes(standardName)) {
+         accumulatedKeys.push(standardName);
+       }
+-      
++
+       inputEl.value = accumulatedKeys.join('+');
+-      
++
+       // Mark profile dirty
+       inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+     }
+@@ -448,7 +472,7 @@ function renderLlmDownloadProgress(state = null, model = null) {
+   }
+ 
+   const status = String(state?.status || '').toLowerCase();
+-  const show = ['starting', 'downloading', 'complete', 'ready', 'already_installed', 'error'].includes(status);
++  const show = ['queued', 'starting', 'downloading', 'complete', 'ready', 'already_installed', 'error'].includes(status) || Boolean(state?.active || state?.resumable);
+   llmDownloadProgressEl.hidden = !show;
+   if (!show) {
+     return;
+@@ -457,7 +481,7 @@ function renderLlmDownloadProgress(state = null, model = null) {
+   const percent = Math.max(0, Math.min(100, Number(state?.percent || 0)));
+   const rounded = Math.round(percent);
+   const message = state?.message || (model?.name ? `${model.name} download status` : 'Download status');
+-  const downloaded = formatBytes(state?.downloaded_bytes);
++  const downloaded = formatBytes(state?.downloaded_bytes || state?.partial_bytes);
+   const total = formatBytes(state?.total_bytes);
+ 
+   if (llmDownloadProgressLabelEl) {
+@@ -471,7 +495,18 @@ function renderLlmDownloadProgress(state = null, model = null) {
+     llmDownloadProgressFillEl.dataset.tone = status === 'error' ? 'danger' : status === 'complete' || status === 'ready' || status === 'already_installed' ? 'success' : 'active';
+   }
+   if (llmDownloadProgressBytesEl) {
+-    llmDownloadProgressBytesEl.textContent = downloaded && total ? `${downloaded} of ${total}` : downloaded;
++    const parts = [];
++    if (downloaded && total) {
++      parts.push(`${downloaded} of ${total}`);
++    } else if (downloaded) {
++      parts.push(`${downloaded} saved`);
++    }
++    if (state?.resumable && status === 'error') {
++      parts.push('partial kept; next download will resume');
++    } else if (state?.active) {
++      parts.push('running in background');
++    }
++    llmDownloadProgressBytesEl.textContent = parts.join(' · ');
+   }
+ }
+ 
+@@ -593,6 +628,107 @@ function renderModelOverview(llmPayload, whisperPayload, selectedLlm, installedW
+   }
+ }
+ 
++function findModelsForRole(models, role) {
++  return (models ?? []).filter((model) => Array.isArray(model.roles) && model.roles.includes(role));
++}
++
++function preferredModel(models, ids = []) {
++  for (const id of ids) {
++    const found = (models ?? []).find((model) => model.id === id);
++    if (found) {
++      return found;
++    }
++  }
++  return (models ?? [])[0] || null;
++}
++
++function renderStudioModelRoleMap(llmPayload, whisperPayload) {
++  if (!studioModelRoleMapEl) {
++    return;
++  }
++
++  const models = llmPayload?.models ?? [];
++  const dispatcher = preferredModel(findModelsForRole(models, 'dispatcher'), ['gemma-4-e4b-q4', 'gemma-4-e2b-q4']);
++  const writer = preferredModel(findModelsForRole(models, 'writer'), ['gemma-4-12b-q4', 'gemma-3-12b-q4']);
++  const whisperInstalled = (whisperPayload?.models ?? []).some((model) => model.installed);
++
++  const roles = [
++    {
++      label: 'Dispatcher',
++      value: dispatcher?.name || 'Gemma 4 E4B',
++      detail: 'Small always-on Studio floor manager, pinned to CPU/RAM.',
++      state: dispatcher?.installed ? 'Ready' : dispatcher?.resumable ? 'Partial' : 'Needs download',
++      tone: dispatcher?.installed ? 'success' : dispatcher?.resumable ? 'warning' : 'danger',
++    },
++    {
++      label: 'Smart Writer',
++      value: writer?.name || 'Gemma 4 12B',
++      detail: 'Showrunner, scriptwriter, lore, and project intelligence.',
++      state: writer?.installed ? 'Ready' : writer?.resumable ? 'Partial' : 'Needs download',
++      tone: writer?.installed ? 'success' : writer?.resumable ? 'warning' : 'danger',
++    },
++    {
++      label: 'Voice',
++      value: 'Kokoro default · Chatterbox premium',
++      detail: 'Kokoro is the bulk local voice path; Chatterbox is the expressive premium lane.',
++      state: 'Configurable',
++      tone: 'warning',
++    },
++    {
++      label: 'Image',
++      value: 'Diffusers / SDXL / FLUX',
++      detail: 'Scene image prompts are ready; checkpoint downloads/render backend are the next media step.',
++      state: 'Not configured',
++      tone: 'warning',
++    },
++    {
++      label: 'Music',
++      value: 'ACE-Step',
++      detail: 'Per-reel or per-act scoring lane from tone and emotional arc.',
++      state: 'Planned',
++      tone: 'warning',
++    },
++    {
++      label: 'Ambience',
++      value: 'Stable Audio Open',
++      detail: 'Scene loops for locations, mood, and room tone.',
++      state: 'Planned',
++      tone: 'warning',
++    },
++    {
++      label: 'Speech Input',
++      value: `Whisper ${whisperPayload?.selected_model_size ?? ''}`.trim(),
++      detail: 'BetterFingers voice intake and Studio producer conversations.',
++      state: whisperInstalled ? 'Ready' : 'Needs download',
++      tone: whisperInstalled ? 'success' : 'warning',
++    },
++  ];
++
++  studioModelRoleMapEl.innerHTML = '';
++  for (const role of roles) {
++    const card = document.createElement('div');
++    card.className = 'studio-model-role-card';
++
++    const head = document.createElement('div');
++    head.className = 'studio-model-role-head';
++    const label = document.createElement('span');
++    label.textContent = role.label;
++    const state = document.createElement('strong');
++    state.textContent = role.state;
++    state.dataset.tone = role.tone;
++    head.append(label, state);
++
++    const value = document.createElement('b');
++    value.textContent = role.value;
++
++    const detail = document.createElement('small');
++    detail.textContent = role.detail;
++
++    card.append(head, value, detail);
++    studioModelRoleMapEl.append(card);
++  }
++}
++
+ function renderModelPanels() {
+   const llmPayload = llmModelsPayload;
+   const whisperPayload = whisperModelsPayload;
+@@ -610,14 +746,32 @@ function renderModelPanels() {
+   setModelBadge(llmModelBadgeEl, Boolean(llmVisible?.installed), llmVisible?.id === llmPayload.selected_model_id);
+   setModelBadge(whisperModelBadgeEl, Boolean(visibleWhisper?.installed), visibleWhisperSize === whisperPayload.selected_model_size);
+   renderModelOverview(llmPayload, whisperPayload, llmSelected, installedWhisper);
++  renderStudioModelRoleMap(llmPayload, whisperPayload);
+   renderModelDetailGrid(llmModelDetailsEl, [
+     { label: 'Selected model', value: llmPayload.selected_model_id },
+     { label: 'Viewing', value: llmVisible?.name ?? llmVisible?.id ?? 'unknown' },
+     { label: 'Install state', value: llmVisible?.installed ? 'installed' : 'missing', tone: llmVisible?.installed ? 'success' : 'danger' },
+     { label: 'Approx size', value: estimateMb ? `${estimateMb.toLocaleString()} MB` : 'unknown' },
++    { label: 'Role', value: (llmVisible?.roles ?? []).join(', ') || 'rewrite' },
++    { label: 'Lane', value: llmVisible?.lane || 'gpu' },
+     { label: 'Runtime', value: llmPayload.llama_server_exists ? 'found' : 'missing', tone: llmPayload.llama_server_exists ? 'success' : 'danger' },
+   ]);
+-  renderLlmDownloadProgress(llmPayload.download_state, llmVisible);
++  renderLlmDownloadProgress(llmVisible?.download_state || llmPayload.download_state, llmVisible);
++  if (llmVisible?.download_active && !llmDownloadPollTimer) {
++    llmDownloadPollTimer = window.setInterval(async () => {
++      try {
++        const state = await fetchLlmDownloadState(llmVisible.id);
++        renderLlmDownloadProgress(state, llmVisible);
++        if (!state?.active) {
++          window.clearInterval(llmDownloadPollTimer);
++          llmDownloadPollTimer = null;
++          await Promise.all([refreshModels(), refreshRuntime()]);
++        }
++      } catch (_error) {
++        // Keep the visible saved state; the next refresh will reconnect.
++      }
++    }, 1200);
++  }
+   renderModelDetailGrid(whisperModelDetailsEl, [
+     { label: 'Selected model', value: whisperPayload.selected_model_size },
+     { label: 'Viewing', value: visibleWhisperSize },
+@@ -736,7 +890,7 @@ function setStudioProject(projectName, projectId = null, data = null) {
+ 
+ function setStudioButtonBusy(button, busy, busyText = 'Working...') {
+   if (!button) {
+-    return () => {};
++    return () => { };
+   }
+   const previousText = button.textContent;
+   button.disabled = busy;
+@@ -976,6 +1130,115 @@ function renderStudioPanelCard(panel, dialogue) {
+   return card;
+ }
+ 
++function getStudioStoryboard(data = {}) {
++  const bible = getStudioBible(data);
++  if (bible.storyboard?.episodes?.length) {
++    return bible.storyboard;
++  }
++  const minutes = data.minutes || [];
++  const canonEvents = data.canon_events || [];
++  const episodes = minutes.map((minute) => {
++    const raw = minute.summary || '';
++    const splitAt = raw.indexOf(':');
++    return {
++      name: splitAt > 0 ? raw.slice(0, splitAt).trim() : `Beat ${minute.minute_number || ''}`.trim(),
++      summary: splitAt > 0 ? raw.slice(splitAt + 1).trim() : raw,
++    };
++  });
++  return {
++    summary: (data.episodes || [])[0]?.summary || '',
++    episodes,
++    canon_events: canonEvents.map((event) => ({ description: event.description || '', time_index: event.time_index || '' })),
++  };
++}
++
++function renderStudioStoryboard(data = {}) {
++  const storyboard = getStudioStoryboard(data);
++  if (studioStoryboardSummaryEl) {
++    studioStoryboardSummaryEl.value = storyboard.summary || '';
++  }
++  if (studioStoryboardBeatsEl) {
++    studioStoryboardBeatsEl.innerHTML = '';
++    const beats = Array.isArray(storyboard.episodes) ? storyboard.episodes : [];
++    if (!beats.length) {
++      studioStoryboardBeatsEl.innerHTML = '<span class="empty-state">No storyboard beats generated yet.</span>';
++    } else {
++      beats.forEach((beat, index) => {
++        const row = document.createElement('div');
++        row.className = 'studio-storyboard-beat';
++        row.innerHTML = `
++          <label class="status-label">Beat ${index + 1}</label>
++          <input class="settings-input studio-storyboard-beat-name" value="" />
++          <textarea class="settings-input studio-storyboard-beat-summary" rows="3"></textarea>
++        `;
++        row.querySelector('.studio-storyboard-beat-name').value = beat.name || `Beat ${index + 1}`;
++        row.querySelector('.studio-storyboard-beat-summary').value = beat.summary || '';
++        studioStoryboardBeatsEl.append(row);
++      });
++    }
++  }
++  if (studioStoryboardBadgeEl) {
++    renderStudioBadge(studioStoryboardBadgeEl, Boolean(storyboard.summary && (storyboard.episodes || []).length));
++  }
++}
++
++function collectStudioStoryboardEdits() {
++  const beats = [...(studioStoryboardBeatsEl?.querySelectorAll('.studio-storyboard-beat') || [])].map((row, index) => ({
++    name: row.querySelector('.studio-storyboard-beat-name')?.value?.trim() || `Beat ${index + 1}`,
++    summary: row.querySelector('.studio-storyboard-beat-summary')?.value?.trim() || '',
++  })).filter((beat) => beat.name || beat.summary);
++  return {
++    summary: studioStoryboardSummaryEl?.value?.trim() || '',
++    episodes: beats,
++    canon_events: getStudioStoryboard(studioState.data || {}).canon_events || [],
++  };
++}
++
++async function handleStudioStoryboardSave(note = 'Typed storyboard edit') {
++  if (!studioState.projectName || !studioState.projectId) {
++    setMessage(studioApprovalMessageEl, 'Load a Studio project before editing beats.', 'warning');
++    return;
++  }
++  const storyboard = collectStudioStoryboardEdits();
++  if (!storyboard.summary || !storyboard.episodes.length) {
++    setMessage(studioApprovalMessageEl, 'Storyboard needs a summary and at least one beat.', 'warning');
++    return;
++  }
++  const restoreButton = setStudioButtonBusy(studioStoryboardSaveButton, true, 'Saving...');
++  try {
++    const result = await studioUpdateStoryboard(studioState.projectName, studioState.projectId, storyboard, note);
++    studioState.data = result.project || studioState.data;
++    renderStudioApproval(studioState.data);
++    setMessage(studioApprovalMessageEl, 'Storyboard beats saved. Later agents will use this edited structure.', 'success');
++  } catch (error) {
++    setMessage(studioApprovalMessageEl, `Saving storyboard failed: ${error.message}`, 'danger');
++  } finally {
++    restoreButton();
++  }
++}
++
++async function handleStudioStoryboardVoice() {
++  const file = studioStoryboardVoiceInputEl?.files?.[0];
++  if (!file) {
++    setMessage(studioApprovalMessageEl, 'Choose an audio file for the voice fix first.', 'warning');
++    return;
++  }
++  const restoreButton = setStudioButtonBusy(studioStoryboardVoiceButton, true, 'Transcribing...');
++  try {
++    const result = await studioTranscribeEdit(studioState.projectName, studioState.projectId, 'storyboard', null, file);
++    const transcript = result.text || '';
++    const current = studioStoryboardSummaryEl?.value?.trim() || '';
++    if (studioStoryboardSummaryEl && transcript) {
++      studioStoryboardSummaryEl.value = [current, `Voice note: ${transcript}`].filter(Boolean).join('\n\n');
++    }
++    setMessage(studioApprovalMessageEl, 'Voice fix transcribed into the storyboard summary. Save beats when it looks right.', 'success');
++  } catch (error) {
++    setMessage(studioApprovalMessageEl, `Voice transcription failed: ${error.message}`, 'danger');
++  } finally {
++    restoreButton();
++  }
++}
++
+ function renderStudioApproval(data) {
+   const exportData = getStudioExportData(data);
+   const bible = getStudioBible(exportData);
+@@ -1037,6 +1300,8 @@ function renderStudioApproval(data) {
+     }
+   }
+ 
++  renderStudioStoryboard(exportData);
++
+   if (studioPanelsGridEl) {
+     studioPanelsGridEl.innerHTML = '';
+     if (!panels.length) {
+@@ -1183,11 +1448,11 @@ function setStudioMode(mode) {
+     studioSeedInputEl.placeholder = text.placeholder;
+     studioSeedInputEl.rows = copy === 'seed' ? 3 : 15;
+   }
+-  
++
+   if (studioRunPipelineButton) {
+     studioRunPipelineButton.textContent = copy === 'seed' ? 'Send Message' : 'Begin Production';
+   }
+-  
++
+   const chatContainer = document.getElementById('studioIntakeChatContainer');
+   if (chatContainer) {
+     chatContainer.style.display = copy === 'seed' ? 'block' : 'none';
+@@ -1235,7 +1500,7 @@ function appendChatMessage(role, content) {
+   wrapper.style.padding = '10px 14px';
+   wrapper.style.borderRadius = '8px';
+   wrapper.style.maxWidth = '85%';
+-  
++
+   const bubble = document.createElement('div');
+   bubble.className = 'message-bubble';
+   bubble.textContent = content;
+@@ -1247,7 +1512,7 @@ function appendChatMessage(role, content) {
+ async function handleStudioRunPipeline() {
+   const messageText = studioSeedInputEl?.value?.trim();
+   const mode = studioState.mode || 'seed';
+-  
++
+   if (!studioState.projectName) {
+     setMessage(studioPipelineMessageEl, 'Create or load a project first.', 'danger');
+     setStudioView('start');
+@@ -1277,10 +1542,10 @@ async function handleStudioRunPipeline() {
+   try {
+     const result = await studioIntakeTurn(studioState.projectName, studioIntakeChat);
+     const reply = result?.data?.response_text || "I'm having trouble understanding. Can you say that again?";
+-    
++
+     appendChatMessage('assistant', reply);
+     studioIntakeChat.push({ role: 'assistant', content: reply });
+-    
++
+     if (result?.data?.is_complete) {
+       setMessage(studioPipelineMessageEl, 'Intake complete! Starting production...', 'success');
+       studioState.productionSeed = JSON.stringify(result?.data?.draft_premise);
+@@ -1564,7 +1829,7 @@ async function handleStudioRepairRebuild() {
+ async function handleStudioDeleteProject() {
+   const projectName = document.getElementById('studioLoadProjectName')?.value;
+   if (!projectName) return;
+-  
++
+   const confirmDelete = confirm(`Are you sure you want to permanently delete the project "${projectName}"? This cannot be undone.`);
+   if (!confirmDelete) return;
+ 
+@@ -1616,6 +1881,154 @@ async function handleStudioExportReel() {
+   }
+ }
+ 
++async function handleStudioGenerateScenes() {
++  if (!studioState.projectName) {
++    setMessage(studioApprovalMessageEl, 'Load or generate a project before writing scenes.', 'danger');
++    return;
++  }
++  const button = document.getElementById('studioGenerateScenesButton');
++  const restoreButton = setStudioButtonBusy(button, true, 'Writing scenes…');
++  try {
++    const result = await studioRunScenes(studioState.projectName);
++    const count = result?.data?.scenes?.length || 0;
++    setMessage(studioApprovalMessageEl,
++      `Wrote ${count} cinematic scene${count === 1 ? '' : 's'}. Open the Cinematic Player to watch.`, 'success');
++    await refreshCinemaStatus();
++  } catch (error) {
++    setMessage(studioApprovalMessageEl, `Scene generation failed: ${error.message}`, 'danger');
++  } finally {
++    restoreButton();
++  }
++}
++
++function handleStudioPlayCinema() {
++  if (!studioState.projectName) {
++    setMessage(studioApprovalMessageEl, 'Load or generate a project before opening the player.', 'danger');
++    return;
++  }
++  const url = `cinema.html?project=${encodeURIComponent(studioState.projectName)}`;
++  // Open the standalone cinematic player. Prefer a real window; the renderer origin is
++  // http://, so a relative URL resolves against the served renderer.
++  window.open(url, 'studioCinema', 'width=1280,height=800');
++}
++
++// --- Cinematic production desk (Piece 9) ---
++function cinemaMsg(text, type = 'info') {
++  setMessage(document.getElementById('studioCinemaMessage') || studioApprovalMessageEl, text, type);
++}
++
++async function runCinemaStage(fn, buttonId, busyText, doneText) {
++  if (!studioState.projectName) { cinemaMsg('Load or generate a project first.', 'danger'); return null; }
++  const button = document.getElementById(buttonId);
++  const restore = setStudioButtonBusy(button, true, busyText);
++  try {
++    const result = await fn(studioState.projectName);
++    cinemaMsg(typeof doneText === 'function' ? doneText(result) : doneText, 'success');
++    await refreshCinemaStatus();
++    return result;
++  } catch (error) {
++    cinemaMsg(`${busyText.replace('…', '')} failed: ${error.message}`, 'danger');
++    return null;
++  } finally {
++    restore();
++  }
++}
++
++async function handleStudioBlueprint() {
++  const r = await runCinemaStage(
++    (p) => studioRunCinematicStage(p, 'showrunner'),
++    'studioBlueprintButton', 'Breaking into scenes…',
++    (res) => {
++      const n = res?.data?.blueprint?.scene_count || res?.data?.blueprint?.scenes?.length || 0;
++      return `Blueprint ready: ${n} scenes. Review/edit the Storyboard, then Approve.`;
++    });
++  if (r) {
++    studioState.blueprintApproved = false;
++    const gen = document.getElementById('studioGenerateScenesButton');
++    if (gen) gen.disabled = true;
++  }
++}
++
++function handleStudioApproveBlueprint() {
++  if (!studioState.projectName) { cinemaMsg('Load a project first.', 'danger'); return; }
++  studioState.blueprintApproved = true;
++  const gen = document.getElementById('studioGenerateScenesButton');
++  if (gen) gen.disabled = false;
++  cinemaMsg('Blueprint approved — you can now Generate Scenes.', 'success');
++}
++
++function handleStudioRenderImages() {
++  return runCinemaStage((p) => studioRenderImages(p), 'studioRenderImagesButton', 'Rendering images…',
++    (res) => {
++      const d = res?.data || {};
++      return d.renderer_available
++        ? `Rendered ${d.counts?.done || 0} scene image(s).`
++        : 'No image generator configured — scenes keep their atmospheric gradient.';
++    });
++}
++
++function handleStudioVoiceScenes() {
++  return runCinemaStage((p) => studioVoiceScenes(p), 'studioVoiceScenesButton', 'Voicing narration…',
++    (res) => {
++      const d = res?.data || {};
++      return d.synth_available
++        ? `Voiced ${d.done || 0}/${d.total || 0} beats.`
++        : 'No local TTS available — the player will read with browser speech.';
++    });
++}
++
++function handleStudioContinuity() {
++  return runCinemaStage((p) => studioSceneContinuity(p), 'studioContinuityButton', 'Auditing continuity…',
++    (res) => {
++      const warns = res?.data?.warnings || [];
++      renderCinemaWarnings(warns);
++      const high = warns.filter((w) => w.severity === 'high').length;
++      return warns.length
++        ? `${warns.length} continuity note(s), ${high} high (unpaid setups).`
++        : 'Continuity clean — every planted setup pays off.';
++    });
++}
++
++function renderCinemaWarnings(warns) {
++  const el = document.getElementById('studioCinemaWarnings');
++  if (!el) return;
++  if (!warns || !warns.length) { el.innerHTML = ''; return; }
++  const icon = { high: '🔴', medium: '🟠', low: '🟡' };
++  el.innerHTML = warns.slice(0, 12).map((w) =>
++    `<div>${icon[w.severity] || '•'} <strong>${escapeHtml(w.scene_id || '')}</strong> ${escapeHtml(w.message || '')}` +
++    (w.suggestion ? ` <em>— ${escapeHtml(w.suggestion)}</em>` : '') + `</div>`).join('');
++}
++
++async function refreshCinemaStatus() {
++  const el = document.getElementById('studioCinemaStatus');
++  if (!el || !studioState.projectName) return;
++  try {
++    const data = await studioGetScenes(studioState.projectName);
++    const scenes = data.scenes || [];
++    const bp = data.blueprint || {};
++    const sceneCount = bp.scene_count || (bp.scenes ? bp.scenes.length : 0);
++    const written = scenes.filter((s) => (s.narration_script || []).length).length;
++    const grounding = data.grounding || 'none';
++    const live = ['map-reduce', 'map-reduce (partial)', 'invented'].includes(grounding);
++    const rows = [];
++    rows.push(`<strong>Blueprint:</strong> ${sceneCount ? sceneCount + ' scenes' : '—'}` +
++      (studioState.blueprintApproved ? ' ✓ approved' : (sceneCount ? ' · awaiting approval' : '')));
++    rows.push(`<strong>Scenes written:</strong> ${written}/${sceneCount || '—'}`);
++    rows.push(`<strong>Images:</strong> ${data.image_done || 0}/${scenes.length || '—'}`);
++    rows.push(`<strong>Voice:</strong> ${data.audio_done || 0}/${data.audio_total || '—'} beats`);
++    rows.push(`<strong>Source:</strong> ${live ? '🟢 live model' :
++      '⚠ procedural fallback (no live LLM — fix the model for real prose)'}`);
++    el.innerHTML = rows.join('<br>');
++  } catch (error) {
++    el.textContent = `Status unavailable: ${error.message}`;
++  }
++}
++
++function escapeHtml(s) {
++  return String(s == null ? '' : s).replace(/[&<>"]/g, (c) =>
++    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
++}
++
+ function handleStudioSectionApproval(button) {
+   const section = button?.dataset.section;
+   const action = button?.dataset.action;
+@@ -2159,7 +2572,17 @@ function fillSelect(selectEl, options, selectedValue, labelFor = (item) => item)
+ }
+ 
+ function renderProfileSettings(settings) {
+-  activeProfileSettings = { ...(settings ?? {}) };
++  activeProfileSettings = {
++    studio_resource_profile: 'saver',
++    studio_dispatcher_model_id: 'gemma-4-e4b-q4',
++    studio_writer_model_id: 'gemma-4-12b-q4',
++    studio_voice_engine: 'kokoro',
++    studio_image_backend: 'off',
++    studio_music_engine: 'off',
++    studio_ambience_engine: 'off',
++    studio_vram_cap_mb: 14336,
++    ...(settings ?? {}),
++  };
+   profileDirty = false;
+ 
+   // Clear all validation errors
+@@ -2191,7 +2614,7 @@ function renderProfileSettings(settings) {
+ function markProfileDirty() {
+   profileDirty = true;
+   setMessage(profileMessageEl, 'Unsaved profile changes.', 'warning');
+-  
++
+   const saveBar = document.getElementById('settingsSaveBar');
+   if (saveBar) {
+     saveBar.classList.remove('hidden');
+@@ -2246,7 +2669,7 @@ async function refreshPersonasAndVoices() {
+     if (voiceSelect) {
+       const currentSelected = voiceSelect.value;
+       voiceSelect.innerHTML = '';
+-      
++
+       if (Array.isArray(voicesData.defaults)) {
+         for (const voice of voicesData.defaults) {
+           const option = document.createElement('option');
+@@ -2273,7 +2696,7 @@ async function refreshPersonasAndVoices() {
+ }
+ 
+ async function refreshProfiles() {
+-  await refreshPersonasAndVoices().catch(() => {});
++  await refreshPersonasAndVoices().catch(() => { });
+   const payload = await fetchProfiles();
+   fillSelect(profileSelectEl, payload.profiles ?? [], payload.active_profile);
+   renderProfileSettings(payload.settings ?? {});
+@@ -2300,7 +2723,7 @@ function initWizard() {
+         }
+       }
+     }
+-    
++
+     if (wizardStepProgress) {
+       const titles = [
+         "Select Goal & Role",
+@@ -2431,9 +2854,9 @@ function initWizard() {
+       try {
+         const res = await savePersona(name, prompt);
+         setMessage(wizardMessage, res.message || "Persona saved successfully!", "success");
+-        
++
+         await refreshPersonasAndVoices();
+-        
++
+         const presetSelect = settingEls.current_preset;
+         if (presetSelect) {
+           presetSelect.value = name;
+@@ -2477,7 +2900,7 @@ function initWizard() {
+     try {
+       const res = await deletePersona(name);
+       setMessage(wizardMessage, res.message || "Persona deleted successfully!", "success");
+-      
++
+       await refreshPersonasAndVoices();
+ 
+       setTimeout(() => {
+@@ -2503,7 +2926,12 @@ async function refreshModels() {
+ 
+   fillSelect(
+     llmModelSelectEl,
+-    (llmPayload.models ?? []).map((model) => ({ value: model.id, label: `${model.name} ${model.installed ? '(installed)' : ''}` })),
++    (llmPayload.models ?? []).map((model) => {
++      const group = model.group === 'studio' ? 'Studio' : 'BetterFingers';
++      const roles = Array.isArray(model.roles) && model.roles.length ? ` · ${model.roles.join('/')}` : '';
++      const state = model.installed ? 'installed' : model.resumable ? 'partial' : 'missing';
++      return { value: model.id, label: `${group}: ${model.name}${roles} (${state})` };
++    }),
+     llmPayload.selected_model_id,
+     (item) => item.label,
+   );
+@@ -2542,7 +2970,7 @@ async function runLlmDownloadAction() {
+   const visibleModel = (llmModelsPayload?.models ?? []).find((model) => model.id === modelId);
+   let stopped = false;
+   downloadLlmModelButton.disabled = true;
+-  downloadLlmModelButton.textContent = 'Downloading...';
++  downloadLlmModelButton.textContent = 'Starting...';
+   renderLlmDownloadProgress({ status: 'starting', percent: 0, message: `Starting ${visibleModel?.name ?? modelId} download.` }, visibleModel);
+ 
+   const poll = async () => {
+@@ -2552,28 +2980,42 @@ async function runLlmDownloadAction() {
+     try {
+       const state = await fetchLlmDownloadState(modelId);
+       renderLlmDownloadProgress(state, visibleModel);
++      const status = String(state?.status || '').toLowerCase();
++      if (!state?.active && ['ready', 'complete', 'already_installed', 'error'].includes(status)) {
++        stopped = true;
++        window.clearInterval(pollTimer);
++        if (llmDownloadPollTimer === pollTimer) {
++          llmDownloadPollTimer = null;
++        }
++        downloadLlmModelButton.textContent = previous;
++        downloadLlmModelButton.disabled = false;
++        await Promise.all([refreshModels(), refreshRuntime()]);
++      }
+     } catch (_error) {
+       // The main download request is the source of truth; progress polling is best-effort.
+     }
+   };
+ 
++  if (llmDownloadPollTimer) {
++    window.clearInterval(llmDownloadPollTimer);
++    llmDownloadPollTimer = null;
++  }
+   const pollTimer = window.setInterval(poll, 900);
++  llmDownloadPollTimer = pollTimer;
+   try {
+     await poll();
+     const result = await downloadLlmModel(modelId);
+-    stopped = true;
+-    window.clearInterval(pollTimer);
+-    renderLlmDownloadProgress({ status: result?.ok === false ? 'error' : 'ready', percent: result?.ok === false ? 0 : 100, message: result?.message || 'Download complete.' }, visibleModel);
+-    setMessage(modelMessageEl, result?.message || 'LLM download completed.', result?.ok === false ? 'danger' : 'success');
+-    await Promise.all([refreshModels(), refreshRuntime()]);
++    downloadLlmModelButton.textContent = 'Downloading...';
++    setMessage(modelMessageEl, result?.message || 'LLM download started in the background.', result?.ok === false ? 'danger' : 'success');
++    await poll();
+   } catch (error) {
+     stopped = true;
+     window.clearInterval(pollTimer);
++    if (llmDownloadPollTimer === pollTimer) {
++      llmDownloadPollTimer = null;
++    }
+     renderLlmDownloadProgress({ status: 'error', percent: 0, message: `Download failed: ${error.message}` }, visibleModel);
+     setMessage(modelMessageEl, `Download LLM failed: ${error.message}`, 'danger');
+-  } finally {
+-    stopped = true;
+-    window.clearInterval(pollTimer);
+     downloadLlmModelButton.textContent = previous;
+     downloadLlmModelButton.disabled = false;
+   }
+@@ -2642,7 +3084,7 @@ function renderRuntimeErrors(payload) {
+     severityPill.style.fontSize = '0.75rem';
+     severityPill.style.padding = '2px 6px';
+     severityPill.textContent = error.severity ?? 'recoverable';
+-    
++
+     if (error.severity === 'fatal') {
+       severityPill.dataset.tone = 'danger';
+     } else if (error.severity === 'warning') {
+@@ -2681,7 +3123,7 @@ async function refreshSidecarStatus() {
+     `pid: ${status.pid ?? 'none'}`,
+     status.message ?? '',
+   ].filter(Boolean).join('\n');
+-  
++
+   if (status.state === 'error') {
+     sidecarStatusEl.dataset.tone = 'danger';
+   } else if (status.state === 'ready') {
+@@ -2701,7 +3143,7 @@ async function refreshSidecarStatus() {
+   }
+ 
+   if (status.state === 'error' || status.state === 'stopped') {
+-    refreshSidecarLogs().catch(() => {});
++    refreshSidecarLogs().catch(() => { });
+   }
+ 
+   return status;
+@@ -2939,7 +3381,18 @@ function runValidation() {
+     }
+   }
+ 
+-  // 8. Hotkeys Collision Detection
++  // 8. Studio VRAM budget cap
++  const studioVramEl = settingEls.studio_vram_cap_mb;
++  if (studioVramEl) {
++    const val = parseInt(studioVramEl.value, 10);
++    if (isNaN(val) || val < 2048 || val > 65536) {
++      setValidationError('studio_vram_cap_mb', 'Studio VRAM cap must be between 2048 and 65536 MB.');
++    } else {
++      clearValidationError('studio_vram_cap_mb');
++    }
++  }
++
++  // 9. Hotkeys Collision Detection
+   const hotkeyFields = [
+     'hotkey',
+     'force_stop_key',
+@@ -3283,7 +3736,7 @@ async function runWarmup(button, payload) {
+       return;
+     }
+     setWarmupMessage(summary.successes.length ? summary.successes.join(' · ') : 'Warmup request completed.', 'success');
+-    await refreshOutputSettings().catch(() => {});
++    await refreshOutputSettings().catch(() => { });
+   } catch (error) {
+     setWarmupMessage(`Warmup failed: ${error.message}`, 'danger');
+     button.textContent = previousText;
+@@ -3333,17 +3786,17 @@ function updateVoiceStatus(message) {
+       message.status === 'preview_ready' ? 'New draft ready for review.' : message.error || 'Draft needs attention.',
+       message.status === 'preview_ready' ? 'success' : 'danger',
+     );
+-    refreshDrafts().catch(() => {});
++    refreshDrafts().catch(() => { });
+   }
+ 
+   if (['draft_accepted', 'draft_declined'].includes(message.status)) {
+-    refreshDrafts().catch(() => {});
+-    refreshOutputSettings().catch(() => {});
++    refreshDrafts().catch(() => { });
++    refreshOutputSettings().catch(() => { });
+   }
+ 
+   if (message.status === 'draft_history_cleared') {
+     renderDraft(null);
+-    refreshDrafts().catch(() => {});
++    refreshDrafts().catch(() => { });
+   }
+ 
+   if (['draft_updated', 'draft_rewriting', 'draft_rewritten', 'draft_rewrite_error', 'draft_tts_requested'].includes(message.status)) {
+@@ -3357,9 +3810,9 @@ function updateVoiceStatus(message) {
+       setMessage(draftMessageEl, message.status === 'draft_rewritten' ? 'Rewrite complete.' : 'Draft edit saved.', 'success');
+     }
+     if (message.status === 'draft_rewritten' || message.status === 'draft_updated') {
+-      refreshLatestDraft().then(showReviewOverlayDraft).catch(() => {});
++      refreshLatestDraft().then(showReviewOverlayDraft).catch(() => { });
+     }
+-    refreshDrafts().catch(() => {});
++    refreshDrafts().catch(() => { });
+   }
+ 
+   if (['draft_sent', 'draft_send_error', 'selection_captured', 'selection_capture_failed', 'emergency_stop'].includes(message.status)) {
+@@ -3370,8 +3823,8 @@ function updateVoiceStatus(message) {
+     if (message.status === 'draft_sent' || message.status === 'emergency_stop') {
+       hideReviewOverlay();
+     }
+-    refreshDrafts().catch(() => {});
+-    refreshOutputSettings().catch(() => {});
++    refreshDrafts().catch(() => { });
++    refreshOutputSettings().catch(() => { });
+   }
+ }
+ 
+@@ -3493,15 +3946,15 @@ async function bootstrap() {
+     refreshModels().catch((error) => {
+       setMessage(modelMessageEl, `Models unavailable: ${error.message}`, 'danger');
+     }),
+-    refreshStudioProjectList().catch(() => {}),
+-    refreshDiagnostics().catch(() => {}),
+-    refreshDoctor().catch(() => {}),
+-    refreshSidecarLogs().catch(() => {}),
++    refreshStudioProjectList().catch(() => { }),
++    refreshDiagnostics().catch(() => { }),
++    refreshDoctor().catch(() => { }),
++    refreshSidecarLogs().catch(() => { }),
+   ]);
+ 
+   healthRefreshTimer = setInterval(() => {
+     refreshHealth();
+-    refreshSidecarStatus().catch(() => {});
++    refreshSidecarStatus().catch(() => { });
+     refreshRuntime().catch(() => {
+       setBadgeState(transcriberStatusEl, 'offline', 'danger');
+       setBadgeState(llmStatusEl, 'offline', 'danger');
+@@ -3982,7 +4435,7 @@ importProfileFileEl?.addEventListener('change', (e) => {
+   reader.onload = async (event) => {
+     try {
+       let parsed = JSON.parse(event.target.result);
+-      
++
+       // Gracefully upgrade legacy flat or un-versioned profile structures
+       if (!parsed || parsed.kind !== 'betterfingers_profile') {
+         const settings = parsed.settings || parsed;
+@@ -4110,7 +4563,17 @@ studioCreateProjectButton?.addEventListener('click', handleStudioCreateProject);
+ studioLoadProjectButton?.addEventListener('click', handleStudioLoadProject);
+ document.getElementById('studioDeleteProjectButton')?.addEventListener('click', handleStudioDeleteProject);
+ document.getElementById('studioExportReelButton')?.addEventListener('click', handleStudioExportReel);
++document.getElementById('studioGenerateScenesButton')?.addEventListener('click', handleStudioGenerateScenes);
++document.getElementById('studioPlayCinemaButton')?.addEventListener('click', handleStudioPlayCinema);
++document.getElementById('studioBlueprintButton')?.addEventListener('click', handleStudioBlueprint);
++document.getElementById('studioApproveBlueprintButton')?.addEventListener('click', handleStudioApproveBlueprint);
++document.getElementById('studioRenderImagesButton')?.addEventListener('click', handleStudioRenderImages);
++document.getElementById('studioVoiceScenesButton')?.addEventListener('click', handleStudioVoiceScenes);
++document.getElementById('studioContinuityButton')?.addEventListener('click', handleStudioContinuity);
++document.getElementById('studioCinemaRefreshButton')?.addEventListener('click', () => refreshCinemaStatus());
+ document.getElementById('studioAddPageButton')?.addEventListener('click', handleStudioAddPage);
++studioStoryboardSaveButton?.addEventListener('click', () => handleStudioStoryboardSave());
++studioStoryboardVoiceButton?.addEventListener('click', handleStudioStoryboardVoice);
+ studioPanelsGridEl?.addEventListener('click', (event) => {
+   const addPanelButton = event.target.closest('.studio-add-panel-btn');
+   if (addPanelButton) {
+@@ -4426,10 +4889,10 @@ tabButtons.forEach((button) => {
+     });
+ 
+     if (targetTab === 'diagnostics') {
+-      refreshDiagnostics().catch(() => {});
+-      refreshDoctor().catch(() => {});
++      refreshDiagnostics().catch(() => { });
++      refreshDoctor().catch(() => { });
+     } else if (targetTab === 'studio') {
+-      refreshStudioProjectList().catch(() => {});
++      refreshStudioProjectList().catch(() => { });
+     }
+   });
+ });
+@@ -4462,7 +4925,7 @@ async function refreshDoctor(refreshAudio = false) {
+   if (!doctorCardsGrid) {
+     return;
+   }
+-  
++
+   if (refreshDoctorButton) {
+     refreshDoctorButton.disabled = true;
+     refreshDoctorButton.textContent = 'Running check...';
+@@ -4470,9 +4933,9 @@ async function refreshDoctor(refreshAudio = false) {
+ 
+   try {
+     const doctor = await fetchDoctor(refreshAudio);
+-    
++
+     doctorCardsGrid.innerHTML = '';
+-    
++
+     const subsystems = [
+       { id: 'stt', name: 'STT (Transcriber)', data: doctor.stt },
+       { id: 'llm', name: 'LLM Engine', data: doctor.llm },
+@@ -4492,7 +4955,7 @@ async function refreshDoctor(refreshAudio = false) {
+ 
+       const header = document.createElement('div');
+       header.className = 'doctor-card-header';
+-      
++
+       const title = document.createElement('span');
+       title.textContent = sub.name;
+ 
+@@ -4500,7 +4963,7 @@ async function refreshDoctor(refreshAudio = false) {
+       badge.className = 'doctor-card-status';
+ 
+       let detailsText = '';
+-      
++
+       if (sub.id === 'stt') {
+         const isLoaded = sub.data.loaded;
+         const isInit = sub.data.initialized;
+@@ -4549,7 +5012,7 @@ async function refreshDoctor(refreshAudio = false) {
+         const hasDevices = Array.isArray(sub.data.devices) && sub.data.devices.length > 0;
+         badge.textContent = hasDevices ? 'Available' : 'No Mics';
+         badge.dataset.tone = hasDevices ? 'success' : 'danger';
+-        
++
+         let micNames = 'No devices detected.';
+         if (hasDevices) {
+           const defaultInIdx = sub.data.default_input_device;
+@@ -4611,7 +5074,7 @@ async function refreshDoctor(refreshAudio = false) {
+       }
+ 
+       header.append(title, badge);
+-      
++
+       const detail = document.createElement('pre');
+       detail.className = 'doctor-card-detail';
+       detail.textContent = detailsText;
+@@ -4623,7 +5086,7 @@ async function refreshDoctor(refreshAudio = false) {
+     if (doctorRecoveryPanel && doctorRecoveryList) {
+       doctorRecoveryList.innerHTML = '';
+       const uniqueTriggers = [...new Set(recoveryTriggers)];
+-      
++
+       if (uniqueTriggers.length > 0) {
+         doctorRecoveryPanel.classList.remove('hidden');
+         for (const trigger of uniqueTriggers) {
+@@ -4631,7 +5094,7 @@ async function refreshDoctor(refreshAudio = false) {
+           if (recommendation) {
+             const item = document.createElement('div');
+             item.className = 'recovery-item';
+-            
++
+             const labelMap = {
+               missing_model: 'Model Download Needed',
+               missing_llama_server: 'llama-server Required',
+@@ -4673,7 +5136,7 @@ async function refreshDoctor(refreshAudio = false) {
+ }
+ 
+ refreshDoctorButton?.addEventListener('click', () => {
+-  refreshDoctor(true).catch(() => {});
++  refreshDoctor(true).catch(() => { });
+ });
+ 
+ window.addEventListener('beforeunload', () => {
+diff --git a/app/src/renderer/styles/base.css b/app/src/renderer/styles/base.css
+index e13f0fa..f5a9456 100644
+--- a/app/src/renderer/styles/base.css
++++ b/app/src/renderer/styles/base.css
+@@ -465,6 +465,10 @@ h1 {
+   padding-top: 12px;
+ }
+ 
++.studio-model-panel {
++  margin-top: 16px;
++}
++
+ .model-panel-header {
+   display: flex;
+   justify-content: space-between;
+@@ -525,6 +529,73 @@ h1 {
+   gap: 8px;
+ }
+ 
++.studio-model-note {
++  padding: 10px 12px;
++  border: 1px solid rgba(255, 200, 107, 0.22);
++  border-radius: 8px;
++  background: rgba(255, 200, 107, 0.07);
++  color: var(--muted);
++  line-height: 1.45;
++}
++
++.studio-model-role-grid {
++  display: grid;
++  grid-template-columns: repeat(3, minmax(0, 1fr));
++  gap: 10px;
++}
++
++.studio-model-role-card {
++  display: grid;
++  gap: 7px;
++  min-width: 0;
++  padding: 12px;
++  border: 1px solid rgba(159, 177, 203, 0.14);
++  border-radius: 8px;
++  background: rgba(255, 255, 255, 0.035);
++}
++
++.studio-model-role-head {
++  display: flex;
++  justify-content: space-between;
++  gap: 8px;
++  align-items: center;
++}
++
++.studio-model-role-head span {
++  color: var(--muted);
++  font-size: 0.76rem;
++  font-weight: 700;
++  letter-spacing: 0.08em;
++  text-transform: uppercase;
++}
++
++.studio-model-role-head strong {
++  flex: 0 0 auto;
++  font-size: 0.75rem;
++}
++
++.studio-model-role-head strong[data-tone='success'] {
++  color: var(--accent);
++}
++
++.studio-model-role-head strong[data-tone='warning'] {
++  color: #ffc86b;
++}
++
++.studio-model-role-head strong[data-tone='danger'] {
++  color: #ff7c87;
++}
++
++.studio-model-role-card b {
++  color: var(--text);
++  overflow-wrap: anywhere;
++}
++
++.studio-model-role-card small {
++  color: var(--muted);
++  line-height: 1.4;
++}
++
+ .model-download-progress {
+   display: grid;
+   gap: 8px;
+@@ -739,7 +810,8 @@ h1 {
+   .settings-grid,
+   .toggle-grid,
+   .model-overview,
+-  .model-manager-grid {
++  .model-manager-grid,
++  .studio-model-role-grid {
+     grid-template-columns: 1fr;
+   }
+ 
+diff --git a/docs/agent_blackboard.md b/docs/agent_blackboard.md
+index 32264a4..1f235e6 100644
+--- a/docs/agent_blackboard.md
++++ b/docs/agent_blackboard.md
+@@ -277,6 +277,14 @@ This file is the real-time communication medium and coordination panel for the A
+ 
+ ## 3. Shared Memory & Scratchpad
+ 
++### [Codex/GPT / Agent 1] - `COMPLETE` — P-016
++- **Timestamp**: 2026-06-07T17:43:36-07:00
++- **Topic**: Studio storyboard edit checkpoint, memory refresh, visual continuity, and Whisper edit input
++- **Details**: Added durable storyboard artifact persistence (`bible.storyboard` + blackboard `storyboard`), a user-edit endpoint (`POST /studio/workflow/storyboard`), and a Studio Whisper edit transcription endpoint (`POST /studio/workflow/transcribe-edit`). Dialogue and visual prompt generation now refresh world/character/storyboard memory before each generation path, and visual prompts update a persisted `visual_consistency_guide`. The Electron approval dashboard now shows editable Storyboard Beats with typed save and voice-fix transcription. Also restored the agent registry from drifted `cinematics/scenes` naming back to the panel agent contract used by the runner/export/tests. Focused Studio tests and Electron build pass.
++- **Dependencies/Requests**:
++  - @Gemini: Live mic capture can reuse `/studio/workflow/transcribe-edit`; current UI supports audio file transcription into the editable storyboard surface.
++  - @Claude: `storyboard_review.status` is available for stronger production pause/approval policy if you want the Producer to stop before panels.
++
+ - **Active Task**: Director four-phase workflow complete (Exploration/Casting/Scene Planning/Finalization). Open: wire `run_finalization` into full production (Codex); Relation Subagents for logical/semantic GEST edges; GEST execution/render pass.
+ - **Key Files**:
+   - Master Ruling: [docs/AGENTS_RULING.md](AGENTS_RULING.md)
+diff --git a/docs/agent_test_log.md b/docs/agent_test_log.md
+index 5757f7f..117ff1f 100644
+--- a/docs/agent_test_log.md
++++ b/docs/agent_test_log.md
+@@ -8,6 +8,7 @@ This file tracks the test suite executions, command outcomes, and regression tes
+ 
+ | Timestamp (ISO) | Executing Agent | Command Run | Test Suite / Target | Outcome | Passed / Total | Issues Identified | Resolution / Notes |
+ | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
++| 2026-06-07T17:43:36-07:00 | Codex / Agent 1 | `.venv/bin/python -m pytest tests/test_server_studio.py tests/test_studio_workflow.py tests/test_studio_agents.py -q`; `npm --prefix app run build` | Focused Studio backend/orchestrator tests and Electron build after storyboard edit/memory refresh/Whisper edit work | **PASS** | **28 / 28 passed** | Existing FastAPI/pygame deprecation warnings only | Added persisted storyboard edit endpoint, Studio Whisper edit transcription endpoint, visual consistency guide refresh, editable Storyboard Beats UI, regression test for storyboard updates, and fixed `studio_agents.py` registry drift back to panels. |
+ | 2026-06-05T22:11:00-07:00 | Codex | `python3 -m unittest discover tests` | Entire Test Suite | **FAILED** | 0 / 95 | ImportError: Missing `flet`, `fastapi`, `numpy`, `pytest` | Environment lacks dependencies. System fallback python3 has no libraries installed. Must create a virtual environment (`.venv`) and install `requirements.txt`. |
+ | 2026-06-06T00:05:12-07:00 | Codex | `scripts/run-betterfingers-tests-linux.sh` | Entire pytest suite via new shortcut runner | **FAILED** | 0 / 136 collected before interruption | 18 collection errors: missing `tkinter`, Linux `pydirectinput` import failure, and `IndentationError` in `hotkey_manager.py` line 597 | Added `pytest` to `.venv`; fixed the stray empty `if self.controller_enabled:` block in `hotkey_manager.py`. Full log: `/home/donaven/.local/state/BetterFingers/tests-20260606-000512-35966.log`. |
+ | 2026-06-06T00:05:37-07:00 | Codex | `scripts/run-betterfingers-tests-linux.sh` | Entire pytest suite after syntax fix | **FAILED** | 0 / 184 collected before interruption | 12 collection errors remain: system Python lacks `tkinter`; `injector.py` imports Windows-only `pydirectinput` on Linux | Shortcut runner is functional and logs output. Remaining failures need system package `python3-tk` and/or Linux platform guard/mocking around `pydirectinput`. Full log: `/home/donaven/.local/state/BetterFingers/tests-20260606-000537-36281.log`. |
+diff --git a/docs/agents/gpt.md b/docs/agents/gpt.md
+index cd4b73f..58765e0 100644
+--- a/docs/agents/gpt.md
++++ b/docs/agents/gpt.md
+@@ -410,6 +410,37 @@
+ 
+ ---
+ 
++### [P-016] Studio Storyboard Memory & Edit Checkpoint
++- **Date**: 2026-06-07
++- **Scope**: Correct Studio weak points around storyboard editing, agent memory refresh, visual continuity, Whisper edit input, and orchestrator data flow.
++
++#### What was done
++- Added a durable `bible.storyboard`/blackboard storyboard artifact and `/studio/workflow/storyboard` endpoint so user-edited beats are saved back into episode/minute state before downstream generation.
++- Added `/studio/workflow/transcribe-edit` so Whisper can transcribe spoken Studio fix notes and feed the same edit path users can type into.
++- Refreshed world, character, storyboard, and visual-guide memory before dialogue and visual prompt generation; visual prompt generation now updates a persisted `visual_consistency_guide`.
++- Added an editable Storyboard Beats panel in the Electron approval dashboard.
++- Fixed `studio_agents.py` registry drift from `cinematics/scenes` back to `panels`, matching the runner/export/tests.
++
++#### Files changed
++- `studio_workflow.py` — storyboard artifact persistence, user edit application, context refresh, visual consistency guide updates, clean dialogue overwrite on panel regeneration.
++- `studio_memory.py` — episode/minute update helpers.
++- `server.py` — storyboard update and Whisper-backed Studio edit transcription endpoints.
++- `app/src/renderer/index.html`, `app/src/renderer/main.js`, `app/src/renderer/api/backend.js` — Storyboard Beats editor and API wiring.
++- `studio_agents.py` — restored panel agent contract.
++- `tests/test_server_studio.py` — regression test for persisted storyboard edits.
++
++#### Test runs
++| Command | Outcome | Passed / Total | Issues |
++| :------ | :------ | :------------- | :----- |
++| `.venv/bin/python -m pytest tests/test_server_studio.py tests/test_studio_workflow.py tests/test_studio_agents.py -q` | PASS | 28 / 28 | Existing FastAPI/pygame deprecation warnings only. |
++| `npm --prefix app run build` | PASS | — | Electron/Vite build succeeded. |
++
++#### Blockers / Handoffs
++- @Gemini: The UI now has typed and file-based voice transcription for storyboard fixes; live microphone capture could be layered on top of the same endpoint.
++- @Claude: Storyboard edits persist to the current episode/minute rows and bible; broader pipeline pausing/approval policy can build on `storyboard_review.status`.
++
++---
++
+ ## Domain Ownership
+ 
+ GPT owns implementation and test coverage for changes touching:
+diff --git a/model_manager.py b/model_manager.py
+index f717e00..fc83f83 100644
+--- a/model_manager.py
++++ b/model_manager.py
+@@ -18,6 +18,10 @@ AVAILABLE_MODELS = {
+         "url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf",
+         "size_mb": 2963,
+         "family": "gemma-4",
++        "group": "studio",
++        "roles": ["dispatcher"],
++        "lane": "cpu",
++        "recommended_for": "Studio dispatcher on low-RAM machines.",
+         "server_args": ["--jinja", "--chat-template-kwargs", '{"enable_thinking":false}'],
+     },
+     "gemma-4-e2b-q8": {
+@@ -26,6 +30,10 @@ AVAILABLE_MODELS = {
+         "url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q8_0.gguf",
+         "size_mb": 4814,
+         "family": "gemma-4",
++        "group": "studio",
++        "roles": ["dispatcher"],
++        "lane": "cpu",
++        "recommended_for": "Sharper Studio dispatcher when RAM allows.",
+         "server_args": ["--jinja", "--chat-template-kwargs", '{"enable_thinking":false}'],
+     },
+     "gemma-4-e4b-q4": {
+@@ -34,6 +42,10 @@ AVAILABLE_MODELS = {
+         "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
+         "size_mb": 4747,
+         "family": "gemma-4",
++        "group": "studio",
++        "roles": ["dispatcher"],
++        "lane": "cpu",
++        "recommended_for": "Default always-on Studio dispatcher.",
+         "server_args": ["--jinja", "--chat-template-kwargs", '{"enable_thinking":false}'],
+     },
+     "gemma-4-e4b-q8": {
+@@ -42,6 +54,10 @@ AVAILABLE_MODELS = {
+         "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q8_0.gguf",
+         "size_mb": 7813,
+         "family": "gemma-4",
++        "group": "studio",
++        "roles": ["dispatcher", "writer"],
++        "lane": "cpu",
++        "recommended_for": "High-quality dispatcher or smaller Studio writer.",
+         "server_args": ["--jinja", "--chat-template-kwargs", '{"enable_thinking":false}'],
+     },
+     "gemma-4-12b-q4": {
+@@ -50,6 +66,10 @@ AVAILABLE_MODELS = {
+         "url": "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-Q4_K_M.gguf",
+         "size_mb": 6792,
+         "family": "gemma-4",
++        "group": "studio",
++        "roles": ["writer"],
++        "lane": "gpu-transient",
++        "recommended_for": "Default Studio smart writer/showrunner model.",
+         "server_args": ["--jinja", "--chat-template-kwargs", '{"enable_thinking":false}'],
+     },
+     "gemma-4-26b-a4b-q4": {
+@@ -58,6 +78,10 @@ AVAILABLE_MODELS = {
+         "url": "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/main/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+         "size_mb": 16162,
+         "family": "gemma-4",
++        "group": "studio",
++        "roles": ["writer"],
++        "lane": "gpu-transient",
++        "recommended_for": "Large Studio writer for users with more RAM/VRAM.",
+         "server_args": ["--jinja", "--chat-template-kwargs", '{"enable_thinking":false}'],
+     },
+     "gemma-4-31b-q4": {
+@@ -66,6 +90,10 @@ AVAILABLE_MODELS = {
+         "url": "https://huggingface.co/unsloth/gemma-4-31B-it-GGUF/resolve/main/gemma-4-31B-it-Q4_K_M.gguf",
+         "size_mb": 17475,
+         "family": "gemma-4",
++        "group": "studio",
++        "roles": ["writer"],
++        "lane": "gpu-transient",
++        "recommended_for": "Experimental large Studio writer.",
+         "server_args": ["--jinja", "--chat-template-kwargs", '{"enable_thinking":false}'],
+     },
+     "gemma-3-4b-q4": {
+@@ -73,36 +101,60 @@ AVAILABLE_MODELS = {
+         "filename": "gemma-3-4b-it-Q4_K_M.gguf",
+         "url": "https://huggingface.co/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf",
+         "size_mb": 2600,
++        "group": "betterfingers",
++        "roles": ["rewrite"],
++        "lane": "gpu",
++        "recommended_for": "Default BetterFingers rewrite/persona model.",
+     },
+     "gemma-3-4b-q6": {
+         "name": "Gemma 3 4B (Q6_K)",
+         "filename": "gemma-3-4b-it-Q6_K.gguf",
+         "url": "https://huggingface.co/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q6_K.gguf",
+         "size_mb": 3500,
++        "group": "betterfingers",
++        "roles": ["rewrite"],
++        "lane": "gpu",
++        "recommended_for": "BetterFingers rewrite model with a quality bump.",
+     },
+     "gemma-3-4b-q8": {
+         "name": "Gemma 3 4B (Q8_0)",
+         "filename": "gemma-3-4b-it-Q8_0.gguf",
+         "url": "https://huggingface.co/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q8_0.gguf",
+         "size_mb": 4600,
++        "group": "betterfingers",
++        "roles": ["rewrite"],
++        "lane": "gpu",
++        "recommended_for": "Best 4B BetterFingers rewrite quality.",
+     },
+     "gemma-3-12b-q4": {
+         "name": "Gemma 3 12B (Q4_K_M)",
+         "filename": "gemma-3-12b-it-Q4_K_M.gguf",
+         "url": "https://huggingface.co/unsloth/gemma-3-12b-it-GGUF/resolve/main/gemma-3-12b-it-Q4_K_M.gguf",
+         "size_mb": 7500,
++        "group": "betterfingers",
++        "roles": ["rewrite", "writer"],
++        "lane": "gpu",
++        "recommended_for": "Bigger BetterFingers rewrite or fallback Studio writer.",
+     },
+     "gemma-3-12b-q6": {
+         "name": "Gemma 3 12B (Q6_K)",
+         "filename": "gemma-3-12b-it-Q6_K.gguf",
+         "url": "https://huggingface.co/unsloth/gemma-3-12b-it-GGUF/resolve/main/gemma-3-12b-it-Q6_K.gguf",
+         "size_mb": 10000,
++        "group": "betterfingers",
++        "roles": ["rewrite", "writer"],
++        "lane": "gpu",
++        "recommended_for": "Higher-quality 12B rewrite/writer model.",
+     },
+     "gemma-3-12b-q8": {
+         "name": "Gemma 3 12B (Q8_0)",
+         "filename": "gemma-3-12b-it-Q8_0.gguf",
+         "url": "https://huggingface.co/unsloth/gemma-3-12b-it-GGUF/resolve/main/gemma-3-12b-it-Q8_0.gguf",
+         "size_mb": 13000,
++        "group": "betterfingers",
++        "roles": ["rewrite", "writer"],
++        "lane": "gpu",
++        "recommended_for": "Largest Gemma 3 rewrite/writer option.",
+     },
+ }
+ 
+@@ -154,7 +206,16 @@ def get_download_state(model_id=None):
+     key = str(model_id or "").strip() or DEFAULT_MODEL
+     with _download_state_lock:
+         row = _download_state.get(key, {})
+-    return dict(row)
++    result = dict(row)
++    if key in AVAILABLE_MODELS:
++        partial_path = get_partial_model_path(key)
++        partial_bytes = _file_size(partial_path)
++        result.setdefault("model_id", key)
++        result.setdefault("installed", is_model_file_complete(key))
++        result.setdefault("partial_bytes", partial_bytes)
++        result.setdefault("partial_path", partial_path if partial_bytes else "")
++        result.setdefault("resumable", bool(partial_bytes))
++    return result
+ 
+ 
+ def get_models_dir():
+@@ -180,6 +241,40 @@ def get_model_path(model_id=None):
+     return os.path.join(get_models_dir(), filename)
+ 
+ 
++def get_partial_model_path(model_id=None):
++    return f"{get_model_path(model_id)}.part"
++
++
++def _expected_model_bytes(model_id):
++    info = AVAILABLE_MODELS.get(model_id or DEFAULT_MODEL, {})
++    size_mb = int(info.get("size_mb") or 0)
++    return size_mb * 1024 * 1024 if size_mb > 0 else 0
++
++
++def _file_size(path):
++    try:
++        return os.path.getsize(path)
++    except OSError:
++        return 0
++
++
++def is_model_file_complete(model_id):
++    """Best-effort guard against power-loss partial files being treated as installed."""
++    path = get_model_path(model_id)
++    if not os.path.exists(path):
++        return False
++    actual = _file_size(path)
++    # Unit tests and developer overrides often use tiny fixture files. Real GGUF
++    # downloads are gigabytes, so only enforce catalog-size sanity for model-sized files.
++    if actual < 16 * 1024 * 1024:
++        return True
++    expected = _expected_model_bytes(model_id)
++    if not expected:
++        return True
++    # Catalog sizes are rounded, so allow a little slack while still catching truncation.
++    return actual >= int(expected * 0.90)
++
++
+ def get_model_server_args(model_id=None):
+     """Returns additional llama-server args for model families that need them."""
+     if not model_id or model_id not in AVAILABLE_MODELS:
+@@ -189,20 +284,27 @@ def get_model_server_args(model_id=None):
+ 
+ def check_model_exists(model_id):
+     """Returns True if the model file exists."""
+-    path = get_model_path(model_id)
+-    return os.path.exists(path)
++    return is_model_file_complete(model_id)
+ 
+ 
+ def delete_model(model_id):
+     """Deletes the model file if it exists."""
+     path = get_model_path(model_id)
++    partial_path = get_partial_model_path(model_id)
++    removed = False
+     if os.path.exists(path):
+         try:
+             os.remove(path)
+-            return True, f"Deleted {model_id}"
++            removed = True
+         except Exception as exc:
+             return False, f"Failed to delete {model_id}: {exc}"
+-    return False, "Model not found"
++    if os.path.exists(partial_path):
++        try:
++            os.remove(partial_path)
++            removed = True
++        except Exception as exc:
++            return False, f"Failed to delete partial download for {model_id}: {exc}"
++    return (True, f"Deleted {model_id}") if removed else (False, "Model not found")
+ 
+ 
+ def get_server_filename():
+@@ -399,8 +501,23 @@ def validate_llama_server_runtime(server_path=None):
+     return {"ok": True, "message": message, "build": parse_llama_server_build(message)}
+ 
+ 
+-def download_file(url, dest_path, desc="File", progress_callback=None, progress_key=""):
+-    """Downloads a file with optional progress callbacks."""
++def _parse_content_range_total(value):
++    match = re.search(r"/(\d+)\s*$", str(value or ""))
++    if not match:
++        return 0
++    try:
++        return int(match.group(1))
++    except ValueError:
++        return 0
++
++
++def download_file(url, dest_path, desc="File", progress_callback=None, progress_key="", resume=True):
++    """Download a file safely.
++
++    The transfer writes to ``dest_path + ".part"`` and atomically replaces the final
++    path only after the response completes. If a previous partial exists and the
++    server supports byte ranges, the download resumes instead of restarting.
++    """
+     key = str(progress_key or desc or "file").strip()
+     if os.path.exists(dest_path):
+         logging.info("%s already exists: %s", desc, dest_path)
+@@ -420,6 +537,8 @@ def download_file(url, dest_path, desc="File", progress_callback=None, progress_
+ 
+     logging.info("Downloading %s...", desc)
+     logging.info("URL: %s", url)
++    part_path = f"{dest_path}.part"
++    resumed_bytes = _file_size(part_path) if resume and os.path.exists(part_path) else 0
+     _emit_progress(
+         progress_callback,
+         {
+@@ -427,20 +546,36 @@ def download_file(url, dest_path, desc="File", progress_callback=None, progress_
+             "status": "starting",
+             "desc": desc,
+             "percent": 0.0,
+-            "downloaded_bytes": 0,
++            "downloaded_bytes": int(resumed_bytes),
+             "total_bytes": 0,
+-            "message": f"Starting {desc} download.",
++            "partial_path": part_path if resumed_bytes else "",
++            "message": (
++                f"Resuming {desc} download from {resumed_bytes // (1024 * 1024)} MB."
++                if resumed_bytes
++                else f"Starting {desc} download."
++            ),
+         },
+     )
+ 
+     try:
+-        with requests.get(url, stream=True, timeout=120) as response:
++        headers = {"Range": f"bytes={resumed_bytes}-"} if resumed_bytes else {}
++        with requests.get(url, stream=True, timeout=120, headers=headers) as response:
+             response.raise_for_status()
+-            total_size = int(response.headers.get("content-length", 0) or 0)
+-            downloaded = 0
++            if resumed_bytes and response.status_code != 206:
++                logging.info("%s server did not resume; restarting partial download.", desc)
++                resumed_bytes = 0
++                if os.path.exists(part_path):
++                    os.remove(part_path)
++
++            content_length = int(response.headers.get("content-length", 0) or 0)
++            total_size = _parse_content_range_total(response.headers.get("content-range"))
++            if not total_size:
++                total_size = resumed_bytes + content_length if resumed_bytes else content_length
++            downloaded = resumed_bytes
+             last_reported = -1
+ 
+-            with open(dest_path, "wb") as handle:
++            mode = "ab" if resumed_bytes else "wb"
++            with open(part_path, mode) as handle:
+                 for chunk in response.iter_content(chunk_size=8192):
+                     if not chunk:
+                         continue
+@@ -459,6 +594,7 @@ def download_file(url, dest_path, desc="File", progress_callback=None, progress_
+                                 "percent": float(percent),
+                                 "downloaded_bytes": int(downloaded),
+                                 "total_bytes": int(total_size),
++                                "partial_path": part_path,
+                                 "message": (
+                                     f"Downloading {desc} ({percent:.1f}%)."
+                                     if total_size
+@@ -468,6 +604,11 @@ def download_file(url, dest_path, desc="File", progress_callback=None, progress_
+                         )
+                         last_reported = rounded
+ 
++        if total_size and _file_size(part_path) < total_size:
++            raise IOError(
++                f"incomplete download: got {_file_size(part_path)} bytes, expected {total_size}"
++            )
++        os.replace(part_path, dest_path)
+         logging.info("Download complete: %s", dest_path)
+         _emit_progress(
+             progress_callback,
+@@ -478,6 +619,7 @@ def download_file(url, dest_path, desc="File", progress_callback=None, progress_
+                 "percent": 100.0,
+                 "downloaded_bytes": int(downloaded),
+                 "total_bytes": int(total_size),
++                "partial_path": "",
+                 "message": f"{desc} download complete.",
+             },
+         )
+@@ -490,13 +632,12 @@ def download_file(url, dest_path, desc="File", progress_callback=None, progress_
+                 "status": "error",
+                 "desc": desc,
+                 "percent": 0.0,
+-                "downloaded_bytes": 0,
++                "downloaded_bytes": int(_file_size(part_path)),
+                 "total_bytes": 0,
++                "partial_path": part_path if os.path.exists(part_path) else "",
+                 "message": f"Failed downloading {desc}: {exc}",
+             },
+         )
+-        if os.path.exists(dest_path):
+-            os.remove(dest_path)
+         raise
+ 
+ 
+@@ -516,10 +657,24 @@ def check_and_download_resources(model_id=None, progress_callback=None):
+         _set_download_state(target_model_id, body)
+         _emit_progress(progress_callback, body)
+ 
+-    if not os.path.exists(model_path):
++    if not is_model_file_complete(target_model_id):
+         logging.info("Model %s not found.", target_model_id)
+         try:
+-            report({"key": target_model_id, "status": "starting", "percent": 0.0, "message": f"Downloading {model_info['name']}..."})
++            partial_path = get_partial_model_path(target_model_id)
++            partial_bytes = _file_size(partial_path)
++            report({
++                "key": target_model_id,
++                "status": "starting",
++                "percent": 0.0,
++                "downloaded_bytes": partial_bytes,
++                "partial_path": partial_path if partial_bytes else "",
++                "resumable": bool(partial_bytes),
++                "message": (
++                    f"Resuming {model_info['name']}..."
++                    if partial_bytes
++                    else f"Downloading {model_info['name']}..."
++                ),
++            })
+             download_file(
+                 model_info["url"],
+                 model_path,
+@@ -529,11 +684,24 @@ def check_and_download_resources(model_id=None, progress_callback=None):
+             )
+         except Exception:
+             logging.warning("Failed to download model %s. Check internet connection.", target_model_id)
+-            report({"key": target_model_id, "status": "error", "percent": 0.0, "message": f"Failed downloading {model_info['name']}."})
++            partial_path = get_partial_model_path(target_model_id)
++            partial_bytes = _file_size(partial_path)
++            report({
++                "key": target_model_id,
++                "status": "error",
++                "percent": 0.0,
++                "downloaded_bytes": partial_bytes,
++                "partial_path": partial_path if partial_bytes else "",
++                "resumable": bool(partial_bytes),
++                "message": (
++                    f"Failed downloading {model_info['name']}. "
++                    "The partial file was kept and will resume next time."
++                ),
++            })
+     else:
+         report({"key": target_model_id, "status": "already_installed", "percent": 100.0, "message": f"{model_info['name']} already installed."})
+ 
+-    model_ready = os.path.exists(model_path)
++    model_ready = is_model_file_complete(target_model_id)
+     if not model_ready:
+         message = f"{model_info['name']} is unavailable. Download failed."
+         report({"key": target_model_id, "status": "error", "percent": 0.0, "message": message})
+@@ -646,7 +814,7 @@ def check_and_download_resources(model_id=None, progress_callback=None):
+ 
+ 
+ def is_ready(model_id=None):
+-    if not os.path.exists(get_model_path(model_id)) or not os.path.exists(get_server_path()):
++    if not is_model_file_complete(model_id) or not os.path.exists(get_server_path()):
+         return False
+     validation = validate_llama_server_runtime(get_server_path())
+     if not validation.get("ok", False):
+diff --git a/server.py b/server.py
+index 5fb044b..c25b50c 100644
+--- a/server.py
++++ b/server.py
+@@ -64,6 +64,8 @@ if __name__ != "__main__":
+     setup_logging(level="INFO")
+ 
+ app = FastAPI(title="BetterFingers Sidecar")
++_llm_download_jobs = {}
++_llm_download_jobs_lock = threading.Lock()
+ 
+ # CORS - Allow Electron to communicate
+ app.add_middleware(
+@@ -2028,13 +2030,22 @@ async def list_llm_models():
+     models = []
+     for model_id, info in AVAILABLE_MODELS.items():
+         model_path = get_model_path(model_id)
++        download_state = get_download_state(model_id)
++        with _llm_download_jobs_lock:
++            job = _llm_download_jobs.get(model_id)
++            download_active = bool(job and job.is_alive())
++        download_state["active"] = download_active
+         models.append(
+             {
+                 "id": model_id,
+                 "selected": model_id == selected,
+-                "installed": os.path.exists(model_path),
++                "installed": check_model_exists(model_id),
+                 "ready": is_llm_model_ready(model_id),
+                 "path": model_path,
++                "download_state": download_state,
++                "download_active": download_active,
++                "partial_bytes": download_state.get("partial_bytes", 0),
++                "resumable": bool(download_state.get("resumable")),
+                 **info,
+             }
+         )
+@@ -2065,21 +2076,67 @@ async def select_llm_model(request: LlmModelSelectRequest):
+ def download_llm_model(model_id: str):
+     if model_id not in AVAILABLE_MODELS:
+         raise HTTPException(status_code=400, detail="Unsupported LLM model")
+-    result = check_and_download_resources(model_id)
+-    return {"model_id": model_id, **(result if isinstance(result, dict) else {"ok": bool(result)})}
++    with _llm_download_jobs_lock:
++        job = _llm_download_jobs.get(model_id)
++        if job and job.is_alive():
++            state = get_download_state(model_id)
++            return {
++                "ok": True,
++                "model_id": model_id,
++                "background": True,
++                "already_running": True,
++                "message": state.get("message") or "Download is already running in the background.",
++                "state": state,
++            }
++
++        def run_download():
++            try:
++                check_and_download_resources(model_id)
++            except Exception as exc:
++                logging.error("Background LLM download failed for %s: %s", model_id, exc)
++            finally:
++                with _llm_download_jobs_lock:
++                    current = _llm_download_jobs.get(model_id)
++                    if current is threading.current_thread():
++                        _llm_download_jobs.pop(model_id, None)
++
++        thread = threading.Thread(target=run_download, name=f"llm-download-{model_id}", daemon=True)
++        _llm_download_jobs[model_id] = thread
++        thread.start()
++
++    return {
++        "ok": True,
++        "model_id": model_id,
++        "background": True,
++        "message": f"Started background download for {AVAILABLE_MODELS[model_id]['name']}.",
++        "state": get_download_state(model_id),
++    }
+ 
+ 
+ @app.delete("/models/llm/{model_id}")
+ async def delete_llm_model(model_id: str):
+     if model_id not in AVAILABLE_MODELS:
+         raise HTTPException(status_code=400, detail="Unsupported LLM model")
++    with _llm_download_jobs_lock:
++        job = _llm_download_jobs.get(model_id)
++        if job and job.is_alive() and not os.path.exists(get_model_path(model_id)):
++            raise HTTPException(status_code=409, detail="That model is downloading. Wait for it to finish or restart the app before deleting it.")
+     ok, message = delete_model(model_id)
+     return {"ok": ok, "model_id": model_id, "message": message}
+ 
+ 
+ @app.get("/models/llm/{model_id}/download-state")
+ async def llm_download_state(model_id: str):
+-    return get_download_state(model_id)
++    if model_id not in AVAILABLE_MODELS:
++        raise HTTPException(status_code=400, detail="Unsupported LLM model")
++    state = get_download_state(model_id)
++    with _llm_download_jobs_lock:
++        job = _llm_download_jobs.get(model_id)
++        active = bool(job and job.is_alive())
++    state["active"] = active
++    if active and state.get("status") in (None, "", "error"):
++        state["status"] = "downloading"
++    return state
+ 
+ 
+ @app.get("/models/whisper")
+@@ -2948,6 +3005,12 @@ class StudioRunStageRequest(BaseModel):
+     source_story: Optional[str] = None
+     input_data: Optional[dict] = None
+ 
++class StudioStoryboardUpdateRequest(BaseModel):
++    project_name: str
++    project_id: Optional[int] = None
++    storyboard: dict = Field(default_factory=dict)
++    note: Optional[str] = ""
++
+ class StudioSceneRequest(BaseModel):
+     project_name: str
+     # Deterministic scene spec: {region_id?, actors:[...], chains:[{actor, poi?, actions:[...]}]}
+@@ -2958,6 +3021,14 @@ class StudioFinalizeRequest(BaseModel):
+     # Optional explicit scene ordering; defaults to scene creation order.
+     scene_order: Optional[list] = None
+ 
++class StudioRegenerateSceneRequest(BaseModel):
++    project_name: str
++    scene_id: str
++    # What to rebuild: 'script', 'image', or 'all'.
++    target: Optional[str] = "all"
++    # Optional plain-language direction for the rewrite (e.g. "make Louis pettier here").
++    feedback: Optional[str] = ""
++
+ class StudioWarningResolveRequest(BaseModel):
+     project_name: str
+     warning_id: int
+@@ -3184,6 +3255,75 @@ async def studio_repair_propose(request: StudioRepairProposeRequest):
+         logging.error(f"Studio repair propose failed: {e}")
+         raise HTTPException(status_code=500, detail=str(e))
+ 
++@app.post("/studio/workflow/storyboard")
++async def studio_update_storyboard(request: StudioStoryboardUpdateRequest):
++    from studio_workflow import StudioWorkflowRunner
++    import studio_memory as memory
++    try:
++        runner = StudioWorkflowRunner(request.project_name)
++        if request.project_id and int(request.project_id) != int(runner.project_id):
++            raise HTTPException(status_code=400, detail="project_id does not match project_name")
++        result = runner.apply_storyboard_edits(request.storyboard, note=request.note or "")
++        return {
++            "status": "success",
++            "project_id": runner.project_id,
++            "project_name": request.project_name,
++            "data": result,
++            "project": memory.export_project_json(request.project_name, runner.project_id),
++        }
++    except HTTPException:
++        raise
++    except ValueError as e:
++        raise HTTPException(status_code=400, detail=str(e))
++    except Exception as e:
++        logging.error(f"Studio storyboard update failed: {e}")
++        raise HTTPException(status_code=500, detail=str(e))
++
++@app.post("/studio/workflow/transcribe-edit")
++async def studio_transcribe_edit(
++    project_name: str = Form(...),
++    project_id: Optional[int] = Form(None),
++    target_type: str = Form("storyboard"),
++    target_id: Optional[int] = Form(None),
++    file: UploadFile = File(...),
++):
++    """Transcribe a spoken Studio edit note with Whisper.
++
++    The transcript is intentionally returned as plain text plus target metadata, so the UI can
++    feed voice and typed corrections through the same save/rebuild endpoints.
++    """
++    import studio_memory as memory
++    temp_filename = None
++    try:
++        runner_project_id = memory.init_project_db(project_name)
++        if project_id and int(project_id) != int(runner_project_id):
++            raise HTTPException(status_code=400, detail="project_id does not match project_name")
++        suffix = Path(file.filename or "studio-edit.wav").suffix or ".wav"
++        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
++            temp_filename = temp_file.name
++            shutil.copyfileobj(file.file, temp_file)
++        trans = ensure_transcriber_initialized(preload=False)
++        text = trans.transcribe(temp_filename)
++        return {
++            "status": "success",
++            "project_id": runner_project_id,
++            "project_name": project_name,
++            "target_type": target_type,
++            "target_id": target_id,
++            "text": text,
++        }
++    except HTTPException:
++        raise
++    except Exception as e:
++        logging.error(f"Studio edit transcription failed: {e}")
++        raise HTTPException(status_code=500, detail=str(e))
++    finally:
++        if temp_filename:
++            try:
++                os.unlink(temp_filename)
++            except Exception:
++                pass
++
+ @app.post("/studio/workflow/stage")
+ async def studio_run_stage(request: StudioRunStageRequest):
+     from studio_workflow import StudioWorkflowRunner
+@@ -3258,6 +3398,54 @@ async def studio_run_stage(request: StudioRunStageRequest):
+             data = runner.run_dialogue_and_panels(premise, world, characters, story_plan, ep_id)
+             return {"status": "success", "stage": stage_name, "data": data}
+             
++        elif stage_name in ("loremaster", "understanding"):
++            # Stage 0: distill the full source story into a complete understanding.
++            data = runner.run_loremaster()
++            if data is None:
++                raise HTTPException(status_code=400, detail="No source story to understand. Use adapt/continue mode.")
++            return {"status": "success", "stage": "loremaster", "data": data}
++
++        elif stage_name in ("genesis", "invent"):
++            # Stage 0 (seed mode): invent a full story_understanding from the premise/seed.
++            data = runner.run_genesis(premise, seed_text=request.seed_text or "")
++            return {"status": "success", "stage": "genesis", "data": data}
++
++        elif stage_name in ("showrunner", "blueprint"):
++            # Stage 4 (cinematic): dynamic scene blueprint + setup/payoff (the user gate).
++            storyboard, ep_id, blueprint = runner.run_showrunner(
++                premise_data=premise, world_data=world, characters=characters)
++            return {"status": "success", "stage": "showrunner",
++                    "data": {"storyboard": storyboard, "blueprint": blueprint}, "episode_id": ep_id}
++
++        elif stage_name in ("scenes", "scriptwriting"):
++            # Stage 5 (cinematic): write every scene (script + image). Self-bootstraps the
++            # blueprint if it has not been generated yet.
++            blueprint = (request.input_data or {}).get("blueprint") if request.input_data else None
++            scenes = runner.run_scenes(blueprint=blueprint)
++            return {"status": "success", "stage": "scenes", "data": {"scenes": scenes}}
++
++        elif stage_name in ("voice", "scene_audio", "narrate"):
++            # Stage 8 (cinematic): render per-beat narration audio (browser-speech fallback).
++            force = bool((request.input_data or {}).get("force")) if request.input_data else False
++            result = runner.run_scene_audio(force=force)
++            if not result.get("ok"):
++                raise HTTPException(status_code=400, detail=result.get("error", "Voicing failed."))
++            return {"status": "success", "stage": "voice", "data": result}
++
++        elif stage_name in ("scene_continuity", "continuity_scenes"):
++            # Stage 7 (cinematic): audit the scene spine; verify setups pay off.
++            warnings = runner.run_scene_continuity()
++            return {"status": "success", "stage": "scene_continuity", "data": {"warnings": warnings}}
++
++        elif stage_name in ("render", "render_images"):
++            # Stage 6 (cinematic): render scene images from their prompts (no-op gradient
++            # fallback when no generator is configured).
++            force = bool((request.input_data or {}).get("force")) if request.input_data else False
++            result = runner.run_render_images(force=force)
++            if not result.get("ok"):
++                raise HTTPException(status_code=400, detail=result.get("error", "Render failed."))
++            return {"status": "success", "stage": "render", "data": result}
++
+         elif stage_name == "approval_ready":
+             panels = memory.get_panels(request.project_name, runner.project_id)
+             # Add dialogue/text back into panels for audit input format compatibility
+@@ -3315,6 +3503,89 @@ async def studio_get_project_panels(project_name: str, project_id: int):
+         logging.error(f"Studio get panels failed: {e}")
+         raise HTTPException(status_code=500, detail=str(e))
+ 
++@app.get("/studio/projects/{project_name}/scenes")
++async def studio_get_scenes(project_name: str):
++    """Return the cinematic `scenes` artifact (the new spine) for the player."""
++    import studio_memory as memory
++    try:
++        runner_id = memory.init_project_db(project_name)
++        bible = memory.get_bible(project_name, runner_id)
++        scenes = bible.get("scenes") or []
++        understanding = bible.get("story_understanding") or {}
++        # Honest provenance so the UI never sells procedural fallback as live-LLM quality.
++        grounding = understanding.get("_grounding") or ("none" if not understanding else "")
++        img_done = sum(1 for s in scenes if s.get("image_status") == "done")
++        aud_done = sum(1 for s in scenes for b in (s.get("narration_script") or [])
++                       if b.get("audio_status") == "done")
++        aud_total = sum(len(s.get("narration_script") or []) for s in scenes)
++        return {
++            "status": "success",
++            "scenes": scenes,
++            "blueprint": bible.get("scene_blueprint") or {},
++            "summary": (bible.get("scene_blueprint") or {}).get("summary", ""),
++            "grounding": grounding,
++            "image_done": img_done,
++            "audio_done": aud_done,
++            "audio_total": aud_total,
++        }
++    except Exception as e:
++        logging.error(f"Studio get scenes failed: {e}")
++        raise HTTPException(status_code=500, detail=str(e))
++
++@app.get("/studio/models/image")
++async def studio_list_image_models():
++    """Catalog of in-process image checkpoints + install status (the Studio image model picker)."""
++    import studio_image_backend
++    return {"status": "success", "models": studio_image_backend.list_image_models(),
++            "default": studio_image_backend.DEFAULT_IMAGE_MODEL,
++            "diffusers_available": studio_image_backend.diffusers_available()}
++
++
++@app.post("/studio/models/image/{model_key}/download")
++async def studio_download_image_model(model_key: str):
++    """Download an image checkpoint through Studio (background, resumable). Poll download-state."""
++    import studio_image_backend
++    if model_key not in studio_image_backend.IMAGE_MODELS:
++        raise HTTPException(status_code=404, detail=f"Unknown image model '{model_key}'.")
++    return {"status": "success", "state": studio_image_backend.start_download(model_key)}
++
++
++@app.get("/studio/models/image/{model_key}/download-state")
++async def studio_image_model_download_state(model_key: str):
++    import studio_image_backend
++    return {"status": "success", "state": studio_image_backend.download_state(model_key)}
++
++
++@app.get("/studio/projects/{project_name}/render-status")
++async def studio_render_status(project_name: str):
++    """Per-scene image render queue status (for the production-desk UI)."""
++    import studio_memory as memory
++    import studio_render
++    try:
++        pid = memory.init_project_db(project_name)
++        return {"status": "success", **studio_render.render_status(project_name, pid)}
++    except Exception as e:
++        logging.error(f"Studio render status failed: {e}")
++        raise HTTPException(status_code=500, detail=str(e))
++
++@app.post("/studio/workflow/scene/regenerate")
++async def studio_regenerate_scene(request: StudioRegenerateSceneRequest):
++    """Per-scene reject/refine: rewrite one scene's script and/or image, leaving the rest."""
++    from studio_workflow import StudioWorkflowRunner
++    try:
++        runner = StudioWorkflowRunner(request.project_name)
++        runner._load_source()
++        result = runner.regenerate_scene(request.scene_id, target=request.target or "all",
++                                         feedback=request.feedback or "")
++        if not result.get("ok"):
++            raise HTTPException(status_code=400, detail=result.get("error", "Regeneration failed."))
++        return {"status": "success", "scene": result["scene"]}
++    except HTTPException:
++        raise
++    except Exception as e:
++        logging.error(f"Studio regenerate scene failed: {e}")
++        raise HTTPException(status_code=500, detail=str(e))
++
+ @app.post("/studio/project/warning/resolve")
+ async def studio_resolve_warning(request: StudioWarningResolveRequest):
+     import studio_memory as memory
+diff --git a/studio_memory.py b/studio_memory.py
+index 450ee13..c4083f8 100644
+--- a/studio_memory.py
++++ b/studio_memory.py
+@@ -873,6 +873,48 @@ def get_minutes(project_name, project_id):
+     return _rows_to_dicts(rows)
+ 
+ 
++def update_episode(project_name, project_id, episode_id, name=None, summary=None, metadata=None):
++    conn = get_connection(project_name)
++    project_id = _require_project(conn, project_id)
++    episode_id = _require_row(conn, "episodes", project_id, episode_id, "episode_id")
++    updates = {"updated_at": utc_now()}
++    if name is not None:
++        updates["name"] = _require_text(name, "Episode name")
++    if summary is not None:
++        updates["summary"] = str(summary or "")
++    if metadata is not None:
++        updates["metadata"] = _json_dumps(metadata)
++    assignments = ", ".join(f"{key} = ?" for key in updates)
++    conn.execute(
++        f"UPDATE episodes SET {assignments} WHERE project_id = ? AND id = ?",
++        list(updates.values()) + [project_id, episode_id],
++    )
++    _touch_project(conn, project_id)
++    conn.commit()
++    conn.close()
++    return get_project_by_id(project_name, project_id)
++
++
++def update_minute(project_name, project_id, minute_id, summary=None, metadata=None):
++    conn = get_connection(project_name)
++    project_id = _require_project(conn, project_id)
++    minute_id = _require_row(conn, "minutes", project_id, minute_id, "minute_id")
++    updates = {"updated_at": utc_now()}
++    if summary is not None:
++        updates["summary"] = str(summary or "")
++    if metadata is not None:
++        updates["metadata"] = _json_dumps(metadata)
++    assignments = ", ".join(f"{key} = ?" for key in updates)
++    conn.execute(
++        f"UPDATE minutes SET {assignments} WHERE project_id = ? AND id = ?",
++        list(updates.values()) + [project_id, minute_id],
++    )
++    _touch_project(conn, project_id)
++    conn.commit()
++    conn.close()
++    return minute_id
++
++
+ def add_page(project_name, project_id, episode_id, page_number, title="", summary="", status="draft", metadata=None):
+     conn = get_connection(project_name)
+     project_id = _require_project(conn, project_id)
+diff --git a/studio_workflow.py b/studio_workflow.py
+index 96fb8df..4ed4194 100644
+--- a/studio_workflow.py
++++ b/studio_workflow.py
+@@ -6,6 +6,16 @@ from datetime import datetime, timezone
+ import studio_capabilities
+ import studio_memory as memory
+ import studio_analyzer
++import studio_loremaster
++import studio_genesis
++import studio_taste
++import studio_showrunner
++import studio_scriptwriter
++import studio_render
++import studio_audio
++import studio_continuity
++import studio_prompt_compiler
++import studio_image_backend
+ import studio_repair
+ import studio_generation
+ import studio_visual
+@@ -45,6 +55,58 @@ WORLD_LOCATION_KEYS = ["name", "visual_prompt", "mood"]
+ CHARACTER_BIBLE_KEYS = ["personality", "goals", "speech_style", "visual", "voice_profile"]
+ 
+ 
++def _dossier_grounding(dossier):
++    """Render a Loremaster character dossier into a compact grounding string the Character
++    Creator expands from (traits, want/need, wound, secret, relationships, real lines)."""
++    if not isinstance(dossier, dict):
++        return ""
++    parts = []
++    if dossier.get("traits"):
++        parts.append("traits: " + ", ".join(str(t) for t in dossier["traits"]))
++    for label, key in (("wants", "want"), ("needs", "need"), ("wound", "wound"), ("secret", "secret"), ("voice", "voice")):
++        val = str(dossier.get(key) or "").strip()
++        if val:
++            parts.append(f"{label}: {val}")
++    rels = dossier.get("relationships") or []
++    rel_bits = []
++    for r in rels:
++        if isinstance(r, dict) and (r.get("who") or r.get("bond")):
++            rel_bits.append(f"{r.get('who', '')} ({r.get('bond', '')})".strip())
++        elif isinstance(r, str) and r.strip():
++            rel_bits.append(r.strip())
++    if rel_bits:
++        parts.append("relationships: " + "; ".join(rel_bits))
++    if dossier.get("key_lines"):
++        parts.append("real lines: " + " / ".join(f'"{l}"' for l in dossier["key_lines"][:3] if l))
++    return ". ".join(parts)
++
++
++def _normalize_story_plan_shape(plan):
++    """Return a storyboard shape downstream agents can depend on."""
++    plan = plan if isinstance(plan, dict) else {}
++    episodes = plan.get("episodes") if isinstance(plan.get("episodes"), list) else []
++    canon_events = plan.get("canon_events") if isinstance(plan.get("canon_events"), list) else []
++    return {
++        "summary": str(plan.get("summary") or "").strip(),
++        "episodes": [
++            {
++                "name": str(beat.get("name") or f"Beat {idx + 1}").strip(),
++                "summary": str(beat.get("summary") or "").strip(),
++            }
++            for idx, beat in enumerate(episodes)
++            if isinstance(beat, dict) and str(beat.get("summary") or beat.get("name") or "").strip()
++        ],
++        "canon_events": [
++            {
++                "description": str(event.get("description") or "").strip(),
++                "time_index": str(event.get("time_index") or "").strip(),
++            }
++            for event in canon_events
++            if isinstance(event, dict) and str(event.get("description") or "").strip()
++        ],
++    }
++
++
+ class StudioWorkflowRunner:
+     def __init__(self, project_name):
+         self.project_name = project_name
+@@ -166,6 +228,73 @@ class StudioWorkflowRunner:
+             self.source_story = prefs.get("source_story")
+         return self.mode, self.source_story
+ 
++    def _context_state(self):
++        """Refresh the current memory bank before agents that must stay consistent."""
++        bible = memory.get_bible(self.project_name, self.project_id)
++        return {
++            "bible": bible,
++            "premise": bible.get("premise") or {},
++            "world": bible.get("world") or {},
++            "characters": memory.get_characters(self.project_name, self.project_id),
++            "locations": memory.get_locations(self.project_name, self.project_id),
++            "visual_guide": memory.get_user_preferences(self.project_name, self.project_id).get("visual_consistency_guide") or {},
++            "storyboard": bible.get("storyboard") or {},
++        }
++
++    def _save_storyboard(self, story_data, ep_id=None, status="needs_user_review", note=""):
++        story_data = _normalize_story_plan_shape(story_data)
++        current_bible = memory.get_bible(self.project_name, self.project_id)
++        current_bible["storyboard"] = story_data
++        memory.save_bible(self.project_name, self.project_id, current_bible)
++        memory.set_user_preference(
++            self.project_name,
++            self.project_id,
++            "storyboard_review",
++            {"status": status, "episode_id": ep_id, "note": note, "updated_at": datetime.now(timezone.utc).isoformat()},
++        )
++        try:
++            studio_blackboard.put_artifact(
++                self.project_name,
++                self.project_id,
++                "storyboard",
++                story_data,
++                produced_by="planner",
++                status=status,
++            )
++        except Exception:
++            pass
++        return story_data
++
++    def apply_storyboard_edits(self, story_plan, note=""):
++        """User editing checkpoint for the Director/Storyboarder output."""
++        story_plan = _normalize_story_plan_shape(story_plan)
++        if not self._is_valid_story_plan(story_plan):
++            raise ValueError("Storyboard edits must include a summary and at least one beat.")
++
++        self._log_step("storyboard_edit", "start", "Applying user-edited storyboard beats.")
++        episodes = memory.get_episodes(self.project_name, self.project_id)
++        ep_id = episodes[0]["id"] if episodes else memory.add_episode(
++            self.project_name,
++            self.project_id,
++            (memory.get_bible(self.project_name, self.project_id).get("premise") or {}).get("title", "Episode 1"),
++            story_plan["summary"],
++            metadata={"source": "storyboard_edit"},
++        )
++        if episodes:
++            memory.update_episode(self.project_name, self.project_id, ep_id, summary=story_plan["summary"])
++
++        minutes = [m for m in memory.get_minutes(self.project_name, self.project_id) if m.get("episode_id") == ep_id]
++        for idx, beat in enumerate(story_plan["episodes"]):
++            summary = f"{beat['name']}: {beat['summary']}"
++            if idx < len(minutes):
++                memory.update_minute(self.project_name, self.project_id, minutes[idx]["id"], summary=summary)
++            else:
++                memory.add_minute(self.project_name, self.project_id, ep_id, idx + 1, summary)
++
++        saved = self._save_storyboard(story_plan, ep_id=ep_id, status="approved", note=note)
++        self._log_step("storyboard_edit", "complete", "Saved user-edited storyboard beats.", saved)
++        return {"ok": True, "storyboard": saved, "episode_id": ep_id}
++
+     def _canon_block(self, source_story, label="EXISTING STORY"):
+         """Build a fenced canon block to append to a stage prompt, or empty string if no source."""
+         excerpt = self._story_excerpt(source_story)
+@@ -192,6 +321,113 @@ class StudioWorkflowRunner:
+         self._analysis_cache = result
+         return result
+ 
++    def _understanding(self, source_story=None):
++        """Lazily run (and cache) the Loremaster's WHOLE-story understanding.
++
++        This is the Phase 0 keystone: instead of every stage reading a 6k head+tail
++        excerpt (which dropped ~73% of a long manuscript, including its inciting
++        incident and climax), the Loremaster map-reduces the full text once into a
++        structured ``story_understanding`` (premise, themes, motifs, a real ordered
++        timeline, and deep per-character dossiers) that downstream stages ground on.
++
++        In seed mode (no manuscript) this does NOT return None — it falls through to Genesis,
++        which *invents* a story_understanding with the same contract, so the "make a story from
++        nothing" button gives every downstream stage the same rich input. Cached; persisted.
++        """
++        story = source_story if source_story is not None else self.source_story
++        if story:
++            cached = getattr(self, "_understanding_cache", None)
++            if cached is not None and cached.get("_story") == story:
++                return cached
++            return self.run_loremaster(story)
++        # Seed mode: reuse a stored understanding if present, else invent one (Genesis).
++        stored = memory.get_bible(self.project_name, self.project_id).get("story_understanding")
++        if stored:
++            return stored
++        premise = memory.get_bible(self.project_name, self.project_id).get("premise")
++        if premise:
++            return self.run_genesis(premise)
++        return None
++
++    def run_genesis(self, premise=None, seed_text=""):
++        """Stage 0 (seed mode): invent a full ``story_understanding`` from a premise/seed.
++
++        The counterpart to the Loremaster for the "from nothing" path. Persists to the same
++        bible/blackboard keys so the Showrunner/Scriptwriter are agnostic to how the story
++        came to exist (read vs invented)."""
++        if premise is None:
++            premise = memory.get_bible(self.project_name, self.project_id).get("premise") or {}
++        self.state = "genesis"
++        self._log_step("genesis", "start", "Inventing a story from the seed...")
++        understanding = studio_genesis.invent_understanding(
++            premise, seed_text=seed_text or "",
++            llm_call=self._call_llm_with_fallback, profile=self.profile,
++            progress=lambda m: self._progress("genesis", m),
++            taste=studio_taste.digest_clause(self.project_name, self.project_id),
++        )
++        try:
++            current_bible = memory.get_bible(self.project_name, self.project_id)
++            current_bible["story_understanding"] = understanding
++            memory.save_bible(self.project_name, self.project_id, current_bible)
++            studio_blackboard.put_artifact(
++                self.project_name, self.project_id, "understanding", understanding,
++                produced_by="genesis")
++        except Exception as e:
++            logger.warning(f"Could not persist invented understanding: {e}")
++        self._log_step("genesis", "complete",
++                       f"Invented {len(understanding.get('timeline', []))} beats and "
++                       f"{len(understanding.get('character_dossiers', []))} characters.",
++                       understanding)
++        return understanding
++
++    def run_loremaster(self, source_story=None):
++        """Stage 0: Loremaster — distill the full source story into ``story_understanding``.
++
++        Reads the ENTIRE manuscript (not a truncated excerpt) via map-reduce and persists
++        the result so every later stage — world, characters, storyboard, scriptwriting —
++        works from one faithful, complete distillation. Safe to call repeatedly (cached).
++        """
++        story = source_story if source_story is not None else self.source_story
++        if not story:
++            return None
++        self.state = "loremaster"
++        self._log_step("loremaster", "start",
++                       f"Reading the full story ({len(story)} chars) to build a complete understanding...")
++        understanding = studio_loremaster.analyze_full(
++            story,
++            llm_call=self._call_llm_with_fallback,
++            profile=self.profile,
++            progress=lambda m: self._progress("loremaster", m),
++        )
++        understanding["_story"] = story
++        self._understanding_cache = understanding
++
++        # Persist: into the bible (for stages/export) and as a blackboard artifact (for the Producer).
++        try:
++            current_bible = memory.get_bible(self.project_name, self.project_id)
++            # Don't carry the raw-story echo into stored memory.
++            current_bible["story_understanding"] = {k: v for k, v in understanding.items() if k != "_story"}
++            memory.save_bible(self.project_name, self.project_id, current_bible)
++        except Exception as e:
++            logger.warning(f"Could not persist story understanding to bible: {e}")
++        try:
++            studio_blackboard.put_artifact(
++                self.project_name, self.project_id, "understanding",
++                {k: v for k, v in understanding.items() if k != "_story"},
++                produced_by="loremaster",
++            )
++        except Exception:
++            pass
++
++        self._log_step(
++            "loremaster", "complete",
++            f"Distilled {len(understanding.get('timeline', []))} timeline events and "
++            f"{len(understanding.get('character_dossiers', []))} character dossiers "
++            f"({understanding.get('_grounding')}).",
++            {k: v for k, v in understanding.items() if k != "_story"},
++        )
++        return understanding
++
+     def _call_llm_with_fallback(self, prompt, system_prompt, fallback_data_func, max_output_tokens=None):
+         """Thin adapter that calls LLMEngine and falls back gracefully to mocks if needed."""
+         if "AGENTIC CONSTRAINTS" not in system_prompt:
+@@ -1136,16 +1372,36 @@ class StudioWorkflowRunner:
+         seeds = []
+ 
+         if source_story and mode in (MODE_ADAPT, MODE_CONTINUE):
+-            analysis = self._analysis(source_story)
++            # Prefer the Loremaster's deep dossiers (built from the WHOLE story) over the
++            # heuristic analyzer roster, so characters who only appear in the middle of a
++            # long manuscript are cast — and each seed carries real, story-derived depth.
++            understanding = self._understanding(source_story) or {}
++            dossiers = understanding.get("character_dossiers") or []
+             roles = ["lead", "rival", "supporting", "supporting"]
++            for i, dossier in enumerate(dossiers[:4]):
++                name = (dossier.get("name") or "").strip()
++                if not name:
++                    continue
++                seeds.append({
++                    "name": name,
++                    "role": dossier.get("role") or (roles[i] if i < len(roles) else "supporting"),
++                    "skin_id": cast[i]["skin_id"] if i < len(cast) else None,
++                    # The full dossier grounds the expansion (traits/want/wound/secret/voice),
++                    # not just one quoted line. Used to EXPAND, never stored verbatim.
++                    "dossier": dossier,
++                    "grounding": _dossier_grounding(dossier),
++                })
++            if seeds:
++                return seeds
++
++            # Fallback: heuristic analyzer roster if the Loremaster produced no dossiers.
++            analysis = self._analysis(source_story)
+             people = (analysis or {}).get("characters") or []
+             for i, person in enumerate(people[:4]):
+                 seeds.append({
+                     "name": person["name"],
+                     "role": roles[i] if i < len(roles) else "supporting",
+                     "skin_id": cast[i]["skin_id"] if i < len(cast) else None,
+-                    # Grounding is the character's real sample line — used to EXPAND a voice,
+-                    # never to be stored verbatim as the description.
+                     "grounding": (person.get("sample_line") or person.get("description") or "").strip(),
+                 })
+             if seeds:
+@@ -1195,17 +1451,33 @@ class StudioWorkflowRunner:
+ 
+         def fallback():
+             tone = (self._analysis(source_story) or {}).get("tone", "grounded") if source_story else "grounded"
++            # Ground the fallback in the Loremaster dossier when present, so an offline run
++            # still yields a character shaped by the real story rather than generic noir.
++            dossier = seed.get("dossier") if isinstance(seed.get("dossier"), dict) else {}
++            traits = ", ".join(str(t) for t in (dossier.get("traits") or [])) or \
++                "Guarded, quick-witted, carries more weight than they show."
++            rels = dossier.get("relationships") or []
++            rel_text = "; ".join(
++                f"{r.get('who', '')} ({r.get('bond', '')})".strip() if isinstance(r, dict) else str(r)
++                for r in rels if r
++            ) or "Bound to the others by obligation more than trust."
++            arc = (f"From wanting {dossier['want']} to needing {dossier['need']}."
++                   if dossier.get("want") and dossier.get("need")
++                   else "Learning to trust again despite past betrayals.")
+             return {
+                 "name": seed["name"],
+                 "role": seed["role"],
+                 "archetype": "Lead" if "lead" in seed["role"].lower() or "protagon" in seed["role"].lower() else "Supporting",
+-                "personality": "Guarded, quick-witted, carries more weight than they show.",
+-                "goals": "Get through the next hour without losing what little they have left.",
++                "personality": traits,
++                "goals": dossier.get("want") or "Get through the next hour without losing what little they have left.",
+                 "fears": "Being seen as expendable.",
+-                "secrets": "Owes someone dangerous and can't pay.",
+-                "relationships": "Bound to the others by obligation more than trust.",
++                "secrets": dossier.get("secret") or "Owes someone dangerous and can't pay.",
++                "relationships": rel_text,
++                "backstory": "Forged by the events of the story; their past surfaces in what they protect.",
++                "core_wounds": dossier.get("wound") or "Abandoned when they needed help the most.",
++                "character_arc": arc,
+                 "speech_style": studio_generation.sentence_safe_trim(
+-                    seed.get("grounding") or "Clipped, dry, says less than they mean.", 140),
++                    dossier.get("voice") or seed.get("grounding") or "Clipped, dry, says less than they mean.", 140),
+                 "visual": {
+                     "face": "lived-in, alert eyes", "hair": "unfussed, practical",
+                     "build": "average, tense", "outfit": "worn everyday clothes that fit the world",
+@@ -1458,9 +1730,386 @@ class StudioWorkflowRunner:
+         for event in story_data["canon_events"]:
+             memory.add_canon_event(self.project_name, self.project_id, event["description"], event["time_index"])
+ 
++        self._save_storyboard(story_data, ep_id=ep_id)
+         self._log_step("story_planning", "complete", "Created and stored story plan.", story_data)
+         return story_data, ep_id
+ 
++    def run_showrunner(self, premise_data=None, world_data=None, characters=None,
++                       mode=None, source_story=None):
++        """Stage 4 (cinematic): Showrunner — dynamic scene blueprint + setup/payoff gate.
++
++        Replaces the hardcoded 3-beat planner for the cinematic path. Decides how many
++        scenes the story actually needs (from the Loremaster timeline, not a fixed count),
++        emits a per-scene blueprint with explicit setup→payoff, persists it, and mirrors it
++        onto the legacy storyboard so the existing approval gate/editor keep working.
++        Returns (storyboard, episode_id, blueprint).
++        """
++        mode = self._normalize_mode(mode) if mode is not None else self.mode
++        source_story = source_story if source_story is not None else self.source_story
++        self.state = "showrunner"
++        self._log_step("showrunner", "start", "Breaking the story into scenes...")
++
++        state = self._context_state()
++        world_data = world_data or state["world"]
++        characters = characters or state["characters"]
++        understanding = (
++            self._understanding(source_story)
++            or state["bible"].get("story_understanding")
++            or {}
++        )
++        if premise_data is None:
++            premise_data = state["premise"]
++
++        blueprint = studio_showrunner.build_blueprint(
++            understanding, world=world_data, characters=characters,
++            llm_call=self._call_llm_with_fallback, profile=self.profile,
++            progress=lambda m: self._progress("showrunner", m),
++            taste=studio_taste.digest_clause(self.project_name, self.project_id),
++        )
++
++        # Persist the rich blueprint, and mirror onto the legacy storyboard shape so the
++        # existing review gate / editor / minutes plumbing all keep functioning.
++        try:
++            current_bible = memory.get_bible(self.project_name, self.project_id)
++            current_bible["scene_blueprint"] = blueprint
++            memory.save_bible(self.project_name, self.project_id, current_bible)
++            studio_blackboard.put_artifact(
++                self.project_name, self.project_id, "scene_blueprint", blueprint,
++                produced_by="showrunner", status="needs_user_review",
++            )
++        except Exception as e:
++            logger.warning(f"Could not persist scene blueprint: {e}")
++
++        storyboard = studio_showrunner.blueprint_to_storyboard(blueprint)
++        # Idempotent: reuse this project's episode on a re-run instead of piling up duplicate
++        # episodes/minutes. Update its summary; rewrite minutes in place to match the new beats.
++        episodes = memory.get_episodes(self.project_name, self.project_id)
++        if episodes:
++            ep_id = episodes[0]["id"]
++            memory.update_episode(self.project_name, self.project_id, ep_id, summary=storyboard.get("summary", ""))
++        else:
++            ep_id = memory.add_episode(
++                self.project_name, self.project_id,
++                (premise_data or {}).get("title", "Episode 1"),
++                storyboard.get("summary", ""),
++                metadata={"source": "showrunner", "scene_count": blueprint.get("scene_count")},
++            )
++        existing_minutes = [m for m in memory.get_minutes(self.project_name, self.project_id)
++                            if m.get("episode_id") == ep_id]
++        for idx, beat in enumerate(storyboard.get("episodes", [])):
++            summary = f"{beat['name']}: {beat['summary']}"
++            if idx < len(existing_minutes):
++                memory.update_minute(self.project_name, self.project_id, existing_minutes[idx]["id"], summary=summary)
++            else:
++                memory.add_minute(self.project_name, self.project_id, ep_id, idx + 1, summary)
++        self._save_storyboard(storyboard, ep_id=ep_id, status="needs_user_review")
++
++        self._log_step("showrunner", "complete",
++                       f"Drafted a {blueprint.get('scene_count')}-scene blueprint "
++                       f"with {len(blueprint.get('setups', []))} setup/payoff threads.",
++                       blueprint)
++        return storyboard, ep_id, blueprint
++
++    def run_scenes(self, blueprint=None, ep_id=None, mode=None, source_story=None):
++        """Stage 5 (cinematic): Scriptwriter + Cinematographer — write every scene.
++
++        Replaces the 12-panel comic back half. For each blueprint scene it writes an
++        authored ``narration_script`` (flowing narration + in-voice dialogue, paced to the
++        scene's length — not balloons) and one evocative image prompt (via studio_visual).
++        Persists a ``scenes`` artifact (the new spine) and mirrors each scene onto a
++        panel + dialogue rows so the existing export/UI keep working. Because every
++        script beat is non-empty, this path also avoids the legacy empty-dialogue crash.
++        Returns the list of written scenes.
++        """
++        mode = self._normalize_mode(mode) if mode is not None else self.mode
++        source_story = source_story if source_story is not None else self.source_story
++        self.state = "scriptwriting"
++
++        state = self._context_state()
++        if blueprint is None:
++            blueprint = state["bible"].get("scene_blueprint") or {}
++        if not blueprint.get("scenes"):
++            # No blueprint yet — produce one so this stage can run stand-alone.
++            _, ep_id, blueprint = self.run_showrunner(mode=mode, source_story=source_story)
++
++        understanding = self._understanding(source_story) or state["bible"].get("story_understanding") or {}
++        characters = state["characters"]
++        world_data = state["world"]
++
++        self._log_step("scriptwriting", "start",
++                       f"Writing {len(blueprint.get('scenes', []))} cinematic scenes...")
++        scenes = studio_scriptwriter.build_scenes(
++            blueprint, understanding=understanding, world=world_data, characters=characters,
++            llm_call=self._call_llm_with_fallback, profile=self.profile,
++            progress=lambda m: self._progress("scriptwriting", m),
++            taste=studio_taste.digest_clause(self.project_name, self.project_id),
++        )
++
++        # Persist the new spine + the voice guide (so continuity can check drift and a single-scene
++        # regenerate stays voice-consistent).
++        try:
++            current_bible = memory.get_bible(self.project_name, self.project_id)
++            current_bible["scenes"] = scenes
++            memory.save_bible(self.project_name, self.project_id, current_bible)
++            studio_blackboard.put_artifact(
++                self.project_name, self.project_id, "scenes", scenes, produced_by="scriptwriter",
++            )
++            memory.set_user_preference(
++                self.project_name, self.project_id, "voice_guide",
++                studio_scriptwriter.build_voice_guide(characters, understanding))
++        except Exception as e:
++            logger.warning(f"Could not persist scenes artifact: {e}")
++
++        # Mirror onto panels + dialogue rows for export/back-compat.
++        self._persist_scenes_as_panels(scenes, ep_id, blueprint)
++
++        self._log_step("scriptwriting", "complete",
++                       f"Wrote {len(scenes)} scenes "
++                       f"({sum(len(s['narration_script']) for s in scenes)} script beats).",
++                       {"scenes": scenes})
++        return scenes
++
++    def _persist_scenes_as_panels(self, scenes, ep_id, blueprint):
++        """Write each cinematic scene to a panel + its narration beats as dialogue rows, so
++        export and any panel-reading UI keep functioning while the spine becomes scene-based."""
++        episodes = memory.get_episodes(self.project_name, self.project_id)
++        if ep_id is None:
++            ep_id = episodes[-1]["id"] if episodes else memory.add_episode(
++                self.project_name, self.project_id, "Episode 1",
++                (blueprint or {}).get("summary", ""), metadata={"source": "scenes"})
++        minutes = [m for m in memory.get_minutes(self.project_name, self.project_id)
++                   if m.get("episode_id") == ep_id]
++        page_id = memory.ensure_page(
++            self.project_name, self.project_id, ep_id, 1, title="Scenes",
++            summary=(blueprint or {}).get("summary", ""),
++            metadata={"source": "scenes", "scene_count": len(scenes)})
++
++        existing = {(p.get("page_id"), p["panel_number"]): p
++                    for p in memory.get_panels(self.project_name, self.project_id)}
++        for i, scene in enumerate(scenes):
++            min_id = minutes[min(i, len(minutes) - 1)]["id"] if minutes else memory.add_minute(
++                self.project_name, self.project_id, ep_id, i + 1, scene.get("title", ""))
++            panel_meta = {
++                "scene_id": scene.get("id"),
++                "image_prompt": scene.get("image_prompt"),
++                "negative_prompt": scene.get("negative_prompt", ""),
++                "location_ref": scene.get("location", ""),
++                "visible_characters": scene.get("characters", []),
++                "duration_seconds": scene.get("duration_seconds", 12),
++                "emotional_shift": scene.get("emotional_shift", ""),
++                "kind": "scene",
++            }
++            key = (page_id, i + 1)
++            if key in existing:
++                panel_id = existing[key]["id"]
++                memory.update_panel(self.project_name, self.project_id, panel_id,
++                                    scene.get("title", ""), panel_meta, page_id=page_id)
++            else:
++                panel_id = memory.add_panel(
++                    self.project_name, self.project_id, min_id, i + 1,
++                    scene.get("title", ""), scene.get("image_prompt", ""),
++                    metadata=panel_meta, page_id=page_id)
++
++            memory.clear_dialogue_lines(self.project_name, self.project_id, panel_id)
++            for beat in scene.get("narration_script", []):
++                memory.add_dialogue_line(
++                    self.project_name, self.project_id, panel_id,
++                    beat.get("speaker", "Narrator"), beat.get("line", ""),
++                    metadata={"emotion": beat.get("emotion", "neutral"),
++                              "delivery": beat.get("delivery", ""),
++                              "duration_seconds": beat.get("duration_seconds", 3)})
++            scene["panel_id"] = panel_id
++
++    def run_scene_continuity(self):
++        """Stage 7 (cinematic): audit the SCENE spine for continuity + payoff landing (§9.2b).
++
++        Verifies every planted setup is actually echoed in its payoff scene, flags off-roster
++        speakers, thin scenes, and an early climax. Persists warnings (with a repair target so the
++        UI can route each into scene regeneration) and returns them."""
++        self.state = "scene_continuity"
++        bible = memory.get_bible(self.project_name, self.project_id)
++        scenes = bible.get("scenes") or []
++        blueprint = bible.get("scene_blueprint") or {}
++        understanding = bible.get("story_understanding") or {}
++        voice_guide = memory.get_user_preferences(self.project_name, self.project_id).get("voice_guide") or {}
++        self._log_step("scene_continuity", "start", f"Auditing {len(scenes)} scenes for continuity...")
++
++        warnings = studio_continuity.audit_scenes(scenes, blueprint, voice_guide, understanding)
++
++        # Persist as continuity warnings (target_id maps to the scene's panel where available).
++        panel_by_scene = {}
++        for p in memory.get_panels(self.project_name, self.project_id):
++            sid = (p.get("metadata") or {}).get("scene_id")
++            if sid:
++                panel_by_scene[sid] = p["id"]
++        for w in warnings:
++            try:
++                memory.add_continuity_warning(
++                    self.project_name, self.project_id, "panel",
++                    panel_by_scene.get(w.get("scene_id"), 0) or 0,
++                    w.get("severity", "low"), w.get("message", ""),
++                    metadata={"scene_id": w.get("scene_id"), "suggestion": w.get("suggestion", ""),
++                              "repair_target": w.get("repair_target", "all"), "kind": "scene_continuity"})
++            except Exception:
++                pass
++        try:
++            studio_blackboard.put_artifact(self.project_name, self.project_id, "scene_continuity",
++                                           warnings, produced_by="continuity")
++        except Exception:
++            pass
++        high = sum(1 for w in warnings if w.get("severity") == "high")
++        self._log_step("scene_continuity", "complete",
++                       f"{len(warnings)} continuity notes ({high} high — unpaid setups).",
++                       {"warnings": warnings})
++        return warnings
++
++    def run_scene_audio(self, force=False):
++        """Stage 8 (cinematic): render each narration beat to local audio (gpt §4).
++
++        Uses the local Kokoro/TTS path when available; with none, every beat is marked
++        ``unavailable`` and the player falls back to browser speech — nothing is faked. Stamps
++        ``audio_path`` onto beats and persists the updated scenes. Voices each speaker via the
++        per-character voice profile when one exists."""
++        self.state = "voicing"
++        bible = memory.get_bible(self.project_name, self.project_id)
++        scenes = bible.get("scenes") or []
++        if not scenes:
++            return {"ok": False, "error": "No scenes to voice. Run scenes first."}
++
++        # Map each speaker -> a voice id from their bible voice_profile when present.
++        by_name = {}
++        for ch in memory.get_characters(self.project_name, self.project_id):
++            vid = ((ch.get("metadata") or {}).get("voice_profile") or {}).get("voice") \
++                if isinstance(ch.get("metadata"), dict) else None
++            if ch.get("name"):
++                by_name[str(ch["name"]).lower()] = vid
++        def voice_for(speaker):
++            return by_name.get(str(speaker or "").lower())
++
++        self._log_step("voicing", "start", f"Voicing {len(scenes)} scenes...")
++        synth = studio_audio.kokoro_synth(self.project_name)  # None -> unavailable, graceful
++        scenes, status = studio_audio.synthesize_scenes(
++            self.project_name, self.project_id, scenes, synth=synth, voice_for=voice_for,
++            force=force, progress=lambda m: self._progress("voicing", m))
++        try:
++            bible = memory.get_bible(self.project_name, self.project_id)
++            bible["scenes"] = scenes
++            memory.save_bible(self.project_name, self.project_id, bible)
++            studio_blackboard.put_artifact(self.project_name, self.project_id, "scenes", scenes,
++                                           produced_by="sound")
++        except Exception as e:
++            logger.warning(f"Could not persist voiced scenes: {e}")
++        self._log_step("voicing", "complete",
++                       f"Voiced {status['done']}/{status['total']} beats "
++                       f"({'TTS available' if status['synth_available'] else 'no TTS — browser fallback'}).",
++                       status)
++        return {"ok": True, "scenes": scenes, **status}
++
++    def run_render_images(self, force=False):
++        """Stage 6 (cinematic): render an image for each scene from its prompt (gpt §3).
++
++        Uses the configured image renderer (``studio_render.set_renderer``) if one exists; with
++        none configured every scene is marked ``unavailable`` and the player keeps its gradient —
++        nothing is faked. Updates the scenes artifact with ``image_path``/``image_status``.
++        Returns the render status rollup.
++        """
++        self.state = "rendering"
++        bible = memory.get_bible(self.project_name, self.project_id)
++        scenes = bible.get("scenes") or []
++        if not scenes:
++            return {"ok": False, "error": "No scenes to render. Run scenes first."}
++        # Visual Prompt Compiler: turn each scene + the world/character bibles into a reproducible
++        # PromptPacket (positive/negative + model/steps/cfg/seed) attached as scene['prompt_packet'].
++        world_data = bible.get("world") or {}
++        characters = memory.get_characters(self.project_name, self.project_id)
++        prefs = memory.get_user_preferences(self.project_name, self.project_id)
++        model_profile = prefs.get("image_model_profile") or {}
++        studio_prompt_compiler.compile_for_scenes(scenes, world_data, characters, model_profile)
++
++        # Self-install the in-process image backend if one is configured + available (diffusers +
++        # CUDA + a model). If not, this is a no-op and the gradient fallback stands — never faked.
++        if not studio_render.has_renderer():
++            try:
++                fn = studio_image_backend.make_image_backend(prefs.get("image_settings") or {})
++                if fn:
++                    studio_render.set_renderer(fn)
++            except Exception as e:
++                logger.warning(f"Image backend install skipped: {e}")
++        self._log_step("rendering", "start", f"Rendering {len(scenes)} scene images...")
++        scenes, queue = studio_render.render_scenes(
++            self.project_name, self.project_id, scenes, force=force,
++            progress=lambda m: self._progress("rendering", m))
++        try:
++            bible = memory.get_bible(self.project_name, self.project_id)
++            bible["scenes"] = scenes
++            memory.save_bible(self.project_name, self.project_id, bible)
++            studio_blackboard.put_artifact(self.project_name, self.project_id, "scenes", scenes,
++                                           produced_by="renderer")
++        except Exception as e:
++            logger.warning(f"Could not persist rendered scenes: {e}")
++        status = studio_render.render_status(self.project_name, self.project_id)
++        done = status["counts"].get("done", 0)
++        self._log_step("rendering", "complete",
++                       f"Rendered {done}/{len(scenes)} scene images "
++                       f"(renderer {'available' if status['renderer_available'] else 'not configured'}).",
++                       status)
++        return {"ok": True, "scenes": scenes, **status}
++
++    def regenerate_scene(self, scene_id, target="all", feedback=""):
++        """Per-scene reject/refine: rewrite one scene's script and/or image, leaving the
++        rest of the reel intact. ``target`` is 'script', 'image', or 'all'."""
++        state = self._context_state()
++        scenes = state["bible"].get("scenes") or []
++        blueprint = state["bible"].get("scene_blueprint") or {}
++        bp_by_id = {s.get("id"): s for s in blueprint.get("scenes", [])}
++        idx = next((i for i, s in enumerate(scenes) if s.get("id") == scene_id), None)
++        if idx is None:
++            return {"ok": False, "error": f"Unknown scene '{scene_id}'."}
++
++        # Learn the user's taste from this steer (§9.4): a worded refine is the richest signal;
++        # a bare regenerate reads as a reject of the current take.
++        studio_taste.record_signal(
++            self.project_name, self.project_id,
++            kind="refine" if feedback else "reject", note=feedback, scene_id=scene_id)
++
++        understanding = self._understanding() or state["bible"].get("story_understanding") or {}
++        characters = state["characters"]
++        world_data = state["world"]
++        by_name = studio_visual.index_characters(characters)
++        # Keep payoff-landing (§9.2b) and cross-scene voice (§9.2d) intact on a single-scene rewrite.
++        setups = {s.get("id"): s for s in (blueprint.get("setups") or []) if s.get("id")}
++        voice_guide = studio_scriptwriter.build_voice_guide(characters, understanding)
++        bp_scene = dict(bp_by_id.get(scene_id) or {})
++        if feedback:
++            bp_scene["purpose"] = f"{bp_scene.get('purpose', '')}\nUser direction: {feedback}".strip()
++
++        fresh = studio_scriptwriter.write_scene(
++            bp_scene, idx, understanding, world_data, characters, by_name,
++            llm_call=self._call_llm_with_fallback, profile=self.profile,
++            setups=setups, voice_guide=voice_guide)
++
++        old = scenes[idx]
++        if target in ("script", "all"):
++            old["narration_script"] = fresh["narration_script"]
++            old["duration_seconds"] = fresh["duration_seconds"]
++        if target in ("image", "all"):
++            old["image_prompt"] = fresh["image_prompt"]
++            old["negative_prompt"] = fresh["negative_prompt"]
++        old["status"] = "draft"
++        scenes[idx] = old
++
++        current_bible = memory.get_bible(self.project_name, self.project_id)
++        current_bible["scenes"] = scenes
++        memory.save_bible(self.project_name, self.project_id, current_bible)
++        try:
++            studio_blackboard.put_artifact(self.project_name, self.project_id, "scenes", scenes,
++                                           produced_by="scriptwriter")
++        except Exception:
++            pass
++        self._persist_scenes_as_panels(scenes, None, blueprint)
++        self._log_step("scriptwriting", "complete", f"Regenerated scene {scene_id} ({target}).", old)
++        return {"ok": True, "scene": old}
++
+     def _is_valid_story_plan(self, value):
+         if not isinstance(value, dict):
+             return False
+@@ -1639,6 +2288,12 @@ class StudioWorkflowRunner:
+                 speaker, text = line["speaker"], line["text"]
+             else:
+                 speaker, text = "Narrator", studio_generation.sentence_safe_trim(shot.get("action", ""), 160)
++            # A panel must never carry empty narration: an empty distributed slot or an
++            # actionless shot would otherwise crash add_dialogue_line ("text is required").
++            if not str(text or "").strip():
++                speaker = speaker or "Narrator"
++                text = subject or studio_generation.sentence_safe_trim(
++                    shot.get("subject", "") or premise_data.get("premise", "") or "The scene continues.", 160)
+             style_prompt = f"{palette}, {cam_comp}, cinematic comic panel"
+             panels.append({
+                 "panel_number": i + 1,
+@@ -1662,11 +2317,34 @@ class StudioWorkflowRunner:
+     def _apply_visual_prompts(self, panels, world_data, characters):
+         """Visual Prompt agent: assemble each panel's image_prompt + negative_prompt from the
+         structured world + character bibles (deterministic; see studio_visual)."""
++        state = self._context_state()
++        world_data = state["world"] or world_data
++        characters = state["characters"] or characters
++        visual_guide = state["visual_guide"] if isinstance(state.get("visual_guide"), dict) else {}
+         by_name = studio_visual.index_characters(characters)
+         for p in panels:
++            if visual_guide:
++                continuity = p.get("continuity_state") if isinstance(p.get("continuity_state"), dict) else {}
++                persistent = visual_guide.get("persistent") if isinstance(visual_guide.get("persistent"), dict) else {}
++                continuity.update({k: v for k, v in persistent.items() if v and not continuity.get(k)})
++                p["continuity_state"] = continuity
+             image_prompt, negative_prompt = studio_visual.build_image_prompt(p, world_data, by_name)
+             p["image_prompt"] = image_prompt
+             p["negative_prompt"] = negative_prompt
++            panel_note = {
++                "panel_number": p.get("panel_number"),
++                "beat": p.get("beat"),
++                "location_ref": p.get("location_ref"),
++                "visible_characters": p.get("visible_characters", []),
++                "continuity_state": p.get("continuity_state", {}),
++            }
++            visual_guide.setdefault("panels", []).append(panel_note)
++            visual_guide["persistent"] = {
++                "lighting": (p.get("continuity_state") or {}).get("lighting") or world_data.get("lighting", ""),
++                "palette": world_data.get("palette") or world_data.get("aesthetic", ""),
++            }
++            visual_guide["last_panel"] = panel_note
++        memory.set_user_preference(self.project_name, self.project_id, "visual_consistency_guide", visual_guide)
+         return panels
+ 
+     @staticmethod
+@@ -1679,6 +2357,10 @@ class StudioWorkflowRunner:
+         """Dialogue agent: rewrite each panel's line in the speaker's voice and attach emotion,
+         delivery, and duration. Batched per the model tier; on medium/large a second punch-up
+         pass tightens the lines. Falls back to the assembly-assigned line when the LLM is off."""
++        state = self._context_state()
++        world_data = state["world"] or world_data
++        characters = state["characters"] or characters
++        storyboard = state["storyboard"] or story_plan
+         by_name = {}
+         for ch in characters:
+             if isinstance(ch, dict) and ch.get("name"):
+@@ -1698,16 +2380,21 @@ class StudioWorkflowRunner:
+                     "beat": p.get("beat", ""),
+                     "draft": studio_generation.sentence_safe_trim(p.get("text", ""), 160),
+                     "voice": style,
++                    "world_context": studio_generation.sentence_safe_trim(world_data.get("setting", ""), 140),
+                 })
+             system_prompt = (
+                 "You are the Dialogue & Performance writer. Rewrite each panel's single line so it "
+-                "sounds like the named speaker (use their voice), fits what is on screen, and reads "
+-                "punchy — not generic AI mush. Narrator lines are spare and atmospheric. Keep each "
+-                "line short (a comic balloon). Output ONLY a JSON list, one object per panel: "
++                "sounds like the named speaker, fits the current beat and what is on screen, and stays "
++                "strictly consistent with the refreshed character/world/storyboard memory. Prioritize "
++                "scene consistency over creative flair. Narrator lines are spare and atmospheric. Keep "
++                "each line short (a comic balloon). Output ONLY a JSON list, one object per panel: "
+                 '[{"panel_number": N, "speaker": "...", "line": "...", "emotion": "one word", '
+                 '"delivery_note": "short performance note"}]'
+             )
+-            prompt = "Panels to voice:\n" + json.dumps(briefs)
++            prompt = (
++                "Storyboard memory:\n" + json.dumps(storyboard) +
++                "\n\nPanels to voice:\n" + json.dumps(briefs)
++            )
+             nums = [b["panel_number"] for b in briefs]
+             self._progress("panels", f"Writing dialogue for panel(s) {min(nums)}–{max(nums)} of {len(panels)}")
+ 
+@@ -1749,6 +2436,10 @@ class StudioWorkflowRunner:
+         source_story = source_story if source_story is not None else self.source_story
+         self.state = "panel_planning"
+         self._log_step("panel_planning", "start", "Building shot list and assembling 12 panels...")
++        state = self._context_state()
++        world_data = state["world"] or world_data
++        characters = state["characters"] or characters
++        story_plan = state["storyboard"] or story_plan
+ 
+         shots = self.run_shot_list(premise_data, world_data, characters, story_plan, mode, source_story)
+         panels_list = self.assemble_panels(
+@@ -1826,6 +2517,7 @@ class StudioWorkflowRunner:
+                     page_id=page_id,
+                 )
+ 
++            memory.clear_dialogue_lines(self.project_name, self.project_id, panel_id)
+             memory.add_dialogue_line(
+                 self.project_name,
+                 self.project_id,
+diff --git a/tests/test_model_manager_status.py b/tests/test_model_manager_status.py
+index bd8072f..40df721 100644
+--- a/tests/test_model_manager_status.py
++++ b/tests/test_model_manager_status.py
+@@ -34,6 +34,79 @@ class ModelManagerStatusTests(unittest.TestCase):
+         self.assertIn("--jinja", args)
+         self.assertIn("--chat-template-kwargs", args)
+ 
++    def test_models_expose_studio_and_betterfingers_roles(self):
++        dispatcher = model_manager.AVAILABLE_MODELS["gemma-4-e4b-q4"]
++        writer = model_manager.AVAILABLE_MODELS["gemma-4-12b-q4"]
++        rewrite = model_manager.AVAILABLE_MODELS["gemma-3-4b-q4"]
++
++        self.assertEqual(dispatcher["group"], "studio")
++        self.assertIn("dispatcher", dispatcher["roles"])
++        self.assertEqual(dispatcher["lane"], "cpu")
++        self.assertIn("writer", writer["roles"])
++        self.assertEqual(writer["lane"], "gpu-transient")
++        self.assertEqual(rewrite["group"], "betterfingers")
++        self.assertIn("rewrite", rewrite["roles"])
++
++    def test_download_file_resumes_partial_and_promotes_atomically(self):
++        class FakeResponse:
++            status_code = 206
++            headers = {"content-length": "5", "content-range": "bytes 5-9/10"}
++
++            def __enter__(self):
++                return self
++
++            def __exit__(self, *_args):
++                return False
++
++            def raise_for_status(self):
++                return None
++
++            def iter_content(self, chunk_size=8192):
++                yield b"fghij"
++
++        progress = []
++        with tempfile.TemporaryDirectory() as tmp:
++            dest = os.path.join(tmp, "model.gguf")
++            with open(f"{dest}.part", "wb") as handle:
++                handle.write(b"abcde")
++
++            with patch("model_manager.requests.get", return_value=FakeResponse()) as get:
++                model_manager.download_file("https://example.test/model", dest, "Model", progress_callback=progress.append)
++
++            self.assertTrue(os.path.exists(dest))
++            self.assertFalse(os.path.exists(f"{dest}.part"))
++            with open(dest, "rb") as handle:
++                self.assertEqual(handle.read(), b"abcdefghij")
++            self.assertEqual(get.call_args.kwargs["headers"], {"Range": "bytes=5-"})
++            self.assertEqual(progress[-1]["status"], "complete")
++
++    def test_download_file_keeps_partial_on_failure(self):
++        class BrokenResponse:
++            status_code = 200
++            headers = {"content-length": "10"}
++
++            def __enter__(self):
++                return self
++
++            def __exit__(self, *_args):
++                return False
++
++            def raise_for_status(self):
++                return None
++
++            def iter_content(self, chunk_size=8192):
++                yield b"abc"
++                raise RuntimeError("connection dropped")
++
++        with tempfile.TemporaryDirectory() as tmp:
++            dest = os.path.join(tmp, "model.gguf")
++            with patch("model_manager.requests.get", return_value=BrokenResponse()):
++                with self.assertRaises(RuntimeError):
++                    model_manager.download_file("https://example.test/model", dest, "Model")
++
++            self.assertFalse(os.path.exists(dest))
++            self.assertTrue(os.path.exists(f"{dest}.part"))
++
+     def test_linux_runtime_tar_symlinks_are_preserved_and_repaired(self):
+         with tempfile.TemporaryDirectory() as tmp:
+             archive_path = os.path.join(tmp, "runtime.tar.gz")
+diff --git a/tests/test_server_studio.py b/tests/test_server_studio.py
+index 5b0e838..ed523ec 100644
+--- a/tests/test_server_studio.py
++++ b/tests/test_server_studio.py
+@@ -202,6 +202,41 @@ class ServerStudioTests(unittest.TestCase):
+         types = {(p.get("resolution") or {}).get("type") for p in payload["proposals"]}
+         self.assertIn("freeform", types)
+ 
++    def test_studio_storyboard_update_persists_user_edited_beats(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            with patch.object(studio_memory, "get_user_data_path", return_value=tmp):
++                with TestClient(server.app) as client:
++                    created = client.post("/studio/projects", json={"name": "Storyboard Edit Project"})
++                    project = created.json()["project"]
++                    storyboard = {
++                        "summary": "Mara chooses the archive over the easy escape.",
++                        "episodes": [
++                            {"name": "Opening Choice", "summary": "Mara sees the exit closing."},
++                            {"name": "Cost", "summary": "She stays to save the ledger."},
++                        ],
++                        "canon_events": [
++                            {"description": "Mara remains in the archive.", "time_index": "0:35"},
++                        ],
++                    }
++                    saved = client.post(
++                        "/studio/workflow/storyboard",
++                        json={
++                            "project_name": project["name"],
++                            "project_id": project["id"],
++                            "storyboard": storyboard,
++                            "note": "typed edit",
++                        },
++                    )
++                    loaded = client.post("/studio/project/load", json={"project_name": project["name"]})
++
++        self.assertEqual(saved.status_code, 200)
++        payload = saved.json()
++        self.assertEqual(payload["data"]["storyboard"]["episodes"][1]["name"], "Cost")
++        bible = loaded.json()["data"]["bible"]
++        minutes = loaded.json()["data"]["minutes"]
++        self.assertEqual(bible["storyboard"]["summary"], storyboard["summary"])
++        self.assertEqual(minutes[0]["summary"], "Opening Choice: Mara sees the exit closing.")
++
+     def test_studio_blackboard_endpoint_reports_artifacts_and_posts(self):
+         with tempfile.TemporaryDirectory() as tmp:
+             with patch.object(studio_memory, "get_user_data_path", return_value=tmp):

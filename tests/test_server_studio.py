@@ -202,6 +202,41 @@ class ServerStudioTests(unittest.TestCase):
         types = {(p.get("resolution") or {}).get("type") for p in payload["proposals"]}
         self.assertIn("freeform", types)
 
+    def test_studio_storyboard_update_persists_user_edited_beats(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(studio_memory, "get_user_data_path", return_value=tmp):
+                with TestClient(server.app) as client:
+                    created = client.post("/studio/projects", json={"name": "Storyboard Edit Project"})
+                    project = created.json()["project"]
+                    storyboard = {
+                        "summary": "Mara chooses the archive over the easy escape.",
+                        "episodes": [
+                            {"name": "Opening Choice", "summary": "Mara sees the exit closing."},
+                            {"name": "Cost", "summary": "She stays to save the ledger."},
+                        ],
+                        "canon_events": [
+                            {"description": "Mara remains in the archive.", "time_index": "0:35"},
+                        ],
+                    }
+                    saved = client.post(
+                        "/studio/workflow/storyboard",
+                        json={
+                            "project_name": project["name"],
+                            "project_id": project["id"],
+                            "storyboard": storyboard,
+                            "note": "typed edit",
+                        },
+                    )
+                    loaded = client.post("/studio/project/load", json={"project_name": project["name"]})
+
+        self.assertEqual(saved.status_code, 200)
+        payload = saved.json()
+        self.assertEqual(payload["data"]["storyboard"]["episodes"][1]["name"], "Cost")
+        bible = loaded.json()["data"]["bible"]
+        minutes = loaded.json()["data"]["minutes"]
+        self.assertEqual(bible["storyboard"]["summary"], storyboard["summary"])
+        self.assertEqual(minutes[0]["summary"], "Opening Choice: Mara sees the exit closing.")
+
     def test_studio_blackboard_endpoint_reports_artifacts_and_posts(self):
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(studio_memory, "get_user_data_path", return_value=tmp):

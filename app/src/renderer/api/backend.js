@@ -179,7 +179,7 @@ async function selectLlmModel(modelId, timeoutMs = 10000) {
   return postJson(`${MODELS_LLM_URL}/select`, { model_id: modelId }, timeoutMs);
 }
 
-async function downloadLlmModel(modelId, timeoutMs = 1800000) {
+async function downloadLlmModel(modelId, timeoutMs = 10000) {
   return postJson(`${MODELS_LLM_URL}/${encodeURIComponent(modelId)}/download`, {}, timeoutMs);
 }
 
@@ -551,6 +551,51 @@ async function studioGetPanels(projectName, projectId, timeoutMs = 10000) {
   return fetchJson(`${STUDIO_URL}/project/${encodeURIComponent(projectName)}/${projectId}/panels`, timeoutMs);
 }
 
+// --- Cinematic scene player (Phase 4) ---
+async function studioGetScenes(projectName, timeoutMs = 15000) {
+  return fetchJson(`${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/scenes`, timeoutMs);
+}
+
+// Write every scene (script + image) from the approved blueprint. Long-running.
+async function studioRunScenes(projectName, timeoutMs = 600000) {
+  return postJson(`${STUDIO_URL}/workflow/stage`,
+    { project_name: projectName, stage: 'scenes' }, timeoutMs);
+}
+
+// Per-scene reject/refine. target: 'script' | 'image' | 'all'.
+async function studioRegenerateScene(projectName, sceneId, target = 'all', feedback = '', timeoutMs = 240000) {
+  return postJson(`${STUDIO_URL}/workflow/scene/regenerate`,
+    { project_name: projectName, scene_id: sceneId, target, feedback }, timeoutMs);
+}
+
+// Cinematic stages (thin wrappers over the unified stage endpoint).
+async function studioRunCinematicStage(projectName, stage, timeoutMs = 600000) {
+  return postJson(`${STUDIO_URL}/workflow/stage`, { project_name: projectName, stage }, timeoutMs);
+}
+async function studioRenderImages(projectName, timeoutMs = 600000) {
+  return studioRunCinematicStage(projectName, 'render', timeoutMs);
+}
+async function studioVoiceScenes(projectName, timeoutMs = 600000) {
+  return studioRunCinematicStage(projectName, 'voice', timeoutMs);
+}
+async function studioSceneContinuity(projectName, timeoutMs = 240000) {
+  return studioRunCinematicStage(projectName, 'scene_continuity', timeoutMs);
+}
+async function studioRenderStatus(projectName, timeoutMs = 15000) {
+  return fetchJson(`${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/render-status`, timeoutMs);
+}
+
+// In-process image model catalog + download (Studio downloads + runs the model itself).
+async function studioListImageModels(timeoutMs = 10000) {
+  return fetchJson(`${STUDIO_URL}/models/image`, timeoutMs);
+}
+async function studioDownloadImageModel(modelKey, timeoutMs = 15000) {
+  return postJson(`${STUDIO_URL}/models/image/${encodeURIComponent(modelKey)}/download`, {}, timeoutMs);
+}
+async function studioImageModelDownloadState(modelKey, timeoutMs = 10000) {
+  return fetchJson(`${STUDIO_URL}/models/image/${encodeURIComponent(modelKey)}/download-state`, timeoutMs);
+}
+
 async function studioCreatePage(projectName, episodeId, pageNumber, title = '', summary = '', timeoutMs = 10000) {
   return postJson(
     `${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/pages`,
@@ -592,6 +637,42 @@ async function studioResolveWarning(projectName, warningId, timeoutMs = 10000) {
 
 async function studioRepairPropose(projectName, report, userNote = '', timeoutMs = 240000) {
   return postJson(`${STUDIO_URL}/workflow/repair/propose`, { project_name: projectName, report, user_note: userNote }, timeoutMs);
+}
+
+async function studioUpdateStoryboard(projectName, projectId, storyboard, note = '', timeoutMs = 20000) {
+  return postJson(
+    `${STUDIO_URL}/workflow/storyboard`,
+    { project_name: projectName, project_id: projectId, storyboard, note },
+    timeoutMs,
+  );
+}
+
+async function studioTranscribeEdit(projectName, projectId, targetType, targetId, file, timeoutMs = 180000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const form = new FormData();
+  form.append('project_name', projectName);
+  if (projectId) form.append('project_id', String(projectId));
+  form.append('target_type', targetType || 'storyboard');
+  if (targetId) form.append('target_id', String(targetId));
+  form.append('file', file);
+
+  try {
+    const response = await fetch(`${STUDIO_URL}/workflow/transcribe-edit`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: form,
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(await getResponseErrorMessage(response, `${STUDIO_URL}/workflow/transcribe-edit`));
+    }
+    return await response.json();
+  } catch (error) {
+    throw normalizeFetchError(error, timeoutMs);
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 async function fetchStudioBlackboard(projectName, timeoutMs = 5000) {
@@ -709,12 +790,25 @@ export {
   studioRunWorkflow,
   studioRunStage,
   studioGetPanels,
+  studioGetScenes,
+  studioRunScenes,
+  studioRegenerateScene,
+  studioRunCinematicStage,
+  studioRenderImages,
+  studioVoiceScenes,
+  studioSceneContinuity,
+  studioRenderStatus,
+  studioListImageModels,
+  studioDownloadImageModel,
+  studioImageModelDownloadState,
   studioCreatePage,
   studioCreatePanel,
   studioApproveItem,
   studioBriefReview,
   studioResolveWarning,
   studioRepairPropose,
+  studioUpdateStoryboard,
+  studioTranscribeEdit,
   studioAssetUrl,
   fetchStudioBlackboard,
   studioUploadPanelImage,

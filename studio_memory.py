@@ -873,6 +873,58 @@ def get_minutes(project_name, project_id):
     return _rows_to_dicts(rows)
 
 
+def update_episode(project_name, project_id, episode_id, name=None, summary=None, metadata=None):
+    conn = get_connection(project_name)
+    project_id = _require_project(conn, project_id)
+    episode_id = _require_row(conn, "episodes", project_id, episode_id, "episode_id")
+    updates = {"updated_at": utc_now()}
+    if name is not None:
+        updates["name"] = _require_text(name, "Episode name")
+    if summary is not None:
+        updates["summary"] = str(summary or "")
+    if metadata is not None:
+        updates["metadata"] = _json_dumps(metadata)
+    assignments = ", ".join(f"{key} = ?" for key in updates)
+    conn.execute(
+        f"UPDATE episodes SET {assignments} WHERE project_id = ? AND id = ?",
+        list(updates.values()) + [project_id, episode_id],
+    )
+    _touch_project(conn, project_id)
+    conn.commit()
+    conn.close()
+    return get_project_by_id(project_name, project_id)
+
+
+def update_minute(project_name, project_id, minute_id, summary=None, metadata=None):
+    conn = get_connection(project_name)
+    project_id = _require_project(conn, project_id)
+    minute_id = _require_row(conn, "minutes", project_id, minute_id, "minute_id")
+    updates = {"updated_at": utc_now()}
+    if summary is not None:
+        updates["summary"] = str(summary or "")
+    if metadata is not None:
+        updates["metadata"] = _json_dumps(metadata)
+    assignments = ", ".join(f"{key} = ?" for key in updates)
+    conn.execute(
+        f"UPDATE minutes SET {assignments} WHERE project_id = ? AND id = ?",
+        list(updates.values()) + [project_id, minute_id],
+    )
+    _touch_project(conn, project_id)
+    conn.commit()
+    conn.close()
+    return minute_id
+
+
+def delete_minute(project_name, project_id, minute_id):
+    conn = get_connection(project_name)
+    project_id = _require_project(conn, project_id)
+    minute_id = _require_row(conn, "minutes", project_id, minute_id, "minute_id")
+    conn.execute("DELETE FROM minutes WHERE project_id = ? AND id = ?", (project_id, minute_id))
+    _touch_project(conn, project_id)
+    conn.commit()
+    conn.close()
+
+
 def add_page(project_name, project_id, episode_id, page_number, title="", summary="", status="draft", metadata=None):
     conn = get_connection(project_name)
     project_id = _require_project(conn, project_id)

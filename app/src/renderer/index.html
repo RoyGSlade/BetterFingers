@@ -860,6 +860,118 @@
               </div>
 
               <div class="setting-group">
+                <h3>Studio Media Engine</h3>
+                <p class="group-desc">Local-first model lanes for cinematic Studio projects. Keep the dispatcher small and resident; let heavy media workers load only when their queue runs.</p>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingStudioResourceProfile">Resource Profile</label>
+                    <span class="setting-desc">Background saver unloads workers after jobs; speedy keeps compatible workers warm.</span>
+                  </div>
+                  <div class="setting-control">
+                    <select id="settingStudioResourceProfile" class="settings-input min-w-200">
+                      <option value="saver">Background VRAM Saver</option>
+                      <option value="speedy">Speedy Pipeline</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingStudioDispatcherModel">Dispatcher Model</label>
+                    <span class="setting-desc">Small always-on Studio coordinator. Keep this on CPU/RAM.</span>
+                  </div>
+                  <div class="setting-control">
+                    <select id="settingStudioDispatcherModel" class="settings-input min-w-200">
+                      <option value="gemma-4-e4b-q4">Gemma 4 E4B Q4 (default)</option>
+                      <option value="gemma-4-e2b-q4">Gemma 4 E2B Q4 (low RAM)</option>
+                      <option value="gemma-4-e4b-q8">Gemma 4 E4B Q8</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingStudioWriterModel">Smart Writer Model</label>
+                    <span class="setting-desc">Larger transient model for lore, showrunning, scriptwriting, and project intelligence.</span>
+                  </div>
+                  <div class="setting-control">
+                    <select id="settingStudioWriterModel" class="settings-input min-w-200">
+                      <option value="gemma-4-12b-q4">Gemma 4 12B Q4 (default)</option>
+                      <option value="gemma-4-e4b-q8">Gemma 4 E4B Q8</option>
+                      <option value="gemma-3-12b-q4">Gemma 3 12B Q4</option>
+                      <option value="gemma-4-26b-a4b-q4">Gemma 4 26B-A4B Q4</option>
+                      <option value="gemma-4-31b-q4">Gemma 4 31B Q4</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingStudioVoiceEngine">Studio Voice Engine</label>
+                    <span class="setting-desc">Kokoro is the default bulk voice engine; Chatterbox is the premium expressive lane.</span>
+                  </div>
+                  <div class="setting-control">
+                    <select id="settingStudioVoiceEngine" class="settings-input min-w-200">
+                      <option value="kokoro">Kokoro</option>
+                      <option value="chatterbox">Chatterbox</option>
+                      <option value="off">Off</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingStudioImageBackend">Image Backend</label>
+                    <span class="setting-desc">Scene image rendering backend. Off keeps the cinematic player's gradient fallback.</span>
+                  </div>
+                  <div class="setting-control">
+                    <select id="settingStudioImageBackend" class="settings-input min-w-200">
+                      <option value="off">Off / fallback</option>
+                      <option value="diffusers">In-process Diffusers</option>
+                      <option value="comfyui">ComfyUI URL</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingStudioMusicEngine">Music Engine</label>
+                    <span class="setting-desc">Score generation for reels or acts.</span>
+                  </div>
+                  <div class="setting-control">
+                    <select id="settingStudioMusicEngine" class="settings-input min-w-200">
+                      <option value="off">Off</option>
+                      <option value="ace-step">ACE-Step</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingStudioAmbienceEngine">Ambience Engine</label>
+                    <span class="setting-desc">Scene ambience and room-tone loops.</span>
+                  </div>
+                  <div class="setting-control">
+                    <select id="settingStudioAmbienceEngine" class="settings-input min-w-200">
+                      <option value="off">Off</option>
+                      <option value="stable-audio-open">Stable Audio Open</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingStudioVramCap">VRAM Budget Cap (MB)</label>
+                    <span class="setting-desc">Soft cap used by Studio queue planning and future ModelHost scheduling.</span>
+                  </div>
+                  <div class="setting-control">
+                    <input id="settingStudioVramCap" class="settings-input w-120" type="number" min="2048" max="65536" step="512" />
+                  </div>
+                </div>
+              </div>
+
+              <div class="setting-group">
                 <h3>Hardware Platform Capabilities</h3>
                 <div id="capabilitiesList" class="detail-list"></div>
               </div>
@@ -919,8 +1031,8 @@
             <section class="model-panel" aria-labelledby="llmModelHeading">
               <div class="model-panel-header">
                 <div>
-                  <h3 id="llmModelHeading">LLM Rewrite Model</h3>
-                  <p>Controls the local model used for cleanup, personas, and rewrites.</p>
+                  <h3 id="llmModelHeading">BetterFingers Core LLM</h3>
+                  <p>Used for dictation cleanup, personas, rewrites, and any selected smart-text task.</p>
                 </div>
                 <span id="llmModelBadge" class="model-badge">Loading</span>
               </div>
@@ -968,6 +1080,20 @@
               </div>
             </section>
           </div>
+
+          <section class="model-panel studio-model-panel" aria-labelledby="studioModelHeading">
+            <div class="model-panel-header">
+              <div>
+                <h3 id="studioModelHeading">Studio Media Engine</h3>
+                <p>Dispatcher, writer, voice, image, music, and ambience lanes for cinematic Studio projects.</p>
+              </div>
+              <span class="model-badge" data-tone="warning">Local-first</span>
+            </div>
+            <div class="studio-model-note">
+              Downloads run in the background and resume from partial files after a connection drop, app restart, or power loss. Heavy Studio workers should stay unloaded until their queue needs them.
+            </div>
+            <div id="studioModelRoleMap" class="studio-model-role-grid" aria-live="polite"></div>
+          </section>
 
           <div class="model-panel model-panel-compact">
             <div class="model-panel-header">
@@ -1337,6 +1463,30 @@
                 <button id="studioAddPageButton" class="secondary-button" type="button">Add Page</button>
               </div>
               <div id="studioPanelsGrid" class="studio-panels-grid"></div>
+            </div>
+
+            <!-- Cinematic Production (scene-based reel) -->
+            <div class="studio-approval-section" id="studioCinematicSection">
+              <div class="studio-section-title">
+                <span class="studio-section-icon">🎞️</span>
+                <h3>Cinematic Production</h3>
+                <button id="studioCinemaRefreshButton" class="secondary-button" type="button" title="Refresh status">↻</button>
+              </div>
+              <p class="setting-desc">A scene-based cinematic reel: a dynamic scene blueprint you approve, then authored narration, evocative imagery, and local voice — played back as a scrolling, narrated reel you refine scene by scene.</p>
+
+              <div id="studioCinemaStatus" class="draft-metadata" style="margin:8px 0; line-height:1.7;">No cinematic run yet — start with <strong>Blueprint</strong>.</div>
+
+              <div class="studio-pipeline-actions">
+                <button id="studioBlueprintButton" class="secondary-button" type="button" title="Break the story into a scene blueprint (read or invented)">1 · Blueprint</button>
+                <button id="studioApproveBlueprintButton" class="secondary-button" type="button" title="Approve the scene list before generating">2 · Approve</button>
+                <button id="studioGenerateScenesButton" class="secondary-button primary-button" type="button" title="Write narration + imagery for each scene">3 · Generate Scenes</button>
+                <button id="studioRenderImagesButton" class="secondary-button" type="button" title="Render an image per scene (if a generator is configured)">Render Images</button>
+                <button id="studioVoiceScenesButton" class="secondary-button" type="button" title="Voice the narration locally">Voice</button>
+                <button id="studioContinuityButton" class="secondary-button" type="button" title="Audit continuity + verify setups pay off">Continuity</button>
+                <button id="studioPlayCinemaButton" class="secondary-button primary-button" type="button" title="Play the cinematic reel">▶ Player</button>
+              </div>
+              <div id="studioCinemaWarnings" class="draft-metadata" style="margin-top:8px;"></div>
+              <div id="studioCinemaMessage" class="warmup-message" role="status" aria-live="polite"></div>
             </div>
 
             <!-- Export Placeholder -->
