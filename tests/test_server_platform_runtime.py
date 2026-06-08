@@ -16,6 +16,24 @@ class DummyTranscriber:
         self.model = None
 
 
+class DummyTTS:
+    _status_message = "ready"
+    _fallback = False
+
+    def is_loaded(self):
+        return False
+
+    def backend(self):
+        return "dummy"
+
+
+class DummyLlmEngine:
+    _ready = False
+    model_id = "gemma-4-12b-q4"
+    _last_error = "llama-server exited during startup."
+    _last_error_details = {"stderr": "libmtmd.so.0 missing"}
+
+
 class ServerPlatformRuntimeTests(unittest.TestCase):
     def setUp(self):
         server.transcriber = None
@@ -160,6 +178,28 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
         self.assertIn("tts", data)
         self.assertIn("audio", data)
         self.assertIn("recovery", data)
+
+    def test_doctor_reports_llm_runtime_link_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server_path = os.path.join(tmp, "llama-server")
+            with open(server_path, "w", encoding="utf-8") as handle:
+                handle.write("#!/bin/sh\nexit 127\n")
+
+            with patch.object(server, "get_engine_if_initialized", return_value=DummyLlmEngine()), patch.object(
+                server, "get_server_path", return_value=server_path
+            ), patch.object(server, "check_model_exists", return_value=True), patch.object(
+                server,
+                "validate_llama_server_runtime",
+                return_value={"ok": False, "message": "llama-server runtime libraries are incomplete: libmtmd.so.0"},
+            ), patch.object(server, "ensure_tts_initialized", return_value=DummyTTS()):
+                with TestClient(server.app) as client:
+                    response = client.get("/doctor")
+
+        self.assertEqual(response.status_code, 200)
+        llm = response.json()["llm"]
+        self.assertFalse(llm["runtime_valid"])
+        self.assertEqual(llm["runtime_status"], "runtime_link_failure")
+        self.assertIn("libmtmd.so.0", llm["runtime_message"])
 
     def test_record_runtime_error_severity(self):
         server.record_runtime_error("stt", "failed loading model", "fatal", {"model": "base.en"})

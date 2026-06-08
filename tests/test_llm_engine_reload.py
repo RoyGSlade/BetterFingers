@@ -1,3 +1,4 @@
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -11,6 +12,9 @@ class LLMEngineReloadTests(unittest.TestCase):
         self._process_pid = LLMEngine._process_pid
         self._owns_process = LLMEngine._owns_process
         self._initialized = LLMEngine._initialized
+        self._stderr_log = LLMEngine._stderr_log
+        self._last_error = LLMEngine._last_error
+        self._last_error_details = LLMEngine._last_error_details
 
     def tearDown(self):
         LLMEngine._ready = self._ready
@@ -18,6 +22,9 @@ class LLMEngineReloadTests(unittest.TestCase):
         LLMEngine._process_pid = self._process_pid
         LLMEngine._owns_process = self._owns_process
         LLMEngine._initialized = self._initialized
+        LLMEngine._stderr_log = self._stderr_log
+        LLMEngine._last_error = self._last_error
+        LLMEngine._last_error_details = self._last_error_details
 
     def _new_engine(self):
         engine = LLMEngine.__new__(LLMEngine)
@@ -66,6 +73,28 @@ class LLMEngineReloadTests(unittest.TestCase):
         self.assertIn("--jinja", cmd)
         self.assertIn("--chat-template-kwargs", cmd)
         self.assertIn('{"enable_thinking":false}', cmd)
+
+    def test_wait_for_server_records_immediate_process_exit(self):
+        engine = self._new_engine()
+        process = Mock()
+        process.poll.return_value = 127
+        LLMEngine._process = process
+        LLMEngine._ready = False
+        LLMEngine._stderr_log = tempfile.TemporaryFile()
+        LLMEngine._stderr_log.write(b"error while loading shared libraries: libmtmd.so.0")
+        LLMEngine._stderr_log.seek(0)
+
+        with patch("llm_engine.requests.get", side_effect=RuntimeError("not listening")), patch.object(
+            engine, "shutdown"
+        ) as shutdown_mock:
+            engine._wait_for_server()
+
+        self.assertIn("libmtmd.so.0", LLMEngine._last_error)
+        self.assertEqual(LLMEngine._last_error_details["returncode"], 127)
+        shutdown_mock.assert_called_once()
+
+        LLMEngine._stderr_log.close()
+        LLMEngine._stderr_log = None
 
 
 if __name__ == "__main__":

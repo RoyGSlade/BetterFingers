@@ -35,6 +35,8 @@ from model_manager import (
     get_server_path,
     is_ready as is_llm_model_ready,
     check_model_exists,
+    required_llama_server_build,
+    validate_llama_server_runtime,
 )
 # Configure Logging
 from transcriber import (
@@ -1234,13 +1236,51 @@ async def run_doctor(refresh_audio: bool = False):
 
     # LLM details
     selected_model_id = model_id or get_selected_llm_model_id()
+    llama_server_path = str(get_server_path())
+    llama_server_exists = os.path.exists(llama_server_path)
+    model_exists = check_model_exists(selected_model_id)
+    runtime_validation = (
+        validate_llama_server_runtime(llama_server_path)
+        if llama_server_exists
+        else {"ok": False, "message": "llama-server binary is missing."}
+    )
+    required_runtime_build = required_llama_server_build(selected_model_id)
+    runtime_build = runtime_validation.get("build")
+    runtime_build_ok = (
+        not required_runtime_build
+        or (runtime_build is not None and runtime_build >= required_runtime_build)
+    )
+    llm_last_error = str(getattr(engine, "_last_error", "") or "") if engine else ""
+    if not llama_server_exists:
+        llm_runtime_status = "missing_llama_server"
+    elif not model_exists:
+        llm_runtime_status = "missing_model"
+    elif not runtime_validation.get("ok", False):
+        llm_runtime_status = "runtime_link_failure"
+    elif not runtime_build_ok:
+        llm_runtime_status = "runtime_outdated"
+    elif engine_ready:
+        llm_runtime_status = "ready"
+    elif llm_last_error:
+        llm_runtime_status = "startup_failure"
+    else:
+        llm_runtime_status = "not_loaded"
+
     llm_info = {
         "initialized": engine is not None,
         "ready": engine_ready,
         "model_id": selected_model_id,
-        "llama_server_path": str(get_server_path()),
-        "llama_server_exists": os.path.exists(get_server_path()),
-        "model_exists": check_model_exists(selected_model_id),
+        "llama_server_path": llama_server_path,
+        "llama_server_exists": llama_server_exists,
+        "model_exists": model_exists,
+        "runtime_status": llm_runtime_status,
+        "runtime_valid": bool(runtime_validation.get("ok", False)),
+        "runtime_compatible": bool(runtime_validation.get("ok", False) and runtime_build_ok),
+        "runtime_build": runtime_build,
+        "required_runtime_build": required_runtime_build,
+        "runtime_message": runtime_validation.get("message", ""),
+        "last_error": llm_last_error,
+        "last_error_details": dict(getattr(engine, "_last_error_details", {}) or {}) if engine else {},
     }
 
     # TTS details
@@ -1284,6 +1324,8 @@ async def run_doctor(refresh_audio: bool = False):
     recovery_guidelines = {
         "missing_model": "Go to the Models screen to download the recommended LLM or Whisper models, or verify that the GGUF/Whisper files exist in the models directory.",
         "missing_llama_server": "llama-server binary could not be found. If you are on Linux, please compile or install llama-server and set the BETTERFINGERS_LLAMA_SERVER environment variable.",
+        "runtime_link_failure": "llama-server exists, but its shared runtime libraries are incomplete. Reinstall the runtime or repair the Linux .so symlinks in the models directory.",
+        "runtime_outdated": "The selected model requires a newer llama.cpp runtime. Download or reinstall the LLM runtime from the Models screen.",
         "port_conflict": "Port 8000 is occupied by another process. Please close the conflicting application or configure a different port.",
         "microphone_unavailable": "No input audio devices were detected, or microphone permission was denied. Please connect a microphone and ensure BetterFingers has permission to access it.",
         "unsupported_wayland_injection": "Typing and pasting injection are not supported under Wayland. BetterFingers has safely fallen back to copying text to the clipboard.",
@@ -2463,10 +2505,12 @@ async def runtime_warmup(request: RuntimeWarmupRequest):
     if request.llm:
         try:
             engine = get_selected_llm_engine()
+            ready = bool(getattr(engine, "_ready", False))
             result["llm"] = {
-                "ok": True,
+                "ok": ready,
                 "initialized": engine is not None,
-                "ready": bool(getattr(engine, "_ready", False)),
+                "ready": ready,
+                "error": "" if ready else str(getattr(engine, "_last_error", "") or ""),
             }
         except Exception as e:
             logging.exception("LLM warmup failure")

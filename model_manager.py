@@ -1,5 +1,7 @@
 import logging
 import os
+import re
+import subprocess
 import sys
 import threading
 import zipfile
@@ -110,14 +112,24 @@ if sys.platform.startswith("win"):
     SERVER_FILENAME = "llama-server.exe"
     SERVER_ARCHIVE_NAME = "server-cuda-bin.zip"
     CUDA_ARCHIVE_NAME = "cuda-libs.zip"
-    SERVER_BIN_URL = "https://github.com/ggml-org/llama.cpp/releases/download/b7870/llama-b7870-bin-win-cuda-12.4-x64.zip"
-    CUDA_LIB_URL = "https://github.com/ggml-org/llama.cpp/releases/download/b7870/cudart-llama-bin-win-cuda-12.4-x64.zip"
+    SERVER_BIN_URL = "https://github.com/ggml-org/llama.cpp/releases/download/b9548/llama-b9548-bin-win-cuda-12.4-x64.zip"
+    CUDA_LIB_URL = "https://github.com/ggml-org/llama.cpp/releases/download/b9548/cudart-llama-bin-win-cuda-12.4-x64.zip"
 else:
     SERVER_FILENAME = "llama-server"
     SERVER_ARCHIVE_NAME = "server-ubuntu-vulkan-bin.tar.gz"
     CUDA_ARCHIVE_NAME = None
-    SERVER_BIN_URL = "https://github.com/ggml-org/llama.cpp/releases/download/b7870/llama-b7870-bin-ubuntu-vulkan-x64.tar.gz"
+    SERVER_BIN_URL = "https://github.com/ggml-org/llama.cpp/releases/download/b9548/llama-b9548-bin-ubuntu-vulkan-x64.tar.gz"
     CUDA_LIB_URL = None
+
+PACKAGED_LLAMA_CPP_BUILD = 9548
+GEMMA4_MIN_LLAMA_CPP_BUILD = 8660
+
+LINUX_RUNTIME_LINKS = {
+    "libmtmd.so.0": "libmtmd.so.0.0.7870",
+    "libllama.so.0": "libllama.so.0.0.7870",
+    "libggml.so.0": "libggml.so.0.9.5",
+    "libggml-base.so.0": "libggml-base.so.0.9.5",
+}
 
 _download_state_lock = threading.Lock()
 _download_state = {}
@@ -216,6 +228,175 @@ def get_server_path():
         return repo_local
 
     return os.path.join(get_models_dir(), get_server_filename())
+
+
+def get_llama_runtime_env(server_path=None):
+    env = os.environ.copy()
+    runtime_dir = os.path.dirname(os.path.abspath(server_path or get_server_path()))
+    if not sys.platform.startswith("win"):
+        existing = env.get("LD_LIBRARY_PATH", "")
+        paths = [runtime_dir]
+        if existing:
+            paths.append(existing)
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(paths)
+    return env
+
+
+def _find_runtime_target(runtime_dir, link_name, preferred_target):
+    preferred_path = os.path.join(runtime_dir, preferred_target)
+    if os.path.exists(preferred_path):
+        return preferred_target
+
+    prefix = f"{link_name}."
+    candidates = [
+        name
+        for name in os.listdir(runtime_dir)
+        if name.startswith(prefix) and os.path.isfile(os.path.join(runtime_dir, name))
+    ]
+    if candidates:
+        return sorted(candidates)[-1]
+    return preferred_target
+
+
+def _safe_symlink(runtime_dir, link_name, target_name, replace=False, require_target=True):
+    link_path = os.path.join(runtime_dir, link_name)
+    target_path = os.path.join(runtime_dir, target_name)
+
+    if os.path.islink(link_path):
+        current_target = os.readlink(link_path)
+        resolved = current_target if os.path.isabs(current_target) else os.path.join(runtime_dir, current_target)
+        if os.path.exists(resolved) and not replace:
+            return None
+        os.remove(link_path)
+    elif os.path.exists(link_path):
+        return None
+
+    if require_target and not os.path.exists(target_path):
+        return f"{link_name} target missing: {target_name}"
+
+    os.symlink(target_name, link_path)
+    return None
+
+
+def repair_linux_runtime_links(runtime_dir=None):
+    """
+    Recreate shared-library soname links lost by flattened tar extraction.
+    """
+    if sys.platform.startswith("win"):
+        return {"ok": True, "repaired": [], "missing": [], "errors": []}
+
+    runtime_dir = runtime_dir or os.path.dirname(os.path.abspath(get_server_path()))
+    if not os.path.isdir(runtime_dir):
+        return {"ok": False, "repaired": [], "missing": [runtime_dir], "errors": []}
+
+    repaired = []
+    missing = []
+    errors = []
+    for link_name, preferred_target in LINUX_RUNTIME_LINKS.items():
+        link_path = os.path.join(runtime_dir, link_name)
+        if os.path.exists(link_path):
+            continue
+
+        target_name = _find_runtime_target(runtime_dir, link_name, preferred_target)
+        try:
+            error = _safe_symlink(runtime_dir, link_name, target_name)
+        except OSError as exc:
+            errors.append(f"{link_name}: {exc}")
+            continue
+
+        if error:
+            missing.append(error)
+        else:
+            repaired.append(f"{link_name} -> {target_name}")
+
+    return {
+        "ok": not missing and not errors,
+        "repaired": repaired,
+        "missing": missing,
+        "errors": errors,
+    }
+
+
+def _extract_tar_flat(archive_path, dest_dir):
+    import tarfile
+
+    with tarfile.open(archive_path, "r:gz") as archive:
+        for member in archive.getmembers():
+            name = os.path.basename(member.name)
+            if not name:
+                continue
+            if member.isfile():
+                target_path = os.path.join(dest_dir, name)
+                if os.path.lexists(target_path) and not os.path.isdir(target_path):
+                    os.remove(target_path)
+                member.name = name
+                archive.extract(member, path=dest_dir)
+            elif member.issym():
+                target = os.path.basename(member.linkname or "")
+                if not target:
+                    continue
+                error = _safe_symlink(dest_dir, name, target, replace=True, require_target=False)
+                if error:
+                    logging.warning("Skipped runtime symlink %s -> %s: %s", name, target, error)
+
+
+def parse_llama_server_build(version_text):
+    match = re.search(r"(?:version|build):\s*(\d+)", str(version_text or ""), flags=re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except Exception:
+        return None
+
+
+def required_llama_server_build(model_id=None):
+    info = AVAILABLE_MODELS.get(model_id or DEFAULT_MODEL, {})
+    if str(info.get("family", "")).lower() == "gemma-4":
+        return GEMMA4_MIN_LLAMA_CPP_BUILD
+    return 0
+
+
+def is_managed_server_path(server_path):
+    try:
+        managed_path = os.path.abspath(os.path.join(get_models_dir(), get_server_filename()))
+        return os.path.abspath(server_path) == managed_path
+    except Exception:
+        return False
+
+
+def validate_llama_server_runtime(server_path=None):
+    """Returns whether llama-server can execute in its runtime directory."""
+    server_path = server_path or get_server_path()
+    if not os.path.exists(server_path):
+        return {"ok": False, "message": f"llama-server runtime is missing: {server_path}"}
+
+    repair_result = None
+    if not sys.platform.startswith("win"):
+        repair_result = repair_linux_runtime_links(os.path.dirname(os.path.abspath(server_path)))
+
+    try:
+        result = subprocess.run(
+            [server_path, "--version"],
+            cwd=os.path.dirname(os.path.abspath(server_path)),
+            env=get_llama_runtime_env(server_path),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception as exc:
+        return {"ok": False, "message": f"llama-server runtime failed validation: {exc}"}
+
+    output = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part and part.strip())
+    if result.returncode != 0:
+        detail = output or f"exit code {result.returncode}"
+        if repair_result and not repair_result.get("ok", False):
+            repair_detail = "; ".join(repair_result.get("missing", []) + repair_result.get("errors", []))
+            detail = f"{detail}; runtime libraries incomplete: {repair_detail}"
+        return {"ok": False, "message": f"llama-server runtime failed validation: {detail}"}
+
+    message = output or "llama-server runtime validated."
+    return {"ok": True, "message": message, "build": parse_llama_server_build(message)}
 
 
 def download_file(url, dest_path, desc="File", progress_callback=None, progress_key=""):
@@ -359,8 +540,47 @@ def check_and_download_resources(model_id=None, progress_callback=None):
         return {"ok": False, "model_id": target_model_id, "message": message}
 
     server_path = get_server_path()
-    if not os.path.exists(server_path):
-        logging.info("llama-server not found. Downloading binaries...")
+    server_needs_install = not os.path.exists(server_path)
+    existing_validation = None
+    required_build = required_llama_server_build(target_model_id)
+    if not server_needs_install:
+        existing_validation = validate_llama_server_runtime(server_path)
+        existing_build = existing_validation.get("build")
+        managed_server = is_managed_server_path(server_path)
+        if not existing_validation.get("ok", False) and managed_server:
+            server_needs_install = True
+            report(
+                {
+                    "key": f"{target_model_id}:server",
+                    "status": "starting",
+                    "percent": 0.0,
+                    "message": "Repairing llama-server runtime.",
+                }
+            )
+        elif required_build and (existing_build is None or existing_build < required_build):
+            if managed_server:
+                server_needs_install = True
+                report(
+                    {
+                        "key": f"{target_model_id}:server",
+                        "status": "starting",
+                        "percent": 0.0,
+                        "message": (
+                            f"Updating llama-server runtime for {model_info['name']} "
+                            f"(found build {existing_build or 'unknown'}, need {required_build}+)."
+                        ),
+                    }
+                )
+            else:
+                message = (
+                    f"{model_info['name']} requires llama.cpp build {required_build}+; "
+                    f"found {existing_build or 'unknown'} at {server_path}."
+                )
+                report({"key": target_model_id, "status": "error", "percent": 0.0, "message": message})
+                return {"ok": False, "model_id": target_model_id, "message": message, "runtime": existing_validation}
+
+    if server_needs_install:
+        logging.info("llama-server not found or outdated. Downloading binaries...")
 
         bin_archive = os.path.join(models_dir, SERVER_ARCHIVE_NAME)
         try:
@@ -375,14 +595,10 @@ def check_and_download_resources(model_id=None, progress_callback=None):
                 with zipfile.ZipFile(bin_archive, "r") as archive:
                     archive.extractall(models_dir)
             elif SERVER_ARCHIVE_NAME.endswith(".tar.gz"):
-                import tarfile
-                with tarfile.open(bin_archive, "r:gz") as archive:
-                    for member in archive.getmembers():
-                        if member.isfile():
-                            member.name = os.path.basename(member.name)
-                            archive.extract(member, path=models_dir)
+                _extract_tar_flat(bin_archive, models_dir)
                 if os.path.exists(server_path):
                     os.chmod(server_path, 0o755)
+                repair_linux_runtime_links(os.path.dirname(os.path.abspath(server_path)))
         finally:
             if os.path.exists(bin_archive):
                 os.remove(bin_archive)
@@ -411,6 +627,12 @@ def check_and_download_resources(model_id=None, progress_callback=None):
         report({"key": target_model_id, "status": "error", "percent": 0.0, "message": message})
         return {"ok": False, "model_id": target_model_id, "message": message}
 
+    validation = validate_llama_server_runtime(server_path)
+    if not validation.get("ok", False):
+        message = validation.get("message", "llama-server runtime failed validation.")
+        report({"key": target_model_id, "status": "error", "percent": 0.0, "message": message})
+        return {"ok": False, "model_id": target_model_id, **validation}
+
     ready_message = f"{model_info['name']} and runtime are ready."
     report(
         {
@@ -424,4 +646,13 @@ def check_and_download_resources(model_id=None, progress_callback=None):
 
 
 def is_ready(model_id=None):
-    return os.path.exists(get_model_path(model_id)) and os.path.exists(get_server_path())
+    if not os.path.exists(get_model_path(model_id)) or not os.path.exists(get_server_path()):
+        return False
+    validation = validate_llama_server_runtime(get_server_path())
+    if not validation.get("ok", False):
+        return False
+    required_build = required_llama_server_build(model_id)
+    runtime_build = validation.get("build")
+    if required_build and (runtime_build is None or runtime_build < required_build):
+        return False
+    return True

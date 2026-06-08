@@ -9,6 +9,59 @@ import studio_memory
 
 
 class StudioMemoryTests(unittest.TestCase):
+    def test_studio_projects_dir_reports_permission_fix_hint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(studio_memory, "get_user_data_path", return_value=tmp), \
+                 patch.object(studio_memory, "_handoff_path_to_user"), \
+                 patch.object(studio_memory.os, "access", return_value=False), \
+                 patch.dict(studio_memory.os.environ, {"USER": "donaven"}, clear=False):
+                with self.assertRaises(PermissionError) as raised:
+                    studio_memory.get_studio_projects_dir()
+
+        message = str(raised.exception)
+        self.assertIn("Studio projects folder is not writable", message)
+        self.assertIn("sudo chown -R donaven:donaven", message)
+
+    def test_handoff_path_to_user_chowns_project_tree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "Project"
+            asset_dir = project_dir / "assets"
+            asset_dir.mkdir(parents=True)
+            asset_file = asset_dir / "panel.png"
+            asset_file.write_text("image bytes")
+
+            chowned = []
+
+            def record_chown(path, uid, gid):
+                chowned.append((Path(path), uid, gid))
+
+            with patch.object(studio_memory, "_target_user_ids_for_handoff", return_value=(1000, 1000)), \
+                 patch.object(studio_memory, "_chown_path", side_effect=record_chown):
+                studio_memory._handoff_path_to_user(project_dir, recursive=True)
+
+        self.assertIn((project_dir, 1000, 1000), chowned)
+        self.assertIn((asset_dir, 1000, 1000), chowned)
+        self.assertIn((asset_file, 1000, 1000), chowned)
+
+    def test_root_handoff_prefers_sudo_user_ids(self):
+        with patch.object(studio_memory.os, "name", "posix"), \
+             patch.object(studio_memory.os, "geteuid", return_value=0, create=True), \
+             patch.dict(studio_memory.os.environ, {"SUDO_UID": "1000", "SUDO_GID": "1000"}, clear=True):
+            self.assertEqual(studio_memory._target_user_ids_for_handoff(), (1000, 1000))
+
+    def test_project_creation_hands_off_project_tree_on_close(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(studio_memory, "get_user_data_path", return_value=tmp), \
+                 patch.object(studio_memory, "_handoff_path_to_user") as handoff:
+                project = studio_memory.create_project("Ownership Handoff")
+
+        recursive_paths = [
+            Path(call.args[0])
+            for call in handoff.call_args_list
+            if call.kwargs.get("recursive")
+        ]
+        self.assertIn(Path(project["path"]), recursive_paths)
+
     def test_project_schema_structure_and_export(self):
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(studio_memory, "get_user_data_path", return_value=tmp):

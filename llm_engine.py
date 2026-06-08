@@ -16,7 +16,13 @@ import signal
 import re
 import tempfile
 import yaml
-from model_manager import get_model_path, get_model_server_args, get_server_path, check_and_download_resources
+from model_manager import (
+    check_and_download_resources,
+    get_llama_runtime_env,
+    get_model_path,
+    get_model_server_args,
+    get_server_path,
+)
 
 # --- Configuration ---
 SIDECAR_PORT = 8080
@@ -463,6 +469,8 @@ class LLMEngine:
     _ready = False
     _stderr_log = None
     _loaded_model_id = None
+    _last_error = ""
+    _last_error_details = {}
     
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
@@ -495,6 +503,27 @@ class LLMEngine:
         """Set the model ID to be used on next start/reload."""
         self.model_id = model_id
 
+    def _clear_last_error(self):
+        LLMEngine._last_error = ""
+        LLMEngine._last_error_details = {}
+
+    def _mark_error(self, message, details=None):
+        text = str(message or "llama-server failed.")
+        LLMEngine._ready = False
+        LLMEngine._last_error = text
+        LLMEngine._last_error_details = dict(details or {})
+        logging.error(text)
+
+    def _read_server_stderr(self, limit=4000):
+        if not LLMEngine._stderr_log:
+            return ""
+        try:
+            LLMEngine._stderr_log.flush()
+            LLMEngine._stderr_log.seek(0)
+            return LLMEngine._stderr_log.read(limit).decode("utf-8", errors="ignore").strip()
+        except Exception:
+            return ""
+
     def _setup_server(self):
         """Setup the sidecar server with deduplication."""
         
@@ -511,6 +540,7 @@ class LLMEngine:
                 logging.info(f"âœ… Reusing existing llama-server on port {self.port}")
             LLMEngine._ready = True
             LLMEngine._loaded_model_id = getattr(self, "model_id", None)
+            self._clear_last_error()
             return
         
         # STEP 2: Ensure resources exist
@@ -518,13 +548,13 @@ class LLMEngine:
             model_id = getattr(self, "model_id", None)
             download_result = check_and_download_resources(model_id)
             if isinstance(download_result, dict) and not bool(download_result.get("ok", False)):
-                logging.error(
-                    "LLM resources unavailable: %s",
-                    download_result.get("message", "unknown resource error"),
+                self._mark_error(
+                    f"LLM resources unavailable: {download_result.get('message', 'unknown resource error')}",
+                    download_result,
                 )
                 return
         except Exception as e:
-            logging.error(f"Failed to download resources: {e}")
+            self._mark_error(f"Failed to download resources: {e}")
             return
         
         # STEP 3: Start fresh server
@@ -537,11 +567,11 @@ class LLMEngine:
         model_path = get_model_path(model_id)
 
         if not os.path.exists(server_exe):
-            logging.error(f"llama-server not found: {server_exe}")
+            self._mark_error(f"llama-server not found: {server_exe}")
             return
             
         if not os.path.exists(model_path):
-            logging.error(f"Model not found: {model_path}")
+            self._mark_error(f"Model not found: {model_path}")
             return
         
         cmd = [
@@ -572,12 +602,18 @@ class LLMEngine:
                 pass
         LLMEngine._stderr_log = tempfile.TemporaryFile()
 
-        LLMEngine._process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=LLMEngine._stderr_log,
-            startupinfo=startupinfo
-        )
+        try:
+            LLMEngine._process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=LLMEngine._stderr_log,
+                startupinfo=startupinfo,
+                cwd=os.path.dirname(os.path.abspath(server_exe)),
+                env=get_llama_runtime_env(server_exe),
+            )
+        except Exception as exc:
+            self._mark_error(f"Failed to start llama-server: {exc}", {"server_path": server_exe})
+            return
         
         # Store PID for targeted shutdown
         LLMEngine._process_pid = LLMEngine._process.pid
@@ -596,21 +632,28 @@ class LLMEngine:
                     logging.info("âœ… llama-server is READY!")
                     LLMEngine._ready = True
                     LLMEngine._loaded_model_id = getattr(self, "model_id", None)
+                    self._clear_last_error()
                     return
             except Exception:
                 pass
+            process = LLMEngine._process
+            if process is not None:
+                return_code = process.poll()
+                if return_code is not None:
+                    stderr = self._read_server_stderr()
+                    message = f"llama-server exited during startup with code {return_code}."
+                    if stderr:
+                        message = f"{message} Server stderr: {stderr[:1200]}"
+                    self._mark_error(message, {"returncode": return_code, "stderr": stderr})
+                    self.shutdown()
+                    return
             time.sleep(1)
         
-        logging.error("âŒ llama-server timed out!")
-        if LLMEngine._stderr_log:
-            try:
-                LLMEngine._stderr_log.flush()
-                LLMEngine._stderr_log.seek(0)
-                err = LLMEngine._stderr_log.read(4000).decode('utf-8', errors='ignore')
-                if err:
-                    logging.error(f"Server stderr: {err[:1200]}")
-            except Exception:
-                pass
+        stderr = self._read_server_stderr()
+        message = "llama-server timed out while starting."
+        if stderr:
+            message = f"{message} Server stderr: {stderr[:1200]}"
+        self._mark_error(message, {"stderr": stderr})
         self.shutdown()
 
     def shutdown(self):

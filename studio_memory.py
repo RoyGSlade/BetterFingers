@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -6,6 +7,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from utils import get_user_data_path
+
+try:
+    import pwd
+except ImportError:  # pragma: no cover - Windows compatibility
+    pwd = None
 
 
 STUDIO_SPEC_TITLE = (
@@ -55,6 +61,86 @@ DEFAULT_USER_PREFERENCES = {
 }
 
 
+def _target_user_ids_for_handoff():
+    if os.name != "posix" or not hasattr(os, "geteuid") or os.geteuid() != 0:
+        return None
+
+    sudo_uid = os.environ.get("SUDO_UID")
+    if sudo_uid and sudo_uid.isdigit() and int(sudo_uid) != 0:
+        sudo_gid = os.environ.get("SUDO_GID")
+        if sudo_gid and sudo_gid.isdigit():
+            return int(sudo_uid), int(sudo_gid)
+        if pwd is not None:
+            try:
+                return int(sudo_uid), pwd.getpwuid(int(sudo_uid)).pw_gid
+            except Exception:
+                pass
+        return int(sudo_uid), -1
+
+    if pwd is None:
+        return None
+
+    for key in ("USER", "LOGNAME"):
+        username = str(os.environ.get(key, "") or "").strip()
+        if username and username != "root":
+            try:
+                row = pwd.getpwnam(username)
+                return row.pw_uid, row.pw_gid
+            except KeyError:
+                continue
+    return None
+
+
+def _chown_path(path, uid, gid):
+    chown = getattr(os, "lchown", os.chown)
+    chown(path, uid, gid)
+
+
+def _handoff_path_to_user(path, recursive=False):
+    ids = _target_user_ids_for_handoff()
+    if not ids:
+        return
+
+    uid, gid = ids
+    target = Path(path)
+    if not target.exists():
+        return
+
+    paths = []
+    if recursive and target.is_dir():
+        for root, dirs, files in os.walk(target):
+            for name in dirs:
+                paths.append(Path(root) / name)
+            for name in files:
+                paths.append(Path(root) / name)
+    paths.append(target)
+
+    for item in paths:
+        try:
+            _chown_path(item, uid, gid)
+        except OSError as exc:
+            logging.warning("Failed to hand off Studio path ownership for %s: %s", item, exc)
+
+
+def _assert_writable_dir(path):
+    if not os.access(path, os.W_OK):
+        owner = os.environ.get("SUDO_USER") or os.environ.get("USER") or os.environ.get("LOGNAME") or "$USER"
+        raise PermissionError(
+            f"Studio projects folder is not writable: {path}. "
+            f"Run: sudo chown -R {owner}:{owner} {path}"
+        )
+
+
+class StudioConnection(sqlite3.Connection):
+    def close(self):
+        project_dir = getattr(self, "_studio_project_dir", None)
+        try:
+            super().close()
+        finally:
+            if project_dir:
+                _handoff_path_to_user(project_dir, recursive=True)
+
+
 def utc_now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -71,6 +157,8 @@ def safe_project_name(project_name):
 def get_studio_projects_dir():
     path = Path(get_user_data_path()) / "studio_projects"
     path.mkdir(parents=True, exist_ok=True)
+    _handoff_path_to_user(path)
+    _assert_writable_dir(path)
     return str(path)
 
 
@@ -88,6 +176,7 @@ def ensure_project_structure(project_name):
     project_dir.mkdir(parents=True, exist_ok=True)
     for relative in PROJECT_ASSET_DIRS:
         (project_dir / relative).mkdir(parents=True, exist_ok=True)
+    _handoff_path_to_user(project_dir, recursive=True)
     return project_dir
 
 
@@ -98,7 +187,8 @@ def get_project_db_path(project_name):
 
 def get_connection(project_name):
     db_path, _project_dir = get_project_db_path(project_name)
-    conn = sqlite3.connect(db_path, timeout=30)
+    conn = sqlite3.connect(db_path, timeout=30, factory=StudioConnection)
+    conn._studio_project_dir = _project_dir
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA busy_timeout = 30000;")
