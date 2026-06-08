@@ -6,6 +6,13 @@ import sys
 import threading
 import zipfile
 
+try:
+    import pwd
+    import grp
+except Exception:  # pragma: no cover - Windows
+    pwd = None
+    grp = None
+
 import requests
 
 from utils import get_user_data_path
@@ -210,11 +217,13 @@ def get_download_state(model_id=None):
     if key in AVAILABLE_MODELS:
         partial_path = get_partial_model_path(key)
         partial_bytes = _file_size(partial_path)
+        file_status = get_model_file_status(key)
         result.setdefault("model_id", key)
-        result.setdefault("installed", is_model_file_complete(key))
+        result.setdefault("installed", bool(file_status.get("complete")))
         result.setdefault("partial_bytes", partial_bytes)
         result.setdefault("partial_path", partial_path if partial_bytes else "")
         result.setdefault("resumable", bool(partial_bytes))
+        result.setdefault("file_status", file_status)
     return result
 
 
@@ -258,10 +267,87 @@ def _file_size(path):
         return 0
 
 
+def _owner_name(uid):
+    try:
+        if pwd is None:
+            return str(uid)
+        return pwd.getpwuid(uid).pw_name
+    except Exception:
+        return str(uid)
+
+
+def _group_name(gid):
+    try:
+        if grp is None:
+            return str(gid)
+        return grp.getgrgid(gid).gr_name
+    except Exception:
+        return str(gid)
+
+
+def get_model_file_status(model_id):
+    """Return first-run health details for a managed GGUF file.
+
+    ``installed`` answers "is the file complete enough to use"; this status explains whether
+    the app can also read, repair, resume, replace, or delete it without surprising the user.
+    """
+    path = get_model_path(model_id)
+    exists = os.path.exists(path)
+    size = _file_size(path)
+    status = {
+        "model_id": model_id,
+        "path": path,
+        "exists": exists,
+        "size_bytes": size,
+        "complete": is_model_file_complete(model_id) if exists else False,
+        "readable": False,
+        "writable": False,
+        "owner": "",
+        "group": "",
+        "mode": "",
+        "attention": [],
+        "fix_command": "",
+        "ok": False,
+    }
+    if not exists:
+        status["attention"].append("missing")
+        return status
+    try:
+        st = os.stat(path)
+        status["owner"] = _owner_name(st.st_uid)
+        status["group"] = _group_name(st.st_gid)
+        status["mode"] = oct(st.st_mode & 0o777)
+    except OSError as exc:
+        status["attention"].append(f"stat_failed:{exc}")
+    status["readable"] = os.access(path, os.R_OK)
+    status["writable"] = os.access(path, os.W_OK)
+    if not status["complete"]:
+        status["attention"].append("incomplete")
+    if not status["readable"]:
+        status["attention"].append("not_readable")
+    # A non-writable managed model may still load, but it cannot be repaired/replaced/deleted by
+    # the app. Surface that explicitly so a root-owned file is not mistaken for a perfect install.
+    if not status["writable"]:
+        status["attention"].append("not_writable")
+    current_uid = getattr(os, "getuid", lambda: None)()
+    try:
+        if current_uid is not None and os.stat(path).st_uid != current_uid:
+            status["attention"].append("owned_by_other_user")
+            user = _owner_name(current_uid)
+            if user and not user.isdigit():
+                status["fix_command"] = f"sudo chown {user}:{user} {path}"
+    except OSError:
+        pass
+    status["ok"] = bool(status["complete"] and status["readable"])
+    return status
+
+
 def is_model_file_complete(model_id):
     """Best-effort guard against power-loss partial files being treated as installed."""
     path = get_model_path(model_id)
     if not os.path.exists(path):
+        return False
+    if not os.access(path, os.R_OK):
         return False
     actual = _file_size(path)
     # Unit tests and developer overrides often use tiny fixture files. Real GGUF
@@ -641,6 +727,28 @@ def download_file(url, dest_path, desc="File", progress_callback=None, progress_
         raise
 
 
+def _prepare_incomplete_model_for_resume(model_id):
+    """If a previous crash left a truncated file at the final path, turn it into .part."""
+    path = get_model_path(model_id)
+    part_path = get_partial_model_path(model_id)
+    if not os.path.exists(path) or is_model_file_complete(model_id):
+        return 0
+    existing = _file_size(path)
+    if existing <= 0:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return 0
+    if os.path.exists(part_path):
+        if _file_size(part_path) >= existing:
+            os.remove(path)
+            return _file_size(part_path)
+        os.remove(part_path)
+    os.replace(path, part_path)
+    return existing
+
+
 def check_and_download_resources(model_id=None, progress_callback=None):
     """
     Ensures model and server (bin + cuda libs) are present.
@@ -660,6 +768,7 @@ def check_and_download_resources(model_id=None, progress_callback=None):
     if not is_model_file_complete(target_model_id):
         logging.info("Model %s not found.", target_model_id)
         try:
+            _prepare_incomplete_model_for_resume(target_model_id)
             partial_path = get_partial_model_path(target_model_id)
             partial_bytes = _file_size(partial_path)
             report({

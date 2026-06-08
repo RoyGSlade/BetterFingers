@@ -38,8 +38,20 @@ class DummyHotkeyManager:
         self.started = True
 
 
+class SyncThread:
+    def __init__(self, target, daemon=True, name=None, args=(), kwargs=None):
+        self.target = target
+        self.args = args
+        self.kwargs = kwargs or {}
+
+    def start(self):
+        self.target(*self.args, **self.kwargs)
+
+
 class ServerLazyStartupTests(unittest.TestCase):
     def setUp(self):
+        self._thread_patcher = patch("threading.Thread", SyncThread)
+        self._thread_patcher.start()
         self._llm_engine_state = {
             "_instance": llm_engine.LLMEngine._instance,
             "_initialized": llm_engine.LLMEngine._initialized,
@@ -64,6 +76,7 @@ class ServerLazyStartupTests(unittest.TestCase):
         DummyTranscriber.instances = []
 
     def tearDown(self):
+        self._thread_patcher.stop()
         llm_engine.LLMEngine._instance = self._llm_engine_state["_instance"]
         llm_engine.LLMEngine._initialized = self._llm_engine_state["_initialized"]
         llm_engine.LLMEngine._process = self._llm_engine_state["_process"]
@@ -105,7 +118,15 @@ class ServerLazyStartupTests(unittest.TestCase):
             server.hotkey_manager = started
             return started
 
+        profile = {
+            "model_keep_llm_loaded": True,
+            "model_keep_stt_loaded": True,
+            "model_keep_tts_loaded": False,
+        }
+
         with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": ""}, clear=False), patch.object(server, "Transcriber", DummyTranscriber), patch.object(
+            server, "load_profile", return_value=profile
+        ), patch.object(
             server, "get_engine", return_value=DummyEngine()
         ) as engine_mock, patch.object(
             server, "start_hotkey_manager", side_effect=_start_hotkey_manager

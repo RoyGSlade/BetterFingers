@@ -936,6 +936,22 @@
 
                 <div class="setting-row">
                   <div class="setting-info">
+                    <label class="status-label" for="settingStudioImageResolution">Image Resolution</label>
+                    <span class="setting-desc">Lower resolutions prevent OOM errors on smaller cards.</span>
+                  </div>
+                  <div class="setting-control">
+                    <select id="settingStudioImageResolution" class="settings-input min-w-200">
+                      <option value="1024x1024">1024x1024</option>
+                      <option value="1024x768">1024x768 (Landscape)</option>
+                      <option value="768x1024">768x1024 (Portrait)</option>
+                      <option value="768x768">768x768 (Low VRAM)</option>
+                      <option value="512x512">512x512 (Fast draft)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
                     <label class="status-label" for="settingStudioMusicEngine">Music Engine</label>
                     <span class="setting-desc">Score generation for reels or acts.</span>
                   </div>
@@ -1027,6 +1043,21 @@
             </div>
           </div>
 
+          <section class="download-center" aria-labelledby="downloadCenterHeading">
+            <div class="download-center-header">
+              <div>
+                <p class="eyebrow">Downloads</p>
+                <h3 id="downloadCenterHeading">BetterFingers Download Center</h3>
+                <p>Track Studio and BetterFingers model installs in one place. Downloads continue in the background and reconnect when you reopen this screen.</p>
+              </div>
+              <div class="download-center-actions">
+                <button id="downloadCenterRefreshButton" class="secondary-button" type="button">Refresh</button>
+                <button id="downloadRequiredStudioButton" class="secondary-button primary-button" type="button">Get Studio Essentials</button>
+              </div>
+            </div>
+            <div id="downloadCenterList" class="download-center-list" aria-live="polite"></div>
+          </section>
+
           <div class="model-manager-grid">
             <section class="model-panel" aria-labelledby="llmModelHeading">
               <div class="model-panel-header">
@@ -1077,6 +1108,54 @@
                 <button id="testWhisperButton" class="secondary-button" type="button">Test Load</button>
                 <button id="deleteWhisperButton" class="secondary-button" type="button">Delete</button>
                 <button id="unloadSttButton" class="secondary-button" type="button">Unload</button>
+              </div>
+            </section>
+
+            <section class="model-panel" aria-labelledby="voiceModelHeading">
+              <div class="model-panel-header">
+                <div>
+                  <h3 id="voiceModelHeading">Studio Voice Models</h3>
+                  <p>Expressive TTS models like Chatterbox for cinematic audio passes.</p>
+                </div>
+                <span id="voiceModelBadge" class="model-badge">Loading</span>
+              </div>
+              <label class="model-select-row">
+                <span class="status-label">Choose model</span>
+                <select id="voiceModelSelect" class="settings-input"></select>
+              </label>
+              <div id="voiceModelDetails" class="model-detail-grid"></div>
+              <div class="model-action-group">
+                <button id="downloadVoiceButton" class="secondary-button primary-button" type="button">Download</button>
+              </div>
+              <div id="voiceDownloadProgress" class="model-download-progress" hidden>
+                <div class="model-progress-header">
+                  <span id="voiceDownloadProgressLabel">Download pending</span>
+                  <strong id="voiceDownloadProgressPercent">0%</strong>
+                </div>
+              </div>
+            </section>
+
+            <section class="model-panel" aria-labelledby="imageModelHeading">
+              <div class="model-panel-header">
+                <div>
+                  <h3 id="imageModelHeading">Studio Image Checkpoints</h3>
+                  <p>In-process Diffusers image models for local scene rendering.</p>
+                </div>
+                <span id="imageModelBadge" class="model-badge">Loading</span>
+              </div>
+              <label class="model-select-row">
+                <span class="status-label">Choose model</span>
+                <select id="imageModelSelect" class="settings-input"></select>
+              </label>
+              <div id="imageModelDetails" class="model-detail-grid"></div>
+              <div class="model-action-group">
+                <button id="downloadImageButton" class="secondary-button primary-button" type="button">Download</button>
+              </div>
+              <div id="imageDownloadProgress" class="model-download-progress" hidden>
+                <div class="model-progress-header">
+                  <span id="imageDownloadProgressLabel">Download pending</span>
+                  <strong id="imageDownloadProgressPercent">0%</strong>
+                </div>
               </div>
             </section>
           </div>
@@ -1378,6 +1457,7 @@
               </div>
               <div class="studio-header-actions">
                 <button id="studioNewProjectFromApprovalButton" class="secondary-button" type="button">New Project</button>
+                <button id="studioRegenerateButton" class="secondary-button" type="button" title="Re-run the whole pipeline on this project using its saved seed (rebuilds the story from scratch)">↻ Regenerate</button>
                 <button id="studioExportButton" class="secondary-button primary-button" type="button" disabled>Export Comic Reel</button>
               </div>
             </div>
@@ -1482,8 +1562,23 @@
                 <button id="studioGenerateScenesButton" class="secondary-button primary-button" type="button" title="Write narration + imagery for each scene">3 · Generate Scenes</button>
                 <button id="studioRenderImagesButton" class="secondary-button" type="button" title="Render an image per scene (if a generator is configured)">Render Images</button>
                 <button id="studioVoiceScenesButton" class="secondary-button" type="button" title="Voice the narration locally">Voice</button>
+                <button id="studioRenderAmbienceButton" class="secondary-button" type="button" title="Render per-scene ambience / SFX (Stable Audio Open Small, if installed)">Render Ambience</button>
+                <button id="studioRenderScoreButton" class="secondary-button" type="button" title="Render an instrumental score cue (ACE-Step, if installed)">Render Score</button>
                 <button id="studioContinuityButton" class="secondary-button" type="button" title="Audit continuity + verify setups pay off">Continuity</button>
                 <button id="studioPlayCinemaButton" class="secondary-button primary-button" type="button" title="Play the cinematic reel">▶ Player</button>
+              </div>
+              <div class="studio-media-volumes" style="display:flex; gap:24px; align-items:center; margin-top:10px; flex-wrap:wrap;">
+                <label style="display:flex; align-items:center; gap:8px; font-size:0.85rem;">
+                  🎙 Voice
+                  <input id="studioVoiceVolume" type="range" min="0" max="1.5" step="0.05" value="1.0" style="width:120px;" />
+                  <span id="studioVoiceVolumeLabel" class="draft-metadata">100%</span>
+                </label>
+                <label style="display:flex; align-items:center; gap:8px; font-size:0.85rem;">
+                  🎵 Score
+                  <input id="studioMusicVolume" type="range" min="0" max="1.5" step="0.05" value="0.35" style="width:120px;" />
+                  <span id="studioMusicVolumeLabel" class="draft-metadata">35%</span>
+                </label>
+                <span class="draft-metadata" style="font-size:0.78rem;">Applied on the next Voice / Render Score.</span>
               </div>
               <div id="studioCinemaWarnings" class="draft-metadata" style="margin-top:8px;"></div>
               <div id="studioCinemaMessage" class="warmup-message" role="status" aria-live="polite"></div>

@@ -55,13 +55,19 @@ import {
   studioListProjects,
   studioLoadProject,
   studioRunWorkflow,
+  studioRegenerateWorkflow,
   studioGetPanels,
   studioRunScenes,
   studioGetScenes,
   studioRunCinematicStage,
   studioRenderImages,
   studioVoiceScenes,
+  studioRenderAmbience,
+  studioRenderScore,
   studioSceneContinuity,
+  studioReadiness,
+  studioGetMediaSettings,
+  studioSetMediaSettings,
   studioCreatePage,
   studioCreatePanel,
   studioApproveItem,
@@ -74,6 +80,13 @@ import {
   studioUploadPanelImage,
   studioDeleteProject,
   studioExportReel,
+  studioListImageModels,
+  studioDownloadImageModel,
+  studioListVoiceModels,
+  studioDownloadVoiceModel,
+  studioListMediaModels,
+  studioDownloadMediaModel,
+  studioMediaModelDownloadState,
 } from './api/backend.js';
 
 const backendStatusEl = document.getElementById('backendStatus');
@@ -159,6 +172,9 @@ const unloadSttButton = document.getElementById('unloadSttButton');
 const unloadLlmButton = document.getElementById('unloadLlmButton');
 const unloadTtsButton = document.getElementById('unloadTtsButton');
 const studioModelRoleMapEl = document.getElementById('studioModelRoleMap');
+const downloadCenterListEl = document.getElementById('downloadCenterList');
+const downloadCenterRefreshButton = document.getElementById('downloadCenterRefreshButton');
+const downloadRequiredStudioButton = document.getElementById('downloadRequiredStudioButton');
 const studioViewStartEl = document.getElementById('studioViewStart');
 const studioViewSeedEl = document.getElementById('studioViewSeed');
 const studioViewPipelineEl = document.getElementById('studioViewPipeline');
@@ -250,7 +266,11 @@ let activeProfileSettings = null;
 let profileDirty = false;
 let llmModelsPayload = null;
 let whisperModelsPayload = null;
+let voiceModelsPayload = null;
+let imageModelsPayload = null;
+let mediaModelsPayload = null;
 let llmDownloadPollTimer = null;
+let downloadCenterPollTimer = null;
 let studioState = {
   projectName: '',
   projectId: null,
@@ -319,6 +339,7 @@ const settingEls = {
   studio_writer_model_id: document.getElementById('settingStudioWriterModel'),
   studio_voice_engine: document.getElementById('settingStudioVoiceEngine'),
   studio_image_backend: document.getElementById('settingStudioImageBackend'),
+  studio_image_resolution: document.getElementById('settingStudioImageResolution'),
   studio_music_engine: document.getElementById('settingStudioMusicEngine'),
   studio_ambience_engine: document.getElementById('settingStudioAmbienceEngine'),
   studio_vram_cap_mb: document.getElementById('settingStudioVramCap'),
@@ -729,6 +750,147 @@ function renderStudioModelRoleMap(llmPayload, whisperPayload) {
   }
 }
 
+function downloadTone(item) {
+  if (item?.installed) return 'success';
+  const status = String(item?.download_state?.status || item?.status || '').toLowerCase();
+  if ((status === 'failed' || status === 'error') && !item?.resumable && !item?.download_state?.resumable) return 'danger';
+  if (item?.download_state?.active || status === 'downloading') return 'warning';
+  return 'warning';
+}
+
+function downloadStatusText(item) {
+  if (item?.installed) return 'Installed';
+  const state = item?.download_state || {};
+  if (state.active || state.status === 'downloading') return 'Downloading';
+  if (item?.resumable || state.resumable || state.status === 'partial') return 'Paused';
+  if (state.status === 'failed' || state.status === 'error') return 'Failed';
+  return 'Missing';
+}
+
+function buildDownloadItems() {
+  const llm = (llmModelsPayload?.models ?? [])
+    .filter((m) => ['gemma-4-e4b-q4', 'gemma-4-12b-q4', 'gemma-4-e4b-q8'].includes(m.id))
+    .map((m) => ({
+      key: m.id,
+      type: 'llm',
+      department: m.roles?.includes('dispatcher') ? 'Dispatcher / LLM' : 'Writer / LLM',
+      name: m.name,
+      size_mb: m.size_mb,
+      installed: m.installed,
+      active: m.download_active,
+      resumable: m.resumable,
+      download_state: m.download_state,
+      detail: m.recommended_for || `${(m.roles || []).join(', ')} · ${m.lane || 'gpu'}`,
+    }));
+  const image = (imageModelsPayload?.models ?? []).map((m) => ({
+    key: m.key,
+    type: 'image',
+    department: 'Image',
+    name: m.name,
+    size_mb: m.size_mb,
+    installed: m.installed,
+    resumable: m.resumable,
+    download_state: m.download_state,
+    detail: m.recommended_for,
+  }));
+  const media = (mediaModelsPayload?.models ?? []).map((m) => ({
+    key: m.key,
+    type: m.kind || 'media',
+    department: (m.kind || 'media').replace(/^./, (c) => c.toUpperCase()),
+    name: m.name,
+    size_mb: m.size_mb,
+    installed: m.installed,
+    resumable: m.resumable,
+    download_state: m.download_state,
+    detail: m.recommended_for,
+  }));
+  return [...llm, ...image, ...media];
+}
+
+function renderDownloadCenter() {
+  if (!downloadCenterListEl) return;
+  const items = buildDownloadItems();
+  downloadCenterListEl.innerHTML = '';
+  if (!items.length) {
+    downloadCenterListEl.innerHTML = '<span class="empty-state">Download catalog unavailable.</span>';
+    return;
+  }
+
+  let anyActive = false;
+  for (const item of items) {
+    const state = item.download_state || {};
+    const active = Boolean(state.active || item.active);
+    anyActive = anyActive || active;
+    const downloadedBytes = Number(state.downloaded_bytes || state.partial_bytes || item.partial_bytes || 0);
+    const expectedBytes = Number(item.size_mb || 0) * 1024 * 1024;
+    const computedPercent = expectedBytes > 0 && downloadedBytes > 0 ? (downloadedBytes / expectedBytes) * 100 : 0;
+    const percent = Number(state.percent || computedPercent || 0);
+    const card = document.createElement('div');
+    card.className = 'download-card';
+    card.dataset.type = item.type;
+
+    const main = document.createElement('div');
+    main.className = 'download-card-main';
+
+    const title = document.createElement('div');
+    title.className = 'download-card-title';
+    const name = document.createElement('strong');
+    name.textContent = item.name || item.key;
+    const dept = document.createElement('span');
+    dept.className = 'download-pill';
+    dept.textContent = item.department || item.type;
+    const status = document.createElement('span');
+    status.className = 'download-pill';
+    status.dataset.tone = downloadTone(item);
+    status.textContent = downloadStatusText(item);
+    title.append(name, dept, status);
+
+    const detail = document.createElement('small');
+    const size = item.size_mb ? `${Number(item.size_mb).toLocaleString()} MB` : 'size unknown';
+    const progressText = downloadedBytes ? `${formatBytes(downloadedBytes)} downloaded` : '';
+    detail.textContent = [size, progressText, item.detail, state.message].filter(Boolean).join(' · ');
+    main.append(title, detail);
+
+    const actions = document.createElement('div');
+    actions.className = 'download-card-actions';
+    const button = document.createElement('button');
+    button.className = 'secondary-button';
+    button.type = 'button';
+    button.dataset.downloadType = item.type;
+    button.dataset.downloadKey = item.key;
+    button.disabled = Boolean(item.installed || active);
+    button.textContent = item.installed ? 'Installed' : active ? 'Downloading...' : 'Download';
+    actions.append(button);
+
+    card.append(main, actions);
+    if (active || percent > 0) {
+      const track = document.createElement('div');
+      track.className = 'model-progress-track';
+      const fill = document.createElement('div');
+      fill.className = 'model-progress-fill';
+      fill.style.width = `${Math.max(4, Math.min(100, percent || (active ? 12 : 0)))}%`;
+      fill.dataset.tone = state.status === 'failed' ? 'danger' : item.installed ? 'success' : 'active';
+      track.append(fill);
+      card.append(track);
+    }
+    downloadCenterListEl.append(card);
+  }
+
+  if (anyActive && !downloadCenterPollTimer) {
+    downloadCenterPollTimer = window.setInterval(async () => {
+      try {
+        await refreshModels();
+        if (!buildDownloadItems().some((item) => item.download_state?.active || item.active)) {
+          window.clearInterval(downloadCenterPollTimer);
+          downloadCenterPollTimer = null;
+        }
+      } catch (_error) {
+        // Try again on the next tick; manual refresh also reconnects.
+      }
+    }, 1800);
+  }
+}
+
 function renderModelPanels() {
   const llmPayload = llmModelsPayload;
   const whisperPayload = whisperModelsPayload;
@@ -743,10 +905,21 @@ function renderModelPanels() {
   const visibleWhisper = (whisperPayload.models ?? []).find((model) => model.model_size === visibleWhisperSize);
   const estimateMb = Number(llmVisible?.size_mb || 0);
 
+  const voicePayload = voiceModelsPayload;
+  const voiceModelSelectEl = document.getElementById('voiceModelSelect');
+  const visibleVoiceKey = voiceModelSelectEl?.value;
+  const visibleVoice = (voicePayload?.models ?? []).find((m) => m.key === visibleVoiceKey);
+
+  const imagePayload = imageModelsPayload;
+  const imageModelSelectEl = document.getElementById('imageModelSelect');
+  const visibleImageKey = imageModelSelectEl?.value;
+  const visibleImage = (imagePayload?.models ?? []).find((m) => m.key === visibleImageKey);
+
   setModelBadge(llmModelBadgeEl, Boolean(llmVisible?.installed), llmVisible?.id === llmPayload.selected_model_id);
   setModelBadge(whisperModelBadgeEl, Boolean(visibleWhisper?.installed), visibleWhisperSize === whisperPayload.selected_model_size);
   renderModelOverview(llmPayload, whisperPayload, llmSelected, installedWhisper);
   renderStudioModelRoleMap(llmPayload, whisperPayload);
+  renderDownloadCenter();
   renderModelDetailGrid(llmModelDetailsEl, [
     { label: 'Selected model', value: llmPayload.selected_model_id },
     { label: 'Viewing', value: llmVisible?.name ?? llmVisible?.id ?? 'unknown' },
@@ -778,6 +951,26 @@ function renderModelPanels() {
     { label: 'Install state', value: visibleWhisper?.installed ? 'installed' : 'missing', tone: visibleWhisper?.installed ? 'success' : 'warning' },
     { label: 'Installed models', value: installedWhisper.length ? installedWhisper.join(', ') : 'none' },
     { label: 'Download state', value: whisperPayload.download_state?.status ?? 'unknown' },
+  ]);
+
+  const voiceModelBadgeEl = document.getElementById('voiceModelBadge');
+  setModelBadge(voiceModelBadgeEl, Boolean(visibleVoice?.installed), false);
+  const voiceModelDetailsEl = document.getElementById('voiceModelDetails');
+  renderModelDetailGrid(voiceModelDetailsEl, [
+    { label: 'Viewing', value: visibleVoice?.name ?? 'unknown' },
+    { label: 'Install state', value: visibleVoice?.installed ? 'installed' : 'missing', tone: visibleVoice?.installed ? 'success' : 'danger' },
+    { label: 'Approx size', value: visibleVoice?.size_mb ? `${visibleVoice.size_mb.toLocaleString()} MB` : 'unknown' },
+    { label: 'Recommended', value: visibleVoice?.recommended_for ?? '' },
+  ]);
+
+  const imageModelBadgeEl = document.getElementById('imageModelBadge');
+  setModelBadge(imageModelBadgeEl, Boolean(visibleImage?.installed), false);
+  const imageModelDetailsEl = document.getElementById('imageModelDetails');
+  renderModelDetailGrid(imageModelDetailsEl, [
+    { label: 'Viewing', value: visibleImage?.name ?? 'unknown' },
+    { label: 'Install state', value: visibleImage?.installed ? 'installed' : 'missing', tone: visibleImage?.installed ? 'success' : 'danger' },
+    { label: 'Approx size', value: visibleImage?.size_mb ? `${visibleImage.size_mb.toLocaleString()} MB` : 'unknown' },
+    { label: 'Recommended', value: visibleImage?.recommended_for ?? '' },
   ]);
 }
 
@@ -1621,6 +1814,49 @@ function renderStudioPipelineProgress(summary, elapsedMs) {
   if (elapsedEl) elapsedEl.textContent = `${formatElapsed(elapsedMs)} elapsed`;
 }
 
+// Re-run the whole pipeline on the loaded project using its saved seed (fast iteration aid).
+async function handleStudioRegenerate() {
+  if (!studioState.projectName) {
+    setMessage(studioApprovalMessageEl, 'Load a project before regenerating.', 'danger');
+    return;
+  }
+  if (!window.confirm(`Regenerate "${studioState.projectName}" from its saved seed? This rebuilds the story, characters, and scenes from scratch.`)) {
+    return;
+  }
+  setStudioView('pipeline');
+  setStudioPipelineStage('intake');
+  if (studioPipelineStatusTextEl) studioPipelineStatusTextEl.textContent = 'Regenerating project...';
+  renderStudioPipelineProgress({ stage: 'intake', detail: 'Regenerating from saved seed...', doneCount: 0 }, 0);
+
+  const startedAt = Date.now();
+  const poll = window.setInterval(async () => {
+    try {
+      const board = await fetchStudioBlackboard(studioState.projectName);
+      renderStudioPipelineProgress(summarizeStudioProgress(board?.posts || []), Date.now() - startedAt);
+    } catch {
+      renderStudioPipelineProgress(null, Date.now() - startedAt);
+    }
+  }, 1500);
+
+  try {
+    const result = await studioRegenerateWorkflow(studioState.projectName);
+    window.clearInterval(poll);
+    if (result?.status === 'rejected' || result?.needs_repair || result?.repair) {
+      openStudioRepair(result.repair, result.error);
+      return;
+    }
+    completeStudioPipelineStages();
+    setStudioProject(result?.project_name || studioState.projectName, result?.project_id || studioState.projectId, result?.data || null);
+    renderStudioApproval(result?.data || result);
+    setStudioView('approval');
+    setMessage(studioApprovalMessageEl, 'Project regenerated — review the new plan.', 'success');
+  } catch (error) {
+    window.clearInterval(poll);
+    setStudioView('approval');
+    setMessage(studioApprovalMessageEl, `Regenerate failed: ${error.message}`, 'danger');
+  }
+}
+
 async function startProductionWorkflow(productionSeed) {
   setStudioView('pipeline');
   setStudioPipelineStage('intake');
@@ -1921,12 +2157,33 @@ async function runCinemaStage(fn, buttonId, busyText, doneText) {
   if (!studioState.projectName) { cinemaMsg('Load or generate a project first.', 'danger'); return null; }
   const button = document.getElementById(buttonId);
   const restore = setStudioButtonBusy(button, true, busyText);
+  
+  cinemaMsg(busyText, 'warning');
+  const startedAt = Date.now();
+  const poll = window.setInterval(async () => {
+    try {
+      const board = await fetchStudioBlackboard(studioState.projectName);
+      const posts = board?.posts || [];
+      for (let i = posts.length - 1; i >= 0; i--) {
+        if (posts[i].status === 'progress') {
+          cinemaMsg(posts[i].detail || busyText, 'warning');
+          break;
+        }
+      }
+      await refreshCinemaStatus();
+    } catch {
+      // ignore
+    }
+  }, 1500);
+
   try {
     const result = await fn(studioState.projectName);
+    window.clearInterval(poll);
     cinemaMsg(typeof doneText === 'function' ? doneText(result) : doneText, 'success');
     await refreshCinemaStatus();
     return result;
   } catch (error) {
+    window.clearInterval(poll);
     cinemaMsg(`${busyText.replace('…', '')} failed: ${error.message}`, 'danger');
     return null;
   } finally {
@@ -1971,9 +2228,30 @@ function handleStudioVoiceScenes() {
   return runCinemaStage((p) => studioVoiceScenes(p), 'studioVoiceScenesButton', 'Voicing narration…',
     (res) => {
       const d = res?.data || {};
+      const backend = d.synth_backend && d.synth_backend !== 'none' ? ` via ${d.synth_backend}` : '';
       return d.synth_available
-        ? `Voiced ${d.done || 0}/${d.total || 0} beats.`
+        ? `Voiced ${d.done || 0}/${d.total || 0} beats${backend}.`
         : 'No local TTS available — the player will read with browser speech.';
+    });
+}
+
+function handleStudioRenderAmbience() {
+  return runCinemaStage((p) => studioRenderAmbience(p), 'studioRenderAmbienceButton', 'Rendering ambience…',
+    (res) => {
+      const d = res?.data || {};
+      return d.renderer_available
+        ? `Rendered ambience for ${d.done || 0}/${d.total || 0} scene(s).`
+        : 'No ambience engine installed — download Stable Audio Open Small to add room tone & SFX.';
+    });
+}
+
+function handleStudioRenderScore() {
+  return runCinemaStage((p) => studioRenderScore(p), 'studioRenderScoreButton', 'Rendering score…',
+    (res) => {
+      const d = res?.data || {};
+      return d.renderer_available
+        ? `Score cue rendered (${d.music_status || 'done'}).`
+        : 'No music engine installed — download ACE-Step to score the reel.';
     });
 }
 
@@ -1999,7 +2277,38 @@ function renderCinemaWarnings(warns) {
     (w.suggestion ? ` <em>— ${escapeHtml(w.suggestion)}</em>` : '') + `</div>`).join('');
 }
 
+function setVolumeLabel(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = `${Math.round(Number(value) * 100)}%`;
+}
+
+async function loadStudioMediaVolumes() {
+  if (!studioState.projectName) return;
+  try {
+    const s = await studioGetMediaSettings(studioState.projectName);
+    const v = document.getElementById('studioVoiceVolume');
+    const m = document.getElementById('studioMusicVolume');
+    if (v) { v.value = s.voice_volume; setVolumeLabel('studioVoiceVolumeLabel', s.voice_volume); }
+    if (m) { m.value = s.music_volume; setVolumeLabel('studioMusicVolumeLabel', s.music_volume); }
+  } catch { /* settings unavailable — keep defaults */ }
+}
+
+async function saveStudioMediaVolumes() {
+  if (!studioState.projectName) return;
+  const v = document.getElementById('studioVoiceVolume');
+  const m = document.getElementById('studioMusicVolume');
+  try {
+    await studioSetMediaSettings(studioState.projectName, {
+      voice_volume: v ? Number(v.value) : undefined,
+      music_volume: m ? Number(m.value) : undefined,
+    });
+  } catch (error) {
+    cinemaMsg(`Could not save volume: ${error.message}`, 'danger');
+  }
+}
+
 async function refreshCinemaStatus() {
+  loadStudioMediaVolumes();
   const el = document.getElementById('studioCinemaStatus');
   if (!el || !studioState.projectName) return;
   try {
@@ -2014,13 +2323,55 @@ async function refreshCinemaStatus() {
     rows.push(`<strong>Blueprint:</strong> ${sceneCount ? sceneCount + ' scenes' : '—'}` +
       (studioState.blueprintApproved ? ' ✓ approved' : (sceneCount ? ' · awaiting approval' : '')));
     rows.push(`<strong>Scenes written:</strong> ${written}/${sceneCount || '—'}`);
-    rows.push(`<strong>Images:</strong> ${data.image_done || 0}/${scenes.length || '—'}`);
+
+    if (scenes.length) {
+      const badges = scenes.map((s, i) => {
+        const st = s.image_status;
+        let color = 'var(--text-muted)';
+        if (st === 'done') color = 'var(--success-color)';
+        else if (st === 'rendering') color = 'var(--warning-color)';
+        else if (st === 'failed') color = 'var(--error-color)';
+        else if (st === 'queued') color = 'var(--accent-color)';
+        return `<span style="display:inline-block; width:10px; height:10px; border-radius:50%; background-color:${color}; margin-left:2px;" title="Scene ${i + 1}: ${st || 'pending'}"></span>`;
+      }).join('');
+      rows.push(`<strong>Images:</strong> ${data.image_done || 0}/${scenes.length || '—'} <span style="margin-left:6px; display:inline-block; vertical-align:middle;">${badges}</span>`);
+    } else {
+      rows.push(`<strong>Images:</strong> ${data.image_done || 0}/${scenes.length || '—'}`);
+    }
     rows.push(`<strong>Voice:</strong> ${data.audio_done || 0}/${data.audio_total || '—'} beats`);
+    rows.push(`<strong>Ambience:</strong> ${data.ambience_done || 0}/${data.ambience_total || '—'} scenes`);
+    const musicStatus = data.music_status || (data.music_path ? 'done' : '');
+    rows.push(`<strong>Score:</strong> ${musicStatus === 'done' ? '🟢 rendered' :
+      (musicStatus ? musicStatus : '—')}`);
     rows.push(`<strong>Source:</strong> ${live ? '🟢 live model' :
       '⚠ procedural fallback (no live LLM — fix the model for real prose)'}`);
-    el.innerHTML = rows.join('<br>');
+    rows.push(await cinemaReadinessRow());
+    el.innerHTML = rows.filter(Boolean).join('<br>');
   } catch (error) {
     el.textContent = `Status unavailable: ${error.message}`;
+  }
+}
+
+// A compact "which engines are installed" line for the production desk. Each media department
+// reads from /studio/readiness so the user knows whether Voice/Ambience/Score will produce real
+// assets or honest fallbacks before they click the buttons.
+async function cinemaReadinessRow() {
+  try {
+    const r = await studioReadiness();
+    const checks = r.checks || [];
+    const ok = (id) => Boolean(checks.find((c) => c.id === id)?.ok);
+    const okKind = (kind) => checks.some((c) => c.kind === kind && c.ok);
+    const dot = (v) => (v ? '🟢' : '⚪');
+    const parts = [
+      `${dot(ok('media:chatterbox'))} Voice`,
+      `${dot(ok('tools:stable-audio') || ok('media:stable-audio-open-small'))} Ambience`,
+      `${dot(ok('tools:ace-step') || ok('media:ace-step-1-5'))} Score`,
+      `${dot(okKind('image'))} Image`,
+    ];
+    return `<strong>Engines:</strong> ${parts.join(' · ')}` +
+      (r.ready_for_first_run ? '' : ` <em>(download missing models in Settings)</em>`);
+  } catch {
+    return '';
   }
 }
 
@@ -2578,6 +2929,7 @@ function renderProfileSettings(settings) {
     studio_writer_model_id: 'gemma-4-12b-q4',
     studio_voice_engine: 'kokoro',
     studio_image_backend: 'off',
+    studio_image_resolution: '768x768',
     studio_music_engine: 'off',
     studio_ambience_engine: 'off',
     studio_vram_cap_mb: 14336,
@@ -2917,12 +3269,18 @@ function initWizard() {
 }
 
 async function refreshModels() {
-  const [llmPayload, whisperPayload] = await Promise.all([
+  const [llmPayload, whisperPayload, voicePayload, imagePayload, mediaPayload] = await Promise.all([
     fetchLlmModels(),
     fetchWhisperModels(),
+    studioListVoiceModels().catch(() => ({ models: [], default: '' })),
+    studioListImageModels().catch(() => ({ models: [], default: '' })),
+    studioListMediaModels().catch(() => ({ models: [], defaults: {} })),
   ]);
   llmModelsPayload = llmPayload;
   whisperModelsPayload = whisperPayload;
+  voiceModelsPayload = voicePayload;
+  imageModelsPayload = imagePayload;
+  mediaModelsPayload = mediaPayload;
 
   fillSelect(
     llmModelSelectEl,
@@ -2937,8 +3295,28 @@ async function refreshModels() {
   );
   fillSelect(whisperModelSelectEl, whisperPayload.supported ?? [], whisperPayload.selected_model_size);
 
+  const voiceModelSelectEl = document.getElementById('voiceModelSelect');
+  if (voiceModelSelectEl) {
+    fillSelect(
+      voiceModelSelectEl,
+      (voicePayload.models ?? []).map((m) => ({ value: m.key, label: `${m.name} (${m.installed ? 'installed' : 'missing'})` })),
+      voicePayload.default,
+      (item) => item.label,
+    );
+  }
+
+  const imageModelSelectEl = document.getElementById('imageModelSelect');
+  if (imageModelSelectEl) {
+    fillSelect(
+      imageModelSelectEl,
+      (imagePayload.models ?? []).map((m) => ({ value: m.key, label: `${m.name} (${m.installed ? 'installed' : 'missing'})` })),
+      imagePayload.default,
+      (item) => item.label,
+    );
+  }
+
   renderModelPanels();
-  return { llmPayload, whisperPayload };
+  return { llmPayload, whisperPayload, voicePayload, imagePayload, mediaPayload };
 }
 
 async function runModelAction(button, label, action) {
@@ -3019,6 +3397,40 @@ async function runLlmDownloadAction() {
     downloadLlmModelButton.textContent = previous;
     downloadLlmModelButton.disabled = false;
   }
+}
+
+async function startDownloadCenterItem(type, key) {
+  if (!type || !key) return;
+  if (type === 'llm') {
+    await downloadLlmModel(key);
+  } else if (type === 'image') {
+    await studioDownloadImageModel(key);
+  } else {
+    await studioDownloadMediaModel(key);
+  }
+  await refreshModels();
+}
+
+async function startStudioEssentialsDownload() {
+  const essentials = [
+    ['llm', 'gemma-4-e4b-q4'],
+    ['image', 'animagine-xl-4'],
+    ['voice', 'chatterbox'],
+    ['music', 'ace-step-1-5'],
+    ['ambience', 'stable-audio-open-small'],
+  ];
+  for (const [type, key] of essentials) {
+    try {
+      const item = buildDownloadItems().find((row) => row.type === type && row.key === key);
+      if (!item?.installed && !item?.download_state?.active && !item?.active) {
+        await startDownloadCenterItem(type, key);
+      }
+    } catch (error) {
+      setMessage(modelMessageEl, `Could not start ${key}: ${error.message}`, 'danger');
+    }
+  }
+  setMessage(modelMessageEl, 'Studio essentials are queued or already installed.', 'success');
+  await refreshModels();
 }
 
 async function refreshCapabilities() {
@@ -4559,6 +4971,44 @@ unloadTtsButton?.addEventListener('click', () => {
   runModelAction(unloadTtsButton, 'Unload TTS', () => unloadModel('tts'));
 });
 
+document.getElementById('downloadVoiceButton')?.addEventListener('click', () => {
+  const modelKey = document.getElementById('voiceModelSelect')?.value;
+  if (!modelKey) return;
+  runModelAction(document.getElementById('downloadVoiceButton'), 'Download Voice', async () => {
+    await studioDownloadVoiceModel(modelKey);
+    await refreshModels();
+  });
+});
+
+document.getElementById('voiceModelSelect')?.addEventListener('change', renderModelPanels);
+
+document.getElementById('downloadImageButton')?.addEventListener('click', () => {
+  const modelKey = document.getElementById('imageModelSelect')?.value;
+  if (!modelKey) return;
+  runModelAction(document.getElementById('downloadImageButton'), 'Download Image', async () => {
+    await studioDownloadImageModel(modelKey);
+    await refreshModels();
+  });
+});
+
+document.getElementById('imageModelSelect')?.addEventListener('change', renderModelPanels);
+
+downloadCenterRefreshButton?.addEventListener('click', () => {
+  refreshModels().catch((error) => setMessage(modelMessageEl, `Refresh failed: ${error.message}`, 'danger'));
+});
+
+downloadRequiredStudioButton?.addEventListener('click', () => {
+  runModelAction(downloadRequiredStudioButton, 'Get Studio Essentials', startStudioEssentialsDownload);
+});
+
+downloadCenterListEl?.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-download-key]');
+  if (!button) return;
+  const type = button.dataset.downloadType;
+  const key = button.dataset.downloadKey;
+  runModelAction(button, `Download ${key}`, () => startDownloadCenterItem(type, key));
+});
+
 studioCreateProjectButton?.addEventListener('click', handleStudioCreateProject);
 studioLoadProjectButton?.addEventListener('click', handleStudioLoadProject);
 document.getElementById('studioDeleteProjectButton')?.addEventListener('click', handleStudioDeleteProject);
@@ -4569,6 +5019,12 @@ document.getElementById('studioBlueprintButton')?.addEventListener('click', hand
 document.getElementById('studioApproveBlueprintButton')?.addEventListener('click', handleStudioApproveBlueprint);
 document.getElementById('studioRenderImagesButton')?.addEventListener('click', handleStudioRenderImages);
 document.getElementById('studioVoiceScenesButton')?.addEventListener('click', handleStudioVoiceScenes);
+document.getElementById('studioRenderAmbienceButton')?.addEventListener('click', handleStudioRenderAmbience);
+document.getElementById('studioRenderScoreButton')?.addEventListener('click', handleStudioRenderScore);
+document.getElementById('studioVoiceVolume')?.addEventListener('input', (e) => setVolumeLabel('studioVoiceVolumeLabel', e.target.value));
+document.getElementById('studioMusicVolume')?.addEventListener('input', (e) => setVolumeLabel('studioMusicVolumeLabel', e.target.value));
+document.getElementById('studioVoiceVolume')?.addEventListener('change', saveStudioMediaVolumes);
+document.getElementById('studioMusicVolume')?.addEventListener('change', saveStudioMediaVolumes);
 document.getElementById('studioContinuityButton')?.addEventListener('click', handleStudioContinuity);
 document.getElementById('studioCinemaRefreshButton')?.addEventListener('click', () => refreshCinemaStatus());
 document.getElementById('studioAddPageButton')?.addEventListener('click', handleStudioAddPage);
@@ -4663,6 +5119,8 @@ studioNewProjectFromApprovalButton?.addEventListener('click', () => {
   setStudioView('start');
   setMessage(studioApprovalMessageEl, '');
 });
+
+document.getElementById('studioRegenerateButton')?.addEventListener('click', handleStudioRegenerate);
 
 studioNewProjectNameEl?.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {

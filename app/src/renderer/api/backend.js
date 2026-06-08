@@ -529,6 +529,11 @@ async function studioIntakeTurn(projectName, chatHistory, timeoutMs = 240000) {
   return postJson(`${STUDIO_URL}/workflow/intake/turn`, { project_name: projectName, chat_history: chatHistory }, timeoutMs);
 }
 
+// Re-run the whole pipeline on an existing project using its saved seed (testing aid).
+async function studioRegenerateWorkflow(projectName, timeoutMs = 900000) {
+  return postJson(`${STUDIO_URL}/workflow/regenerate`, { project_name: projectName }, timeoutMs);
+}
+
 async function studioRunWorkflow(projectName, seedText, mode = 'seed', sourceStory = null, timeoutMs = 600000) {
   const body = { project_name: projectName, seed_text: seedText, mode };
   if (sourceStory) body.source_story = sourceStory;
@@ -578,11 +583,30 @@ async function studioRenderImages(projectName, timeoutMs = 600000) {
 async function studioVoiceScenes(projectName, timeoutMs = 600000) {
   return studioRunCinematicStage(projectName, 'voice', timeoutMs);
 }
+async function studioRenderAmbience(projectName, timeoutMs = 600000) {
+  return studioRunCinematicStage(projectName, 'ambience', timeoutMs);
+}
+async function studioRenderScore(projectName, timeoutMs = 600000) {
+  return studioRunCinematicStage(projectName, 'music', timeoutMs);
+}
 async function studioSceneContinuity(projectName, timeoutMs = 240000) {
   return studioRunCinematicStage(projectName, 'scene_continuity', timeoutMs);
 }
 async function studioRenderStatus(projectName, timeoutMs = 15000) {
   return fetchJson(`${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/render-status`, timeoutMs);
+}
+// First-run readiness: which media engines (voice / ambience / music / image / LLM) are installed.
+async function studioReadiness(timeoutMs = 15000) {
+  return fetchJson(`${STUDIO_URL}/readiness`, timeoutMs);
+}
+
+// Per-project narration/score volume (so the reel doesn't blare).
+async function studioGetMediaSettings(projectName, timeoutMs = 10000) {
+  return fetchJson(`${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/media-settings`, timeoutMs);
+}
+async function studioSetMediaSettings(projectName, settings, timeoutMs = 10000) {
+  return postJson(`${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/media-settings`,
+    { project_name: projectName, ...settings }, timeoutMs);
 }
 
 // In-process image model catalog + download (Studio downloads + runs the model itself).
@@ -594,6 +618,28 @@ async function studioDownloadImageModel(modelKey, timeoutMs = 15000) {
 }
 async function studioImageModelDownloadState(modelKey, timeoutMs = 10000) {
   return fetchJson(`${STUDIO_URL}/models/image/${encodeURIComponent(modelKey)}/download-state`, timeoutMs);
+}
+
+// In-process voice model catalog + download.
+async function studioListVoiceModels(timeoutMs = 10000) {
+  return fetchJson(`${STUDIO_URL}/models/voice`, timeoutMs);
+}
+async function studioDownloadVoiceModel(modelKey, timeoutMs = 15000) {
+  return postJson(`${STUDIO_URL}/models/voice/${encodeURIComponent(modelKey)}/download`, {}, timeoutMs);
+}
+async function studioVoiceModelDownloadState(modelKey, timeoutMs = 10000) {
+  return fetchJson(`${STUDIO_URL}/models/voice/${encodeURIComponent(modelKey)}/download-state`, timeoutMs);
+}
+
+// Unified Studio media model catalog: voice, music, ambience.
+async function studioListMediaModels(timeoutMs = 10000) {
+  return fetchJson(`${STUDIO_URL}/models/media`, timeoutMs);
+}
+async function studioDownloadMediaModel(modelKey, timeoutMs = 15000) {
+  return postJson(`${STUDIO_URL}/models/media/${encodeURIComponent(modelKey)}/download`, {}, timeoutMs);
+}
+async function studioMediaModelDownloadState(modelKey, timeoutMs = 10000) {
+  return fetchJson(`${STUDIO_URL}/models/media/${encodeURIComponent(modelKey)}/download-state`, timeoutMs);
 }
 
 async function studioCreatePage(projectName, episodeId, pageNumber, title = '', summary = '', timeoutMs = 10000) {
@@ -788,6 +834,7 @@ export {
   studioLoadProject,
   studioIntakeTurn,
   studioRunWorkflow,
+  studioRegenerateWorkflow,
   studioRunStage,
   studioGetPanels,
   studioGetScenes,
@@ -796,11 +843,22 @@ export {
   studioRunCinematicStage,
   studioRenderImages,
   studioVoiceScenes,
+  studioRenderAmbience,
+  studioRenderScore,
   studioSceneContinuity,
   studioRenderStatus,
+  studioReadiness,
+  studioGetMediaSettings,
+  studioSetMediaSettings,
   studioListImageModels,
   studioDownloadImageModel,
   studioImageModelDownloadState,
+  studioListVoiceModels,
+  studioDownloadVoiceModel,
+  studioVoiceModelDownloadState,
+  studioListMediaModels,
+  studioDownloadMediaModel,
+  studioMediaModelDownloadState,
   studioCreatePage,
   studioCreatePanel,
   studioApproveItem,

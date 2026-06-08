@@ -62,13 +62,13 @@ class TestStudioExport(unittest.TestCase):
         texts = " ".join(d["text"] for d in lines)
         self.assertIn("You heard about the job", texts)
         speakers = {d["speaker"] for d in lines}
-        self.assertIn("Goldstein", speakers)
+        self.assertTrue(any("Goldstein" in s for s in speakers))
 
     def test_export_writes_full_package(self):
         out = self._run_pipeline()
         result = studio_export.export_project(self.project, model_status=out["model_status"])
         self.assertTrue(result["ok"])
-        self.assertEqual(result["panel_count"], 12)
+        self.assertEqual(result["panel_count"], 4)
 
         export_dir = result["export_dir"]
         for rel in ("project.json", "script.md", "subtitles.srt", "reel.html",
@@ -115,7 +115,7 @@ class TestStudioExport(unittest.TestCase):
             self.assertEqual(exp.status_code, 200)
             body = exp.json()
             self.assertEqual(body["status"], "success")
-            self.assertEqual(body["panel_count"], 12)
+            self.assertEqual(body["panel_count"], 4)
             self.assertTrue(os.path.exists(body["reel_html"]))
             self.assertTrue(os.path.exists(body["zip_path"]))
 

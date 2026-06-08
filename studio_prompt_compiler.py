@@ -125,10 +125,11 @@ def build_location_visuals(world: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
 # Seed (reproducible re-rolls + character consistency)
 # --------------------------------------------------------------------------- #
 
-def stable_seed(scene_id: str, character_names: List[str]) -> int:
+def stable_seed(scene_id: str, character_names: List[str], reroll_count: int = 0) -> int:
     """A deterministic seed from the scene id + its cast, so the same scene re-renders the same
-    base composition and characters keep their identity across re-rolls."""
-    key = f"{scene_id}|{'|'.join(sorted(str(c).lower() for c in (character_names or [])))}"
+    base composition and characters keep their identity across re-rolls. Bumping the reroll count
+    changes the seed."""
+    key = f"{scene_id}|{reroll_count}|{'|'.join(sorted(str(c).lower() for c in (character_names or [])))}"
     return int(hashlib.sha256(key.encode()).hexdigest()[:8], 16)
 
 
@@ -188,8 +189,9 @@ def compile_visual_prompt(scene, style_bible=None, character_visuals=None,
         *style_bible.get("avoid", []),
     ])
 
+    rerolls = scene.get("image_rerolls", 0)
     seed = int(profile["seed"]) if int(profile.get("seed", -1)) >= 0 else \
-        stable_seed(scene.get("id", "scene"), present)
+        stable_seed(scene.get("id", "scene"), present, rerolls)
 
     return PromptPacket(
         positive_prompt=positive,

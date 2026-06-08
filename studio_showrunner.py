@@ -178,6 +178,8 @@ def _deterministic_blueprint(understanding, target):
     """Build a faithful blueprint with zero LLM: bucket the timeline into `target` scenes."""
     timeline = understanding.get("timeline") or []
     buckets = _bucket_events(timeline, target)
+    dossiers = understanding.get("character_dossiers") or []
+    char_names = [d.get("name") for d in dossiers if d.get("name")]
     motifs = understanding.get("motifs") or []
     candidates = understanding.get("setup_payoff_candidates") or []
     functions = assign_functions(len(buckets))
@@ -192,9 +194,20 @@ def _deterministic_blueprint(understanding, target):
         func, tone = functions[i] if i < len(functions) else ("carry the throughline", "steady")
         # A scene built from a high-significance event is the reel's weight; keep it noted.
         significance = _most_common([e.get("significance") for e in events if e.get("significance")])
+        title = _title_for(events, i)
+
+        if not chars:
+            scan_text = (title + " " + purpose).lower()
+            for name in char_names:
+                name_lower = name.lower()
+                last_name = name_lower.split()[-1] if name_lower.split() else name_lower
+                if name_lower in scan_text or last_name in scan_text:
+                    chars.append(name)
+            chars = _dedupe(chars)
+
         scenes.append({
             "id": f"s{i + 1}",
-            "title": _title_for(events, i),
+            "title": title,
             "function": func,
             "location": location,
             "characters": chars,
@@ -349,6 +362,33 @@ def _is_valid_blueprint(value):
         return False
     return any(isinstance(s, dict) and str(s.get("purpose") or s.get("title") or "").strip()
                for s in scenes)
+
+
+def gate_blueprint(blueprint):
+    """The setup/payoff gate (the cinematic 'gate' stage between Showrunner and Scriptwriter).
+
+    Inspect a finished blueprint and return a list of human-readable problems. An empty list
+    means it is sound enough to commit to scriptwriting; a non-empty list routes the Producer to
+    the repair flow instead of writing scripts onto a broken story spine. Deterministic and cheap
+    — no model call. The deterministic blueprint builder always passes; this exists to catch a
+    malformed LLM blueprint (no usable scenes, or a setup that pays off in a scene that doesn't
+    exist) before any tokens are spent on scriptwriting.
+    """
+    if not _is_valid_blueprint(blueprint):
+        return ["The Showrunner produced no usable scenes — there is nothing to script."]
+    scenes = blueprint.get("scenes") or []
+    scene_ids = {str(s.get("id")) for s in scenes if isinstance(s, dict) and s.get("id")}
+    problems = []
+    for s in blueprint.get("setups") or []:
+        if not isinstance(s, dict):
+            continue
+        sid = s.get("id") or "setup"
+        planted, paid = str(s.get("planted_in") or ""), str(s.get("paid_off_in") or "")
+        if planted and planted not in scene_ids:
+            problems.append(f"Setup '{sid}' is planted in a scene that doesn't exist ('{planted}').")
+        if paid and paid not in scene_ids:
+            problems.append(f"Setup '{sid}' never pays off — '{paid}' is not a real scene.")
+    return problems
 
 
 def blueprint_to_storyboard(blueprint):

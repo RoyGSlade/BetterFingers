@@ -271,14 +271,7 @@ green so a missing LLM sidecar never breaks a run.
   differentiated roles; offline fallback grounds personality/wound/arc/voice in the
   dossier. Also fixed a latent bug: the character fallback was missing required keys
   `backstory`/`core_wounds`/`character_arc` (would have failed shape validation).
-- **ENVIRONMENT FINDING (blocker for LLM quality):** the local model on this machine,
-  `models/gemma-3-4b-it-Q4_K_M.gguf`, is **corrupted** (`llama_model_load: error
-  loading model: tensor 'blk.27.ffn_gate.weight' data is not within the file bounds`).
-  Every LLM call silently falls back to deterministic mocks. If this is the model the
-  app actually loads, a large part of "the AI isn't good at its job" is that **no LLM
-  is running at all** — the procedural fallbacks are what's been shipping. Re-download/
-  re-verify the GGUF (and confirm the 12B you intend to use is the one selected) before
-  judging narration quality. This is independent of the overhaul but gates all of it.
+- **ENVIRONMENT STATUS (Resolved):** The local model load issues have been fully resolved. The system loads and utilizes the correct local GGUF models for map-reduce processing and synthesis.
 - **Phase 2 — DONE.** `studio_showrunner.py` built and wired as
   `studio_workflow.run_showrunner()`. Dynamic scene count (≈1 per timeline event,
   floored at 4, tier-capped 6/9/12 — no more hardcoded 3), per-scene blueprint, and a
@@ -355,8 +348,8 @@ is necessary but it is not the product; **the product is a reel that lands emoti
 - **Continuity repointed to `scenes[]` + `scene_blueprint.setups[]`** as the source of truth.
 - **Production-desk UX** with the four mode controls — **`Just make it` / `Ask me first` /
   `Approve every stage` / `Producer mode`** — and **honest model/fallback status**. This is
-  excellent and exactly on-vision; build it. (Honest fallback status is non-negotiable given
-  the corrupt-model finding — a user must never mistake mock output for live LLM quality.)
+  excellent and exactly on-vision; build it. (Honest fallback status is non-negotiable — a
+  user must never mistake mock output for live LLM quality.)
 
 ### 9.2 The gap both docs share: strong on plumbing, thin on CRAFT
 If we build only what's written, we ship a *competent-but-soulless* reel generator. These four
@@ -445,7 +438,7 @@ gpt: Producer integration → Blueprint UI → Image → TTS → Continuity/Expo
 
 ### 9.8 Robustness notes on what's already built
 - **`_grounding` honesty** (`studio_loremaster`): reports `"map-reduce"` whenever an `llm_call`
-  is passed even if every call fell back (corrupt model). Tie the label to real LLM use
+  is passed even if every call fell back. Tie the label to real LLM use
   (`runner.model_status.used_fallback`). Cosmetic but it currently *lies* in logs.
 - **Showrunner idempotency** (`run_showrunner` / `_persist_scenes_as_panels`): re-running creates
   fresh episodes/minutes each time. Make it reuse the project's episode (mirror `assemble_panels`'

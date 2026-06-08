@@ -35,7 +35,10 @@ _PROFILES = {
         "beats_per_call": 1,          # deepen one beat at a time
         "shots_per_beat": 2,          # 2 shots per beat
         "panels_per_call": 2,         # dialogue/panels in pairs
-        "max_tokens": {"small": 500, "medium": 800, "large": 1100},
+        # `large` is the single-shot whole-story schema (genesis/loremaster/showrunner). It must be
+        # big enough to emit a COMPLETE JSON object; too small truncates it mid-object and the parse
+        # fails, dropping the keystone understanding to the procedural skeleton.
+        "max_tokens": {"small": 500, "medium": 800, "large": 2600},
         "dialogue_passes": 1,         # single well-briefed pass
     },
     TIER_MEDIUM: {
@@ -44,7 +47,7 @@ _PROFILES = {
         "beats_per_call": 2,
         "shots_per_beat": 3,
         "panels_per_call": 4,
-        "max_tokens": {"small": 700, "medium": 1200, "large": 1500},
+        "max_tokens": {"small": 700, "medium": 1200, "large": 4096},
         "dialogue_passes": 2,         # write + voice/punch-up pass
     },
     TIER_LARGE: {
@@ -53,7 +56,7 @@ _PROFILES = {
         "beats_per_call": 3,
         "shots_per_beat": 4,
         "panels_per_call": 6,
-        "max_tokens": {"small": 900, "medium": 1500, "large": 2000},
+        "max_tokens": {"small": 900, "medium": 1500, "large": 6144},
         "dialogue_passes": 2,
     },
 }

@@ -29,13 +29,14 @@ class StudioAgentsTests(unittest.TestCase):
         self.assertEqual(runner.state, "complete")
 
         keys = {a["key"] for a in artifacts}
-        # Every specialist published its artifact onto the blackboard.
-        for expected in ("premise", "world", "characters", "treatment", "beats", "panels", "continuity"):
+        # Every cinematic specialist published its artifact onto the blackboard.
+        for expected in ("premise", "understanding", "world", "characters", "scene_blueprint",
+                         "scene_gate", "scenes"):
             self.assertIn(expected, keys)
 
         # Each agent posted a 'done' status, and the Producer signed off.
         done_agents = {p["agent"] for p in posts if p["status"] == "done"}
-        for agent in ("intake", "world", "characters", "treatment", "planner", "panels"):
+        for agent in ("intake", "understanding", "world", "characters", "showrunner", "gate", "scenes"):
             self.assertIn(agent, done_agents)
         self.assertTrue(any(p["agent"] == "producer" and p["status"] == "complete" for p in posts))
 

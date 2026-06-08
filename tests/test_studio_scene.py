@@ -208,7 +208,7 @@ class StudioSceneBuilderTests(unittest.TestCase):
             self.assertEqual(res.json()["phase"], "scene_planning")
             self.assertEqual(len(res.json()["data"]["nodes"]), 2)
 
-            # Invalid action chain -> 400, not a 500.
+            # Invalid action chain -> returns 200 with status "rejected" containing repair report.
             res = client.post("/studio/workflow/scene", json={
                 "project_name": self.project_name,
                 "scene": {
@@ -220,7 +220,8 @@ class StudioSceneBuilderTests(unittest.TestCase):
                     ]}],
                 },
             })
-            self.assertEqual(res.status_code, 400)
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.json()["status"], "rejected")
 
 
 if __name__ == "__main__":

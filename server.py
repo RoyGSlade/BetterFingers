@@ -7,6 +7,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+import typing
 import pyperclip
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,6 +30,7 @@ from model_manager import (
     check_and_download_resources,
     delete_model,
     get_download_state,
+    get_model_file_status,
     get_model_path,
     get_models_dir,
     get_repo_local_server_path,
@@ -431,7 +433,7 @@ def stop_hotkey_manager():
     hotkey_manager_started = False
 
 # Status Broadcaster
-async def broadcast_status(status: str, data: dict = None):
+async def broadcast_status(status: str, data: typing.Optional[dict] = None):
     """
     Status: 'listening', 'thinking', 'speaking', 'idle'
     """
@@ -451,7 +453,7 @@ async def broadcast_status(status: str, data: dict = None):
             active_websockets.remove(ws)
 
 
-def broadcast_status_threadsafe(status: str, data: dict = None):
+def broadcast_status_threadsafe(status: str, data: typing.Optional[dict] = None):
     if not loop or loop.is_closed():
         logging.warning("Loop not ready for broadcast")
         return
@@ -626,7 +628,7 @@ def perform_output_action(text, action="copy_only", open_chat=False):
     if requested_action == "copy_only":
         result = copy_text_to_clipboard(final_text)
         payload.update(result)
-        payload["actual_action"] = result.get("actual_action") or result.get("action") or "copy_only"
+        payload["actual_action"] = str(result.get("actual_action") or result.get("action") or "copy_only")
         payload["clipboard_result"] = dict(result)
         return payload
 
@@ -769,7 +771,7 @@ def speak_text_aloud(text: str):
 
     engine = ensure_tts_initialized()
     if engine is not None:
-        engine._kokoro_quantization = quantization
+        setattr(engine, "_kokoro_quantization", quantization)
         logging.info(f"Speaking text aloud: '{phrase[:30]}...' (voice={voice_id}, speed={speed}x, quant={quantization})")
         engine.speak(phrase, speed=speed, voice_hint=voice_id)
 
@@ -803,7 +805,7 @@ def handle_review_tts_shortcut():
         result = {"ok": False, "text": "", "message": f"Selection capture failed: {exc}"}
 
     if result.get("ok"):
-        text = result.get("text", "").strip()
+        text = str(result.get("text", "")).strip()
         if text:
             speak_text_aloud(text)
 
@@ -832,7 +834,7 @@ def handle_primary_action():
         result = {"ok": False, "text": "", "message": f"Selection capture failed: {exc}", "error": str(exc)}
 
     if result.get("ok"):
-        text = result.get("text", "").strip()
+        text = str(result.get("text", "")).strip()
         if text:
             speak_text_aloud(text)
 
@@ -1250,7 +1252,7 @@ async def run_doctor(refresh_audio: bool = False):
     runtime_build = runtime_validation.get("build")
     runtime_build_ok = (
         not required_runtime_build
-        or (runtime_build is not None and runtime_build >= required_runtime_build)
+        or (runtime_build is not None and int(runtime_build) >= required_runtime_build)
     )
     llm_last_error = str(getattr(engine, "_last_error", "") or "") if engine else ""
     if not llama_server_exists:
@@ -1380,7 +1382,7 @@ async def runtime_status():
 
 @app.get("/runtime/output-settings")
 async def runtime_output_settings():
-    settings = get_profile_output_settings()
+    settings: typing.Dict[str, typing.Any] = dict(get_profile_output_settings())
     settings["pending_manual_send_ids"] = list(pending_manual_send_ids)
     settings["supported_actions"] = ["copy_only", "paste", "type", "open_chat_then_send"]
     settings["capabilities"] = get_capabilities()
@@ -2031,10 +2033,12 @@ async def list_llm_models():
     for model_id, info in AVAILABLE_MODELS.items():
         model_path = get_model_path(model_id)
         download_state = get_download_state(model_id)
+        file_status = get_model_file_status(model_id)
         with _llm_download_jobs_lock:
             job = _llm_download_jobs.get(model_id)
             download_active = bool(job and job.is_alive())
         download_state["active"] = download_active
+        download_state["file_status"] = file_status
         models.append(
             {
                 "id": model_id,
@@ -2042,6 +2046,7 @@ async def list_llm_models():
                 "installed": check_model_exists(model_id),
                 "ready": is_llm_model_ready(model_id),
                 "path": model_path,
+                "file_status": file_status,
                 "download_state": download_state,
                 "download_active": download_active,
                 "partial_bytes": download_state.get("partial_bytes", 0),
@@ -2130,6 +2135,7 @@ async def llm_download_state(model_id: str):
     if model_id not in AVAILABLE_MODELS:
         raise HTTPException(status_code=400, detail="Unsupported LLM model")
     state = get_download_state(model_id)
+    state["file_status"] = get_model_file_status(model_id)
     with _llm_download_jobs_lock:
         job = _llm_download_jobs.get(model_id)
         active = bool(job and job.is_alive())
@@ -2539,7 +2545,7 @@ async def runtime_tts_toggle():
 
 @app.post("/runtime/warmup")
 async def runtime_warmup(request: RuntimeWarmupRequest):
-    result = {"requested": request.dict()}
+    result: typing.Dict[str, typing.Any] = {"requested": request.model_dump()}
 
     if request.stt:
         try:
@@ -2837,7 +2843,7 @@ async def save_graph(data: GraphRequest):
         graph_path.parent.mkdir(parents=True, exist_ok=True)
         with open(graph_path, "w") as f:
             import json
-            json.dump(data.dict(), f)
+            json.dump(data.model_dump(), f)
         return {"status": "success"}
     except Exception as e:
         logging.error(f"Graph Save Error: {e}")
@@ -2876,8 +2882,8 @@ async def generate_plan(request: PlanRequest):
     if clean_text.endswith("```"):
         clean_text = clean_text[:-3]
     
+    import json
     try:
-        import json
         plan = json.loads(clean_text.strip())
         return plan
     except json.JSONDecodeError:
@@ -2978,7 +2984,8 @@ class StudioLoadProjectRequest(BaseModel):
 
 class StudioRunWorkflowRequest(BaseModel):
     project_name: str
-    seed_text: str
+    # Optional so /studio/workflow/regenerate can reuse a project's saved seed without resending it.
+    seed_text: Optional[str] = ""
     # Production style: "seed" (invent new), "adapt"/"start" (storyboard an existing story),
     # or "continue" (generate what happens next from an existing story).
     mode: Optional[str] = "seed"
@@ -3110,6 +3117,26 @@ async def studio_run_workflow(request: StudioRunWorkflowRequest):
         raise
     except Exception as e:
         logging.error(f"Studio workflow run failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/studio/workflow/regenerate")
+async def studio_regenerate_workflow(request: StudioRunWorkflowRequest):
+    """Re-run the whole pipeline on an existing project using its saved seed/source (testing aid)."""
+    from studio_workflow import StudioWorkflowRunner
+    from fastapi.concurrency import run_in_threadpool
+    try:
+        runner = StudioWorkflowRunner(request.project_name)
+        result = await run_in_threadpool(runner.regenerate_project, request.seed_text)
+        if result.get("ok"):
+            return result
+        if result.get("needs_repair") or result.get("repair"):
+            return {"status": "rejected", **result}
+        raise HTTPException(status_code=500, detail=result.get("error"))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Studio workflow regenerate failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/studio/workflow/intake/turn")
@@ -3261,7 +3288,7 @@ async def studio_update_storyboard(request: StudioStoryboardUpdateRequest):
     import studio_memory as memory
     try:
         runner = StudioWorkflowRunner(request.project_name)
-        if request.project_id and int(request.project_id) != int(runner.project_id):
+        if request.project_id is not None and runner.project_id is not None and int(request.project_id) != int(runner.project_id):
             raise HTTPException(status_code=400, detail="project_id does not match project_name")
         result = runner.apply_storyboard_edits(request.storyboard, note=request.note or "")
         return {
@@ -3296,7 +3323,7 @@ async def studio_transcribe_edit(
     temp_filename = None
     try:
         runner_project_id = memory.init_project_db(project_name)
-        if project_id and int(project_id) != int(runner_project_id):
+        if project_id is not None and runner_project_id is not None and int(project_id) != int(runner_project_id):
             raise HTTPException(status_code=400, detail="project_id does not match project_name")
         suffix = Path(file.filename or "studio-edit.wav").suffix or ".wav"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
@@ -3389,11 +3416,11 @@ async def studio_run_stage(request: StudioRunStageRequest):
             episodes = memory.get_episodes(request.project_name, runner.project_id)
             if not episodes:
                 raise HTTPException(status_code=400, detail="No episode found in memory. Run story planning first.")
-            ep_id = episodes[0]["id"]
+            ep_id = typing.cast(dict, episodes[0])["id"]
             story_plan = {
-                "summary": episodes[0]["summary"],
-                "episodes": [{"name": m["summary"].split(":")[0], "summary": m["summary"].split(":")[1] if ":" in m["summary"] else m["summary"]} for m in memory.get_minutes(request.project_name, runner.project_id)],
-                "canon_events": [{"description": c["description"], "time_index": c["time_index"]} for c in memory.get_canon_events(request.project_name, runner.project_id)]
+                "summary": typing.cast(dict, episodes[0])["summary"],
+                "episodes": [{"name": typing.cast(dict, m)["summary"].split(":")[0], "summary": typing.cast(dict, m)["summary"].split(":")[1] if ":" in typing.cast(dict, m)["summary"] else typing.cast(dict, m)["summary"]} for m in memory.get_minutes(request.project_name, runner.project_id)],
+                "canon_events": [{"description": typing.cast(dict, c)["description"], "time_index": typing.cast(dict, c)["time_index"]} for c in memory.get_canon_events(request.project_name, runner.project_id)]
             }
             data = runner.run_dialogue_and_panels(premise, world, characters, story_plan, ep_id)
             return {"status": "success", "stage": stage_name, "data": data}
@@ -3432,6 +3459,20 @@ async def studio_run_stage(request: StudioRunStageRequest):
                 raise HTTPException(status_code=400, detail=result.get("error", "Voicing failed."))
             return {"status": "success", "stage": "voice", "data": result}
 
+        elif stage_name in ("ambience", "scene_ambience", "sfx"):
+            force = bool((request.input_data or {}).get("force")) if request.input_data else False
+            result = runner.run_scene_ambience(force=force)
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Ambience failed."))
+            return {"status": "success", "stage": "ambience", "data": result}
+
+        elif stage_name in ("music", "score", "project_music"):
+            force = bool((request.input_data or {}).get("force")) if request.input_data else False
+            result = runner.run_project_music(force=force)
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Music failed."))
+            return {"status": "success", "stage": "music", "data": result}
+
         elif stage_name in ("scene_continuity", "continuity_scenes"):
             # Stage 7 (cinematic): audit the scene spine; verify setups pay off.
             warnings = runner.run_scene_continuity()
@@ -3449,10 +3490,11 @@ async def studio_run_stage(request: StudioRunStageRequest):
         elif stage_name == "approval_ready":
             panels = memory.get_panels(request.project_name, runner.project_id)
             # Add dialogue/text back into panels for audit input format compatibility
-            dialogue_lines = {d["panel_id"]: d for d in memory.get_dialogue_lines(request.project_name, runner.project_id)}
+            dialogue_lines = {typing.cast(dict, d)["panel_id"]: d for d in memory.get_dialogue_lines(request.project_name, runner.project_id)}
             audit_panels = []
-            for p in panels:
-                d_line = dialogue_lines.get(p["id"], {})
+            for p_obj in panels:
+                p = typing.cast(dict, p_obj)
+                d_line = typing.cast(dict, dialogue_lines.get(p["id"]) or {})
                 audit_panels.append({
                     "panel_number": p["panel_number"],
                     "visual_description": p["visual_description"],
@@ -3479,10 +3521,11 @@ async def studio_get_project_panels(project_name: str, project_id: int):
         panels = memory.get_panels(project_name, project_id)
         dialogue = memory.get_dialogue_lines(project_name, project_id)
         # Zip panels and dialogue
-        dial_dict = {d["panel_id"]: d for d in dialogue}
+        dial_dict = {typing.cast(dict, d)["panel_id"]: d for d in dialogue}
         zipped = []
-        for p in panels:
-            d = dial_dict.get(p["id"], {})
+        for p_obj in panels:
+            p = typing.cast(dict, p_obj)
+            d = typing.cast(dict, dial_dict.get(p["id"]) or {})
             zipped.append({
                 "id": p["id"],
                 "page_id": p.get("page_id"),
@@ -3515,6 +3558,7 @@ async def studio_get_scenes(project_name: str):
         # Honest provenance so the UI never sells procedural fallback as live-LLM quality.
         grounding = understanding.get("_grounding") or ("none" if not understanding else "")
         img_done = sum(1 for s in scenes if s.get("image_status") == "done")
+        amb_done = sum(1 for s in scenes if s.get("ambience_status") == "done")
         aud_done = sum(1 for s in scenes for b in (s.get("narration_script") or [])
                        if b.get("audio_status") == "done")
         aud_total = sum(len(s.get("narration_script") or []) for s in scenes)
@@ -3525,6 +3569,10 @@ async def studio_get_scenes(project_name: str):
             "summary": (bible.get("scene_blueprint") or {}).get("summary", ""),
             "grounding": grounding,
             "image_done": img_done,
+            "ambience_done": amb_done,
+            "ambience_total": len(scenes),
+            "music_path": bible.get("music_path"),
+            "music_status": bible.get("music_status"),
             "audio_done": aud_done,
             "audio_total": aud_total,
         }
@@ -3554,6 +3602,98 @@ async def studio_download_image_model(model_key: str):
 async def studio_image_model_download_state(model_key: str):
     import studio_image_backend
     return {"status": "success", "state": studio_image_backend.download_state(model_key)}
+
+
+@app.get("/studio/models/voice")
+async def studio_list_voice_models():
+    """Catalog of local voice models (Chatterbox, etc)."""
+    import studio_audio
+    return {"status": "success", "models": studio_audio.list_voice_models(),
+            "default": studio_audio.DEFAULT_VOICE_MODEL}
+
+
+@app.post("/studio/models/voice/{model_key}/download")
+async def studio_download_voice_model(model_key: str):
+    import studio_audio
+    if model_key not in studio_audio.VOICE_MODELS:
+        raise HTTPException(status_code=404, detail=f"Unknown voice model '{model_key}'.")
+    return {"status": "success", "state": studio_audio.start_download(model_key)}
+
+
+@app.get("/studio/models/voice/{model_key}/download-state")
+async def studio_voice_model_download_state(model_key: str):
+    import studio_audio
+    return {"status": "success", "state": studio_audio.download_state(model_key)}
+
+
+@app.get("/studio/models/media")
+async def studio_list_media_models():
+    """Unified Studio media catalog: voice, music, ambience/SFX."""
+    import studio_media_models
+    return {"status": "success", **studio_media_models.all_downloads()}
+
+
+@app.post("/studio/models/media/{model_key}/download")
+async def studio_download_media_model(model_key: str):
+    import studio_media_models
+    if model_key not in studio_media_models.MEDIA_MODELS:
+        raise HTTPException(status_code=404, detail=f"Unknown media model '{model_key}'.")
+    return {"status": "success", "state": studio_media_models.start_download(model_key)}
+
+
+@app.get("/studio/models/media/{model_key}/download-state")
+async def studio_media_model_download_state(model_key: str):
+    import studio_media_models
+    if model_key not in studio_media_models.MEDIA_MODELS:
+        raise HTTPException(status_code=404, detail=f"Unknown media model '{model_key}'.")
+    return {"status": "success", "state": studio_media_models.download_state(model_key)}
+
+
+@app.get("/studio/readiness")
+async def studio_readiness():
+    import studio_readiness as readiness
+    return {"status": "success", **readiness.audit_studio_readiness()}
+
+
+class StudioMediaSettingsRequest(BaseModel):
+    project_name: str
+    voice_volume: Optional[float] = None
+    music_volume: Optional[float] = None
+
+
+def _clamp_volume(v, default):
+    try:
+        return max(0.0, min(2.0, float(v)))
+    except (TypeError, ValueError):
+        return default
+
+
+@app.get("/studio/projects/{project_name}/media-settings")
+async def studio_get_media_settings(project_name: str):
+    """Per-project narration/score volume (so the reel doesn't blare). Defaults: voice 1.0, music 0.35."""
+    import studio_memory as memory
+    pid = memory.init_project_db(project_name)
+    prefs = memory.get_user_preferences(project_name, pid)
+    return {"status": "success",
+            "voice_volume": _clamp_volume(prefs.get("voice_volume"), 1.0),
+            "music_volume": _clamp_volume(prefs.get("music_volume"), 0.35)}
+
+
+@app.post("/studio/projects/{project_name}/media-settings")
+async def studio_set_media_settings(request: StudioMediaSettingsRequest):
+    """Persist narration/score volume. Applied on the next Voice / Render Score run."""
+    import studio_memory as memory
+    pid = memory.init_project_db(request.project_name)
+    if request.voice_volume is not None:
+        memory.set_user_preference(request.project_name, pid, "voice_volume",
+                                   _clamp_volume(request.voice_volume, 1.0))
+    if request.music_volume is not None:
+        memory.set_user_preference(request.project_name, pid, "music_volume",
+                                   _clamp_volume(request.music_volume, 0.35))
+    prefs = memory.get_user_preferences(request.project_name, pid)
+    return {"status": "success",
+            "voice_volume": _clamp_volume(prefs.get("voice_volume"), 1.0),
+            "music_volume": _clamp_volume(prefs.get("music_volume"), 0.35)}
 
 
 @app.get("/studio/projects/{project_name}/render-status")
@@ -3645,7 +3785,7 @@ async def studio_upload_panel_image(
             raise HTTPException(status_code=404, detail="Project not found")
 
         panels = memory.get_panels(project_name, project_id)
-        panel = next((row for row in panels if int(row["id"]) == int(panel_id)), None)
+        panel = next((row for row in panels if row is not None and int(typing.cast(dict, row)["id"]) == int(panel_id)), None)
         if not panel:
             raise HTTPException(status_code=404, detail="Panel not found")
 

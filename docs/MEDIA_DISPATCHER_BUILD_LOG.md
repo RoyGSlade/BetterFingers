@@ -136,3 +136,118 @@ downloaded diffusers snapshot → compiled PromptPacket → loaded pipeline → 
   - `.venv/bin/python -m pytest tests/ -q -k "studio and not scene_endpoint_commits_and_rejects"`
     → 145 passed, known unrelated GEST test excluded.
   - `npm run build` from `app/` → passed.
+
+---
+
+## P3 — Download Center + Studio media model catalog ✅
+_Make Studio's required model stack understandable and recoverable from interrupted downloads._
+
+**What changed**
+- Added a unified Studio media catalog/downloader for non-GGUF assets:
+  - Voice: `ResembleAI/chatterbox`.
+  - Music: `ACE-Step/Ace-Step1.5`.
+  - Ambience/SFX: `stabilityai/stable-audio-open-small` (Hugging Face reports this as gated/auto,
+    so it may require accepted terms or an auth token before it completes).
+- Added Studio media endpoints under `/studio/models/media` for listing, starting downloads, and
+  polling status.
+- Reworked the renderer's Models tab with a Steam-like **BetterFingers Download Center**:
+  Studio dispatcher/writer LLMs, image model, voice, music, and ambience are shown together with
+  installed/missing/paused/downloading status and local byte progress when available.
+- Hardened partial-download handling:
+  - GGUF downloads use `.part`, resume with HTTP `Range`, and move corrupt/incomplete final files
+    back to `.part`.
+  - Media snapshots require `.betterfingers_download_complete` before they are treated as installed;
+    non-empty interrupted folders are surfaced as resumable partials.
+- Added `scripts/download_studio_essentials.py` for durable sequential installs outside the app UI:
+  E4B Q4 dispatcher → Chatterbox → ACE-Step → Stable Audio.
+
+**Machine state**
+- Deleted the broken/obsolete Gemma 3 4B Q4 file.
+- `gemma-4-e4b-q4` is resuming as
+  `/home/donaven/BetterFingers/models/gemma-4-E4B-it-Q4_K_M.gguf.part`.
+- The background worker log is `/tmp/betterfingers_downloads.log`; the pid is stored at
+  `/tmp/betterfingers_downloads.pid`.
+
+**Verified**
+- `.venv/bin/python -m pytest tests/test_model_manager_status.py tests/test_studio_media_models.py tests/test_studio_image_backend.py -q`
+  → 27 passed.
+- `.venv/bin/python -m pytest tests/ -q -k "studio and not scene_endpoint_commits_and_rejects"`
+  → 148 passed, known unrelated GEST test excluded.
+- `npm run build` from `app/` → passed.
+
+---
+
+## P5 Headstart — Stable Audio ambience + ACE-Step composer tools ✅
+_Model assets are no longer just downloaded; both audio departments now have isolated runtimes and
+BetterFingers worker adapters._
+
+**What changed**
+- Installed `uv` into the app venv and cloned official tool repos under `.betterfingers/tools/`:
+  - `stable-audio-tools` with a uv-managed Python 3.10 env (`stable-audio-tools==0.0.20`,
+    torch/torchaudio CUDA 12.6).
+  - `ACE-Step-1.5` with a uv-managed Python 3.12 env (`ace-step==1.5.0`,
+    torch/torchaudio CUDA 12.8).
+- Added subprocess generator scripts:
+  - `tools/stable_audio_generate.py` — local Stable Audio Open Small prompt → WAV.
+  - `tools/ace_step_generate.py` — local ACE-Step 1.5 prompt → `music.wav`.
+- Added app-side workers:
+  - `studio_ambience.py` renders per-scene ambience loops and stamps `ambience_path`,
+    `ambience_status`, `ambience_prompt`.
+  - `studio_music.py` renders a project score cue and stamps `music_path`, `music_status`,
+    `music_prompt`.
+- Wired workflow stages:
+  - `ambience` / `scene_ambience` / `sfx`.
+  - `music` / `score` / `project_music`.
+- `GET /studio/projects/{name}/scenes` now reports ambience/music status fields.
+
+**Verified**
+- Tool imports:
+  - Stable Audio env imports `stable_audio_tools`, `torch`, `torchaudio`; CUDA visible.
+  - ACE-Step env imports `AceStepHandler`, `LLMHandler`, `GenerationParams`, `GenerationConfig`; CUDA visible.
+- Real Stable Audio smoke:
+  - `/tmp/betterfingers_stable_audio_smoke.wav`
+  - 1s stereo 44.1kHz WAV generated from Stable Audio Open Small.
+- Real ACE-Step smoke:
+  - `/tmp/betterfingers_ace_step_smoke/music.wav`
+  - 10s stereo 48kHz WAV generated from ACE-Step 1.5.
+- VRAM returned to idle (~552 MiB used) after both subprocesses exited.
+- Tests/build:
+  - `.venv/bin/python -m pytest tests/test_studio_ambience.py tests/test_studio_music.py tests/test_studio_audio.py tests/test_studio_render.py tests/test_studio_media_models.py tests/test_server_studio.py -q`
+    → 24 passed.
+  - `.venv/bin/python -m pytest tests/test_studio_ambience.py tests/test_studio_music.py -q`
+    → 6 passed after wrapper fix.
+  - `npm --prefix app run build` → passed.
+
+---
+
+## Hardening — Studio readiness + model file health ✅
+_First-run status now reports ownership/readability/tool readiness honestly._
+
+**What changed**
+- Added `model_manager.get_model_file_status(model_id)`:
+  - reports existence, completeness, size, owner/group, mode, readable, writable, attention flags,
+    and a `fix_command` when a managed model is owned by another user.
+  - unreadable model files no longer count as complete/installed.
+- LLM model listing and download-state responses now include `file_status`.
+- Added `studio_readiness.py` and `GET /studio/readiness`:
+  - audits dispatcher/writer LLMs, image model, Chatterbox, ACE-Step, Stable Audio, and the two
+    isolated tool environments.
+  - does not load models or spend VRAM; this is a fast first-run truth check.
+
+**Machine state**
+- Attempted to fix the 12B writer ownership with:
+  `sudo chown donaven:donaven /home/donaven/BetterFingers/models/gemma-4-12b-it-Q4_K_M.gguf`
+- The command could not run in this non-interactive session because sudo requires a password.
+- Readiness now reports the 12B as complete/readable/loadable, but warns:
+  `not_writable`, `owned_by_other_user`.
+- Reported fix command:
+  `sudo chown donaven:donaven /home/donaven/BetterFingers/models/gemma-4-12b-it-Q4_K_M.gguf`
+
+**Verified**
+- Actual readiness audit:
+  - `ready_for_first_run: true`
+  - `warnings: 1`
+  - only warning is the root-owned 12B writer file.
+- `.venv/bin/python -m pytest tests/test_model_manager_status.py tests/test_studio_readiness.py tests/test_studio_ambience.py tests/test_studio_music.py tests/test_studio_audio.py tests/test_studio_render.py tests/test_studio_media_models.py tests/test_server_studio.py -q`
+  → 44 passed.
+- `npm --prefix app run build` → passed.

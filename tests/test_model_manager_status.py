@@ -107,6 +107,22 @@ class ModelManagerStatusTests(unittest.TestCase):
             self.assertFalse(os.path.exists(dest))
             self.assertTrue(os.path.exists(f"{dest}.part"))
 
+    def test_incomplete_final_model_is_moved_to_part_for_resume(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model_path = os.path.join(tmp, "bad.gguf")
+            part_path = f"{model_path}.part"
+            with open(model_path, "wb") as handle:
+                handle.write(b"partial")
+
+            with patch("model_manager.get_model_path", return_value=model_path), patch(
+                "model_manager.get_partial_model_path", return_value=part_path
+            ), patch("model_manager.is_model_file_complete", return_value=False):
+                moved = model_manager._prepare_incomplete_model_for_resume("gemma-4-e4b-q4")
+
+            self.assertEqual(moved, len(b"partial"))
+            self.assertFalse(os.path.exists(model_path))
+            self.assertTrue(os.path.exists(part_path))
+
     def test_linux_runtime_tar_symlinks_are_preserved_and_repaired(self):
         with tempfile.TemporaryDirectory() as tmp:
             archive_path = os.path.join(tmp, "runtime.tar.gz")
@@ -260,6 +276,43 @@ class ModelManagerStatusTests(unittest.TestCase):
             self.assertFalse(bool(result.get("ok", True)))
             self.assertIn("unavailable", str(result.get("message", "")).lower())
             self.assertEqual(download_file.call_count, 1)
+
+    def test_model_file_status_reports_non_writable_attention(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model_path = os.path.join(tmp, "model.gguf")
+            with open(model_path, "wb") as handle:
+                handle.write(b"model")
+            os.chmod(model_path, 0o444)
+
+            try:
+                with patch("model_manager.get_model_path", return_value=model_path):
+                    status = model_manager.get_model_file_status("gemma-4-12b-q4")
+            finally:
+                os.chmod(model_path, 0o644)
+
+            self.assertTrue(status["complete"])
+            self.assertTrue(status["readable"])
+            if not status["writable"]:
+                self.assertIn("not_writable", status["attention"])
+
+    def test_unreadable_model_is_not_installed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model_path = os.path.join(tmp, "model.gguf")
+            with open(model_path, "wb") as handle:
+                handle.write(b"model")
+            os.chmod(model_path, 0)
+
+            try:
+                with patch("model_manager.get_model_path", return_value=model_path):
+                    status = model_manager.get_model_file_status("gemma-4-12b-q4")
+                    complete = model_manager.is_model_file_complete("gemma-4-12b-q4")
+                    readable = os.access(model_path, os.R_OK)
+            finally:
+                os.chmod(model_path, 0o644)
+
+            if not readable:
+                self.assertFalse(status["readable"])
+                self.assertFalse(complete)
 
     def test_linux_uses_llama_server_without_exe_and_downloads_linux_archive(self):
         with tempfile.TemporaryDirectory() as tmp:

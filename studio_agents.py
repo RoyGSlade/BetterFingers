@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from typing import Callable, List
 
 import studio_blackboard as bb
+import studio_showrunner
+import studio_repair
 
 
 @dataclass
@@ -38,10 +40,19 @@ def _run_intake(runner, ctx):
     return premise, {}
 
 
-def _run_casting(runner, ctx):
-    casting = runner.run_director_casting(premise_data=ctx["premise"])
-    ctx["casting"] = casting
-    return casting.get("data", casting), {}
+def _run_understanding(runner, ctx):
+    """Stage 0 (cinematic): build the whole-story ``story_understanding`` every later stage grounds on.
+
+    Loremaster *reads* a supplied manuscript (adapt/continue); Genesis *invents* one from the
+    premise/seed (the "make a story from nothing" path). Both emit the same rich contract, so the
+    Showrunner/Scriptwriter stay agnostic to whether the story was read or invented.
+    """
+    if ctx.get("source_story"):
+        understanding = runner.run_loremaster(ctx["source_story"])
+    else:
+        understanding = runner.run_genesis(ctx["premise"], seed_text=ctx.get("seed_text", ""))
+    ctx["understanding"] = understanding or {}
+    return ctx["understanding"], {}
 
 
 def _run_world(runner, ctx):
@@ -56,68 +67,70 @@ def _run_characters(runner, ctx):
     return chars, {}
 
 
-def _run_treatment(runner, ctx):
-    treatment = runner.run_treatment(ctx["premise"], ctx["world"], ctx["characters"],
-                                     mode=ctx["mode"], source_story=ctx["source_story"])
-    ctx["treatment"] = treatment
-    return treatment, {}
-
-
-def _run_planner(runner, ctx):
-    story_plan, ep_id = runner.run_story_planning(ctx["premise"], ctx["world"], ctx["characters"],
-                                                  mode=ctx["mode"], source_story=ctx["source_story"])
-    ctx["story_plan"] = story_plan
+def _run_showrunner(runner, ctx):
+    """Stage 4 (cinematic): dynamic scene blueprint with explicit setup→payoff (replaces the
+    legacy hardcoded 3-beat planner)."""
+    storyboard, ep_id, blueprint = runner.run_showrunner(
+        premise_data=ctx["premise"], world_data=ctx["world"], characters=ctx["characters"],
+        mode=ctx["mode"], source_story=ctx["source_story"])
+    ctx["storyboard"] = storyboard
     ctx["ep_id"] = ep_id
-    return story_plan, {}
+    ctx["blueprint"] = blueprint
+    return blueprint, {}
 
 
-def _run_scene(runner, ctx):
-    scene = runner.run_director_scene_planning(ctx["premise"], ctx["world"], ctx["characters"], ctx["story_plan"])
-    ctx["scene"] = scene
-    # A rejected scene that even the grounded fallback couldn't commit -> route to repair.
-    if not scene.get("ok") and scene.get("repair"):
-        return scene, {"reject": {"phase": scene.get("phase", "director_scene_planning"),
-                                  "error": scene.get("error"), "repair": scene.get("repair")}}
-    return scene, {}
+def _run_gate(runner, ctx):
+    """Stage 4b (cinematic): the setup/payoff gate. Verify the blueprint is structurally sound
+    BEFORE spending scriptwriting tokens. A broken spine (no usable scenes, or a setup that pays
+    off in a scene that doesn't exist) routes to the repair flow instead of writing scripts onto
+    a broken story."""
+    blueprint = ctx["blueprint"]
+    problems = studio_showrunner.gate_blueprint(blueprint)
+    if problems:
+        error = "; ".join(problems)
+        report = studio_repair.build_repair_report(
+            "showrunner", error,
+            context={"scene_count": (blueprint or {}).get("scene_count"),
+                     "summary": (blueprint or {}).get("summary", "")})
+        return ({"problems": problems, "blueprint": blueprint},
+                {"reject": {"phase": "showrunner", "error": error, "repair": report}})
+    return {"passed": True, "scene_count": (blueprint or {}).get("scene_count")}, {}
 
 
-def _run_panels(runner, ctx):
-    panels = runner.run_dialogue_and_panels(ctx["premise"], ctx["world"], ctx["characters"],
-                                            ctx["story_plan"], ctx["ep_id"],
-                                            mode=ctx["mode"], source_story=ctx["source_story"])
-    ctx["panels"] = panels
-    return panels, {}
-
-
-def _run_continuity(runner, ctx):
-    warnings = runner.run_continuity_audit(ctx["premise"], ctx["world"], ctx["characters"], ctx["panels"],
-                                           mode=ctx["mode"], source_story=ctx["source_story"])
-    ctx["warnings"] = warnings
-    return warnings, {}
+def _run_scenes(runner, ctx):
+    """Stage 5 (cinematic): Scriptwriter + Cinematographer — write each scene's narration script
+    + evocative image prompt from the approved blueprint (replaces the 12-panel comic back half)."""
+    scenes = runner.run_scenes(blueprint=ctx["blueprint"], ep_id=ctx.get("ep_id"),
+                               mode=ctx["mode"], source_story=ctx["source_story"])
+    ctx["scenes"] = scenes
+    return scenes, {}
 
 
 def build_registry() -> List[StudioAgent]:
-    """The ordered roster. `reads` are the artifact keys each agent depends on."""
+    """The ordered cinematic roster. `reads` are the artifact keys each agent depends on.
+
+    The chain — intake → understanding (loremaster/genesis) → world → characters → showrunner →
+    gate → scenes — is the cinematic production path from docs/visionchecklist.md, replacing the
+    legacy 12-panel comic chain (casting → treatment → planner → 12 panels → continuity).
+    """
     return [
         StudioAgent("intake", "User Intake", [], "premise", _run_intake,
                     description="Turns the seed/story into a working premise."),
-        StudioAgent("casting", "Director (Casting)", ["premise"], "casting", _run_casting,
-                    description="Picks a grounded region + character skins."),
+        StudioAgent("understanding", "Loremaster / Genesis", ["premise"], "understanding",
+                    _run_understanding, model_tier="medium",
+                    description="Distills (adapt/continue) or invents (seed) a complete story_understanding."),
         StudioAgent("world", "World Builder", ["premise"], "world", _run_world, model_tier="medium",
                     description="Structured world bible: palette, lighting, locations."),
         StudioAgent("characters", "Character Creator", ["premise", "world"], "characters", _run_characters,
                     model_tier="medium", description="One structured bible per character."),
-        StudioAgent("treatment", "Story Editor", ["premise", "world", "characters"], "treatment", _run_treatment,
-                    model_tier="medium", description="Expands the premise into a story spine."),
-        StudioAgent("planner", "Story Planner", ["treatment"], "beats", _run_planner, model_tier="medium",
-                    description="60-second beat sheet."),
-        StudioAgent("scene", "Director (Scene)", ["beats", "characters"], "scene", _run_scene,
-                    description="Simulator-valid GEST scene; repairable on rejection."),
-        StudioAgent("panels", "Shot/Panel + Visual + Dialogue", ["beats", "world", "characters"], "panels",
-                    _run_panels, model_tier="medium",
-                    description="Shot list -> 12 panels -> image prompts -> voiced dialogue."),
-        StudioAgent("continuity", "Continuity Critic", ["panels"], "continuity", _run_continuity,
-                    description="Flags inconsistencies for repair."),
+        StudioAgent("showrunner", "Showrunner", ["understanding", "world", "characters"],
+                    "scene_blueprint", _run_showrunner, model_tier="medium",
+                    description="Dynamic scene blueprint with explicit setup→payoff."),
+        StudioAgent("gate", "Setup/Payoff Gate", ["scene_blueprint"], "scene_gate", _run_gate,
+                    description="Validates the blueprint before scriptwriting; routes a broken spine to repair."),
+        StudioAgent("scenes", "Scriptwriter + Cinematographer", ["scene_blueprint", "scene_gate"],
+                    "scenes", _run_scenes, model_tier="medium",
+                    description="Writes each scene's narration script + evocative image prompt."),
     ]
 
 
@@ -180,8 +193,8 @@ class Producer:
             "project_id": self.project_id,
             "project_name": self.project_name,
             "mode": mode,
-            "casting": ctx.get("casting", {}).get("data") if isinstance(ctx.get("casting"), dict) else ctx.get("casting"),
-            "scene": ctx.get("scene"),
+            "blueprint": ctx.get("blueprint"),
+            "scenes": ctx.get("scenes"),
             "data": final_data,
             "model_status": runner.model_status,
         }

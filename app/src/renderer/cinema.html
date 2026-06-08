@@ -154,6 +154,7 @@
     <span class="spacer"></span>
     <button class="ctl accept" id="btnAccept" title="Approve this scene">✓ Accept</button>
     <button class="ctl reject" id="btnReject" title="Reject &amp; rewrite">✕ Reject</button>
+    <button class="ctl" id="btnRerollImage" title="Re-roll image (bump seed)">🎲 Image</button>
     <button class="ctl" id="btnRefine" title="Refine with a note">✎ Refine</button>
   </div>
 
@@ -193,6 +194,7 @@
   let refineTarget = 'all';
   let advanceTimer = null;
   let utterances = [];
+  let musicPath = '';
 
   // ---- data ------------------------------------------------------------
   async function api(path, opts) {
@@ -203,6 +205,7 @@
   async function loadScenes() {
     const data = await api('/studio/projects/' + encodeURIComponent(PROJECT) + '/scenes');
     scenes = (data.scenes || []).filter(s => (s.narration_script || []).length);
+    musicPath = data.music_path || '';
     if (!scenes.length) { el('empty').classList.remove('hidden'); return; }
     el('empty').classList.add('hidden');
     ui.classList.remove('hidden');
@@ -275,6 +278,7 @@
     const scene = scenes[idx];
     if (!scene) return;
     playing = true; el('btnPlay').textContent = '❚❚ Pause';
+    startBedsForScene(scene);
     const dur = totalDuration(scene);
     // Start the crawl.
     requestAnimationFrame(() => {
@@ -297,10 +301,11 @@
     crawl.classList.remove('run');
     clearTimeout(advanceTimer);
     if (audioEl) audioEl.pause();
-    else if (window.speechSynthesis) window.speechSynthesis.pause();
+    pauseBeds();
+    if (!audioEl && window.speechSynthesis) window.speechSynthesis.pause();
   }
 
-  function togglePlay() { playing ? pause() : (resumeSpeech(), play()); }
+  function togglePlay() { playing ? pause() : play(); }
 
   function next() { showScene(idx + 1, true); }
   function prev() { showScene(idx - 1, true); }
@@ -320,6 +325,49 @@
       requestAnimationFrame(tick);
     }
     requestAnimationFrame(tick);
+  }
+
+  // ---- Audio beds: project score + per-scene ambience loops --------------------
+  let musicEl = null;
+  let ambienceEl = null;
+
+  function makeBedAudio(rel, volume, loop) {
+    if (!rel || muted) return null;
+    const audio = new Audio(assetUrl(rel));
+    audio.loop = !!loop;
+    audio.volume = volume;
+    audio.preload = 'auto';
+    audio.onerror = () => flash('Could not play ' + rel);
+    return audio;
+  }
+
+  function startBedsForScene(scene) {
+    stopBeds();
+    if (muted) return;
+    musicEl = makeBedAudio(musicPath, 0.35, true);
+    ambienceEl = makeBedAudio(scene && scene.ambience_path, 0.22, true);
+    [musicEl, ambienceEl].filter(Boolean).forEach((audio) => {
+      audio.play().catch(() => flash('Click Play again to start audio.'));
+    });
+  }
+
+  function pauseBeds() {
+    [musicEl, ambienceEl].filter(Boolean).forEach((audio) => audio.pause());
+  }
+
+  function stopBeds() {
+    [musicEl, ambienceEl].filter(Boolean).forEach((audio) => {
+      audio.pause();
+      audio.onerror = null;
+      audio.src = '';
+      audio.load();
+    });
+    musicEl = null;
+    ambienceEl = null;
+  }
+
+  function resumeBeds() {
+    [musicEl, ambienceEl].filter(Boolean).forEach((audio) => audio.play().catch(() => {}));
   }
 
   // ---- Narration audio: prefer rendered per-beat files, else browser speech ----
@@ -363,6 +411,7 @@
   }
   function resumeSpeech() {
     if (muted) return;
+    resumeBeds();
     if (audioEl) { audioEl.play().catch(() => {}); }
     else if (window.speechSynthesis) window.speechSynthesis.resume();
   }
@@ -393,8 +442,26 @@
         body: JSON.stringify({ project_name: PROJECT, scene_id: scenes[idx].id, target: refineTarget, feedback }),
       });
       scenes[idx] = res.scene;
+      
+      // If we just re-rolled the image, try to render it immediately.
+      if (refineTarget === 'image') {
+        flash('Rendering new image for Scene ' + (idx + 1) + '…');
+        try {
+          const renderRes = await api('/studio/workflow/stage', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ project_name: PROJECT, stage: 'render_images' }),
+          });
+          if (renderRes.data && renderRes.data.scenes) {
+            // Update all scenes to catch the newly rendered image.
+            scenes = renderRes.data.scenes;
+          }
+        } catch (e) {
+          console.warn('Auto-render failed:', e);
+        }
+      }
+      
       el('mFeedback').value = '';
-      flash('Scene ' + (idx + 1) + ' rewritten.');
+      flash('Scene ' + (idx + 1) + (refineTarget === 'image' ? ' re-rendered.' : ' rewritten.'));
       showScene(idx, true);
     } catch (e) { flash('Rewrite failed: ' + e.message); }
   }
@@ -405,10 +472,16 @@
   el('btnPrev').onclick = prev;
   el('btnAccept').onclick = acceptScene;
   el('btnReject').onclick = () => { refineTarget = 'all'; syncSeg(); openRefine(true); };
+  el('btnRerollImage').onclick = async () => {
+    refineTarget = 'image';
+    el('mFeedback').value = '';
+    await doRegenerate();
+  };
   el('btnRefine').onclick = () => openRefine(false);
   el('btnMute').onclick = () => {
     muted = !muted; el('btnMute').textContent = muted ? '🔇 Muted' : '🔊 Voice';
-    if (muted) stopSpeech(); else if (playing) speakScene(scenes[idx]);
+    if (muted) { stopSpeech(); stopBeds(); }
+    else if (playing) { startBedsForScene(scenes[idx]); speakScene(scenes[idx]); }
   };
   el('mCancel').onclick = () => el('overlay').classList.add('hidden');
   el('mGo').onclick = doRegenerate;

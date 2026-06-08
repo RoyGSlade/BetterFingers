@@ -7,8 +7,7 @@ scipy                       # Signal processing (audio gate)
 # ---- Audio & Speech ----
 sounddevice                 # Microphone capture
 faster-whisper              # Whisper speech-to-text (CTranslate2)
-kokoro; python_version < "3.13"   # TTS backend (primary)
-kokoro-onnx                 # TTS backend (ONNX variant)
+kokoro; python_version < "3.13"   # TTS fallback; Studio narration prefers Chatterbox
 
 # ---- UI ----
 flet==0.80.5                # Settings window (standardized stable line)
@@ -23,6 +22,20 @@ pyperclip                   # Cross-platform clipboard
 requests                    # HTTP client (model downloads)
 huggingface_hub             # Model cache management (Whisper)
 pyyaml                      # Profile / config files
+uv                          # Isolated Studio media tool environments (Stable Audio, ACE-Step)
+
+# ---- Studio voice / audio ----
+# Premium expressive Studio narration. Pulls torch + torchaudio; keep kokoro-onnx out of this
+# environment because Chatterbox pins numpy<2 and kokoro-onnx requires numpy>=2.
+chatterbox-tts              # Resemble AI Chatterbox TTS (Studio hero voices)
+soundfile                   # WAV/FLAC I/O for the Kokoro TTS fallback
+# (numpy + scipy above power the fade-in/out + volume normalization.)
+
+# ---- Studio image generation ----
+# diffusers >=0.32 is REQUIRED: 0.29 imports FLAX_WEIGHTS_NAME, removed in transformers 5.x, which
+# breaks the SDXL pipeline import (silent 0/N renders). Keep it ahead of the transformers pin.
+diffusers>=0.32             # In-process SDXL image rendering (Animagine XL)
+accelerate                  # diffusers device placement / offload
 
 # ---- Sidecar API ----
 fastapi                     # REST + WebSocket server

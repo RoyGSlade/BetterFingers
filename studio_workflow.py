@@ -13,6 +13,8 @@ import studio_showrunner
 import studio_scriptwriter
 import studio_render
 import studio_audio
+import studio_ambience
+import studio_music
 import studio_continuity
 import studio_prompt_compiler
 import studio_image_backend
@@ -31,6 +33,21 @@ logger = logging.getLogger("studio_workflow")
 MODE_SEED = "seed"
 MODE_ADAPT = "adapt"
 MODE_CONTINUE = "continue"
+
+# Studio is a heavy, quality-critical creative job, so it runs on the bigger model regardless of
+# what the always-on assistant uses. The small assistant model both writes weaker prose and
+# truncates the large single-shot schema generations (genesis/loremaster/showrunner), which then
+# fail JSON parsing and fall back to the procedural skeleton. Override via env if needed; if the
+# model isn't installed we transparently keep whatever model is currently selected.
+STUDIO_MODEL_ID = os.environ.get("BETTERFINGERS_STUDIO_MODEL", "gemma-4-12b-q4")
+
+
+def _as_float(value, default):
+    """Parse a stored preference into a float, clamped sane, falling back to default."""
+    try:
+        return max(0.0, min(2.0, float(value)))
+    except (TypeError, ValueError):
+        return default
 
 # How much of a (potentially long) source story we feed to the LLM for grounding.
 # The full text is always preserved in project memory; this only bounds the prompt size.
@@ -124,6 +141,8 @@ class StudioWorkflowRunner:
             "messages": [],
         }
         self._profile = None
+        # Cached whole-story understanding (set by the Loremaster; None = not yet computed/invalidated).
+        self._understanding_cache = None
 
     @property
     def profile(self):
@@ -344,13 +363,17 @@ class StudioWorkflowRunner:
                 return cached
             return self.run_loremaster(story)
         # Seed mode: reuse a stored understanding if present, else invent one (Genesis).
+        # AUTO-HEAL: if the stored understanding was a *fallback* (Genesis previously truncated and
+        # dropped to the procedural skeleton, which poisons every downstream stage with placeholder
+        # names), re-run Genesis so a now-working model re-grounds the project instead of being stuck
+        # with the bad spine forever. A still-failing model just falls back again — no loop.
         stored = memory.get_bible(self.project_name, self.project_id).get("story_understanding")
-        if stored:
+        if stored and str(stored.get("_grounding") or "") not in ("invented-fallback", "none", ""):
             return stored
         premise = memory.get_bible(self.project_name, self.project_id).get("premise")
         if premise:
             return self.run_genesis(premise)
-        return None
+        return stored or None
 
     def run_genesis(self, premise=None, seed_text=""):
         """Stage 0 (seed mode): invent a full ``story_understanding`` from a premise/seed.
@@ -431,6 +454,75 @@ class StudioWorkflowRunner:
         )
         return understanding
 
+    def _studio_model_id(self):
+        """The big model Studio prefers, if it's actually installed; else None (keep the current
+        model so a machine without the 12B still runs on whatever it has)."""
+        target = STUDIO_MODEL_ID
+        try:
+            import model_manager
+            if target and model_manager.check_model_exists(target):
+                return target
+        except Exception:
+            pass
+        return None
+
+    def _ensure_studio_engine(self):
+        """Return the shared LLM engine, switched to the big Studio model for the whole run.
+
+        Cheap no-op once the model is resident (just a string compare). The first call reloads the
+        llama-server onto the 12B if a smaller model is currently loaded — the one-time cost the
+        user opted into. The assistant path uses ``get_selected_llm_engine()``, which reloads back
+        to the user's selected model on its next call, so this doesn't permanently hijack the engine.
+        """
+        engine = get_engine_if_initialized() or get_engine()
+        target = self._studio_model_id()
+        if engine is None or not target or getattr(self, "_studio_model_failed", False):
+            return engine
+        loaded = str(getattr(engine, "_loaded_model_id", "") or "").strip()
+        if loaded == target:
+            return engine
+        try:
+            # Force a real (re)start onto the target model. reload_model() now kills whatever
+            # llama-server holds the port first — even one we didn't start — so this actually
+            # swaps the model instead of reusing a wrong-model server still on the port.
+            self._log_step("model", "start",
+                           f"Loading the Studio model ({target}) for high-quality generation...")
+            engine.set_model_id(target)
+            engine.reload_model()
+            now_loaded = str(getattr(engine, "_loaded_model_id", "") or "").strip()
+            if now_loaded != target:
+                # The big model didn't come up (e.g. out of VRAM). Don't thrash the sidecar on every
+                # call for the rest of this run — degrade to whatever is available.
+                self._studio_model_failed = True
+                self._log_step("model", "warning",
+                               f"Studio model {target} failed to start — continuing on the current model.")
+                return engine
+            # Recompute the generation profile (batch sizes + token budgets) for the new tier.
+            self.model_status["model_id"] = target
+            self._profile = studio_generation.get_generation_profile(target)
+            self._log_step("model", "complete", f"Studio model {target} ready.")
+        except Exception as e:
+            self._studio_model_failed = True
+            logger.warning(f"Could not load Studio model {target}: {e}")
+            self._log_step("model", "warning", f"Keeping current model ({e}).")
+        return engine
+
+    def _free_llm_for_media(self, reason="media generation"):
+        """Unload the LLM sidecar to free VRAM before a heavy media model (TTS / music / image)
+        loads. Those models load onto the SAME GPU; if the 12B stays resident they fight for VRAM
+        and the media model OOMs (the ACE-Step 'failed' you saw). The next LLM stage lazily
+        restarts the sidecar via ensure_ready()."""
+        try:
+            from llm_engine import get_engine_if_initialized
+            eng = get_engine_if_initialized()
+            if eng is not None and getattr(eng, "_loaded_model_id", None):
+                self._log_step("model", "start", f"Unloading the LLM to free VRAM for {reason}...")
+                eng.unload()
+                # Let a later LLM stage reload cleanly (clear the 'gave up on the big model' latch).
+                self._studio_model_failed = False
+        except Exception as e:
+            logger.warning(f"Could not unload LLM before {reason}: {e}")
+
     def _call_llm_with_fallback(self, prompt, system_prompt, fallback_data_func, max_output_tokens=None):
         """Thin adapter that calls LLMEngine and falls back gracefully to mocks if needed."""
         if "AGENTIC CONSTRAINTS" not in system_prompt:
@@ -439,8 +531,8 @@ class StudioWorkflowRunner:
         engine = None
         self.model_status["llm_attempted"] = True
         try:
-            # Check if LLMEngine is initialized/active
-            engine = get_engine_if_initialized() or get_engine()
+            # Switch the shared engine to the big Studio model (once) before use.
+            engine = self._ensure_studio_engine()
             self.model_status["model_id"] = getattr(engine, "model_id", None)
         except Exception as e:
             logger.warning(f"Could not initialize LLMEngine: {e}")
@@ -579,23 +671,35 @@ class StudioWorkflowRunner:
             return None
         text_strip = text.strip()
 
+        # Strip a leading/trailing markdown code fence (```json ... ```), which models love to add
+        # and which defeats a direct json.loads.
+        fence = re.match(r"^```(?:json|JSON)?\s*(.*?)\s*```$", text_strip, re.DOTALL)
+        if fence:
+            text_strip = fence.group(1).strip()
+        else:
+            text_strip = re.sub(r"^```(?:json|JSON)?\s*", "", text_strip).strip()
+
         # 1. Direct try
         try:
             return json.loads(text_strip)
         except json.JSONDecodeError:
             pass
 
-        # Find first brace and bracket
+        # 2. Walk from the first structural char: returns the first COMPLETE top-level value (so
+        # prose wrapped around valid JSON works), or — if the tail was cut off by a token limit —
+        # balances the open brackets to recover the largest valid prefix (the common large-schema
+        # truncation that otherwise drops the keystone understanding to the procedural skeleton).
+        salvaged = self._salvage_json(text_strip)
+        if salvaged is not None:
+            return salvaged
+
+        # 3. Last resort: greedy substring between the outermost braces/brackets.
         first_bracket = text_strip.find('[')
         first_brace = text_strip.find('{')
-
-        # Determine check order
-        stages = []
         if first_bracket != -1 and (first_brace == -1 or first_bracket < first_brace):
             stages = [r"(\[.*\])", r"(\{.*\})"]
         else:
             stages = [r"(\{.*\})", r"(\[.*\])"]
-
         for pattern in stages:
             try:
                 match = re.search(pattern, text_strip, re.DOTALL)
@@ -603,8 +707,55 @@ class StudioWorkflowRunner:
                     return json.loads(match.group(1))
             except json.JSONDecodeError:
                 pass
-
         return None
+
+    def _salvage_json(self, s):
+        """Recover a JSON value from ``s`` by scanning bracket/string state from the first
+        structural char. Returns the first complete top-level value if one closes; otherwise
+        repairs a truncated tail (close a dangling string, drop a partial trailing token, append
+        the missing closers). Returns the parsed value or None."""
+        starts = [i for i in (s.find('{'), s.find('[')) if i != -1]
+        if not starts:
+            return None
+        start = min(starts)
+        stack, in_str, escape = [], False, False
+        for i in range(start, len(s)):
+            c = s[i]
+            if in_str:
+                if escape:
+                    escape = False
+                elif c == '\\':
+                    escape = True
+                elif c == '"':
+                    in_str = False
+                continue
+            if c == '"':
+                in_str = True
+            elif c == '{':
+                stack.append('}')
+            elif c == '[':
+                stack.append(']')
+            elif c in '}]':
+                if stack:
+                    stack.pop()
+                if not stack:
+                    # First complete top-level value closed here — trailing prose (if any) is ignored.
+                    try:
+                        return json.loads(s[start:i + 1])
+                    except json.JSONDecodeError:
+                        return None
+
+        # Never closed -> truncated. Repair the tail.
+        repaired = s[start:]
+        if in_str:
+            repaired += '"'
+        # Drop a dangling trailing comma or a partial '"key":' with no value before closing.
+        repaired = re.sub(r'(,|:\s*"?[\w .\-]*)?\s*$', '', repaired.rstrip()).rstrip().rstrip(',')
+        repaired += ''.join(reversed(stack))
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            return None
 
     def run_director_exploration(self, page_size=20):
         """Phase 1: read-only exploration of regions, skins, POIs, and action chains."""
@@ -1127,6 +1278,11 @@ class StudioWorkflowRunner:
         mode, source_story = self._resolve_source(seed_text, mode, source_story)
         self.state = "intake"
         self._persist_source(mode, source_story)
+        # Remember the raw seed so a project can be regenerated later without re-typing it.
+        try:
+            memory.set_user_preference(self.project_name, self.project_id, "seed_text", seed_text or "")
+        except Exception:
+            pass
 
         if mode == MODE_ADAPT:
             self._log_step("intake", "start", f"Adapting existing story ({len(source_story or '')} chars)...")
@@ -1481,6 +1637,7 @@ class StudioWorkflowRunner:
                 "character_arc": arc,
                 "speech_style": studio_generation.sentence_safe_trim(
                     dossier.get("voice") or seed.get("grounding") or "Clipped, dry, says less than they mean.", 140),
+                "key_lines": dossier.get("key_lines") or [],
                 "visual": {
                     "face": "lived-in, alert eyes", "hair": "unfussed, practical",
                     "build": "average, tense", "outfit": "worn everyday clothes that fit the world",
@@ -1981,6 +2138,7 @@ class StudioWorkflowRunner:
         scenes = bible.get("scenes") or []
         if not scenes:
             return {"ok": False, "error": "No scenes to voice. Run scenes first."}
+        self._free_llm_for_media("voice synthesis")
 
         # Map each speaker -> a voice id from their bible voice_profile when present.
         by_name = {}
@@ -1993,10 +2151,15 @@ class StudioWorkflowRunner:
             return by_name.get(str(speaker or "").lower())
 
         self._log_step("voicing", "start", f"Voicing {len(scenes)} scenes...")
-        synth = studio_audio.kokoro_synth(self.project_name)  # None -> unavailable, graceful
+        # Prefer the premium Chatterbox model when it's downloaded; else the local Kokoro path;
+        # else None -> beats are marked unavailable and the player reads with browser speech.
+        synth = studio_audio.best_synth(self.project_name)
+        prefs = memory.get_user_preferences(self.project_name, self.project_id)
+        voice_volume = _as_float(prefs.get("voice_volume"), 1.0)
         scenes, status = studio_audio.synthesize_scenes(
             self.project_name, self.project_id, scenes, synth=synth, voice_for=voice_for,
-            force=force, progress=lambda m: self._progress("voicing", m))
+            force=force, gain=voice_volume, progress=lambda m: self._progress("voicing", m))
+        studio_audio.release_cuda()  # free the in-process TTS VRAM for the next media stage
         try:
             bible = memory.get_bible(self.project_name, self.project_id)
             bible["scenes"] = scenes
@@ -2005,10 +2168,17 @@ class StudioWorkflowRunner:
                                            produced_by="sound")
         except Exception as e:
             logger.warning(f"Could not persist voiced scenes: {e}")
-        self._log_step("voicing", "complete",
-                       f"Voiced {status['done']}/{status['total']} beats "
-                       f"({'TTS available' if status['synth_available'] else 'no TTS — browser fallback'}).",
-                       status)
+        # Honest status: "available but voiced 0" almost always means a missing TTS dependency
+        # (the chatterbox-tts / soundfile packages), not a content problem — say so.
+        if status["synth_available"] and status["total"] and status["done"] == 0:
+            status["warning"] = ("A TTS engine was found but every beat failed — usually a missing "
+                                 "package. Install it: pip install chatterbox-tts soundfile")
+            self._log_step("voicing", "warning", status["warning"], status)
+        else:
+            self._log_step("voicing", "complete",
+                           f"Voiced {status['done']}/{status['total']} beats "
+                           f"({'TTS available' if status['synth_available'] else 'no TTS — browser fallback'}).",
+                           status)
         return {"ok": True, "scenes": scenes, **status}
 
     def run_render_images(self, force=False):
@@ -2024,12 +2194,22 @@ class StudioWorkflowRunner:
         scenes = bible.get("scenes") or []
         if not scenes:
             return {"ok": False, "error": "No scenes to render. Run scenes first."}
+        self._free_llm_for_media("image rendering")
         # Visual Prompt Compiler: turn each scene + the world/character bibles into a reproducible
         # PromptPacket (positive/negative + model/steps/cfg/seed) attached as scene['prompt_packet'].
         world_data = bible.get("world") or {}
         characters = memory.get_characters(self.project_name, self.project_id)
         prefs = memory.get_user_preferences(self.project_name, self.project_id)
         model_profile = prefs.get("image_model_profile") or {}
+        import utils
+        app_prefs = utils.load_profile(utils.get_last_active_profile())
+        res_str = app_prefs.get("studio_image_resolution", "768x768")
+        try:
+            w, h = map(int, res_str.lower().split("x"))
+            model_profile["width"] = w
+            model_profile["height"] = h
+        except Exception:
+            pass
         studio_prompt_compiler.compile_for_scenes(scenes, world_data, characters, model_profile)
 
         # Self-install the in-process image backend if one is configured + available (diffusers +
@@ -2060,6 +2240,68 @@ class StudioWorkflowRunner:
                        f"(renderer {'available' if status['renderer_available'] else 'not configured'}).",
                        status)
         return {"ok": True, "scenes": scenes, **status}
+
+    def run_scene_ambience(self, force=False):
+        """Render per-scene ambience/SFX loops with Stable Audio Open Small."""
+        self.state = "ambience"
+        bible = memory.get_bible(self.project_name, self.project_id)
+        scenes = bible.get("scenes") or []
+        if not scenes:
+            return {"ok": False, "error": "No scenes for ambience. Run scenes first."}
+        self._free_llm_for_media("ambience rendering")
+        prefs = memory.get_user_preferences(self.project_name, self.project_id)
+        renderer = None
+        try:
+            renderer = studio_ambience.make_ambience_backend(prefs.get("ambience_settings") or prefs)
+        except Exception as e:
+            logger.warning(f"Ambience backend install skipped: {e}")
+        self._log_step("ambience", "start", f"Rendering ambience for {len(scenes)} scenes...")
+        scenes, status = studio_ambience.render_scene_ambience(
+            self.project_name, self.project_id, scenes,
+            world=bible.get("world") or {}, renderer=renderer, force=force,
+            progress=lambda m: self._progress("ambience", m))
+        try:
+            bible = memory.get_bible(self.project_name, self.project_id)
+            bible["scenes"] = scenes
+            memory.save_bible(self.project_name, self.project_id, bible)
+            studio_blackboard.put_artifact(self.project_name, self.project_id, "scenes", scenes,
+                                           produced_by="ambience")
+        except Exception as e:
+            logger.warning(f"Could not persist ambience scenes: {e}")
+        self._log_step(
+            "ambience", "complete",
+            f"Rendered ambience for {status['done']}/{status['total']} scenes "
+            f"({'Stable Audio available' if status['renderer_available'] else 'no ambience backend'}).",
+            status)
+        return {"ok": True, "scenes": scenes, **status}
+
+    def run_project_music(self, force=False):
+        """Render an instrumental score cue with ACE-Step."""
+        self.state = "music"
+        bible = memory.get_bible(self.project_name, self.project_id)
+        scenes = bible.get("scenes") or []
+        if not scenes:
+            return {"ok": False, "error": "No scenes for music. Run scenes first."}
+        # Free both the LLM and any in-process TTS model (Chatterbox) so ACE-Step gets the GPU.
+        self._free_llm_for_media("music rendering")
+        studio_audio.release_cuda()
+        prefs = memory.get_user_preferences(self.project_name, self.project_id)
+        renderer = None
+        try:
+            renderer = studio_music.make_music_backend(prefs.get("music_settings") or prefs)
+        except Exception as e:
+            logger.warning(f"Music backend install skipped: {e}")
+        self._log_step("music", "start", "Rendering project score cue...")
+        result = studio_music.render_project_music(
+            self.project_name, self.project_id, scenes,
+            blueprint=bible.get("scene_blueprint") or {}, world=bible.get("world") or {},
+            renderer=renderer, force=force)
+        self._log_step(
+            "music", "complete",
+            f"Music status: {result.get('music_status')} "
+            f"({'ACE-Step available' if result.get('renderer_available') else 'no music backend'}).",
+            result)
+        return result
 
     def regenerate_scene(self, scene_id, target="all", feedback=""):
         """Per-scene reject/refine: rewrite one scene's script and/or image, leaving the
@@ -2101,6 +2343,8 @@ class StudioWorkflowRunner:
         if target in ("image", "all"):
             old["image_prompt"] = fresh["image_prompt"]
             old["negative_prompt"] = fresh["negative_prompt"]
+            old["image_rerolls"] = old.get("image_rerolls", 0) + 1
+            old["image_status"] = "queued"
         old["status"] = "draft"
         scenes[idx] = old
 
@@ -2705,3 +2949,24 @@ class StudioWorkflowRunner:
                 "error": str(e),
                 "model_status": self.model_status,
             }
+
+    def regenerate_project(self, seed_text=None):
+        """Re-run the WHOLE pipeline on this existing project — a testing aid so a saved project can
+        be rebuilt (e.g. after fixing the model) in one click instead of re-typing the seed.
+
+        Recovers the original mode + seed/source from memory. Intake replaces the bible on the way
+        through, so the story_understanding/blueprint/scenes are all re-grounded from scratch (no
+        stale fallback spine carried over)."""
+        self._load_source()
+        mode, source_story = self.mode, self.source_story
+        prefs = memory.get_user_preferences(self.project_name, self.project_id)
+        seed = seed_text or source_story or prefs.get("seed_text") or ""
+        if not seed:
+            premise = (memory.get_bible(self.project_name, self.project_id) or {}).get("premise") or {}
+            seed = premise.get("premise") or premise.get("title") or ""
+        if not seed:
+            return {"ok": False, "error": "No stored seed/source to regenerate from.",
+                    "model_status": self.model_status}
+        self._understanding_cache = None
+        self._log_step("pipeline", "start", f"Regenerating project from saved seed (mode={mode})...")
+        return self.run_full_pipeline(seed, mode=mode, source_story=source_story)

@@ -436,8 +436,56 @@ def _find_server_pid_on_port(port: int):
                     continue
         except Exception:
             return None
+        return None
 
+    # POSIX (Linux/macOS): try lsof, then ss, then fuser.
+    try:
+        out = subprocess.run(["lsof", "-t", f"-iTCP:{target}", "-sTCP:LISTEN"],
+                             capture_output=True, text=True, timeout=5).stdout
+        for tok in out.split():
+            try:
+                return int(tok)
+            except ValueError:
+                continue
+    except Exception:
+        pass
+    try:
+        out = subprocess.run(["ss", "-tlnpH", f"sport = :{target}"],
+                             capture_output=True, text=True, timeout=5).stdout
+        m = re.search(r"pid=(\d+)", out)
+        if m:
+            return int(m.group(1))
+    except Exception:
+        pass
+    try:
+        out = subprocess.run(["fuser", f"{target}/tcp"],
+                             capture_output=True, text=True, timeout=5).stdout
+        for tok in out.split():
+            try:
+                return int(tok)
+            except ValueError:
+                continue
+    except Exception:
+        pass
     return None
+
+
+def _kill_pid(pid):
+    """Terminate a PID cross-platform: SIGTERM then SIGKILL on POSIX, taskkill on Windows."""
+    if not pid:
+        return
+    if os.name == "nt":
+        try:
+            subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, text=True)
+        except Exception:
+            pass
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.kill(pid, sig)
+        except (OSError, ProcessLookupError):
+            return
+        time.sleep(0.8)
 
 
 def kill_all_servers():
@@ -578,7 +626,11 @@ class LLMEngine:
             server_exe,
             "--model", model_path,
             "--port", str(self.port),
-            "--ctx-size", os.getenv("BETTERFINGERS_LLM_CTX_SIZE", "4096"),
+            # 4096 was too small: it's the TOTAL (input + output) window, so long Studio prompts
+            # (a 23k-char manuscript ≈ 6k tokens) plus a multi-thousand-token structured response
+            # overflowed it — the response truncated mid-JSON and fell back. A bigger window also
+            # means the KV cache actually scales with the work (more GPU used, as intended).
+            "--ctx-size", os.getenv("BETTERFINGERS_LLM_CTX_SIZE", "16384"),
             "--n-gpu-layers", os.getenv("BETTERFINGERS_LLM_GPU_LAYERS", "99"),
             "--threads", os.getenv("BETTERFINGERS_LLM_THREADS", str(max(1, min(os.cpu_count() or 4, 8)))),
             "--batch-size", os.getenv("BETTERFINGERS_LLM_BATCH_SIZE", "512"),
@@ -748,15 +800,52 @@ class LLMEngine:
                 pass
             LLMEngine._stderr_log = None
 
+    def _stop_server_on_port(self):
+        """Stop whatever llama-server is bound to our port — even one this process did NOT start —
+        so a model switch actually replaces the running model. The previous behavior returned early
+        for a 'reused' (non-owned) server and never killed it, so on Linux a reload silently kept
+        the old model. Clears all engine state afterward."""
+        if LLMEngine._owns_process and (LLMEngine._process or LLMEngine._process_pid):
+            self.shutdown()
+        # Anything still holding the port (reused/external) — hunt the PID and kill it.
+        deadline = time.time() + 12
+        while is_server_running() and time.time() < deadline:
+            pid = LLMEngine._process_pid or _find_server_pid_on_port(self.port)
+            if pid:
+                logging.info(f"Stopping llama-server (PID {pid}) to switch models...")
+                _kill_pid(pid)
+            else:
+                # Couldn't resolve a PID (no lsof/ss/fuser?) — last resort, free the port.
+                if os.name != "nt":
+                    try:
+                        subprocess.run(["fuser", "-k", f"{self.port}/tcp"],
+                                       capture_output=True, text=True, timeout=5)
+                    except Exception:
+                        pass
+            time.sleep(1)
+        LLMEngine._process = None
+        LLMEngine._process_pid = None
+        LLMEngine._owns_process = False
+        LLMEngine._ready = False
+        LLMEngine._loaded_model_id = None
+
     def reload_model(self):
-        """
-        Shutdown and restart the server (e.g. after model config change).
-        """
-        logging.info("Reloading LLM Engine model...")
-        self.shutdown()
-        # Sleep briefly to ensure port release
+        """Restart the sidecar onto the CURRENT ``model_id``, even if a server is already running on
+        the port. A model switch MUST replace the running model — the old behavior reused the
+        running server and silently kept the previous model (so heavy Studio stages stayed on the
+        small assistant model)."""
+        logging.info(f"Reloading LLM Engine model -> {getattr(self, 'model_id', None)}...")
+        self._stop_server_on_port()
         time.sleep(1)
-        self._setup_server()
+        # Start fresh directly (bypasses _setup_server's 'reuse running server' short-circuit).
+        self._start_server()
+
+    def unload(self):
+        """Stop the sidecar and free its VRAM WITHOUT restarting. Used before heavy media models
+        (Chatterbox TTS / ACE-Step music / Stable Audio / image diffusers) run, so they don't fight
+        the LLM for the GPU. The next LLM call lazily restarts the server via ensure_ready()."""
+        logging.info("Unloading LLM to free VRAM...")
+        self._stop_server_on_port()
 
     def ensure_ready(self):
         """

@@ -453,6 +453,112 @@ h1 {
   align-items: start;
 }
 
+.download-center {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid rgba(159, 177, 203, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.download-center-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.download-center-header h3 {
+  margin: 2px 0 6px;
+}
+
+.download-center-header p:not(.eyebrow) {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.download-center-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.download-center-list {
+  display: grid;
+  gap: 10px;
+}
+
+.download-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 14px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid rgba(159, 177, 203, 0.14);
+  border-radius: 8px;
+  background: rgba(4, 12, 22, 0.42);
+}
+
+.download-card-main {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.download-card-title {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.download-card-title strong {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.download-pill {
+  border: 1px solid rgba(159, 177, 203, 0.2);
+  border-radius: 999px;
+  padding: 2px 7px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.download-pill[data-tone='success'] {
+  border-color: rgba(102, 242, 193, 0.34);
+  color: var(--accent);
+}
+
+.download-pill[data-tone='warning'] {
+  border-color: rgba(255, 200, 107, 0.34);
+  color: #ffc86b;
+}
+
+.download-pill[data-tone='danger'] {
+  border-color: rgba(255, 124, 135, 0.36);
+  color: #ff7c87;
+}
+
+.download-card small {
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.download-card-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.download-card .model-progress-track {
+  grid-column: 1 / -1;
+}
+
 .model-panel {
   display: grid;
   gap: 14px;
@@ -813,6 +919,20 @@ h1 {
   .model-manager-grid,
   .studio-model-role-grid {
     grid-template-columns: 1fr;
+  }
+
+  .download-center-header,
+  .download-card {
+    grid-template-columns: 1fr;
+  }
+
+  .download-center-header {
+    display: grid;
+  }
+
+  .download-center-actions,
+  .download-card-actions {
+    justify-content: flex-start;
   }
 
   .model-detail-grid {

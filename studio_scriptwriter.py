@@ -74,10 +74,15 @@ def build_voice_guide(characters, understanding=None):
     for ch in characters or []:
         if not isinstance(ch, dict) or not ch.get("name"):
             continue
+        # Key lines can live in ch["key_lines"], ch["bible"]["key_lines"], or ch["metadata"]["bible"]["key_lines"]
+        key_lines = (ch.get("key_lines") 
+                     or (ch.get("bible") or {}).get("key_lines") 
+                     or (ch.get("metadata") or {}).get("bible", {}).get("key_lines") 
+                     or [])
         guide[str(ch["name"]).lower()] = {
             "name": ch["name"],
             "voice": ch.get("speech_style") or ch.get("voice") or "natural, in-character",
-            "samples": [l for l in (ch.get("key_lines") or (ch.get("bible") or {}).get("key_lines") or []) if l][:3],
+            "samples": [l for l in key_lines if l][:3],
         }
     # Backfill from dossiers for any character the bible step didn't expand.
     for d in (understanding or {}).get("character_dossiers", []):
@@ -332,7 +337,12 @@ def _sentences(text):
 def _first_key_line(ch):
     if not isinstance(ch, dict):
         return ""
-    for src in (ch.get("key_lines"), (ch.get("bible") or {}).get("key_lines")):
+    sources = (
+        ch.get("key_lines"),
+        (ch.get("bible") or {}).get("key_lines"),
+        (ch.get("metadata") or {}).get("bible", {}).get("key_lines")
+    )
+    for src in sources:
         if isinstance(src, list) and src:
             for line in src:
                 if str(line or "").strip():
