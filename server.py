@@ -9,6 +9,7 @@ from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+import typing
 import pyperclip
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,12 +36,15 @@ from model_manager import (
     check_and_download_resources,
     delete_model,
     get_download_state,
+    get_model_file_status,
     get_model_path,
     get_models_dir,
     get_repo_local_server_path,
     get_server_path,
     is_ready as is_llm_model_ready,
     check_model_exists,
+    required_llama_server_build,
+    validate_llama_server_runtime,
 )
 # Configure Logging
 from transcriber import (
@@ -68,6 +72,8 @@ if __name__ != "__main__":
     setup_logging(level="INFO")
 
 app = FastAPI(title="BetterFingers Sidecar")
+_llm_download_jobs = {}
+_llm_download_jobs_lock = threading.Lock()
 
 # CORS - Allow Electron to communicate
 app.add_middleware(
@@ -457,7 +463,7 @@ def stop_hotkey_manager():
     hotkey_manager_started = False
 
 # Status Broadcaster
-async def broadcast_status(status: str, data: dict = None):
+async def broadcast_status(status: str, data: typing.Optional[dict] = None):
     """
     Status: 'listening', 'thinking', 'speaking', 'idle'
     """
@@ -477,7 +483,7 @@ async def broadcast_status(status: str, data: dict = None):
             active_websockets.remove(ws)
 
 
-def broadcast_status_threadsafe(status: str, data: dict = None):
+def broadcast_status_threadsafe(status: str, data: typing.Optional[dict] = None):
     if not loop or loop.is_closed():
         logging.warning("Loop not ready for broadcast")
         return
@@ -653,7 +659,7 @@ def perform_output_action(text, action="copy_only", open_chat=False):
     if requested_action == "copy_only":
         result = copy_text_to_clipboard(final_text)
         payload.update(result)
-        payload["actual_action"] = result.get("actual_action") or result.get("action") or "copy_only"
+        payload["actual_action"] = str(result.get("actual_action") or result.get("action") or "copy_only")
         payload["clipboard_result"] = dict(result)
         return payload
 
@@ -796,7 +802,7 @@ def speak_text_aloud(text: str):
 
     engine = ensure_tts_initialized()
     if engine is not None:
-        engine._kokoro_quantization = quantization
+        setattr(engine, "_kokoro_quantization", quantization)
         logging.info(f"Speaking text aloud: '{phrase[:30]}...' (voice={voice_id}, speed={speed}x, quant={quantization})")
         engine.speak(phrase, speed=speed, voice_hint=voice_id)
 
@@ -830,7 +836,7 @@ def handle_review_tts_shortcut():
         result = {"ok": False, "text": "", "message": f"Selection capture failed: {exc}"}
 
     if result.get("ok"):
-        text = result.get("text", "").strip()
+        text = str(result.get("text", "")).strip()
         if text:
             speak_text_aloud(text)
 
@@ -859,7 +865,7 @@ def handle_primary_action():
         result = {"ok": False, "text": "", "message": f"Selection capture failed: {exc}", "error": str(exc)}
 
     if result.get("ok"):
-        text = result.get("text", "").strip()
+        text = str(result.get("text", "")).strip()
         if text:
             speak_text_aloud(text)
 
@@ -1392,13 +1398,51 @@ async def run_doctor(refresh_audio: bool = False):
 
     # LLM details
     selected_model_id = model_id or get_selected_llm_model_id()
+    llama_server_path = str(get_server_path())
+    llama_server_exists = os.path.exists(llama_server_path)
+    model_exists = check_model_exists(selected_model_id)
+    runtime_validation = (
+        validate_llama_server_runtime(llama_server_path)
+        if llama_server_exists
+        else {"ok": False, "message": "llama-server binary is missing."}
+    )
+    required_runtime_build = required_llama_server_build(selected_model_id)
+    runtime_build = runtime_validation.get("build")
+    runtime_build_ok = (
+        not required_runtime_build
+        or (runtime_build is not None and int(runtime_build) >= required_runtime_build)
+    )
+    llm_last_error = str(getattr(engine, "_last_error", "") or "") if engine else ""
+    if not llama_server_exists:
+        llm_runtime_status = "missing_llama_server"
+    elif not model_exists:
+        llm_runtime_status = "missing_model"
+    elif not runtime_validation.get("ok", False):
+        llm_runtime_status = "runtime_link_failure"
+    elif not runtime_build_ok:
+        llm_runtime_status = "runtime_outdated"
+    elif engine_ready:
+        llm_runtime_status = "ready"
+    elif llm_last_error:
+        llm_runtime_status = "startup_failure"
+    else:
+        llm_runtime_status = "not_loaded"
+
     llm_info = {
         "initialized": engine is not None,
         "ready": engine_ready,
         "model_id": selected_model_id,
-        "llama_server_path": str(get_server_path()),
-        "llama_server_exists": os.path.exists(get_server_path()),
-        "model_exists": check_model_exists(selected_model_id),
+        "llama_server_path": llama_server_path,
+        "llama_server_exists": llama_server_exists,
+        "model_exists": model_exists,
+        "runtime_status": llm_runtime_status,
+        "runtime_valid": bool(runtime_validation.get("ok", False)),
+        "runtime_compatible": bool(runtime_validation.get("ok", False) and runtime_build_ok),
+        "runtime_build": runtime_build,
+        "required_runtime_build": required_runtime_build,
+        "runtime_message": runtime_validation.get("message", ""),
+        "last_error": llm_last_error,
+        "last_error_details": dict(getattr(engine, "_last_error_details", {}) or {}) if engine else {},
     }
 
     # TTS details
@@ -1443,6 +1487,8 @@ async def run_doctor(refresh_audio: bool = False):
     recovery_guidelines = {
         "missing_model": "Go to the Models screen to download the recommended LLM or Whisper models, or verify that the GGUF/Whisper files exist in the models directory.",
         "missing_llama_server": "llama-server binary could not be found. If you are on Linux, please compile or install llama-server and set the BETTERFINGERS_LLAMA_SERVER environment variable.",
+        "runtime_link_failure": "llama-server exists, but its shared runtime libraries are incomplete. Reinstall the runtime or repair the Linux .so symlinks in the models directory.",
+        "runtime_outdated": "The selected model requires a newer llama.cpp runtime. Download or reinstall the LLM runtime from the Models screen.",
         "port_conflict": "Port 8000 is occupied by another process. Please close the conflicting application or configure a different port.",
         "microphone_unavailable": "No input audio devices were detected, or microphone permission was denied. Please connect a microphone and ensure BetterFingers has permission to access it.",
         "unsupported_wayland_injection": "Typing and pasting injection are not supported under Wayland. BetterFingers has safely fallen back to copying text to the clipboard.",
@@ -1514,7 +1560,7 @@ async def runtime_status():
 
 @app.get("/runtime/output-settings")
 async def runtime_output_settings():
-    settings = get_profile_output_settings()
+    settings: typing.Dict[str, typing.Any] = dict(get_profile_output_settings())
     settings["pending_manual_send_ids"] = list(pending_manual_send_ids)
     settings["supported_actions"] = ["copy_only", "paste", "type", "open_chat_then_send"]
     settings["capabilities"] = get_capabilities()
@@ -1797,13 +1843,25 @@ async def list_llm_models():
     models = []
     for model_id, info in AVAILABLE_MODELS.items():
         model_path = get_model_path(model_id)
+        download_state = get_download_state(model_id)
+        file_status = get_model_file_status(model_id)
+        with _llm_download_jobs_lock:
+            job = _llm_download_jobs.get(model_id)
+            download_active = bool(job and job.is_alive())
+        download_state["active"] = download_active
+        download_state["file_status"] = file_status
         models.append(
             {
                 "id": model_id,
                 "selected": model_id == selected,
-                "installed": os.path.exists(model_path),
+                "installed": check_model_exists(model_id),
                 "ready": is_llm_model_ready(model_id),
                 "path": model_path,
+                "file_status": file_status,
+                "download_state": download_state,
+                "download_active": download_active,
+                "partial_bytes": download_state.get("partial_bytes", 0),
+                "resumable": bool(download_state.get("resumable")),
                 **info,
             }
         )
@@ -1834,21 +1892,68 @@ async def select_llm_model(request: LlmModelSelectRequest):
 def download_llm_model(model_id: str):
     if model_id not in AVAILABLE_MODELS:
         raise HTTPException(status_code=400, detail="Unsupported LLM model")
-    result = check_and_download_resources(model_id)
-    return {"model_id": model_id, **(result if isinstance(result, dict) else {"ok": bool(result)})}
+    with _llm_download_jobs_lock:
+        job = _llm_download_jobs.get(model_id)
+        if job and job.is_alive():
+            state = get_download_state(model_id)
+            return {
+                "ok": True,
+                "model_id": model_id,
+                "background": True,
+                "already_running": True,
+                "message": state.get("message") or "Download is already running in the background.",
+                "state": state,
+            }
+
+        def run_download():
+            try:
+                check_and_download_resources(model_id)
+            except Exception as exc:
+                logging.error("Background LLM download failed for %s: %s", model_id, exc)
+            finally:
+                with _llm_download_jobs_lock:
+                    current = _llm_download_jobs.get(model_id)
+                    if current is threading.current_thread():
+                        _llm_download_jobs.pop(model_id, None)
+
+        thread = threading.Thread(target=run_download, name=f"llm-download-{model_id}", daemon=True)
+        _llm_download_jobs[model_id] = thread
+        thread.start()
+
+    return {
+        "ok": True,
+        "model_id": model_id,
+        "background": True,
+        "message": f"Started background download for {AVAILABLE_MODELS[model_id]['name']}.",
+        "state": get_download_state(model_id),
+    }
 
 
 @app.delete("/models/llm/{model_id}")
 async def delete_llm_model(model_id: str):
     if model_id not in AVAILABLE_MODELS:
         raise HTTPException(status_code=400, detail="Unsupported LLM model")
+    with _llm_download_jobs_lock:
+        job = _llm_download_jobs.get(model_id)
+        if job and job.is_alive():
+            raise HTTPException(status_code=409, detail="That model is downloading. Wait for it to finish or restart the app before deleting it.")
     ok, message = delete_model(model_id)
     return {"ok": ok, "model_id": model_id, "message": message}
 
 
 @app.get("/models/llm/{model_id}/download-state")
 async def llm_download_state(model_id: str):
-    return get_download_state(model_id)
+    if model_id not in AVAILABLE_MODELS:
+        raise HTTPException(status_code=400, detail="Unsupported LLM model")
+    state = get_download_state(model_id)
+    state["file_status"] = get_model_file_status(model_id)
+    with _llm_download_jobs_lock:
+        job = _llm_download_jobs.get(model_id)
+        active = bool(job and job.is_alive())
+    state["active"] = active
+    if active and state.get("status") in (None, "", "error"):
+        state["status"] = "downloading"
+    return state
 
 
 @app.get("/models/whisper")
@@ -2561,7 +2666,7 @@ async def runtime_tts_toggle():
 
 @app.post("/runtime/warmup")
 async def runtime_warmup(request: RuntimeWarmupRequest):
-    result = {"requested": request.dict()}
+    result: typing.Dict[str, typing.Any] = {"requested": request.model_dump()}
 
     if request.stt:
         try:
@@ -2584,10 +2689,12 @@ async def runtime_warmup(request: RuntimeWarmupRequest):
     if request.llm:
         try:
             engine = get_selected_llm_engine()
+            ready = bool(getattr(engine, "_ready", False))
             result["llm"] = {
-                "ok": True,
+                "ok": ready,
                 "initialized": engine is not None,
-                "ready": bool(getattr(engine, "_ready", False)),
+                "ready": ready,
+                "error": "" if ready else str(getattr(engine, "_last_error", "") or ""),
             }
         except Exception as e:
             logging.exception("LLM warmup failure")
@@ -2857,7 +2964,7 @@ async def save_graph(data: GraphRequest):
         graph_path.parent.mkdir(parents=True, exist_ok=True)
         with open(graph_path, "w") as f:
             import json
-            json.dump(data.dict(), f)
+            json.dump(data.model_dump(), f)
         return {"status": "success"}
     except Exception as e:
         logging.error(f"Graph Save Error: {e}")
@@ -2896,8 +3003,8 @@ async def generate_plan(request: PlanRequest):
     if clean_text.endswith("```"):
         clean_text = clean_text[:-3]
     
+    import json
     try:
-        import json
         plan = json.loads(clean_text.strip())
         return plan
     except json.JSONDecodeError:

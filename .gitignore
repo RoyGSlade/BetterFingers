@@ -6,6 +6,7 @@ __pycache__/
 
 # Test/cache outputs
 .pytest_cache/
+.cache/
 .tmp_pip_meta/
 *.log
 
@@ -24,6 +25,11 @@ app/resources/backend/*
 .venv/
 venv/
 env/
+
+# Local secrets / machine-specific environment
+.env
+.env.*
+!.env.example
 
 # Repo-local runtime assets
 .betterfingers/
