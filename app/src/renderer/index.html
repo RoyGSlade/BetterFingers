@@ -46,15 +46,15 @@
       </div>
 
       <!-- Tab Navigation -->
-      <nav class="tab-nav" aria-label="Main Navigation">
-        <button id="tabButtonDashboard" class="tab-button active" type="button" data-tab="dashboard">Dashboard</button>
-        <button id="tabButtonSettings" class="tab-button" type="button" data-tab="settings">Settings</button>
-        <button id="tabButtonModels" class="tab-button" type="button" data-tab="models">Models</button>
-        <button id="tabButtonDiagnostics" class="tab-button" type="button" data-tab="diagnostics">Diagnostics & Doctor</button>
+      <nav class="tab-nav" aria-label="Main Navigation" role="tablist">
+        <button id="tabButtonDashboard" class="tab-button active" type="button" data-tab="dashboard" role="tab" aria-selected="true" aria-controls="tabDashboard" tabindex="0">Dashboard</button>
+        <button id="tabButtonSettings" class="tab-button" type="button" data-tab="settings" role="tab" aria-selected="false" aria-controls="tabSettings" tabindex="-1">Settings</button>
+        <button id="tabButtonModels" class="tab-button" type="button" data-tab="models" role="tab" aria-selected="false" aria-controls="tabModels" tabindex="-1">Models</button>
+        <button id="tabButtonDiagnostics" class="tab-button" type="button" data-tab="diagnostics" role="tab" aria-selected="false" aria-controls="tabDiagnostics" tabindex="-1">Diagnostics & Doctor</button>
       </nav>
 
       <!-- Dashboard Tab Content -->
-      <div id="tabDashboard" class="tab-content active">
+      <div id="tabDashboard" class="tab-content active" role="tabpanel" aria-labelledby="tabButtonDashboard" tabindex="0">
         <section class="status-grid" aria-label="Backend status">
           <article class="status-card">
             <span class="status-label">Backend</span>
@@ -169,7 +169,7 @@
       </div>
 
       <!-- Settings Tab Content -->
-      <div id="tabSettings" class="tab-content">
+      <div id="tabSettings" class="tab-content" role="tabpanel" aria-labelledby="tabButtonSettings" tabindex="0">
         <div class="settings-layout">
           <!-- Sidebar for Categories & Search -->
           <aside class="settings-sidebar">
@@ -905,7 +905,7 @@
       </div>
 
       <!-- Models Tab Content -->
-      <div id="tabModels" class="tab-content">
+      <div id="tabModels" class="tab-content" role="tabpanel" aria-labelledby="tabButtonModels" tabindex="0">
         <section class="stream-panel">
           <div class="panel-header">
             <div>
@@ -1003,7 +1003,7 @@
       </div>
 
       <!-- Diagnostics Tab Content -->
-      <div id="tabDiagnostics" class="tab-content">
+      <div id="tabDiagnostics" class="tab-content" role="tabpanel" aria-labelledby="tabButtonDiagnostics" tabindex="0">
         <!-- Centralized Doctor Checkup Panel -->
         <section class="stream-panel">
           <div class="panel-header">

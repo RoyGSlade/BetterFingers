@@ -3405,25 +3405,47 @@ document.addEventListener('keydown', async (event) => {
 const tabButtons = document.querySelectorAll('.tab-button');
 const tabContents = document.querySelectorAll('.tab-content');
 
-tabButtons.forEach((button) => {
-  button.addEventListener('click', () => {
-    const targetTab = button.dataset.tab;
+function activateTab(button, { focus = false } = {}) {
+  const targetTab = button.dataset.tab;
 
-    tabButtons.forEach((btn) => btn.classList.remove('active'));
-    button.classList.add('active');
+  tabButtons.forEach((btn) => {
+    const isActive = btn === button;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    // Roving tabindex: only the active tab is in the Tab order.
+    btn.tabIndex = isActive ? 0 : -1;
+  });
 
-    tabContents.forEach((content) => {
-      if (content.id === `tab${targetTab.charAt(0).toUpperCase() + targetTab.slice(1)}`) {
-        content.classList.add('active');
-      } else {
-        content.classList.remove('active');
-      }
-    });
+  tabContents.forEach((content) => {
+    content.classList.toggle(
+      'active',
+      content.id === `tab${targetTab.charAt(0).toUpperCase() + targetTab.slice(1)}`,
+    );
+  });
 
-    if (targetTab === 'diagnostics') {
-      refreshDiagnostics().catch(() => {});
-      refreshDoctor().catch(() => {});
-    }
+  if (focus) {
+    button.focus();
+  }
+
+  if (targetTab === 'diagnostics') {
+    refreshDiagnostics().catch(() => {});
+    refreshDoctor().catch(() => {});
+  }
+}
+
+tabButtons.forEach((button, index) => {
+  button.addEventListener('click', () => activateTab(button));
+
+  // Arrow-key navigation per the ARIA tabs pattern.
+  button.addEventListener('keydown', (event) => {
+    let nextIndex = null;
+    if (event.key === 'ArrowRight') nextIndex = (index + 1) % tabButtons.length;
+    else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + tabButtons.length) % tabButtons.length;
+    else if (event.key === 'Home') nextIndex = 0;
+    else if (event.key === 'End') nextIndex = tabButtons.length - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    activateTab(tabButtons[nextIndex], { focus: true });
   });
 });
 
