@@ -1,7 +1,45 @@
 const path = require('node:path');
-const { BrowserWindow } = require('electron');
+const fs = require('node:fs');
+const { BrowserWindow, app } = require('electron');
 
 let mainWindow = null;
+
+const OVERLAY_SIZE = { width: 220, height: 54 };
+
+function overlayPositionFile() {
+  return path.join(app.getPath('userData'), 'overlay-position.json');
+}
+
+function readSavedOverlayPosition() {
+  try {
+    const raw = fs.readFileSync(overlayPositionFile(), 'utf8');
+    const pos = JSON.parse(raw);
+    if (Number.isFinite(pos?.x) && Number.isFinite(pos?.y)) {
+      return { x: Math.round(pos.x), y: Math.round(pos.y) };
+    }
+  } catch (error) {
+    // No saved position yet, or it's unreadable — fall back to the default.
+  }
+  return null;
+}
+
+function saveOverlayPosition(x, y) {
+  try {
+    fs.writeFileSync(overlayPositionFile(), JSON.stringify({ x, y }));
+  } catch (error) {
+    // Non-fatal: the overlay just won't remember its spot this run.
+  }
+}
+
+// True only if the point sits inside some display's work area (so a saved
+// position on a since-disconnected monitor doesn't strand the overlay offscreen).
+function isPositionOnScreen(x, y) {
+  const { screen } = require('electron');
+  return screen.getAllDisplays().some((display) => {
+    const { x: dx, y: dy, width, height } = display.workArea;
+    return x >= dx && y >= dy && x + OVERLAY_SIZE.width <= dx + width + 1 && y + OVERLAY_SIZE.height <= dy + height + 1;
+  });
+}
 
 function resolvePreloadPath() {
   return path.join(__dirname, '../preload/preload.js');
@@ -82,10 +120,29 @@ function createOverlayWindow() {
     },
   });
 
+  // Restore the last dragged position if it's still on a connected display;
+  // otherwise default to the bottom-right corner of the primary display.
   const { screen } = require('electron');
-  const primaryDisplay = screen.getPrimaryDisplay();
-  const { width, height } = primaryDisplay.workAreaSize;
-  overlayWindow.setPosition(width - 240, height - 74);
+  const saved = readSavedOverlayPosition();
+  if (saved && isPositionOnScreen(saved.x, saved.y)) {
+    overlayWindow.setPosition(saved.x, saved.y);
+  } else {
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const { width, height } = primaryDisplay.workAreaSize;
+    overlayWindow.setPosition(width - 240, height - 74);
+  }
+
+  // Persist the position when the user drags the overlay (debounced).
+  let moveSaveTimer = null;
+  overlayWindow.on('moved', () => {
+    if (moveSaveTimer) clearTimeout(moveSaveTimer);
+    moveSaveTimer = setTimeout(() => {
+      if (overlayWindow && !overlayWindow.isDestroyed()) {
+        const [x, y] = overlayWindow.getPosition();
+        saveOverlayPosition(x, y);
+      }
+    }, 400);
+  });
 
   if (process.env.ELECTRON_RENDERER_URL) {
     overlayWindow.loadURL(`${process.env.ELECTRON_RENDERER_URL}/overlay.html`);
