@@ -104,6 +104,17 @@ M (≤1 week), L (1–3 weeks), XL (3+ weeks).
   rich fields) and runs `validate_persona()` (prompt required, temperature 0–2, few_shot a
   list). +19 unit tests (206 green). DEFERRED: Studio live-preview persona editor UI.
 
+- [~] **C9 — Golden audio suite (WER core).** New pure `wer.py` (stdlib-only, no `jiwer`/
+  `numpy`): `word_error_rate()` + `compare_transcripts()` do a word-level Levenshtein
+  alignment with backtrace, reporting `{wer, substitutions, deletions, insertions, hits,
+  ref_words, hyp_words}`. Unicode-safe normalizer folds case/punctuation/whitespace so
+  references are written naturally. Edge cases handled (empty ref+hyp → 0.0, empty ref +
+  words → 1.0, WER can exceed 1.0 on many insertions). Scaffolded `tests/golden_audio/`
+  with a README documenting the `<name>.wav`+`<name>.txt` fixture format and harness usage.
+  +15 unit tests (221 green). DEFERRED: checked-in real WAV fixtures + per-STT-model CI job
+  (needs recorded audio + model download; add `test_golden_audio.py` that skips when no
+  model available).
+
 ---
 
 ## Part 1 — Verification matrix
