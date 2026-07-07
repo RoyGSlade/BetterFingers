@@ -16,6 +16,8 @@ import {
   fetchDiagnosticsLogs,
   fetchDiagnosticsPaths,
   fetchMetrics,
+  fetchPrivacy,
+  wipeData,
   fetchDrafts,
   fetchHealth,
   fetchLatestDraft,
@@ -1848,6 +1850,57 @@ function renderMetricsHud(summary) {
     `</tbody></table><p class="section-desc">Over the last ${summary.count} utterance(s).</p>`;
 }
 
+async function refreshPrivacy() {
+  const netEl = document.getElementById('privacyNetworkList');
+  const dataEl = document.getElementById('privacyDataList');
+  if (!netEl && !dataEl) return;
+  try {
+    const report = await fetchPrivacy();
+    if (netEl) {
+      netEl.innerHTML = (report.network_touchpoints || [])
+        .map((t) => {
+          const tag = t.direction === 'outbound' ? 'outbound' : 'on-device';
+          const hosts = (t.hosts || []).length ? ` (${t.hosts.join(', ')})` : '';
+          return `<div class="detail-row"><span class="detail-key">${t.name} — ${tag}${hosts}</span>` +
+            `<span class="detail-value">${t.purpose}</span></div>`;
+        })
+        .join('') || '<span class="empty-state">No network activity.</span>';
+    }
+    if (dataEl) {
+      dataEl.innerHTML = (report.data_locations || [])
+        .map((d) => `<div class="detail-row"><span class="detail-key">${d.name}</span>` +
+          `<span class="detail-value">${formatBytes(d.bytes)} · ${d.path}</span></div>`)
+        .join('');
+    }
+  } catch (error) {
+    if (netEl) netEl.innerHTML = `<span class="empty-state">Privacy report unavailable: ${error.message}</span>`;
+  }
+}
+
+async function handleWipeData() {
+  const button = document.getElementById('privacyWipeButton');
+  const wipeVoices = document.getElementById('privacyWipeVoices')?.checked || false;
+  const confirmed = window.confirm(
+    'Permanently delete your drafts, transcription history, and in-memory recordings' +
+      (wipeVoices ? ', plus your cloned voices' : '') +
+      '? This cannot be undone.',
+  );
+  if (!confirmed) return;
+  if (button) button.disabled = true;
+  try {
+    const result = await wipeData(wipeVoices);
+    const cleared = result?.cleared || {};
+    showToast(`Data wiped (${cleared.drafts ?? 0} drafts cleared).`, 'success');
+    setMessage(document.getElementById('privacyMessage'), 'Your data was wiped.', 'success');
+    await refreshPrivacy();
+    await refreshDrafts().catch(() => {});
+  } catch (error) {
+    showToast(`Wipe failed: ${error.message}`, 'danger');
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 async function refreshDiagnostics() {
   await Promise.all([
     refreshSidecarStatus().catch((error) => {
@@ -2714,6 +2767,10 @@ function initSettingsPanel() {
       categoryButtons.forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
 
+      if (sectionName === 'privacy') {
+        refreshPrivacy().catch(() => {});
+      }
+
       settingsSections.forEach((section) => {
         if (section.dataset.section === sectionName) {
           section.classList.remove('hidden');
@@ -2967,6 +3024,8 @@ emergencyStopButton?.addEventListener('click', async () => {
 refreshDiagnosticsButton?.addEventListener('click', () => {
   refreshDiagnostics();
 });
+
+document.getElementById('privacyWipeButton')?.addEventListener('click', handleWipeData);
 
 profileSelectEl?.addEventListener('change', async () => {
   try {

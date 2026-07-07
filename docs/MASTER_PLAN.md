@@ -12,6 +12,12 @@ M (≤1 week), L (1–3 weeks), XL (3+ weeks).
 - [x] **C10 — Latency HUD.** server.py times STT + LLM stages per utterance, keeps the
   last 50 samples, exposes `GET /metrics` (avg/p50/p95/last per stage). Renderer shows a
   "Pipeline latency" table in the Diagnostics tab, refreshed with diagnostics.
+- [x] **C7 — Privacy dashboard.** `GET /privacy` reports network touchpoints (only model
+  downloads are outbound; STT/LLM/TTS all local) + on-device data locations w/ sizes +
+  retention. `POST /privacy/wipe` clears drafts/history/recordings (opt-in voices). New
+  Privacy settings section renders it with a confirm-gated "Wipe my data" button. Also
+  fixed a latent flaky test: `startup_event`'s background warmup thread leaked across
+  TestClient instances; `shutdown_event` now joins it.
 
 ---
 

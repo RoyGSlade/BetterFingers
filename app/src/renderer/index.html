@@ -187,6 +187,7 @@
               <button class="settings-nav-button" type="button" data-section="tts-readaloud">TTS / Read-Aloud</button>
               <button class="settings-nav-button" type="button" data-section="notifications-status">Notifications & Status</button>
               <button class="settings-nav-button" type="button" data-section="appearance">Appearance</button>
+              <button class="settings-nav-button" type="button" data-section="privacy">Privacy</button>
               <button class="settings-nav-button" type="button" data-section="advanced-dev">Advanced & Developer</button>
             </nav>
           </aside>
@@ -802,6 +803,33 @@
                     </label>
                   </div>
                 </div>
+              </div>
+            </div>
+
+            <!-- Section: Privacy (C7) -->
+            <div class="settings-section hidden" data-section="privacy">
+              <h2>Privacy</h2>
+              <p class="section-desc">BetterFingers runs offline. Here's exactly what touches the network and where your data lives.</p>
+
+              <div class="setting-group">
+                <h3>Network activity</h3>
+                <div id="privacyNetworkList" class="detail-list compact"><span class="empty-state">Loading…</span></div>
+              </div>
+
+              <div class="setting-group">
+                <h3>Your data on this device</h3>
+                <div id="privacyDataList" class="detail-list compact"><span class="empty-state">Loading…</span></div>
+              </div>
+
+              <div class="setting-group">
+                <h3>Wipe my data</h3>
+                <p class="setting-desc">Permanently deletes your drafts, transcription history, and any recordings held in memory. Models and profiles are kept.</p>
+                <label class="consent" style="margin: 8px 0;">
+                  <input type="checkbox" id="privacyWipeVoices" />
+                  <span>Also delete my cloned voices</span>
+                </label>
+                <button id="privacyWipeButton" class="danger-button" type="button">Wipe my data…</button>
+                <div id="privacyMessage" class="warmup-message" role="status" aria-live="polite"></div>
               </div>
             </div>
 

@@ -167,6 +167,14 @@ async function fetchMetrics(timeoutMs = 2500) {
   return fetchJson(`${BACKEND_ORIGIN}/metrics`, timeoutMs);
 }
 
+async function fetchPrivacy(timeoutMs = 2500) {
+  return fetchJson(`${BACKEND_ORIGIN}/privacy`, timeoutMs);
+}
+
+async function wipeData(wipeVoices = false, timeoutMs = 10000) {
+  return postJson(`${BACKEND_ORIGIN}/privacy/wipe`, { wipe_voices: wipeVoices }, timeoutMs);
+}
+
 async function fetchRuntimeErrors(timeoutMs = 2500) {
   return fetchJson(RUNTIME_ERRORS_URL, timeoutMs);
 }
@@ -528,6 +536,8 @@ export {
   fetchDiagnosticsLogs,
   fetchDiagnosticsPaths,
   fetchMetrics,
+  fetchPrivacy,
+  wipeData,
   fetchPersonas,
   fetchTtsVoices,
   savePersona,

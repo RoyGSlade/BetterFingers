@@ -1189,6 +1189,11 @@ async def startup_event():
 @app.on_event("shutdown")
 def shutdown_event():
     stop_hotkey_manager()
+    # Join the background warmup thread so it can't outlive this app instance and
+    # mutate global model state afterwards (also keeps tests deterministic).
+    thread = _warmup_thread
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=5)
 
 from fastapi import Query, status
 
@@ -1871,6 +1876,120 @@ async def unload_model_component(component: str):
 @app.get("/metrics")
 async def pipeline_metrics_endpoint():
     return get_pipeline_metrics_summary()
+
+
+def _path_size_bytes(path):
+    """Total size of a file, or recursive size of a directory (0 if missing)."""
+    try:
+        if os.path.isfile(path):
+            return os.path.getsize(path)
+        total = 0
+        for root, _dirs, files in os.walk(path):
+            for name in files:
+                try:
+                    total += os.path.getsize(os.path.join(root, name))
+                except OSError:
+                    pass
+        return total
+    except OSError:
+        return 0
+
+
+def get_privacy_report():
+    """Everything that touches the network + where local data lives (C7)."""
+    history_file = os.path.join(get_user_data_path(), "draft_history.json")
+    voices_dir = str(get_app_data_dir() / "voices")
+    with draft_lock:
+        recordings_in_memory = len(draft_recordings)
+        drafts_in_memory = len(draft_queue)
+
+    network_touchpoints = [
+        {
+            "name": "Model & binary downloads",
+            "hosts": ["huggingface.co", "github.com"],
+            "direction": "outbound",
+            "optional": True,
+            "purpose": "Downloads STT/LLM/TTS models and the llama-server binary — only when you explicitly choose to install one.",
+        },
+        {
+            "name": "Local LLM server",
+            "hosts": ["127.0.0.1"],
+            "direction": "local",
+            "optional": False,
+            "purpose": "The llama-server runs on localhost. Your prompts never leave this machine.",
+        },
+        {
+            "name": "Speech-to-text & text-to-speech",
+            "hosts": [],
+            "direction": "local",
+            "optional": False,
+            "purpose": "Transcription and speech synthesis run fully on-device.",
+        },
+    ]
+
+    data_locations = [
+        {"name": "Draft history", "path": history_file, "bytes": _path_size_bytes(history_file)},
+        {"name": "Cloned voices", "path": voices_dir, "bytes": _path_size_bytes(voices_dir)},
+        {"name": "Models", "path": str(get_models_dir()), "bytes": _path_size_bytes(str(get_models_dir()))},
+    ]
+
+    return {
+        "offline_by_default": True,
+        "network_touchpoints": network_touchpoints,
+        "data_locations": data_locations,
+        "retention": {
+            "recordings_persisted_to_disk": False,
+            "recordings_in_memory": recordings_in_memory,
+            "drafts_in_memory": drafts_in_memory,
+            "draft_history_limit": MAX_DRAFT_HISTORY,
+        },
+    }
+
+
+@app.get("/privacy")
+async def privacy_report():
+    return get_privacy_report()
+
+
+class PrivacyWipeRequest(BaseModel):
+    wipe_voices: bool = False
+
+
+@app.post("/privacy/wipe")
+async def privacy_wipe(request: PrivacyWipeRequest = PrivacyWipeRequest()):
+    """Delete app-generated conversational data (drafts, history, in-memory
+    recordings). Models and profiles are intentionally NOT touched; cloned
+    voices are removed only when explicitly requested."""
+    cleared = {}
+    with draft_lock:
+        cleared["drafts"] = len(draft_queue)
+        cleared["recordings"] = len(draft_recordings)
+        draft_queue.clear()
+        draft_recordings.clear()
+        pending_manual_send_ids.clear()
+    save_draft_history()
+
+    history_file = os.path.join(get_user_data_path(), "draft_history.json")
+    try:
+        if os.path.exists(history_file):
+            os.remove(history_file)
+            cleared["history_file_removed"] = True
+    except OSError as exc:
+        logging.warning(f"Could not remove draft history file: {exc}")
+        cleared["history_file_removed"] = False
+
+    if request.wipe_voices:
+        voices_dir = get_app_data_dir() / "voices"
+        try:
+            if voices_dir.exists():
+                shutil.rmtree(voices_dir, ignore_errors=True)
+                cleared["voices_removed"] = True
+        except OSError as exc:
+            logging.warning(f"Could not remove voices dir: {exc}")
+            cleared["voices_removed"] = False
+
+    broadcast_status_threadsafe("draft_history_cleared")
+    return {"ok": True, "cleared": cleared, "message": "Your data was wiped."}
 
 
 @app.get("/diagnostics/logs")
