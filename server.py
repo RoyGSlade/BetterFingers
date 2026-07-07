@@ -4,6 +4,8 @@ import shutil
 import tempfile
 import logging
 import threading
+import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -90,6 +92,9 @@ hotkey_manager = None
 hotkey_recorder = None
 hotkey_manager_started = False
 _warmup_thread = None  # background model-warmup thread started by startup_event
+# Rolling per-utterance pipeline latency samples for the /metrics HUD (C10).
+pipeline_metrics = deque(maxlen=50)
+pipeline_metrics_lock = threading.Lock()
 output_injector = None
 tts_engine = None
 active_websockets = []
@@ -906,6 +911,55 @@ def stop_recording_runtime():
     return {"ok": True, "recording": False, "message": "Recording stopped. Processing audio..."}
 
 
+def record_pipeline_metrics(stt_ms=None, llm_ms=None, total_ms=None, audio_seconds=0.0, chars=0):
+    """Append one utterance's pipeline latency sample (C10 HUD)."""
+    entry = {
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "stt_ms": round(stt_ms, 1) if stt_ms is not None else None,
+        "llm_ms": round(llm_ms, 1) if llm_ms is not None else None,
+        "total_ms": round(total_ms, 1) if total_ms is not None else None,
+        "audio_seconds": round(float(audio_seconds or 0.0), 2),
+        "chars": int(chars or 0),
+    }
+    with pipeline_metrics_lock:
+        pipeline_metrics.append(entry)
+    return entry
+
+
+def _percentile(values, pct):
+    if not values:
+        return None
+    ordered = sorted(values)
+    k = max(0, min(len(ordered) - 1, int(round((pct / 100.0) * (len(ordered) - 1)))))
+    return round(ordered[k], 1)
+
+
+def get_pipeline_metrics_summary():
+    """Summary stats over the recent latency samples for the HUD."""
+    with pipeline_metrics_lock:
+        samples = list(pipeline_metrics)
+
+    def stage_stats(key):
+        vals = [s[key] for s in samples if s.get(key) is not None]
+        if not vals:
+            return {"count": 0, "avg_ms": None, "p50_ms": None, "p95_ms": None, "last_ms": None}
+        return {
+            "count": len(vals),
+            "avg_ms": round(sum(vals) / len(vals), 1),
+            "p50_ms": _percentile(vals, 50),
+            "p95_ms": _percentile(vals, 95),
+            "last_ms": vals[-1],
+        }
+
+    return {
+        "count": len(samples),
+        "stt": stage_stats("stt_ms"),
+        "llm": stage_stats("llm_ms"),
+        "total": stage_stats("total_ms"),
+        "recent": samples[-10:],
+    }
+
+
 def process_recording_result(recording_result):
     global is_processing_draft
     with draft_lock:
@@ -919,17 +973,22 @@ def process_recording_result(recording_result):
     preset = "True Janitor"
     raw_text = ""
     metadata = get_recording_metadata(recording_result)
+    pipeline_t0 = time.perf_counter()
+    stt_ms = None
+    llm_ms = None
     try:
         check_cancelled()
         broadcast_status_threadsafe("transcribing")
         trans = ensure_transcriber_initialized(preload=False)
         audio_data = getattr(recording_result, "audio_data", recording_result)
+        _stt_start = time.perf_counter()
         if hasattr(audio_data, "size") and audio_data.size <= 0:
             raw_text = ""
         elif audio_data is None:
             raw_text = ""
         else:
             raw_text = trans.transcribe(audio_data)
+        stt_ms = (time.perf_counter() - _stt_start) * 1000.0
 
         check_cancelled()
         blocked, reasons = should_block_for_no_audio(
@@ -973,7 +1032,9 @@ def process_recording_result(recording_result):
         except Exception:
             llm_chunk_size = 750
         
+        _llm_start = time.perf_counter()
         final_text = engine.process_fast_lane(raw_text, preset, chunk_size=llm_chunk_size)
+        llm_ms = (time.perf_counter() - _llm_start) * 1000.0
 
         check_cancelled()
         draft = create_draft(
@@ -982,6 +1043,13 @@ def process_recording_result(recording_result):
             preset=preset,
             metadata=metadata,
             recording_result=recording_result,
+        )
+        record_pipeline_metrics(
+            stt_ms=stt_ms,
+            llm_ms=llm_ms,
+            total_ms=(time.perf_counter() - pipeline_t0) * 1000.0,
+            audio_seconds=float(getattr(recording_result, "duration_seconds", 0.0) or 0.0),
+            chars=len(final_text or ""),
         )
         broadcast_status_threadsafe(
             "preview_ready",
@@ -1798,6 +1866,11 @@ async def unload_model_component(component: str):
         }
 
     raise HTTPException(status_code=400, detail="Unsupported component")
+
+
+@app.get("/metrics")
+async def pipeline_metrics_endpoint():
+    return get_pipeline_metrics_summary()
 
 
 @app.get("/diagnostics/logs")

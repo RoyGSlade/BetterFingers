@@ -15,6 +15,7 @@ import {
   fetchCapabilities,
   fetchDiagnosticsLogs,
   fetchDiagnosticsPaths,
+  fetchMetrics,
   fetchDrafts,
   fetchHealth,
   fetchLatestDraft,
@@ -1827,6 +1828,26 @@ function updateBackendBanner(status) {
   }
 }
 
+function renderMetricsHud(summary) {
+  const el = document.getElementById('metricsHud');
+  if (!el) return;
+  if (!summary || !summary.count) {
+    el.innerHTML = '<p class="empty-state">No utterances measured yet.</p>';
+    return;
+  }
+  const fmt = (v) => (v === null || v === undefined ? '—' : `${v} ms`);
+  const row = (label, stage) =>
+    `<tr><th scope="row">${label}</th><td>${fmt(stage.last_ms)}</td><td>${fmt(stage.avg_ms)}</td>` +
+    `<td>${fmt(stage.p50_ms)}</td><td>${fmt(stage.p95_ms)}</td></tr>`;
+  el.innerHTML =
+    `<table class="metrics-table"><thead><tr><th scope="col">Stage</th><th scope="col">Last</th>` +
+    `<th scope="col">Avg</th><th scope="col">p50</th><th scope="col">p95</th></tr></thead><tbody>` +
+    row('Transcribe', summary.stt) +
+    row('LLM cleanup', summary.llm) +
+    row('Total', summary.total) +
+    `</tbody></table><p class="section-desc">Over the last ${summary.count} utterance(s).</p>`;
+}
+
 async function refreshDiagnostics() {
   await Promise.all([
     refreshSidecarStatus().catch((error) => {
@@ -1835,6 +1856,7 @@ async function refreshDiagnostics() {
         sidecarStatusEl.dataset.tone = 'danger';
       }
     }),
+    fetchMetrics().then(renderMetricsHud).catch(() => {}),
     fetchDiagnosticsPaths().then((paths) => {
       renderDetailList(diagnosticsPathsListEl, paths, [
         'debug_log_path',

@@ -1022,6 +1022,19 @@
           </div>
         </section>
 
+        <!-- Pipeline latency HUD (C10) -->
+        <section class="stream-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Pipeline latency</h2>
+              <p class="section-desc">Per-stage timings for recent utterances (STT → LLM → total).</p>
+            </div>
+          </div>
+          <div id="metricsHud" class="metrics-hud">
+            <p class="empty-state">No utterances measured yet.</p>
+          </div>
+        </section>
+
         <!-- Captured Sidecar startup logs (rendered if backend fails or on diagnostics tab) -->
         <section class="stream-panel">
           <div class="panel-header">

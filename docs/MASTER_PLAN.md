@@ -7,6 +7,12 @@ working, packaging done, first-run state client-side, legacy tkinter tree delete
 Item codes: **U1–U11** = user's list, **C1–C12** = companion list. Effort: S (≤2 days),
 M (≤1 week), L (1–3 weeks), XL (3+ weeks).
 
+## Implementation progress (branch: master-plan)
+
+- [x] **C10 — Latency HUD.** server.py times STT + LLM stages per utterance, keeps the
+  last 50 samples, exposes `GET /metrics` (avg/p50/p95/last per stage). Renderer shows a
+  "Pipeline latency" table in the Diagnostics tab, refreshed with diagnostics.
+
 ---
 
 ## Part 1 — Verification matrix

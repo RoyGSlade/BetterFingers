@@ -163,6 +163,10 @@ async function fetchDiagnosticsPaths(timeoutMs = 2500) {
   return fetchJson(DIAGNOSTICS_PATHS_URL, timeoutMs);
 }
 
+async function fetchMetrics(timeoutMs = 2500) {
+  return fetchJson(`${BACKEND_ORIGIN}/metrics`, timeoutMs);
+}
+
 async function fetchRuntimeErrors(timeoutMs = 2500) {
   return fetchJson(RUNTIME_ERRORS_URL, timeoutMs);
 }
@@ -523,6 +527,7 @@ export {
   fetchCapabilities,
   fetchDiagnosticsLogs,
   fetchDiagnosticsPaths,
+  fetchMetrics,
   fetchPersonas,
   fetchTtsVoices,
   savePersona,

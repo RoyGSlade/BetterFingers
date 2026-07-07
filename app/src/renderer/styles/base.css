@@ -1723,3 +1723,23 @@ body.theme-light.high-contrast {
   margin-top: 24px;
 }
 .onboarding-spacer { flex: 1; }
+
+/* ==========================================
+   Pipeline latency HUD (C10)
+   ========================================== */
+.metrics-hud { overflow-x: auto; }
+.metrics-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.metrics-table th,
+.metrics-table td {
+  padding: 8px 10px;
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+}
+.metrics-table thead th { color: var(--muted); font-weight: 600; }
+.metrics-table th[scope='row'] { text-align: left; color: var(--text); font-weight: 600; }
+.metrics-table tbody tr:last-child td,
+.metrics-table tbody tr:last-child th { border-bottom: none; font-weight: 700; }
