@@ -462,8 +462,47 @@ class Transcriber:
         logging.info("Whisper model unloaded.")
 
     def transcribe(self, audio_array):
+        # Kept for callers that only need text; delegates to the confidence path.
+        return self.transcribe_with_confidence(audio_array)[0]
+
+    @staticmethod
+    def _compute_confidence(seg_list):
+        """Turn faster-whisper per-segment stats into a 0..1 confidence score.
+
+        avg_logprob is a mean token log-probability (<= 0); exp() maps it to a
+        rough probability. no_speech_prob is how likely the segment is silence.
+        We length-weight the segments and penalize by the worst no_speech_prob.
+        """
+        import math
+
+        if not seg_list:
+            return {"score": 0.0, "avg_logprob": None, "no_speech_prob": None}
+
+        total_dur = 0.0
+        weighted_logprob = 0.0
+        worst_no_speech = 0.0
+        for seg in seg_list:
+            dur = max(0.001, float(getattr(seg, "end", 0.0)) - float(getattr(seg, "start", 0.0)))
+            logprob = float(getattr(seg, "avg_logprob", -1.0) or -1.0)
+            weighted_logprob += logprob * dur
+            total_dur += dur
+            worst_no_speech = max(worst_no_speech, float(getattr(seg, "no_speech_prob", 0.0) or 0.0))
+
+        mean_logprob = weighted_logprob / total_dur if total_dur else -1.0
+        prob = math.exp(max(-10.0, mean_logprob))  # exp of a mean log-prob -> ~0..1
+        score = max(0.0, min(1.0, prob * (1.0 - worst_no_speech)))
+        return {
+            "score": round(score, 3),
+            "avg_logprob": round(mean_logprob, 3),
+            "no_speech_prob": round(worst_no_speech, 3),
+        }
+
+    def transcribe_with_confidence(self, audio_array):
+        """Return (text, confidence_dict). confidence_dict has score/avg_logprob/
+        no_speech_prob (score is None-safe 0..1)."""
+        empty_conf = {"score": None, "avg_logprob": None, "no_speech_prob": None}
         if not self.ensure_loaded():
-            return ""
+            return "", empty_conf
 
         try:
             if hasattr(audio_array, "dtype") and audio_array.dtype != np.float32:
@@ -472,29 +511,27 @@ class Transcriber:
             with self._model_lock:
                 model = self.model
                 if model is None:
-                    return ""
-                
+                    return "", empty_conf
+
                 # --- Fast Lane & VRAM Protection ---
                 # For short audio (< 2.0s), use greedy search (beam_size=1) for speed.
                 duration = len(audio_array) / 16000.0
                 beam_size = 1 if duration < 2.0 else 5
-                
+
                 segments, _info = model.transcribe(audio_array, beam_size=beam_size)
-                
+
                 # Periodic GC to prevent VRAM fragmentation/leaks
-                # (Simple heuristic: run collection every time significantly long audio is processed
-                # or just randomly? Let's do it if duration > 5s to clear buffers)
                 if duration > 5.0:
                     gc.collect()
 
             seg_list = list(segments)
             if not seg_list:
-                return ""
+                return "", empty_conf
             raw = TextFormatter.format_segments(seg_list, paragraph_threshold=1.2)
             if _is_hallucination(raw):
                 logging.debug("Hallucination detected, discarding: %r", raw)
-                return ""
-            return raw
+                return "", empty_conf
+            return raw, self._compute_confidence(seg_list)
         except Exception as exc:
             logging.error(f"Error during transcription: {exc}")
-            return ""
+            return "", empty_conf

@@ -512,7 +512,7 @@ def update_draft_review_fields(draft):
     return draft
 
 
-def create_draft(raw_text, final_text, preset="True Janitor", status="pending", metadata=None, error="", gate_reasons=None, recording_result=None):
+def create_draft(raw_text, final_text, preset="True Janitor", status="pending", metadata=None, error="", gate_reasons=None, recording_result=None, confidence=None):
     global next_draft_id
 
     with draft_lock:
@@ -525,6 +525,7 @@ def create_draft(raw_text, final_text, preset="True Janitor", status="pending", 
             "metadata": metadata or {},
             "error": error or "",
             "gate_reasons": list(gate_reasons or []),
+            "confidence": confidence or {"score": None, "avg_logprob": None, "no_speech_prob": None},
             "pending_send": False,
             "send_result": None,
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -993,10 +994,13 @@ def process_recording_result(recording_result):
         trans = ensure_transcriber_initialized(preload=False)
         audio_data = getattr(recording_result, "audio_data", recording_result)
         _stt_start = time.perf_counter()
+        confidence = {"score": None, "avg_logprob": None, "no_speech_prob": None}
         if hasattr(audio_data, "size") and audio_data.size <= 0:
             raw_text = ""
         elif audio_data is None:
             raw_text = ""
+        elif hasattr(trans, "transcribe_with_confidence"):
+            raw_text, confidence = trans.transcribe_with_confidence(audio_data)
         else:
             raw_text = trans.transcribe(audio_data)
         stt_ms = (time.perf_counter() - _stt_start) * 1000.0
@@ -1054,6 +1058,7 @@ def process_recording_result(recording_result):
             preset=preset,
             metadata=metadata,
             recording_result=recording_result,
+            confidence=confidence,
         )
         record_pipeline_metrics(
             stt_ms=stt_ms,
@@ -1071,6 +1076,7 @@ def process_recording_result(recording_result):
                 "token_count": draft["token_count"],
                 "token_limit": draft["token_limit"],
                 "long_text": draft["long_text"],
+                "confidence": draft["confidence"],
             },
         )
         return draft

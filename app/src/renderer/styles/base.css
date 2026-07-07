@@ -1761,3 +1761,17 @@ body.theme-light.high-contrast {
 .recording-meta { font-size: 0.88rem; color: var(--muted); }
 .recording-actions { display: flex; gap: 6px; flex: none; }
 .recording-actions .secondary-button { padding: 5px 10px; font-size: 0.82rem; }
+
+/* ==========================================
+   Transcription confidence badge (C4)
+   ========================================== */
+.confidence-badge {
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.confidence-badge[data-tone='success'] { color: var(--accent); border-color: rgba(102, 242, 193, 0.4); }
+.confidence-badge[data-tone='warning'] { color: var(--warning); border-color: rgba(255, 200, 107, 0.4); }
+.confidence-badge[data-tone='danger'] { color: var(--danger); border-color: rgba(255, 124, 135, 0.4); }

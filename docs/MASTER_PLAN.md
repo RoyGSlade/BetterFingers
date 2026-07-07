@@ -25,6 +25,13 @@ M (≤1 week), L (1–3 weeks), XL (3+ weeks).
   RecordingResult and re-runs the pipeline), `DELETE /recordings/{id}`, `DELETE
   /recordings`. Renderer "Recovery" panel in Diagnostics lists them with re-transcribe/
   discard/clear-all.
+- [x] **C4 — Confidence (rendered, not hidden).** transcriber gains
+  `transcribe_with_confidence()` → (text, {score, avg_logprob, no_speech_prob}); score is
+  length-weighted `exp(mean avg_logprob)` penalized by no_speech_prob. Plumbed through
+  `create_draft` + the `preview_ready` WS event (pipeline prefers it, falls back to plain
+  `transcribe` for other transcriber impls). Renderer shows a tone-tinted "% confident"
+  badge on the draft. NOTE: auto-accept/silent-inject threshold intentionally deferred
+  (kept conservative — surfacing confidence first, no behavior change).
 
 ---
 

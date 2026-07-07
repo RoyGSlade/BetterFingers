@@ -1057,6 +1057,22 @@ function setDraftControlsEnabled(enabled) {
   }
 }
 
+// Confidence is rendered, not hidden (C4): show a score badge, tinted by how sure
+// the transcriber was, so the user can trust or double-check at a glance.
+function renderConfidenceBadge(draft) {
+  const el = document.getElementById('draftConfidence');
+  if (!el) return;
+  const score = draft?.confidence?.score;
+  if (score === null || score === undefined) {
+    el.classList.add('hidden');
+    return;
+  }
+  const pct = Math.round(score * 100);
+  el.textContent = `${pct}% confident`;
+  el.dataset.tone = score >= 0.65 ? 'success' : score >= 0.4 ? 'warning' : 'danger';
+  el.classList.remove('hidden');
+}
+
 function formatDraftMetadata(draft) {
   const metadata = draft?.metadata ?? {};
   if (!Object.keys(metadata).length) {
@@ -1107,6 +1123,7 @@ function renderDraft(draft) {
     draftFinalTextEl.value = latestDraft.final_text || '';
   }
   renderTokenSummary(latestDraft);
+  renderConfidenceBadge(latestDraft);
   if (draftMetadataEl) {
     draftMetadataEl.textContent = formatDraftMetadata(latestDraft);
   }
