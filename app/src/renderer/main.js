@@ -1453,6 +1453,8 @@ async function refreshCapabilities() {
     'supports_basic_clipboard',
     'supports_rich_clipboard_restore',
     'supports_input_injection',
+    'injection_method',
+    'supports_typing',
     'supports_global_hotkeys',
     'supports_audio_ducking',
     'supports_stt',
@@ -1461,6 +1463,28 @@ async function refreshCapabilities() {
   ]);
   updatePlatformWarnings(capabilities);
   return capabilities;
+}
+
+// Reflect whether push-to-talk is actually available on this platform/session,
+// based on the Electron hotkey backend (uiohook vs globalShortcut fallback).
+async function refreshPttAvailability() {
+  const note = document.getElementById('pttAvailabilityNote');
+  if (!note || !window.betterFingers?.getHotkeyCapabilities) {
+    return;
+  }
+  try {
+    const caps = await window.betterFingers.getHotkeyCapabilities();
+    if (caps?.pttSupported) {
+      note.textContent = 'Push-to-talk is available on this system.';
+      note.dataset.tone = 'success';
+    } else {
+      note.textContent =
+        'Push-to-talk needs a global key hook that is unavailable here (e.g. Wayland); it will fall back to toggle.';
+      note.dataset.tone = 'warning';
+    }
+  } catch (error) {
+    note.textContent = '';
+  }
 }
 
 function renderRuntimeErrors(payload) {
@@ -2366,6 +2390,7 @@ async function bootstrap() {
     refreshDiagnostics().catch(() => {}),
     refreshDoctor().catch(() => {}),
     refreshSidecarLogs().catch(() => {}),
+    refreshPttAvailability().catch(() => {}),
   ]);
 
   healthRefreshTimer = setInterval(() => {

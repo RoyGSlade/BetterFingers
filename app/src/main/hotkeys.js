@@ -293,7 +293,11 @@ function registerHotkeys(config, token) {
   }
   if (!config) return;
   activeConfig = config;
-  recordingMode = config.recording_mode === 'push_to_talk' ? 'push_to_talk' : 'toggle';
+  // The settings UI stores this as "ptt"; accept the long forms too.
+  const modeRaw = String(config.recording_mode || '').toLowerCase();
+  recordingMode = ['ptt', 'push_to_talk', 'pushtotalk', 'push-to-talk'].includes(modeRaw)
+    ? 'push_to_talk'
+    : 'toggle';
 
   if (ensureHookRunning()) {
     // uiohook path: matchers are consulted live by the event handlers.
