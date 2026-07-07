@@ -1711,6 +1711,14 @@ async def settings_export_profile(profile_name: str):
 class PersonaRequest(BaseModel):
     name: str
     prompt: str
+    # Optional persona schema v2 fields (U7). Omitted fields are left untouched on
+    # update, so legacy {name, prompt} clients keep working unchanged.
+    temperature: Optional[float] = None
+    model_hint: Optional[str] = None
+    dictionary_scope: Optional[str] = None
+    voice: Optional[dict] = None
+    format: Optional[dict] = None
+    few_shot: Optional[list] = None
 
 
 @app.get("/personas")
@@ -1719,10 +1727,27 @@ async def list_personas_route():
     return load_personas(force_reload=True)
 
 
+@app.get("/personas/{name}")
+async def get_persona_route(name: str):
+    """Return the full schema v2 persona dict for the editor."""
+    from llm_engine import get_persona
+    entry = get_persona(name)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Persona '{name}' not found.")
+    return entry
+
+
 @app.post("/personas")
 async def save_persona_route(request: PersonaRequest):
     from llm_engine import upsert_persona
-    ok, msg = upsert_persona(request.name, request.prompt)
+    # Build a v2 payload from the provided fields; drop unspecified ones so an
+    # update preserves prior rich values (upsert_persona merges partial dicts).
+    payload = {"prompt": request.prompt}
+    for key in ("temperature", "model_hint", "dictionary_scope", "voice", "format", "few_shot"):
+        value = getattr(request, key)
+        if value is not None:
+            payload[key] = value
+    ok, msg = upsert_persona(request.name, payload)
     if not ok:
         raise HTTPException(status_code=400, detail=msg)
     return {"message": msg}

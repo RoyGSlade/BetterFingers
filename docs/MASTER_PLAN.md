@@ -141,6 +141,17 @@ M (≤1 week), L (1–3 weeks), XL (3+ weeks).
   URLs for the two small LLMs, and real non-whisper STT engine integration
   (Moonshine/Parakeet) behind the transcriber interface.
 
+- [~] **U7 editor — chunk A (persona routes accept/return v2).** `server.py`:
+  `PersonaRequest` gains optional schema-v2 fields (`temperature`, `model_hint`,
+  `dictionary_scope`, `voice`, `format`, `few_shot`); `POST /personas` builds a v2 payload
+  from the provided fields (unspecified ones dropped so updates preserve prior rich values
+  via `upsert_persona`'s partial-merge) — legacy `{name, prompt}` bodies still work
+  unchanged. New `GET /personas/{name}` returns the full v2 persona dict for the editor
+  (404 if absent); `GET /personas` list view stays the legacy `{name: prompt}` map.
+  Validation errors (e.g. temperature out of 0–2) surface as HTTP 400. +5 route tests
+  (262 green). NEXT (chunk B): renderer Advanced controls (temperature/voice/format/
+  model_hint/few-shot) wired to these routes.
+
 ---
 
 ## Part 1 — Verification matrix
