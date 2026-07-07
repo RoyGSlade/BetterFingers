@@ -360,6 +360,19 @@ def check_and_download_resources(model_id=None, progress_callback=None):
 
     server_path = get_server_path()
     if not os.path.exists(server_path):
+        # On Linux/macOS we do not auto-download a prebuilt llama-server — the
+        # binary is platform/GPU-specific and is provided by the user (build it
+        # with tools/setup_linux_llama_server.py, or point BETTERFINGERS_LLAMA_SERVER
+        # at an existing one). Windows ships a known-good prebuilt archive.
+        if sys.platform != "win32":
+            message = (
+                "llama-server binary not found. On Linux/macOS, build it with "
+                "tools/setup_linux_llama_server.py or set BETTERFINGERS_LLAMA_SERVER "
+                "to the path of an existing llama-server."
+            )
+            report({"key": target_model_id, "status": "error", "percent": 0.0, "message": message})
+            return {"ok": False, "model_id": target_model_id, "message": message}
+
         logging.info("llama-server not found. Downloading binaries...")
 
         bin_archive = os.path.join(models_dir, SERVER_ARCHIVE_NAME)

@@ -89,6 +89,7 @@ transcriber = None
 hotkey_manager = None
 hotkey_recorder = None
 hotkey_manager_started = False
+_warmup_thread = None  # background model-warmup thread started by startup_event
 output_injector = None
 tts_engine = None
 active_websockets = []
@@ -1076,7 +1077,7 @@ def on_recording_complete(recording_result):
 
 @app.on_event("startup")
 async def startup_event():
-    global loop
+    global loop, _warmup_thread
     loop = asyncio.get_event_loop()
     load_draft_history()
     lazy_startup = is_lazy_startup_enabled()
@@ -1097,7 +1098,8 @@ async def startup_event():
         else:
             logging.info("No keep-loaded model residency flags are enabled; model startup is deferred.")
 
-    threading.Thread(target=background_warmup, daemon=True, name="betterfingers-warmup").start()
+    _warmup_thread = threading.Thread(target=background_warmup, daemon=True, name="betterfingers-warmup")
+    _warmup_thread.start()
 
     if lazy_startup:
         logging.info("Lazy startup enabled; deferring Hotkey Manager startup.")

@@ -77,6 +77,14 @@ class ServerLazyStartupTests(unittest.TestCase):
         server.hotkey_manager_started = False
         server.loop = None
 
+    def _run_startup(self):
+        # startup_event() warms models on a background thread; join it so
+        # assertions about the transcriber/engine are deterministic.
+        asyncio.run(server.startup_event())
+        thread = getattr(server, "_warmup_thread", None)
+        if thread is not None:
+            thread.join(timeout=5)
+
     def test_lazy_startup_skips_llm_and_hotkeys(self):
         profile = {
             "model_keep_llm_loaded": False,
@@ -90,7 +98,7 @@ class ServerLazyStartupTests(unittest.TestCase):
         ), patch.object(
             server, "HotkeyManager", side_effect=AssertionError("HotkeyManager should not start")
         ):
-            asyncio.run(server.startup_event())
+            self._run_startup()
 
         self.assertEqual(len(DummyTranscriber.instances), 1)
         self.assertFalse(DummyTranscriber.instances[0].preload)
@@ -105,12 +113,21 @@ class ServerLazyStartupTests(unittest.TestCase):
             server.hotkey_manager = started
             return started
 
-        with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": ""}, clear=False), patch.object(server, "Transcriber", DummyTranscriber), patch.object(
+        # Keep-loaded on so the background warmup preloads STT and warms the LLM.
+        profile = {
+            "model_keep_llm_loaded": True,
+            "model_keep_stt_loaded": True,
+            "model_keep_tts_loaded": False,
+        }
+
+        with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": ""}, clear=False), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ), patch.object(server, "load_profile", return_value=profile), patch.object(
             server, "get_engine", return_value=DummyEngine()
         ) as engine_mock, patch.object(
             server, "start_hotkey_manager", side_effect=_start_hotkey_manager
         ) as hotkey_mock:
-            asyncio.run(server.startup_event())
+            self._run_startup()
 
         self.assertEqual(len(DummyTranscriber.instances), 1)
         self.assertTrue(DummyTranscriber.instances[0].preload)
@@ -143,7 +160,7 @@ class ServerLazyStartupTests(unittest.TestCase):
         ), patch.object(
             server, "start_hotkey_manager", side_effect=_start_hotkey_manager
         ):
-            asyncio.run(server.startup_event())
+            self._run_startup()
 
         self.assertEqual(len(DummyTranscriber.instances), 1)
         self.assertFalse(DummyTranscriber.instances[0].preload)
@@ -164,7 +181,7 @@ class ServerLazyStartupTests(unittest.TestCase):
         ) as engine_mock, patch.object(
             server, "HotkeyManager", side_effect=AssertionError("HotkeyManager should not start in lazy startup")
         ):
-            asyncio.run(server.startup_event())
+            self._run_startup()
 
         self.assertEqual(len(DummyTranscriber.instances), 1)
         self.assertTrue(DummyTranscriber.instances[0].preload)
