@@ -33,6 +33,17 @@ Status as of 2026-07-07, after removal of Studio Mode. Scope: Windows + Linux de
   even dev launch since Phase 1.3. Native module asarUnpack'd for packaging.
   Remaining UI touch: surface `pttSupported` in the recording-mode setting (Phase 3).
 
+### Parallel tracks (as of the 2.1 checkpoint)
+
+Work split across two agents to speed delivery, partitioned by file ownership so
+they never conflict:
+- **Backend/platform track (delegated, isolated worktree):** Phase 2.2 (injection
+  matrix) + 2.5 (backend gaps). Owns all `*.py` + `requirements.txt`, incl. exclusive
+  ownership of `server.py`. Merged back by commit hash.
+- **Frontend/UX track (this loop):** Phase 2.3 (review flow), 2.4 (overlays & tray),
+  2.6 (first-run), Phase 3 (UI/UX). Owns all `app/src/**`. First-run/policy state is
+  stored client-side (Electron userData) to avoid touching `server.py`.
+
 ---
 
 
