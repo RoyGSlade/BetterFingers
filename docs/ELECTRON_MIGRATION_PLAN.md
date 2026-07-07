@@ -47,10 +47,17 @@ server.py hand-ported), so nothing was lost.
   gc), `/project/export` → Downloads (XDG-aware), audio_ducker pactl Linux backend,
   requirements platform markers, standardized `sys.platform == 'win32'`. +15 new tests.
 - Dead agent worktree left in place (harness-locked); harmless, on its own branch.
-- **Remaining = frontend/UX only, done solo in this loop:** 2.3 (review flow),
-  2.4 (status-overlay drag/position + notification toasts; tray already done),
-  2.6 (first-run policy/tour/model wizard), Phase 3 (apply saved theme/density,
-  error/loading states, dead-DOM cleanup, a11y). First-run state stored client-side.
+- **Frontend progress (solo loop):**
+  - **2.1 UI — DONE:** PTT availability note; fixed the `ptt` vs `push_to_talk` value
+    mismatch that would have silently disabled push-to-talk; injection method surfaced.
+  - **2.3 — DONE:** review-overlay rewrite preset picker (Clearer/Shorter/Tone).
+  - **2.4 — DONE:** state-driven tray icon + menu; in-app toast system (wired to
+    sidecar crash/unhealthy pushes); status overlay was already draggable, now its
+    position persists across launches (on-screen-validated).
+  - **Phase 3 — partial:** removed 3 dead DOM refs. Theming was already fully wired
+    (audit was wrong); high-contrast/accent/density all apply at startup.
+  - **Remaining:** 2.6 (first-run policy/tour/model wizard, state stored client-side),
+    Phase 3 (error/loading states on more paths, a11y: tab roles/focus trap).
 
 ---
 
