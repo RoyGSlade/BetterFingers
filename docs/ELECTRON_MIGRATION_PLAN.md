@@ -33,16 +33,24 @@ Status as of 2026-07-07, after removal of Studio Mode. Scope: Windows + Linux de
   even dev launch since Phase 1.3. Native module asarUnpack'd for packaging.
   Remaining UI touch: surface `pttSupported` in the recording-mode setting (Phase 3).
 
-### Parallel tracks (as of the 2.1 checkpoint)
+### Parallel tracks — outcome
 
-Work split across two agents to speed delivery, partitioned by file ownership so
-they never conflict:
-- **Backend/platform track (delegated, isolated worktree):** Phase 2.2 (injection
-  matrix) + 2.5 (backend gaps). Owns all `*.py` + `requirements.txt`, incl. exclusive
-  ownership of `server.py`. Merged back by commit hash.
-- **Frontend/UX track (this loop):** Phase 2.3 (review flow), 2.4 (overlays & tray),
-  2.6 (first-run), Phase 3 (UI/UX). Owns all `app/src/**`. First-run/policy state is
-  stored client-side (Electron userData) to avoid touching `server.py`.
+The backend agent's worktree was accidentally branched from a stale base and it
+died with its work uncommitted. All of its changes were salvaged and re-applied
+onto the correct base (4 files applied clean; model_manager.py/requirements.txt/
+server.py hand-ported), so nothing was lost.
+- **Phase 2.2 injection matrix — DONE (salvaged).** injector.py runtime backend
+  selection (pydirectinput → xdotool → wtype/ydotool → paste); platform_capabilities
+  reports `injection_method`/`supports_typing` via /capabilities; best-effort Wayland
+  clipboard.
+- **Phase 2.5 backend gaps — DONE (salvaged).** Real `/models/unload` (frees memory +
+  gc), `/project/export` → Downloads (XDG-aware), audio_ducker pactl Linux backend,
+  requirements platform markers, standardized `sys.platform == 'win32'`. +15 new tests.
+- Dead agent worktree left in place (harness-locked); harmless, on its own branch.
+- **Remaining = frontend/UX only, done solo in this loop:** 2.3 (review flow),
+  2.4 (status-overlay drag/position + notification toasts; tray already done),
+  2.6 (first-run policy/tour/model wizard), Phase 3 (apply saved theme/density,
+  error/loading states, dead-DOM cleanup, a11y). First-run state stored client-side.
 
 ---
 
