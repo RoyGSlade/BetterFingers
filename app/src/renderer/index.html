@@ -188,6 +188,7 @@
               <button class="settings-nav-button" type="button" data-section="tts-readaloud">TTS / Read-Aloud</button>
               <button class="settings-nav-button" type="button" data-section="notifications-status">Notifications & Status</button>
               <button class="settings-nav-button" type="button" data-section="appearance">Appearance</button>
+              <button class="settings-nav-button" type="button" data-section="dictionary">Dictionary</button>
               <button class="settings-nav-button" type="button" data-section="privacy">Privacy</button>
               <button class="settings-nav-button" type="button" data-section="advanced-dev">Advanced & Developer</button>
             </nav>
@@ -804,6 +805,35 @@
                     </label>
                   </div>
                 </div>
+              </div>
+            </div>
+
+            <!-- Section: Personal Dictionary (C1) -->
+            <div class="settings-section hidden" data-section="dictionary">
+              <h2>Personal Dictionary</h2>
+              <p class="section-desc">Add names and jargon you use so BetterFingers hears them correctly and fixes common mishears.</p>
+
+              <div class="setting-group">
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="dictionaryInput">Add a term</label>
+                    <span class="setting-desc">A word or phrase (e.g. a name, product, or acronym).</span>
+                  </div>
+                  <div class="setting-control dictionary-add">
+                    <input id="dictionaryInput" class="settings-input" type="text" placeholder="e.g. Kubernetes" />
+                    <button id="dictionaryAddButton" class="primary-button" type="button">Add</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="setting-group" id="dictionarySuggestGroup" hidden>
+                <h3>Suggested from your edits</h3>
+                <div id="dictionarySuggestions" class="dictionary-chips"></div>
+              </div>
+
+              <div class="setting-group">
+                <h3>Your terms</h3>
+                <div id="dictionaryList" class="dictionary-chips"><span class="empty-state">No terms yet.</span></div>
               </div>
             </div>
 

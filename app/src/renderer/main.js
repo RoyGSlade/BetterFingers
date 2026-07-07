@@ -22,6 +22,10 @@ import {
   retranscribeRecording,
   deleteRecording,
   clearRecordings,
+  fetchDictionary,
+  addDictionaryTerm,
+  deleteDictionaryTerm,
+  suggestDictionaryTerms,
   fetchDrafts,
   fetchHealth,
   fetchLatestDraft,
@@ -1922,6 +1926,105 @@ async function handleWipeData() {
   }
 }
 
+// --- Personal dictionary (C1) ---
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (ch) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]),
+  );
+}
+
+function escapeAttr(value) {
+  return escapeHtml(value);
+}
+
+function renderDictionaryTerms(terms) {
+  const el = document.getElementById('dictionaryList');
+  if (!el) return;
+  if (!terms || !terms.length) {
+    el.innerHTML = '<span class="empty-state">No terms yet.</span>';
+    return;
+  }
+  el.innerHTML = terms
+    .map(
+      (t) =>
+        `<span class="dictionary-chip">${escapeHtml(t)}` +
+        `<button class="dictionary-chip-remove" type="button" data-term="${escapeAttr(t)}" aria-label="Remove ${escapeAttr(t)}">×</button></span>`,
+    )
+    .join('');
+}
+
+async function refreshDictionary() {
+  const el = document.getElementById('dictionaryList');
+  if (!el) return;
+  try {
+    const payload = await fetchDictionary();
+    renderDictionaryTerms(payload?.terms || []);
+  } catch (error) {
+    el.innerHTML = `<span class="empty-state">Dictionary unavailable: ${error.message}</span>`;
+  }
+}
+
+async function handleAddDictionaryTerm(term) {
+  const value = String(term || '').trim();
+  if (!value) return;
+  try {
+    const payload = await addDictionaryTerm(value);
+    renderDictionaryTerms(payload?.terms || []);
+    const input = document.getElementById('dictionaryInput');
+    if (input) input.value = '';
+    // Drop it from the suggestions row if it was there.
+    document.querySelector(`#dictionarySuggestions [data-term="${CSS.escape(value)}"]`)?.closest('.dictionary-chip')?.remove();
+  } catch (error) {
+    showToast(`Could not add term: ${error.message}`, 'danger');
+  }
+}
+
+async function handleRemoveDictionaryTerm(term) {
+  try {
+    const payload = await deleteDictionaryTerm(term);
+    renderDictionaryTerms(payload?.terms || []);
+  } catch (error) {
+    showToast(`Could not remove term: ${error.message}`, 'danger');
+  }
+}
+
+function renderDictionarySuggestions(suggestions) {
+  const group = document.getElementById('dictionarySuggestGroup');
+  const el = document.getElementById('dictionarySuggestions');
+  if (!group || !el) return;
+  if (!suggestions || !suggestions.length) {
+    group.hidden = true;
+    el.innerHTML = '';
+    return;
+  }
+  group.hidden = false;
+  el.innerHTML = suggestions
+    .map(
+      (t) =>
+        `<button class="dictionary-chip dictionary-chip-add" type="button" data-term="${escapeAttr(t)}">+ ${escapeHtml(t)}</button>`,
+    )
+    .join('');
+}
+
+// After a draft edit, quietly learn candidate terms from what the user changed.
+async function maybeLearnFromEdit(rawText, editedText) {
+  if (!rawText || !editedText) return;
+  try {
+    const payload = await suggestDictionaryTerms(rawText, editedText);
+    const suggestions = payload?.suggestions || [];
+    if (suggestions.length) {
+      renderDictionarySuggestions(suggestions);
+      showToast(
+        `Dictionary suggestion${suggestions.length > 1 ? 's' : ''}: ${suggestions.slice(0, 3).join(', ')} — add in Settings → Dictionary.`,
+        'info',
+      );
+    }
+  } catch (error) {
+    // Non-fatal: auto-learn is best-effort.
+  }
+}
+
 async function refreshRecordings() {
   const el = document.getElementById('recordingsList');
   if (!el) return;
@@ -2650,12 +2753,15 @@ async function saveCurrentDraftEdit({ silent = false } = {}) {
     return latestDraft;
   }
 
+  const rawTextBefore = latestDraft.raw_text ?? '';
   const draft = await editDraft(latestDraft.id, finalText);
   renderDraft(draft);
   await refreshDrafts();
   if (!silent) {
     setMessage(draftMessageEl, 'Draft edit saved.', 'success');
   }
+  // Auto-learn dictionary terms from what the user corrected (C1).
+  maybeLearnFromEdit(rawTextBefore, finalText).catch(() => {});
   return draft;
 }
 
@@ -2839,6 +2945,8 @@ function initSettingsPanel() {
 
       if (sectionName === 'privacy') {
         refreshPrivacy().catch(() => {});
+      } else if (sectionName === 'dictionary') {
+        refreshDictionary().catch(() => {});
       }
 
       settingsSections.forEach((section) => {
@@ -3096,6 +3204,28 @@ refreshDiagnosticsButton?.addEventListener('click', () => {
 });
 
 document.getElementById('privacyWipeButton')?.addEventListener('click', handleWipeData);
+
+document.getElementById('dictionaryAddButton')?.addEventListener('click', () => {
+  handleAddDictionaryTerm(document.getElementById('dictionaryInput')?.value);
+});
+document.getElementById('dictionaryInput')?.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    handleAddDictionaryTerm(event.target.value);
+  }
+});
+document.getElementById('dictionaryList')?.addEventListener('click', (event) => {
+  const remove = event.target.closest('.dictionary-chip-remove');
+  if (remove?.dataset.term) {
+    handleRemoveDictionaryTerm(remove.dataset.term);
+  }
+});
+document.getElementById('dictionarySuggestions')?.addEventListener('click', (event) => {
+  const add = event.target.closest('.dictionary-chip-add');
+  if (add?.dataset.term) {
+    handleAddDictionaryTerm(add.dataset.term);
+  }
+});
 
 document.getElementById('recordingsList')?.addEventListener('click', (event) => {
   const retry = event.target.closest('.recording-retry');

@@ -1775,3 +1775,36 @@ body.theme-light.high-contrast {
 .confidence-badge[data-tone='success'] { color: var(--accent); border-color: rgba(102, 242, 193, 0.4); }
 .confidence-badge[data-tone='warning'] { color: var(--warning); border-color: rgba(255, 200, 107, 0.4); }
 .confidence-badge[data-tone='danger'] { color: var(--danger); border-color: rgba(255, 124, 135, 0.4); }
+
+/* ==========================================
+   Personal dictionary (C1)
+   ========================================== */
+.dictionary-add { display: flex; gap: 8px; align-items: center; }
+.dictionary-add .settings-input { flex: 1; min-width: 140px; }
+.dictionary-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.dictionary-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  font-size: 0.88rem;
+}
+.dictionary-chip-remove {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0;
+}
+.dictionary-chip-remove:hover { color: var(--danger); }
+.dictionary-chip-add {
+  cursor: pointer;
+  color: var(--accent);
+  border-color: rgba(102, 242, 193, 0.4);
+}
+.dictionary-chip-add:hover { background: rgba(102, 242, 193, 0.08); }

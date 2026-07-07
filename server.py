@@ -2078,6 +2078,17 @@ async def delete_dictionary_term(term: str):
     return {"ok": True, "terms": dictionary.remove_term(term)}
 
 
+class DictionarySuggestRequest(BaseModel):
+    raw_text: str = ""
+    edited_text: str = ""
+
+
+@app.post("/dictionary/suggest")
+async def suggest_dictionary_terms(request: DictionarySuggestRequest):
+    suggestions = dictionary.suggest_from_edit(request.raw_text, request.edited_text)
+    return {"ok": True, "suggestions": suggestions}
+
+
 @app.get("/diagnostics/logs")
 async def diagnostics_logs(lines: int = 120):
     return read_log_tail(lines)

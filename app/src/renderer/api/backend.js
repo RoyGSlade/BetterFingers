@@ -191,6 +191,22 @@ async function clearRecordings(timeoutMs = 10000) {
   return deleteJson(`${BACKEND_ORIGIN}/recordings`, timeoutMs);
 }
 
+async function fetchDictionary(timeoutMs = 2500) {
+  return fetchJson(`${BACKEND_ORIGIN}/dictionary`, timeoutMs);
+}
+
+async function addDictionaryTerm(term, timeoutMs = 10000) {
+  return postJson(`${BACKEND_ORIGIN}/dictionary`, { term }, timeoutMs);
+}
+
+async function deleteDictionaryTerm(term, timeoutMs = 10000) {
+  return deleteJson(`${BACKEND_ORIGIN}/dictionary/${encodeURIComponent(term)}`, timeoutMs);
+}
+
+async function suggestDictionaryTerms(rawText, editedText, timeoutMs = 5000) {
+  return postJson(`${BACKEND_ORIGIN}/dictionary/suggest`, { raw_text: rawText, edited_text: editedText }, timeoutMs);
+}
+
 async function fetchRuntimeErrors(timeoutMs = 2500) {
   return fetchJson(RUNTIME_ERRORS_URL, timeoutMs);
 }
@@ -558,6 +574,10 @@ export {
   retranscribeRecording,
   deleteRecording,
   clearRecordings,
+  fetchDictionary,
+  addDictionaryTerm,
+  deleteDictionaryTerm,
+  suggestDictionaryTerms,
   fetchPersonas,
   fetchTtsVoices,
   savePersona,

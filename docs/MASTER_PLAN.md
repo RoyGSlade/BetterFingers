@@ -32,14 +32,15 @@ M (≤1 week), L (1–3 weeks), XL (3+ weeks).
   `transcribe` for other transcriber impls). Renderer shows a tone-tinted "% confident"
   badge on the draft. NOTE: auto-accept/silent-inject threshold intentionally deferred
   (kept conservative — surfacing confidence first, no behavior change).
-- [~] **C1 — Personal dictionary (backend done; UI + auto-learn next).** New
-  `dictionary.py`: terms persisted to `<userdata>/dictionary.json`; faster-whisper
-  `hotwords` bias (verified supported) wired through `transcribe_with_confidence`;
-  conservative post-ASR correction via **stdlib difflib** (no rapidfuzz dependency —
-  it's not installed) that only snaps long tokens at ≥0.82 similarity, casing-aware;
-  `suggest_from_edit()` for auto-learn (stopword-filtered). Endpoints GET/POST/DELETE
-  `/dictionary`. REMAINING: Dictionary settings UI + auto-learn (diff raw vs edited on
-  draft edit → suggest terms).
+- [x] **C1 — Personal dictionary.** `dictionary.py`: terms persisted to
+  `<userdata>/dictionary.json`; faster-whisper `hotwords` bias (verified supported) wired
+  through `transcribe_with_confidence`; conservative post-ASR correction via **stdlib
+  difflib** (no rapidfuzz dependency — not installed): only long tokens at ≥0.82
+  similarity are snapped, casing-aware. Endpoints GET/POST/DELETE `/dictionary` +
+  `/dictionary/suggest`. New "Personal Dictionary" settings section (chips: add / remove /
+  one-click-add suggestions). Auto-learn: saving a draft edit diffs raw vs edited
+  (`suggest_from_edit`, stopword-filtered) and surfaces candidate terms via toast +
+  the suggestions row.
 
 ---
 
