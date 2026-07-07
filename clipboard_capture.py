@@ -1,6 +1,7 @@
 import logging
-import os
 import re
+import shutil
+import subprocess
 import threading
 import time
 import uuid
@@ -9,18 +10,51 @@ import ctypes
 import keyboard
 import pyperclip
 
+import platform_capabilities
+
 
 _URL_ONLY_RE = re.compile(r"^(https?://|www\.)\S+$", re.IGNORECASE)
 _MAX_TTS_CHARS = 6000
+
+IS_WINDOWS = platform_capabilities.IS_WINDOWS
+
+
+def _wayland_clipboard_get_text() -> str:
+    """Best-effort Wayland clipboard read via wl-clipboard's `wl-paste`.
+
+    pyperclip cannot read the Wayland selection on many setups; if wl-paste is
+    available, use it as a fallback. Returns "" on any failure.
+    """
+    if not (platform_capabilities.is_wayland and shutil.which("wl-paste")):
+        return ""
+    try:
+        result = subprocess.run(
+            ["wl-paste", "--no-newline"],
+            check=False,
+            capture_output=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return ""
+        return result.stdout.decode("utf-8", "replace")
+    except Exception as exc:
+        logging.debug(f"wl-paste read failed: {exc}")
+        return ""
 
 
 def _clipboard_get_text() -> str:
     try:
         value = pyperclip.paste()
-        return str(value or "")
+        text = str(value or "")
     except Exception as exc:
         logging.debug(f"Clipboard read failed: {exc}")
-        return ""
+        text = ""
+    if not text:
+        # Best-effort Wayland fallback where pyperclip returns nothing.
+        wayland_text = _wayland_clipboard_get_text()
+        if wayland_text:
+            return wayland_text
+    return text
 
 
 def _clipboard_set_text(value: str) -> bool:
@@ -60,7 +94,7 @@ def is_readable_tts_text(text: str) -> bool:
 
 
 def _capture_clipboard_snapshot_windows():
-    if os.name != "nt":
+    if not IS_WINDOWS:
         return None
 
     try:
@@ -108,7 +142,7 @@ def _capture_clipboard_snapshot_windows():
 
 
 def _restore_clipboard_snapshot_windows(snapshot):
-    if os.name != "nt":
+    if not IS_WINDOWS:
         return False
     if not snapshot:
         return False
@@ -169,7 +203,7 @@ def _snapshot_signature(snapshot):
 
 
 def _schedule_delayed_clipboard_restore(snapshot, delay_ms=150):
-    if os.name != "nt":
+    if not IS_WINDOWS:
         return
     if not snapshot:
         return

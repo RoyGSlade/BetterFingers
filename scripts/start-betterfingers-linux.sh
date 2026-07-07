@@ -57,15 +57,15 @@ kill_group() {
     return 0
   fi
 
-  if sudo kill -0 -- "-$pgid" 2>/dev/null; then
+  if kill -0 -- "-$pgid" 2>/dev/null; then
     printf 'Stopping previous %s process group %s...\n' "$label" "$pgid"
-    sudo kill -TERM -- "-$pgid" 2>/dev/null || true
+    kill -TERM -- "-$pgid" 2>/dev/null || true
     sleep 2
   fi
 
-  if sudo kill -0 -- "-$pgid" 2>/dev/null; then
+  if kill -0 -- "-$pgid" 2>/dev/null; then
     printf 'Force-stopping previous %s process group %s...\n' "$label" "$pgid"
-    sudo kill -KILL -- "-$pgid" 2>/dev/null || true
+    kill -KILL -- "-$pgid" 2>/dev/null || true
   fi
 }
 
@@ -188,9 +188,9 @@ printf 'Python: %s\n' "$PYTHON_BIN"
 printf 'Node: %s\n' "$NODE_BIN"
 printf 'Logs: %s\n\n' "$LOG_DIR"
 
-printf 'Requesting sudo now so Linux keyboard hooks can access input devices...\n'
-sudo -v
-
+# No sudo: global hotkeys are handled by the Electron main process, and the
+# backend runs as the normal user. (For X11 text injection via the `keyboard`
+# library, add your user to the `input` group once instead of elevating here.)
 kill_previous_launch
 trap cleanup_this_launch EXIT INT TERM HUP
 
@@ -199,8 +199,8 @@ if [[ -n "${PYTHONPATH:-}" ]]; then
   PYTHONPATH_EXTRA="${PYTHONPATH_EXTRA:+$PYTHONPATH_EXTRA:}$PYTHONPATH"
 fi
 
-printf 'Starting root backend from current code...\n'
-sudo -E setsid env \
+printf 'Starting backend from current code...\n'
+setsid env \
   HOME="$HOME" \
   USER="${USER:-}" \
   LOGNAME="${LOGNAME:-${USER:-}}" \

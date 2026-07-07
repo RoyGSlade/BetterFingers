@@ -167,7 +167,7 @@ AVAILABLE_MODELS = {
 
 DEFAULT_MODEL = "gemma-3-4b-q4"
 
-if sys.platform.startswith("win"):
+if sys.platform == "win32":
     SERVER_FILENAME = "llama-server.exe"
     SERVER_ARCHIVE_NAME = "server-cuda-bin.zip"
     CUDA_ARCHIVE_NAME = "cuda-libs.zip"
@@ -395,7 +395,7 @@ def delete_model(model_id):
 
 def get_server_filename():
     """Returns the platform-specific llama-server binary name."""
-    if sys.platform.startswith("win"):
+    if sys.platform == "win32":
         return "llama-server.exe"
     return "llama-server"
 
@@ -855,6 +855,17 @@ def check_and_download_resources(model_id=None, progress_callback=None):
                 )
                 report({"key": target_model_id, "status": "error", "percent": 0.0, "message": message})
                 return {"ok": False, "model_id": target_model_id, "message": message, "runtime": existing_validation}
+
+    # Windows and Linux both have a known-good prebuilt llama.cpp archive to fetch
+    # (win-cuda / ubuntu-vulkan). macOS has no prebuilt binary here, so rather than
+    # download a Linux archive that can't run, tell the user to provide their own.
+    if server_needs_install and sys.platform == "darwin":
+        message = (
+            "llama-server binary not found. On macOS, build it yourself or set "
+            "BETTERFINGERS_LLAMA_SERVER to the path of an existing llama-server."
+        )
+        report({"key": target_model_id, "status": "error", "percent": 0.0, "message": message})
+        return {"ok": False, "model_id": target_model_id, "message": message}
 
     if server_needs_install:
         logging.info("llama-server not found or outdated. Downloading binaries...")

@@ -163,6 +163,79 @@ async function fetchDiagnosticsPaths(timeoutMs = 2500) {
   return fetchJson(DIAGNOSTICS_PATHS_URL, timeoutMs);
 }
 
+async function fetchMetrics(timeoutMs = 2500) {
+  return fetchJson(`${BACKEND_ORIGIN}/metrics`, timeoutMs);
+}
+
+async function fetchPrivacy(timeoutMs = 2500) {
+  return fetchJson(`${BACKEND_ORIGIN}/privacy`, timeoutMs);
+}
+
+async function wipeData(wipeVoices = false, timeoutMs = 10000) {
+  return postJson(`${BACKEND_ORIGIN}/privacy/wipe`, { wipe_voices: wipeVoices }, timeoutMs);
+}
+
+async function fetchRecordings(timeoutMs = 2500) {
+  return fetchJson(`${BACKEND_ORIGIN}/recordings`, timeoutMs);
+}
+
+async function retranscribeRecording(recId, timeoutMs = 120000) {
+  return postJson(`${BACKEND_ORIGIN}/recordings/${encodeURIComponent(recId)}/retranscribe`, {}, timeoutMs);
+}
+
+async function deleteRecording(recId, timeoutMs = 10000) {
+  return deleteJson(`${BACKEND_ORIGIN}/recordings/${encodeURIComponent(recId)}`, timeoutMs);
+}
+
+async function clearRecordings(timeoutMs = 10000) {
+  return deleteJson(`${BACKEND_ORIGIN}/recordings`, timeoutMs);
+}
+
+async function fetchDictionary(timeoutMs = 2500) {
+  return fetchJson(`${BACKEND_ORIGIN}/dictionary`, timeoutMs);
+}
+
+async function addDictionaryTerm(term, timeoutMs = 10000) {
+  return postJson(`${BACKEND_ORIGIN}/dictionary`, { term }, timeoutMs);
+}
+
+async function deleteDictionaryTerm(term, timeoutMs = 10000) {
+  return deleteJson(`${BACKEND_ORIGIN}/dictionary/${encodeURIComponent(term)}`, timeoutMs);
+}
+
+async function suggestDictionaryTerms(rawText, editedText, timeoutMs = 5000) {
+  return postJson(`${BACKEND_ORIGIN}/dictionary/suggest`, { raw_text: rawText, edited_text: editedText }, timeoutMs);
+}
+
+async function searchHistory(query, limit = 50, timeoutMs = 5000) {
+  const params = new URLSearchParams({ q: query ?? '', limit: String(limit) });
+  return fetchJson(`${BACKEND_ORIGIN}/history/search?${params.toString()}`, timeoutMs);
+}
+
+async function fetchHistoryRecent(limit = 50, timeoutMs = 5000) {
+  return fetchJson(`${BACKEND_ORIGIN}/history?limit=${encodeURIComponent(limit)}`, timeoutMs);
+}
+
+async function clearHistory(timeoutMs = 10000) {
+  return deleteJson(`${BACKEND_ORIGIN}/history`, timeoutMs);
+}
+
+async function fetchModelRecommendation(timeoutMs = 5000) {
+  return fetchJson(`${BACKEND_ORIGIN}/models/recommend`, timeoutMs);
+}
+
+async function fetchMacros(timeoutMs = 2500) {
+  return fetchJson(`${BACKEND_ORIGIN}/macros`, timeoutMs);
+}
+
+async function addMacro(trigger, expansion, timeoutMs = 10000) {
+  return postJson(`${BACKEND_ORIGIN}/macros`, { trigger, expansion }, timeoutMs);
+}
+
+async function deleteMacro(trigger, timeoutMs = 10000) {
+  return deleteJson(`${BACKEND_ORIGIN}/macros/${encodeURIComponent(trigger)}`, timeoutMs);
+}
+
 async function fetchRuntimeErrors(timeoutMs = 2500) {
   return fetchJson(RUNTIME_ERRORS_URL, timeoutMs);
 }
@@ -179,7 +252,7 @@ async function selectLlmModel(modelId, timeoutMs = 10000) {
   return postJson(`${MODELS_LLM_URL}/select`, { model_id: modelId }, timeoutMs);
 }
 
-async function downloadLlmModel(modelId, timeoutMs = 10000) {
+async function downloadLlmModel(modelId, timeoutMs = 1800000) {
   return postJson(`${MODELS_LLM_URL}/${encodeURIComponent(modelId)}/download`, {}, timeoutMs);
 }
 
@@ -350,8 +423,20 @@ async function fetchTtsVoices(timeoutMs = 2500) {
   return fetchJson(TTS_VOICES_URL, timeoutMs);
 }
 
-async function savePersona(name, prompt, timeoutMs = 5000) {
-  return postJson(PERSONAS_URL, { name, prompt }, timeoutMs);
+async function getPersonaV2(name, timeoutMs = 2500) {
+  return fetchJson(`${PERSONAS_URL}/${encodeURIComponent(name)}`, timeoutMs);
+}
+
+async function savePersona(name, prompt, extra = null, timeoutMs = 5000) {
+  const body = { name, prompt };
+  if (extra && typeof extra === 'object') {
+    for (const [key, value] of Object.entries(extra)) {
+      if (value !== null && value !== undefined) {
+        body[key] = value;
+      }
+    }
+  }
+  return postJson(PERSONAS_URL, body, timeoutMs);
 }
 
 async function deletePersona(name, timeoutMs = 5000) {
@@ -491,277 +576,6 @@ function connectVoiceStatus({
   };
 }
 
-// --- Studio Mode API ---
-const STUDIO_URL = `${BACKEND_ORIGIN}/studio`;
-
-// Build an HTTP URL for a file inside a project's folder. The renderer runs from an
-// http:// origin, so file:// URLs are blocked; assets must be served by the backend.
-// `version` cache-busts so a freshly uploaded image replaces the old one.
-function studioAssetUrl(projectName, relPath, version = '') {
-  if (!projectName || !relPath) {
-    return '';
-  }
-  const encoded = String(relPath).split('/').map(encodeURIComponent).join('/');
-  const base = `${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/assets/${encoded}`;
-  return version ? `${base}?v=${encodeURIComponent(version)}` : base;
-}
-
-async function studioCreateProject(projectName, timeoutMs = 10000) {
-  return postJson(`${STUDIO_URL}/project/create`, { project_name: projectName }, timeoutMs);
-}
-
-async function studioLoadProject(projectName, timeoutMs = 10000) {
-  return postJson(`${STUDIO_URL}/project/load`, { project_name: projectName }, timeoutMs);
-}
-
-async function studioListProjects(timeoutMs = 10000) {
-  try {
-    return await fetchJson(`${STUDIO_URL}/project/list`, timeoutMs);
-  } catch (error) {
-    if (!String(error.message || '').toLowerCase().includes('not found')) {
-      throw error;
-    }
-    return fetchJson(`${STUDIO_URL}/projects`, timeoutMs);
-  }
-}
-
-async function studioIntakeTurn(projectName, chatHistory, timeoutMs = 240000) {
-  return postJson(`${STUDIO_URL}/workflow/intake/turn`, { project_name: projectName, chat_history: chatHistory }, timeoutMs);
-}
-
-// Re-run the whole pipeline on an existing project using its saved seed (testing aid).
-async function studioRegenerateWorkflow(projectName, timeoutMs = 900000) {
-  return postJson(`${STUDIO_URL}/workflow/regenerate`, { project_name: projectName }, timeoutMs);
-}
-
-async function studioRunWorkflow(projectName, seedText, mode = 'seed', sourceStory = null, timeoutMs = 600000) {
-  const body = { project_name: projectName, seed_text: seedText, mode };
-  if (sourceStory) body.source_story = sourceStory;
-  return postJson(`${STUDIO_URL}/workflow/run`, body, timeoutMs);
-}
-
-async function studioBriefReview(projectName, seedText, mode = 'seed', sourceStory = null, userNotes = '', timeoutMs = 300000) {
-  const body = { project_name: projectName, seed_text: seedText, mode, user_notes: userNotes };
-  if (sourceStory) body.source_story = sourceStory;
-  return postJson(`${STUDIO_URL}/workflow/brief`, body, timeoutMs);
-}
-
-async function studioRunStage(projectName, stage, seedText = null, timeoutMs = 240000) {
-  const body = { project_name: projectName, stage };
-  if (seedText) body.seed_text = seedText;
-  return postJson(`${STUDIO_URL}/workflow/stage`, body, timeoutMs);
-}
-
-async function studioGetPanels(projectName, projectId, timeoutMs = 10000) {
-  return fetchJson(`${STUDIO_URL}/project/${encodeURIComponent(projectName)}/${projectId}/panels`, timeoutMs);
-}
-
-// --- Cinematic scene player (Phase 4) ---
-async function studioGetScenes(projectName, timeoutMs = 15000) {
-  return fetchJson(`${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/scenes`, timeoutMs);
-}
-
-// Write every scene (script + image) from the approved blueprint. Long-running.
-async function studioRunScenes(projectName, timeoutMs = 600000) {
-  return postJson(`${STUDIO_URL}/workflow/stage`,
-    { project_name: projectName, stage: 'scenes' }, timeoutMs);
-}
-
-// Per-scene reject/refine. target: 'script' | 'image' | 'all'.
-async function studioRegenerateScene(projectName, sceneId, target = 'all', feedback = '', timeoutMs = 240000) {
-  return postJson(`${STUDIO_URL}/workflow/scene/regenerate`,
-    { project_name: projectName, scene_id: sceneId, target, feedback }, timeoutMs);
-}
-
-// Cinematic stages (thin wrappers over the unified stage endpoint).
-async function studioRunCinematicStage(projectName, stage, timeoutMs = 600000) {
-  return postJson(`${STUDIO_URL}/workflow/stage`, { project_name: projectName, stage }, timeoutMs);
-}
-async function studioRenderImages(projectName, timeoutMs = 600000) {
-  return studioRunCinematicStage(projectName, 'render', timeoutMs);
-}
-async function studioVoiceScenes(projectName, timeoutMs = 600000) {
-  return studioRunCinematicStage(projectName, 'voice', timeoutMs);
-}
-async function studioRenderAmbience(projectName, timeoutMs = 600000) {
-  return studioRunCinematicStage(projectName, 'ambience', timeoutMs);
-}
-async function studioRenderScore(projectName, timeoutMs = 600000) {
-  return studioRunCinematicStage(projectName, 'music', timeoutMs);
-}
-async function studioSceneContinuity(projectName, timeoutMs = 240000) {
-  return studioRunCinematicStage(projectName, 'scene_continuity', timeoutMs);
-}
-async function studioRenderStatus(projectName, timeoutMs = 15000) {
-  return fetchJson(`${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/render-status`, timeoutMs);
-}
-// First-run readiness: which media engines (voice / ambience / music / image / LLM) are installed.
-async function studioReadiness(timeoutMs = 15000) {
-  return fetchJson(`${STUDIO_URL}/readiness`, timeoutMs);
-}
-
-// Per-project narration/score volume (so the reel doesn't blare).
-async function studioGetMediaSettings(projectName, timeoutMs = 10000) {
-  return fetchJson(`${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/media-settings`, timeoutMs);
-}
-async function studioSetMediaSettings(projectName, settings, timeoutMs = 10000) {
-  return postJson(`${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/media-settings`,
-    { project_name: projectName, ...settings }, timeoutMs);
-}
-
-// In-process image model catalog + download (Studio downloads + runs the model itself).
-async function studioListImageModels(timeoutMs = 10000) {
-  return fetchJson(`${STUDIO_URL}/models/image`, timeoutMs);
-}
-async function studioDownloadImageModel(modelKey, timeoutMs = 15000) {
-  return postJson(`${STUDIO_URL}/models/image/${encodeURIComponent(modelKey)}/download`, {}, timeoutMs);
-}
-async function studioImageModelDownloadState(modelKey, timeoutMs = 10000) {
-  return fetchJson(`${STUDIO_URL}/models/image/${encodeURIComponent(modelKey)}/download-state`, timeoutMs);
-}
-
-// In-process voice model catalog + download.
-async function studioListVoiceModels(timeoutMs = 10000) {
-  return fetchJson(`${STUDIO_URL}/models/voice`, timeoutMs);
-}
-async function studioDownloadVoiceModel(modelKey, timeoutMs = 15000) {
-  return postJson(`${STUDIO_URL}/models/voice/${encodeURIComponent(modelKey)}/download`, {}, timeoutMs);
-}
-async function studioVoiceModelDownloadState(modelKey, timeoutMs = 10000) {
-  return fetchJson(`${STUDIO_URL}/models/voice/${encodeURIComponent(modelKey)}/download-state`, timeoutMs);
-}
-
-// Unified Studio media model catalog: voice, music, ambience.
-async function studioListMediaModels(timeoutMs = 10000) {
-  return fetchJson(`${STUDIO_URL}/models/media`, timeoutMs);
-}
-async function studioDownloadMediaModel(modelKey, timeoutMs = 15000) {
-  return postJson(`${STUDIO_URL}/models/media/${encodeURIComponent(modelKey)}/download`, {}, timeoutMs);
-}
-async function studioMediaModelDownloadState(modelKey, timeoutMs = 10000) {
-  return fetchJson(`${STUDIO_URL}/models/media/${encodeURIComponent(modelKey)}/download-state`, timeoutMs);
-}
-
-async function studioCreatePage(projectName, episodeId, pageNumber, title = '', summary = '', timeoutMs = 10000) {
-  return postJson(
-    `${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/pages`,
-    { episode_id: episodeId, page_number: pageNumber, title, summary },
-    timeoutMs
-  );
-}
-
-async function studioCreatePanel(projectName, panel, timeoutMs = 10000) {
-  return postJson(`${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/panels`, panel, timeoutMs);
-}
-
-async function studioApproveItem(projectName, projectId, itemType, itemId, approved, feedback = null, timeoutMs = 20000) {
-  return postJson(`${STUDIO_URL}/project/approve`, { project_name: projectName, project_id: projectId, item_type: itemType, item_id: itemId, approved, feedback }, timeoutMs);
-}
-
-async function studioDeleteProject(projectName, timeoutMs = 10000) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(`${STUDIO_URL}/project/${encodeURIComponent(projectName)}`, {
-      method: 'DELETE',
-      headers: getHeaders(),
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => null);
-      throw new Error(errorData?.detail || `HTTP error ${response.status}`);
-    }
-    return await response.json();
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-async function studioResolveWarning(projectName, warningId, timeoutMs = 10000) {
-  return postJson(`${STUDIO_URL}/project/warning/resolve`, { project_name: projectName, warning_id: warningId }, timeoutMs);
-}
-
-async function studioRepairPropose(projectName, report, userNote = '', timeoutMs = 240000) {
-  return postJson(`${STUDIO_URL}/workflow/repair/propose`, { project_name: projectName, report, user_note: userNote }, timeoutMs);
-}
-
-async function studioUpdateStoryboard(projectName, projectId, storyboard, note = '', timeoutMs = 20000) {
-  return postJson(
-    `${STUDIO_URL}/workflow/storyboard`,
-    { project_name: projectName, project_id: projectId, storyboard, note },
-    timeoutMs,
-  );
-}
-
-async function studioTranscribeEdit(projectName, projectId, targetType, targetId, file, timeoutMs = 180000) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  const form = new FormData();
-  form.append('project_name', projectName);
-  if (projectId) form.append('project_id', String(projectId));
-  form.append('target_type', targetType || 'storyboard');
-  if (targetId) form.append('target_id', String(targetId));
-  form.append('file', file);
-
-  try {
-    const response = await fetch(`${STUDIO_URL}/workflow/transcribe-edit`, {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: form,
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      throw new Error(await getResponseErrorMessage(response, `${STUDIO_URL}/workflow/transcribe-edit`));
-    }
-    return await response.json();
-  } catch (error) {
-    throw normalizeFetchError(error, timeoutMs);
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-async function fetchStudioBlackboard(projectName, timeoutMs = 5000) {
-  return fetchJson(`${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/blackboard`, timeoutMs);
-}
-
-async function studioUploadPanelImage(projectName, projectId, panelId, file, timeoutMs = 60000) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  const form = new FormData();
-  form.append('project_name', projectName);
-  form.append('project_id', String(projectId));
-  form.append('panel_id', String(panelId));
-  form.append('file', file);
-
-  try {
-    const response = await fetch(`${STUDIO_URL}/project/panel-image`, {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: form,
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      throw new Error(await getResponseErrorMessage(response, `${STUDIO_URL}/project/panel-image`));
-    }
-    return await response.json();
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-async function studioExportReel(projectName, projectId = null, timeoutMs = 60000) {
-  return postJson(`${STUDIO_URL}/project/export-reel`, { project_name: projectName, project_id: projectId }, timeoutMs);
-}
-
-async function studioPrepareAudio(projectName, text, profileName = "default") {
-  return postJson(`${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/audio/prepare`, { text, profile_name: profileName });
-}
-
-async function studioRenderAudio(projectName, chunks) {
-  return postJson(`${STUDIO_URL}/projects/${encodeURIComponent(projectName)}/audio/render`, { chunks });
-}
-
 export {
   BACKEND_ORIGIN,
   CAPABILITIES_URL,
@@ -794,7 +608,26 @@ export {
   fetchCapabilities,
   fetchDiagnosticsLogs,
   fetchDiagnosticsPaths,
+  fetchMetrics,
+  fetchPrivacy,
+  wipeData,
+  fetchRecordings,
+  retranscribeRecording,
+  deleteRecording,
+  clearRecordings,
+  fetchDictionary,
+  addDictionaryTerm,
+  deleteDictionaryTerm,
+  suggestDictionaryTerms,
+  searchHistory,
+  fetchHistoryRecent,
+  clearHistory,
+  fetchModelRecommendation,
+  fetchMacros,
+  addMacro,
+  deleteMacro,
   fetchPersonas,
+  getPersonaV2,
   fetchTtsVoices,
   savePersona,
   deletePersona,
@@ -829,49 +662,4 @@ export {
   fetchDoctor,
   refreshAudioDevices,
   fetchVersion,
-  studioCreateProject,
-  studioListProjects,
-  studioLoadProject,
-  studioIntakeTurn,
-  studioRunWorkflow,
-  studioRegenerateWorkflow,
-  studioRunStage,
-  studioGetPanels,
-  studioGetScenes,
-  studioRunScenes,
-  studioRegenerateScene,
-  studioRunCinematicStage,
-  studioRenderImages,
-  studioVoiceScenes,
-  studioRenderAmbience,
-  studioRenderScore,
-  studioSceneContinuity,
-  studioRenderStatus,
-  studioReadiness,
-  studioGetMediaSettings,
-  studioSetMediaSettings,
-  studioListImageModels,
-  studioDownloadImageModel,
-  studioImageModelDownloadState,
-  studioListVoiceModels,
-  studioDownloadVoiceModel,
-  studioVoiceModelDownloadState,
-  studioListMediaModels,
-  studioDownloadMediaModel,
-  studioMediaModelDownloadState,
-  studioCreatePage,
-  studioCreatePanel,
-  studioApproveItem,
-  studioBriefReview,
-  studioResolveWarning,
-  studioRepairPropose,
-  studioUpdateStoryboard,
-  studioTranscribeEdit,
-  studioAssetUrl,
-  fetchStudioBlackboard,
-  studioUploadPanelImage,
-  studioDeleteProject,
-  studioExportReel,
-  studioPrepareAudio,
-  studioRenderAudio,
 };

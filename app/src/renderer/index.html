@@ -10,6 +10,23 @@
     <link rel="stylesheet" href="./styles/base.css" />
   </head>
   <body>
+    <div id="toastContainer" class="toast-container" role="status" aria-live="polite"></div>
+
+    <!-- First-run onboarding: policy → tour → models. Shown once (localStorage flag). -->
+    <div id="onboardingOverlay" class="onboarding-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle">
+      <div class="onboarding-card">
+        <div class="onboarding-progress" id="onboardingProgress"></div>
+        <h2 id="onboardingTitle" class="onboarding-title">Welcome</h2>
+        <div id="onboardingBody" class="onboarding-body"></div>
+        <div class="onboarding-actions">
+          <button id="onboardingDeclineButton" class="secondary-button" type="button">Decline &amp; quit</button>
+          <span class="onboarding-spacer"></span>
+          <button id="onboardingBackButton" class="secondary-button" type="button">Back</button>
+          <button id="onboardingNextButton" class="primary-button" type="button">Next</button>
+        </div>
+      </div>
+    </div>
+
     <div class="app-shell">
       <header class="hero">
         <div>
@@ -22,22 +39,22 @@
         <button id="quitButton" class="secondary-button" type="button">Quit app</button>
       </header>
 
-      <!-- Warning Banner for Version Mismatch -->
+      <!-- Warning Banner for backend health / version issues -->
       <div id="versionMismatchBanner" class="warning-banner hidden" role="alert">
-        <strong>Backend Version Mismatch:</strong> The running backend version does not match the version expected by this Electron client (0.1.0). Some features may behave unexpectedly. Please verify your installation.
+        <strong id="backendBannerTitle">Backend issue:</strong>
+        <span id="backendBannerMessage">The backend is not responding as expected.</span>
       </div>
 
       <!-- Tab Navigation -->
-      <nav class="tab-nav" aria-label="Main Navigation">
-        <button id="tabButtonDashboard" class="tab-button active" type="button" data-tab="dashboard">Dashboard</button>
-        <button id="tabButtonSettings" class="tab-button" type="button" data-tab="settings">Settings</button>
-        <button id="tabButtonModels" class="tab-button" type="button" data-tab="models">Models</button>
-        <button id="tabButtonDiagnostics" class="tab-button" type="button" data-tab="diagnostics">Diagnostics & Doctor</button>
-        <button id="tabButtonStudio" class="tab-button" type="button" data-tab="studio">Studio Mode</button>
+      <nav class="tab-nav" aria-label="Main Navigation" role="tablist">
+        <button id="tabButtonDashboard" class="tab-button active" type="button" data-tab="dashboard" role="tab" aria-selected="true" aria-controls="tabDashboard" tabindex="0">Dashboard</button>
+        <button id="tabButtonSettings" class="tab-button" type="button" data-tab="settings" role="tab" aria-selected="false" aria-controls="tabSettings" tabindex="-1">Settings</button>
+        <button id="tabButtonModels" class="tab-button" type="button" data-tab="models" role="tab" aria-selected="false" aria-controls="tabModels" tabindex="-1">Models</button>
+        <button id="tabButtonDiagnostics" class="tab-button" type="button" data-tab="diagnostics" role="tab" aria-selected="false" aria-controls="tabDiagnostics" tabindex="-1">Diagnostics & Doctor</button>
       </nav>
 
       <!-- Dashboard Tab Content -->
-      <div id="tabDashboard" class="tab-content active">
+      <div id="tabDashboard" class="tab-content active" role="tabpanel" aria-labelledby="tabButtonDashboard" tabindex="0">
         <section class="status-grid" aria-label="Backend status">
           <article class="status-card">
             <span class="status-label">Backend</span>
@@ -81,6 +98,7 @@
             <div class="draft-column">
               <div class="draft-column-header">
                 <span class="status-label">Cleaned output</span>
+                <span id="draftConfidence" class="confidence-badge hidden" title="Transcription confidence"></span>
                 <span id="draftTokenSummary" class="token-summary">0 tokens</span>
               </div>
               <textarea id="draftFinalText" class="draft-text review-editor" rows="8" disabled>Nothing to preview yet.</textarea>
@@ -126,7 +144,8 @@
               <span class="status-label">Draft history</span>
               <button id="clearDraftHistoryButton" class="secondary-button compact-button" type="button" style="padding: 2px 8px; font-size: 11px; margin: 0;">Clear History</button>
             </div>
-            <p class="draft-metadata">Persisted history keeps the latest 100 drafts.</p>
+            <p class="draft-metadata">Search your full dictation history — click a result to copy it.</p>
+            <input id="historySearchInput" class="settings-input" type="search" placeholder="Search history…" aria-label="Search dictation history" style="margin-bottom: 8px;" />
             <div id="draftHistoryList" class="draft-history">
               <span class="empty-state">No draft history yet.</span>
             </div>
@@ -152,7 +171,7 @@
       </div>
 
       <!-- Settings Tab Content -->
-      <div id="tabSettings" class="tab-content">
+      <div id="tabSettings" class="tab-content" role="tabpanel" aria-labelledby="tabButtonSettings" tabindex="0">
         <div class="settings-layout">
           <!-- Sidebar for Categories & Search -->
           <aside class="settings-sidebar">
@@ -170,6 +189,9 @@
               <button class="settings-nav-button" type="button" data-section="tts-readaloud">TTS / Read-Aloud</button>
               <button class="settings-nav-button" type="button" data-section="notifications-status">Notifications & Status</button>
               <button class="settings-nav-button" type="button" data-section="appearance">Appearance</button>
+              <button class="settings-nav-button" type="button" data-section="dictionary">Dictionary</button>
+              <button class="settings-nav-button" type="button" data-section="macros">Macros</button>
+              <button class="settings-nav-button" type="button" data-section="privacy">Privacy</button>
               <button class="settings-nav-button" type="button" data-section="advanced-dev">Advanced & Developer</button>
             </nav>
           </aside>
@@ -241,6 +263,19 @@
                       <option value="toggle">toggle</option>
                       <option value="ptt">push-to-talk</option>
                     </select>
+                    <span id="pttAvailabilityNote" class="setting-desc"></span>
+                  </div>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingVoiceCommands">Voice commands</label>
+                    <span class="setting-desc">Say "new paragraph", "period", "all caps word", etc. and have them formatted. Turn off if it interferes with normal dictation.</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="custom-switch-label">
+                      <input id="settingVoiceCommands" type="checkbox" />
+                      <span class="custom-switch-slider"></span>
+                    </label>
                   </div>
                 </div>
               </div>
@@ -538,6 +573,34 @@
                         <textarea id="wizardPromptPreview" class="settings-input textarea-medium" readonly></textarea>
                       </label>
                     </div>
+                    <details id="wizardAdvanced" class="mt-12">
+                      <summary class="status-label">Advanced (optional)</summary>
+                      <p class="setting-desc">Fine-tune generation, output formatting, and which model this persona prefers. Leave blank to use defaults.</p>
+                      <div class="settings-grid grid-cols-1 flex-column-gap12 mt-12">
+                        <label>
+                          <span class="status-label">Temperature (0–2)</span>
+                          <input id="wizardTemperature" class="settings-input" type="number" min="0" max="2" step="0.1" placeholder="model default" />
+                        </label>
+                        <label>
+                          <span class="status-label">Preferred model (optional)</span>
+                          <input id="wizardModelHint" class="settings-input" type="text" placeholder="e.g. gemma-4-e4b-q4" />
+                        </label>
+                        <label>
+                          <span class="status-label">Capitalization</span>
+                          <select id="wizardFormatCaps" class="settings-input">
+                            <option value="none">Leave as written</option>
+                            <option value="sentence">Sentence case</option>
+                            <option value="upper">UPPERCASE</option>
+                            <option value="lower">lowercase</option>
+                          </select>
+                        </label>
+                        <label class="flex-align-center-gap8"><input id="wizardFormatPunctuation" type="checkbox" checked /> Enforce punctuation</label>
+                        <label>
+                          <span class="status-label">Sign-off (optional)</span>
+                          <input id="wizardFormatSignoff" class="settings-input" type="text" placeholder="e.g. — Best, John" />
+                        </label>
+                      </div>
+                    </details>
                   </div>
                   
                   <div class="action-row mt-20 flex-between-center">
@@ -787,6 +850,99 @@
               </div>
             </div>
 
+            <!-- Section: Personal Dictionary (C1) -->
+            <div class="settings-section hidden" data-section="dictionary">
+              <h2>Personal Dictionary</h2>
+              <p class="section-desc">Add names and jargon you use so BetterFingers hears them correctly and fixes common mishears.</p>
+
+              <div class="setting-group">
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="dictionaryInput">Add a term</label>
+                    <span class="setting-desc">A word or phrase (e.g. a name, product, or acronym).</span>
+                  </div>
+                  <div class="setting-control dictionary-add">
+                    <input id="dictionaryInput" class="settings-input" type="text" placeholder="e.g. Kubernetes" />
+                    <button id="dictionaryAddButton" class="primary-button" type="button">Add</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="setting-group" id="dictionarySuggestGroup" hidden>
+                <h3>Suggested from your edits</h3>
+                <div id="dictionarySuggestions" class="dictionary-chips"></div>
+              </div>
+
+              <div class="setting-group">
+                <h3>Your terms</h3>
+                <div id="dictionaryList" class="dictionary-chips"><span class="empty-state">No terms yet.</span></div>
+              </div>
+            </div>
+
+            <!-- Section: Voice Macros (C11) -->
+            <div class="settings-section hidden" data-section="macros">
+              <h2>Voice Macros</h2>
+              <p class="section-desc">Say a short trigger and have it expand to a longer snippet (e.g. "my address" → your full address).</p>
+
+              <div class="setting-group">
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="macroTrigger">Add a macro</label>
+                    <span class="setting-desc">Trigger phrase and what it expands to.</span>
+                  </div>
+                  <div class="setting-control dictionary-add">
+                    <input id="macroTrigger" class="settings-input" type="text" placeholder="Trigger, e.g. my address" />
+                    <input id="macroExpansion" class="settings-input" type="text" placeholder="Expansion" />
+                    <button id="macroAddButton" class="primary-button" type="button">Add</button>
+                  </div>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingMacrosEnabled">Enable macros</label>
+                    <span class="setting-desc">Expand macros during dictation.</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="custom-switch-label">
+                      <input id="settingMacrosEnabled" type="checkbox" />
+                      <span class="custom-switch-slider"></span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="setting-group">
+                <h3>Your macros</h3>
+                <div id="macrosList" class="macros-list"><span class="empty-state">No macros yet.</span></div>
+              </div>
+            </div>
+
+            <!-- Section: Privacy (C7) -->
+            <div class="settings-section hidden" data-section="privacy">
+              <h2>Privacy</h2>
+              <p class="section-desc">BetterFingers runs offline. Here's exactly what touches the network and where your data lives.</p>
+
+              <div class="setting-group">
+                <h3>Network activity</h3>
+                <div id="privacyNetworkList" class="detail-list compact"><span class="empty-state">Loading…</span></div>
+              </div>
+
+              <div class="setting-group">
+                <h3>Your data on this device</h3>
+                <div id="privacyDataList" class="detail-list compact"><span class="empty-state">Loading…</span></div>
+              </div>
+
+              <div class="setting-group">
+                <h3>Wipe my data</h3>
+                <p class="setting-desc">Permanently deletes your drafts, transcription history, and any recordings held in memory. Models and profiles are kept.</p>
+                <label class="consent" style="margin: 8px 0;">
+                  <input type="checkbox" id="privacyWipeVoices" />
+                  <span>Also delete my cloned voices</span>
+                </label>
+                <button id="privacyWipeButton" class="danger-button" type="button">Wipe my data…</button>
+                <div id="privacyMessage" class="warmup-message" role="status" aria-live="polite"></div>
+              </div>
+            </div>
+
             <!-- Section: Advanced / Developer -->
             <div class="settings-section hidden" data-section="advanced-dev">
               <h2>Advanced & Developer Settings</h2>
@@ -860,134 +1016,6 @@
               </div>
 
               <div class="setting-group">
-                <h3>Studio Media Engine</h3>
-                <p class="group-desc">Local-first model lanes for cinematic Studio projects. Keep the dispatcher small and resident; let heavy media workers load only when their queue runs.</p>
-
-                <div class="setting-row">
-                  <div class="setting-info">
-                    <label class="status-label" for="settingStudioResourceProfile">Resource Profile</label>
-                    <span class="setting-desc">Background saver unloads workers after jobs; speedy keeps compatible workers warm.</span>
-                  </div>
-                  <div class="setting-control">
-                    <select id="settingStudioResourceProfile" class="settings-input min-w-200">
-                      <option value="saver">Background VRAM Saver</option>
-                      <option value="speedy">Speedy Pipeline</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div class="setting-row">
-                  <div class="setting-info">
-                    <label class="status-label" for="settingStudioDispatcherModel">Dispatcher Model</label>
-                    <span class="setting-desc">Small always-on Studio coordinator. Keep this on CPU/RAM.</span>
-                  </div>
-                  <div class="setting-control">
-                    <select id="settingStudioDispatcherModel" class="settings-input min-w-200">
-                      <option value="gemma-4-e4b-q4">Gemma 4 E4B Q4 (default)</option>
-                      <option value="gemma-4-e2b-q4">Gemma 4 E2B Q4 (low RAM)</option>
-                      <option value="gemma-4-e4b-q8">Gemma 4 E4B Q8</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div class="setting-row">
-                  <div class="setting-info">
-                    <label class="status-label" for="settingStudioWriterModel">Smart Writer Model</label>
-                    <span class="setting-desc">Larger transient model for lore, showrunning, scriptwriting, and project intelligence.</span>
-                  </div>
-                  <div class="setting-control">
-                    <select id="settingStudioWriterModel" class="settings-input min-w-200">
-                      <option value="gemma-4-12b-q4">Gemma 4 12B Q4 (default)</option>
-                      <option value="gemma-4-e4b-q8">Gemma 4 E4B Q8</option>
-                      <option value="gemma-3-12b-q4">Gemma 3 12B Q4</option>
-                      <option value="gemma-4-26b-a4b-q4">Gemma 4 26B-A4B Q4</option>
-                      <option value="gemma-4-31b-q4">Gemma 4 31B Q4</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div class="setting-row">
-                  <div class="setting-info">
-                    <label class="status-label" for="settingStudioVoiceEngine">Studio Voice Engine</label>
-                    <span class="setting-desc">Kokoro is the default bulk voice engine; Chatterbox is the premium expressive lane.</span>
-                  </div>
-                  <div class="setting-control">
-                    <select id="settingStudioVoiceEngine" class="settings-input min-w-200">
-                      <option value="kokoro">Kokoro</option>
-                      <option value="chatterbox">Chatterbox</option>
-                      <option value="off">Off</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div class="setting-row">
-                  <div class="setting-info">
-                    <label class="status-label" for="settingStudioImageBackend">Image Backend</label>
-                    <span class="setting-desc">Scene image rendering backend. Off keeps the cinematic player's gradient fallback.</span>
-                  </div>
-                  <div class="setting-control">
-                    <select id="settingStudioImageBackend" class="settings-input min-w-200">
-                      <option value="off">Off / fallback</option>
-                      <option value="diffusers">In-process Diffusers</option>
-                      <option value="comfyui">ComfyUI URL</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div class="setting-row">
-                  <div class="setting-info">
-                    <label class="status-label" for="settingStudioImageResolution">Image Resolution</label>
-                    <span class="setting-desc">Lower resolutions prevent OOM errors on smaller cards.</span>
-                  </div>
-                  <div class="setting-control">
-                    <select id="settingStudioImageResolution" class="settings-input min-w-200">
-                      <option value="1024x1024">1024x1024</option>
-                      <option value="1024x768">1024x768 (Landscape)</option>
-                      <option value="768x1024">768x1024 (Portrait)</option>
-                      <option value="768x768">768x768 (Low VRAM)</option>
-                      <option value="512x512">512x512 (Fast draft)</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div class="setting-row">
-                  <div class="setting-info">
-                    <label class="status-label" for="settingStudioMusicEngine">Music Engine</label>
-                    <span class="setting-desc">Score generation for reels or acts.</span>
-                  </div>
-                  <div class="setting-control">
-                    <select id="settingStudioMusicEngine" class="settings-input min-w-200">
-                      <option value="off">Off</option>
-                      <option value="ace-step">ACE-Step</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div class="setting-row">
-                  <div class="setting-info">
-                    <label class="status-label" for="settingStudioAmbienceEngine">Ambience Engine</label>
-                    <span class="setting-desc">Scene ambience and room-tone loops.</span>
-                  </div>
-                  <div class="setting-control">
-                    <select id="settingStudioAmbienceEngine" class="settings-input min-w-200">
-                      <option value="off">Off</option>
-                      <option value="stable-audio-open">Stable Audio Open</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div class="setting-row">
-                  <div class="setting-info">
-                    <label class="status-label" for="settingStudioVramCap">VRAM Budget Cap (MB)</label>
-                    <span class="setting-desc">Soft cap used by Studio queue planning and future ModelHost scheduling.</span>
-                  </div>
-                  <div class="setting-control">
-                    <input id="settingStudioVramCap" class="settings-input w-120" type="number" min="2048" max="65536" step="512" />
-                  </div>
-                </div>
-              </div>
-
-              <div class="setting-group">
                 <h3>Hardware Platform Capabilities</h3>
                 <div id="capabilitiesList" class="detail-list"></div>
               </div>
@@ -1015,7 +1043,7 @@
       </div>
 
       <!-- Models Tab Content -->
-      <div id="tabModels" class="tab-content">
+      <div id="tabModels" class="tab-content" role="tabpanel" aria-labelledby="tabButtonModels" tabindex="0">
         <section class="stream-panel">
           <div class="panel-header">
             <div>
@@ -1024,6 +1052,8 @@
             </div>
             <button id="refreshModelsButton" class="secondary-button" type="button">Refresh Models</button>
           </div>
+
+          <div id="modelRecommendation" class="model-recommendation hidden"></div>
 
           <div id="modelStatusSummary" class="model-overview" aria-live="polite">
             <div class="model-stat">
@@ -1043,27 +1073,12 @@
             </div>
           </div>
 
-          <section class="download-center" aria-labelledby="downloadCenterHeading">
-            <div class="download-center-header">
-              <div>
-                <p class="eyebrow">Downloads</p>
-                <h3 id="downloadCenterHeading">BetterFingers Download Center</h3>
-                <p>Track Studio and BetterFingers model installs in one place. Downloads continue in the background and reconnect when you reopen this screen.</p>
-              </div>
-              <div class="download-center-actions">
-                <button id="downloadCenterRefreshButton" class="secondary-button" type="button">Refresh</button>
-                <button id="downloadRequiredStudioButton" class="secondary-button primary-button" type="button">Get Studio Essentials</button>
-              </div>
-            </div>
-            <div id="downloadCenterList" class="download-center-list" aria-live="polite"></div>
-          </section>
-
           <div class="model-manager-grid">
             <section class="model-panel" aria-labelledby="llmModelHeading">
               <div class="model-panel-header">
                 <div>
-                  <h3 id="llmModelHeading">BetterFingers Core LLM</h3>
-                  <p>Used for dictation cleanup, personas, rewrites, and any selected smart-text task.</p>
+                  <h3 id="llmModelHeading">LLM Rewrite Model</h3>
+                  <p>Controls the local model used for cleanup, personas, and rewrites.</p>
                 </div>
                 <span id="llmModelBadge" class="model-badge">Loading</span>
               </div>
@@ -1110,69 +1125,7 @@
                 <button id="unloadSttButton" class="secondary-button" type="button">Unload</button>
               </div>
             </section>
-
-            <section class="model-panel" aria-labelledby="voiceModelHeading">
-              <div class="model-panel-header">
-                <div>
-                  <h3 id="voiceModelHeading">Studio Voice Models</h3>
-                  <p>Expressive TTS models like Chatterbox for cinematic audio passes.</p>
-                </div>
-                <span id="voiceModelBadge" class="model-badge">Loading</span>
-              </div>
-              <label class="model-select-row">
-                <span class="status-label">Choose model</span>
-                <select id="voiceModelSelect" class="settings-input"></select>
-              </label>
-              <div id="voiceModelDetails" class="model-detail-grid"></div>
-              <div class="model-action-group">
-                <button id="downloadVoiceButton" class="secondary-button primary-button" type="button">Download</button>
-              </div>
-              <div id="voiceDownloadProgress" class="model-download-progress" hidden>
-                <div class="model-progress-header">
-                  <span id="voiceDownloadProgressLabel">Download pending</span>
-                  <strong id="voiceDownloadProgressPercent">0%</strong>
-                </div>
-              </div>
-            </section>
-
-            <section class="model-panel" aria-labelledby="imageModelHeading">
-              <div class="model-panel-header">
-                <div>
-                  <h3 id="imageModelHeading">Studio Image Checkpoints</h3>
-                  <p>In-process Diffusers image models for local scene rendering.</p>
-                </div>
-                <span id="imageModelBadge" class="model-badge">Loading</span>
-              </div>
-              <label class="model-select-row">
-                <span class="status-label">Choose model</span>
-                <select id="imageModelSelect" class="settings-input"></select>
-              </label>
-              <div id="imageModelDetails" class="model-detail-grid"></div>
-              <div class="model-action-group">
-                <button id="downloadImageButton" class="secondary-button primary-button" type="button">Download</button>
-              </div>
-              <div id="imageDownloadProgress" class="model-download-progress" hidden>
-                <div class="model-progress-header">
-                  <span id="imageDownloadProgressLabel">Download pending</span>
-                  <strong id="imageDownloadProgressPercent">0%</strong>
-                </div>
-              </div>
-            </section>
           </div>
-
-          <section class="model-panel studio-model-panel" aria-labelledby="studioModelHeading">
-            <div class="model-panel-header">
-              <div>
-                <h3 id="studioModelHeading">Studio Media Engine</h3>
-                <p>Dispatcher, writer, voice, image, music, and ambience lanes for cinematic Studio projects.</p>
-              </div>
-              <span class="model-badge" data-tone="warning">Local-first</span>
-            </div>
-            <div class="studio-model-note">
-              Downloads run in the background and resume from partial files after a connection drop, app restart, or power loss. Heavy Studio workers should stay unloaded until their queue needs them.
-            </div>
-            <div id="studioModelRoleMap" class="studio-model-role-grid" aria-live="polite"></div>
-          </section>
 
           <div class="model-panel model-panel-compact">
             <div class="model-panel-header">
@@ -1190,7 +1143,7 @@
       </div>
 
       <!-- Diagnostics Tab Content -->
-      <div id="tabDiagnostics" class="tab-content">
+      <div id="tabDiagnostics" class="tab-content" role="tabpanel" aria-labelledby="tabButtonDiagnostics" tabindex="0">
         <!-- Centralized Doctor Checkup Panel -->
         <section class="stream-panel">
           <div class="panel-header">
@@ -1206,6 +1159,33 @@
           <div id="doctorRecoveryPanel" class="doctor-recovery-panel hidden">
             <span class="status-label">Recommended Recovery Actions</span>
             <div id="doctorRecoveryList" class="recovery-list"></div>
+          </div>
+        </section>
+
+        <!-- Pipeline latency HUD (C10) -->
+        <section class="stream-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Pipeline latency</h2>
+              <p class="section-desc">Per-stage timings for recent utterances (STT → LLM → total).</p>
+            </div>
+          </div>
+          <div id="metricsHud" class="metrics-hud">
+            <p class="empty-state">No utterances measured yet.</p>
+          </div>
+        </section>
+
+        <!-- Recovery: saved raw recordings (C6) -->
+        <section class="stream-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Recovery</h2>
+              <p class="section-desc">Every utterance's raw audio is saved here so nothing is lost. Re-transcribe or discard.</p>
+            </div>
+            <button id="clearRecordingsButton" class="secondary-button" type="button">Clear all</button>
+          </div>
+          <div id="recordingsList" class="recordings-list">
+            <p class="empty-state">No saved recordings.</p>
           </div>
         </section>
 
@@ -1259,359 +1239,6 @@
             <pre id="debugLogTail" class="log-tail">Log tail loading...</pre>
           </div>
         </section>
-      </div>
-      <!-- Studio Mode Tab Content -->
-      <div id="tabStudio" class="tab-content">
-
-        <!-- View: Start / Project Picker -->
-        <div id="studioViewStart" class="studio-view">
-          <section class="stream-panel studio-hero-panel">
-            <div class="studio-hero-banner">
-              <div>
-                <p class="eyebrow">Source Arcanum</p>
-                <h2 class="studio-title">Studio Mode</h2>
-                <p class="lede">Local-first AI-assisted storyboarding and voiced comic reel generator. Create structured story canon, character bibles, panel plans, and dialogue — all under your control.</p>
-              </div>
-            </div>
-
-            <div class="studio-start-grid">
-              <div class="studio-start-card">
-                <span class="status-label">New Project</span>
-                <p class="setting-desc">Name your production and start from a story seed.</p>
-                <div class="studio-input-row">
-                  <input id="studioNewProjectName" class="settings-input" type="text" placeholder="Project name (e.g. The Iron Veil)" maxlength="80" />
-                  <button id="studioCreateProjectButton" class="secondary-button primary-button" type="button">Create Project</button>
-                </div>
-                <div id="studioCreateMessage" class="warmup-message" role="status" aria-live="polite"></div>
-              </div>
-
-              <div class="studio-start-card">
-                <span class="status-label">Load Existing Project</span>
-                <p class="setting-desc">Continue a project that's already been started.</p>
-                <div class="studio-input-row">
-                  <select id="studioLoadProjectName" class="settings-input">
-                    <option value="">No saved projects found</option>
-                  </select>
-                  <button id="studioLoadProjectButton" class="secondary-button" type="button">Load</button>
-                  <button id="studioDeleteProjectButton" class="secondary-button" type="button" style="color: var(--error-color); border-color: var(--error-color);">Delete</button>
-                </div>
-                <div id="studioLoadMessage" class="warmup-message" role="status" aria-live="polite"></div>
-              </div>
-            </div>
-          </section>
-        </div>
-
-        <!-- View: Story Seed -->
-        <div id="studioViewSeed" class="studio-view hidden">
-          <section class="stream-panel">
-            <div class="panel-header">
-              <div>
-                <p class="eyebrow" id="studioSeedProjectLabel">Project</p>
-                <h2>Story Seed</h2>
-              </div>
-              <button id="studioBackToStartButton" class="secondary-button" type="button">← Back</button>
-            </div>
-            <p class="lede" id="studioSeedLede" style="margin-bottom: 20px;">Tell the studio what your story is about. A sentence or two is enough — the production pipeline handles the rest.</p>
-
-            <div class="setting-group">
-              <label class="status-label">Production style</label>
-              <div class="studio-mode-toggle" role="radiogroup" aria-label="Production style">
-                <button type="button" class="studio-mode-option active" data-mode="seed" role="radio" aria-checked="true">
-                  <span class="studio-mode-title">Start fresh</span>
-                  <span class="studio-mode-desc">Invent a new story from a short idea</span>
-                </button>
-                <button type="button" class="studio-mode-option" data-mode="adapt" role="radio" aria-checked="false">
-                  <span class="studio-mode-title">Adapt my story</span>
-                  <span class="studio-mode-desc">Storyboard a story you've already written</span>
-                </button>
-                <button type="button" class="studio-mode-option" data-mode="continue" role="radio" aria-checked="false">
-                  <span class="studio-mode-title">Continue my story</span>
-                  <span class="studio-mode-desc">Pick up where your story leaves off</span>
-                </button>
-              </div>
-            </div>
-
-            <div class="setting-group">
-              <div class="studio-seed-label-row">
-                <label class="status-label" for="studioSeedInput" id="studioSeedInputLabel">Your story seed</label>
-                <div class="studio-seed-actions">
-                  <input type="file" id="studioStoryFileInput" accept=".txt,.md,.markdown,.text" class="hidden" />
-                  <button type="button" id="studioLoadStoryFileButton" class="secondary-button hidden">Load file…</button>
-                  <span id="studioStoryMeta" class="studio-story-meta"></span>
-                </div>
-              </div>
-              <div id="studioIntakeChatContainer" class="studio-chat-container" style="margin-top: 16px; margin-bottom: 16px;">
-                <div id="studioIntakeChatHistory" class="studio-chat-history" style="max-height: 350px; overflow-y: auto; border: 1px solid var(--border-color); padding: 12px; border-radius: 6px; display: flex; flex-direction: column; gap: 10px;">
-                  <div class="chat-message assistant-message" style="align-self: flex-start; background: var(--bg-hover); padding: 10px 14px; border-radius: 8px; max-width: 85%;">
-                    <div class="message-bubble">Hello! I'm the Source Arcanum Intake Agent. What is your story idea? We are building a 60-second comic reel, so keep the scope tight (1-2 locations, 2-3 characters max).</div>
-                  </div>
-                </div>
-              </div>
-              <textarea id="studioSeedInput" class="settings-input studio-seed-textarea" rows="3" placeholder="Type your idea or response here..."></textarea>
-              
-              <div class="action-row" style="margin-top: 16px;">
-                <button id="studioRunPipelineButton" class="secondary-button primary-button studio-begin-btn" type="button">Send Message</button>
-              </div>
-              <div id="studioPipelineMessage" class="warmup-message" role="status" aria-live="polite"></div>
-            </div>
-          </section>
-        </div>
-
-        <!-- View: Pipeline Running -->
-        <div id="studioViewPipeline" class="studio-view hidden">
-          <section class="stream-panel">
-            <div class="panel-header">
-              <div>
-                <p class="eyebrow" id="studioPipelineProjectLabel">Project</p>
-                <h2>Running Pipeline</h2>
-              </div>
-            </div>
-            <div class="studio-pipeline-track">
-              <div class="studio-stage-step" data-stage="intake">
-                <div class="studio-stage-dot"></div>
-                <span>Story Intake</span>
-              </div>
-              <div class="studio-stage-step" data-stage="world_building">
-                <div class="studio-stage-dot"></div>
-                <span>World Building</span>
-              </div>
-              <div class="studio-stage-step" data-stage="character_building">
-                <div class="studio-stage-dot"></div>
-                <span>Characters</span>
-              </div>
-              <div class="studio-stage-step" data-stage="story_planning">
-                <div class="studio-stage-dot"></div>
-                <span>Story Planning</span>
-              </div>
-              <div class="studio-stage-step" data-stage="dialogue">
-                <div class="studio-stage-dot"></div>
-                <span>Dialogue & Panels</span>
-              </div>
-              <div class="studio-stage-step" data-stage="approval_ready">
-                <div class="studio-stage-dot"></div>
-                <span>Continuity Check</span>
-              </div>
-            </div>
-            <div id="studioPipelineStatus" class="studio-pipeline-status">
-              <span class="studio-spinner"></span>
-              <span id="studioPipelineStatusText">Starting production...</span>
-            </div>
-            <div class="studio-pipeline-progress">
-              <div class="studio-progress-track" aria-hidden="true">
-                <div id="studioPipelineProgressFill" class="studio-progress-fill"></div>
-              </div>
-              <div class="studio-pipeline-progress-row">
-                <span id="studioPipelineStep" class="studio-progress-step">Step 0 of 9</span>
-                <span id="studioPipelineElapsed" class="studio-progress-elapsed">0:00 elapsed</span>
-              </div>
-              <p id="studioPipelineDetail" class="studio-pipeline-detail">The local AI writes your story step by step. On a CPU-only machine this can take several minutes — it is working even when this looks still.</p>
-            </div>
-          </section>
-        </div>
-
-        <!-- View: Repair / Rebuild -->
-        <div id="studioViewRepair" class="studio-view hidden">
-          <section class="stream-panel">
-            <div class="panel-header">
-              <div>
-                <p class="eyebrow" id="studioRepairProjectLabel">Repair</p>
-                <h2>Let's fix what got rejected</h2>
-              </div>
-              <button id="studioRepairBackButton" class="secondary-button" type="button">← Back to seed</button>
-            </div>
-
-            <div class="studio-repair-problem">
-              <span class="status-label">What went wrong</span>
-              <p id="studioRepairProblem" class="studio-prose">—</p>
-              <pre id="studioRepairError" class="doctor-card-detail studio-repair-error"></pre>
-            </div>
-
-            <div class="studio-repair-step">
-              <label class="status-label" for="studioRepairNote" id="studioRepairQuestion">What were you going for here?</label>
-              <textarea id="studioRepairNote" class="settings-input" rows="3" placeholder="Describe what this beat should be, or what you wanted to happen..."></textarea>
-              <button id="studioRepairProposeButton" class="secondary-button primary-button" type="button">Get AI suggestions</button>
-            </div>
-
-            <div id="studioRepairDiagnosis" class="studio-repair-diagnosis hidden">
-              <span class="status-label">AI diagnosis</span>
-              <p id="studioRepairDiagnosisText" class="studio-prose">—</p>
-            </div>
-
-            <div id="studioRepairProposals" class="studio-repair-proposals"></div>
-
-            <div class="studio-repair-actions">
-              <textarea id="studioRepairFreeform" class="settings-input hidden" rows="2" placeholder="Write your own fix here..."></textarea>
-              <button id="studioRepairRebuildButton" class="secondary-button primary-button" type="button" disabled>Rebuild with this fix</button>
-            </div>
-            <div id="studioRepairMessage" class="warmup-message" role="status" aria-live="polite"></div>
-          </section>
-        </div>
-
-        <!-- View: Approval Dashboard -->
-        <div id="studioViewApproval" class="studio-view hidden">
-          <section class="stream-panel">
-            <div class="panel-header">
-              <div>
-                <p class="eyebrow" id="studioApprovalProjectLabel">Project</p>
-                <h2>Approval Dashboard</h2>
-              </div>
-              <div class="studio-header-actions">
-                <button id="studioNewProjectFromApprovalButton" class="secondary-button" type="button">New Project</button>
-                <button id="studioRegenerateButton" class="secondary-button" type="button" title="Re-run the whole pipeline on this project using its saved seed (rebuilds the story from scratch)">↻ Regenerate</button>
-                <button id="studioExportButton" class="secondary-button primary-button" type="button" disabled>Export Comic Reel</button>
-              </div>
-            </div>
-            <p class="setting-desc" style="margin-bottom: 24px; font-size: 0.88rem;">Review every section. Approve what works, reject or edit what doesn't. Everything stays local.</p>
-
-            <!-- Continuity Warnings (shown at top if any) -->
-            <div id="studioContinuityWarnings" class="studio-warnings-section hidden">
-              <div class="studio-section-title">
-                <span class="studio-section-icon">⚠</span>
-                <h3>Continuity Warnings</h3>
-              </div>
-              <div id="studioWarningsList" class="studio-warnings-list"></div>
-            </div>
-
-            <!-- Premise -->
-            <div class="studio-approval-section" id="studioPremiseSection">
-              <div class="studio-section-title">
-                <span class="studio-section-icon">📖</span>
-                <h3>Premise</h3>
-                <span class="studio-approval-badge" id="studioPremiseBadge">Pending</span>
-              </div>
-              <div class="studio-content-card" id="studioPremiseCard">
-                <div class="studio-field-row">
-                  <span class="studio-field-label">Title</span>
-                  <strong id="studioPremiseTitle" class="studio-field-value">—</strong>
-                </div>
-                <div class="studio-field-row">
-                  <span class="studio-field-label">Theme</span>
-                  <span id="studioPremiseTheme" class="studio-field-value">—</span>
-                </div>
-                <div class="studio-field-row">
-                  <span class="studio-field-label">Premise</span>
-                  <p id="studioPremiseText" class="studio-field-value studio-prose">—</p>
-                </div>
-              </div>
-              <div class="studio-approval-controls">
-                <button class="secondary-button studio-approve-btn" type="button" data-action="approve" data-section="premise">✓ Approve</button>
-                <button class="secondary-button studio-reject-btn" type="button" data-action="reject" data-section="premise">✗ Reject</button>
-              </div>
-            </div>
-
-            <!-- World Bible -->
-            <div class="studio-approval-section" id="studioWorldSection">
-              <div class="studio-section-title">
-                <span class="studio-section-icon">🌍</span>
-                <h3>World Bible</h3>
-                <span class="studio-approval-badge" id="studioWorldBadge">Pending</span>
-              </div>
-              <div class="studio-content-card" id="studioWorldCard">
-                <div class="studio-field-row">
-                  <span class="studio-field-label">Setting</span>
-                  <p id="studioWorldSetting" class="studio-field-value studio-prose">—</p>
-                </div>
-                <div class="studio-field-row">
-                  <span class="studio-field-label">Aesthetic</span>
-                  <p id="studioWorldAesthetic" class="studio-field-value studio-prose">—</p>
-                </div>
-                <div class="studio-field-row">
-                  <span class="studio-field-label">World Rules</span>
-                  <ul id="studioWorldRules" class="studio-rules-list"></ul>
-                </div>
-              </div>
-              <div class="studio-approval-controls">
-                <button class="secondary-button studio-approve-btn" type="button" data-action="approve" data-section="world">✓ Approve</button>
-                <button class="secondary-button studio-reject-btn" type="button" data-action="reject" data-section="world">✗ Reject</button>
-              </div>
-            </div>
-
-            <!-- Character Cards -->
-            <div class="studio-approval-section" id="studioCharactersSection">
-              <div class="studio-section-title">
-                <span class="studio-section-icon">🎭</span>
-                <h3>Characters</h3>
-              </div>
-              <div id="studioCharactersList" class="studio-characters-grid"></div>
-            </div>
-
-            <!-- 12-Panel Comic Reel -->
-            <div class="studio-approval-section" id="studioPanelsSection">
-              <div class="studio-section-title">
-                <span class="studio-section-icon">🎬</span>
-                <h3>Comic Pages</h3>
-                <button id="studioAddPageButton" class="secondary-button" type="button">Add Page</button>
-              </div>
-              <div id="studioPanelsGrid" class="studio-panels-grid"></div>
-            </div>
-
-            <!-- Cinematic Production (scene-based reel) -->
-            <div class="studio-approval-section" id="studioCinematicSection">
-              <div class="studio-section-title">
-                <span class="studio-section-icon">🎞️</span>
-                <h3>Cinematic Production</h3>
-                <button id="studioCinemaRefreshButton" class="secondary-button" type="button" title="Refresh status">↻</button>
-              </div>
-              <p class="setting-desc">A scene-based cinematic reel: a dynamic scene blueprint you approve, then authored narration, evocative imagery, and local voice — played back as a scrolling, narrated reel you refine scene by scene.</p>
-
-              <div id="studioCinemaStatus" class="draft-metadata" style="margin:8px 0; line-height:1.7;">No cinematic run yet — start with <strong>Blueprint</strong>.</div>
-
-              <div class="studio-pipeline-actions">
-                <button id="studioBlueprintButton" class="secondary-button" type="button" title="Break the story into a scene blueprint (read or invented)">1 · Blueprint</button>
-                <button id="studioApproveBlueprintButton" class="secondary-button" type="button" title="Approve the scene list before generating">2 · Approve</button>
-                <button id="studioGenerateScenesButton" class="secondary-button primary-button" type="button" title="Write narration + imagery for each scene">3 · Generate Scenes</button>
-                <button id="studioRenderImagesButton" class="secondary-button" type="button" title="Render an image per scene (if a generator is configured)">Render Images</button>
-                <button id="studioVoiceScenesButton" class="secondary-button" type="button" title="Voice the narration locally">Voice</button>
-                <button id="studioRenderAmbienceButton" class="secondary-button" type="button" title="Render per-scene ambience / SFX (Stable Audio Open Small, if installed)">Render Ambience</button>
-                <button id="studioRenderScoreButton" class="secondary-button" type="button" title="Render an instrumental score cue (ACE-Step, if installed)">Render Score</button>
-                <button id="studioContinuityButton" class="secondary-button" type="button" title="Audit continuity + verify setups pay off">Continuity</button>
-                <button id="studioPlayCinemaButton" class="secondary-button primary-button" type="button" title="Play the cinematic reel">▶ Player</button>
-              </div>
-              <div class="studio-media-volumes" style="display:flex; gap:24px; align-items:center; margin-top:10px; flex-wrap:wrap;">
-                <label style="display:flex; align-items:center; gap:8px; font-size:0.85rem;">
-                  🎙 Voice
-                  <input id="studioVoiceVolume" type="range" min="0" max="1.5" step="0.05" value="1.0" style="width:120px;" />
-                  <span id="studioVoiceVolumeLabel" class="draft-metadata">100%</span>
-                </label>
-                <label style="display:flex; align-items:center; gap:8px; font-size:0.85rem;">
-                  🎵 Score
-                  <input id="studioMusicVolume" type="range" min="0" max="1.5" step="0.05" value="0.35" style="width:120px;" />
-                  <span id="studioMusicVolumeLabel" class="draft-metadata">35%</span>
-                </label>
-                <span class="draft-metadata" style="font-size:0.78rem;">Applied on the next Voice / Render Score.</span>
-              </div>
-              <div id="studioCinemaWarnings" class="draft-metadata" style="margin-top:8px;"></div>
-              <div id="studioCinemaMessage" class="warmup-message" role="status" aria-live="polite"></div>
-            </div>
-
-            <!-- Export Placeholder -->
-            <div class="studio-approval-section studio-export-section">
-              <div class="studio-section-title">
-                <span class="studio-section-icon">📤</span>
-                <h3>Export</h3>
-              </div>
-              <p class="setting-desc">Export your comic reel as a local production package — a self-contained scrolling <strong>reel.html</strong> preview, series/world/character/style bibles, a panel-by-panel script, timed subtitles (.srt), an export report, and a shareable ZIP. Everything stays on your machine.</p>
-              
-              <div class="studio-pipeline-actions">
-                <button id="studioPrepareAudioButton" class="secondary-button" type="button">Prepare Audio</button>
-                <button id="studioExportReelButton" class="secondary-button primary-button" type="button">Export Comic Reel</button>
-                <button id="studioOpenReelButton" class="secondary-button" type="button" style="display:none;">Open Reel Preview</button>
-              </div>
-              
-              <div id="studioAudioSection" class="studio-approval-section hidden">
-                <h3>Audio Rendering</h3>
-                <div id="studioAudioChunksList" class="studio-audio-chunks-list" style="margin-bottom: 12px;"></div>
-                <button id="studioRenderAudioButton" class="secondary-button primary-button" type="button">Render Audio Files</button>
-                <div id="studioAudioMessage" class="warmup-message" role="status" aria-live="polite"></div>
-              </div>
-
-              <p id="studioExportResult" class="draft-metadata" style="margin-top: 8px;">Bibles, script, subtitles, and a scrolling reel preview are written into your project's <code>exports/</code> folder.</p>
-            </div>
-
-            <div id="studioApprovalMessage" class="warmup-message" role="status" aria-live="polite"></div>
-          </section>
-        </div>
-
       </div>
     </div>
 

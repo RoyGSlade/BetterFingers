@@ -3,6 +3,13 @@ const net = require('node:net');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { app } = require('electron');
+const { EXPECTED_API_SCHEMA_VERSION } = require('./config');
+
+// How the post-startup health monitor behaves once the backend is ready.
+const HEALTH_POLL_INTERVAL_MS = 5000;
+const HEALTH_FAILURES_BEFORE_UNHEALTHY = 3; // ~15s of missed pings
+const MAX_AUTO_RESTARTS = 3; // give up (and tell the user) after this many
+const RESTART_COUNTER_RESET_MS = 5 * 60 * 1000; // a clean 5min resets the count
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -106,7 +113,8 @@ function resolveBackendExecutable() {
 
 function killChildProcess(child) {
   return new Promise((resolve) => {
-    if (!child || child.killed) {
+    if (!child || child.killed || child.exitCode !== null || child.signalCode !== null) {
+      // Already gone (killed, or crashed on its own) — nothing to wait for.
       resolve();
       return;
     }
@@ -155,6 +163,7 @@ function createSidecar({
   authToken = '',
   devCommand = 'python',
   devArgs = [],
+  onStatusChange = null,
 } = {}) {
   const healthUrl = `http://${host}:${port}/health`;
   const isPackaged = app.isPackaged;
@@ -168,6 +177,11 @@ function createSidecar({
   let startPromise = null;
   let logBuffer = [];
   const maxLogBufferLines = 200;
+  let healthTimer = null;
+  let consecutiveHealthFailures = 0;
+  let autoRestartCount = 0;
+  let lastRestartAt = 0;
+  let restarting = false;
   let status = {
     state: 'stopped',
     message: 'Backend has not started yet.',
@@ -185,6 +199,13 @@ function createSidecar({
       pid: childProcess?.pid ?? null,
       ownsProcess: Boolean(childProcess),
     };
+    if (typeof onStatusChange === 'function') {
+      try {
+        onStatusChange({ ...status });
+      } catch (error) {
+        // A status listener must never take down the main process.
+      }
+    }
   }
 
   function appendLog(streamName, data) {
@@ -228,9 +249,24 @@ function createSidecar({
 
       try {
         const logFilePath = path.join(app.getPath('userData'), 'sidecar_backend_raw.log');
-        fs.writeFileSync(logFilePath, '');
+        // Preserve prior sessions for diagnostics: append a separator instead of
+        // wiping, and trim from the front if the file grows past ~2 MB.
+        const maxLogFileBytes = 2 * 1024 * 1024;
+        try {
+          const stat = fs.statSync(logFilePath);
+          if (stat.size > maxLogFileBytes) {
+            const kept = fs.readFileSync(logFilePath).slice(-maxLogFileBytes);
+            fs.writeFileSync(logFilePath, kept);
+          }
+        } catch (e) {
+          // No existing log file yet — nothing to trim.
+        }
+        fs.appendFileSync(
+          logFilePath,
+          `\n===== session started ${new Date().toISOString()} =====\n`,
+        );
       } catch (e) {
-        console.error('Failed to clear sidecar backend log file:', e);
+        console.error('Failed to prepare sidecar backend log file:', e);
       }
       logBuffer = [];
 
@@ -341,9 +377,10 @@ function createSidecar({
           exitPromise,
         ].filter(Boolean));
 
-        // Perform Version Handshake
+        // Perform Version Handshake. Compatibility is gated on the API schema
+        // version, not the marketing version — a 0.1.0 -> 0.2.0 app bump that
+        // keeps the same contract must not trip the mismatch banner.
         const versionUrl = `http://${host}:${port}/runtime/version`;
-        const expectedVersion = '0.1.0';
         let versionPayload = null;
         try {
           const versionController = new AbortController();
@@ -363,11 +400,18 @@ function createSidecar({
 
         let versionMismatch = false;
         if (versionPayload) {
-          const backendVer = versionPayload.backend_version;
-          appendLog('electron', `Backend version: ${backendVer} (expected: ${expectedVersion})`);
-          if (backendVer !== expectedVersion) {
+          const backendSchema = versionPayload.schema_version;
+          const backendVer = versionPayload.backend_version ?? 'unknown';
+          appendLog(
+            'electron',
+            `Backend version ${backendVer}, API schema ${backendSchema} (expected schema ${EXPECTED_API_SCHEMA_VERSION}).`,
+          );
+          if (backendSchema !== EXPECTED_API_SCHEMA_VERSION) {
             versionMismatch = true;
-            appendLog('electron', `Version mismatch detected! Backend is ${backendVer}, Frontend expects ${expectedVersion}`);
+            appendLog(
+              'electron',
+              `API schema mismatch! Backend schema ${backendSchema}, client expects ${EXPECTED_API_SCHEMA_VERSION}.`,
+            );
           }
         } else {
           versionMismatch = true;
@@ -377,13 +421,20 @@ function createSidecar({
         setStatus({
           state: versionMismatch ? 'version_mismatch' : 'ready',
           message: versionMismatch
-            ? `Warning: Frontend expects API version ${expectedVersion}, but backend reported version ${versionPayload?.backend_version ?? 'unknown'}.`
+            ? `Warning: this app speaks API schema ${EXPECTED_API_SCHEMA_VERSION}, but the backend reported schema ${versionPayload?.schema_version ?? 'unknown'}. Some features may not work.`
             : `Backend is ready at ${healthUrl}.`,
           health: result,
+          backendVersion: versionPayload?.backend_version ?? null,
+          schemaVersion: versionPayload?.schema_version ?? null,
           error: versionMismatch ? 'version_mismatch' : '',
         });
 
         appendLog('electron', `Backend handshake completed. State: ${status.state}`);
+
+        // Only monitor liveness for a process we own and that came up cleanly.
+        if (!versionMismatch && childProcess) {
+          startHealthMonitor();
+        }
 
         return {
           url: healthUrl,
@@ -404,13 +455,115 @@ function createSidecar({
     return startPromise;
   }
 
+  function stopHealthMonitor() {
+    if (healthTimer) {
+      clearInterval(healthTimer);
+      healthTimer = null;
+    }
+    consecutiveHealthFailures = 0;
+  }
+
+  function startHealthMonitor() {
+    stopHealthMonitor();
+    healthTimer = setInterval(async () => {
+      // Skip while a (re)start is mid-flight or we don't own a process.
+      if (restarting || !childProcess) {
+        return;
+      }
+
+      const health = await tryReadHealth(healthUrl);
+      if (health) {
+        consecutiveHealthFailures = 0;
+        if (status.state === 'unhealthy') {
+          setStatus({
+            state: 'ready',
+            message: `Backend recovered and is ready at ${healthUrl}.`,
+            error: '',
+          });
+          appendLog('electron', 'Backend health recovered.');
+        }
+        return;
+      }
+
+      consecutiveHealthFailures += 1;
+      appendLog(
+        'electron',
+        `Backend health check missed (${consecutiveHealthFailures}/${HEALTH_FAILURES_BEFORE_UNHEALTHY}).`,
+      );
+
+      if (consecutiveHealthFailures === HEALTH_FAILURES_BEFORE_UNHEALTHY) {
+        setStatus({
+          state: 'unhealthy',
+          message: 'Backend stopped responding to health checks. Attempting to recover…',
+          error: 'unhealthy',
+        });
+        restartBackend('health checks stopped responding');
+      }
+    }, HEALTH_POLL_INTERVAL_MS);
+
+    if (typeof healthTimer.unref === 'function') {
+      healthTimer.unref();
+    }
+  }
+
+  async function restartBackend(reason) {
+    if (restarting) {
+      return;
+    }
+    restarting = true;
+    stopHealthMonitor();
+
+    const now = Date.now();
+    if (now - lastRestartAt > RESTART_COUNTER_RESET_MS) {
+      autoRestartCount = 0;
+    }
+
+    if (autoRestartCount >= MAX_AUTO_RESTARTS) {
+      setStatus({
+        state: 'crashed',
+        message:
+          'The backend stopped responding and could not be recovered automatically. Please restart BetterFingers.',
+        error: 'crashed',
+      });
+      appendLog('electron', `Giving up after ${autoRestartCount} auto-restart attempts.`);
+      restarting = false;
+      return;
+    }
+
+    autoRestartCount += 1;
+    lastRestartAt = now;
+    appendLog(
+      'electron',
+      `Restarting backend (attempt ${autoRestartCount}/${MAX_AUTO_RESTARTS}): ${reason}`,
+    );
+    setStatus({
+      state: 'restarting',
+      message: `Backend stopped responding; restarting (attempt ${autoRestartCount})…`,
+      error: '',
+    });
+
+    try {
+      await stop();
+    } catch (error) {
+      appendLog('electron', `Error while stopping crashed backend: ${error.message}`);
+    }
+
+    restarting = false;
+    try {
+      await start();
+    } catch (error) {
+      appendLog('electron', `Auto-restart failed: ${error.message}`);
+    }
+  }
+
   async function stop() {
+    stopHealthMonitor();
     const processRef = childProcess;
     childProcess = null;
     startPromise = null;
 
     if (!processRef) {
-      const preserveStates = ['external', 'error', 'version_mismatch'];
+      const preserveStates = ['external', 'error', 'version_mismatch', 'crashed'];
       setStatus({
         state: preserveStates.includes(status.state) ? status.state : 'stopped',
         message: preserveStates.includes(status.state) ? status.message : 'Backend is stopped.',

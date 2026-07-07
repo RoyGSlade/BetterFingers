@@ -4,6 +4,8 @@ import shutil
 import tempfile
 import logging
 import threading
+import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -11,6 +13,7 @@ import typing
 import pyperclip
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from llm_engine import get_engine, get_engine_if_initialized
 from transcriber import Transcriber
@@ -20,10 +23,13 @@ from user_profile_manager import profile_manager
 from intent_engine import intent_engine, IntentState
 from project_generator import project_generator
 from platform_capabilities import get_capabilities
-from hardware_report import get_hardware_report, assess_model_fit
+from hardware_report import get_hardware_report, assess_model_fit, get_hardware_tier
 from platform_paths import ensure_app_dirs, get_app_data_dir, get_config_dir
-import studio_capabilities
-import studio_memory
+import recordings
+import dictionary
+import dictation_commands
+import macros
+import history_store
 from model_manager import (
     DEFAULT_MODEL,
     AVAILABLE_MODELS,
@@ -97,6 +103,10 @@ transcriber = None
 hotkey_manager = None
 hotkey_recorder = None
 hotkey_manager_started = False
+_warmup_thread = None  # background model-warmup thread started by startup_event
+# Rolling per-utterance pipeline latency samples for the /metrics HUD (C10).
+pipeline_metrics = deque(maxlen=50)
+pipeline_metrics_lock = threading.Lock()
 output_injector = None
 tts_engine = None
 active_websockets = []
@@ -120,6 +130,8 @@ def save_draft_history():
             serializable_drafts = [dict(draft) for draft in draft_queue]
         with open(history_file, "w", encoding="utf-8") as f:
             json.dump(serializable_drafts, f, indent=2)
+        # Mirror into the searchable, uncapped archive (C8). Defensive: never fatal.
+        history_store.upsert_many(serializable_drafts)
     except Exception as exc:
         logging.exception(f"Failed to save draft history to {history_file}: {exc}")
 
@@ -284,6 +296,24 @@ def apply_active_profile_runtime(profile_name):
 
 def is_lazy_startup_enabled():
     return os.getenv("BETTERFINGERS_LAZY_STARTUP") == "1"
+
+
+def voice_commands_enabled():
+    """Whether spoken dictation commands (C2) are applied. Per-profile, default on."""
+    try:
+        config = load_profile(get_last_active_profile())
+    except Exception:
+        return True
+    return bool(config.get("voice_commands_enabled", True))
+
+
+def macros_enabled():
+    """Whether voice macros (C11) are expanded. Per-profile, default on."""
+    try:
+        config = load_profile(get_last_active_profile())
+    except Exception:
+        return True
+    return bool(config.get("macros_enabled", True))
 
 
 def get_model_residency_settings():
@@ -512,7 +542,7 @@ def update_draft_review_fields(draft):
     return draft
 
 
-def create_draft(raw_text, final_text, preset="True Janitor", status="pending", metadata=None, error="", gate_reasons=None, recording_result=None):
+def create_draft(raw_text, final_text, preset="True Janitor", status="pending", metadata=None, error="", gate_reasons=None, recording_result=None, confidence=None):
     global next_draft_id
 
     with draft_lock:
@@ -525,6 +555,7 @@ def create_draft(raw_text, final_text, preset="True Janitor", status="pending", 
             "metadata": metadata or {},
             "error": error or "",
             "gate_reasons": list(gate_reasons or []),
+            "confidence": confidence or {"score": None, "avg_logprob": None, "no_speech_prob": None},
             "pending_send": False,
             "send_result": None,
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -886,6 +917,82 @@ def toggle_recording_runtime():
     return {"ok": False, "recording": False, "message": "Recording did not start. Check microphone permissions/device."}
 
 
+def start_recording_runtime():
+    """Explicit recording start, used for push-to-talk key-down (idempotent)."""
+    manager = start_hotkey_manager()
+    if manager is None:
+        raise HTTPException(status_code=500, detail="Recording runtime is unavailable.")
+
+    if bool(getattr(manager, "is_recording", False)):
+        return {"ok": True, "recording": True, "message": "Already recording."}
+    manager.request_start(reason="ptt")
+    is_recording = bool(getattr(manager, "is_recording", False))
+    if is_recording:
+        return {"ok": True, "recording": True, "message": "Recording started."}
+    return {"ok": False, "recording": False, "message": "Recording did not start. Check microphone permissions/device."}
+
+
+def stop_recording_runtime():
+    """Explicit recording stop, used for push-to-talk key-up (idempotent)."""
+    manager = start_hotkey_manager()
+    if manager is None:
+        raise HTTPException(status_code=500, detail="Recording runtime is unavailable.")
+
+    if not bool(getattr(manager, "is_recording", False)):
+        return {"ok": True, "recording": False, "message": "Not recording."}
+    manager.request_stop(reason="ptt_release")
+    return {"ok": True, "recording": False, "message": "Recording stopped. Processing audio..."}
+
+
+def record_pipeline_metrics(stt_ms=None, llm_ms=None, total_ms=None, audio_seconds=0.0, chars=0):
+    """Append one utterance's pipeline latency sample (C10 HUD)."""
+    entry = {
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "stt_ms": round(stt_ms, 1) if stt_ms is not None else None,
+        "llm_ms": round(llm_ms, 1) if llm_ms is not None else None,
+        "total_ms": round(total_ms, 1) if total_ms is not None else None,
+        "audio_seconds": round(float(audio_seconds or 0.0), 2),
+        "chars": int(chars or 0),
+    }
+    with pipeline_metrics_lock:
+        pipeline_metrics.append(entry)
+    return entry
+
+
+def _percentile(values, pct):
+    if not values:
+        return None
+    ordered = sorted(values)
+    k = max(0, min(len(ordered) - 1, int(round((pct / 100.0) * (len(ordered) - 1)))))
+    return round(ordered[k], 1)
+
+
+def get_pipeline_metrics_summary():
+    """Summary stats over the recent latency samples for the HUD."""
+    with pipeline_metrics_lock:
+        samples = list(pipeline_metrics)
+
+    def stage_stats(key):
+        vals = [s[key] for s in samples if s.get(key) is not None]
+        if not vals:
+            return {"count": 0, "avg_ms": None, "p50_ms": None, "p95_ms": None, "last_ms": None}
+        return {
+            "count": len(vals),
+            "avg_ms": round(sum(vals) / len(vals), 1),
+            "p50_ms": _percentile(vals, 50),
+            "p95_ms": _percentile(vals, 95),
+            "last_ms": vals[-1],
+        }
+
+    return {
+        "count": len(samples),
+        "stt": stage_stats("stt_ms"),
+        "llm": stage_stats("llm_ms"),
+        "total": stage_stats("total_ms"),
+        "recent": samples[-10:],
+    }
+
+
 def process_recording_result(recording_result):
     global is_processing_draft
     with draft_lock:
@@ -899,17 +1006,46 @@ def process_recording_result(recording_result):
     preset = "True Janitor"
     raw_text = ""
     metadata = get_recording_metadata(recording_result)
+    # Persist the raw audio up front so it survives even a processing crash (C6).
+    try:
+        recordings.save_recording(
+            recording_result,
+            rec_id=str(int(time.time() * 1000)),
+            metadata={"stop_reason": getattr(recording_result, "stop_reason", "manual")},
+        )
+    except Exception as exc:
+        logging.debug(f"Could not persist recording: {exc}")
+    pipeline_t0 = time.perf_counter()
+    stt_ms = None
+    llm_ms = None
     try:
         check_cancelled()
         broadcast_status_threadsafe("transcribing")
         trans = ensure_transcriber_initialized(preload=False)
         audio_data = getattr(recording_result, "audio_data", recording_result)
+        # Personal dictionary (C1): bias the ASR toward the user's terms.
+        dict_terms = dictionary.get_terms()
+        hotwords = dictionary.hotwords_string(dict_terms)
+        _stt_start = time.perf_counter()
+        confidence = {"score": None, "avg_logprob": None, "no_speech_prob": None}
         if hasattr(audio_data, "size") and audio_data.size <= 0:
             raw_text = ""
         elif audio_data is None:
             raw_text = ""
+        elif hasattr(trans, "transcribe_with_confidence"):
+            raw_text, confidence = trans.transcribe_with_confidence(audio_data, hotwords=hotwords)
         else:
             raw_text = trans.transcribe(audio_data)
+        # Post-ASR correction snaps near-miss tokens back to dictionary terms.
+        if raw_text and dict_terms:
+            raw_text = dictionary.correct_text(raw_text, dict_terms)
+        # Spoken dictation commands (C2): "new paragraph", "period", "all caps", ...
+        if raw_text and voice_commands_enabled():
+            raw_text = dictation_commands.apply_commands(raw_text)
+        # Voice macros (C11): expand user snippets like "my address".
+        if raw_text and macros_enabled():
+            raw_text = macros.apply_macros(raw_text)
+        stt_ms = (time.perf_counter() - _stt_start) * 1000.0
 
         check_cancelled()
         blocked, reasons = should_block_for_no_audio(
@@ -953,7 +1089,9 @@ def process_recording_result(recording_result):
         except Exception:
             llm_chunk_size = 750
         
+        _llm_start = time.perf_counter()
         final_text = engine.process_fast_lane(raw_text, preset, chunk_size=llm_chunk_size)
+        llm_ms = (time.perf_counter() - _llm_start) * 1000.0
 
         check_cancelled()
         draft = create_draft(
@@ -962,6 +1100,14 @@ def process_recording_result(recording_result):
             preset=preset,
             metadata=metadata,
             recording_result=recording_result,
+            confidence=confidence,
+        )
+        record_pipeline_metrics(
+            stt_ms=stt_ms,
+            llm_ms=llm_ms,
+            total_ms=(time.perf_counter() - pipeline_t0) * 1000.0,
+            audio_seconds=float(getattr(recording_result, "duration_seconds", 0.0) or 0.0),
+            chars=len(final_text or ""),
         )
         broadcast_status_threadsafe(
             "preview_ready",
@@ -972,6 +1118,7 @@ def process_recording_result(recording_result):
                 "token_count": draft["token_count"],
                 "token_limit": draft["token_limit"],
                 "long_text": draft["long_text"],
+                "confidence": draft["confidence"],
             },
         )
         return draft
@@ -1057,9 +1204,14 @@ def on_recording_complete(recording_result):
 
 @app.on_event("startup")
 async def startup_event():
-    global loop
+    global loop, _warmup_thread
     loop = asyncio.get_event_loop()
     load_draft_history()
+    # One-time backfill of the searchable archive from the legacy JSON (C8).
+    try:
+        history_store.migrate_from_json(os.path.join(get_user_data_path(), "draft_history.json"))
+    except Exception as exc:
+        logging.debug(f"history archive migration skipped: {exc}")
     lazy_startup = is_lazy_startup_enabled()
     residency_settings = get_model_residency_settings()
 
@@ -1078,7 +1230,8 @@ async def startup_event():
         else:
             logging.info("No keep-loaded model residency flags are enabled; model startup is deferred.")
 
-    threading.Thread(target=background_warmup, daemon=True, name="betterfingers-warmup").start()
+    _warmup_thread = threading.Thread(target=background_warmup, daemon=True, name="betterfingers-warmup")
+    _warmup_thread.start()
 
     if lazy_startup:
         logging.info("Lazy startup enabled; deferring Hotkey Manager startup.")
@@ -1100,6 +1253,11 @@ async def startup_event():
 @app.on_event("shutdown")
 def shutdown_event():
     stop_hotkey_manager()
+    # Join the background warmup thread so it can't outlive this app instance and
+    # mutate global model state afterwards (also keeps tests deterministic).
+    thread = _warmup_thread
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=5)
 
 from fastapi import Query, status
 
@@ -1323,6 +1481,7 @@ async def run_doctor(refresh_audio: bool = False):
     # Hardware specs + model-fit assessment for the selected LLM
     hardware_info = get_hardware_report()
     model_fit_info = assess_model_fit(selected_model_id, report=hardware_info)
+    hardware_tier_info = get_hardware_tier(report=hardware_info)
 
     # Recovery instructions
     recovery_guidelines = {
@@ -1347,9 +1506,28 @@ async def run_doctor(refresh_audio: bool = False):
         "audio": audio_info,
         "platform": platform_info,
         "hardware": hardware_info,
+        "hardware_tier": hardware_tier_info,
         "model_fit": model_fit_info,
         "recovery": recovery_guidelines,
     }
+
+
+@app.get("/hardware/tier")
+async def hardware_tier():
+    return {"ok": True, "tier": get_hardware_tier()}
+
+
+@app.get("/models/recommend")
+async def models_recommend():
+    import model_recommender
+
+    report = get_hardware_report()
+    tier_info = get_hardware_tier(report=report)
+    ram_mb = (report.get("memory") or {}).get("total_mb") or 0
+    recommendation = model_recommender.recommend(tier_info["tier"], ram_mb)
+    recommendation["tier_label"] = tier_info.get("label")
+    recommendation["tier_guidance"] = tier_info.get("guidance")
+    return {"ok": True, "recommendation": recommendation}
 
 
 @app.get("/health")
@@ -1579,6 +1757,14 @@ async def settings_export_profile(profile_name: str):
 class PersonaRequest(BaseModel):
     name: str
     prompt: str
+    # Optional persona schema v2 fields (U7). Omitted fields are left untouched on
+    # update, so legacy {name, prompt} clients keep working unchanged.
+    temperature: Optional[float] = None
+    model_hint: Optional[str] = None
+    dictionary_scope: Optional[str] = None
+    voice: Optional[dict] = None
+    format: Optional[dict] = None
+    few_shot: Optional[list] = None
 
 
 @app.get("/personas")
@@ -1587,10 +1773,27 @@ async def list_personas_route():
     return load_personas(force_reload=True)
 
 
+@app.get("/personas/{name}")
+async def get_persona_route(name: str):
+    """Return the full schema v2 persona dict for the editor."""
+    from llm_engine import get_persona
+    entry = get_persona(name)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Persona '{name}' not found.")
+    return entry
+
+
 @app.post("/personas")
 async def save_persona_route(request: PersonaRequest):
     from llm_engine import upsert_persona
-    ok, msg = upsert_persona(request.name, request.prompt)
+    # Build a v2 payload from the provided fields; drop unspecified ones so an
+    # update preserves prior rich values (upsert_persona merges partial dicts).
+    payload = {"prompt": request.prompt}
+    for key in ("temperature", "model_hint", "dictionary_scope", "voice", "format", "few_shot"):
+        value = getattr(request, key)
+        if value is not None:
+            payload[key] = value
+    ok, msg = upsert_persona(request.name, payload)
     if not ok:
         raise HTTPException(status_code=400, detail=msg)
     return {"message": msg}
@@ -1617,398 +1820,6 @@ class LlmModelSelectRequest(BaseModel):
 class WhisperModelRequest(BaseModel):
     model_size: str
     prefer_gpu: bool = True
-
-
-class StudioProjectRequest(BaseModel):
-    name: str
-    preferences: dict = Field(default_factory=dict)
-
-
-class StudioBibleRequest(BaseModel):
-    content: dict
-
-
-class StudioCharacterRequest(BaseModel):
-    name: str
-    description: str = ""
-    role: str = ""
-    archetype: str = ""
-    status: str = "draft"
-    metadata: dict = Field(default_factory=dict)
-
-
-class StudioEpisodeRequest(BaseModel):
-    name: str
-    summary: str = ""
-    metadata: dict = Field(default_factory=dict)
-
-
-class StudioMinuteRequest(BaseModel):
-    episode_id: int
-    minute_number: int
-    summary: str = ""
-    metadata: dict = Field(default_factory=dict)
-
-
-class StudioPageRequest(BaseModel):
-    episode_id: int
-    page_number: int
-    title: str = ""
-    summary: str = ""
-    status: str = "draft"
-    metadata: dict = Field(default_factory=dict)
-
-
-class StudioPanelRequest(BaseModel):
-    minute_id: int
-    page_id: Optional[int] = None
-    panel_number: int
-    visual_description: str = ""
-    style_prompt: str = ""
-    metadata: dict = Field(default_factory=dict)
-
-
-class StudioContinuityWarningRequest(BaseModel):
-    target_type: str
-    target_id: Optional[int] = None
-    severity: str
-    message: str
-    metadata: dict = Field(default_factory=dict)
-
-
-class StudioApprovalRequest(BaseModel):
-    item_type: str
-    item_id: int
-    approved: bool
-    approved_by: str = "User"
-    note: str = ""
-
-
-class StudioAudioPrepareRequest(BaseModel):
-    text: str
-    profile_name: Optional[str] = "default"
-    fallback_voice: str = "af_heart"
-    fallback_speed: float = 0.95
-
-
-class StudioAudioRenderRequest(BaseModel):
-    chunks: list[dict]
-
-
-@app.get("/studio/capabilities")
-async def list_studio_capability_categories():
-    return {
-        "ok": True,
-        "registry_version": studio_capabilities.REGISTRY_VERSION,
-        "categories": studio_capabilities.list_categories(),
-    }
-
-
-@app.get("/studio/capabilities/{category}")
-async def list_studio_capabilities(category: str, page: int = 1, page_size: int = 20, query: Optional[str] = None):
-    try:
-        payload = studio_capabilities.list_capabilities(category, page=page, page_size=page_size, query=query)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"ok": True, **payload}
-
-
-@app.get("/studio/capabilities/{category}/{capability_id}")
-async def get_studio_capability(category: str, capability_id: str):
-    try:
-        capability = studio_capabilities.get_capability(category, capability_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    if not capability:
-        raise HTTPException(status_code=404, detail="Studio capability not found")
-    return {"ok": True, "category": category, "capability": capability}
-
-
-@app.get("/studio/capabilities/actions/{action_id}/next")
-async def list_studio_next_actions(action_id: str):
-    action = studio_capabilities.get_capability("actions", action_id)
-    if not action:
-        raise HTTPException(status_code=404, detail="Studio action not found")
-    return {"ok": True, "action": action, "next_actions": studio_capabilities.get_next_actions(action_id)}
-
-
-def _load_studio_project(project_name: str):
-    try:
-        project = studio_memory.get_project_by_name(project_name)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    if not project:
-        raise HTTPException(status_code=404, detail="Studio project not found")
-    return project
-
-
-@app.post("/studio/projects")
-async def create_studio_project(request: StudioProjectRequest):
-    try:
-        project = studio_memory.create_project(request.name, preferences=request.preferences)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"ok": True, "project": project, "asset_dirs": list(studio_memory.PROJECT_ASSET_DIRS)}
-
-
-@app.get("/studio/projects")
-async def list_studio_projects():
-    try:
-        projects = studio_memory.list_projects()
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"ok": True, "projects": projects}
-
-
-@app.get("/studio/projects/{project_name}")
-async def load_studio_project(project_name: str):
-    project = _load_studio_project(project_name)
-    return {
-        "ok": True,
-        "project": project,
-        "bible": studio_memory.get_bible(project["name"], project["id"]),
-        "characters": studio_memory.get_characters(project["name"], project["id"]),
-        "episodes": studio_memory.get_episodes(project["name"], project["id"]),
-        "pages": studio_memory.get_pages(project["name"], project["id"]),
-        "minutes": studio_memory.get_minutes(project["name"], project["id"]),
-        "panels": studio_memory.get_panels(project["name"], project["id"]),
-        "continuity_warnings": studio_memory.get_continuity_warnings(project["name"], project["id"]),
-    }
-
-
-@app.get("/studio/projects/{project_name}/bible")
-async def get_studio_bible(project_name: str):
-    project = _load_studio_project(project_name)
-    return {"ok": True, "project_id": project["id"], "bible": studio_memory.get_bible(project["name"], project["id"])}
-
-
-@app.get("/studio/projects/{project_name}/blackboard")
-async def get_studio_blackboard(project_name: str):
-    """Surface the production blackboard: which agent produced what, and the status log.
-
-    Lets the UI show a studio-dashboard view of agent activity instead of a black box.
-    """
-    import studio_blackboard
-    project = _load_studio_project(project_name)
-    return {
-        "ok": True,
-        "project_id": project["id"],
-        "artifacts": studio_blackboard.list_artifacts(project["name"], project["id"]),
-        "posts": studio_blackboard.get_posts(project["name"], project["id"]),
-    }
-
-
-@app.post("/studio/projects/{project_name}/bible")
-async def save_studio_bible(project_name: str, request: StudioBibleRequest):
-    project = _load_studio_project(project_name)
-    try:
-        studio_memory.save_bible(project["name"], project["id"], request.content)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"ok": True, "project_id": project["id"], "bible": studio_memory.get_bible(project["name"], project["id"])}
-
-
-@app.post("/studio/projects/{project_name}/characters")
-async def create_studio_character(project_name: str, request: StudioCharacterRequest):
-    project = _load_studio_project(project_name)
-    try:
-        character_id = studio_memory.add_character(
-            project["name"],
-            project["id"],
-            request.name,
-            request.description,
-            request.role,
-            request.archetype,
-            status=request.status,
-            metadata=request.metadata,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"ok": True, "character": studio_memory.get_character(project["name"], project["id"], character_id)}
-
-
-@app.put("/studio/projects/{project_name}/characters/{character_id}")
-async def update_studio_character(project_name: str, character_id: int, request: StudioCharacterRequest):
-    project = _load_studio_project(project_name)
-    try:
-        character = studio_memory.update_character(
-            project["name"],
-            project["id"],
-            character_id,
-            name=request.name,
-            description=request.description,
-            role=request.role,
-            archetype=request.archetype,
-            status=request.status,
-            metadata=request.metadata,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    if not character:
-        raise HTTPException(status_code=404, detail="Character not found")
-    return {"ok": True, "character": character}
-
-
-@app.post("/studio/projects/{project_name}/episodes")
-async def create_studio_episode(project_name: str, request: StudioEpisodeRequest):
-    project = _load_studio_project(project_name)
-    try:
-        episode_id = studio_memory.add_episode(project["name"], project["id"], request.name, request.summary, metadata=request.metadata)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"ok": True, "episode_id": episode_id, "episodes": studio_memory.get_episodes(project["name"], project["id"])}
-
-
-@app.post("/studio/projects/{project_name}/minutes")
-async def create_studio_minute(project_name: str, request: StudioMinuteRequest):
-    project = _load_studio_project(project_name)
-    try:
-        minute_id = studio_memory.add_minute(
-            project["name"],
-            project["id"],
-            request.episode_id,
-            request.minute_number,
-            request.summary,
-            metadata=request.metadata,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"ok": True, "minute_id": minute_id, "minutes": studio_memory.get_minutes(project["name"], project["id"])}
-
-
-@app.post("/studio/projects/{project_name}/pages")
-async def create_studio_page(project_name: str, request: StudioPageRequest):
-    project = _load_studio_project(project_name)
-    try:
-        page_id = studio_memory.add_page(
-            project["name"],
-            project["id"],
-            request.episode_id,
-            request.page_number,
-            title=request.title,
-            summary=request.summary,
-            status=request.status,
-            metadata=request.metadata,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"ok": True, "page_id": page_id, "pages": studio_memory.get_pages(project["name"], project["id"])}
-
-
-@app.get("/studio/projects/{project_name}/pages")
-async def list_studio_pages(project_name: str, episode_id: Optional[int] = None):
-    project = _load_studio_project(project_name)
-    return {"ok": True, "pages": studio_memory.get_pages(project["name"], project["id"], episode_id=episode_id)}
-
-
-@app.post("/studio/projects/{project_name}/panels")
-async def create_studio_panel(project_name: str, request: StudioPanelRequest):
-    project = _load_studio_project(project_name)
-    try:
-        panel_id = studio_memory.add_panel(
-            project["name"],
-            project["id"],
-            request.minute_id,
-            request.panel_number,
-            request.visual_description,
-            request.style_prompt,
-            metadata=request.metadata,
-            page_id=request.page_id,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"ok": True, "panel_id": panel_id, "panels": studio_memory.get_panels(project["name"], project["id"])}
-
-
-@app.get("/studio/projects/{project_name}/panels")
-async def list_studio_panels(project_name: str, minute_id: Optional[int] = None, page_id: Optional[int] = None):
-    project = _load_studio_project(project_name)
-    return {"ok": True, "panels": studio_memory.get_panels(project["name"], project["id"], minute_id=minute_id, page_id=page_id)}
-
-
-@app.post("/studio/projects/{project_name}/continuity-warnings")
-async def save_studio_continuity_warning(project_name: str, request: StudioContinuityWarningRequest):
-    project = _load_studio_project(project_name)
-    try:
-        warning_id = studio_memory.add_continuity_warning(
-            project["name"],
-            project["id"],
-            request.target_type,
-            request.target_id,
-            request.severity,
-            request.message,
-            metadata=request.metadata,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"ok": True, "warning_id": warning_id, "warnings": studio_memory.get_continuity_warnings(project["name"], project["id"])}
-
-
-@app.post("/studio/projects/{project_name}/approvals")
-async def approve_studio_item(project_name: str, request: StudioApprovalRequest):
-    project = _load_studio_project(project_name)
-    try:
-        approval_id = studio_memory.record_approval(
-            project["name"],
-            project["id"],
-            request.item_type,
-            request.item_id,
-            request.approved,
-            approved_by=request.approved_by,
-            note=request.note,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"ok": True, "approval_id": approval_id, "approvals": studio_memory.get_approvals(project["name"], project["id"])}
-
-
-@app.post("/studio/projects/{project_name}/audio/prepare")
-async def prepare_studio_audio(project_name: str, request: StudioAudioPrepareRequest):
-    project = _load_studio_project(project_name)
-    from kokoro_sound_engineer import KokoroSoundEngineer
-    engineer = KokoroSoundEngineer(project_name=project["name"])
-    try:
-        import studio_memory
-        pronunciations = studio_memory.get_pronunciation_dict(project["name"], project["id"])
-        engineer.load_project_memory(pronunciations)
-    except Exception as exc:
-        logging.error(f"Failed to load pronunciation memory: {exc}")
-        
-    chunks = engineer.prepare_text(
-        request.text, 
-        profile_name=request.profile_name,
-        fallback_voice=request.fallback_voice,
-        fallback_speed=request.fallback_speed
-    )
-    return {"ok": True, "chunks": chunks}
-
-
-@app.post("/studio/projects/{project_name}/audio/render")
-async def render_studio_audio(project_name: str, request: StudioAudioRenderRequest):
-    project = _load_studio_project(project_name)
-    engine = ensure_tts_initialized()
-    if not engine:
-        raise HTTPException(status_code=500, detail="TTS Engine not available")
-        
-    import os
-    from utils import get_user_data_path
-    export_dir = os.path.join(get_user_data_path(), "studio", project["name"], "audio_renders")
-    
-    try:
-        saved_files = engine.render_prepared_chunks(request.chunks, export_dir)
-        return {"ok": True, "files": saved_files}
-    except Exception as exc:
-        logging.error(f"Audio render failed: {exc}")
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
-@app.get("/studio/projects/{project_name}/export")
-async def export_studio_project(project_name: str):
-    project = _load_studio_project(project_name)
-    payload = studio_memory.export_project_json(project["name"], project["id"])
-    if not payload:
-        raise HTTPException(status_code=404, detail="Studio project not found")
-    return payload
 
 
 def get_selected_llm_model_id():
@@ -2187,21 +1998,321 @@ def test_whisper(request: WhisperModelRequest):
 
 @app.post("/models/unload/{component}")
 async def unload_model_component(component: str):
+    """Genuinely release a model component's memory.
+
+    Beyond calling any .unload()/.shutdown()/.close() the engine exposes, this
+    drops the module-level global reference so the object can be garbage
+    collected, then runs gc.collect(). This matters on low-RAM machines where
+    merely freeing the model tensor is not enough if the wrapper object (and its
+    caches) stays reachable via a global.
+    """
+    import gc
+
+    global transcriber, tts_engine
+
     normalized = component.strip().lower()
+    unloaded = False
+
     if normalized == "stt":
         if transcriber is not None:
-            transcriber.unload()
-        return {"ok": True, "component": "stt", "message": "STT unloaded."}
+            try:
+                transcriber.unload()
+            except Exception as exc:
+                logging.debug(f"transcriber.unload() failed: {exc}")
+            transcriber = None
+            unloaded = True
+        gc.collect()
+        return {
+            "ok": True,
+            "component": "stt",
+            "unloaded": unloaded,
+            "message": "STT unloaded." if unloaded else "STT was not loaded.",
+        }
+
     if normalized == "llm":
         engine = get_engine_if_initialized()
         if engine is not None:
-            engine.shutdown()
-        return {"ok": True, "component": "llm", "message": "LLM unloaded."}
+            # shutdown() stops the llama-server subprocess (frees its RAM/VRAM);
+            # unload() also works but shutdown is the harder stop here.
+            for method in ("shutdown", "unload", "close"):
+                fn = getattr(engine, method, None)
+                if callable(fn):
+                    try:
+                        fn()
+                        unloaded = True
+                        break
+                    except Exception as exc:
+                        logging.debug(f"LLM {method}() failed: {exc}")
+            # Drop the module-level singleton so the wrapper can be collected.
+            try:
+                import llm_engine
+
+                llm_engine._engine_instance = None
+            except Exception as exc:
+                logging.debug(f"Could not clear llm_engine singleton: {exc}")
+        gc.collect()
+        return {
+            "ok": True,
+            "component": "llm",
+            "unloaded": unloaded,
+            "message": "LLM unloaded." if unloaded else "LLM was not loaded.",
+        }
+
     if normalized == "tts":
         if tts_engine is not None:
-            tts_engine.unload()
-        return {"ok": True, "component": "tts", "message": "TTS unloaded."}
+            for method in ("unload", "shutdown", "close"):
+                fn = getattr(tts_engine, method, None)
+                if callable(fn):
+                    try:
+                        fn()
+                        unloaded = True
+                        break
+                    except Exception as exc:
+                        logging.debug(f"TTS {method}() failed: {exc}")
+            tts_engine = None
+        gc.collect()
+        return {
+            "ok": True,
+            "component": "tts",
+            "unloaded": unloaded,
+            "message": "TTS unloaded." if unloaded else "TTS was not loaded.",
+        }
+
     raise HTTPException(status_code=400, detail="Unsupported component")
+
+
+@app.get("/metrics")
+async def pipeline_metrics_endpoint():
+    return get_pipeline_metrics_summary()
+
+
+def _path_size_bytes(path):
+    """Total size of a file, or recursive size of a directory (0 if missing)."""
+    try:
+        if os.path.isfile(path):
+            return os.path.getsize(path)
+        total = 0
+        for root, _dirs, files in os.walk(path):
+            for name in files:
+                try:
+                    total += os.path.getsize(os.path.join(root, name))
+                except OSError:
+                    pass
+        return total
+    except OSError:
+        return 0
+
+
+def get_privacy_report():
+    """Everything that touches the network + where local data lives (C7)."""
+    history_file = os.path.join(get_user_data_path(), "draft_history.json")
+    voices_dir = str(get_app_data_dir() / "voices")
+    with draft_lock:
+        recordings_in_memory = len(draft_recordings)
+        drafts_in_memory = len(draft_queue)
+
+    network_touchpoints = [
+        {
+            "name": "Model & binary downloads",
+            "hosts": ["huggingface.co", "github.com"],
+            "direction": "outbound",
+            "optional": True,
+            "purpose": "Downloads STT/LLM/TTS models and the llama-server binary — only when you explicitly choose to install one.",
+        },
+        {
+            "name": "Local LLM server",
+            "hosts": ["127.0.0.1"],
+            "direction": "local",
+            "optional": False,
+            "purpose": "The llama-server runs on localhost. Your prompts never leave this machine.",
+        },
+        {
+            "name": "Speech-to-text & text-to-speech",
+            "hosts": [],
+            "direction": "local",
+            "optional": False,
+            "purpose": "Transcription and speech synthesis run fully on-device.",
+        },
+    ]
+
+    data_locations = [
+        {"name": "Draft history", "path": history_file, "bytes": _path_size_bytes(history_file)},
+        {"name": "Cloned voices", "path": voices_dir, "bytes": _path_size_bytes(voices_dir)},
+        {"name": "Models", "path": str(get_models_dir()), "bytes": _path_size_bytes(str(get_models_dir()))},
+    ]
+
+    return {
+        "offline_by_default": True,
+        "network_touchpoints": network_touchpoints,
+        "data_locations": data_locations,
+        "retention": {
+            "recordings_persisted_to_disk": False,
+            "recordings_in_memory": recordings_in_memory,
+            "drafts_in_memory": drafts_in_memory,
+            "draft_history_limit": MAX_DRAFT_HISTORY,
+        },
+    }
+
+
+@app.get("/privacy")
+async def privacy_report():
+    return get_privacy_report()
+
+
+class PrivacyWipeRequest(BaseModel):
+    wipe_voices: bool = False
+
+
+@app.post("/privacy/wipe")
+async def privacy_wipe(request: PrivacyWipeRequest = PrivacyWipeRequest()):
+    """Delete app-generated conversational data (drafts, history, in-memory
+    recordings). Models and profiles are intentionally NOT touched; cloned
+    voices are removed only when explicitly requested."""
+    cleared = {}
+    with draft_lock:
+        cleared["drafts"] = len(draft_queue)
+        cleared["recordings"] = len(draft_recordings)
+        draft_queue.clear()
+        draft_recordings.clear()
+        pending_manual_send_ids.clear()
+    save_draft_history()
+
+    history_file = os.path.join(get_user_data_path(), "draft_history.json")
+    try:
+        if os.path.exists(history_file):
+            os.remove(history_file)
+            cleared["history_file_removed"] = True
+    except OSError as exc:
+        logging.warning(f"Could not remove draft history file: {exc}")
+        cleared["history_file_removed"] = False
+
+    if request.wipe_voices:
+        voices_dir = get_app_data_dir() / "voices"
+        try:
+            if voices_dir.exists():
+                shutil.rmtree(voices_dir, ignore_errors=True)
+                cleared["voices_removed"] = True
+        except OSError as exc:
+            logging.warning(f"Could not remove voices dir: {exc}")
+            cleared["voices_removed"] = False
+
+    broadcast_status_threadsafe("draft_history_cleared")
+    return {"ok": True, "cleared": cleared, "message": "Your data was wiped."}
+
+
+@app.get("/recordings")
+async def list_recordings_endpoint():
+    return {"ok": True, "recordings": recordings.list_recordings()}
+
+
+@app.post("/recordings/{rec_id}/retranscribe")
+async def retranscribe_recording(rec_id: str):
+    import numpy as np
+    from recorder import RecordingResult
+
+    audio, sample_rate = recordings.load_recording_audio(rec_id)
+    if audio is None:
+        raise HTTPException(status_code=404, detail="Recording not found.")
+
+    audio = np.asarray(audio, dtype=np.float32)
+    rr = RecordingResult(
+        audio_data=audio,
+        sample_rate=int(sample_rate or 16000),
+        duration_seconds=len(audio) / float(sample_rate or 16000),
+        frame_count=0,
+        sample_count=int(audio.size),
+        max_amplitude=float(np.max(np.abs(audio))) if audio.size else 0.0,
+        rms_amplitude=float(np.sqrt(np.mean(np.square(audio)))) if audio.size else 0.0,
+        stop_reason="recovery",
+    )
+    draft = await run_in_threadpool(process_recording_result, rr)
+    return {"ok": True, "draft": draft}
+
+
+@app.delete("/recordings/{rec_id}")
+async def delete_recording_endpoint(rec_id: str):
+    removed = recordings.delete_recording(rec_id)
+    return {"ok": True, "removed": removed}
+
+
+@app.delete("/recordings")
+async def clear_recordings_endpoint():
+    count = recordings.clear_recordings()
+    return {"ok": True, "cleared": count}
+
+
+class DictionaryTermRequest(BaseModel):
+    term: str
+
+
+@app.get("/dictionary")
+async def get_dictionary():
+    return {"ok": True, "terms": dictionary.get_terms()}
+
+
+@app.post("/dictionary")
+async def add_dictionary_term(request: DictionaryTermRequest):
+    if not str(request.term or "").strip():
+        raise HTTPException(status_code=400, detail="Term must not be empty.")
+    return {"ok": True, "terms": dictionary.add_term(request.term)}
+
+
+@app.delete("/dictionary/{term}")
+async def delete_dictionary_term(term: str):
+    return {"ok": True, "terms": dictionary.remove_term(term)}
+
+
+class DictionarySuggestRequest(BaseModel):
+    raw_text: str = ""
+    edited_text: str = ""
+
+
+@app.post("/dictionary/suggest")
+async def suggest_dictionary_terms(request: DictionarySuggestRequest):
+    suggestions = dictionary.suggest_from_edit(request.raw_text, request.edited_text)
+    return {"ok": True, "suggestions": suggestions}
+
+
+class MacroRequest(BaseModel):
+    trigger: str
+    expansion: str
+
+
+@app.get("/macros")
+async def get_macros_endpoint():
+    return {"ok": True, "macros": macros.get_macros()}
+
+
+@app.post("/macros")
+async def add_macro_endpoint(request: MacroRequest):
+    if not str(request.trigger or "").strip() or not str(request.expansion or "").strip():
+        raise HTTPException(status_code=400, detail="Both a trigger and an expansion are required.")
+    return {"ok": True, "macros": macros.add_macro(request.trigger, request.expansion)}
+
+
+@app.delete("/macros/{trigger}")
+async def delete_macro_endpoint(trigger: str):
+    return {"ok": True, "macros": macros.remove_macro(trigger)}
+
+
+@app.get("/history/search")
+async def history_search(q: str = "", limit: int = 50):
+    limit = max(1, min(200, int(limit or 50)))
+    results = history_store.search(q, limit=limit)
+    return {"ok": True, "query": q, "count": len(results), "results": results}
+
+
+@app.get("/history")
+async def history_recent(limit: int = 50):
+    limit = max(1, min(200, int(limit or 50)))
+    results = history_store.recent(limit=limit)
+    return {"ok": True, "count": len(results), "total": history_store.count(), "results": results}
+
+
+@app.delete("/history")
+async def history_clear():
+    ok = history_store.clear()
+    return {"ok": ok, "message": "Searchable history cleared." if ok else "Could not clear history."}
 
 
 @app.get("/diagnostics/logs")
@@ -2535,6 +2646,16 @@ async def runtime_emergency_stop():
 @app.post("/runtime/recording/toggle")
 async def runtime_recording_toggle():
     return toggle_recording_runtime()
+
+
+@app.post("/runtime/recording/start")
+async def runtime_recording_start():
+    return start_recording_runtime()
+
+
+@app.post("/runtime/recording/stop")
+async def runtime_recording_stop():
+    return stop_recording_runtime()
 
 
 @app.post("/runtime/tts/toggle")
@@ -2893,6 +3014,24 @@ async def generate_plan(request: PlanRequest):
         logging.error(f"Plan Gen Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+def _get_downloads_dir():
+    """Return the user's Downloads directory, cross-platform.
+
+    Falls back to the home directory if a Downloads folder does not exist.
+    Honors the XDG_DOWNLOAD_DIR env var on Linux when set.
+    """
+    home = os.path.expanduser("~")
+    xdg = os.environ.get("XDG_DOWNLOAD_DIR")
+    candidates = []
+    if xdg:
+        candidates.append(os.path.expanduser(os.path.expandvars(xdg)))
+    candidates.append(os.path.join(home, "Downloads"))
+    for path in candidates:
+        if path and os.path.isdir(path):
+            return path
+    return home
+
+
 class ExportRequest(BaseModel):
     title: str
     content: str
@@ -2919,18 +3058,15 @@ async def export_project(request: ExportRequest):
             zip_file.writestr("plan.json", json.dumps(request.plan, indent=2))
             
         zip_buffer.seek(0)
-        
-        # In a real app we might return a file download response directly
-        # But since we are calling this from fetch in Electron, we might want to save it to a temp path 
-        # or return base64. For simplicity, let's return the path to a saved temp file that Electron can "download" or move.
-        # Actually, let's stick to the "server saves to desktop" or "downloads folder" approach for this local app.
-        
-        # For this specific task constraints, let's save to the Desktop for easy verification.
+
+        # Save under the user's Downloads dir (cross-platform), falling back to
+        # the home directory if Downloads doesn't exist.
+        export_dir = _get_downloads_dir()
         safe_title = re.sub(r"[^\w\-]", "_", request.title)[:60] or "export"
-        export_path = os.path.join(os.path.expanduser("~"), "Desktop", f"{safe_title}_Export.zip")
+        export_path = os.path.join(export_dir, f"{safe_title}_Export.zip")
         with open(export_path, "wb") as f:
             f.write(zip_buffer.getvalue())
-            
+
         return {"status": "success", "path": export_path}
 
     except Exception as e:
@@ -2972,927 +3108,6 @@ async def generate_project(data: dict):
     
     success, msg = project_generator.generate_project(plan, path)
     return {"status": "success" if success else "error", "message": msg}
-
-
-# --- Studio Mode Endpoints (Agent 2) ---
-
-class StudioCreateProjectRequest(BaseModel):
-    project_name: str
-
-class StudioLoadProjectRequest(BaseModel):
-    project_name: str
-
-class StudioRunWorkflowRequest(BaseModel):
-    project_name: str
-    # Optional so /studio/workflow/regenerate can reuse a project's saved seed without resending it.
-    seed_text: Optional[str] = ""
-    # Production style: "seed" (invent new), "adapt"/"start" (storyboard an existing story),
-    # or "continue" (generate what happens next from an existing story).
-    mode: Optional[str] = "seed"
-    # Full text of an existing story (for adapt/continue). May also be supplied via seed_text.
-    # Full text of an existing story (for adapt/continue). May also be supplied via seed_text.
-    source_story: Optional[str] = None
-
-class StudioIntakeTurnRequest(BaseModel):
-    project_name: str
-    chat_history: list = Field(default_factory=list)
-
-class StudioBriefReviewRequest(BaseModel):
-    project_name: str
-    seed_text: str
-    mode: Optional[str] = "seed"
-    source_story: Optional[str] = None
-    user_notes: Optional[str] = ""
-
-class StudioRunStageRequest(BaseModel):
-    project_name: str
-    stage: str
-    seed_text: Optional[str] = None
-    mode: Optional[str] = "seed"
-    source_story: Optional[str] = None
-    input_data: Optional[dict] = None
-
-class StudioStoryboardUpdateRequest(BaseModel):
-    project_name: str
-    project_id: Optional[int] = None
-    storyboard: dict = Field(default_factory=dict)
-    note: Optional[str] = ""
-
-class StudioSceneRequest(BaseModel):
-    project_name: str
-    # Deterministic scene spec: {region_id?, actors:[...], chains:[{actor, poi?, actions:[...]}]}
-    scene: dict = Field(default_factory=dict)
-
-class StudioFinalizeRequest(BaseModel):
-    project_name: str
-    # Optional explicit scene ordering; defaults to scene creation order.
-    scene_order: Optional[list] = None
-
-class StudioRegenerateSceneRequest(BaseModel):
-    project_name: str
-    scene_id: str
-    # What to rebuild: 'script', 'image', or 'all'.
-    target: Optional[str] = "all"
-    # Optional plain-language direction for the rewrite (e.g. "make Louis pettier here").
-    feedback: Optional[str] = ""
-
-class StudioWarningResolveRequest(BaseModel):
-    project_name: str
-    warning_id: int
-
-class StudioRepairProposeRequest(BaseModel):
-    project_name: str
-    # The repair report returned by a rejected stage (scene/finalize).
-    report: dict = Field(default_factory=dict)
-    # The user's plain-language explanation of what they intended.
-    user_note: Optional[str] = ""
-
-class StudioApproveRequest(BaseModel):
-    project_name: str
-    project_id: int
-    item_type: str
-    item_id: int
-    approved: bool
-    approved_by: Optional[str] = "User"
-    feedback: Optional[str] = None
-
-@app.post("/studio/project/create")
-async def studio_create_project(request: StudioCreateProjectRequest):
-    import studio_memory as memory
-    try:
-        project_id = memory.init_project_db(request.project_name)
-        return {"status": "success", "project_id": project_id, "project_name": request.project_name}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logging.error(f"Studio create project failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/studio/project/list")
-async def studio_list_projects():
-    import studio_memory as memory
-    try:
-        return {"status": "success", "projects": memory.list_projects()}
-    except Exception as e:
-        logging.error(f"Studio list projects failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/studio/project/load")
-async def studio_load_project(request: StudioLoadProjectRequest):
-    import studio_memory as memory
-    try:
-        proj = memory.get_project_by_name(request.project_name)
-        if not proj:
-            raise HTTPException(status_code=404, detail="Project not found")
-        project_id = proj["id"]
-        data = memory.export_project_json(request.project_name, project_id)
-        return {"status": "success", "project": proj, "data": data}
-    except HTTPException:
-        raise
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logging.error(f"Studio load project failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/studio/workflow/run")
-async def studio_run_workflow(request: StudioRunWorkflowRequest):
-    from studio_workflow import StudioWorkflowRunner
-    from fastapi.concurrency import run_in_threadpool
-    try:
-        runner = StudioWorkflowRunner(request.project_name)
-        # Run the long, blocking pipeline in a worker thread so the event loop stays free to
-        # serve concurrent /blackboard progress polls during the (potentially minutes-long) run.
-        result = await run_in_threadpool(
-            runner.run_full_pipeline, request.seed_text, request.mode, request.source_story
-        )
-        if result.get("ok"):
-            return result
-        # A rejection that carries a repair report is recoverable: return it (200) so
-        # the UI opens the repair/rebuild panel instead of showing a hard failure.
-        if result.get("needs_repair") or result.get("repair"):
-            return {"status": "rejected", **result}
-        raise HTTPException(status_code=500, detail=result.get("error"))
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Studio workflow run failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/studio/workflow/regenerate")
-async def studio_regenerate_workflow(request: StudioRunWorkflowRequest):
-    """Re-run the whole pipeline on an existing project using its saved seed/source (testing aid)."""
-    from studio_workflow import StudioWorkflowRunner
-    from fastapi.concurrency import run_in_threadpool
-    try:
-        runner = StudioWorkflowRunner(request.project_name)
-        result = await run_in_threadpool(runner.regenerate_project, request.seed_text)
-        if result.get("ok"):
-            return result
-        if result.get("needs_repair") or result.get("repair"):
-            return {"status": "rejected", **result}
-        raise HTTPException(status_code=500, detail=result.get("error"))
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Studio workflow regenerate failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/studio/workflow/intake/turn")
-async def studio_intake_turn(request: StudioIntakeTurnRequest):
-    from studio_workflow import StudioWorkflowRunner
-    try:
-        runner = StudioWorkflowRunner(request.project_name)
-        data = runner.run_intake_interview_turn(request.chat_history)
-        return {"status": "success", "data": data}
-    except Exception as e:
-        logging.error(f"Studio intake turn failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/studio/workflow/brief")
-async def studio_brief_review(request: StudioBriefReviewRequest):
-    from studio_workflow import StudioWorkflowRunner
-    try:
-        runner = StudioWorkflowRunner(request.project_name)
-        data = runner.run_brief_review(
-            request.seed_text,
-            mode=request.mode,
-            source_story=request.source_story,
-            user_notes=request.user_notes or "",
-        )
-        return {"status": "success", "project_id": runner.project_id, "project_name": request.project_name, "data": data}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logging.error(f"Studio brief review failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/studio/workflow/explore")
-async def studio_director_explore(request: StudioCreateProjectRequest):
-    from studio_workflow import StudioWorkflowRunner
-    try:
-        runner = StudioWorkflowRunner(request.project_name)
-        result = runner.run_director_exploration()
-        return {
-            "status": "success",
-            "project_id": runner.project_id,
-            "project_name": request.project_name,
-            **result,
-        }
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logging.error(f"Studio director exploration failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/studio/workflow/cast")
-async def studio_director_cast(request: StudioCreateProjectRequest):
-    from studio_workflow import StudioWorkflowRunner
-    try:
-        runner = StudioWorkflowRunner(request.project_name)
-        result = runner.run_director_casting()
-        return {
-            "status": "success",
-            "project_id": runner.project_id,
-            "project_name": request.project_name,
-            **result,
-        }
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logging.error(f"Studio director casting failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/studio/workflow/scene")
-async def studio_scene_round(request: StudioSceneRequest):
-    from studio_workflow import StudioWorkflowRunner
-    try:
-        runner = StudioWorkflowRunner(request.project_name)
-        result = runner.run_scene_round(request.scene)
-        if result.get("ok"):
-            return {
-                "status": "success",
-                "project_id": runner.project_id,
-                "project_name": request.project_name,
-                **result,
-            }
-        # A rejected scene spec carries a structured repair report; return it (200) so the
-        # UI can open the repair/rebuild panel instead of losing it to an HTTP error body.
-        return {
-            "status": "rejected",
-            "project_id": runner.project_id,
-            "project_name": request.project_name,
-            **result,
-        }
-    except HTTPException:
-        raise
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logging.error(f"Studio scene round failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/studio/workflow/finalize")
-async def studio_finalize(request: StudioFinalizeRequest):
-    from studio_workflow import StudioWorkflowRunner
-    try:
-        runner = StudioWorkflowRunner(request.project_name)
-        result = runner.run_finalization(scene_order=request.scene_order)
-        if result.get("ok"):
-            return {
-                "status": "success",
-                "project_id": runner.project_id,
-                "project_name": request.project_name,
-                **result,
-            }
-        # An invalid timeline carries a repair report; return it (200) for the repair panel.
-        return {
-            "status": "rejected",
-            "project_id": runner.project_id,
-            "project_name": request.project_name,
-            **result,
-        }
-    except HTTPException:
-        raise
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logging.error(f"Studio finalization failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/studio/workflow/repair/propose")
-async def studio_repair_propose(request: StudioRepairProposeRequest):
-    """Read the user's explanation of a rejected step and propose grounded fixes."""
-    from studio_workflow import StudioWorkflowRunner
-    try:
-        runner = StudioWorkflowRunner(request.project_name)
-        result = runner.propose_repairs(request.report, request.user_note)
-        return {
-            "status": "success",
-            "project_id": runner.project_id,
-            "project_name": request.project_name,
-            "diagnosis": result.get("diagnosis", ""),
-            "proposals": result.get("proposals", []),
-        }
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logging.error(f"Studio repair propose failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/studio/workflow/storyboard")
-async def studio_update_storyboard(request: StudioStoryboardUpdateRequest):
-    from studio_workflow import StudioWorkflowRunner
-    import studio_memory as memory
-    try:
-        runner = StudioWorkflowRunner(request.project_name)
-        if request.project_id is not None and runner.project_id is not None and int(request.project_id) != int(runner.project_id):
-            raise HTTPException(status_code=400, detail="project_id does not match project_name")
-        result = runner.apply_storyboard_edits(request.storyboard, note=request.note or "")
-        return {
-            "status": "success",
-            "project_id": runner.project_id,
-            "project_name": request.project_name,
-            "data": result,
-            "project": memory.export_project_json(request.project_name, runner.project_id),
-        }
-    except HTTPException:
-        raise
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logging.error(f"Studio storyboard update failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/studio/workflow/transcribe-edit")
-async def studio_transcribe_edit(
-    project_name: str = Form(...),
-    project_id: Optional[int] = Form(None),
-    target_type: str = Form("storyboard"),
-    target_id: Optional[int] = Form(None),
-    file: UploadFile = File(...),
-):
-    """Transcribe a spoken Studio edit note with Whisper.
-
-    The transcript is intentionally returned as plain text plus target metadata, so the UI can
-    feed voice and typed corrections through the same save/rebuild endpoints.
-    """
-    import studio_memory as memory
-    temp_filename = None
-    try:
-        runner_project_id = memory.init_project_db(project_name)
-        if project_id is not None and runner_project_id is not None and int(project_id) != int(runner_project_id):
-            raise HTTPException(status_code=400, detail="project_id does not match project_name")
-        suffix = Path(file.filename or "studio-edit.wav").suffix or ".wav"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
-            temp_filename = temp_file.name
-            shutil.copyfileobj(file.file, temp_file)
-        trans = ensure_transcriber_initialized(preload=False)
-        text = trans.transcribe(temp_filename)
-        return {
-            "status": "success",
-            "project_id": runner_project_id,
-            "project_name": project_name,
-            "target_type": target_type,
-            "target_id": target_id,
-            "text": text,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Studio edit transcription failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if temp_filename:
-            try:
-                os.unlink(temp_filename)
-            except Exception:
-                pass
-
-@app.post("/studio/workflow/stage")
-async def studio_run_stage(request: StudioRunStageRequest):
-    from studio_workflow import StudioWorkflowRunner
-    import studio_memory as memory
-    try:
-        runner = StudioWorkflowRunner(request.project_name)
-        stage_name = request.stage.lower().strip()
-
-        # Recover the production mode / dropped story from memory so stages run after intake
-        # (in separate requests) stay grounded on the same canon.
-        runner._load_source()
-
-        # Determine inputs based on stage
-        premise = memory.get_bible(request.project_name, runner.project_id).get("premise")
-        world = memory.get_bible(request.project_name, runner.project_id).get("world")
-        characters = memory.get_characters(request.project_name, runner.project_id)
-        
-        if stage_name in ("exploration", "director_exploration"):
-            data = runner.run_director_exploration()
-            return {"status": "success", "stage": "exploration", "data": data["data"]}
-
-        elif stage_name in ("casting", "director_casting"):
-            data = runner.run_director_casting(premise_data=premise)
-            return {"status": "success", "stage": "casting", "data": data["data"]}
-
-        elif stage_name in ("scene_planning", "director_scene_planning"):
-            story_plan = request.input_data or None
-            data = runner.run_director_scene_planning(premise= premise, world=world, characters=characters, story_plan=story_plan)
-            if not data.get("ok"):
-                raise HTTPException(status_code=400, detail=data.get("error"))
-            return {"status": "success", "stage": "scene_planning", "data": data}
-
-        elif stage_name in ("finalization", "finalize"):
-            scene_order = (request.input_data or {}).get("scene_order")
-            data = runner.run_finalization(scene_order=scene_order)
-            return {"status": "success", "stage": "finalization", "data": data["data"]}
-
-        elif stage_name == "intake":
-            if not request.seed_text and not request.source_story:
-                raise HTTPException(status_code=400, detail="seed_text is required for intake stage")
-            data = runner.run_intake(request.seed_text, mode=request.mode, source_story=request.source_story)
-            return {"status": "success", "stage": "intake", "data": data}
-            
-        elif stage_name == "world_building":
-            if not premise:
-                raise HTTPException(status_code=400, detail="No premise found in memory. Run intake first.")
-            data = runner.run_world_building(premise)
-            return {"status": "success", "stage": "world_building", "data": data}
-            
-        elif stage_name == "character_building":
-            if not premise or not world:
-                raise HTTPException(status_code=400, detail="No premise/world found in memory. Run world building first.")
-            data = runner.run_character_building(premise, world)
-            return {"status": "success", "stage": "character_building", "data": data}
-            
-        elif stage_name == "story_planning":
-            if not premise or not world or not characters:
-                raise HTTPException(status_code=400, detail="Missing premise, world, or characters. Run prior stages first.")
-            story_plan, ep_id = runner.run_story_planning(premise, world, characters)
-            return {"status": "success", "stage": "story_planning", "data": story_plan, "episode_id": ep_id}
-            
-        elif stage_name == "panel_planning" or stage_name == "dialogue":
-            episodes = memory.get_episodes(request.project_name, runner.project_id)
-            if not episodes:
-                raise HTTPException(status_code=400, detail="No episode found in memory. Run story planning first.")
-            ep_id = typing.cast(dict, episodes[0])["id"]
-            story_plan = {
-                "summary": typing.cast(dict, episodes[0])["summary"],
-                "episodes": [{"name": typing.cast(dict, m)["summary"].split(":")[0], "summary": typing.cast(dict, m)["summary"].split(":")[1] if ":" in typing.cast(dict, m)["summary"] else typing.cast(dict, m)["summary"]} for m in memory.get_minutes(request.project_name, runner.project_id)],
-                "canon_events": [{"description": typing.cast(dict, c)["description"], "time_index": typing.cast(dict, c)["time_index"]} for c in memory.get_canon_events(request.project_name, runner.project_id)]
-            }
-            data = runner.run_dialogue_and_panels(premise, world, characters, story_plan, ep_id)
-            return {"status": "success", "stage": stage_name, "data": data}
-            
-        elif stage_name in ("loremaster", "understanding"):
-            # Stage 0: distill the full source story into a complete understanding.
-            data = runner.run_loremaster()
-            if data is None:
-                raise HTTPException(status_code=400, detail="No source story to understand. Use adapt/continue mode.")
-            return {"status": "success", "stage": "loremaster", "data": data}
-
-        elif stage_name in ("genesis", "invent"):
-            # Stage 0 (seed mode): invent a full story_understanding from the premise/seed.
-            data = runner.run_genesis(premise, seed_text=request.seed_text or "")
-            return {"status": "success", "stage": "genesis", "data": data}
-
-        elif stage_name in ("showrunner", "blueprint"):
-            # Stage 4 (cinematic): dynamic scene blueprint + setup/payoff (the user gate).
-            storyboard, ep_id, blueprint = runner.run_showrunner(
-                premise_data=premise, world_data=world, characters=characters)
-            return {"status": "success", "stage": "showrunner",
-                    "data": {"storyboard": storyboard, "blueprint": blueprint}, "episode_id": ep_id}
-
-        elif stage_name in ("scenes", "scriptwriting"):
-            # Stage 5 (cinematic): write every scene (script + image). Self-bootstraps the
-            # blueprint if it has not been generated yet.
-            blueprint = (request.input_data or {}).get("blueprint") if request.input_data else None
-            scenes = runner.run_scenes(blueprint=blueprint)
-            return {"status": "success", "stage": "scenes", "data": {"scenes": scenes}}
-
-        elif stage_name in ("voice", "scene_audio", "narrate"):
-            # Stage 8 (cinematic): render per-beat narration audio (browser-speech fallback).
-            force = bool((request.input_data or {}).get("force")) if request.input_data else False
-            result = runner.run_scene_audio(force=force)
-            if not result.get("ok"):
-                raise HTTPException(status_code=400, detail=result.get("error", "Voicing failed."))
-            return {"status": "success", "stage": "voice", "data": result}
-
-        elif stage_name in ("ambience", "scene_ambience", "sfx"):
-            force = bool((request.input_data or {}).get("force")) if request.input_data else False
-            result = runner.run_scene_ambience(force=force)
-            if not result.get("ok"):
-                raise HTTPException(status_code=400, detail=result.get("error", "Ambience failed."))
-            return {"status": "success", "stage": "ambience", "data": result}
-
-        elif stage_name in ("music", "score", "project_music"):
-            force = bool((request.input_data or {}).get("force")) if request.input_data else False
-            result = runner.run_project_music(force=force)
-            if not result.get("ok"):
-                raise HTTPException(status_code=400, detail=result.get("error", "Music failed."))
-            return {"status": "success", "stage": "music", "data": result}
-
-        elif stage_name in ("scene_continuity", "continuity_scenes"):
-            # Stage 7 (cinematic): audit the scene spine; verify setups pay off.
-            warnings = runner.run_scene_continuity()
-            return {"status": "success", "stage": "scene_continuity", "data": {"warnings": warnings}}
-
-        elif stage_name in ("render", "render_images"):
-            # Stage 6 (cinematic): render scene images from their prompts (no-op gradient
-            # fallback when no generator is configured).
-            force = bool((request.input_data or {}).get("force")) if request.input_data else False
-            result = runner.run_render_images(force=force)
-            if not result.get("ok"):
-                raise HTTPException(status_code=400, detail=result.get("error", "Render failed."))
-            return {"status": "success", "stage": "render", "data": result}
-
-        elif stage_name == "approval_ready":
-            panels = memory.get_panels(request.project_name, runner.project_id)
-            # Add dialogue/text back into panels for audit input format compatibility
-            dialogue_lines = {typing.cast(dict, d)["panel_id"]: d for d in memory.get_dialogue_lines(request.project_name, runner.project_id)}
-            audit_panels = []
-            for p_obj in panels:
-                p = typing.cast(dict, p_obj)
-                d_line = typing.cast(dict, dialogue_lines.get(p["id"]) or {})
-                audit_panels.append({
-                    "panel_number": p["panel_number"],
-                    "visual_description": p["visual_description"],
-                    "style_prompt": p["style_prompt"],
-                    "speaker": d_line.get("speaker", "Narrator"),
-                    "text": d_line.get("text", "")
-                })
-            data = runner.run_continuity_audit(premise, world, characters, audit_panels)
-            return {"status": "success", "stage": "approval_ready", "data": data}
-            
-        else:
-            raise HTTPException(status_code=400, detail=f"Invalid stage name: {stage_name}")
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Studio workflow stage failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/studio/project/{project_name}/{project_id}/panels")
-async def studio_get_project_panels(project_name: str, project_id: int):
-    import studio_memory as memory
-    try:
-        panels = memory.get_panels(project_name, project_id)
-        dialogue = memory.get_dialogue_lines(project_name, project_id)
-        # Zip panels and dialogue
-        dial_dict = {typing.cast(dict, d)["panel_id"]: d for d in dialogue}
-        zipped = []
-        for p_obj in panels:
-            p = typing.cast(dict, p_obj)
-            d = typing.cast(dict, dial_dict.get(p["id"]) or {})
-            zipped.append({
-                "id": p["id"],
-                "page_id": p.get("page_id"),
-                "panel_number": p["panel_number"],
-                "visual_description": p["visual_description"],
-                "style_prompt": p["style_prompt"],
-                "approved": p["approved"],
-                "dialogue": {
-                    "id": d.get("id"),
-                    "speaker": d.get("speaker", "Narrator"),
-                    "text": d.get("text", ""),
-                    "audio_path": d.get("audio_path"),
-                    "approved": d.get("approved", 0)
-                }
-            })
-        return {"status": "success", "panels": zipped}
-    except Exception as e:
-        logging.error(f"Studio get panels failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/studio/projects/{project_name}/scenes")
-async def studio_get_scenes(project_name: str):
-    """Return the cinematic `scenes` artifact (the new spine) for the player."""
-    import studio_memory as memory
-    try:
-        runner_id = memory.init_project_db(project_name)
-        bible = memory.get_bible(project_name, runner_id)
-        scenes = bible.get("scenes") or []
-        understanding = bible.get("story_understanding") or {}
-        # Honest provenance so the UI never sells procedural fallback as live-LLM quality.
-        grounding = understanding.get("_grounding") or ("none" if not understanding else "")
-        img_done = sum(1 for s in scenes if s.get("image_status") == "done")
-        amb_done = sum(1 for s in scenes if s.get("ambience_status") == "done")
-        aud_done = sum(1 for s in scenes for b in (s.get("narration_script") or [])
-                       if b.get("audio_status") == "done")
-        aud_total = sum(len(s.get("narration_script") or []) for s in scenes)
-        return {
-            "status": "success",
-            "scenes": scenes,
-            "blueprint": bible.get("scene_blueprint") or {},
-            "summary": (bible.get("scene_blueprint") or {}).get("summary", ""),
-            "grounding": grounding,
-            "image_done": img_done,
-            "ambience_done": amb_done,
-            "ambience_total": len(scenes),
-            "music_path": bible.get("music_path"),
-            "music_status": bible.get("music_status"),
-            "audio_done": aud_done,
-            "audio_total": aud_total,
-        }
-    except Exception as e:
-        logging.error(f"Studio get scenes failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/studio/models/image")
-async def studio_list_image_models():
-    """Catalog of in-process image checkpoints + install status (the Studio image model picker)."""
-    import studio_image_backend
-    return {"status": "success", "models": studio_image_backend.list_image_models(),
-            "default": studio_image_backend.DEFAULT_IMAGE_MODEL,
-            "diffusers_available": studio_image_backend.diffusers_available()}
-
-
-@app.post("/studio/models/image/{model_key}/download")
-async def studio_download_image_model(model_key: str):
-    """Download an image checkpoint through Studio (background, resumable). Poll download-state."""
-    import studio_image_backend
-    if model_key not in studio_image_backend.IMAGE_MODELS:
-        raise HTTPException(status_code=404, detail=f"Unknown image model '{model_key}'.")
-    return {"status": "success", "state": studio_image_backend.start_download(model_key)}
-
-
-@app.get("/studio/models/image/{model_key}/download-state")
-async def studio_image_model_download_state(model_key: str):
-    import studio_image_backend
-    return {"status": "success", "state": studio_image_backend.download_state(model_key)}
-
-
-@app.get("/studio/models/voice")
-async def studio_list_voice_models():
-    """Catalog of local voice models (Chatterbox, etc)."""
-    import studio_audio
-    return {"status": "success", "models": studio_audio.list_voice_models(),
-            "default": studio_audio.DEFAULT_VOICE_MODEL}
-
-
-@app.post("/studio/models/voice/{model_key}/download")
-async def studio_download_voice_model(model_key: str):
-    import studio_audio
-    if model_key not in studio_audio.VOICE_MODELS:
-        raise HTTPException(status_code=404, detail=f"Unknown voice model '{model_key}'.")
-    return {"status": "success", "state": studio_audio.start_download(model_key)}
-
-
-@app.get("/studio/models/voice/{model_key}/download-state")
-async def studio_voice_model_download_state(model_key: str):
-    import studio_audio
-    return {"status": "success", "state": studio_audio.download_state(model_key)}
-
-
-@app.get("/studio/models/media")
-async def studio_list_media_models():
-    """Unified Studio media catalog: voice, music, ambience/SFX."""
-    import studio_media_models
-    return {"status": "success", **studio_media_models.all_downloads()}
-
-
-@app.post("/studio/models/media/{model_key}/download")
-async def studio_download_media_model(model_key: str):
-    import studio_media_models
-    if model_key not in studio_media_models.MEDIA_MODELS:
-        raise HTTPException(status_code=404, detail=f"Unknown media model '{model_key}'.")
-    return {"status": "success", "state": studio_media_models.start_download(model_key)}
-
-
-@app.get("/studio/models/media/{model_key}/download-state")
-async def studio_media_model_download_state(model_key: str):
-    import studio_media_models
-    if model_key not in studio_media_models.MEDIA_MODELS:
-        raise HTTPException(status_code=404, detail=f"Unknown media model '{model_key}'.")
-    return {"status": "success", "state": studio_media_models.download_state(model_key)}
-
-
-@app.get("/studio/readiness")
-async def studio_readiness():
-    import studio_readiness as readiness
-    return {"status": "success", **readiness.audit_studio_readiness()}
-
-
-class StudioMediaSettingsRequest(BaseModel):
-    project_name: str
-    voice_volume: Optional[float] = None
-    music_volume: Optional[float] = None
-
-
-def _clamp_volume(v, default):
-    try:
-        return max(0.0, min(2.0, float(v)))
-    except (TypeError, ValueError):
-        return default
-
-
-@app.get("/studio/projects/{project_name}/media-settings")
-async def studio_get_media_settings(project_name: str):
-    """Per-project narration/score volume (so the reel doesn't blare). Defaults: voice 1.0, music 0.35."""
-    import studio_memory as memory
-    pid = memory.init_project_db(project_name)
-    prefs = memory.get_user_preferences(project_name, pid)
-    return {"status": "success",
-            "voice_volume": _clamp_volume(prefs.get("voice_volume"), 1.0),
-            "music_volume": _clamp_volume(prefs.get("music_volume"), 0.35)}
-
-
-@app.post("/studio/projects/{project_name}/media-settings")
-async def studio_set_media_settings(request: StudioMediaSettingsRequest):
-    """Persist narration/score volume. Applied on the next Voice / Render Score run."""
-    import studio_memory as memory
-    pid = memory.init_project_db(request.project_name)
-    if request.voice_volume is not None:
-        memory.set_user_preference(request.project_name, pid, "voice_volume",
-                                   _clamp_volume(request.voice_volume, 1.0))
-    if request.music_volume is not None:
-        memory.set_user_preference(request.project_name, pid, "music_volume",
-                                   _clamp_volume(request.music_volume, 0.35))
-    prefs = memory.get_user_preferences(request.project_name, pid)
-    return {"status": "success",
-            "voice_volume": _clamp_volume(prefs.get("voice_volume"), 1.0),
-            "music_volume": _clamp_volume(prefs.get("music_volume"), 0.35)}
-
-
-@app.get("/studio/projects/{project_name}/render-status")
-async def studio_render_status(project_name: str):
-    """Per-scene image render queue status (for the production-desk UI)."""
-    import studio_memory as memory
-    import studio_render
-    try:
-        pid = memory.init_project_db(project_name)
-        return {"status": "success", **studio_render.render_status(project_name, pid)}
-    except Exception as e:
-        logging.error(f"Studio render status failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/studio/workflow/scene/regenerate")
-async def studio_regenerate_scene(request: StudioRegenerateSceneRequest):
-    """Per-scene reject/refine: rewrite one scene's script and/or image, leaving the rest."""
-    from studio_workflow import StudioWorkflowRunner
-    try:
-        runner = StudioWorkflowRunner(request.project_name)
-        runner._load_source()
-        result = runner.regenerate_scene(request.scene_id, target=request.target or "all",
-                                         feedback=request.feedback or "")
-        if not result.get("ok"):
-            raise HTTPException(status_code=400, detail=result.get("error", "Regeneration failed."))
-        return {"status": "success", "scene": result["scene"]}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Studio regenerate scene failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/studio/project/warning/resolve")
-async def studio_resolve_warning(request: StudioWarningResolveRequest):
-    import studio_memory as memory
-    try:
-        memory.resolve_continuity_warning(request.project_name, request.warning_id)
-        return {"status": "success", "warning_id": request.warning_id}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logging.error(f"Studio resolve warning failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/studio/project/approve")
-async def studio_approve_item(request: StudioApproveRequest):
-    import studio_memory as memory
-    from studio_workflow import StudioWorkflowRunner
-    try:
-        memory.record_approval(
-            request.project_name,
-            request.project_id,
-            request.item_type,
-            request.item_id,
-            request.approved,
-            request.approved_by
-        )
-
-        # Phase 5: Trigger Agentic Correction if rejected and feedback is provided
-        if not request.approved and request.feedback:
-            workflow = StudioWorkflowRunner(request.project_name)
-            workflow.run_correction_turn(request.item_type, request.item_id, request.feedback)
-            
-        return {
-            "status": "success", 
-            "item_type": request.item_type, 
-            "item_id": request.item_id, 
-            "approved": request.approved
-        }
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logging.error(f"Studio approve item failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/studio/project/panel-image")
-async def studio_upload_panel_image(
-    project_name: str = Form(...),
-    project_id: int = Form(...),
-    panel_id: int = Form(...),
-    file: UploadFile = File(...),
-):
-    """Attach a user-provided image to a storyboard panel."""
-    import studio_memory as memory
-    try:
-        project = memory.get_project_by_id(project_name, project_id)
-        if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
-
-        panels = memory.get_panels(project_name, project_id)
-        panel = next((row for row in panels if row is not None and int(typing.cast(dict, row)["id"]) == int(panel_id)), None)
-        if not panel:
-            raise HTTPException(status_code=404, detail="Panel not found")
-
-        raw_name = Path(file.filename or "panel-image").name
-        suffix = Path(raw_name).suffix.lower()
-        if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
-            raise HTTPException(status_code=400, detail="Upload a PNG, JPG, WEBP, or GIF image.")
-
-        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw_name).strip("._") or f"panel_{panel_id}{suffix}"
-        target_name = f"panel_{panel_id}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{safe_name}"
-        project_dir = Path(memory.get_project_dir(project_name)).resolve()
-        image_path = project_dir / "assets" / "images" / target_name
-        image_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with image_path.open("wb") as handle:
-            shutil.copyfileobj(file.file, handle)
-
-        asset_id = memory.add_asset(
-            project_name,
-            project_id,
-            "image",
-            image_path,
-            metadata={"panel_id": panel_id, "source": "user_upload", "filename": raw_name},
-        )
-
-        metadata = panel.get("metadata") or {}
-        if not isinstance(metadata, dict):
-            metadata = {}
-        relative_path = str(image_path.relative_to(project_dir))
-        metadata.update({
-            "image_asset_id": asset_id,
-            "image_path": relative_path,
-            "image_source": "user_upload",
-        })
-        memory.update_panel(project_name, project_id, panel_id, metadata=metadata)
-
-        return {
-            "status": "success",
-            "asset_id": asset_id,
-            "panel_id": panel_id,
-            "path": relative_path,
-            "absolute_path": str(image_path),
-        }
-    except HTTPException:
-        raise
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logging.error(f"Studio panel image upload failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/studio/projects/{project_name}/assets/{rel_path:path}")
-async def studio_get_project_asset(project_name: str, rel_path: str):
-    """Serve a file from a project's folder over HTTP.
-
-    The renderer runs from an http:// origin (Electron dev server), so file:// image
-    URLs are blocked by Chromium. Serving assets through the backend makes panel images
-    load in both dev and packaged builds. Resolves under the project dir and rejects any
-    path that escapes it (traversal guard mirrors the upload handler).
-    """
-    import studio_memory as memory
-    try:
-        project_dir = Path(memory.get_project_dir(project_name)).resolve()
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    target = (project_dir / rel_path).resolve()
-    try:
-        target.relative_to(project_dir)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid asset path.")
-    if not target.is_file():
-        raise HTTPException(status_code=404, detail="Asset not found.")
-    return FileResponse(str(target))
-
-
-class StudioExportReelRequest(BaseModel):
-    project_name: str
-    project_id: Optional[int] = None
-
-
-@app.post("/studio/project/export-reel")
-async def studio_export_reel(request: StudioExportReelRequest):
-    """Build the full local export package (bibles, script, subtitles, reel.html, ZIP)."""
-    import studio_export
-    try:
-        result = studio_export.export_project(request.project_name, request.project_id)
-        return {"status": "success", **result}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logging.error(f"Studio export reel failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.delete("/studio/project/{project_name}")
-async def studio_delete_project(project_name: str):
-    import studio_memory as memory
-    try:
-        success = memory.delete_project(project_name)
-        if not success:
-            raise HTTPException(status_code=404, detail="Project not found")
-        return {"status": "success", "message": f"Project '{project_name}' deleted."}
-    except Exception as e:
-        logging.error(f"Studio delete project failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

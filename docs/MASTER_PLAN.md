@@ -1,0 +1,386 @@
+# BetterFingers Master Plan — 23 Features + UI/UX Overhaul
+
+Researched and verified 2026-07-07 (web research pass + codebase audit). Assumes the
+Electron migration (ELECTRON_MIGRATION_PLAN.md) is complete: sidecar hardened, PTT
+working, packaging done, first-run state client-side, legacy tkinter tree deleted.
+
+Item codes: **U1–U11** = user's list, **C1–C12** = companion list. Effort: S (≤2 days),
+M (≤1 week), L (1–3 weeks), XL (3+ weeks).
+
+## Implementation progress (branch: master-plan)
+
+- [x] **C10 — Latency HUD.** server.py times STT + LLM stages per utterance, keeps the
+  last 50 samples, exposes `GET /metrics` (avg/p50/p95/last per stage). Renderer shows a
+  "Pipeline latency" table in the Diagnostics tab, refreshed with diagnostics.
+- [x] **C7 — Privacy dashboard.** `GET /privacy` reports network touchpoints (only model
+  downloads are outbound; STT/LLM/TTS all local) + on-device data locations w/ sizes +
+  retention. `POST /privacy/wipe` clears drafts/history/recordings (opt-in voices). New
+  Privacy settings section renders it with a confirm-gated "Wipe my data" button. Also
+  fixed a latent flaky test: `startup_event`'s background warmup thread leaked across
+  TestClient instances; `shutdown_event` now joins it.
+- [x] **C6 — Never lose audio.** New `recordings.py` persists each utterance's raw audio
+  as a float32 WAV + JSON sidecar under `<userdata>/recordings/`, saved up front in
+  `process_recording_result` (survives a processing crash), pruned to the last 50.
+  Endpoints: `GET /recordings`, `POST /recordings/{id}/retranscribe` (rebuilds a
+  RecordingResult and re-runs the pipeline), `DELETE /recordings/{id}`, `DELETE
+  /recordings`. Renderer "Recovery" panel in Diagnostics lists them with re-transcribe/
+  discard/clear-all.
+- [x] **C4 — Confidence (rendered, not hidden).** transcriber gains
+  `transcribe_with_confidence()` → (text, {score, avg_logprob, no_speech_prob}); score is
+  length-weighted `exp(mean avg_logprob)` penalized by no_speech_prob. Plumbed through
+  `create_draft` + the `preview_ready` WS event (pipeline prefers it, falls back to plain
+  `transcribe` for other transcriber impls). Renderer shows a tone-tinted "% confident"
+  badge on the draft. NOTE: auto-accept/silent-inject threshold intentionally deferred
+  (kept conservative — surfacing confidence first, no behavior change).
+- [x] **C1 — Personal dictionary.** `dictionary.py`: terms persisted to
+  `<userdata>/dictionary.json`; faster-whisper `hotwords` bias (verified supported) wired
+  through `transcribe_with_confidence`; conservative post-ASR correction via **stdlib
+  difflib** (no rapidfuzz dependency — not installed): only long tokens at ≥0.82
+  similarity are snapped, casing-aware. Endpoints GET/POST/DELETE `/dictionary` +
+  `/dictionary/suggest`. New "Personal Dictionary" settings section (chips: add / remove /
+  one-click-add suggestions). Auto-learn: saving a draft edit diffs raw vs edited
+  (`suggest_from_edit`, stopword-filtered) and surfaces candidate terms via toast +
+  the suggestions row.
+- [x] **C8 — Searchable history.** New `history_store.py`:
+  stdlib sqlite3 **FTS5** archive (`<userdata>/history.db`) — external-content `drafts`
+  table + FTS index kept in sync by triggers, upsert-by-id dedup. The in-memory
+  100-cap `draft_queue`/`draft_history.json` is untouched (tests stay green); every
+  `save_draft_history` mirrors into the uncapped archive, and startup backfills it once
+  from the legacy JSON. Endpoints `GET /history/search?q=&limit=` (prefix MATCH, ranked),
+  `GET /history`, `DELETE /history`. Fully defensive. Renderer: a debounced search box
+  above the draft-history list on the Dashboard queries `/history/search`; results render
+  in the same style and click-to-copy to the clipboard. Clearing the box restores the
+  recent-drafts view.
+- [x] **U2 — Hardware detection / tier classifier.** `hardware_report.py` gains a pure,
+  GPU-lib-free `classify_tier(ram, vram, gpu_kind, cores)` → tier ∈ {cpu-only, igpu,
+  dgpu-8g, dgpu-12g+} with plain-language guidance + RAM warnings, and `get_hardware_tier()`
+  derives it from the existing report (this machine → `igpu`). Exposed in `/doctor`
+  (`hardware_tier`) and a new `GET /hardware/tier`; shown atop the Diagnostics Hardware
+  card. +8 unit tests (pure, no GPU needed). Suite now 156 green. (Vulkan/nvidia-ml
+  precision enumeration deferred — degrades to the report-based classifier.)
+- [x] **U4 — Model recommender.** New `model_recommender.py` (pure/testable):
+  `recommend(tier, ram_mb)` ranks the LLM + Whisper catalogs, picks a default per role
+  capped by tier (cpu-only/igpu→4B, dgpu-8g→12B, dgpu-12g+→31B), never recommends a model
+  that won't fit RAM, and attaches plain-language tradeoff notes. `GET /models/recommend`
+  returns it with the tier label/guidance. +7 unit tests. Renderer: a "Recommended for
+  your hardware" callout at the top of the Models tab shows the tier + guidance + the
+  recommended LLM (with its tradeoff note) and Whisper model. Suite 163 green.
+- [x] **C2 — Voice editing commands (formatting subset).** New `dictation_commands.py`
+  `apply_commands(text)` — a pure text pass turning spoken commands into formatting:
+  "new paragraph/line/sentence", spoken punctuation (period/comma/question mark/…),
+  parentheses, and casing ("all caps X", "capital/caps X"). Word-boundary safe (never
+  fires inside a word like "periodic"), with spacing/capitalization normalization.
+  Wired into `process_recording_result` after dictionary correction, gated by a
+  per-profile `voice_commands_enabled` (default on) with a Settings → Recording toggle.
+  +11 unit tests (174 green). (Phrase-history "scratch that" deferred — needs utterance
+  state.)
+- [~] **U5 — TTS improvements (normalization + smart-split).** New pure `tts_text.py`
+  `normalize_for_speech()` expands abbreviations (Dr./Mr./e.g./vs./…), currency
+  ($5→"5 dollars", $5.50→"…and 50 cents", singular/plural), percentages, and a few
+  symbols (&/@/#) so the voice reads naturally; wired into `ReviewTTSEngine.speak()`
+  before the existing pronunciation map (not regressed). Verified the chunker
+  (`_split_text_for_tts`) ALREADY does sentence→clause→word-boundary splitting (no
+  mid-word cuts) and added a guard test. +7 unit tests (181 green). REMAINING (deferred,
+  audio-DSP + heavier): streaming playback, loudness normalization, chunk crossfade
+  (utterance LRU cache already exists).
+- [x] **C11 — Voice macros (text-expansion subset).** New `macros.py` (mirrors
+  dictionary.py): user trigger→expansion pairs in `<userdata>/macros.json`;
+  `apply_macros(text)` expands whole-phrase, word-boundary-safe, case-insensitive,
+  longest-trigger-first. Wired into `process_recording_result` after dictation commands,
+  gated by per-profile `macros_enabled` (default on). Endpoints GET/POST/DELETE `/macros`.
+  New "Voice Macros" settings section (trigger+expansion inputs, remove chips, enable
+  toggle). +6 unit tests (187 green). Shell/keystroke macros deferred (security).
+
+- [~] **U7 — Persona schema v2 + migration (backend).** `llm_engine.py`: a persona is now
+  a rich dict `{prompt, temperature, few_shot:[{raw,out}], voice:{base,blend,speed},
+  format:{caps,punctuation,signoff}, dictionary_scope, model_hint}` stamped with
+  `schema_version: 2` on disk. `normalize_persona()` upgrades any legacy flat-string / v1
+  entry (or partial/malformed dict) into a fully-defaulted, type-coerced v2 dict; on load
+  legacy files migrate in memory, and every save (`upsert`/`delete`) rewrites v2.
+  `load_personas()` still returns the legacy `{name: prompt}` view (derived from v2) so
+  `process_fast_lane` / `get_persona_prompt` and all existing callers/tests are unchanged;
+  new `load_personas_v2()` + `get_persona()` expose the rich shape. `upsert_persona` now
+  accepts a plain prompt string OR a full/partial v2 dict (partial updates preserve prior
+  rich fields) and runs `validate_persona()` (prompt required, temperature 0–2, few_shot a
+  list). +19 unit tests (206 green). DEFERRED: Studio live-preview persona editor UI.
+
+- [~] **C9 — Golden audio suite (WER core).** New pure `wer.py` (stdlib-only, no `jiwer`/
+  `numpy`): `word_error_rate()` + `compare_transcripts()` do a word-level Levenshtein
+  alignment with backtrace, reporting `{wer, substitutions, deletions, insertions, hits,
+  ref_words, hyp_words}`. Unicode-safe normalizer folds case/punctuation/whitespace so
+  references are written naturally. Edge cases handled (empty ref+hyp → 0.0, empty ref +
+  words → 1.0, WER can exceed 1.0 on many insertions). Scaffolded `tests/golden_audio/`
+  with a README documenting the `<name>.wav`+`<name>.txt` fixture format and harness usage.
+  +15 unit tests (221 green). DEFERRED: checked-in real WAV fixtures + per-STT-model CI job
+  (needs recorded audio + model download; add `test_golden_audio.py` that skips when no
+  model available).
+
+- [~] **U6 — Kokoro voice blending (math core).** New pure `voice_blend.py` (numpy-only):
+  `blend_voices(a, b, weight)` weighted-averages two same-shape voice style tensors
+  (`weight` clamped 0–1: 0→A, 1→B, 0.5→mean; shape mismatch / empty → ValueError),
+  `blend_many(vectors, weights)` does an N-way normalized weighted average (weights
+  clipped ≥0, normalized to sum 1, all-zero → uniform; supports higher-dim tensors),
+  `clamp_weight()` + `validate_blend_request(names, weights)` guard user input. Results are
+  float32 (voicepack dtype). +26 unit tests (247 green). DEFERRED: extracting real voice
+  tensors from `voices-v1.0.bin`, saving blended voicepacks to disk, and the slider-based
+  blend-editor UI. Voice cloning tier (NeuTTS Air / Chatterbox) also deferred.
+
+- [~] **U8 — Model catalog additions.** VERIFY found the **Gemma 4 family
+  (E2B/E4B/12B/26B-A4B/31B GGUF) is already in the downloadable catalog**
+  (`model_manager.AVAILABLE_MODELS`) with real unsloth URLs — so U8's LLM half was
+  already shipped (regression-guarded by new tests). Added an **informational
+  "alternatives" catalog** to `model_recommender.py` (`ALTERNATIVE_LLMS` +
+  `ALTERNATIVE_STT`): the plan's named-but-not-yet-wired models — FunctionGemma-270M,
+  Qwen3.5-2B (LLM); Moonshine, distil-large-v3.5, Parakeet-ONNX (STT) — as metadata
+  entries (name, params/min-tier, engine, tradeoff blurb) all flagged
+  `downloadable: false`. `recommend_alternatives(tier)` returns tier-appropriate
+  suggestions (small models on cpu-only; GPU-only STT gated to higher tiers) and is
+  merged into `recommend()`, so `/models/recommend` surfaces them to the UI without
+  ever entering the downloadable lists (would break the faster-whisper transcriber /
+  need verified URLs). +10 unit tests (257 green). DEFERRED: verified GGUF download
+  URLs for the two small LLMs, and real non-whisper STT engine integration
+  (Moonshine/Parakeet) behind the transcriber interface.
+
+- [~] **U7 editor — chunk A (persona routes accept/return v2).** `server.py`:
+  `PersonaRequest` gains optional schema-v2 fields (`temperature`, `model_hint`,
+  `dictionary_scope`, `voice`, `format`, `few_shot`); `POST /personas` builds a v2 payload
+  from the provided fields (unspecified ones dropped so updates preserve prior rich values
+  via `upsert_persona`'s partial-merge) — legacy `{name, prompt}` bodies still work
+  unchanged. New `GET /personas/{name}` returns the full v2 persona dict for the editor
+  (404 if absent); `GET /personas` list view stays the legacy `{name: prompt}` map.
+  Validation errors (e.g. temperature out of 0–2) surface as HTTP 400. +5 route tests
+  (262 green). NEXT (chunk B): renderer Advanced controls (temperature/voice/format/
+  model_hint/few-shot) wired to these routes.
+
+- [x] **U7 editor — chunk B (renderer Advanced controls) → U7 COMPLETE.** Renderer now
+  edits schema-v2 personas end-to-end. `backend.js`: new `getPersonaV2(name)` (GET
+  `/personas/{name}`) and `savePersona(name, prompt, extra)` merges optional rich fields
+  into the POST body. `index.html`: collapsible **Advanced (optional)** block in persona
+  wizard step 4 — temperature (0–2), preferred model (`model_hint`), capitalization
+  (none/sentence/upper/lower), enforce-punctuation checkbox, sign-off. `main.js`: gathers
+  only non-empty Advanced values on save (so partial saves preserve prior fields via the
+  backend merge); on persona-name `change`, loads an existing persona's saved v2 fields
+  into the block; resets the block after save. JS parse-checked (`node --check`); pytest
+  still 262 green. **U7 done** (schema v2 + migration + routes + editor). DEFERRED
+  (non-blocking polish): live prompt preview, full voice base/blend/speed + few-shot
+  raw→out list UI, and a `dictionary_scope` control.
+
+- [x] **U3 — First-run wizard.** VERIFY found a **complete onboarding system already
+  implemented** in `app/src/renderer/main.js` (`initOnboarding()` called at app start,
+  `onboardingSteps` array, `renderOnboardingStep`/`finishOnboarding`) + `index.html`
+  (`#onboardingOverlay` modal) + `styles/base.css`: 4 gated steps (Welcome; data/consent
+  checkbox gate; record→review→send explainer; speech-models status), progress dots,
+  Escape-blocked required gate with Tab focus-trap, decline→quit, and `localStorage`
+  (`bf_onboarding_complete`) persistence so it shows once. The only gap vs. the plan was
+  that the "Speech models" step didn't surface the U4 hardware-aware recommendation.
+  ADDED: `populateOnboardingRecommendation()` — an async `onEnter` on that step that pulls
+  `/models/recommend` and renders the detected hardware tier + recommended LLM/Whisper
+  (reusing the same shape as `renderModelRecommendation`), non-fatal on failure. JS
+  parse-checked; pytest 262 green. **U3 done.**
+
+---
+
+## Part 1 — Verification matrix
+
+Every item is feasible. Verified tech picks (licenses checked for commercial shipping):
+
+| # | Item | Verdict | Verified tech pick |
+|---|------|---------|-------------------|
+| U1 | Screenshot QA of every page | ✅ Solid | Playwright `_electron` + `toHaveScreenshot()`, pinned Linux CI image, `reg-actions` for PR diffs. Tray/native dialogs must be stubbed. |
+| U2 | Smart hardware detection + tradeoffs | ✅ Solid | Vulkan device enumeration as the universal probe (works for NVIDIA/AMD/Intel on Win+Linux, reports real VRAM) + `nvidia-ml-py` / `amdsmi` for precision. Borrow Ollama's discovery/dedupe design (MIT). Extends existing `hardware_report.py` + `assess_model_fit()`. |
+| U3 | First-run wizard | ✅ Solid | Port `guided_tour.py` content into an Electron modal wizard; first-run flag client-side (already planned as Phase 2.6). |
+| U4 | Hardware-aware model downloader | ✅ Solid | Backend already has `/models/download` + progress + `/whisper/download`. Add a recommendation layer: hardware tier → model shortlist with tradeoff copy. Needs download resume (gap found in audit). |
+| U5 | Improved TTS | ✅ Solid | Keep Kokoro-82M (Apache) as default. Add: sentence-chunked streaming (RealtimeTTS pattern, MIT), token-aware smart-split (175/250/450 sentence-boundary chunking à la Kokoro-FastAPI), text normalization (numbers/abbrev/code symbols), RMS/BS.1770 loudness normalization, chunk crossfade, utterance cache. ⚠️ Piper is now GPL-3.0 under new maintainers — do not adopt; old MIT fork is frozen. |
+| U6 | Voice cloning / customization | ✅ Solid | Two tiers. Customization: **Kokoro voice blending** — voice packs are tensors; weighted-average blends work today, save as new voicepacks (near-free feature). Cloning: **NeuTTS Air** (Apache, CPU, ~3s sample) or **Kyutai Pocket TTS** (CC-BY, 100M, CPU-realtime) on CPU; **Chatterbox** (MIT, 23 langs, ~10s sample) when GPU detected. Ship a consent checkbox (industry norm; Chatterbox watermarks output). Avoid XTTS-v2/F5-TTS/Fish Speech — non-commercial weights. |
+| U7 | Persona overhaul | ✅ Solid | Today a persona = name + prompt only. Redefine (see Part 3). |
+| U8 | Model updates | ✅ **Gemma 4 confirmed** | Gemma 4 released 2026-03-31, **Apache 2.0**: E2B, E4B (multimodal, native function calling), 12B Unified, 26B-A4B MoE (runs like a 4B — flagship local pick), 31B. GGUFs available. STT: Moonshine v3 streaming (34M–245M, true streaming, medium beats Whisper large-v3 on WER, CPU-realtime), faster-whisper distil-large-v3.5 (MIT), Parakeet-TDT 0.6B v3 (CC-BY, ONNX int8 runs on CPU). Intent-tier LLMs: Qwen3.5-2B, FunctionGemma-270M (tool-call router). |
+| U9 | Cross-vendor efficiency | ✅ Solid | **llama.cpp Vulkan as universal default** (70–90% of native speed on AMD/Intel, fine on NVIDIA), CUDA build offered when NVIDIA detected. whisper.cpp shares the same GGML/Vulkan story (v1.8.3: 12× iGPU speedup). KV-cache quant `q8_0` (≈lossless). llama-server prompt/prefix caching — big win for persistent persona system prompts. Hot-swap via llama-server router mode or llama-swap. **Skip speculative decoding** below ~8B targets — overhead eats the gain. |
+| U10 | Meetings mode | ✅ Feasible, CPU-constrained | Capture in sidecar: PyAudioWPatch (WASAPI loopback, Win) + SoundCard (Pulse/PipeWire monitor, Linux). Diarization: pyannote community-1 (CC-BY, gated, CPU=slow batch) or NeMo Sortformer (ungated) — **offline post-meeting processing on CPU; live diarization needs GPU**. Notes/action items via local LLM. |
+| U11 | Brainstorm mode | ✅ Feasible | Streaming STT (Moonshine) + Silero VAD turn-taking + LLM question generation. `project_generator.py` already produces structured plans — seed for this. |
+| C1 | Personal dictionary | ✅ Solid | faster-whisper's native `hotwords` param (~100–200 token budget) + post-ASR fuzzy/phonetic correction (rapidfuzz + metaphone) + **auto-learn from user corrections** (the Wispr Flow pattern — their accuracy went 88%→96%). |
+| C2 | Voice editing commands | ✅ Solid | Talon-community pattern (reference implementation studied): phrase history (last ~40 utterances with emitted-keystroke counts) powers "scratch that"; a DictationFormat state machine handles "new paragraph"/"cap"/spoken punctuation. Command grammar layered before injection. |
+| C3 | Per-app injection profiles | ✅ Win/X11; ⚠️ Wayland partial | `get-windows` npm (in Electron main) on Windows/X11. Wayland: per-compositor adapters (kdotool on KDE, D-Bus shell extension on GNOME, wlr-foreign-toplevel on Sway) + graceful default-profile fallback. Even Talon/Espanso don't fully solve Wayland — don't promise parity. |
+| C4 | Confidence-gated review | ✅ Solid | faster-whisper exposes per-segment `avg_logprob` / `no_speech_prob`. Threshold: high-confidence → silent inject; low → review overlay. Per-profile sensitivity slider. |
+| C5 | Wake word / hands-free | ✅ Solid | openWakeWord (code Apache) with a **self-trained model** (pre-trained ones are CC-BY-NC — train our own via their synthetic-TTS pipeline, <1hr) gated by Silero VAD v6 (MIT). Always-on cost: a few % of one core. Porcupine rejected ($6k+/yr). |
+| C6 | Never lose audio | ✅ Trivial | Persist raw WAV per utterance (recorder already has the buffer); retention policy + "recovery bin" UI; re-transcribe action. |
+| C7 | Privacy dashboard | ✅ Trivial | App is already offline-only except model downloads. Dashboard enumerates every network touchpoint, audio-retention settings, one-button data wipe. Competitive weapon: Wispr Flow is getting roasted for covert screenshots. |
+| C8 | Searchable history | ✅ Solid | SQLite FTS5 (stdlib) in sidecar — replaces the 100-cap `draft_history.json`. `sqlite-vec` v0.1.9 later for semantic search. |
+| C9 | Golden audio suite | ✅ Solid | WAV fixtures + expected transcripts, WER via `jiwer`, run per STT model in CI. Audit found tests use mock arrays only — no real-audio regression safety today. |
+| C10 | Latency HUD | ✅ Trivial | Timestamp every pipeline stage (record→VAD→STT→LLM→inject), `/metrics` endpoint, debug HUD in renderer + status-rail glanceables. |
+| C11 | Voice macros | ✅ Solid | Phrase table → snippet / keystroke sequence / shell command. Builds directly on C2's command grammar. Shell macros default-off + confirmation. |
+| C12 | MCP client | ✅ Solid, newly viable | Official `mcp` Python SDK in the **sidecar** (not renderer), Claude-Desktop-style `mcpServers` JSON config, stdio servers. llama-server has native OpenAI-compatible `tools` support → schema bridge is trivial. Gemma 4's function-calling jump (~86% tool-call accuracy at E4B) is what makes this real at local scale. ~2–4 days for the loop; hard part is UX for tool permissions. |
+
+**Corrections to earlier assumptions:** Gemma 4 is real (user was right). Piper is now
+GPL. Speculative decoding is not worth it at our model sizes.
+
+---
+
+## Part 2 — UI/UX overhaul: "Speech is material"
+
+One idea drives the whole overhaul: **everything you say becomes a visible, solid,
+manipulable object.** Today the app's state is mostly invisible (audio vanishes into a
+pipeline, drafts appear in a tab). The overhaul makes the pipeline itself the UI.
+
+### Signature element: the Stream
+
+The main surface is a chronological feed of **utterance cards**. Each card shows the
+raw transcript morphing into the refined text (a brief, satisfying transition — you
+*see* the persona work). Cards carry their audio (replayable), their confidence, their
+destination app, and their actions (send / rewrite / speak / pin / macro-ify).
+
+- **Confidence is rendered, not hidden** (C4): high-confidence words are solid ink;
+  low-confidence words render slightly translucent with a soft underline. Say "fix
+  word three" or click to correct — corrections feed the personal dictionary (C1),
+  and the user *watches the app learn*. This is the genuinely-unique hook: no
+  competitor shows uncertainty honestly.
+- Recovery bin (C6) is just the Stream's "unprocessed" filter — failed audio stays
+  visible as a card with a retry button, never silently lost.
+
+### Information architecture — three spaces + a rail
+
+Replaces the current 4 tabs. Nothing is more than one click deep.
+
+1. **Talk** — the Stream + live mic state. The default, 90%-of-time view.
+2. **Library** — history search (C8), Meetings (U10), Brainstorms (U11). Time on one
+   axis, projects on the other.
+3. **Studio** — Personas & Voices (U7/U6), Models & Hardware (U2/U4/U8), Macros (C11),
+   Tools/MCP (C12), Privacy (C7).
+- **Status rail** (persistent, bottom): mic level, loaded models with RAM/VRAM gauge,
+  active persona, target app (C3), latency readout (C10). Every piece of hidden state,
+  permanently glanceable. Click any element to jump to its settings.
+
+### "Promotes brain activity"
+
+- **Brainstorm constellation** (U11): ideas appear as nodes as you speak; the LLM
+  links related nodes and asks one probing question at a time (visible as a pulsing
+  node you answer by voice). Export as outline/plan via `project_generator.py`.
+- **Threads**: while you dictate, the Library surfaces related past utterances/notes
+  in a side rail (FTS5 now, sqlite-vec later) — your own ideas resurface in context.
+- **Echo cards** (opt-in): after a meeting or brainstorm, the app generates 2–3 recall
+  questions and resurfaces them a day later as Stream cards — active recall applied to
+  your own work.
+
+### Design language: "solid"
+
+- **Tactile-physical, not glassy**: high-contrast type (one strong grotesque for UI,
+  a serif for transcript ink), hard edges, real shadows, springy 120–200ms motion
+  (scale/settle, no fades-of-mush). Dark "desk" theme default, paper-light theme.
+- **Sound design**: three tiny earcons (record start, refined, sent) — a voice app
+  should speak its own state. All optional.
+- **Waveform ring**: while recording, a calm breathing ring around the overlay dot —
+  ambient, alive, never distracting.
+- **Plain CSS stays** (current custom-properties approach is fine): formalize into
+  design tokens (`tokens.css`: color/space/type/motion/elevation scales). No framework
+  migration — the renderer is small enough that vanilla + web components per card type
+  is simpler and lighter than adopting React mid-flight.
+- **Accessibility as identity**: full keyboard nav, visible focus, reduced-motion mode,
+  ≥4.5:1 contrast everywhere, and — uniquely — **complete voice operability** (C2/C5/
+  C11 mean the app itself can be driven hands-free; "BetterFingers" earns its name).
+
+### Onboarding (U3) in this language
+
+Five-step modal wizard, each step doing real work: (1) mic check with live waveform →
+(2) hardware probe with plain-language verdict ("You can run these three models well")
+→ (3) recommended downloads with tradeoff copy + progress (U4) → (4) say one test
+sentence, watch it become a card and get refined (the aha moment) → (5) pick hotkey +
+persona. Skippable, revisitable from Studio.
+
+---
+
+## Part 3 — Persona overhaul (U7 design)
+
+A persona stops being a bare prompt and becomes the app's central object — *a way of
+speaking*:
+
+```yaml
+persona:
+  name: "Polished"
+  prompt: "..."                  # rewrite instruction (as today)
+  temperature: 0.3
+  few_shot: [{raw: "...", out: "..."}]   # 0–3 examples — biggest quality lever
+  voice: {base: af_heart, blend: {am_adam: 0.2}, speed: 1.05}   # U6 tie-in
+  format: {caps: sentence, punctuation: full, signoff: null}    # C2 state-machine defaults
+  dictionary_scope: [global, coding]                            # C1 tie-in
+  tools: []                      # MCP tool allowlist (C12) — persona becomes an agent
+  model_hint: gemma-4-e4b        # optional per-persona model
+```
+
+Studio editor with **live side-by-side preview**: dictate one sentence, see every
+persona's rewrite rendered as cards, hear its voice. Personas keep YAML storage
+(schema_version bump + migration for existing name+prompt entries).
+
+---
+
+## Part 4 — Phased implementation plan
+
+Dependencies flow downward; phases 2–3 can overlap with 1 (different layers of the
+stack). Backend work = Python sidecar; frontend = Electron renderer/main.
+
+### Phase 0 — Measure first (foundation for everything) — ~2 wks
+| Item | Work | Effort |
+|---|---|---|
+| C9 | `tests/golden_audio/` WAVs + jiwer WER harness; CI job per configured STT model | M |
+| C10 | Pipeline stage timestamps in server.py; `/metrics`; renderer debug HUD | S |
+| U1 | Playwright `_electron` harness; screenshot spec per view; pinned-Linux CI + reg-actions | M |
+| U2 | `hardware_report.py` v2: Vulkan enumeration + nvidia-ml-py/amdsmi; tier classifier (`cpu-only / igpu / dgpu-8g / dgpu-12g+`) feeding `assess_model_fit` | M |
+
+*Why first: every model/perf claim in later phases gets accepted or rejected by these numbers.*
+
+### Phase 1 — Models, runtimes, onboarding — ~3 wks
+| Item | Work | Effort |
+|---|---|---|
+| U8 | Model catalog: add Gemma 4 (E2B/E4B/12B/26B-A4B GGUF), Qwen3.5-2B, FunctionGemma-270M; add Moonshine + distil-large-v3.5 + Parakeet-ONNX as STT options behind the existing transcriber interface | L |
+| U9 | Ship Vulkan llama-server/whisper.cpp builds as default, CUDA variant on NVIDIA detect; enable KV-cache q8_0 + prompt caching; llama-swap for hot-switching | L |
+| U4 | Recommender: tier → shortlist w/ tradeoff copy; download resume; disk-space guard | M |
+| U3 | First-run wizard (5 steps above); reuses U2 probe + U4 recommender | M |
+
+*Gate: golden-suite WER + latency numbers must confirm each new model before it becomes a default.*
+
+### Phase 2 — UI/UX overhaul shell — ~3 wks (overlaps Phase 1)
+`tokens.css` design system → status rail → Stream (utterance cards over existing
+draft/WS events — backend already pushes `preview_ready`/`draft_sent` etc.) → three-space
+navigation, migrating the current 4 tabs → sound design + motion + reduced-motion +
+keyboard nav. Screenshot QA (U1) locks each view as it lands.
+
+### Phase 3 — Core dictation loop — ~3 wks
+| Item | Work | Effort |
+|---|---|---|
+| C1 | `dictionary.py` (hotwords injection + rapidfuzz/metaphone post-correction); auto-learn from card edits; Studio UI | M |
+| C4 | Confidence plumb-through → card rendering + silent-inject threshold per profile | S |
+| C2 | Phrase history + DictationFormat state machine; command grammar pre-injection ("scratch that", "new paragraph", "fix word N") | L |
+| C6 | Raw-audio retention + recovery cards + retention setting | S |
+| C3 | `get-windows` in Electron main → active-app context to sidecar; per-app profile switching (extends context_rules.yaml + profiles); Wayland adapters best-effort | M |
+
+### Phase 4 — Voice, TTS, personas — ~3 wks
+| Item | Work | Effort |
+|---|---|---|
+| U5 | tts_engine: smart-split chunking, streaming playback, text normalization, loudness norm, crossfade, utterance cache | M |
+| U6 | Kokoro blend editor (sliders → save voicepack); cloning engine plugin (NeuTTS Air CPU / Chatterbox GPU) + consent flow | L |
+| U7 | Persona schema v2 + migration; Studio editor w/ live preview; per-persona voice/model | L |
+| C5 | openWakeWord integration (self-trained "hey fingers" model) + Silero VAD v6 gating; hands-free mode toggle | M |
+
+### Phase 5 — Knowledge features — ~4 wks
+| Item | Work | Effort |
+|---|---|---|
+| C8 | SQLite FTS5 store replacing draft_history.json; Library search UI; sqlite-vec semantic pass later | M |
+| U10 | Meetings: sidecar loopback+mic capture → chunked STT → offline diarization (pyannote/NeMo) → LLM notes/action items → Library timeline UI | XL |
+| U11 | Brainstorm: streaming STT + VAD turn-taking + question-generating LLM loop; constellation UI; export via project_generator | L |
+| — | Threads + Echo cards (uses C8) | M |
+
+### Phase 6 — Power & trust — ~2 wks
+| Item | Work | Effort |
+|---|---|---|
+| C11 | Macro table (phrase → snippet/keys/shell w/ confirm); Studio UI | M |
+| C12 | `mcp` SDK client in sidecar; mcpServers config; llama-server tools bridge; per-persona tool allowlist + permission prompts in Stream | L |
+| C7 | Privacy dashboard + data wipe | S |
+| — | electron-updater (NSIS differential + AppImage) rollout channel | M |
+
+### Cross-cutting risks
+1. **CPU floor** (8GB, no GPU): every default must pass on the low-end tier — Moonshine
+   + E2B/Qwen3.5-2B + Kokoro is the floor stack; bigger models are opt-in via U4 tradeoff UI.
+2. **Wayland**: C3/C5-hotkey degrade — document per-feature fallbacks in one support matrix.
+3. **License hygiene**: re-check weight licenses at integration time (Moonshine streaming
+   weights, Qwen3.5 license unverified as of research date); keep an in-repo `LICENSES-MODELS.md`.
+4. **Sidecar API growth**: bump `schema_version` per phase; version-gate renderer features.
+5. **pyannote gating** (HF contact-info agreement) — decide whether to bundle NeMo as the
+   ungated default for meetings diarization.

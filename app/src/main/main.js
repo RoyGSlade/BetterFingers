@@ -6,7 +6,8 @@ const { createMainWindow, focusMainWindow, createOverlayWindow } = require('./wi
 const { createSidecar } = require('./sidecar');
 const { createTray } = require('./tray');
 const { registerIpc } = require('./ipc');
-const { unregisterAllHotkeys } = require('./hotkeys');
+const { unregisterAllHotkeys, triggerBackendAction } = require('./hotkeys');
+const { BACKEND_HOST, BACKEND_PORT } = require('./config');
 
 const authToken = randomUUID();
 
@@ -49,19 +50,26 @@ function resolveDevPythonCommand() {
   return fallbackCommand;
 }
 
+function notifyRendererSidecarStatus(status) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('sidecar:status', status);
+  }
+}
+
 function bootstrapApp() {
   sidecar = createSidecar({
-    host: '127.0.0.1',
-    port: 8000,
+    host: BACKEND_HOST,
+    port: BACKEND_PORT,
     authToken,
     devCommand: resolveDevPythonCommand(),
     devArgs: [
       'server.py',
       '--host',
-      '127.0.0.1',
+      BACKEND_HOST,
       '--port',
-      '8000',
+      String(BACKEND_PORT),
     ],
+    onStatusChange: notifyRendererSidecarStatus,
   });
 
   registerIpc({
@@ -79,6 +87,7 @@ function bootstrapApp() {
     getMainWindow: () => mainWindow,
     onShow: () => focusMainWindow(mainWindow),
     onQuit: requestQuit,
+    onToggleRecording: () => triggerBackendAction('/runtime/recording/toggle'),
   });
 
   sidecar.start().catch((error) => {

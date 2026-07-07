@@ -17,6 +17,30 @@ const dataSources = [
   ['assets', 'assets'],
 ];
 
+// Packages PyInstaller can't fully trace on its own. `collect-all` pulls in data
+// files, binaries, and submodules; these are the sidecar's runtime deps only —
+// the legacy flet/tkinter UI is intentionally excluded from the backend bundle.
+const collectAllPackages = [
+  'kokoro_onnx',
+  'espeakng_loader',
+  'language_tags',
+  'faster_whisper',
+];
+const hiddenImports = [
+  'ctranslate2',
+  'sounddevice',
+  'av',
+];
+
+function resolvePython() {
+  const explicit = process.env.BETTERFINGERS_PYTHON;
+  if (explicit) {
+    return explicit;
+  }
+  // The build hosts (Linux/macOS) ship `python3`; Windows ships `python`.
+  return process.platform === 'win32' ? 'python' : 'python3';
+}
+
 function run(command, args, options = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(command, args, {
@@ -89,9 +113,20 @@ async function main() {
     addDataIfExists(pyinstallerArgs, source, target);
   }
 
+  for (const pkg of collectAllPackages) {
+    pyinstallerArgs.push('--collect-all', pkg);
+  }
+
+  for (const mod of hiddenImports) {
+    pyinstallerArgs.push('--hidden-import', mod);
+  }
+
   pyinstallerArgs.push(backendSource);
 
-  await run('python', pyinstallerArgs, { cwd: repoRoot });
+  const python = resolvePython();
+  console.log(`[build-backend] Building sidecar with ${python} (PyInstaller onefile)…`);
+  await run(python, pyinstallerArgs, { cwd: repoRoot });
+  console.log(`[build-backend] Backend written to ${backendOutputDir}`);
 }
 
 main().catch((error) => {

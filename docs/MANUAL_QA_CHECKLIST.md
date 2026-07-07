@@ -1,0 +1,107 @@
+# Manual QA checklist
+
+Manual verification steps for every feature shipped during the MASTER_PLAN
+loop. The automated suite (`python3 -m pytest`, 262 tests) covers the pure
+logic; this checklist covers what needs a **running app + sidecar** to confirm.
+
+How to run the app for QA:
+
+```bash
+# Terminal 1 — Python sidecar
+python3 server.py            # or the packaged sidecar
+
+# Terminal 2 — Electron renderer
+cd app && npm run dev
+```
+
+Legend: ☐ = to verify. Each item notes the feature (MASTER_PLAN id) and the
+files involved so a failure is easy to trace.
+
+---
+
+## Onboarding & first run (U3)
+
+- ☐ Fresh profile (clear `localStorage` key `bf_onboarding_complete`) → the
+  onboarding overlay appears on launch and blocks the app.
+- ☐ Step 2 (data consent): **Next is disabled** until the checkbox is ticked.
+- ☐ `Esc` does **not** dismiss the overlay; `Tab`/`Shift+Tab` stays trapped
+  inside the modal.
+- ☐ Step 4 "Speech models": the **hardware-aware recommendation box** appears
+  with a detected tier + recommended LLM/Whisper (U4). If the sidecar is down,
+  the box stays hidden and the step still works.
+- ☐ "Decline" quits the app; finishing sets the flag so it does not reappear.
+  _Files: `app/src/renderer/main.js` (`initOnboarding`, `onboardingSteps`,
+  `populateOnboardingRecommendation`), `index.html` `#onboardingOverlay`._
+
+## Hardware detection & model recommender (U2, U4, U8)
+
+- ☐ `GET /hardware/tier` returns a tier in `{cpu-only, igpu, dgpu-8g, dgpu-12g+}`
+  matching the machine.
+- ☐ `GET /models/recommend` returns `llm`, `whisper`, and `alternatives`
+  sections; the recommended LLM fits within RAM (never "insufficient").
+- ☐ Models tab shows the recommendation callout (`#modelRecommendation`).
+- ☐ `alternatives` lists FunctionGemma-270M / Qwen3.5-2B / Moonshine etc. and
+  none of them appear as **downloadable** entries (they are informational only).
+  _Files: `hardware_report.py`, `model_recommender.py`, `model_manager.py`._
+
+## Personas — schema v2 + editor (U7)
+
+- ☐ Existing (v1, flat-string) `personas.yaml` still loads; personas appear in
+  the preset dropdown unchanged.
+- ☐ Persona wizard → **Advanced** block: set temperature / preferred model /
+  capitalization / punctuation / sign-off, save → success toast.
+- ☐ Re-open the same persona by name (blur the name field) → Advanced fields
+  repopulate from the saved values (`GET /personas/{name}`).
+- ☐ Save a **prompt-only** edit on that persona → the previously-set temperature
+  is **preserved** (partial-merge).
+- ☐ Temperature outside 0–2 → save fails with a 400 message.
+- ☐ On disk, `personas.yaml` now has `schema_version: 2` and nested dicts.
+  _Files: `llm_engine.py`, `server.py` `/personas*`, `app/src/renderer/*`._
+
+## Dictation pipeline add-ons (C1, C2, C4, C11)
+
+- ☐ **Personal dictionary (C1):** add a term; speak a phrase that should map to
+  it → the correction is applied in the draft. Terms persist across restart.
+- ☐ **Voice editing commands (C2):** speak "new paragraph" / "all caps" style
+  commands → formatting applied (only when Voice Commands enabled in the profile).
+- ☐ **Confidence (C4):** speak clearly vs. mumble → low-confidence drafts render
+  the confidence indicator; silent-inject threshold respected per profile.
+- ☐ **Macros (C11):** define trigger→expansion; speak the trigger as a whole
+  phrase → expands; a substring (e.g. "beta" for "eta") does **not** expand.
+  Toggle "Voice Macros" off → no expansion.
+
+## Audio, history, privacy (C6, C7, C8, C10)
+
+- ☐ **Never lose audio (C6):** record, then simulate a pipeline error → the raw
+  audio is retained and a recovery card lets you re-run it.
+- ☐ **Privacy dashboard (C7):** `/privacy` lists only local touchpoints;
+  "wipe" removes recordings/drafts/history.
+- ☐ **Searchable history (C8):** past drafts are searchable in the Library;
+  FTS matches partial words. Survives restart (SQLite store).
+- ☐ **Latency HUD (C10):** after an utterance, the debug HUD shows STT + LLM
+  stage timings; `/metrics` returns the same numbers.
+
+## TTS (U5, U6)
+
+- ☐ **Normalization (U5):** TTS reads "$5", "Dr.", "3.14", a URL, and a code
+  symbol naturally (not character-by-character).
+- ☐ **Smart-split (U5):** a long multi-sentence draft is chunked at sentence
+  boundaries with no mid-word cuts; playback is continuous.
+- ☐ **Voice blend (U6, math core only):** `voice_blend.blend_voices/blend_many`
+  are unit-tested; the **slider editor + saving blended voicepacks is not yet
+  wired** (see REMAINING_WORK). Confirm base voices still play.
+
+## Global hotkey / push-to-talk (migration)
+
+- ☐ Hold-to-talk: audio records only while the key is held (key-up ends it).
+- ☐ Press-to-toggle: one press starts, another stops.
+- ☐ Works when the app is unfocused / in the tray.
+  _Files: `app/src/main/hotkeys.js` (uiohook-napi)._
+
+---
+
+## Regression sanity (every session)
+
+- ☐ `python3 -m pytest -q` → 262+ passing.
+- ☐ `node --check app/src/renderer/main.js && node --check app/src/renderer/api/backend.js`.
+- ☐ App launches, records one utterance end-to-end (record → draft → send).

@@ -9,11 +9,14 @@ const api = {
   getAppState: () => ipcRenderer.invoke('app:get-state'),
   getSidecarStatus: () => ipcRenderer.invoke('sidecar:get-status'),
   getSidecarLogs: () => ipcRenderer.invoke('sidecar:get-logs'),
+  onSidecarStatus: (callback) =>
+    ipcRenderer.on('sidecar:status', (_event, status) => callback(status)),
   writeClipboardText: (text) => ipcRenderer.invoke('clipboard:write-text', text),
   updateOverlayStatus: (status) => ipcRenderer.invoke('overlay:update-status', status),
   showReviewOverlay: (draft) => ipcRenderer.invoke('review:show', draft),
   hideReviewOverlay: () => ipcRenderer.invoke('review:hide'),
   updateHotkeys: (config) => ipcRenderer.send('update-hotkeys', config),
+  getHotkeyCapabilities: () => ipcRenderer.invoke('hotkeys:get-capabilities'),
   openPath: (targetPath) => ipcRenderer.invoke('shell:open-path', targetPath),
 };
 

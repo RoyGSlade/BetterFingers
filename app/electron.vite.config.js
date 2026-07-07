@@ -8,6 +8,7 @@ module.exports = defineConfig({
       rollupOptions: {
         input: {
           main: resolve(__dirname, 'src/main/main.js'),
+          config: resolve(__dirname, 'src/main/config.js'),
           windows: resolve(__dirname, 'src/main/windows.js'),
           sidecar: resolve(__dirname, 'src/main/sidecar.js'),
           tray: resolve(__dirname, 'src/main/tray.js'),
@@ -35,7 +36,6 @@ module.exports = defineConfig({
           index: resolve(__dirname, 'src/renderer/index.html'),
           overlay: resolve(__dirname, 'src/renderer/overlay.html'),
           reviewOverlay: resolve(__dirname, 'src/renderer/review-overlay.html'),
-          cinema: resolve(__dirname, 'src/renderer/cinema.html'),
         },
       },
     },

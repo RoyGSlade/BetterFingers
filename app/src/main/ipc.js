@@ -20,6 +20,11 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthT
     registerHotkeys(config, token);
   });
 
+  ipcMain.handle('hotkeys:get-capabilities', () => {
+    const { getHotkeyCapabilities } = require('./hotkeys');
+    return getHotkeyCapabilities();
+  });
+
 
   ipcMain.handle('shell:open-path', async (_event, targetPath) => {
     // Open an exported file/folder (e.g. the reel.html preview) in the OS default app.
@@ -79,6 +84,10 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthT
 
     const payload = typeof update === 'string' ? { status: update } : { ...(update ?? {}) };
     const status = String(payload.status ?? 'unknown');
+
+    // Reflect pipeline state in the tray icon/menu too.
+    const { getTray } = require('./tray');
+    getTray()?.setState?.(status);
     const MAX_DURATION_MS = 30000;
     const rawDuration = payload.durationMs !== undefined ? Number(payload.durationMs) : 2600;
     const safeDuration = isNaN(rawDuration) || rawDuration < 0 || rawDuration > MAX_DURATION_MS ? 2600 : rawDuration;

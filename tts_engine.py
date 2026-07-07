@@ -11,6 +11,7 @@ from typing import Dict, Optional, Tuple
 import numpy as np
 import sounddevice as sd
 from utils import get_user_data_path
+from tts_text import normalize_for_speech
 
 # Regex-based pronunciation fixes
 _PRONUNCIATION_MAP = {
@@ -185,7 +186,9 @@ class ReviewTTSEngine:
                 return status
 
             self.stop_current()
-            # 1. Apply pronunciation fixes
+            # 1a. Normalize written forms to speech (currency, %, abbreviations…).
+            text = normalize_for_speech(text)
+            # 1b. Apply pronunciation fixes
             for pattern, replacement in _PRONUNCIATION_MAP.items():
                 text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
 

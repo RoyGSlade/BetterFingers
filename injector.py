@@ -1,5 +1,6 @@
 import logging
 import random
+import subprocess
 import threading
 import time
 
@@ -8,7 +9,11 @@ import sys
 import keyboard
 import pyperclip
 
-if sys.platform == "win32":
+import platform_capabilities
+
+IS_WINDOWS = platform_capabilities.IS_WINDOWS
+
+if IS_WINDOWS:
     import pydirectinput
 else:
     # pydirectinput uses ctypes.windll which is Windows-only.
@@ -24,6 +29,36 @@ else:
 from utils import load_profile
 
 
+def _run_type_tool(argv, text) -> bool:
+    """Shell out to an external typing tool (xdotool/wtype/ydotool).
+
+    Returns True on success, False if the tool is missing or exits non-zero so
+    the caller can fall back to clipboard paste.
+    """
+    try:
+        result = subprocess.run(
+            argv + [text],
+            check=False,
+            capture_output=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            logging.debug(
+                "Type tool %s exited %s: %s",
+                argv[0],
+                result.returncode,
+                (result.stderr or b"").decode("utf-8", "replace").strip(),
+            )
+            return False
+        return True
+    except FileNotFoundError:
+        logging.debug("Type tool not found: %s", argv[0])
+        return False
+    except Exception as exc:
+        logging.debug("Type tool %s failed: %s", argv[0], exc)
+        return False
+
+
 class InputInjector:
     def __init__(self, profile_name="Default"):
         pydirectinput.PAUSE = 0.0
@@ -33,6 +68,10 @@ class InputInjector:
         self.stop_signal = False
         self._voice_mute_lock = threading.Lock()
         self._held_voice_mute_key = ""
+        # Runtime-selected text-injection backend:
+        # "pydirectinput" | "xdotool" | "wtype" | "ydotool" | "paste" | "none".
+        self.injection_method = platform_capabilities.injection_method
+        logging.info(f"InputInjector active injection method: {self.injection_method}")
 
     def _update_params(self):
         self.min_hold = float(self.config.get("min_key_hold", 0.015))
@@ -67,12 +106,38 @@ class InputInjector:
             base = f"{base} {sign_off}".strip()
         return base
 
+    def _type_via_external_tool(self, text: str) -> bool:
+        """Type via the selected Linux backend. Returns True on success."""
+        method = self.injection_method
+        if method == "xdotool":
+            return _run_type_tool(["xdotool", "type", "--clearmodifiers", "--"], text)
+        if method == "wtype":
+            return _run_type_tool(["wtype", "--"], text)
+        if method == "ydotool":
+            return _run_type_tool(["ydotool", "type"], text)
+        return False
+
     def type_text(self, text: str):
         text = self._compose_output_text(text)
         if not text:
             return
 
         self.stop_signal = False
+
+        # Non-Windows: route through the runtime injection matrix. External typing
+        # tools (xdotool/wtype/ydotool) inject the whole string at once; if the
+        # selected tool is missing or fails, fall back to clipboard paste, which
+        # is the guaranteed universal fallback.
+        if not IS_WINDOWS:
+            if self.injection_method in ("xdotool", "wtype", "ydotool"):
+                if self._type_via_external_tool(text):
+                    return
+                logging.warning(
+                    f"Injection tool '{self.injection_method}' failed; falling back to paste."
+                )
+            self._paste_raw(text)
+            return
+
         is_instant = bool(self.config.get("instant_typing", False))
 
         if is_instant:
@@ -123,16 +188,34 @@ class InputInjector:
         except Exception as exc:
             logging.debug(f"Live delta injection failed: {exc}")
 
-    def paste_text(self, text: str):
-        text = self._compose_output_text(text)
-        if not text:
-            return
-
-        try:
-            pyperclip.copy(text)
+    def _send_paste_hotkey(self):
+        """Send Ctrl+V using the platform-appropriate mechanism."""
+        if IS_WINDOWS:
             pydirectinput.keyDown("ctrl")
             pydirectinput.press("v")
             pydirectinput.keyUp("ctrl")
+            return
+        # On Linux/macOS pydirectinput is stubbed; use the `keyboard` library
+        # which drives the OS input layer directly.
+        keyboard.press_and_release("ctrl+v")
+
+    def _press_key(self, key: str):
+        """Press a single key (e.g. enter/esc/chat-open) cross-platform."""
+        if IS_WINDOWS:
+            pydirectinput.press(key)
+        else:
+            keyboard.press_and_release(key)
+
+    def _paste_raw(self, text: str):
+        """Copy already-composed text to the clipboard and paste it.
+
+        This is the guaranteed universal fallback across all platforms.
+        """
+        if not text:
+            return
+        try:
+            pyperclip.copy(text)
+            self._send_paste_hotkey()
         except Exception as exc:
             logging.error(f"Paste injection failed ({exc}); falling back to instant type.")
             try:
@@ -140,12 +223,16 @@ class InputInjector:
             except Exception as fallback_exc:
                 logging.error(f"Fallback typing failed: {fallback_exc}")
 
+    def paste_text(self, text: str):
+        text = self._compose_output_text(text)
+        self._paste_raw(text)
+
     def open_chat(self):
         key = (self.config.get("chat_open_key", "") or "").strip()
         if not key:
             return
         try:
-            pydirectinput.press(key)
+            self._press_key(key)
             time.sleep(0.08)
         except Exception as exc:
             logging.error(f"Failed to open chat with '{key}': {exc}")
@@ -156,11 +243,11 @@ class InputInjector:
             return
         try:
             if action == "esc":
-                pydirectinput.press("esc")
+                self._press_key("esc")
             elif action == "chat_key":
                 key = (self.config.get("chat_open_key", "") or "").strip()
                 if key:
-                    pydirectinput.press(key)
+                    self._press_key(key)
         except Exception as exc:
             logging.error(f"Failed close-chat action '{action}': {exc}")
 
@@ -178,7 +265,7 @@ class InputInjector:
         if auto_submit:
             try:
                 time.sleep(max(0.01, self.min_delay))
-                pydirectinput.press("enter")
+                self._press_key("enter")
             except Exception as exc:
                 logging.error(f"Auto submit failed: {exc}")
 
