@@ -170,6 +170,14 @@
         background: rgba(102, 242, 193, 0.13);
       }
 
+      .rewrite-preset {
+        appearance: none;
+        padding-right: 22px;
+      }
+      .rewrite-preset option {
+        color: #000;
+      }
+
       .button.warning {
         border-color: rgba(246, 193, 95, 0.42);
       }
@@ -276,7 +284,12 @@
       <footer>
         <div class="actions">
           <button id="acceptButton" class="button primary" type="button">Accept</button>
-          <button id="changeButton" class="button" type="button">Change</button>
+          <select id="rewritePreset" class="button rewrite-preset" aria-label="Rewrite style">
+            <option value="clearer">Clearer</option>
+            <option value="shorter">Shorter</option>
+            <option value="tone">Tone</option>
+          </select>
+          <button id="changeButton" class="button" type="button">Rewrite</button>
           <button id="instructButton" class="button" type="button">Instruct</button>
           <button id="readButton" class="button" type="button">Read</button>
           <button id="cancelButton" class="button danger" type="button">Cancel</button>
@@ -295,6 +308,7 @@
       const instructionTextEl = document.getElementById('instructionText');
       const acceptButton = document.getElementById('acceptButton');
       const changeButton = document.getElementById('changeButton');
+      const rewritePresetEl = document.getElementById('rewritePreset');
       const instructButton = document.getElementById('instructButton');
       const runInstructionButton = document.getElementById('runInstructionButton');
       const readButton = document.getElementById('readButton');
@@ -476,7 +490,7 @@
       }
 
       function setBusy(isBusy) {
-        for (const button of [acceptButton, changeButton, instructButton, runInstructionButton, cancelButton]) {
+        for (const button of [acceptButton, changeButton, rewritePresetEl, instructButton, runInstructionButton, cancelButton]) {
           button.disabled = isBusy;
         }
       }
@@ -609,7 +623,7 @@
       });
 
       acceptButton.addEventListener('click', acceptDraft);
-      changeButton.addEventListener('click', () => rewriteDraft('clearer'));
+      changeButton.addEventListener('click', () => rewriteDraft(rewritePresetEl?.value || 'clearer'));
       instructButton.addEventListener('click', () => {
         instructionRow.classList.toggle('hidden');
         if (!instructionRow.classList.contains('hidden')) {
