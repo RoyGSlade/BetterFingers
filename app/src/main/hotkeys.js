@@ -346,4 +346,5 @@ module.exports = {
   registerHotkeys,
   unregisterAllHotkeys,
   getHotkeyCapabilities,
+  triggerBackendAction,
 };

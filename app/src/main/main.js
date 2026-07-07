@@ -6,7 +6,7 @@ const { createMainWindow, focusMainWindow, createOverlayWindow } = require('./wi
 const { createSidecar } = require('./sidecar');
 const { createTray } = require('./tray');
 const { registerIpc } = require('./ipc');
-const { unregisterAllHotkeys } = require('./hotkeys');
+const { unregisterAllHotkeys, triggerBackendAction } = require('./hotkeys');
 const { BACKEND_HOST, BACKEND_PORT } = require('./config');
 
 const authToken = randomUUID();
@@ -87,6 +87,7 @@ function bootstrapApp() {
     getMainWindow: () => mainWindow,
     onShow: () => focusMainWindow(mainWindow),
     onQuit: requestQuit,
+    onToggleRecording: () => triggerBackendAction('/runtime/recording/toggle'),
   });
 
   sidecar.start().catch((error) => {
