@@ -601,6 +601,10 @@
         renderDraft(draft);
         refreshOutputSettings().catch(() => {});
         updateTtsStatusBadge().catch(() => {});
+        // Move focus into the overlay so keyboard users land somewhere useful.
+        if (!acceptButton.disabled) {
+          acceptButton.focus();
+        }
       });
 
       window.betterFingersReview?.onStatus((statusUpdate) => {
@@ -653,6 +657,15 @@
       closeButton.addEventListener('click', () => {
         stopTtsIfSpeaking();
         window.betterFingersReview?.hide?.();
+      });
+
+      // Escape dismisses the review overlay (non-destructive: hides, doesn't decline).
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          stopTtsIfSpeaking();
+          window.betterFingersReview?.hide?.();
+        }
       });
 
       refreshOutputSettings().catch(() => {});
