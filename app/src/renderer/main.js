@@ -60,7 +60,6 @@ const wsConnectionEl = document.getElementById('wsConnection');
 const voiceStatusEl = document.getElementById('voiceStatus');
 const voiceStatusDetailEl = document.getElementById('voiceStatusDetail');
 const quitButton = document.getElementById('quitButton');
-const refreshRuntimeButton = document.getElementById('refreshRuntimeButton');
 const warmupSttButton = document.getElementById('warmupSttButton');
 const warmupLlmButton = document.getElementById('warmupLlmButton');
 const startHotkeysButton = document.getElementById('startHotkeysButton');
@@ -70,7 +69,6 @@ const runtimeStatusListEl = document.getElementById('runtimeStatusList');
 const warmupMessageEl = document.getElementById('warmupMessage');
 const outputSettingsSummaryEl = document.getElementById('outputSettingsSummary');
 const capabilitiesListEl = document.getElementById('capabilitiesList');
-const capabilitiesSummaryEl = document.getElementById('capabilitiesSummary');
 const draftStatusEl = document.getElementById('draftStatus');
 const draftRawTextEl = document.getElementById('draftRawText');
 const draftFinalTextEl = document.getElementById('draftFinalText');
@@ -102,7 +100,6 @@ const sidecarStatusEl = document.getElementById('sidecarStatus');
 const diagnosticsPathsListEl = document.getElementById('diagnosticsPathsList');
 const runtimeErrorsListEl = document.getElementById('runtimeErrorsList');
 const debugLogTailEl = document.getElementById('debugLogTail');
-const refreshProfilesButton = document.getElementById('refreshProfilesButton');
 const profileSelectEl = document.getElementById('profileSelect');
 const newProfileNameEl = document.getElementById('newProfileName');
 const activateProfileButton = document.getElementById('activateProfileButton');
@@ -1430,11 +1427,6 @@ async function runLlmDownloadAction() {
 
 async function refreshCapabilities() {
   const capabilities = await fetchCapabilities();
-  if (capabilitiesSummaryEl) {
-    const platform = capabilities.platform ?? 'unknown';
-    const session = capabilities.session_type ?? 'unknown';
-    capabilitiesSummaryEl.textContent = `${platform} · ${session}`;
-  }
 
   // Update Hotkeys session indicator element
   const hotkeySessionIndicator = document.getElementById('hotkeySessionIndicator');
@@ -2368,9 +2360,6 @@ async function bootstrap() {
       renderDetailList(runtimeStatusListEl, {});
     }),
     refreshCapabilities().catch(() => {
-      if (capabilitiesSummaryEl) {
-        capabilitiesSummaryEl.textContent = 'Unavailable';
-      }
       renderDetailList(capabilitiesListEl, {});
     }),
     refreshDrafts().catch(() => {
@@ -2632,17 +2621,6 @@ quitButton?.addEventListener('click', () => {
   window.betterFingers?.quitApp?.();
 });
 
-refreshRuntimeButton?.addEventListener('click', () => {
-  Promise.all([
-    refreshHealth(),
-    refreshRuntime().catch(() => {
-      setBadgeState(transcriberStatusEl, 'offline', 'danger');
-      setBadgeState(llmStatusEl, 'offline', 'danger');
-      renderDetailList(runtimeStatusListEl, {});
-    }),
-  ]);
-});
-
 warmupSttButton?.addEventListener('click', () => {
   runWarmup(warmupSttButton, { stt: true });
 });
@@ -2725,10 +2703,6 @@ emergencyStopButton?.addEventListener('click', async () => {
 
 refreshDiagnosticsButton?.addEventListener('click', () => {
   refreshDiagnostics();
-});
-
-refreshProfilesButton?.addEventListener('click', () => {
-  refreshProfiles().catch((error) => setMessage(profileMessageEl, `Refresh failed: ${error.message}`, 'danger'));
 });
 
 profileSelectEl?.addEventListener('change', async () => {
