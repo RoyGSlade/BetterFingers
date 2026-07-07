@@ -220,6 +220,10 @@ async function clearHistory(timeoutMs = 10000) {
   return deleteJson(`${BACKEND_ORIGIN}/history`, timeoutMs);
 }
 
+async function fetchModelRecommendation(timeoutMs = 5000) {
+  return fetchJson(`${BACKEND_ORIGIN}/models/recommend`, timeoutMs);
+}
+
 async function fetchRuntimeErrors(timeoutMs = 2500) {
   return fetchJson(RUNTIME_ERRORS_URL, timeoutMs);
 }
@@ -594,6 +598,7 @@ export {
   searchHistory,
   fetchHistoryRecent,
   clearHistory,
+  fetchModelRecommendation,
   fetchPersonas,
   fetchTtsVoices,
   savePersona,

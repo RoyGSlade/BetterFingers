@@ -62,6 +62,7 @@ import {
   duplicateProfile,
   exportProfile,
   importProfile,
+  fetchModelRecommendation,
 } from './api/backend.js';
 
 const backendStatusEl = document.getElementById('backendStatus');
@@ -1656,6 +1657,30 @@ function initWizard() {
   });
 }
 
+async function renderModelRecommendation() {
+  const el = document.getElementById('modelRecommendation');
+  if (!el) return;
+  try {
+    const payload = await fetchModelRecommendation();
+    const rec = payload?.recommendation;
+    if (!rec) {
+      el.classList.add('hidden');
+      return;
+    }
+    const llm = rec.llm?.models?.find((m) => m.id === rec.llm.recommended);
+    const whisper = rec.whisper?.recommended;
+    const llmNote = llm?.note ? ` — ${llm.note}` : '';
+    el.innerHTML =
+      `<strong>Recommended for your hardware (${rec.tier_label ?? rec.tier})</strong>` +
+      (rec.tier_guidance ? `<p class="section-desc">${rec.tier_guidance}</p>` : '') +
+      `<ul><li><strong>Language model:</strong> ${llm?.name ?? rec.llm?.recommended ?? '—'}${llmNote}</li>` +
+      `<li><strong>Speech model:</strong> ${whisper ?? '—'}</li></ul>`;
+    el.classList.remove('hidden');
+  } catch (error) {
+    el.classList.add('hidden');
+  }
+}
+
 async function refreshModels() {
   const [llmPayload, whisperPayload] = await Promise.all([
     fetchLlmModels(),
@@ -1663,6 +1688,7 @@ async function refreshModels() {
   ]);
   llmModelsPayload = llmPayload;
   whisperModelsPayload = whisperPayload;
+  renderModelRecommendation().catch(() => {});
 
   fillSelect(
     llmModelSelectEl,

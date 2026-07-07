@@ -1808,3 +1808,16 @@ body.theme-light.high-contrast {
   border-color: rgba(102, 242, 193, 0.4);
 }
 .dictionary-chip-add:hover { background: rgba(102, 242, 193, 0.08); }
+
+/* ==========================================
+   Model recommendation callout (U4)
+   ========================================== */
+.model-recommendation {
+  margin: 12px 0;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: rgba(102, 242, 193, 0.06);
+  border: 1px solid rgba(102, 242, 193, 0.28);
+}
+.model-recommendation ul { margin: 8px 0 0; padding-left: 18px; }
+.model-recommendation li { margin: 4px 0; }
