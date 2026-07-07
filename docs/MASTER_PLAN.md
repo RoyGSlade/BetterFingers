@@ -152,6 +152,19 @@ M (≤1 week), L (1–3 weeks), XL (3+ weeks).
   (262 green). NEXT (chunk B): renderer Advanced controls (temperature/voice/format/
   model_hint/few-shot) wired to these routes.
 
+- [x] **U7 editor — chunk B (renderer Advanced controls) → U7 COMPLETE.** Renderer now
+  edits schema-v2 personas end-to-end. `backend.js`: new `getPersonaV2(name)` (GET
+  `/personas/{name}`) and `savePersona(name, prompt, extra)` merges optional rich fields
+  into the POST body. `index.html`: collapsible **Advanced (optional)** block in persona
+  wizard step 4 — temperature (0–2), preferred model (`model_hint`), capitalization
+  (none/sentence/upper/lower), enforce-punctuation checkbox, sign-off. `main.js`: gathers
+  only non-empty Advanced values on save (so partial saves preserve prior fields via the
+  backend merge); on persona-name `change`, loads an existing persona's saved v2 fields
+  into the block; resets the block after save. JS parse-checked (`node --check`); pytest
+  still 262 green. **U7 done** (schema v2 + migration + routes + editor). DEFERRED
+  (non-blocking polish): live prompt preview, full voice base/blend/speed + few-shot
+  raw→out list UI, and a `dictionary_scope` control.
+
 ---
 
 ## Part 1 — Verification matrix

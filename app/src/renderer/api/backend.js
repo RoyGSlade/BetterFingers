@@ -423,8 +423,20 @@ async function fetchTtsVoices(timeoutMs = 2500) {
   return fetchJson(TTS_VOICES_URL, timeoutMs);
 }
 
-async function savePersona(name, prompt, timeoutMs = 5000) {
-  return postJson(PERSONAS_URL, { name, prompt }, timeoutMs);
+async function getPersonaV2(name, timeoutMs = 2500) {
+  return fetchJson(`${PERSONAS_URL}/${encodeURIComponent(name)}`, timeoutMs);
+}
+
+async function savePersona(name, prompt, extra = null, timeoutMs = 5000) {
+  const body = { name, prompt };
+  if (extra && typeof extra === 'object') {
+    for (const [key, value] of Object.entries(extra)) {
+      if (value !== null && value !== undefined) {
+        body[key] = value;
+      }
+    }
+  }
+  return postJson(PERSONAS_URL, body, timeoutMs);
 }
 
 async function deletePersona(name, timeoutMs = 5000) {
@@ -615,6 +627,7 @@ export {
   addMacro,
   deleteMacro,
   fetchPersonas,
+  getPersonaV2,
   fetchTtsVoices,
   savePersona,
   deletePersona,

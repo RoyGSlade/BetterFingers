@@ -573,6 +573,34 @@
                         <textarea id="wizardPromptPreview" class="settings-input textarea-medium" readonly></textarea>
                       </label>
                     </div>
+                    <details id="wizardAdvanced" class="mt-12">
+                      <summary class="status-label">Advanced (optional)</summary>
+                      <p class="setting-desc">Fine-tune generation, output formatting, and which model this persona prefers. Leave blank to use defaults.</p>
+                      <div class="settings-grid grid-cols-1 flex-column-gap12 mt-12">
+                        <label>
+                          <span class="status-label">Temperature (0–2)</span>
+                          <input id="wizardTemperature" class="settings-input" type="number" min="0" max="2" step="0.1" placeholder="model default" />
+                        </label>
+                        <label>
+                          <span class="status-label">Preferred model (optional)</span>
+                          <input id="wizardModelHint" class="settings-input" type="text" placeholder="e.g. gemma-4-e4b-q4" />
+                        </label>
+                        <label>
+                          <span class="status-label">Capitalization</span>
+                          <select id="wizardFormatCaps" class="settings-input">
+                            <option value="none">Leave as written</option>
+                            <option value="sentence">Sentence case</option>
+                            <option value="upper">UPPERCASE</option>
+                            <option value="lower">lowercase</option>
+                          </select>
+                        </label>
+                        <label class="flex-align-center-gap8"><input id="wizardFormatPunctuation" type="checkbox" checked /> Enforce punctuation</label>
+                        <label>
+                          <span class="status-label">Sign-off (optional)</span>
+                          <input id="wizardFormatSignoff" class="settings-input" type="text" placeholder="e.g. — Best, John" />
+                        </label>
+                      </div>
+                    </details>
                   </div>
                   
                   <div class="action-row mt-20 flex-between-center">

@@ -55,6 +55,7 @@ import {
   refreshAudioDevices,
   fetchVersion,
   fetchPersonas,
+  getPersonaV2,
   fetchTtsVoices,
   savePersona,
   deletePersona,
@@ -165,6 +166,11 @@ const wizardRuleNoPreamble = document.getElementById('wizardRuleNoPreamble');
 const wizardRuleSanitize = document.getElementById('wizardRuleSanitize');
 const wizardPersonaName = document.getElementById('wizardPersonaName');
 const wizardPromptPreview = document.getElementById('wizardPromptPreview');
+const wizardTemperature = document.getElementById('wizardTemperature');
+const wizardModelHint = document.getElementById('wizardModelHint');
+const wizardFormatCaps = document.getElementById('wizardFormatCaps');
+const wizardFormatPunctuation = document.getElementById('wizardFormatPunctuation');
+const wizardFormatSignoff = document.getElementById('wizardFormatSignoff');
 
 let loadedPersonas = {};
 
@@ -1557,6 +1563,68 @@ function initWizard() {
     }
   }
 
+  // Collect the optional schema-v2 fields the user set in the Advanced block.
+  // Only non-empty values are returned so a partial save preserves prior fields.
+  function gatherAdvancedPersonaFields() {
+    const extra = {};
+    const tempRaw = wizardTemperature?.value?.trim();
+    if (tempRaw) {
+      const temp = Number(tempRaw);
+      if (Number.isFinite(temp)) extra.temperature = temp;
+    }
+    const hint = wizardModelHint?.value?.trim();
+    if (hint) extra.model_hint = hint;
+
+    const caps = wizardFormatCaps?.value || 'none';
+    const signoff = wizardFormatSignoff?.value?.trim() || '';
+    const punctuation = wizardFormatPunctuation ? !!wizardFormatPunctuation.checked : true;
+    // Only send format when it deviates from the defaults (none / punctuation on / no signoff).
+    if (caps !== 'none' || !punctuation || signoff) {
+      extra.format = { caps, punctuation, signoff };
+    }
+    return extra;
+  }
+
+  function resetAdvancedPersonaFields() {
+    if (wizardTemperature) wizardTemperature.value = '';
+    if (wizardModelHint) wizardModelHint.value = '';
+    if (wizardFormatCaps) wizardFormatCaps.value = 'none';
+    if (wizardFormatPunctuation) wizardFormatPunctuation.checked = true;
+    if (wizardFormatSignoff) wizardFormatSignoff.value = '';
+  }
+
+  function populateAdvancedPersonaFields(persona) {
+    if (!persona || typeof persona !== 'object') {
+      resetAdvancedPersonaFields();
+      return;
+    }
+    if (wizardTemperature) {
+      wizardTemperature.value = (persona.temperature === null || persona.temperature === undefined)
+        ? '' : String(persona.temperature);
+    }
+    if (wizardModelHint) wizardModelHint.value = persona.model_hint || '';
+    const fmt = (persona.format && typeof persona.format === 'object') ? persona.format : {};
+    if (wizardFormatCaps) wizardFormatCaps.value = fmt.caps || 'none';
+    if (wizardFormatPunctuation) wizardFormatPunctuation.checked = fmt.punctuation !== false;
+    if (wizardFormatSignoff) wizardFormatSignoff.value = fmt.signoff || '';
+  }
+
+  // When the entered name matches an existing persona, pull its saved v2 fields
+  // into the Advanced block so editing preserves (and shows) them.
+  async function loadExistingPersonaAdvanced() {
+    const name = wizardPersonaName?.value?.trim();
+    if (!name || !loadedPersonas || !loadedPersonas[name]) {
+      return;
+    }
+    try {
+      const persona = await getPersonaV2(name);
+      populateAdvancedPersonaFields(persona);
+    } catch (err) {
+      // Non-fatal: leave Advanced fields as-is if the fetch fails.
+      console.warn('Could not load persona advanced fields:', err);
+    }
+  }
+
   wizardRole?.addEventListener('change', () => {
     if (wizardRole.value === 'custom') {
       wizardCustomRoleLabel?.classList.remove('hidden');
@@ -1575,6 +1643,11 @@ function initWizard() {
 
   wizardPersonaName?.addEventListener('input', () => {
     updateDeleteButtonVisibility();
+  });
+
+  // Fires on blur / Enter — load an existing persona's advanced fields if matched.
+  wizardPersonaName?.addEventListener('change', () => {
+    loadExistingPersonaAdvanced();
   });
 
   wizardPrevButton?.addEventListener('click', () => {
@@ -1602,7 +1675,8 @@ function initWizard() {
       setMessage(wizardMessage, "Saving persona...", "warning");
 
       try {
-        const res = await savePersona(name, prompt);
+        const advanced = gatherAdvancedPersonaFields();
+        const res = await savePersona(name, prompt, advanced);
         setMessage(wizardMessage, res.message || "Persona saved successfully!", "success");
         
         await refreshPersonasAndVoices();
@@ -1616,6 +1690,7 @@ function initWizard() {
         setTimeout(() => {
           showStep(1);
           if (wizardPersonaName) wizardPersonaName.value = '';
+          resetAdvancedPersonaFields();
           if (wizardCustomRole) wizardCustomRole.value = '';
           if (wizardCustomTone) wizardCustomTone.value = '';
           if (wizardRole) {
