@@ -22,9 +22,10 @@
         <button id="quitButton" class="secondary-button" type="button">Quit app</button>
       </header>
 
-      <!-- Warning Banner for Version Mismatch -->
+      <!-- Warning Banner for backend health / version issues -->
       <div id="versionMismatchBanner" class="warning-banner hidden" role="alert">
-        <strong>Backend Version Mismatch:</strong> The running backend version does not match the version expected by this Electron client (0.1.0). Some features may behave unexpectedly. Please verify your installation.
+        <strong id="backendBannerTitle">Backend issue:</strong>
+        <span id="backendBannerMessage">The backend is not responding as expected.</span>
       </div>
 
       <!-- Tab Navigation -->

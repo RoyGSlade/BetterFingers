@@ -156,6 +156,8 @@ const wizardPromptPreview = document.getElementById('wizardPromptPreview');
 let loadedPersonas = {};
 
 const versionMismatchBanner = document.getElementById('versionMismatchBanner');
+const backendBannerTitleEl = document.getElementById('backendBannerTitle');
+const backendBannerMessageEl = document.getElementById('backendBannerMessage');
 const refreshDoctorButton = document.getElementById('refreshDoctorButton');
 const doctorCardsGrid = document.getElementById('doctorCardsGrid');
 const doctorRecoveryPanel = document.getElementById('doctorRecoveryPanel');
@@ -1529,29 +1531,50 @@ async function refreshSidecarStatus() {
     status.message ?? '',
   ].filter(Boolean).join('\n');
   
-  if (status.state === 'error') {
+  const dangerStates = new Set(['error', 'crashed']);
+  if (dangerStates.has(status.state)) {
     sidecarStatusEl.dataset.tone = 'danger';
   } else if (status.state === 'ready') {
     sidecarStatusEl.dataset.tone = 'success';
-  } else if (status.state === 'version_mismatch') {
-    sidecarStatusEl.dataset.tone = 'warning';
   } else {
     sidecarStatusEl.dataset.tone = 'warning';
   }
 
-  if (versionMismatchBanner) {
-    if (status.state === 'version_mismatch') {
-      versionMismatchBanner.classList.remove('hidden');
-    } else {
-      versionMismatchBanner.classList.add('hidden');
-    }
-  }
+  updateBackendBanner(status);
 
-  if (status.state === 'error' || status.state === 'stopped') {
+  if (dangerStates.has(status.state) || status.state === 'stopped') {
     refreshSidecarLogs().catch(() => {});
   }
 
   return status;
+}
+
+// Banner states worth interrupting the user for, mapped to a short title.
+const BACKEND_BANNER_TITLES = {
+  version_mismatch: 'Backend version mismatch:',
+  unhealthy: 'Backend not responding:',
+  restarting: 'Restarting backend:',
+  crashed: 'Backend stopped:',
+};
+
+function updateBackendBanner(status) {
+  if (!versionMismatchBanner) {
+    return;
+  }
+  const title = BACKEND_BANNER_TITLES[status?.state];
+  if (title) {
+    if (backendBannerTitleEl) {
+      backendBannerTitleEl.textContent = title;
+    }
+    if (backendBannerMessageEl) {
+      backendBannerMessageEl.textContent =
+        status.message || 'Some features may behave unexpectedly.';
+    }
+    versionMismatchBanner.dataset.tone = status.state === 'crashed' ? 'danger' : 'warning';
+    versionMismatchBanner.classList.remove('hidden');
+  } else {
+    versionMismatchBanner.classList.add('hidden');
+  }
 }
 
 async function refreshDiagnostics() {
@@ -2353,6 +2376,14 @@ async function bootstrap() {
       setBadgeState(llmStatusEl, 'offline', 'danger');
     });
   }, 3000);
+
+  // React to sidecar lifecycle pushes (crash / restart / recovery) immediately
+  // instead of waiting for the next poll tick.
+  window.betterFingers?.onSidecarStatus?.((status) => {
+    if (!status) return;
+    updateBackendBanner(status);
+    refreshSidecarStatus().catch(() => {});
+  });
 
   websocketHandle = connectVoiceStatus({
     onConnectionChange: updateConnectionPill,

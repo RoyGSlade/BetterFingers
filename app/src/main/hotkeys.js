@@ -1,5 +1,6 @@
 const { globalShortcut } = require('electron');
 const { net } = require('electron');
+const { BACKEND_HOST, BACKEND_PORT } = require('./config');
 
 let activeConfig = null;
 let authToken = null;
@@ -32,8 +33,8 @@ function triggerBackendAction(endpoint) {
   const request = net.request({
     method: 'POST',
     protocol: 'http:',
-    hostname: '127.0.0.1',
-    port: 8000,
+    hostname: BACKEND_HOST,
+    port: BACKEND_PORT,
     path: endpoint,
   });
 
