@@ -205,6 +205,7 @@ const settingEls = {
   no_audio_min_peak: document.getElementById('settingNoAudioPeak'),
   auto_submit: document.getElementById('settingAutoSubmit'),
   instant_typing: document.getElementById('settingInstantTyping'),
+  voice_commands_enabled: document.getElementById('settingVoiceCommands'),
   audio_ducking: document.getElementById('settingAudioDucking'),
   status_indicator_enabled: document.getElementById('settingStatusIndicator'),
   notification_overlay_enabled: document.getElementById('settingNotificationOverlay'),
@@ -1336,7 +1337,11 @@ function renderProfileSettings(settings) {
       continue;
     }
     if (el.type === 'checkbox') {
-      el.checked = el.disabled ? false : Boolean(activeProfileSettings[key]);
+      // Some toggles default ON when the profile hasn't stored them yet.
+      const defaultOnKeys = new Set(['voice_commands_enabled']);
+      const stored = activeProfileSettings[key];
+      const value = stored === undefined && defaultOnKeys.has(key) ? true : Boolean(stored);
+      el.checked = el.disabled ? false : value;
     } else {
       el.value = activeProfileSettings[key] ?? '';
     }

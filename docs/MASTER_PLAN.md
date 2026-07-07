@@ -65,6 +65,15 @@ M (≤1 week), L (1–3 weeks), XL (3+ weeks).
   returns it with the tier label/guidance. +7 unit tests. Renderer: a "Recommended for
   your hardware" callout at the top of the Models tab shows the tier + guidance + the
   recommended LLM (with its tradeoff note) and Whisper model. Suite 163 green.
+- [x] **C2 — Voice editing commands (formatting subset).** New `dictation_commands.py`
+  `apply_commands(text)` — a pure text pass turning spoken commands into formatting:
+  "new paragraph/line/sentence", spoken punctuation (period/comma/question mark/…),
+  parentheses, and casing ("all caps X", "capital/caps X"). Word-boundary safe (never
+  fires inside a word like "periodic"), with spacing/capitalization normalization.
+  Wired into `process_recording_result` after dictionary correction, gated by a
+  per-profile `voice_commands_enabled` (default on) with a Settings → Recording toggle.
+  +11 unit tests (174 green). (Phrase-history "scratch that" deferred — needs utterance
+  state.)
 
 ---
 

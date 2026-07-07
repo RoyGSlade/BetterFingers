@@ -26,6 +26,7 @@ from hardware_report import get_hardware_report, assess_model_fit, get_hardware_
 from platform_paths import ensure_app_dirs, get_app_data_dir, get_config_dir
 import recordings
 import dictionary
+import dictation_commands
 import history_store
 from model_manager import (
     DEFAULT_MODEL,
@@ -288,6 +289,15 @@ def apply_active_profile_runtime(profile_name):
 
 def is_lazy_startup_enabled():
     return os.getenv("BETTERFINGERS_LAZY_STARTUP") == "1"
+
+
+def voice_commands_enabled():
+    """Whether spoken dictation commands (C2) are applied. Per-profile, default on."""
+    try:
+        config = load_profile(get_last_active_profile())
+    except Exception:
+        return True
+    return bool(config.get("voice_commands_enabled", True))
 
 
 def get_model_residency_settings():
@@ -1013,6 +1023,9 @@ def process_recording_result(recording_result):
         # Post-ASR correction snaps near-miss tokens back to dictionary terms.
         if raw_text and dict_terms:
             raw_text = dictionary.correct_text(raw_text, dict_terms)
+        # Spoken dictation commands (C2): "new paragraph", "period", "all caps", ...
+        if raw_text and voice_commands_enabled():
+            raw_text = dictation_commands.apply_commands(raw_text)
         stt_ms = (time.perf_counter() - _stt_start) * 1000.0
 
         check_cancelled()
