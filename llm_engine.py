@@ -89,8 +89,12 @@ REWRITE_PRESETS = {
     ),
 }
 
+# Persona schema version written to personas.yaml. v1 == flat {name: promptstring}.
+PERSONA_SCHEMA_VERSION = 2
+
 # Cached personas (loaded once)
-_personas_cache = None
+_personas_cache = None       # legacy view: {name: prompt-string}
+_personas_v2_cache = None    # rich view:   {name: v2-dict}
 _personas_lock = threading.RLock()
 _context_rules_recovery_logged = False
 _context_rules_yaml_error_logged = False
@@ -125,16 +129,129 @@ def _sanitize_persona_name(name):
     return candidate.strip()
 
 
+def _coerce_float(value, fallback):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def default_persona(prompt=""):
+    """Return a fully-defaulted persona schema v2 dict for the given prompt."""
+    return {
+        "prompt": str(prompt or ""),
+        "temperature": None,
+        "few_shot": [],  # list of {"raw": str, "out": str}
+        "voice": {"base": "", "blend": "", "speed": 1.0},
+        "format": {"caps": "none", "punctuation": True, "signoff": ""},
+        "dictionary_scope": "global",
+        "model_hint": "",
+    }
+
+
+def normalize_persona(entry):
+    """Upgrade a persona of any supported shape into a schema v2 dict.
+
+    Accepts:
+      * a plain prompt string (legacy v1),
+      * a partial/complete v2 dict,
+      * None / unexpected types (coerced defensively).
+    Always returns a complete v2 dict with every field defaulted and type-coerced.
+    """
+    if isinstance(entry, str):
+        return default_persona(entry)
+    if not isinstance(entry, dict):
+        return default_persona("" if entry is None else str(entry))
+
+    result = default_persona(entry.get("prompt", ""))
+
+    temp = entry.get("temperature", None)
+    if temp is not None:
+        result["temperature"] = _coerce_float(temp, None)
+
+    few_shot = entry.get("few_shot", [])
+    if isinstance(few_shot, list):
+        result["few_shot"] = [
+            {"raw": str(item.get("raw", "") or ""), "out": str(item.get("out", "") or "")}
+            for item in few_shot
+            if isinstance(item, dict)
+        ]
+
+    voice = entry.get("voice", {})
+    if isinstance(voice, dict):
+        result["voice"] = {
+            "base": str(voice.get("base", "") or ""),
+            "blend": str(voice.get("blend", "") or ""),
+            "speed": _coerce_float(voice.get("speed", 1.0), 1.0),
+        }
+
+    fmt = entry.get("format", {})
+    if isinstance(fmt, dict):
+        result["format"] = {
+            "caps": str(fmt.get("caps", "none") or "none"),
+            "punctuation": bool(fmt.get("punctuation", True)),
+            "signoff": str(fmt.get("signoff", "") or ""),
+        }
+
+    result["dictionary_scope"] = str(entry.get("dictionary_scope", "global") or "global")
+    result["model_hint"] = str(entry.get("model_hint", "") or "")
+    return result
+
+
+def validate_persona(entry):
+    """Validate a (normalized or raw) persona. Returns (ok, message)."""
+    if isinstance(entry, str):
+        entry = normalize_persona(entry)
+    if not isinstance(entry, dict):
+        return False, "Persona must be a mapping or prompt string."
+    if not str(entry.get("prompt", "") or "").strip():
+        return False, "Persona prompt is required."
+    temp = entry.get("temperature", None)
+    if temp is not None:
+        try:
+            temp_val = float(temp)
+        except (TypeError, ValueError):
+            return False, "Persona temperature must be a number."
+        if not (0.0 <= temp_val <= 2.0):
+            return False, "Persona temperature must be between 0.0 and 2.0."
+    if not isinstance(entry.get("few_shot", []), list):
+        return False, "Persona few_shot must be a list."
+    return True, ""
+
+
+def _read_personas_v2(path):
+    """Read personas.yaml from disk and normalize every entry to schema v2."""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle) or {}
+    except FileNotFoundError:
+        data = {}
+    raw = data.get("personas", {})
+    if not isinstance(raw, dict):
+        raw = {}
+    normalized = {}
+    for name, entry in raw.items():
+        key = str(name).strip()
+        if key:
+            normalized[key] = normalize_persona(entry)
+    return normalized
+
+
+def _write_personas_v2(path, personas_v2):
+    """Persist personas in schema v2 form, stamping the schema version."""
+    payload = {"schema_version": PERSONA_SCHEMA_VERSION, "personas": personas_v2}
+    _atomic_write_yaml(path, payload)
+
+
 def ensure_default_personas():
-    """Create default personas.yaml if it doesn't exist."""
+    """Create default personas.yaml (schema v2) if it doesn't exist."""
     path = _get_personas_path()
     if os.path.exists(path):
         return
-    
+
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, 'w', encoding='utf-8') as f:
-            yaml.safe_dump({"personas": _DEFAULT_PERSONAS}, f, default_flow_style=False, allow_unicode=True)
+        defaults = {name: normalize_persona(prompt) for name, prompt in _DEFAULT_PERSONAS.items()}
+        _write_personas_v2(path, defaults)
         logging.info(f"Created default personas.yaml at {path}")
     except Exception as e:
         logging.error(f"Failed to create default personas.yaml: {e}")
@@ -145,29 +262,53 @@ def is_builtin_persona(name):
     return key in _DEFAULT_PERSONAS
 
 
-def load_personas(force_reload=False):
-    """Load personas from personas.yaml. Returns dict of {name: prompt}."""
-    global _personas_cache
-    
+def load_personas_v2(force_reload=False):
+    """Load personas as schema v2 dicts: {name: {prompt, temperature, ...}}.
+
+    Migrates any legacy (flat-string / v1) entries into v2 form in memory.
+    Also refreshes the legacy {name: prompt-string} cache used by callers that
+    only need the prompt (process_fast_lane, get_persona_prompt, ...).
+    """
+    global _personas_cache, _personas_v2_cache
+
     with _personas_lock:
-        if _personas_cache is not None and not force_reload:
-            return _personas_cache
-        
+        if _personas_v2_cache is not None and not force_reload:
+            return _personas_v2_cache
+
         ensure_default_personas()
         path = _get_personas_path()
-        
+
         try:
-            with open(path, 'r', encoding='utf-8') as f:
-                data = yaml.safe_load(f) or {}
-            _personas_cache = data.get("personas", {})
-            if not _personas_cache:
-                _personas_cache = dict(_DEFAULT_PERSONAS)
-            logging.debug(f"Loaded {len(_personas_cache)} personas from {path}")
+            normalized = _read_personas_v2(path)
+            if not normalized:
+                normalized = {name: normalize_persona(p) for name, p in _DEFAULT_PERSONAS.items()}
+            logging.debug(f"Loaded {len(normalized)} personas from {path}")
         except Exception as e:
             logging.error(f"Failed to load personas.yaml: {e}")
-            _personas_cache = dict(_DEFAULT_PERSONAS)
-        
+            normalized = {name: normalize_persona(p) for name, p in _DEFAULT_PERSONAS.items()}
+
+        _personas_v2_cache = normalized
+        _personas_cache = {name: entry["prompt"] for name, entry in normalized.items()}
+        return _personas_v2_cache
+
+
+def load_personas(force_reload=False):
+    """Load personas from personas.yaml. Returns dict of {name: prompt}.
+
+    Backward-compatible legacy view; derived from the schema v2 store.
+    """
+    load_personas_v2(force_reload=force_reload)
+    with _personas_lock:
         return _personas_cache
+
+
+def get_persona(name):
+    """Return the full schema v2 dict for a persona, or None if absent."""
+    personas = load_personas_v2()
+    key = str(name or "").strip()
+    with _personas_lock:
+        entry = personas.get(key)
+    return dict(entry) if entry else None
 
 
 def get_fast_lane_preset_names():
@@ -183,27 +324,42 @@ def get_persona_prompt(name, default=""):
     return str(default or "")
 
 
-def upsert_persona(name, prompt):
-    global _personas_cache
+def upsert_persona(name, persona):
+    """Create or update a persona.
+
+    `persona` may be a plain prompt string (legacy call sites) or a full/partial
+    schema v2 dict. Either shape is normalized, validated, and persisted in v2 form.
+    Updating an existing persona preserves its unspecified rich fields.
+    """
+    global _personas_cache, _personas_v2_cache
     persona_name = _sanitize_persona_name(name)
-    persona_prompt = str(prompt or "").strip()
     if not persona_name:
         return False, "Persona name is required."
-    if not persona_prompt:
-        return False, "Persona prompt is required."
 
     path = _get_personas_path()
     ensure_default_personas()
     try:
         with _personas_lock:
-            with open(path, "r", encoding="utf-8") as handle:
-                data = yaml.safe_load(handle) or {}
-            personas = data.get("personas", {})
-            if not isinstance(personas, dict):
-                personas = {}
-            personas[persona_name] = persona_prompt
-            _atomic_write_yaml(path, {"personas": personas})
-            _personas_cache = dict(personas)
+            personas = _read_personas_v2(path)
+
+            if isinstance(persona, dict):
+                # Merge onto any existing entry so partial updates keep prior rich fields.
+                merged = dict(personas.get(persona_name, default_persona()))
+                merged.update(persona)
+                entry = normalize_persona(merged)
+            else:
+                existing = personas.get(persona_name)
+                entry = normalize_persona(existing) if existing else default_persona()
+                entry["prompt"] = str(persona or "").strip()
+
+            ok, msg = validate_persona(entry)
+            if not ok:
+                return False, msg
+
+            personas[persona_name] = entry
+            _write_personas_v2(path, personas)
+            _personas_v2_cache = personas
+            _personas_cache = {n: e["prompt"] for n, e in personas.items()}
         return True, f"Saved persona '{persona_name}'."
     except Exception as exc:
         logging.error("Failed to save persona '%s': %s", persona_name, exc)
@@ -211,7 +367,7 @@ def upsert_persona(name, prompt):
 
 
 def delete_persona(name, allow_builtin=False):
-    global _personas_cache
+    global _personas_cache, _personas_v2_cache
     persona_name = str(name or "").strip()
     if not persona_name:
         return False, "Persona name is required."
@@ -224,18 +380,15 @@ def delete_persona(name, allow_builtin=False):
     ensure_default_personas()
     try:
         with _personas_lock:
-            with open(path, "r", encoding="utf-8") as handle:
-                data = yaml.safe_load(handle) or {}
-            personas = data.get("personas", {})
-            if not isinstance(personas, dict):
-                personas = {}
+            personas = _read_personas_v2(path)
             if persona_name not in personas:
                 return False, f"Persona '{persona_name}' was not found."
             personas.pop(persona_name, None)
             if not personas:
-                personas = dict(_DEFAULT_PERSONAS)
-            _atomic_write_yaml(path, {"personas": personas})
-            _personas_cache = dict(personas)
+                personas = {n: normalize_persona(p) for n, p in _DEFAULT_PERSONAS.items()}
+            _write_personas_v2(path, personas)
+            _personas_v2_cache = personas
+            _personas_cache = {n: e["prompt"] for n, e in personas.items()}
         return True, f"Deleted persona '{persona_name}'."
     except Exception as exc:
         logging.error("Failed deleting persona '%s': %s", persona_name, exc)

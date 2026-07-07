@@ -91,6 +91,19 @@ M (≤1 week), L (1–3 weeks), XL (3+ weeks).
   New "Voice Macros" settings section (trigger+expansion inputs, remove chips, enable
   toggle). +6 unit tests (187 green). Shell/keystroke macros deferred (security).
 
+- [~] **U7 — Persona schema v2 + migration (backend).** `llm_engine.py`: a persona is now
+  a rich dict `{prompt, temperature, few_shot:[{raw,out}], voice:{base,blend,speed},
+  format:{caps,punctuation,signoff}, dictionary_scope, model_hint}` stamped with
+  `schema_version: 2` on disk. `normalize_persona()` upgrades any legacy flat-string / v1
+  entry (or partial/malformed dict) into a fully-defaulted, type-coerced v2 dict; on load
+  legacy files migrate in memory, and every save (`upsert`/`delete`) rewrites v2.
+  `load_personas()` still returns the legacy `{name: prompt}` view (derived from v2) so
+  `process_fast_lane` / `get_persona_prompt` and all existing callers/tests are unchanged;
+  new `load_personas_v2()` + `get_persona()` expose the rich shape. `upsert_persona` now
+  accepts a plain prompt string OR a full/partial v2 dict (partial updates preserve prior
+  rich fields) and runs `validate_persona()` (prompt required, temperature 0–2, few_shot a
+  list). +19 unit tests (206 green). DEFERRED: Studio live-preview persona editor UI.
+
 ---
 
 ## Part 1 — Verification matrix
