@@ -115,6 +115,16 @@ M (≤1 week), L (1–3 weeks), XL (3+ weeks).
   (needs recorded audio + model download; add `test_golden_audio.py` that skips when no
   model available).
 
+- [~] **U6 — Kokoro voice blending (math core).** New pure `voice_blend.py` (numpy-only):
+  `blend_voices(a, b, weight)` weighted-averages two same-shape voice style tensors
+  (`weight` clamped 0–1: 0→A, 1→B, 0.5→mean; shape mismatch / empty → ValueError),
+  `blend_many(vectors, weights)` does an N-way normalized weighted average (weights
+  clipped ≥0, normalized to sum 1, all-zero → uniform; supports higher-dim tensors),
+  `clamp_weight()` + `validate_blend_request(names, weights)` guard user input. Results are
+  float32 (voicepack dtype). +26 unit tests (247 green). DEFERRED: extracting real voice
+  tensors from `voices-v1.0.bin`, saving blended voicepacks to disk, and the slider-based
+  blend-editor UI. Voice cloning tier (NeuTTS Air / Chatterbox) also deferred.
+
 ---
 
 ## Part 1 — Verification matrix
