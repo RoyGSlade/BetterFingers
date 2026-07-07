@@ -1,7 +1,14 @@
 import logging
+import re
+import shutil
+import subprocess
 import threading
 import time
 from ctypes import POINTER, cast
+
+import platform_capabilities
+
+IS_WINDOWS = platform_capabilities.IS_WINDOWS
 
 try:
     import comtypes
@@ -13,22 +20,93 @@ except Exception as exc:
     CORE_AUDIO_AVAILABLE = False
     CORE_AUDIO_IMPORT_ERROR = exc
 
+
+def _pactl_path():
+    """Return the pactl executable path if PulseAudio/PipeWire is present."""
+    if IS_WINDOWS:
+        return None
+    return shutil.which("pactl")
+
+
 class AudioDucker:
-    """
-    Windows master-volume ducker.
-    Reads current volume, applies a lower level while recording, then restores the prior level.
+    """Cross-platform master-volume ducker.
+
+    Windows: pycaw / Core Audio (reads + restores exact prior level & mute).
+    Linux:   best-effort via `pactl` (PulseAudio / PipeWire default sink).
+             Degrades gracefully to a no-op if pactl is unavailable.
+    Reads current volume, applies a lower level while recording, then restores
+    the prior level.
     """
 
     def __init__(self):
-        self.available = CORE_AUDIO_AVAILABLE
         self._lock = threading.Lock()
         self._ducked = False
         self._pre_duck_volume = None
         self._pre_duck_mute = None
         self._fallback_restore_level = 1.0
 
+        self._pactl = None
+        self.backend = "none"
+        if CORE_AUDIO_AVAILABLE and IS_WINDOWS:
+            self.backend = "pycaw"
+        elif not IS_WINDOWS:
+            self._pactl = _pactl_path()
+            if self._pactl:
+                self.backend = "pactl"
+
+        self.available = self.backend != "none"
+
         if not self.available:
-            logging.warning(f"Core audio ducking unavailable: {CORE_AUDIO_IMPORT_ERROR}")
+            if IS_WINDOWS:
+                logging.warning(f"Core audio ducking unavailable: {CORE_AUDIO_IMPORT_ERROR}")
+            else:
+                logging.warning("Audio ducking unavailable: `pactl` not found on PATH.")
+
+    # ------------------------------------------------------------------
+    # Linux (pactl) backend
+    # ------------------------------------------------------------------
+    def _pactl_run(self, args):
+        try:
+            return subprocess.run(
+                [self._pactl] + args,
+                check=False,
+                capture_output=True,
+                timeout=5,
+            )
+        except Exception as exc:
+            logging.debug(f"pactl {args} failed: {exc}")
+            return None
+
+    def _pactl_read_state(self):
+        """Return (volume_scalar 0-1, muted bool) for the default sink, or None."""
+        vol_res = self._pactl_run(["get-sink-volume", "@DEFAULT_SINK@"])
+        if vol_res is None or vol_res.returncode != 0:
+            return None
+        text = (vol_res.stdout or b"").decode("utf-8", "replace")
+        percents = [int(m) for m in re.findall(r"(\d+)%", text)]
+        if not percents:
+            return None
+        # Average the channels, clamp to 0-1.
+        level = max(0.0, min(1.0, (sum(percents) / len(percents)) / 100.0))
+
+        muted = False
+        mute_res = self._pactl_run(["get-sink-mute", "@DEFAULT_SINK@"])
+        if mute_res is not None and mute_res.returncode == 0:
+            muted = b"yes" in (mute_res.stdout or b"").lower()
+        return level, muted
+
+    def _pactl_set_state(self, level=None, muted=None):
+        ok = True
+        if level is not None:
+            pct = int(round(self._clamp_level(level) * 100))
+            res = self._pactl_run(["set-sink-volume", "@DEFAULT_SINK@", f"{pct}%"])
+            ok = ok and (res is not None and res.returncode == 0)
+        if muted is not None:
+            res = self._pactl_run(
+                ["set-sink-mute", "@DEFAULT_SINK@", "1" if muted else "0"]
+            )
+            ok = ok and (res is not None and res.returncode == 0)
+        return ok
 
     @staticmethod
     def _clamp_level(level, default=1.0):
@@ -57,6 +135,9 @@ class AudioDucker:
         if not self.available:
             return None
 
+        if self.backend == "pactl":
+            return self._pactl_read_state()
+
         coinited = False
         try:
             comtypes.CoInitialize()
@@ -76,6 +157,9 @@ class AudioDucker:
     def _set_audio_state(self, level=None, muted=None):
         if not self.available:
             return False
+
+        if self.backend == "pactl":
+            return self._pactl_set_state(level=level, muted=muted)
 
         coinited = False
         try:
@@ -100,6 +184,10 @@ class AudioDucker:
     def _fade_volume(self, start_vol, end_vol, duration_s=0.2, steps=10):
         if not self.available:
             return False
+
+        if self.backend == "pactl":
+            # No smooth COM fade on Linux; jump straight to the target level.
+            return self._pactl_set_state(level=end_vol)
 
         coinited = False
         try:

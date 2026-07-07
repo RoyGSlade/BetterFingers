@@ -106,7 +106,7 @@ AVAILABLE_MODELS = {
 
 DEFAULT_MODEL = "gemma-3-4b-q4"
 
-if sys.platform.startswith("win"):
+if sys.platform == "win32":
     SERVER_FILENAME = "llama-server.exe"
     SERVER_ARCHIVE_NAME = "server-cuda-bin.zip"
     CUDA_ARCHIVE_NAME = "cuda-libs.zip"
@@ -195,7 +195,7 @@ def delete_model(model_id):
 
 def get_server_filename():
     """Returns the platform-specific llama-server binary name."""
-    if sys.platform.startswith("win"):
+    if sys.platform == "win32":
         return "llama-server.exe"
     return "llama-server"
 

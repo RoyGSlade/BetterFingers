@@ -1715,20 +1715,86 @@ def test_whisper(request: WhisperModelRequest):
 
 @app.post("/models/unload/{component}")
 async def unload_model_component(component: str):
+    """Genuinely release a model component's memory.
+
+    Beyond calling any .unload()/.shutdown()/.close() the engine exposes, this
+    drops the module-level global reference so the object can be garbage
+    collected, then runs gc.collect(). This matters on low-RAM machines where
+    merely freeing the model tensor is not enough if the wrapper object (and its
+    caches) stays reachable via a global.
+    """
+    import gc
+
+    global transcriber, tts_engine
+
     normalized = component.strip().lower()
+    unloaded = False
+
     if normalized == "stt":
         if transcriber is not None:
-            transcriber.unload()
-        return {"ok": True, "component": "stt", "message": "STT unloaded."}
+            try:
+                transcriber.unload()
+            except Exception as exc:
+                logging.debug(f"transcriber.unload() failed: {exc}")
+            transcriber = None
+            unloaded = True
+        gc.collect()
+        return {
+            "ok": True,
+            "component": "stt",
+            "unloaded": unloaded,
+            "message": "STT unloaded." if unloaded else "STT was not loaded.",
+        }
+
     if normalized == "llm":
         engine = get_engine_if_initialized()
         if engine is not None:
-            engine.shutdown()
-        return {"ok": True, "component": "llm", "message": "LLM unloaded."}
+            # shutdown() stops the llama-server subprocess (frees its RAM/VRAM);
+            # unload() also works but shutdown is the harder stop here.
+            for method in ("shutdown", "unload", "close"):
+                fn = getattr(engine, method, None)
+                if callable(fn):
+                    try:
+                        fn()
+                        unloaded = True
+                        break
+                    except Exception as exc:
+                        logging.debug(f"LLM {method}() failed: {exc}")
+            # Drop the module-level singleton so the wrapper can be collected.
+            try:
+                import llm_engine
+
+                llm_engine._engine_instance = None
+            except Exception as exc:
+                logging.debug(f"Could not clear llm_engine singleton: {exc}")
+        gc.collect()
+        return {
+            "ok": True,
+            "component": "llm",
+            "unloaded": unloaded,
+            "message": "LLM unloaded." if unloaded else "LLM was not loaded.",
+        }
+
     if normalized == "tts":
         if tts_engine is not None:
-            tts_engine.unload()
-        return {"ok": True, "component": "tts", "message": "TTS unloaded."}
+            for method in ("unload", "shutdown", "close"):
+                fn = getattr(tts_engine, method, None)
+                if callable(fn):
+                    try:
+                        fn()
+                        unloaded = True
+                        break
+                    except Exception as exc:
+                        logging.debug(f"TTS {method}() failed: {exc}")
+            tts_engine = None
+        gc.collect()
+        return {
+            "ok": True,
+            "component": "tts",
+            "unloaded": unloaded,
+            "message": "TTS unloaded." if unloaded else "TTS was not loaded.",
+        }
+
     raise HTTPException(status_code=400, detail="Unsupported component")
 
 
@@ -2429,6 +2495,24 @@ async def generate_plan(request: PlanRequest):
         logging.error(f"Plan Gen Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+def _get_downloads_dir():
+    """Return the user's Downloads directory, cross-platform.
+
+    Falls back to the home directory if a Downloads folder does not exist.
+    Honors the XDG_DOWNLOAD_DIR env var on Linux when set.
+    """
+    home = os.path.expanduser("~")
+    xdg = os.environ.get("XDG_DOWNLOAD_DIR")
+    candidates = []
+    if xdg:
+        candidates.append(os.path.expanduser(os.path.expandvars(xdg)))
+    candidates.append(os.path.join(home, "Downloads"))
+    for path in candidates:
+        if path and os.path.isdir(path):
+            return path
+    return home
+
+
 class ExportRequest(BaseModel):
     title: str
     content: str
@@ -2455,18 +2539,15 @@ async def export_project(request: ExportRequest):
             zip_file.writestr("plan.json", json.dumps(request.plan, indent=2))
             
         zip_buffer.seek(0)
-        
-        # In a real app we might return a file download response directly
-        # But since we are calling this from fetch in Electron, we might want to save it to a temp path 
-        # or return base64. For simplicity, let's return the path to a saved temp file that Electron can "download" or move.
-        # Actually, let's stick to the "server saves to desktop" or "downloads folder" approach for this local app.
-        
-        # For this specific task constraints, let's save to the Desktop for easy verification.
+
+        # Save under the user's Downloads dir (cross-platform), falling back to
+        # the home directory if Downloads doesn't exist.
+        export_dir = _get_downloads_dir()
         safe_title = re.sub(r"[^\w\-]", "_", request.title)[:60] or "export"
-        export_path = os.path.join(os.path.expanduser("~"), "Desktop", f"{safe_title}_Export.zip")
+        export_path = os.path.join(export_dir, f"{safe_title}_Export.zip")
         with open(export_path, "wb") as f:
             f.write(zip_buffer.getvalue())
-            
+
         return {"status": "success", "path": export_path}
 
     except Exception as e:

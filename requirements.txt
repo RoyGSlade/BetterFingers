@@ -16,7 +16,7 @@ flet==0.80.5                # Settings window (standardized stable line)
 # ---- Input & Clipboard ----
 keyboard                    # Global hotkey listener
 pygame                      # Controller / gamepad support
-pydirectinput               # Simulated keystrokes
+pydirectinput; sys_platform == "win32"   # Simulated keystrokes (Windows-only; ctypes.windll)
 pyperclip                   # Cross-platform clipboard
 
 # ---- LLM Server ----
@@ -31,5 +31,7 @@ websockets                  # WebSocket protocol support
 python-multipart            # FastAPI file/form uploads
 
 # ---- Windows Audio Control ----
-comtypes                    # COM automation (Windows)
-pycaw                       # Windows audio session control
+# Windows-only (COM / Core Audio). On Linux, audio ducking uses `pactl`
+# (PulseAudio / PipeWire) at runtime instead.
+comtypes; sys_platform == "win32"   # COM automation (Windows)
+pycaw; sys_platform == "win32"      # Windows audio session control
