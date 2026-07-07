@@ -602,6 +602,50 @@ function setMessage(el, message = '', tone = '') {
   }
 }
 
+// Transient toast notifications — the app-wide way to surface events/errors that
+// would otherwise only reach the console.
+function showToast(message, tone = 'info', durationMs = 5000) {
+  const container = document.getElementById('toastContainer');
+  if (!container || !message) {
+    return;
+  }
+
+  const toast = document.createElement('div');
+  toast.className = 'toast';
+  toast.dataset.tone = tone;
+
+  const text = document.createElement('div');
+  text.className = 'toast-message';
+  text.textContent = String(message);
+
+  const close = document.createElement('button');
+  close.className = 'toast-close';
+  close.type = 'button';
+  close.setAttribute('aria-label', 'Dismiss notification');
+  close.textContent = '×';
+
+  let removeTimer = null;
+  const dismiss = () => {
+    if (removeTimer) {
+      clearTimeout(removeTimer);
+      removeTimer = null;
+    }
+    toast.classList.add('leaving');
+    toast.addEventListener('animationend', () => toast.remove(), { once: true });
+    // Fallback in case the animation doesn't fire.
+    setTimeout(() => toast.remove(), 250);
+  };
+
+  close.addEventListener('click', dismiss);
+  toast.append(text, close);
+  container.append(toast);
+
+  if (durationMs > 0) {
+    removeTimer = setTimeout(dismiss, durationMs);
+  }
+  return toast;
+}
+
 function formatSendActionLabel(action = '') {
   const labels = {
     profile_default: 'Profile default',
@@ -2397,6 +2441,12 @@ async function bootstrap() {
     if (!status) return;
     updateBackendBanner(status);
     refreshSidecarStatus().catch(() => {});
+    // These pushes are transition-based, so toasting here won't spam.
+    if (status.state === 'crashed') {
+      showToast(status.message || 'The backend stopped and could not recover.', 'danger', 0);
+    } else if (status.state === 'unhealthy') {
+      showToast(status.message || 'The backend stopped responding; recovering…', 'warning');
+    }
   });
 
   websocketHandle = connectVoiceStatus({
