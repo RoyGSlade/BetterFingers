@@ -1445,6 +1445,19 @@ async def hardware_tier():
     return {"ok": True, "tier": get_hardware_tier()}
 
 
+@app.get("/models/recommend")
+async def models_recommend():
+    import model_recommender
+
+    report = get_hardware_report()
+    tier_info = get_hardware_tier(report=report)
+    ram_mb = (report.get("memory") or {}).get("total_mb") or 0
+    recommendation = model_recommender.recommend(tier_info["tier"], ram_mb)
+    recommendation["tier_label"] = tier_info.get("label")
+    recommendation["tier_guidance"] = tier_info.get("guidance")
+    return {"ok": True, "recommendation": recommendation}
+
+
 @app.get("/health")
 async def health_check():
 

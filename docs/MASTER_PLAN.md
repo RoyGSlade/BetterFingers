@@ -58,6 +58,13 @@ M (≤1 week), L (1–3 weeks), XL (3+ weeks).
   (`hardware_tier`) and a new `GET /hardware/tier`; shown atop the Diagnostics Hardware
   card. +8 unit tests (pure, no GPU needed). Suite now 156 green. (Vulkan/nvidia-ml
   precision enumeration deferred — degrades to the report-based classifier.)
+- [~] **U4 — Model recommender (backend done; Models-tab UI next).** New
+  `model_recommender.py` (pure/testable): `recommend(tier, ram_mb)` ranks the LLM +
+  Whisper catalogs, picks a default per role capped by tier (cpu-only/igpu→4B,
+  dgpu-8g→12B, dgpu-12g+→31B), never recommends a model that won't fit RAM, and attaches
+  plain-language tradeoff notes. `GET /models/recommend` returns it with the tier
+  label/guidance. +7 unit tests (163 green). REMAINING: "Recommended for your hardware"
+  callout in the Models tab (mark the recommended model + show notes).
 
 ---
 
