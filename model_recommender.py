@@ -33,6 +33,88 @@ _WHISPER_BLURB = {
     "distil-large-v3": "Near-large accuracy, faster than large.",
 }
 
+# Tier ordering, smallest-capability first, for min-tier suitability checks.
+_TIER_ORDER = ("cpu-only", "igpu", "dgpu-8g", "dgpu-12g+")
+
+
+def _tier_at_least(tier, min_tier):
+    """True if `tier` is at or above `min_tier` in the capability ordering."""
+    try:
+        return _TIER_ORDER.index(tier) >= _TIER_ORDER.index(min_tier)
+    except ValueError:
+        return True  # unknown tier -> don't hide anything
+
+
+# Informational catalog of models worth surfacing that are NOT yet wired for
+# one-click download in this build (U8). These never enter the downloadable
+# AVAILABLE_MODELS / whisper lists — the transcriber only speaks faster-whisper,
+# and several of these need verified GGUF URLs or a different STT engine — so
+# each carries downloadable=False. They give the UI accurate "what else exists"
+# copy without triggering a download or breaking transcription.
+ALTERNATIVE_LLMS = [
+    {
+        "id": "functiongemma-270m",
+        "name": "FunctionGemma 270M",
+        "role": "llm",
+        "params_b": 0,  # ~270M, well under 1B
+        "min_tier": "cpu-only",
+        "engine": "llama-server",
+        "downloadable": False,
+        "note": "Tiny tool-calling model; near-instant on any CPU. Great for macros/commands.",
+    },
+    {
+        "id": "qwen3.5-2b",
+        "name": "Qwen3.5 2B",
+        "role": "llm",
+        "params_b": 2,
+        "min_tier": "cpu-only",
+        "engine": "llama-server",
+        "downloadable": False,
+        "note": "Small, fast general model; a lighter alternative to Gemma on low-end hardware.",
+    },
+]
+
+ALTERNATIVE_STT = [
+    {
+        "id": "moonshine",
+        "name": "Moonshine (tiny/base)",
+        "role": "stt",
+        "min_tier": "cpu-only",
+        "engine": "moonshine",
+        "downloadable": False,
+        "note": "Ultra-low-latency English STT for short utterances; CPU-friendly.",
+    },
+    {
+        "id": "distil-large-v3.5",
+        "name": "distil-large-v3.5",
+        "role": "stt",
+        "min_tier": "dgpu-8g",
+        "engine": "faster-whisper",
+        "downloadable": False,
+        "note": "Near-large accuracy, faster than large; best with a GPU.",
+    },
+    {
+        "id": "parakeet-onnx",
+        "name": "Parakeet (ONNX)",
+        "role": "stt",
+        "min_tier": "igpu",
+        "engine": "parakeet-onnx",
+        "downloadable": False,
+        "note": "High-accuracy ONNX STT; needs a dedicated engine (not faster-whisper).",
+    },
+]
+
+
+def recommend_alternatives(tier):
+    """Tier-appropriate informational model suggestions (not yet downloadable).
+
+    Returns {"llm": [...], "stt": [...]} of catalog entries whose min_tier is at
+    or below the given tier. Every entry is downloadable=False by construction.
+    """
+    llm = [dict(m) for m in ALTERNATIVE_LLMS if _tier_at_least(tier, m["min_tier"])]
+    stt = [dict(m) for m in ALTERNATIVE_STT if _tier_at_least(tier, m["min_tier"])]
+    return {"llm": llm, "stt": stt}
+
 
 def _params_b(model_id, meta):
     name = f"{meta.get('name', '')} {model_id}".lower()
@@ -123,4 +205,5 @@ def recommend(tier, ram_mb):
         "ram_mb": int(ram_mb or 0) or None,
         "llm": recommend_llm(tier, ram_mb),
         "whisper": recommend_whisper(tier),
+        "alternatives": recommend_alternatives(tier),
     }

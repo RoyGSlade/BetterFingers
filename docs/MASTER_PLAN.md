@@ -125,6 +125,22 @@ M (≤1 week), L (1–3 weeks), XL (3+ weeks).
   tensors from `voices-v1.0.bin`, saving blended voicepacks to disk, and the slider-based
   blend-editor UI. Voice cloning tier (NeuTTS Air / Chatterbox) also deferred.
 
+- [~] **U8 — Model catalog additions.** VERIFY found the **Gemma 4 family
+  (E2B/E4B/12B/26B-A4B/31B GGUF) is already in the downloadable catalog**
+  (`model_manager.AVAILABLE_MODELS`) with real unsloth URLs — so U8's LLM half was
+  already shipped (regression-guarded by new tests). Added an **informational
+  "alternatives" catalog** to `model_recommender.py` (`ALTERNATIVE_LLMS` +
+  `ALTERNATIVE_STT`): the plan's named-but-not-yet-wired models — FunctionGemma-270M,
+  Qwen3.5-2B (LLM); Moonshine, distil-large-v3.5, Parakeet-ONNX (STT) — as metadata
+  entries (name, params/min-tier, engine, tradeoff blurb) all flagged
+  `downloadable: false`. `recommend_alternatives(tier)` returns tier-appropriate
+  suggestions (small models on cpu-only; GPU-only STT gated to higher tiers) and is
+  merged into `recommend()`, so `/models/recommend` surfaces them to the UI without
+  ever entering the downloadable lists (would break the faster-whisper transcriber /
+  need verified URLs). +10 unit tests (257 green). DEFERRED: verified GGUF download
+  URLs for the two small LLMs, and real non-whisper STT engine integration
+  (Moonshine/Parakeet) behind the transcriber interface.
+
 ---
 
 ## Part 1 — Verification matrix
