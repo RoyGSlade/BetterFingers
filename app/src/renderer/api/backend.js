@@ -207,6 +207,19 @@ async function suggestDictionaryTerms(rawText, editedText, timeoutMs = 5000) {
   return postJson(`${BACKEND_ORIGIN}/dictionary/suggest`, { raw_text: rawText, edited_text: editedText }, timeoutMs);
 }
 
+async function searchHistory(query, limit = 50, timeoutMs = 5000) {
+  const params = new URLSearchParams({ q: query ?? '', limit: String(limit) });
+  return fetchJson(`${BACKEND_ORIGIN}/history/search?${params.toString()}`, timeoutMs);
+}
+
+async function fetchHistoryRecent(limit = 50, timeoutMs = 5000) {
+  return fetchJson(`${BACKEND_ORIGIN}/history?limit=${encodeURIComponent(limit)}`, timeoutMs);
+}
+
+async function clearHistory(timeoutMs = 10000) {
+  return deleteJson(`${BACKEND_ORIGIN}/history`, timeoutMs);
+}
+
 async function fetchRuntimeErrors(timeoutMs = 2500) {
   return fetchJson(RUNTIME_ERRORS_URL, timeoutMs);
 }
@@ -578,6 +591,9 @@ export {
   addDictionaryTerm,
   deleteDictionaryTerm,
   suggestDictionaryTerms,
+  searchHistory,
+  fetchHistoryRecent,
+  clearHistory,
   fetchPersonas,
   fetchTtsVoices,
   savePersona,

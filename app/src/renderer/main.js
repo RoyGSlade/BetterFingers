@@ -26,6 +26,7 @@ import {
   addDictionaryTerm,
   deleteDictionaryTerm,
   suggestDictionaryTerms,
+  searchHistory,
   fetchDrafts,
   fetchHealth,
   fetchLatestDraft,
@@ -1184,6 +1185,60 @@ function renderDraftHistory(drafts) {
     });
     draftHistoryListEl.append(item);
   }
+}
+
+// Render FTS archive search results (C8) into the history list; clicking copies.
+function renderHistoryResults(results) {
+  if (!draftHistoryListEl) return;
+  draftHistoryListEl.innerHTML = '';
+  if (!results || !results.length) {
+    draftHistoryListEl.innerHTML = '<span class="empty-state">No matching history.</span>';
+    return;
+  }
+  for (const row of results) {
+    const item = document.createElement('button');
+    item.className = 'draft-history-item';
+    item.type = 'button';
+    item.dataset.status = row.status ?? '';
+    const title = document.createElement('strong');
+    const when = row.created_at ? new Date(row.created_at).toLocaleString() : `#${row.id}`;
+    title.textContent = `${when} · ${row.status ?? ''}`;
+    const detail = document.createElement('small');
+    const text = row.final_text || row.raw_text || 'No text';
+    detail.textContent = text.length > 140 ? `${text.slice(0, 140)}...` : text;
+    item.append(title, detail);
+    item.addEventListener('click', async () => {
+      const copyText = row.final_text || row.raw_text || '';
+      try {
+        await window.betterFingers?.writeClipboardText?.(copyText);
+        showToast('Copied to clipboard.', 'success', 2000);
+      } catch (error) {
+        showToast(`Copy failed: ${error.message}`, 'danger');
+      }
+    });
+    draftHistoryListEl.append(item);
+  }
+}
+
+let historySearchTimer = null;
+function handleHistorySearch(query) {
+  const q = String(query || '').trim();
+  if (historySearchTimer) clearTimeout(historySearchTimer);
+  if (!q) {
+    // Empty query restores the normal recent-drafts view.
+    refreshDrafts().catch(() => {});
+    return;
+  }
+  historySearchTimer = setTimeout(async () => {
+    try {
+      const payload = await searchHistory(q, 50);
+      renderHistoryResults(payload?.results || []);
+    } catch (error) {
+      if (draftHistoryListEl) {
+        draftHistoryListEl.innerHTML = `<span class="empty-state">Search failed: ${error.message}</span>`;
+      }
+    }
+  }, 250);
 }
 
 async function refreshLatestDraft() {
@@ -3621,6 +3676,10 @@ declineDraftButton?.addEventListener('click', async () => {
   } catch (error) {
     setMessage(draftMessageEl, `Decline failed: ${error.message}`, 'danger');
   }
+});
+
+document.getElementById('historySearchInput')?.addEventListener('input', (event) => {
+  handleHistorySearch(event.target.value);
 });
 
 clearDraftHistoryButton?.addEventListener('click', async () => {
