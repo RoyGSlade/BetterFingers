@@ -56,8 +56,25 @@ server.py hand-ported), so nothing was lost.
     position persists across launches (on-screen-validated).
   - **Phase 3 — partial:** removed 3 dead DOM refs. Theming was already fully wired
     (audit was wrong); high-contrast/accent/density all apply at startup.
-  - **Remaining:** 2.6 (first-run policy/tour/model wizard, state stored client-side),
-    Phase 3 (error/loading states on more paths, a11y: tab roles/focus trap).
+  - **2.6 — DONE:** first-run onboarding modal (welcome → consent-gated policy →
+    how-it-works tour → model-status step routing to the Models tab), focus-trapped.
+  - **Phase 3 — DONE:** dead-DOM cleanup; a11y (ARIA tabs + arrow keys, review-overlay
+    Escape + initial focus, onboarding focus trap); error surfacing already covered by
+    setMessage + the toast system (only 2 console.error paths existed — audit overstated).
+  - **Phase 4 — DONE:** retired the entire legacy tkinter/Flet stack (11 modules + 25
+    UI tests) after verifying no sidecar module imports it. Test suite now collects
+    cleanly (was 11 collection errors); 143 pass.
+
+### Migration status: COMPLETE
+
+All phases done. Remaining polish before pivoting the loop to docs/MASTER_PLAN.md:
+- Fix 5 pre-existing test failures (test_server_lazy_startup x4, test_model_manager_status
+  x1) — they failed on unmodified HEAD too, unrelated to the migration.
+- (Optional) Electron-path smoke tests; Windows packaged-build verification needs a
+  Windows box.
+
+Per user directive ([[post-migration-masterplan-loop]]), once these are addressed the
+autonomous loop switches to docs/MASTER_PLAN.md.
 
 ---
 
