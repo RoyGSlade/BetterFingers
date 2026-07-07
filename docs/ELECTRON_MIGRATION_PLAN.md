@@ -3,6 +3,28 @@
 Status as of 2026-07-07, after removal of Studio Mode. Scope: Windows + Linux desktop
 (macOS gaps noted but out of scope).
 
+## Progress log (branch: electron-migration)
+
+- **Studio Mode removed** — 38 files, ~14k lines.
+- **Phase 1.3 sidecar hardening — DONE.** Unified `app/src/main/config.js`; fixed
+  hotkeys.js hardcoded host/port; version handshake now gates on API `schema_version`;
+  post-startup health monitor with bounded auto-restart + `crashed` state; logs
+  retained across restarts; sidecar status pushed to renderer with a generalized banner.
+- **Phase 1.1 Windows packaging — MOSTLY DONE (unverified build).** `build-backend.js`
+  now resolves python3/python correctly and adds the `--collect-all`/`--hidden-import`
+  flags the sidecar's deps need; `package.json` bundles `images/` too; `build.bat`
+  rewritten to drive `npm run dist:win`; legacy `BetterFingers.spec` + standalone
+  `installer/BetterFingers.nsi` + its test retired (electron-builder generates the NSIS
+  installer). NOT YET VERIFIED end-to-end — needs a Windows box with PyInstaller.
+  Model-prefetch moves to the first-run wizard (2.6).
+- **Phase 1.2 Linux launch — DONE (dev launcher).** De-sudo'd
+  `start-betterfingers-linux.sh` (backend runs as the user; fixes the root-owned-files
+  gotcha); `BetterFingers.desktop` is now a template + `scripts/install-linux-shortcut.sh`
+  fills in the real repo path. AppImage target already configured in package.json.
+
+---
+
+
 ## Where things stand
 
 - **Backend (server.py)**: fully decoupled from the tkinter app — no imports of main.py or

@@ -1,10 +1,12 @@
 [Desktop Entry]
 Type=Application
 Name=BetterFingers
-Comment=Restart BetterFingers with Linux keyboard hook permissions
-Exec=/home/donaven/Desktop/BetterFingers-1/scripts/launch-betterfingers-linux.sh
-Path=/home/donaven/Desktop/BetterFingers-1
-Icon=/home/donaven/Desktop/BetterFingers-1/images/BetterFingers.ico
+Comment=Voice dictation with local transcription, rewrite, and TTS
+# Paths below are placeholders. Run scripts/install-linux-shortcut.sh to generate
+# a working entry in ~/.local/share/applications with the real repo path filled in.
+Exec=@APP_DIR@/scripts/launch-betterfingers-linux.sh
+Path=@APP_DIR@
+Icon=@APP_DIR@/images/BetterFingers.ico
 Terminal=false
 Categories=Utility;Accessibility;
 StartupNotify=true

@@ -1,32 +1,33 @@
 @echo off
-echo Cleaning previous builds...
-rmdir /s /q build dist 2>nul
-for /d /r . %%d in (__pycache__) do @if exist "%%d" rd /s /q "%%d" 2>nul
+REM Build the Windows BetterFingers desktop app (Electron shell + PyInstaller
+REM backend + NSIS installer). electron-builder produces the installer under
+REM app\release\. Requires: Node.js, Python 3, and `pip install pyinstaller`.
 
-echo Installing Dependencies...
-pip install -r requirements.txt
+setlocal
 
-echo.
-echo Building BetterFingers...
-pyinstaller BetterFingers.spec
+echo Cleaning previous Electron/backend build output...
+rmdir /s /q app\out app\release app\resources\backend app\.electron-backend-build 2>nul
 
 echo.
-echo Build Complete!
-echo You can find the executable in the "dist\BetterFingers" folder.
-
-echo.
-echo Building NSIS installer...
-set "MAKENSIS=%ProgramFiles(x86)%\NSIS\makensis.exe"
-if exist "%MAKENSIS%" (
-    "%MAKENSIS%" "installer\BetterFingers.nsi"
-    if %errorlevel% neq 0 (
-        echo WARNING: NSIS build failed. Check installer\BetterFingers.nsi
-    ) else (
-        echo Installer created at dist\BetterFingers_Setup.exe
-    )
-) else (
-    echo WARNING: NSIS not found at %MAKENSIS%
-    echo Install NSIS to generate BetterFingers_Setup.exe
+echo Installing Electron dependencies...
+pushd app
+call npm install
+if %errorlevel% neq 0 (
+    echo ERROR: npm install failed.
+    popd & exit /b 1
 )
 
-pause
+echo.
+echo Building app (renderer + main), backend (PyInstaller), and installer (NSIS)...
+call npm run dist:win
+set BUILD_RESULT=%errorlevel%
+popd
+
+if %BUILD_RESULT% neq 0 (
+    echo ERROR: dist:win failed.
+    exit /b %BUILD_RESULT%
+)
+
+echo.
+echo Build complete. Installer is in app\release\.
+endlocal
