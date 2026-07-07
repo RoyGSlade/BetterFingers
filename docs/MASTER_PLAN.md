@@ -165,6 +165,19 @@ M (≤1 week), L (1–3 weeks), XL (3+ weeks).
   (non-blocking polish): live prompt preview, full voice base/blend/speed + few-shot
   raw→out list UI, and a `dictionary_scope` control.
 
+- [x] **U3 — First-run wizard.** VERIFY found a **complete onboarding system already
+  implemented** in `app/src/renderer/main.js` (`initOnboarding()` called at app start,
+  `onboardingSteps` array, `renderOnboardingStep`/`finishOnboarding`) + `index.html`
+  (`#onboardingOverlay` modal) + `styles/base.css`: 4 gated steps (Welcome; data/consent
+  checkbox gate; record→review→send explainer; speech-models status), progress dots,
+  Escape-blocked required gate with Tab focus-trap, decline→quit, and `localStorage`
+  (`bf_onboarding_complete`) persistence so it shows once. The only gap vs. the plan was
+  that the "Speech models" step didn't surface the U4 hardware-aware recommendation.
+  ADDED: `populateOnboardingRecommendation()` — an async `onEnter` on that step that pulls
+  `/models/recommend` and renders the detected hardware tier + recommended LLM/Whisper
+  (reusing the same shape as `renderModelRecommendation`), non-fatal on failure. JS
+  parse-checked; pytest 262 green. **U3 done.**
+
 ---
 
 ## Part 1 — Verification matrix

@@ -728,22 +728,45 @@ const onboardingSteps = [
   {
     title: 'Speech models',
     body: () => {
-      const hasLlm = Array.isArray(llmModelsPayload?.models)
-        && llmModelsPayload.models.some((m) => m.downloaded || m.installed || m.available);
       const hasWhisper = Array.isArray(whisperModelsPayload?.models)
         && whisperModelsPayload.models.some((m) => m.downloaded || m.installed);
-      if (hasWhisper) {
-        return `<p>A speech model is installed — you're ready to go. You can manage or add
-          models any time from the <strong>Models</strong> tab.</p>`;
-      }
-      return `<p>No speech model is installed yet. Open the <strong>Models</strong> tab to
-        download the recommended set for your hardware (a small Whisper model for
-        transcription, plus an optional local LLM for cleanup).</p>
-        <p>You can finish setup now and download models whenever you're ready.</p>`;
+      const intro = hasWhisper
+        ? `<p>A speech model is installed — you're ready to go. You can manage or add
+          models any time from the <strong>Models</strong> tab.</p>`
+        : `<p>No speech model is installed yet. Open the <strong>Models</strong> tab to
+          download the recommended set for your hardware (a small Whisper model for
+          transcription, plus an optional local LLM for cleanup).</p>
+          <p>You can finish setup now and download models whenever you're ready.</p>`;
+      // Filled in asynchronously by onEnter with the hardware-aware recommendation.
+      return `${intro}<div id="onboardingRecommendation" class="policy-box" hidden></div>`;
     },
+    onEnter: () => { populateOnboardingRecommendation(); },
     nextLabel: 'Finish',
   },
 ];
+
+// Surface the U4 hardware-aware recommendation (tier + recommended LLM/Whisper)
+// inside the onboarding "Speech models" step. Non-fatal on any failure.
+async function populateOnboardingRecommendation() {
+  const box = document.getElementById('onboardingRecommendation');
+  if (!box) return;
+  try {
+    const payload = await fetchModelRecommendation();
+    const rec = payload?.recommendation;
+    if (!rec) return;
+    const llm = rec.llm?.models?.find((m) => m.id === rec.llm.recommended);
+    const whisper = rec.whisper?.recommended;
+    const llmNote = llm?.note ? ` — ${llm.note}` : '';
+    box.innerHTML =
+      `<strong>Recommended for your hardware (${rec.tier_label ?? rec.tier})</strong>` +
+      (rec.tier_guidance ? `<p class="section-desc">${rec.tier_guidance}</p>` : '') +
+      `<ul><li><strong>Language model:</strong> ${llm?.name ?? rec.llm?.recommended ?? '—'}${llmNote}</li>` +
+      `<li><strong>Speech model:</strong> ${whisper ?? '—'}</li></ul>`;
+    box.hidden = false;
+  } catch (error) {
+    // Recommendation is a nice-to-have; leave the box hidden if it can't load.
+  }
+}
 
 let onboardingIndex = 0;
 
