@@ -11,6 +11,22 @@
   </head>
   <body>
     <div id="toastContainer" class="toast-container" role="status" aria-live="polite"></div>
+
+    <!-- First-run onboarding: policy → tour → models. Shown once (localStorage flag). -->
+    <div id="onboardingOverlay" class="onboarding-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle">
+      <div class="onboarding-card">
+        <div class="onboarding-progress" id="onboardingProgress"></div>
+        <h2 id="onboardingTitle" class="onboarding-title">Welcome</h2>
+        <div id="onboardingBody" class="onboarding-body"></div>
+        <div class="onboarding-actions">
+          <button id="onboardingDeclineButton" class="secondary-button" type="button">Decline &amp; quit</button>
+          <span class="onboarding-spacer"></span>
+          <button id="onboardingBackButton" class="secondary-button" type="button">Back</button>
+          <button id="onboardingNextButton" class="primary-button" type="button">Next</button>
+        </div>
+      </div>
+    </div>
+
     <div class="app-shell">
       <header class="hero">
         <div>

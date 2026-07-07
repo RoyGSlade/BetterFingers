@@ -646,6 +646,196 @@ function showToast(message, tone = 'info', durationMs = 5000) {
   return toast;
 }
 
+// --- First-run onboarding (policy -> tour -> models) ---
+
+const ONBOARDING_FLAG = 'bf_onboarding_complete';
+
+const onboardingSteps = [
+  {
+    title: 'Welcome to BetterFingers',
+    body: () => `
+      <p>BetterFingers turns your voice into text anywhere on your system — fully
+      local, no cloud. This quick setup takes about a minute.</p>
+      <h3>What you'll do</h3>
+      <ul>
+        <li>Review how BetterFingers uses your data</li>
+        <li>Learn the record → review → send flow</li>
+        <li>Make sure a speech model is installed</li>
+      </ul>`,
+    nextLabel: 'Get started',
+  },
+  {
+    title: 'Your data stays on this device',
+    body: () => `
+      <div class="policy-box">
+        <p>BetterFingers runs a local speech-to-text, rewrite, and text-to-speech
+        pipeline on your own machine. Audio you record is transcribed locally and is
+        not sent to any external server.</p>
+        <p>The only network activity is downloading the AI models you choose to
+        install. You can delete recordings, drafts, and models at any time from the
+        app.</p>
+        <p>By continuing you confirm you will use BetterFingers lawfully and only to
+        capture speech you are authorized to capture.</p>
+      </div>
+      <label class="consent">
+        <input type="checkbox" id="onboardingConsent" />
+        <span>I understand and accept how BetterFingers handles my data.</span>
+      </label>`,
+    nextLabel: 'Accept & continue',
+    onEnter: () => {
+      const consent = document.getElementById('onboardingConsent');
+      consent?.addEventListener('change', updateOnboardingNextState);
+    },
+    canProceed: () => Boolean(document.getElementById('onboardingConsent')?.checked),
+  },
+  {
+    title: 'How it works',
+    body: () => `
+      <ul>
+        <li><strong>Record</strong> — press your record hotkey (or use the tray) and speak.
+        Hold-to-talk and press-to-toggle are both supported.</li>
+        <li><strong>Review</strong> — a draft appears with the cleaned-up text. Rewrite it
+        (Clearer / Shorter / Tone), edit inline, or have it read back to you.</li>
+        <li><strong>Send</strong> — accept to type or paste it into whatever app you're in.</li>
+      </ul>
+      <p>You can change hotkeys, injection behavior, and more under <strong>Settings</strong>.</p>`,
+    nextLabel: 'Next',
+  },
+  {
+    title: 'Speech models',
+    body: () => {
+      const hasLlm = Array.isArray(llmModelsPayload?.models)
+        && llmModelsPayload.models.some((m) => m.downloaded || m.installed || m.available);
+      const hasWhisper = Array.isArray(whisperModelsPayload?.models)
+        && whisperModelsPayload.models.some((m) => m.downloaded || m.installed);
+      if (hasWhisper) {
+        return `<p>A speech model is installed — you're ready to go. You can manage or add
+          models any time from the <strong>Models</strong> tab.</p>`;
+      }
+      return `<p>No speech model is installed yet. Open the <strong>Models</strong> tab to
+        download the recommended set for your hardware (a small Whisper model for
+        transcription, plus an optional local LLM for cleanup).</p>
+        <p>You can finish setup now and download models whenever you're ready.</p>`;
+    },
+    nextLabel: 'Finish',
+  },
+];
+
+let onboardingIndex = 0;
+
+function updateOnboardingNextState() {
+  const nextButton = document.getElementById('onboardingNextButton');
+  if (!nextButton) return;
+  const step = onboardingSteps[onboardingIndex];
+  nextButton.disabled = typeof step.canProceed === 'function' ? !step.canProceed() : false;
+}
+
+function renderOnboardingStep() {
+  const overlay = document.getElementById('onboardingOverlay');
+  const titleEl = document.getElementById('onboardingTitle');
+  const bodyEl = document.getElementById('onboardingBody');
+  const progressEl = document.getElementById('onboardingProgress');
+  const backButton = document.getElementById('onboardingBackButton');
+  const nextButton = document.getElementById('onboardingNextButton');
+  if (!overlay || !titleEl || !bodyEl) return;
+
+  const step = onboardingSteps[onboardingIndex];
+  titleEl.textContent = step.title;
+  bodyEl.innerHTML = typeof step.body === 'function' ? step.body() : String(step.body || '');
+
+  if (progressEl) {
+    progressEl.innerHTML = '';
+    onboardingSteps.forEach((_, i) => {
+      const dot = document.createElement('div');
+      dot.className = 'step-dot' + (i === onboardingIndex ? ' active' : i < onboardingIndex ? ' done' : '');
+      progressEl.append(dot);
+    });
+  }
+
+  if (backButton) backButton.style.visibility = onboardingIndex === 0 ? 'hidden' : 'visible';
+  if (nextButton) nextButton.textContent = step.nextLabel || 'Next';
+
+  if (typeof step.onEnter === 'function') step.onEnter();
+  updateOnboardingNextState();
+  nextButton?.focus();
+}
+
+function finishOnboarding() {
+  try {
+    localStorage.setItem(ONBOARDING_FLAG, 'true');
+  } catch (error) {
+    // Non-fatal; onboarding may show again next launch.
+  }
+  const overlay = document.getElementById('onboardingOverlay');
+  overlay?.classList.add('hidden');
+  document.removeEventListener('keydown', onboardingKeydownTrap, true);
+}
+
+function onboardingKeydownTrap(event) {
+  const overlay = document.getElementById('onboardingOverlay');
+  if (!overlay || overlay.classList.contains('hidden')) return;
+  // Block Escape (this is a required first-run gate) and keep Tab focus inside.
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
+  if (event.key !== 'Tab') return;
+  const focusable = overlay.querySelectorAll('button:not([disabled]), input, a[href]');
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function initOnboarding() {
+  let complete = false;
+  try {
+    complete = localStorage.getItem(ONBOARDING_FLAG) === 'true';
+  } catch (error) {
+    complete = false;
+  }
+  const overlay = document.getElementById('onboardingOverlay');
+  if (!overlay || complete) return;
+
+  const backButton = document.getElementById('onboardingBackButton');
+  const nextButton = document.getElementById('onboardingNextButton');
+  const declineButton = document.getElementById('onboardingDeclineButton');
+
+  nextButton?.addEventListener('click', () => {
+    const step = onboardingSteps[onboardingIndex];
+    if (typeof step.canProceed === 'function' && !step.canProceed()) return;
+    if (onboardingIndex >= onboardingSteps.length - 1) {
+      finishOnboarding();
+      return;
+    }
+    onboardingIndex += 1;
+    renderOnboardingStep();
+  });
+
+  backButton?.addEventListener('click', () => {
+    if (onboardingIndex > 0) {
+      onboardingIndex -= 1;
+      renderOnboardingStep();
+    }
+  });
+
+  declineButton?.addEventListener('click', () => {
+    window.betterFingers?.quitApp?.();
+  });
+
+  document.addEventListener('keydown', onboardingKeydownTrap, true);
+  overlay.classList.remove('hidden');
+  onboardingIndex = 0;
+  renderOnboardingStep();
+}
+
 function formatSendActionLabel(action = '') {
   const labels = {
     profile_default: 'Profile default',
@@ -2459,6 +2649,7 @@ async function bootstrap() {
 
   initWizard();
   initSettingsPanel();
+  initOnboarding();
 }
 
 function initSettingsPanel() {
