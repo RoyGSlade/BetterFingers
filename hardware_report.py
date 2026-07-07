@@ -279,3 +279,71 @@ def _suggest_lighter_model(current_id, budget_mb):
         return None
     best = max(fitting, key=lambda item: item[1])
     return AVAILABLE_MODELS[best[0]].get("name", best[0])
+
+
+# --- Hardware capability tier (U2) ---
+
+TIER_ORDER = ["cpu-only", "igpu", "dgpu-8g", "dgpu-12g+"]
+
+
+def classify_tier(ram_mb=0, vram_mb=None, gpu_kind=None, cores=None):
+    """Map hardware into a coarse capability tier with plain-language guidance.
+
+    Pure function of primitives so it is unit-testable without any GPU present.
+    """
+    ram_mb = int(ram_mb or 0)
+    vram = int(vram_mb) if vram_mb else 0
+    kind = (gpu_kind or "none").lower()
+
+    if kind == "discrete" and vram >= 12000:
+        tier = "dgpu-12g+"
+        label = "Dedicated GPU (12 GB+)"
+        guidance = "You can run large local models (12B–31B) with GPU acceleration."
+    elif kind == "discrete" and vram >= 8000:
+        tier = "dgpu-8g"
+        label = "Dedicated GPU (8 GB)"
+        guidance = "Run up to ~12B models comfortably; larger ones with CPU offload."
+    elif kind == "discrete":
+        tier = "dgpu-8g"
+        label = "Dedicated GPU"
+        guidance = "A dedicated GPU is present; 4B–12B models should run well."
+    elif kind == "integrated":
+        tier = "igpu"
+        label = "Integrated GPU"
+        guidance = "Integrated graphics can modestly accelerate small models via Vulkan; a 4B Q4 model is the sweet spot."
+    else:
+        tier = "cpu-only"
+        label = "CPU only"
+        guidance = "No GPU acceleration detected. Stick to small models (4B Q4, Whisper base/small); expect a few seconds per utterance."
+
+    warnings = []
+    if ram_mb and ram_mb < 8000:
+        warnings.append("Under 8 GB RAM — use the smallest models and keep other apps closed.")
+    elif ram_mb and ram_mb < 16000 and tier in ("cpu-only", "igpu"):
+        warnings.append("~8–16 GB RAM — a 4B Q4 model fits; avoid 12B+ on CPU.")
+
+    return {
+        "tier": tier,
+        "label": label,
+        "guidance": guidance,
+        "warnings": warnings,
+        "ram_mb": ram_mb or None,
+        "vram_mb": vram or None,
+        "gpu_kind": kind,
+        "cores": int(cores) if cores else None,
+    }
+
+
+def get_hardware_tier(report=None):
+    """Classify the current machine (or a supplied report) into a capability tier."""
+    if report is None:
+        report = get_hardware_report()
+    mem = report.get("memory") or {}
+    gpu = report.get("gpu") or {}
+    cpu = report.get("cpu") or {}
+    return classify_tier(
+        ram_mb=mem.get("total_mb") or 0,
+        vram_mb=gpu.get("vram_mb"),
+        gpu_kind=gpu.get("kind"),
+        cores=cpu.get("physical_cores"),
+    )

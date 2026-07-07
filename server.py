@@ -22,7 +22,7 @@ from user_profile_manager import profile_manager
 from intent_engine import intent_engine, IntentState
 from project_generator import project_generator
 from platform_capabilities import get_capabilities
-from hardware_report import get_hardware_report, assess_model_fit
+from hardware_report import get_hardware_report, assess_model_fit, get_hardware_tier
 from platform_paths import ensure_app_dirs, get_app_data_dir, get_config_dir
 import recordings
 import dictionary
@@ -1411,6 +1411,7 @@ async def run_doctor(refresh_audio: bool = False):
     # Hardware specs + model-fit assessment for the selected LLM
     hardware_info = get_hardware_report()
     model_fit_info = assess_model_fit(selected_model_id, report=hardware_info)
+    hardware_tier_info = get_hardware_tier(report=hardware_info)
 
     # Recovery instructions
     recovery_guidelines = {
@@ -1433,9 +1434,15 @@ async def run_doctor(refresh_audio: bool = False):
         "audio": audio_info,
         "platform": platform_info,
         "hardware": hardware_info,
+        "hardware_tier": hardware_tier_info,
         "model_fit": model_fit_info,
         "recovery": recovery_guidelines,
     }
+
+
+@app.get("/hardware/tier")
+async def hardware_tier():
+    return {"ok": True, "tier": get_hardware_tier()}
 
 
 @app.get("/health")

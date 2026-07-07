@@ -3859,7 +3859,7 @@ async function refreshDoctor(refreshAudio = false) {
       { id: 'models', name: 'Model Paths', data: doctor.models },
       { id: 'audio', name: 'Audio System', data: doctor.audio },
       { id: 'platform', name: 'Platform Capabilities', data: doctor.platform },
-      { id: 'hardware', name: 'Hardware & Model Fit', data: { hardware: doctor.hardware, fit: doctor.model_fit } }
+      { id: 'hardware', name: 'Hardware & Model Fit', data: { hardware: doctor.hardware, fit: doctor.model_fit, tier: doctor.hardware_tier } }
     ];
 
     let recoveryTriggers = [];
@@ -3971,7 +3971,12 @@ async function refreshDoctor(refreshAudio = false) {
           const gpuText = gpu.accelerated
             ? `${gpu.name ?? 'GPU'} (${gb(gpu.vram_mb)} VRAM)`
             : `${gpu.name ?? 'None'} — CPU-only`;
+          const tier = sub.data.tier ?? {};
           const lines = [
+            tier.label ? `Tier: ${tier.label} [${tier.tier}]` : '',
+            tier.guidance ? tier.guidance : '',
+            ...(Array.isArray(tier.warnings) ? tier.warnings.map((w) => `⚠ ${w}`) : []),
+            tier.label ? '' : '',
             `CPU: ${cpu.model ?? 'Unknown'} (${cpu.physical_cores ?? '?'}c / ${cpu.logical_threads ?? '?'}t)`,
             `RAM: ${gb(mem.available_mb)} free of ${gb(mem.total_mb)} (${mem.used_percent ?? '?'}% used)`,
             `Swap: ${gb(swap.used_mb)} / ${gb(swap.total_mb)} used`,

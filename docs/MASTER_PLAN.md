@@ -51,6 +51,13 @@ M (≤1 week), L (1–3 weeks), XL (3+ weeks).
   above the draft-history list on the Dashboard queries `/history/search`; results render
   in the same style and click-to-copy to the clipboard. Clearing the box restores the
   recent-drafts view.
+- [x] **U2 — Hardware detection / tier classifier.** `hardware_report.py` gains a pure,
+  GPU-lib-free `classify_tier(ram, vram, gpu_kind, cores)` → tier ∈ {cpu-only, igpu,
+  dgpu-8g, dgpu-12g+} with plain-language guidance + RAM warnings, and `get_hardware_tier()`
+  derives it from the existing report (this machine → `igpu`). Exposed in `/doctor`
+  (`hardware_tier`) and a new `GET /hardware/tier`; shown atop the Diagnostics Hardware
+  card. +8 unit tests (pure, no GPU needed). Suite now 156 green. (Vulkan/nvidia-ml
+  precision enumeration deferred — degrades to the report-based classifier.)
 
 ---
 
