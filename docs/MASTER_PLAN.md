@@ -18,6 +18,13 @@ M (≤1 week), L (1–3 weeks), XL (3+ weeks).
   Privacy settings section renders it with a confirm-gated "Wipe my data" button. Also
   fixed a latent flaky test: `startup_event`'s background warmup thread leaked across
   TestClient instances; `shutdown_event` now joins it.
+- [x] **C6 — Never lose audio.** New `recordings.py` persists each utterance's raw audio
+  as a float32 WAV + JSON sidecar under `<userdata>/recordings/`, saved up front in
+  `process_recording_result` (survives a processing crash), pruned to the last 50.
+  Endpoints: `GET /recordings`, `POST /recordings/{id}/retranscribe` (rebuilds a
+  RecordingResult and re-runs the pipeline), `DELETE /recordings/{id}`, `DELETE
+  /recordings`. Renderer "Recovery" panel in Diagnostics lists them with re-transcribe/
+  discard/clear-all.
 
 ---
 

@@ -18,6 +18,10 @@ import {
   fetchMetrics,
   fetchPrivacy,
   wipeData,
+  fetchRecordings,
+  retranscribeRecording,
+  deleteRecording,
+  clearRecordings,
   fetchDrafts,
   fetchHealth,
   fetchLatestDraft,
@@ -1901,6 +1905,54 @@ async function handleWipeData() {
   }
 }
 
+async function refreshRecordings() {
+  const el = document.getElementById('recordingsList');
+  if (!el) return;
+  try {
+    const payload = await fetchRecordings();
+    const items = payload?.recordings || [];
+    if (!items.length) {
+      el.innerHTML = '<p class="empty-state">No saved recordings.</p>';
+      return;
+    }
+    el.innerHTML = items
+      .map((r) => {
+        const when = r.created_at ? new Date(r.created_at * 1000).toLocaleString() : '';
+        const dur = r.duration_seconds ? `${r.duration_seconds}s` : '';
+        const reason = r.stop_reason ? ` · ${r.stop_reason}` : '';
+        return `<div class="recording-row" data-rec-id="${r.id}">` +
+          `<span class="recording-meta">${when} · ${dur}${reason}</span>` +
+          `<span class="recording-actions">` +
+          `<button class="secondary-button recording-retry" type="button" data-rec-id="${r.id}">Re-transcribe</button>` +
+          `<button class="secondary-button recording-discard" type="button" data-rec-id="${r.id}">Discard</button>` +
+          `</span></div>`;
+      })
+      .join('');
+  } catch (error) {
+    el.innerHTML = `<p class="empty-state">Recordings unavailable: ${error.message}</p>`;
+  }
+}
+
+async function handleRetranscribeRecording(recId) {
+  showToast('Re-transcribing…', 'info', 2500);
+  try {
+    await retranscribeRecording(recId);
+    showToast('Re-transcribed — check the dashboard for the new draft.', 'success');
+    await refreshDrafts().catch(() => {});
+  } catch (error) {
+    showToast(`Re-transcribe failed: ${error.message}`, 'danger');
+  }
+}
+
+async function handleDiscardRecording(recId) {
+  try {
+    await deleteRecording(recId);
+    await refreshRecordings();
+  } catch (error) {
+    showToast(`Discard failed: ${error.message}`, 'danger');
+  }
+}
+
 async function refreshDiagnostics() {
   await Promise.all([
     refreshSidecarStatus().catch((error) => {
@@ -1910,6 +1962,7 @@ async function refreshDiagnostics() {
       }
     }),
     fetchMetrics().then(renderMetricsHud).catch(() => {}),
+    refreshRecordings().catch(() => {}),
     fetchDiagnosticsPaths().then((paths) => {
       renderDetailList(diagnosticsPathsListEl, paths, [
         'debug_log_path',
@@ -3026,6 +3079,29 @@ refreshDiagnosticsButton?.addEventListener('click', () => {
 });
 
 document.getElementById('privacyWipeButton')?.addEventListener('click', handleWipeData);
+
+document.getElementById('recordingsList')?.addEventListener('click', (event) => {
+  const retry = event.target.closest('.recording-retry');
+  if (retry?.dataset.recId) {
+    handleRetranscribeRecording(retry.dataset.recId);
+    return;
+  }
+  const discard = event.target.closest('.recording-discard');
+  if (discard?.dataset.recId) {
+    handleDiscardRecording(discard.dataset.recId);
+  }
+});
+
+document.getElementById('clearRecordingsButton')?.addEventListener('click', async () => {
+  if (!window.confirm('Delete all saved recordings? This cannot be undone.')) return;
+  try {
+    await clearRecordings();
+    await refreshRecordings();
+    showToast('All recordings cleared.', 'success');
+  } catch (error) {
+    showToast(`Clear failed: ${error.message}`, 'danger');
+  }
+});
 
 profileSelectEl?.addEventListener('change', async () => {
   try {

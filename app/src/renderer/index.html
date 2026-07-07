@@ -1063,6 +1063,20 @@
           </div>
         </section>
 
+        <!-- Recovery: saved raw recordings (C6) -->
+        <section class="stream-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Recovery</h2>
+              <p class="section-desc">Every utterance's raw audio is saved here so nothing is lost. Re-transcribe or discard.</p>
+            </div>
+            <button id="clearRecordingsButton" class="secondary-button" type="button">Clear all</button>
+          </div>
+          <div id="recordingsList" class="recordings-list">
+            <p class="empty-state">No saved recordings.</p>
+          </div>
+        </section>
+
         <!-- Captured Sidecar startup logs (rendered if backend fails or on diagnostics tab) -->
         <section class="stream-panel">
           <div class="panel-header">

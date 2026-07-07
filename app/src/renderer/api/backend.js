@@ -175,6 +175,22 @@ async function wipeData(wipeVoices = false, timeoutMs = 10000) {
   return postJson(`${BACKEND_ORIGIN}/privacy/wipe`, { wipe_voices: wipeVoices }, timeoutMs);
 }
 
+async function fetchRecordings(timeoutMs = 2500) {
+  return fetchJson(`${BACKEND_ORIGIN}/recordings`, timeoutMs);
+}
+
+async function retranscribeRecording(recId, timeoutMs = 120000) {
+  return postJson(`${BACKEND_ORIGIN}/recordings/${encodeURIComponent(recId)}/retranscribe`, {}, timeoutMs);
+}
+
+async function deleteRecording(recId, timeoutMs = 10000) {
+  return deleteJson(`${BACKEND_ORIGIN}/recordings/${encodeURIComponent(recId)}`, timeoutMs);
+}
+
+async function clearRecordings(timeoutMs = 10000) {
+  return deleteJson(`${BACKEND_ORIGIN}/recordings`, timeoutMs);
+}
+
 async function fetchRuntimeErrors(timeoutMs = 2500) {
   return fetchJson(RUNTIME_ERRORS_URL, timeoutMs);
 }
@@ -538,6 +554,10 @@ export {
   fetchMetrics,
   fetchPrivacy,
   wipeData,
+  fetchRecordings,
+  retranscribeRecording,
+  deleteRecording,
+  clearRecordings,
   fetchPersonas,
   fetchTtsVoices,
   savePersona,

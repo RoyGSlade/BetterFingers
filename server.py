@@ -12,6 +12,7 @@ from typing import Optional
 import pyperclip
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from llm_engine import get_engine, get_engine_if_initialized
 from transcriber import Transcriber
@@ -23,6 +24,7 @@ from project_generator import project_generator
 from platform_capabilities import get_capabilities
 from hardware_report import get_hardware_report, assess_model_fit
 from platform_paths import ensure_app_dirs, get_app_data_dir, get_config_dir
+import recordings
 from model_manager import (
     DEFAULT_MODEL,
     AVAILABLE_MODELS,
@@ -973,6 +975,15 @@ def process_recording_result(recording_result):
     preset = "True Janitor"
     raw_text = ""
     metadata = get_recording_metadata(recording_result)
+    # Persist the raw audio up front so it survives even a processing crash (C6).
+    try:
+        recordings.save_recording(
+            recording_result,
+            rec_id=str(int(time.time() * 1000)),
+            metadata={"stop_reason": getattr(recording_result, "stop_reason", "manual")},
+        )
+    except Exception as exc:
+        logging.debug(f"Could not persist recording: {exc}")
     pipeline_t0 = time.perf_counter()
     stt_ms = None
     llm_ms = None
@@ -1990,6 +2001,47 @@ async def privacy_wipe(request: PrivacyWipeRequest = PrivacyWipeRequest()):
 
     broadcast_status_threadsafe("draft_history_cleared")
     return {"ok": True, "cleared": cleared, "message": "Your data was wiped."}
+
+
+@app.get("/recordings")
+async def list_recordings_endpoint():
+    return {"ok": True, "recordings": recordings.list_recordings()}
+
+
+@app.post("/recordings/{rec_id}/retranscribe")
+async def retranscribe_recording(rec_id: str):
+    import numpy as np
+    from recorder import RecordingResult
+
+    audio, sample_rate = recordings.load_recording_audio(rec_id)
+    if audio is None:
+        raise HTTPException(status_code=404, detail="Recording not found.")
+
+    audio = np.asarray(audio, dtype=np.float32)
+    rr = RecordingResult(
+        audio_data=audio,
+        sample_rate=int(sample_rate or 16000),
+        duration_seconds=len(audio) / float(sample_rate or 16000),
+        frame_count=0,
+        sample_count=int(audio.size),
+        max_amplitude=float(np.max(np.abs(audio))) if audio.size else 0.0,
+        rms_amplitude=float(np.sqrt(np.mean(np.square(audio)))) if audio.size else 0.0,
+        stop_reason="recovery",
+    )
+    draft = await run_in_threadpool(process_recording_result, rr)
+    return {"ok": True, "draft": draft}
+
+
+@app.delete("/recordings/{rec_id}")
+async def delete_recording_endpoint(rec_id: str):
+    removed = recordings.delete_recording(rec_id)
+    return {"ok": True, "removed": removed}
+
+
+@app.delete("/recordings")
+async def clear_recordings_endpoint():
+    count = recordings.clear_recordings()
+    return {"ok": True, "cleared": count}
 
 
 @app.get("/diagnostics/logs")
