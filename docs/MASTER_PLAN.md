@@ -83,6 +83,13 @@ M (≤1 week), L (1–3 weeks), XL (3+ weeks).
   mid-word cuts) and added a guard test. +7 unit tests (181 green). REMAINING (deferred,
   audio-DSP + heavier): streaming playback, loudness normalization, chunk crossfade
   (utterance LRU cache already exists).
+- [x] **C11 — Voice macros (text-expansion subset).** New `macros.py` (mirrors
+  dictionary.py): user trigger→expansion pairs in `<userdata>/macros.json`;
+  `apply_macros(text)` expands whole-phrase, word-boundary-safe, case-insensitive,
+  longest-trigger-first. Wired into `process_recording_result` after dictation commands,
+  gated by per-profile `macros_enabled` (default on). Endpoints GET/POST/DELETE `/macros`.
+  New "Voice Macros" settings section (trigger+expansion inputs, remove chips, enable
+  toggle). +6 unit tests (187 green). Shell/keystroke macros deferred (security).
 
 ---
 

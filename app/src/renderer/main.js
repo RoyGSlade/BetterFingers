@@ -63,6 +63,9 @@ import {
   exportProfile,
   importProfile,
   fetchModelRecommendation,
+  fetchMacros,
+  addMacro,
+  deleteMacro,
 } from './api/backend.js';
 
 const backendStatusEl = document.getElementById('backendStatus');
@@ -206,6 +209,7 @@ const settingEls = {
   auto_submit: document.getElementById('settingAutoSubmit'),
   instant_typing: document.getElementById('settingInstantTyping'),
   voice_commands_enabled: document.getElementById('settingVoiceCommands'),
+  macros_enabled: document.getElementById('settingMacrosEnabled'),
   audio_ducking: document.getElementById('settingAudioDucking'),
   status_indicator_enabled: document.getElementById('settingStatusIndicator'),
   notification_overlay_enabled: document.getElementById('settingNotificationOverlay'),
@@ -1338,7 +1342,7 @@ function renderProfileSettings(settings) {
     }
     if (el.type === 'checkbox') {
       // Some toggles default ON when the profile hasn't stored them yet.
-      const defaultOnKeys = new Set(['voice_commands_enabled']);
+      const defaultOnKeys = new Set(['voice_commands_enabled', 'macros_enabled']);
       const stored = activeProfileSettings[key];
       const value = stored === undefined && defaultOnKeys.has(key) ? true : Boolean(stored);
       el.checked = el.disabled ? false : value;
@@ -2038,6 +2042,61 @@ function renderDictionaryTerms(terms) {
         `<button class="dictionary-chip-remove" type="button" data-term="${escapeAttr(t)}" aria-label="Remove ${escapeAttr(t)}">×</button></span>`,
     )
     .join('');
+}
+
+// --- Voice macros (C11) ---
+
+function renderMacros(macrosList) {
+  const el = document.getElementById('macrosList');
+  if (!el) return;
+  if (!macrosList || !macrosList.length) {
+    el.innerHTML = '<span class="empty-state">No macros yet.</span>';
+    return;
+  }
+  el.innerHTML = macrosList
+    .map(
+      (m) =>
+        `<div class="macro-row"><span class="macro-pair"><strong>${escapeHtml(m.trigger)}</strong> → ${escapeHtml(m.expansion)}</span>` +
+        `<button class="dictionary-chip-remove macro-remove" type="button" data-trigger="${escapeAttr(m.trigger)}" aria-label="Remove ${escapeAttr(m.trigger)}">×</button></div>`,
+    )
+    .join('');
+}
+
+async function refreshMacros() {
+  const el = document.getElementById('macrosList');
+  if (!el) return;
+  try {
+    const payload = await fetchMacros();
+    renderMacros(payload?.macros || []);
+  } catch (error) {
+    el.innerHTML = `<span class="empty-state">Macros unavailable: ${error.message}</span>`;
+  }
+}
+
+async function handleAddMacro() {
+  const trigger = document.getElementById('macroTrigger')?.value?.trim();
+  const expansion = document.getElementById('macroExpansion')?.value?.trim();
+  if (!trigger || !expansion) {
+    showToast('A macro needs both a trigger and an expansion.', 'warning');
+    return;
+  }
+  try {
+    const payload = await addMacro(trigger, expansion);
+    renderMacros(payload?.macros || []);
+    document.getElementById('macroTrigger').value = '';
+    document.getElementById('macroExpansion').value = '';
+  } catch (error) {
+    showToast(`Could not add macro: ${error.message}`, 'danger');
+  }
+}
+
+async function handleRemoveMacro(trigger) {
+  try {
+    const payload = await deleteMacro(trigger);
+    renderMacros(payload?.macros || []);
+  } catch (error) {
+    showToast(`Could not remove macro: ${error.message}`, 'danger');
+  }
 }
 
 async function refreshDictionary() {
@@ -3033,6 +3092,8 @@ function initSettingsPanel() {
         refreshPrivacy().catch(() => {});
       } else if (sectionName === 'dictionary') {
         refreshDictionary().catch(() => {});
+      } else if (sectionName === 'macros') {
+        refreshMacros().catch(() => {});
       }
 
       settingsSections.forEach((section) => {
@@ -3293,6 +3354,19 @@ document.getElementById('privacyWipeButton')?.addEventListener('click', handleWi
 
 document.getElementById('dictionaryAddButton')?.addEventListener('click', () => {
   handleAddDictionaryTerm(document.getElementById('dictionaryInput')?.value);
+});
+document.getElementById('macroAddButton')?.addEventListener('click', handleAddMacro);
+document.getElementById('macroExpansion')?.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    handleAddMacro();
+  }
+});
+document.getElementById('macrosList')?.addEventListener('click', (event) => {
+  const remove = event.target.closest('.macro-remove');
+  if (remove?.dataset.trigger) {
+    handleRemoveMacro(remove.dataset.trigger);
+  }
 });
 document.getElementById('dictionaryInput')?.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {

@@ -224,6 +224,18 @@ async function fetchModelRecommendation(timeoutMs = 5000) {
   return fetchJson(`${BACKEND_ORIGIN}/models/recommend`, timeoutMs);
 }
 
+async function fetchMacros(timeoutMs = 2500) {
+  return fetchJson(`${BACKEND_ORIGIN}/macros`, timeoutMs);
+}
+
+async function addMacro(trigger, expansion, timeoutMs = 10000) {
+  return postJson(`${BACKEND_ORIGIN}/macros`, { trigger, expansion }, timeoutMs);
+}
+
+async function deleteMacro(trigger, timeoutMs = 10000) {
+  return deleteJson(`${BACKEND_ORIGIN}/macros/${encodeURIComponent(trigger)}`, timeoutMs);
+}
+
 async function fetchRuntimeErrors(timeoutMs = 2500) {
   return fetchJson(RUNTIME_ERRORS_URL, timeoutMs);
 }
@@ -599,6 +611,9 @@ export {
   fetchHistoryRecent,
   clearHistory,
   fetchModelRecommendation,
+  fetchMacros,
+  addMacro,
+  deleteMacro,
   fetchPersonas,
   fetchTtsVoices,
   savePersona,

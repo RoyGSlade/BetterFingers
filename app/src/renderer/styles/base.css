@@ -1821,3 +1821,19 @@ body.theme-light.high-contrast {
 }
 .model-recommendation ul { margin: 8px 0 0; padding-left: 18px; }
 .model-recommendation li { margin: 4px 0; }
+
+/* ==========================================
+   Voice macros (C11)
+   ========================================== */
+.macros-list { display: flex; flex-direction: column; gap: 6px; }
+.macro-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-soft);
+}
+.macro-pair { font-size: 0.9rem; word-break: break-word; }

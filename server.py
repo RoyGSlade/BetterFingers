@@ -27,6 +27,7 @@ from platform_paths import ensure_app_dirs, get_app_data_dir, get_config_dir
 import recordings
 import dictionary
 import dictation_commands
+import macros
 import history_store
 from model_manager import (
     DEFAULT_MODEL,
@@ -298,6 +299,15 @@ def voice_commands_enabled():
     except Exception:
         return True
     return bool(config.get("voice_commands_enabled", True))
+
+
+def macros_enabled():
+    """Whether voice macros (C11) are expanded. Per-profile, default on."""
+    try:
+        config = load_profile(get_last_active_profile())
+    except Exception:
+        return True
+    return bool(config.get("macros_enabled", True))
 
 
 def get_model_residency_settings():
@@ -1026,6 +1036,9 @@ def process_recording_result(recording_result):
         # Spoken dictation commands (C2): "new paragraph", "period", "all caps", ...
         if raw_text and voice_commands_enabled():
             raw_text = dictation_commands.apply_commands(raw_text)
+        # Voice macros (C11): expand user snippets like "my address".
+        if raw_text and macros_enabled():
+            raw_text = macros.apply_macros(raw_text)
         stt_ms = (time.perf_counter() - _stt_start) * 1000.0
 
         check_cancelled()
@@ -2128,6 +2141,28 @@ class DictionarySuggestRequest(BaseModel):
 async def suggest_dictionary_terms(request: DictionarySuggestRequest):
     suggestions = dictionary.suggest_from_edit(request.raw_text, request.edited_text)
     return {"ok": True, "suggestions": suggestions}
+
+
+class MacroRequest(BaseModel):
+    trigger: str
+    expansion: str
+
+
+@app.get("/macros")
+async def get_macros_endpoint():
+    return {"ok": True, "macros": macros.get_macros()}
+
+
+@app.post("/macros")
+async def add_macro_endpoint(request: MacroRequest):
+    if not str(request.trigger or "").strip() or not str(request.expansion or "").strip():
+        raise HTTPException(status_code=400, detail="Both a trigger and an expansion are required.")
+    return {"ok": True, "macros": macros.add_macro(request.trigger, request.expansion)}
+
+
+@app.delete("/macros/{trigger}")
+async def delete_macro_endpoint(trigger: str):
+    return {"ok": True, "macros": macros.remove_macro(trigger)}
 
 
 @app.get("/history/search")

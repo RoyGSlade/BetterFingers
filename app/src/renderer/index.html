@@ -190,6 +190,7 @@
               <button class="settings-nav-button" type="button" data-section="notifications-status">Notifications & Status</button>
               <button class="settings-nav-button" type="button" data-section="appearance">Appearance</button>
               <button class="settings-nav-button" type="button" data-section="dictionary">Dictionary</button>
+              <button class="settings-nav-button" type="button" data-section="macros">Macros</button>
               <button class="settings-nav-button" type="button" data-section="privacy">Privacy</button>
               <button class="settings-nav-button" type="button" data-section="advanced-dev">Advanced & Developer</button>
             </nav>
@@ -847,6 +848,43 @@
               <div class="setting-group">
                 <h3>Your terms</h3>
                 <div id="dictionaryList" class="dictionary-chips"><span class="empty-state">No terms yet.</span></div>
+              </div>
+            </div>
+
+            <!-- Section: Voice Macros (C11) -->
+            <div class="settings-section hidden" data-section="macros">
+              <h2>Voice Macros</h2>
+              <p class="section-desc">Say a short trigger and have it expand to a longer snippet (e.g. "my address" → your full address).</p>
+
+              <div class="setting-group">
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="macroTrigger">Add a macro</label>
+                    <span class="setting-desc">Trigger phrase and what it expands to.</span>
+                  </div>
+                  <div class="setting-control dictionary-add">
+                    <input id="macroTrigger" class="settings-input" type="text" placeholder="Trigger, e.g. my address" />
+                    <input id="macroExpansion" class="settings-input" type="text" placeholder="Expansion" />
+                    <button id="macroAddButton" class="primary-button" type="button">Add</button>
+                  </div>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingMacrosEnabled">Enable macros</label>
+                    <span class="setting-desc">Expand macros during dictation.</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="custom-switch-label">
+                      <input id="settingMacrosEnabled" type="checkbox" />
+                      <span class="custom-switch-slider"></span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="setting-group">
+                <h3>Your macros</h3>
+                <div id="macrosList" class="macros-list"><span class="empty-state">No macros yet.</span></div>
               </div>
             </div>
 
