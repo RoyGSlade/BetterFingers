@@ -20,6 +20,11 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthT
     registerHotkeys(config, token);
   });
 
+  ipcMain.handle('hotkeys:get-capabilities', () => {
+    const { getHotkeyCapabilities } = require('./hotkeys');
+    return getHotkeyCapabilities();
+  });
+
 
   ipcMain.handle('shell:open-path', async (_event, targetPath) => {
     // Open an exported file/folder (e.g. the reel.html preview) in the OS default app.

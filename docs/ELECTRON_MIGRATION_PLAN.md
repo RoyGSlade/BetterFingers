@@ -21,6 +21,17 @@ Status as of 2026-07-07, after removal of Studio Mode. Scope: Windows + Linux de
   `start-betterfingers-linux.sh` (backend runs as the user; fixes the root-owned-files
   gotcha); `BetterFingers.desktop` is now a template + `scripts/install-linux-shortcut.sh`
   fills in the real repo path. AppImage target already configured in package.json.
+- **Phase 2.1 Push-to-talk / global hotkeys — DONE (Windows/X11; Wayland degrades).**
+  Backend: added `/runtime/recording/start` + `/stop` (idempotent) and
+  `HotkeyManager.request_start`; smoke-tested live. Electron: rewrote `hotkeys.js`
+  around `uiohook-napi` (N-API, key-down + key-up) so PTT works — key-down starts,
+  key-up stops, with auto-repeat suppression and modifier-order-proof release.
+  Toggle mode debounced. Falls back to Electron `globalShortcut` (toggle-only) when
+  uiohook can't load/start (Wayland, missing libXtst). Capability query exposed via
+  `hotkeys:get-capabilities` for the UI. Also fixed a **latent bundler bug**: `config.js`
+  wasn't a build input, so `require('./config')` resolved to nothing — would have broken
+  even dev launch since Phase 1.3. Native module asarUnpack'd for packaging.
+  Remaining UI touch: surface `pttSupported` in the recording-mode setting (Phase 3).
 
 ---
 

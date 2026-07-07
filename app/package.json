@@ -24,6 +24,9 @@
     "appId": "com.betterfingers.desktop",
     "productName": "BetterFingers",
     "asar": true,
+    "asarUnpack": [
+      "**/node_modules/uiohook-napi/**"
+    ],
     "directories": {
       "output": "release"
     },
@@ -75,5 +78,8 @@
     "electron-winstaller@5.4.0": true,
     "esbuild@0.25.12": true,
     "esbuild@0.27.7": true
+  },
+  "dependencies": {
+    "uiohook-napi": "^1.5.5"
   }
 }

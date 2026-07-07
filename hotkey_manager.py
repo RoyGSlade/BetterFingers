@@ -186,6 +186,9 @@ class HotkeyManager:
         if self.on_complete:
             self.on_complete(result)
 
+    def request_start(self, reason="manual"):
+        self._start_recording(reason=reason)
+
     def request_stop(self, reason="manual"):
         self._stop_recording(reason=reason)
 

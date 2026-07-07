@@ -878,6 +878,33 @@ def toggle_recording_runtime():
     return {"ok": False, "recording": False, "message": "Recording did not start. Check microphone permissions/device."}
 
 
+def start_recording_runtime():
+    """Explicit recording start, used for push-to-talk key-down (idempotent)."""
+    manager = start_hotkey_manager()
+    if manager is None:
+        raise HTTPException(status_code=500, detail="Recording runtime is unavailable.")
+
+    if bool(getattr(manager, "is_recording", False)):
+        return {"ok": True, "recording": True, "message": "Already recording."}
+    manager.request_start(reason="ptt")
+    is_recording = bool(getattr(manager, "is_recording", False))
+    if is_recording:
+        return {"ok": True, "recording": True, "message": "Recording started."}
+    return {"ok": False, "recording": False, "message": "Recording did not start. Check microphone permissions/device."}
+
+
+def stop_recording_runtime():
+    """Explicit recording stop, used for push-to-talk key-up (idempotent)."""
+    manager = start_hotkey_manager()
+    if manager is None:
+        raise HTTPException(status_code=500, detail="Recording runtime is unavailable.")
+
+    if not bool(getattr(manager, "is_recording", False)):
+        return {"ok": True, "recording": False, "message": "Not recording."}
+    manager.request_stop(reason="ptt_release")
+    return {"ok": True, "recording": False, "message": "Recording stopped. Processing audio..."}
+
+
 def process_recording_result(recording_result):
     global is_processing_draft
     with draft_lock:
@@ -2036,6 +2063,16 @@ async def runtime_emergency_stop():
 @app.post("/runtime/recording/toggle")
 async def runtime_recording_toggle():
     return toggle_recording_runtime()
+
+
+@app.post("/runtime/recording/start")
+async def runtime_recording_start():
+    return start_recording_runtime()
+
+
+@app.post("/runtime/recording/stop")
+async def runtime_recording_stop():
+    return stop_recording_runtime()
 
 
 @app.post("/runtime/tts/toggle")
