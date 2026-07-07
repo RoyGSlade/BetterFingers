@@ -41,6 +41,13 @@ M (≤1 week), L (1–3 weeks), XL (3+ weeks).
   one-click-add suggestions). Auto-learn: saving a draft edit diffs raw vs edited
   (`suggest_from_edit`, stopword-filtered) and surfaces candidate terms via toast +
   the suggestions row.
+- [~] **C8 — Searchable history (backend done; search UI next).** New `history_store.py`:
+  stdlib sqlite3 **FTS5** archive (`<userdata>/history.db`) — external-content `drafts`
+  table + FTS index kept in sync by triggers, upsert-by-id dedup. The in-memory
+  100-cap `draft_queue`/`draft_history.json` is untouched (tests stay green); every
+  `save_draft_history` mirrors into the uncapped archive, and startup backfills it once
+  from the legacy JSON. Endpoints `GET /history/search?q=&limit=` (prefix MATCH, ranked),
+  `GET /history`, `DELETE /history`. Fully defensive. REMAINING: renderer search UI.
 
 ---
 

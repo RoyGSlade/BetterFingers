@@ -26,6 +26,7 @@ from hardware_report import get_hardware_report, assess_model_fit
 from platform_paths import ensure_app_dirs, get_app_data_dir, get_config_dir
 import recordings
 import dictionary
+import history_store
 from model_manager import (
     DEFAULT_MODEL,
     AVAILABLE_MODELS,
@@ -121,6 +122,8 @@ def save_draft_history():
             serializable_drafts = [dict(draft) for draft in draft_queue]
         with open(history_file, "w", encoding="utf-8") as f:
             json.dump(serializable_drafts, f, indent=2)
+        # Mirror into the searchable, uncapped archive (C8). Defensive: never fatal.
+        history_store.upsert_many(serializable_drafts)
     except Exception as exc:
         logging.exception(f"Failed to save draft history to {history_file}: {exc}")
 
@@ -1172,6 +1175,11 @@ async def startup_event():
     global loop, _warmup_thread
     loop = asyncio.get_event_loop()
     load_draft_history()
+    # One-time backfill of the searchable archive from the legacy JSON (C8).
+    try:
+        history_store.migrate_from_json(os.path.join(get_user_data_path(), "draft_history.json"))
+    except Exception as exc:
+        logging.debug(f"history archive migration skipped: {exc}")
     lazy_startup = is_lazy_startup_enabled()
     residency_settings = get_model_residency_settings()
 
@@ -2087,6 +2095,26 @@ class DictionarySuggestRequest(BaseModel):
 async def suggest_dictionary_terms(request: DictionarySuggestRequest):
     suggestions = dictionary.suggest_from_edit(request.raw_text, request.edited_text)
     return {"ok": True, "suggestions": suggestions}
+
+
+@app.get("/history/search")
+async def history_search(q: str = "", limit: int = 50):
+    limit = max(1, min(200, int(limit or 50)))
+    results = history_store.search(q, limit=limit)
+    return {"ok": True, "query": q, "count": len(results), "results": results}
+
+
+@app.get("/history")
+async def history_recent(limit: int = 50):
+    limit = max(1, min(200, int(limit or 50)))
+    results = history_store.recent(limit=limit)
+    return {"ok": True, "count": len(results), "total": history_store.count(), "results": results}
+
+
+@app.delete("/history")
+async def history_clear():
+    ok = history_store.clear()
+    return {"ok": ok, "message": "Searchable history cleared." if ok else "Could not clear history."}
 
 
 @app.get("/diagnostics/logs")
