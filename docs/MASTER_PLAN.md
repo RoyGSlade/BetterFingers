@@ -74,6 +74,15 @@ M (≤1 week), L (1–3 weeks), XL (3+ weeks).
   per-profile `voice_commands_enabled` (default on) with a Settings → Recording toggle.
   +11 unit tests (174 green). (Phrase-history "scratch that" deferred — needs utterance
   state.)
+- [~] **U5 — TTS improvements (normalization + smart-split).** New pure `tts_text.py`
+  `normalize_for_speech()` expands abbreviations (Dr./Mr./e.g./vs./…), currency
+  ($5→"5 dollars", $5.50→"…and 50 cents", singular/plural), percentages, and a few
+  symbols (&/@/#) so the voice reads naturally; wired into `ReviewTTSEngine.speak()`
+  before the existing pronunciation map (not regressed). Verified the chunker
+  (`_split_text_for_tts`) ALREADY does sentence→clause→word-boundary splitting (no
+  mid-word cuts) and added a guard test. +7 unit tests (181 green). REMAINING (deferred,
+  audio-DSP + heavier): streaming playback, loudness normalization, chunk crossfade
+  (utterance LRU cache already exists).
 
 ---
 
