@@ -461,9 +461,9 @@ class Transcriber:
             self.model = None
         logging.info("Whisper model unloaded.")
 
-    def transcribe(self, audio_array):
+    def transcribe(self, audio_array, hotwords=None):
         # Kept for callers that only need text; delegates to the confidence path.
-        return self.transcribe_with_confidence(audio_array)[0]
+        return self.transcribe_with_confidence(audio_array, hotwords=hotwords)[0]
 
     @staticmethod
     def _compute_confidence(seg_list):
@@ -497,9 +497,10 @@ class Transcriber:
             "no_speech_prob": round(worst_no_speech, 3),
         }
 
-    def transcribe_with_confidence(self, audio_array):
+    def transcribe_with_confidence(self, audio_array, hotwords=None):
         """Return (text, confidence_dict). confidence_dict has score/avg_logprob/
-        no_speech_prob (score is None-safe 0..1)."""
+        no_speech_prob (score is None-safe 0..1). Optional `hotwords` biases the
+        model toward user-dictionary terms (C1)."""
         empty_conf = {"score": None, "avg_logprob": None, "no_speech_prob": None}
         if not self.ensure_loaded():
             return "", empty_conf
@@ -518,7 +519,10 @@ class Transcriber:
                 duration = len(audio_array) / 16000.0
                 beam_size = 1 if duration < 2.0 else 5
 
-                segments, _info = model.transcribe(audio_array, beam_size=beam_size)
+                transcribe_kwargs = {"beam_size": beam_size}
+                if hotwords:
+                    transcribe_kwargs["hotwords"] = hotwords
+                segments, _info = model.transcribe(audio_array, **transcribe_kwargs)
 
                 # Periodic GC to prevent VRAM fragmentation/leaks
                 if duration > 5.0:

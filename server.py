@@ -25,6 +25,7 @@ from platform_capabilities import get_capabilities
 from hardware_report import get_hardware_report, assess_model_fit
 from platform_paths import ensure_app_dirs, get_app_data_dir, get_config_dir
 import recordings
+import dictionary
 from model_manager import (
     DEFAULT_MODEL,
     AVAILABLE_MODELS,
@@ -993,6 +994,9 @@ def process_recording_result(recording_result):
         broadcast_status_threadsafe("transcribing")
         trans = ensure_transcriber_initialized(preload=False)
         audio_data = getattr(recording_result, "audio_data", recording_result)
+        # Personal dictionary (C1): bias the ASR toward the user's terms.
+        dict_terms = dictionary.get_terms()
+        hotwords = dictionary.hotwords_string(dict_terms)
         _stt_start = time.perf_counter()
         confidence = {"score": None, "avg_logprob": None, "no_speech_prob": None}
         if hasattr(audio_data, "size") and audio_data.size <= 0:
@@ -1000,9 +1004,12 @@ def process_recording_result(recording_result):
         elif audio_data is None:
             raw_text = ""
         elif hasattr(trans, "transcribe_with_confidence"):
-            raw_text, confidence = trans.transcribe_with_confidence(audio_data)
+            raw_text, confidence = trans.transcribe_with_confidence(audio_data, hotwords=hotwords)
         else:
             raw_text = trans.transcribe(audio_data)
+        # Post-ASR correction snaps near-miss tokens back to dictionary terms.
+        if raw_text and dict_terms:
+            raw_text = dictionary.correct_text(raw_text, dict_terms)
         stt_ms = (time.perf_counter() - _stt_start) * 1000.0
 
         check_cancelled()
@@ -2048,6 +2055,27 @@ async def delete_recording_endpoint(rec_id: str):
 async def clear_recordings_endpoint():
     count = recordings.clear_recordings()
     return {"ok": True, "cleared": count}
+
+
+class DictionaryTermRequest(BaseModel):
+    term: str
+
+
+@app.get("/dictionary")
+async def get_dictionary():
+    return {"ok": True, "terms": dictionary.get_terms()}
+
+
+@app.post("/dictionary")
+async def add_dictionary_term(request: DictionaryTermRequest):
+    if not str(request.term or "").strip():
+        raise HTTPException(status_code=400, detail="Term must not be empty.")
+    return {"ok": True, "terms": dictionary.add_term(request.term)}
+
+
+@app.delete("/dictionary/{term}")
+async def delete_dictionary_term(term: str):
+    return {"ok": True, "terms": dictionary.remove_term(term)}
 
 
 @app.get("/diagnostics/logs")
