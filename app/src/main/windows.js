@@ -86,6 +86,10 @@ function createMainWindow() {
   return mainWindow;
 }
 
+function getMainWindow() {
+  return mainWindow;
+}
+
 function focusMainWindow(window = mainWindow) {
   if (!window || window.isDestroyed()) {
     return;
@@ -241,6 +245,7 @@ function getReviewWindow() {
 
 module.exports = {
   createMainWindow,
+  getMainWindow,
   focusMainWindow,
   createOverlayWindow,
   getOverlayWindow,

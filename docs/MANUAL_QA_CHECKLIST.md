@@ -104,6 +104,18 @@ files involved so a failure is easy to trace.
 - ☐ Works when the app is unfocused / in the tray.
   _Files: `app/src/main/hotkeys.js` (uiohook-napi)._
 
+## Window lifecycle / tray
+
+- ☐ Close the main dashboard window (X button) — the app keeps running (tray
+  icon stays; sidecar keeps recording via hotkeys).
+- ☐ With the dashboard closed, click the tray icon (or "Open Dashboard" from
+  its menu) — **the dashboard reopens** instead of doing nothing.
+- ☐ Launch a second instance of the app while one is running — the existing
+  dashboard is focused/reopened instead of a second instance starting.
+- ☐ Quit from the tray menu — the sidecar process and hotkey listeners are
+  torn down cleanly (check for orphaned `server.py` processes after quit).
+  _Files: `app/src/main/main.js`, `app/src/main/windows.js`._
+
 ---
 
 ## Regression sanity (every session)

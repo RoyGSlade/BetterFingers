@@ -2,7 +2,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { randomUUID } = require('node:crypto');
 const { app } = require('electron');
-const { createMainWindow, focusMainWindow, createOverlayWindow } = require('./windows');
+const { createMainWindow, getMainWindow, focusMainWindow, createOverlayWindow } = require('./windows');
 const { createSidecar } = require('./sidecar');
 const { createTray } = require('./tray');
 const { registerIpc } = require('./ipc');
@@ -11,10 +11,21 @@ const { BACKEND_HOST, BACKEND_PORT } = require('./config');
 
 const authToken = randomUUID();
 
-let mainWindow = null;
 let tray = null;
 let sidecar = null;
 let isQuitting = false;
+
+// The hidden overlay window keeps Electron alive after the dashboard is
+// closed, so `mainWindow` can be destroyed (null via windows.js) while the
+// app keeps running. Anything that wants to show the dashboard must go
+// through this so tray/second-instance can always bring it back.
+function ensureMainWindow() {
+  let win = getMainWindow();
+  if (!win || win.isDestroyed()) {
+    win = createMainWindow();
+  }
+  return win;
+}
 
 function getDefaultDevPythonCommand() {
   if (process.platform === 'win32') {
@@ -51,8 +62,9 @@ function resolveDevPythonCommand() {
 }
 
 function notifyRendererSidecarStatus(status) {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('sidecar:status', status);
+  const window = getMainWindow();
+  if (window && !window.isDestroyed()) {
+    window.webContents.send('sidecar:status', status);
   }
 }
 
@@ -73,19 +85,19 @@ function bootstrapApp() {
   });
 
   registerIpc({
-    getMainWindow: () => mainWindow,
+    getMainWindow: () => getMainWindow(),
     getSidecarStatus: () => sidecar?.getStatus?.() ?? { state: 'unknown', message: 'Sidecar is unavailable.' },
     getSidecarLogs: () => sidecar?.getLogs?.() ?? [],
     getAuthToken: () => authToken,
     onQuit: requestQuit,
-    onShow: () => focusMainWindow(mainWindow),
+    onShow: () => focusMainWindow(ensureMainWindow()),
   });
 
-  mainWindow = createMainWindow();
+  createMainWindow();
   createOverlayWindow();
   tray = createTray({
-    getMainWindow: () => mainWindow,
-    onShow: () => focusMainWindow(mainWindow),
+    getMainWindow: () => getMainWindow(),
+    onShow: () => focusMainWindow(ensureMainWindow()),
     onQuit: requestQuit,
     onToggleRecording: () => triggerBackendAction('/runtime/recording/toggle'),
   });
@@ -122,7 +134,7 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(bootstrapApp);
 
   app.on('second-instance', () => {
-    focusMainWindow(mainWindow);
+    focusMainWindow(ensureMainWindow());
   });
 
   app.on('window-all-closed', () => {
