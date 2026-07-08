@@ -1841,6 +1841,11 @@ class PersonaRequest(BaseModel):
     voice: Optional[dict] = None
     format: Optional[dict] = None
     few_shot: Optional[list] = None
+    # Phase 7 builder fields:
+    output_policy: Optional[str] = None
+    safety_mode: Optional[str] = None
+    max_completion_tokens: Optional[int] = None
+    chunk_size: Optional[int] = None
 
 
 @app.get("/personas")
@@ -1873,7 +1878,10 @@ async def save_persona_route(request: PersonaRequest):
     # Build a v2 payload from the provided fields; drop unspecified ones so an
     # update preserves prior rich values (upsert_persona merges partial dicts).
     payload = {"prompt": request.prompt}
-    for key in ("temperature", "model_hint", "dictionary_scope", "voice", "format", "few_shot"):
+    for key in (
+        "temperature", "model_hint", "dictionary_scope", "voice", "format", "few_shot",
+        "output_policy", "safety_mode", "max_completion_tokens", "chunk_size",
+    ):
         value = getattr(request, key)
         if value is not None:
             payload[key] = value
@@ -1881,6 +1889,49 @@ async def save_persona_route(request: PersonaRequest):
     if not ok:
         raise HTTPException(status_code=400, detail=msg)
     return {"message": msg}
+
+
+class PersonaLintRequest(BaseModel):
+    prompt: str = ""
+    temperature: Optional[float] = None
+    safety_mode: Optional[str] = None
+    output_policy: Optional[str] = None
+    chunk_size: Optional[int] = None
+
+
+@app.post("/personas/lint")
+async def lint_persona_route(request: PersonaLintRequest):
+    """Non-blocking builder warnings for the persona currently being edited."""
+    from llm_engine import lint_persona
+    payload = {k: v for k, v in request.model_dump().items() if v is not None}
+    return {"warnings": lint_persona(payload)}
+
+
+class PersonaTestRequest(BaseModel):
+    prompt: str
+    sample: str
+    temperature: Optional[float] = None
+    few_shot: Optional[list] = None
+    format: Optional[dict] = None
+    dictionary_scope: Optional[str] = None
+    output_policy: Optional[str] = None
+    safety_mode: Optional[str] = None
+    max_completion_tokens: Optional[int] = None
+
+
+@app.post("/personas/test")
+async def test_persona_route(request: PersonaTestRequest):
+    """Run one sample utterance through an unsaved persona for the test panel."""
+    sample = str(request.sample or "").strip()
+    if not sample:
+        raise HTTPException(status_code=400, detail="A sample utterance is required.")
+    persona = {k: v for k, v in request.model_dump().items() if k != "sample" and v is not None}
+    engine = get_selected_llm_engine()
+    try:
+        result = engine.run_persona_preview(persona, sample, max_output_tokens=get_active_completion_tokens())
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Persona test failed: {exc}")
+    return {"result": result}
 
 
 @app.delete("/personas/{name}")

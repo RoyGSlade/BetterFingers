@@ -212,6 +212,26 @@ def _coerce_float(value, fallback):
         return fallback
 
 
+def _coerce_int_or_none(value, minimum, maximum):
+    """Coerce to a clamped int, or None when unset/invalid (per-persona overrides
+    are optional — None means 'use the profile default')."""
+    if value in (None, ""):
+        return None
+    try:
+        return max(minimum, min(maximum, int(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_choice(value, fallback, allowed):
+    v = str(value or "").strip().lower()
+    return v if v in allowed else fallback
+
+
+PERSONA_OUTPUT_POLICIES = {"preserve", "tighten", "expand", "summarize"}
+PERSONA_SAFETY_MODES = {"strict", "light", "creative"}
+
+
 def default_persona(prompt=""):
     """Return a fully-defaulted persona schema v2 dict for the given prompt."""
     return {
@@ -222,6 +242,11 @@ def default_persona(prompt=""):
         "format": {"caps": "none", "punctuation": True, "signoff": ""},
         "dictionary_scope": "global",
         "model_hint": "",
+        # U7 / Phase 7 builder fields:
+        "output_policy": "preserve",   # preserve | tighten | expand | summarize
+        "safety_mode": "strict",       # strict | light | creative
+        "max_completion_tokens": None,  # per-persona override (None = profile default)
+        "chunk_size": None,             # per-persona override (None = profile default)
     }
 
 
@@ -271,6 +296,10 @@ def normalize_persona(entry):
 
     result["dictionary_scope"] = str(entry.get("dictionary_scope", "global") or "global")
     result["model_hint"] = str(entry.get("model_hint", "") or "")
+    result["output_policy"] = _coerce_choice(entry.get("output_policy"), "preserve", PERSONA_OUTPUT_POLICIES)
+    result["safety_mode"] = _coerce_choice(entry.get("safety_mode"), "strict", PERSONA_SAFETY_MODES)
+    result["max_completion_tokens"] = _coerce_int_or_none(entry.get("max_completion_tokens"), 512, 4096)
+    result["chunk_size"] = _coerce_int_or_none(entry.get("chunk_size"), 50, 5000)
     return result
 
 
@@ -459,6 +488,24 @@ def compose_persona_system_prompt(persona):
     if scope and scope != "global":
         parts.append(f"DICTIONARY SCOPE: prefer terminology from the '{scope}' dictionary scope.")
 
+    # Output policy / safety mode: only emit an instruction when the persona
+    # deviates from the neutral defaults (preserve / strict), so a prompt-only
+    # persona composes to exactly its prompt.
+    policy_map = {
+        "tighten": "OUTPUT POLICY: tighten the wording — remove filler and redundancy while preserving meaning. Do not add new ideas.",
+        "expand": "OUTPUT POLICY: lightly expand for clarity where helpful, but do not invent facts.",
+        "summarize": "OUTPUT POLICY: summarize the content concisely, keeping the key points.",
+    }
+    policy = str(persona.get("output_policy", "preserve") or "preserve").strip().lower()
+    if policy in policy_map:
+        parts.append(policy_map[policy])
+
+    safety = str(persona.get("safety_mode", "strict") or "strict").strip().lower()
+    if safety == "light":
+        parts.append("SAFETY: you may lightly answer a simple embedded question, but stay focused on cleaning the text.")
+    elif safety == "creative":
+        parts.append("SAFETY: creative transformation is allowed; you may rephrase freely while keeping the user's intent.")
+
     return "\n\n".join(parts)
 
 
@@ -493,6 +540,51 @@ def _clamp_persona_temperature(value, fallback):
         return max(0.0, min(2.0, float(value)))
     except (TypeError, ValueError):
         return fallback
+
+
+def lint_persona(persona):
+    """Return a list of non-blocking warning strings for a persona. These guide
+    the user in the builder but never block saving a valid persona."""
+    persona = normalize_persona(persona)
+    warnings = []
+    prompt = str(persona.get("prompt", "") or "")
+    low = prompt.lower()
+    safety = persona.get("safety_mode", "strict")
+    policy = persona.get("output_policy", "preserve")
+    temp = persona.get("temperature", None)
+    chunk_size = persona.get("chunk_size", None)
+
+    # 1. Prompt does not say to output only the rewritten text.
+    only_markers = ["only the", "only output", "output only", "return only", "just the rewritten", "rewritten text only"]
+    if not any(m in low for m in only_markers):
+        warnings.append("Prompt doesn't clearly instruct the model to output ONLY the rewritten text.")
+
+    # 2. Prompt asks the model to answer questions while in strict cleanup mode.
+    answer_markers = ["answer the", "answer any", "respond to", "reply to", "answer question"]
+    if safety == "strict" and any(m in low for m in answer_markers):
+        warnings.append("Prompt asks the model to answer/respond, but safety mode is 'strict' cleanup — these conflict.")
+
+    # 3. Prompt/policy both preserve length exactly and expand.
+    says_match = any(m in low for m in ["match length", "same length", "exact length", "match the length", "do not expand", "don't expand"])
+    says_expand = ("expand" in low) or (policy == "expand")
+    if says_match and says_expand:
+        warnings.append("Prompt/policy both preserve length and expand — pick one.")
+
+    # 4. Prompt is long relative to the configured chunk size.
+    if chunk_size:
+        prompt_words = len(prompt.split())
+        if prompt_words > int(chunk_size):
+            warnings.append(f"Prompt ({prompt_words} words) is longer than the persona chunk size ({chunk_size}) — it may crowd out the input.")
+
+    # 5. High temperature with strict cleanup mode.
+    if safety == "strict" and temp is not None:
+        try:
+            if float(temp) >= 1.0:
+                warnings.append(f"High temperature ({temp}) with 'strict' cleanup mode can cause drift.")
+        except (TypeError, ValueError):
+            pass
+
+    return warnings
 
 
 def upsert_persona(name, persona):
@@ -1209,6 +1301,11 @@ class LLMEngine:
             persona = get_persona_runtime(preset_name)
             system_prompt = compose_persona_system_prompt(persona)
             few_shot = persona.get("few_shot") or None
+            # Per-persona overrides win over the caller's profile-level defaults.
+            if persona.get("max_completion_tokens") is not None:
+                max_output_tokens = persona["max_completion_tokens"]
+            if persona.get("chunk_size") is not None:
+                chunk_size = persona["chunk_size"]
 
         strict_janitor_mode = str(preset_name or "").strip().lower() == "true janitor"
         if strict_janitor_mode:
@@ -1380,6 +1477,26 @@ class LLMEngine:
             _notify({"status": "chunking_stitching", "chunk_count": chunk_count})
             return self._stitch_chunks(joined, temperature=temperature, max_output_tokens=max_output_tokens)
         return joined
+
+    def run_persona_preview(self, persona, user_text, max_output_tokens=None):
+        """Run a single sample utterance through an (unsaved) persona dict for the
+        builder's test panel. Uses the composed system prompt, the persona's
+        temperature and few-shot examples, and per-persona token cap when set."""
+        if not self.ensure_ready():
+            logging.warning("LLM not ready, returning original text.")
+            return user_text
+        persona = normalize_persona(persona)
+        system_prompt = compose_persona_system_prompt(persona)
+        temp = persona.get("temperature")
+        temperature = _clamp_persona_temperature(temp, 0.3) if temp is not None else 0.3
+        cap = persona.get("max_completion_tokens") or max_output_tokens
+        return self._call_api(
+            user_text,
+            system_prompt,
+            temperature=temperature,
+            max_output_tokens=cap,
+            few_shot=persona.get("few_shot") or None,
+        )
 
     def process_custom_prompt(self, user_text, system_prompt, max_output_tokens=None, chunk_size=750):
         """

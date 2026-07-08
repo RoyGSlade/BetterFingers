@@ -427,6 +427,14 @@ async function fetchTtsVoices(timeoutMs = 2500) {
   return fetchJson(TTS_VOICES_URL, timeoutMs);
 }
 
+async function lintPersona(fields = {}, timeoutMs = 5000) {
+  return postJson(`${PERSONAS_URL}/lint`, fields, timeoutMs);
+}
+
+async function testPersona(fields = {}, timeoutMs = 120000) {
+  return postJson(`${PERSONAS_URL}/test`, fields, timeoutMs);
+}
+
 async function getPersonaV2(name, timeoutMs = 2500) {
   return fetchJson(`${PERSONAS_URL}/${encodeURIComponent(name)}`, timeoutMs);
 }
@@ -634,6 +642,8 @@ export {
   fetchBuiltinPersonaNames,
   getPersonaV2,
   fetchTtsVoices,
+  lintPersona,
+  testPersona,
   savePersona,
   deletePersona,
   fetchDrafts,

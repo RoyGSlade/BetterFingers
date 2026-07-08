@@ -1838,3 +1838,16 @@ body.theme-light.high-contrast {
   background: var(--bg-soft);
 }
 .macro-pair { font-size: 0.9rem; word-break: break-word; }
+
+/* Phase 7: persona builder few-shot rows, lint warnings, and test panel. */
+.few-shot-row { display: flex; align-items: center; gap: 8px; }
+.few-shot-row .few-shot-raw,
+.few-shot-row .few-shot-out { flex: 1 1 0; min-width: 0; }
+.few-shot-row .few-shot-remove { flex: 0 0 auto; padding: 4px 10px; }
+.lint-warning-list { margin: 6px 0 0; padding-left: 18px; }
+.lint-warning-list li { margin: 2px 0; }
+.wizard-test-result {
+  white-space: pre-wrap;
+  min-height: 44px;
+  overflow-wrap: anywhere;
+}

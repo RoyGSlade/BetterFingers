@@ -349,6 +349,24 @@ Files:
 
 ## Phase 7: Persona Builder Robustness UI
 
+> **Status: ✅ DONE (2026-07-08).** Backend: `normalize_persona`/`default_persona`
+> gained `output_policy` (preserve/tighten/expand/summarize), `safety_mode`
+> (strict/light/creative), per-persona `max_completion_tokens` and `chunk_size`
+> (nullable overrides). `compose_persona_system_prompt` emits OUTPUT POLICY /
+> SAFETY instructions only for non-default values (prompt-only personas
+> unchanged); `process_fast_lane` applies the per-persona token/chunk overrides;
+> new `LLMEngine.run_persona_preview()` powers the test panel; new `lint_persona()`
+> implements all 5 prompt-lint rules (non-blocking). Server: `PersonaRequest`
+> persists the 4 new fields, plus new **`POST /personas/lint`** and
+> **`POST /personas/test`** routes. Renderer: wizard Advanced block gains output-policy
+> + safety-mode selects, per-persona max-tokens + chunk-size inputs, a dynamic
+> few-shot example pairs UI (add/remove, capped at 5), a "Check prompt" lint panel,
+> and a "Run sample" test panel; `backend.js` adds `lintPersona()`/`testPersona()`;
+> `base.css` styles the new controls. Lint is advisory — save is only blocked when
+> the persona is actually invalid (empty prompt / bad temperature). Tests: 12 new
+> across `tests/test_llm_persona_management.py` + `tests/test_server_persona_routes.py`.
+> Runtime-verified (lint rules + compose). Suite 350 green.
+
 ### Add Builder Controls
 
 Add fields to the persona wizard:

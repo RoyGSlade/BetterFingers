@@ -119,6 +119,57 @@ class PersonaRoutesTests(unittest.TestCase):
                 self.assertEqual(names, set(llm_engine.get_builtin_persona_names()))
                 self.assertIn("True Janitor", names)
 
+    def test_builder_fields_round_trip(self):
+        with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ):
+            with self._client() as client:
+                body = {
+                    "name": "Builder",
+                    "prompt": "Output only the rewritten text.",
+                    "output_policy": "tighten",
+                    "safety_mode": "light",
+                    "max_completion_tokens": 2048,
+                    "chunk_size": 400,
+                }
+                resp = client.post("/personas", json=body)
+                self.assertEqual(resp.status_code, 200, resp.text)
+                data = client.get("/personas/Builder").json()
+                self.assertEqual(data["output_policy"], "tighten")
+                self.assertEqual(data["safety_mode"], "light")
+                self.assertEqual(data["max_completion_tokens"], 2048)
+                self.assertEqual(data["chunk_size"], 400)
+
+    def test_lint_route_returns_warnings(self):
+        with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ):
+            with self._client() as client:
+                resp = client.post("/personas/lint", json={"prompt": "Rewrite the text."})
+                self.assertEqual(resp.status_code, 200, resp.text)
+                warnings = resp.json()["warnings"]
+                self.assertTrue(any("ONLY the rewritten text" in w for w in warnings))
+
+                clean = client.post("/personas/lint", json={"prompt": "Output only the rewritten text."})
+                self.assertEqual(clean.json()["warnings"], [])
+
+    def test_test_route_runs_sample_through_engine(self):
+        class DummyEngine:
+            def run_persona_preview(self, persona, sample, max_output_tokens=None):
+                return f"CLEANED[{sample}]"
+
+        with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ), patch.object(server, "get_selected_llm_engine", return_value=DummyEngine()):
+            with self._client() as client:
+                resp = client.post("/personas/test", json={"prompt": "Rewrite.", "sample": "hello there"})
+                self.assertEqual(resp.status_code, 200, resp.text)
+                self.assertEqual(resp.json()["result"], "CLEANED[hello there]")
+
+                # Empty sample is rejected.
+                bad = client.post("/personas/test", json={"prompt": "Rewrite.", "sample": "   "})
+                self.assertEqual(bad.status_code, 400)
+
 
 if __name__ == "__main__":
     unittest.main()

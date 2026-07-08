@@ -58,6 +58,8 @@ import {
   fetchBuiltinPersonaNames,
   getPersonaV2,
   fetchTtsVoices,
+  lintPersona,
+  testPersona,
   savePersona,
   deletePersona,
   renameProfile,
@@ -173,6 +175,17 @@ const wizardModelHint = document.getElementById('wizardModelHint');
 const wizardFormatCaps = document.getElementById('wizardFormatCaps');
 const wizardFormatPunctuation = document.getElementById('wizardFormatPunctuation');
 const wizardFormatSignoff = document.getElementById('wizardFormatSignoff');
+const wizardOutputPolicy = document.getElementById('wizardOutputPolicy');
+const wizardSafetyMode = document.getElementById('wizardSafetyMode');
+const wizardMaxCompletionTokens = document.getElementById('wizardMaxCompletionTokens');
+const wizardChunkSize = document.getElementById('wizardChunkSize');
+const wizardFewShotList = document.getElementById('wizardFewShotList');
+const wizardAddFewShotButton = document.getElementById('wizardAddFewShotButton');
+const wizardLintButton = document.getElementById('wizardLintButton');
+const wizardLintWarnings = document.getElementById('wizardLintWarnings');
+const wizardTestSample = document.getElementById('wizardTestSample');
+const wizardTestButton = document.getElementById('wizardTestButton');
+const wizardTestResult = document.getElementById('wizardTestResult');
 
 let loadedPersonas = {};
 
@@ -1642,7 +1655,67 @@ function initWizard() {
     if (caps !== 'none' || !punctuation || signoff) {
       extra.format = { caps, punctuation, signoff };
     }
+
+    // Selects always carry a meaningful value, so send them so the user can also
+    // reset back to the neutral default.
+    extra.output_policy = wizardOutputPolicy?.value || 'preserve';
+    extra.safety_mode = wizardSafetyMode?.value || 'strict';
+
+    const maxTok = wizardMaxCompletionTokens?.value?.trim();
+    if (maxTok) {
+      const n = Number(maxTok);
+      if (Number.isFinite(n)) extra.max_completion_tokens = n;
+    }
+    const chunk = wizardChunkSize?.value?.trim();
+    if (chunk) {
+      const n = Number(chunk);
+      if (Number.isFinite(n)) extra.chunk_size = n;
+    }
+
+    const fewShot = collectFewShotExamples();
+    if (fewShot.length) extra.few_shot = fewShot;
+
     return extra;
+  }
+
+  function addFewShotRow(raw = '', out = '') {
+    if (!wizardFewShotList) return;
+    const row = document.createElement('div');
+    row.className = 'few-shot-row flex-align-center-gap8 mt-12';
+    const rawInput = document.createElement('input');
+    rawInput.className = 'settings-input few-shot-raw';
+    rawInput.type = 'text';
+    rawInput.placeholder = 'example input';
+    rawInput.value = raw;
+    const outInput = document.createElement('input');
+    outInput.className = 'settings-input few-shot-out';
+    outInput.type = 'text';
+    outInput.placeholder = 'desired output';
+    outInput.value = out;
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'secondary-button few-shot-remove';
+    removeBtn.type = 'button';
+    removeBtn.textContent = '✕';
+    removeBtn.addEventListener('click', () => row.remove());
+    row.append(rawInput, outInput, removeBtn);
+    wizardFewShotList.appendChild(row);
+  }
+
+  function collectFewShotExamples() {
+    if (!wizardFewShotList) return [];
+    const examples = [];
+    for (const row of wizardFewShotList.querySelectorAll('.few-shot-row')) {
+      const raw = row.querySelector('.few-shot-raw')?.value?.trim() || '';
+      const out = row.querySelector('.few-shot-out')?.value?.trim() || '';
+      if (raw && out) examples.push({ raw, out });
+    }
+    return examples.slice(0, 5);
+  }
+
+  function renderFewShotRows(examples) {
+    if (!wizardFewShotList) return;
+    wizardFewShotList.innerHTML = '';
+    (Array.isArray(examples) ? examples : []).forEach((ex) => addFewShotRow(ex?.raw || '', ex?.out || ''));
   }
 
   function resetAdvancedPersonaFields() {
@@ -1651,6 +1724,14 @@ function initWizard() {
     if (wizardFormatCaps) wizardFormatCaps.value = 'none';
     if (wizardFormatPunctuation) wizardFormatPunctuation.checked = true;
     if (wizardFormatSignoff) wizardFormatSignoff.value = '';
+    if (wizardOutputPolicy) wizardOutputPolicy.value = 'preserve';
+    if (wizardSafetyMode) wizardSafetyMode.value = 'strict';
+    if (wizardMaxCompletionTokens) wizardMaxCompletionTokens.value = '';
+    if (wizardChunkSize) wizardChunkSize.value = '';
+    renderFewShotRows([]);
+    if (wizardLintWarnings) { wizardLintWarnings.textContent = ''; delete wizardLintWarnings.dataset.tone; }
+    if (wizardTestResult) wizardTestResult.textContent = '';
+    if (wizardTestSample) wizardTestSample.value = '';
   }
 
   function populateAdvancedPersonaFields(persona) {
@@ -1667,6 +1748,17 @@ function initWizard() {
     if (wizardFormatCaps) wizardFormatCaps.value = fmt.caps || 'none';
     if (wizardFormatPunctuation) wizardFormatPunctuation.checked = fmt.punctuation !== false;
     if (wizardFormatSignoff) wizardFormatSignoff.value = fmt.signoff || '';
+    if (wizardOutputPolicy) wizardOutputPolicy.value = persona.output_policy || 'preserve';
+    if (wizardSafetyMode) wizardSafetyMode.value = persona.safety_mode || 'strict';
+    if (wizardMaxCompletionTokens) {
+      wizardMaxCompletionTokens.value = (persona.max_completion_tokens === null || persona.max_completion_tokens === undefined)
+        ? '' : String(persona.max_completion_tokens);
+    }
+    if (wizardChunkSize) {
+      wizardChunkSize.value = (persona.chunk_size === null || persona.chunk_size === undefined)
+        ? '' : String(persona.chunk_size);
+    }
+    renderFewShotRows(persona.few_shot);
   }
 
   // When the entered name matches an existing persona, pull its saved v2 fields
@@ -1736,6 +1828,73 @@ function initWizard() {
   wizardRegeneratePromptButton?.addEventListener('click', () => {
     editingExistingPersona = false;
     generatePromptPreview();
+  });
+
+  wizardAddFewShotButton?.addEventListener('click', () => addFewShotRow());
+
+  wizardLintButton?.addEventListener('click', async () => {
+    const prompt = wizardPromptPreview?.value?.trim() || '';
+    const advanced = gatherAdvancedPersonaFields();
+    const fields = {
+      prompt,
+      temperature: advanced.temperature,
+      safety_mode: advanced.safety_mode,
+      output_policy: advanced.output_policy,
+      chunk_size: advanced.chunk_size,
+    };
+    if (wizardLintWarnings) {
+      wizardLintWarnings.textContent = 'Checking…';
+      wizardLintWarnings.dataset.tone = 'info';
+    }
+    try {
+      const res = await lintPersona(fields);
+      const warnings = Array.isArray(res?.warnings) ? res.warnings : [];
+      if (!wizardLintWarnings) return;
+      if (!warnings.length) {
+        wizardLintWarnings.textContent = 'No warnings — looks good.';
+        wizardLintWarnings.dataset.tone = 'success';
+      } else {
+        wizardLintWarnings.textContent = '';
+        const ul = document.createElement('ul');
+        ul.className = 'lint-warning-list';
+        warnings.forEach((w) => {
+          const li = document.createElement('li');
+          li.textContent = w;
+          ul.appendChild(li);
+        });
+        wizardLintWarnings.appendChild(ul);
+        wizardLintWarnings.dataset.tone = 'warning';
+      }
+    } catch (err) {
+      if (wizardLintWarnings) {
+        wizardLintWarnings.textContent = `Lint failed: ${err.message}`;
+        wizardLintWarnings.dataset.tone = 'danger';
+      }
+    }
+  });
+
+  wizardTestButton?.addEventListener('click', async () => {
+    const prompt = wizardPromptPreview?.value?.trim() || '';
+    const sample = wizardTestSample?.value?.trim() || '';
+    if (!prompt) {
+      setMessage(wizardMessage, 'Enter a prompt before testing.', 'danger');
+      return;
+    }
+    if (!sample) {
+      if (wizardTestResult) wizardTestResult.textContent = 'Enter a sample utterance to test.';
+      return;
+    }
+    const fields = { prompt, sample, ...gatherAdvancedPersonaFields() };
+    wizardTestButton.disabled = true;
+    if (wizardTestResult) wizardTestResult.textContent = 'Running…';
+    try {
+      const res = await testPersona(fields);
+      if (wizardTestResult) wizardTestResult.textContent = res?.result || '(no output)';
+    } catch (err) {
+      if (wizardTestResult) wizardTestResult.textContent = `Test failed: ${err.message}`;
+    } finally {
+      wizardTestButton.disabled = false;
+    }
   });
 
   wizardPrevButton?.addEventListener('click', () => {

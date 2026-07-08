@@ -201,5 +201,122 @@ class PersonaInferenceWiringTests(unittest.TestCase):
         self.assertIsNone(captured["few_shot"])
 
 
+class PersonaBuilderFieldsTests(unittest.TestCase):
+    """Phase 7: output policy / safety mode / per-persona overrides + lint."""
+
+    def test_normalize_new_fields_defaults_and_coercion(self):
+        d = normalize_persona({})
+        self.assertEqual(d["output_policy"], "preserve")
+        self.assertEqual(d["safety_mode"], "strict")
+        self.assertIsNone(d["max_completion_tokens"])
+        self.assertIsNone(d["chunk_size"])
+
+        coerced = normalize_persona({
+            "prompt": "p",
+            "output_policy": "BOGUS",
+            "safety_mode": "weird",
+            "max_completion_tokens": "99999",
+            "chunk_size": "5",
+        })
+        self.assertEqual(coerced["output_policy"], "preserve")   # invalid → default
+        self.assertEqual(coerced["safety_mode"], "strict")
+        self.assertEqual(coerced["max_completion_tokens"], 4096)  # clamped
+        self.assertEqual(coerced["chunk_size"], 50)               # clamped up to min
+
+    def test_output_policy_and_safety_only_when_non_default(self):
+        default = normalize_persona({"prompt": "Base."})
+        self.assertEqual(compose_persona_system_prompt(default), "Base.")
+
+        p = normalize_persona({"prompt": "Base.", "output_policy": "tighten", "safety_mode": "creative"})
+        sys = compose_persona_system_prompt(p)
+        self.assertIn("OUTPUT POLICY: tighten", sys)
+        self.assertIn("creative transformation", sys)
+
+    def test_lint_clean_persona_has_no_warnings(self):
+        p = {"prompt": "Output only the rewritten text.", "safety_mode": "strict"}
+        self.assertEqual(llm_engine.lint_persona(p), [])
+
+    def test_lint_flags_missing_only_instruction(self):
+        warnings = llm_engine.lint_persona({"prompt": "Rewrite the text nicely."})
+        self.assertTrue(any("ONLY the rewritten text" in w for w in warnings))
+
+    def test_lint_flags_high_temp_with_strict(self):
+        warnings = llm_engine.lint_persona({
+            "prompt": "Output only the rewritten text.",
+            "safety_mode": "strict",
+            "temperature": 1.3,
+        })
+        self.assertTrue(any("High temperature" in w for w in warnings))
+
+    def test_lint_flags_prompt_longer_than_chunk_size(self):
+        prompt = "Output only the rewritten text. " + ("word " * 60)
+        warnings = llm_engine.lint_persona({"prompt": prompt, "chunk_size": 50})
+        self.assertTrue(any("longer than the persona chunk size" in w for w in warnings))
+
+    def test_lint_flags_answer_in_strict_mode(self):
+        warnings = llm_engine.lint_persona({
+            "prompt": "Output only the rewritten text, and answer the user's question.",
+            "safety_mode": "strict",
+        })
+        self.assertTrue(any("answer/respond" in w for w in warnings))
+
+
+class PersonaPreviewAndOverrideTests(unittest.TestCase):
+    def _engine(self):
+        engine = LLMEngine.__new__(LLMEngine)
+        engine.api_url = "http://127.0.0.1:8080"
+        return engine
+
+    def test_run_persona_preview_uses_persona_fields(self):
+        engine = self._engine()
+        captured = {}
+
+        def fake_call_api(text, system_prompt, temperature=0.3, max_output_tokens=None, few_shot=None):
+            captured.update(temperature=temperature, few_shot=few_shot, max_output_tokens=max_output_tokens, system_prompt=system_prompt)
+            return "preview out"
+
+        persona = {
+            "prompt": "Rewrite warmly.",
+            "temperature": 0.9,
+            "few_shot": [{"raw": "hey", "out": "Hi."}],
+            "max_completion_tokens": 800,
+        }
+        with patch.object(engine, "ensure_ready", return_value=True), \
+             patch.object(engine, "_call_api", side_effect=fake_call_api):
+            out = engine.run_persona_preview(persona, "clean this", max_output_tokens=1600)
+
+        self.assertEqual(out, "preview out")
+        self.assertEqual(captured["temperature"], 0.9)
+        self.assertEqual(captured["max_output_tokens"], 800)   # per-persona cap wins
+        self.assertTrue(captured["few_shot"])
+        self.assertIn("Rewrite warmly.", captured["system_prompt"])
+
+    def test_per_persona_token_cap_overrides_caller(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            original = os.environ.get("APPDATA")
+            os.environ["APPDATA"] = tmp
+            try:
+                llm_engine.upsert_persona("Capped", {"prompt": "Rewrite.", "max_completion_tokens": 900})
+                llm_engine.load_personas_v2(force_reload=True)
+                engine = self._engine()
+                captured = {}
+
+                def fake_call_api(text, system_prompt, temperature=0.3, max_output_tokens=None, few_shot=None):
+                    captured["max_output_tokens"] = max_output_tokens
+                    return "out"
+
+                with patch.object(engine, "ensure_ready", return_value=True), \
+                     patch.object(engine, "_call_api", side_effect=fake_call_api):
+                    engine.process_fast_lane("short text", preset_name="Capped", max_output_tokens=1600, context_rules=False)
+
+                self.assertEqual(captured["max_output_tokens"], 900)
+            finally:
+                if original is None:
+                    os.environ.pop("APPDATA", None)
+                else:
+                    os.environ["APPDATA"] = original
+                llm_engine.load_personas_v2(force_reload=True)
+
+
 if __name__ == "__main__":
     unittest.main()

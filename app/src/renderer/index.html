@@ -625,6 +625,52 @@
                           <span class="status-label">Sign-off (optional)</span>
                           <input id="wizardFormatSignoff" class="settings-input" type="text" placeholder="e.g. — Best, John" />
                         </label>
+                        <label>
+                          <span class="status-label">Output policy</span>
+                          <select id="wizardOutputPolicy" class="settings-input">
+                            <option value="preserve">Preserve length</option>
+                            <option value="tighten">Tighten</option>
+                            <option value="expand">Expand slightly</option>
+                            <option value="summarize">Summarize</option>
+                          </select>
+                        </label>
+                        <label>
+                          <span class="status-label">Safety mode</span>
+                          <select id="wizardSafetyMode" class="settings-input">
+                            <option value="strict">Strict rewrite only</option>
+                            <option value="light">Allow light answering</option>
+                            <option value="creative">Creative transformation</option>
+                          </select>
+                        </label>
+                        <label>
+                          <span class="status-label">Max completion tokens (optional)</span>
+                          <input id="wizardMaxCompletionTokens" class="settings-input" type="number" min="512" max="4096" placeholder="profile default" />
+                        </label>
+                        <label>
+                          <span class="status-label">Chunk size words (optional)</span>
+                          <input id="wizardChunkSize" class="settings-input" type="number" min="50" max="5000" placeholder="profile default" />
+                        </label>
+                      </div>
+
+                      <div class="mt-12">
+                        <span class="status-label">Few-shot examples (optional)</span>
+                        <p class="setting-desc">Show the model example input → desired output pairs. Up to 5 are used.</p>
+                        <div id="wizardFewShotList"></div>
+                        <button id="wizardAddFewShotButton" class="secondary-button mt-12" type="button">Add example</button>
+                      </div>
+
+                      <div class="mt-12">
+                        <button id="wizardLintButton" class="secondary-button" type="button">Check prompt</button>
+                        <div id="wizardLintWarnings" class="warmup-message mt-12" role="status" aria-live="polite"></div>
+                      </div>
+
+                      <div class="mt-12">
+                        <span class="status-label">Test panel</span>
+                        <textarea id="wizardTestSample" class="settings-input textarea-small" placeholder="Type a sample utterance to test this persona..."></textarea>
+                        <div class="action-row mt-12">
+                          <button id="wizardTestButton" class="secondary-button" type="button">Run sample</button>
+                        </div>
+                        <div id="wizardTestResult" class="settings-input textarea-small mt-12 wizard-test-result"></div>
                       </div>
                     </details>
                   </div>
