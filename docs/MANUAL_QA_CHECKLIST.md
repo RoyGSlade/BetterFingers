@@ -75,6 +75,20 @@ files involved so a failure is easy to trace.
 - ☐ **Macros (C11):** define trigger→expansion; speak the trigger as a whole
   phrase → expands; a substring (e.g. "beta" for "eta") does **not** expand.
   Toggle "Voice Macros" off → no expansion.
+- ☐ **Macros persistence (bugfix Phase 6 regression):** add a macro, then
+  reopen the Voice Macros settings section (or restart the app) — the macro
+  list still loads correctly (previously: `get_macros()` crashed on any read
+  after a save, so the list would silently fail to populate / the endpoint
+  would 500).
+- ☐ **Corrupted dictionary/macros files (bugfix Phase 6):** manually put
+  invalid JSON in `dictionary.json` or `macros.json` in the user-data folder,
+  then launch — app starts normally with an empty list (not a crash); the
+  corrupted file is renamed to `*.corrupt` next to the original (check the
+  logs for a warning), and adding a new term/macro saves correctly afterward.
+- ☐ **Latency HUD post-processing row (bugfix Phase 6):** after an utterance,
+  the HUD/`/metrics` shows a "Dictionary/commands/macros" row between
+  Transcribe and LLM cleanup (previously that time was silently folded into
+  the Transcribe number).
 
 ## Audio, history, privacy (C6, C7, C8, C10)
 

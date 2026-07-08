@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import threading
+import time
 
 from utils import get_user_data_path
 
@@ -31,13 +32,34 @@ def _dictionary_path():
     return os.path.join(get_user_data_path(), "dictionary.json")
 
 
+def _quarantine_corrupt_file(path):
+    """Move an unparseable JSON file aside instead of silently losing it, so
+    the pipeline recovers cleanly and the original data isn't overwritten by
+    the next save. Best-effort; failures here are non-fatal."""
+    try:
+        corrupt_path = f"{path}.corrupt"
+        if os.path.exists(corrupt_path):
+            corrupt_path = f"{path}.{int(time.time())}.corrupt"
+        os.replace(path, corrupt_path)
+    except OSError:
+        pass
+
+
 def get_terms():
     """Return the list of dictionary terms (strings), preserving canonical casing."""
+    path = _dictionary_path()
     with _lock:
         try:
-            with open(_dictionary_path(), "r", encoding="utf-8") as handle:
+            with open(path, "r", encoding="utf-8") as handle:
                 data = json.load(handle)
-        except (OSError, ValueError):
+        except FileNotFoundError:
+            return []
+        except OSError as exc:
+            logging.warning(f"Could not read dictionary.json: {exc}")
+            return []
+        except ValueError as exc:
+            logging.warning(f"dictionary.json is corrupted ({exc}); quarantining it and starting fresh.")
+            _quarantine_corrupt_file(path)
             return []
     if isinstance(data, dict):
         data = data.get("terms", [])

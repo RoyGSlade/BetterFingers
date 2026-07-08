@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import threading
+import time
 
 from utils import get_user_data_path
 
@@ -19,16 +20,43 @@ def _macros_path():
     return os.path.join(get_user_data_path(), "macros.json")
 
 
+def _quarantine_corrupt_file(path):
+    """Move an unparseable JSON file aside instead of silently losing it, so
+    the pipeline recovers cleanly and the original data isn't overwritten by
+    the next save. Best-effort; failures here are non-fatal."""
+    try:
+        corrupt_path = f"{path}.corrupt"
+        if os.path.exists(corrupt_path):
+            corrupt_path = f"{path}.{int(time.time())}.corrupt"
+        os.replace(path, corrupt_path)
+    except OSError:
+        pass
+
+
 def get_macros():
     """List of {trigger, expansion} dicts."""
+    path = _macros_path()
     with _lock:
         try:
-            with open(_macros_path(), "r", encoding="utf-8") as handle:
+            with open(path, "r", encoding="utf-8") as handle:
                 data = json.load(handle)
-        except (OSError, ValueError):
+        except FileNotFoundError:
+            return []
+        except OSError as exc:
+            logging.warning(f"Could not read macros.json: {exc}")
+            return []
+        except ValueError as exc:
+            logging.warning(f"macros.json is corrupted ({exc}); quarantining it and starting fresh.")
+            _quarantine_corrupt_file(path)
             return []
     if isinstance(data, dict):
-        data = [{"trigger": k, "expansion": v} for k, v in data.get("macros", data).items()]
+        macros_field = data.get("macros", data)
+        if isinstance(macros_field, dict):
+            # Legacy format: {"macros": {trigger: expansion, ...}}.
+            data = [{"trigger": k, "expansion": v} for k, v in macros_field.items()]
+        else:
+            # Current format written by _save(): {"macros": [{"trigger":.., "expansion":..}, ...]}.
+            data = macros_field
     result = []
     seen = set()
     for item in data or []:

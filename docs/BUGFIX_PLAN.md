@@ -11,6 +11,12 @@ suite is trustworthy for the rest of the work). Rules for every phase: full
 `python3 -m pytest` stays green, `node --check` any touched JS, one commit per
 phase, update this file's checkboxes as work lands.
 
+**STATUS: all 7 phases complete.** 276 → 307 tests, all green, tree clean.
+All 3 HIGH, all 8 MEDIUM, and all 11 LOW findings addressed, plus one
+additional bug discovered and fixed while writing Phase 6 tests (a real
+`macros.json` round-trip crash — see Phase 6). See the Progress checklist at
+the bottom of this file for the commit hash of each phase.
+
 ---
 
 ## Phase 0 — make the suite trustworthy (do first)
@@ -250,4 +256,7 @@ closed, LOWs closed except the explicit out-of-scope features.
 - [x] Phase 3 — dashboard reopen from tray
 - [x] Phase 4 — history retention, single profile read, persona deepcopy, dead deps
 - [x] Phase 5 — race guards, escaping, builtins endpoint, hidden-poll, [hidden] CSS
-- [ ] Phase 6 — stage timing, corrupt-store visibility, gitignore, unused import, doc note
+- [x] Phase 6 — stage timing, corrupt-store visibility, gitignore, unused import, doc note
+      (BONUS: found + fixed a real macros.json round-trip crash while adding tests
+      for corrupt-file handling — get_macros() called .items() on the list _save()
+      writes, so any saved macro crashed the very next read)

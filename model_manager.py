@@ -539,6 +539,9 @@ def parse_llama_server_build(version_text):
 
 
 def required_llama_server_build(model_id=None):
+    # Only the gemma-4 family has a known minimum build today; a new model
+    # family with its own llama.cpp runtime requirement must be added here
+    # explicitly, or it silently gets 0 (no minimum enforced).
     info = AVAILABLE_MODELS.get(model_id or DEFAULT_MODEL, {})
     if str(info.get("family", "")).lower() == "gemma-4":
         return GEMMA4_MIN_LLAMA_CPP_BUILD

@@ -29,7 +29,6 @@ env/
 # Local secrets / machine-specific environment
 .env
 .env.*
-!.env.example
 
 # Repo-local runtime assets
 .betterfingers/

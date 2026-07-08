@@ -2112,12 +2112,13 @@ function renderMetricsHud(summary) {
   }
   const fmt = (v) => (v === null || v === undefined ? '—' : `${v} ms`);
   const row = (label, stage) =>
-    `<tr><th scope="row">${label}</th><td>${fmt(stage.last_ms)}</td><td>${fmt(stage.avg_ms)}</td>` +
-    `<td>${fmt(stage.p50_ms)}</td><td>${fmt(stage.p95_ms)}</td></tr>`;
+    `<tr><th scope="row">${label}</th><td>${fmt(stage?.last_ms)}</td><td>${fmt(stage?.avg_ms)}</td>` +
+    `<td>${fmt(stage?.p50_ms)}</td><td>${fmt(stage?.p95_ms)}</td></tr>`;
   el.innerHTML =
     `<table class="metrics-table"><thead><tr><th scope="col">Stage</th><th scope="col">Last</th>` +
     `<th scope="col">Avg</th><th scope="col">p50</th><th scope="col">p95</th></tr></thead><tbody>` +
     row('Transcribe', summary.stt) +
+    row('Dictionary/commands/macros', summary.post) +
     row('LLM cleanup', summary.llm) +
     row('Total', summary.total) +
     `</tbody></table><p class="section-desc">Over the last ${summary.count} utterance(s).</p>`;

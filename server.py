@@ -14,7 +14,7 @@ import pyperclip
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from llm_engine import get_engine, get_engine_if_initialized
 from transcriber import Transcriber
 from hotkey_manager import HotkeyManager
@@ -949,11 +949,12 @@ def stop_recording_runtime():
     return {"ok": True, "recording": False, "message": "Recording stopped. Processing audio..."}
 
 
-def record_pipeline_metrics(stt_ms=None, llm_ms=None, total_ms=None, audio_seconds=0.0, chars=0):
+def record_pipeline_metrics(stt_ms=None, post_ms=None, llm_ms=None, total_ms=None, audio_seconds=0.0, chars=0):
     """Append one utterance's pipeline latency sample (C10 HUD)."""
     entry = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "stt_ms": round(stt_ms, 1) if stt_ms is not None else None,
+        "post_ms": round(post_ms, 1) if post_ms is not None else None,
         "llm_ms": round(llm_ms, 1) if llm_ms is not None else None,
         "total_ms": round(total_ms, 1) if total_ms is not None else None,
         "audio_seconds": round(float(audio_seconds or 0.0), 2),
@@ -992,6 +993,7 @@ def get_pipeline_metrics_summary():
     return {
         "count": len(samples),
         "stt": stage_stats("stt_ms"),
+        "post": stage_stats("post_ms"),
         "llm": stage_stats("llm_ms"),
         "total": stage_stats("total_ms"),
         "recent": samples[-10:],
@@ -1022,6 +1024,7 @@ def process_recording_result(recording_result):
         logging.debug(f"Could not persist recording: {exc}")
     pipeline_t0 = time.perf_counter()
     stt_ms = None
+    post_ms = None
     llm_ms = None
     try:
         check_cancelled()
@@ -1041,6 +1044,9 @@ def process_recording_result(recording_result):
             raw_text, confidence = trans.transcribe_with_confidence(audio_data, hotwords=hotwords)
         else:
             raw_text = trans.transcribe(audio_data)
+        stt_ms = (time.perf_counter() - _stt_start) * 1000.0
+
+        _post_start = time.perf_counter()
         # Post-ASR correction snaps near-miss tokens back to dictionary terms.
         if raw_text and dict_terms:
             raw_text = dictionary.correct_text(raw_text, dict_terms)
@@ -1052,7 +1058,7 @@ def process_recording_result(recording_result):
         # Voice macros (C11): expand user snippets like "my address".
         if raw_text and pipeline_flags["macros"]:
             raw_text = macros.apply_macros(raw_text)
-        stt_ms = (time.perf_counter() - _stt_start) * 1000.0
+        post_ms = (time.perf_counter() - _post_start) * 1000.0
 
         check_cancelled()
         blocked, reasons = should_block_for_no_audio(
@@ -1111,6 +1117,7 @@ def process_recording_result(recording_result):
         )
         record_pipeline_metrics(
             stt_ms=stt_ms,
+            post_ms=post_ms,
             llm_ms=llm_ms,
             total_ms=(time.perf_counter() - pipeline_t0) * 1000.0,
             audio_seconds=float(getattr(recording_result, "duration_seconds", 0.0) or 0.0),
