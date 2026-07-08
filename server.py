@@ -2135,8 +2135,13 @@ def get_privacy_report():
         },
     ]
 
+    history_db = history_store.get_db_path()
+    recordings_dir = str(recordings.get_recordings_dir())
+
     data_locations = [
         {"name": "Draft history", "path": history_file, "bytes": _path_size_bytes(history_file)},
+        {"name": "Searchable history (database)", "path": history_db, "bytes": _path_size_bytes(history_db)},
+        {"name": "Raw audio recordings", "path": recordings_dir, "bytes": _path_size_bytes(recordings_dir)},
         {"name": "Cloned voices", "path": voices_dir, "bytes": _path_size_bytes(voices_dir)},
         {"name": "Models", "path": str(get_models_dir()), "bytes": _path_size_bytes(str(get_models_dir()))},
     ]
@@ -2146,7 +2151,7 @@ def get_privacy_report():
         "network_touchpoints": network_touchpoints,
         "data_locations": data_locations,
         "retention": {
-            "recordings_persisted_to_disk": False,
+            "recordings_persisted_to_disk": True,
             "recordings_in_memory": recordings_in_memory,
             "drafts_in_memory": drafts_in_memory,
             "draft_history_limit": MAX_DRAFT_HISTORY,
@@ -2165,9 +2170,11 @@ class PrivacyWipeRequest(BaseModel):
 
 @app.post("/privacy/wipe")
 async def privacy_wipe(request: PrivacyWipeRequest = PrivacyWipeRequest()):
-    """Delete app-generated conversational data (drafts, history, in-memory
-    recordings). Models and profiles are intentionally NOT touched; cloned
-    voices are removed only when explicitly requested."""
+    """Delete app-generated conversational data: drafts, the draft-history
+    file, the searchable history database (C8), and persisted raw-audio
+    recordings (C6), plus in-memory queues. Models and profiles are
+    intentionally NOT touched; cloned voices are removed only when
+    explicitly requested."""
     cleared = {}
     with draft_lock:
         cleared["drafts"] = len(draft_queue)
@@ -2185,6 +2192,9 @@ async def privacy_wipe(request: PrivacyWipeRequest = PrivacyWipeRequest()):
     except OSError as exc:
         logging.warning(f"Could not remove draft history file: {exc}")
         cleared["history_file_removed"] = False
+
+    cleared["history_db_cleared"] = history_store.clear()
+    cleared["recordings_files_removed"] = recordings.clear_recordings()
 
     if request.wipe_voices:
         voices_dir = get_app_data_dir() / "voices"

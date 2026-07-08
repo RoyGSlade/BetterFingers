@@ -13,11 +13,15 @@ import threading
 from utils import get_user_data_path
 
 _lock = threading.Lock()
-_initialized = False
+_initialized_path = None
+
+
+def get_db_path():
+    return os.path.join(get_user_data_path(), "history.db")
 
 
 def _db_path():
-    return os.path.join(get_user_data_path(), "history.db")
+    return get_db_path()
 
 
 def _connect():
@@ -59,16 +63,23 @@ def _ensure_schema(conn):
 
 
 def init():
-    global _initialized
+    """Ensure the schema exists for the current data path.
+
+    Keyed by resolved db path (not a plain bool) so switching user-data
+    directories mid-process — e.g. across tests, or a profile/data-dir
+    change — re-creates the schema instead of silently skipping it.
+    """
+    global _initialized_path
+    db_path = get_db_path()
     with _lock:
-        if _initialized:
+        if _initialized_path == db_path:
             return
         try:
             conn = _connect()
             try:
                 _ensure_schema(conn)
                 conn.commit()
-                _initialized = True
+                _initialized_path = db_path
             finally:
                 conn.close()
         except Exception as exc:
