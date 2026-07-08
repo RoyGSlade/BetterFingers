@@ -51,10 +51,16 @@ files involved so a failure is easy to trace.
 - ☐ Persona wizard → **Advanced** block: set temperature / preferred model /
   capitalization / punctuation / sign-off, save → success toast.
 - ☐ Re-open the same persona by name (blur the name field) → Advanced fields
-  repopulate from the saved values (`GET /personas/{name}`).
+  **and its existing prompt** repopulate from the saved values
+  (`GET /personas/{name}`) — the prompt is NOT silently replaced by a fresh
+  wizard-generated one.
+- ☐ Click **"Regenerate from wizard"** while editing an existing persona →
+  prompt is replaced with the wizard-generated text as before.
 - ☐ Save a **prompt-only** edit on that persona → the previously-set temperature
   is **preserved** (partial-merge).
 - ☐ Temperature outside 0–2 → save fails with a 400 message.
+- ☐ Delete a persona → name field, prompt preview, and Advanced fields all
+  clear (no stale data left visible for the next persona created).
 - ☐ On disk, `personas.yaml` now has `schema_version: 2` and nested dicts.
   _Files: `llm_engine.py`, `server.py` `/personas*`, `app/src/renderer/*`._
 

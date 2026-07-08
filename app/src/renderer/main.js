@@ -166,6 +166,7 @@ const wizardRuleNoPreamble = document.getElementById('wizardRuleNoPreamble');
 const wizardRuleSanitize = document.getElementById('wizardRuleSanitize');
 const wizardPersonaName = document.getElementById('wizardPersonaName');
 const wizardPromptPreview = document.getElementById('wizardPromptPreview');
+const wizardRegeneratePromptButton = document.getElementById('wizardRegeneratePromptButton');
 const wizardTemperature = document.getElementById('wizardTemperature');
 const wizardModelHint = document.getElementById('wizardModelHint');
 const wizardFormatCaps = document.getElementById('wizardFormatCaps');
@@ -1488,6 +1489,10 @@ async function refreshProfiles() {
 
 function initWizard() {
   let currentStep = 1;
+  // True once an existing persona's prompt has been loaded into the preview —
+  // suppresses the auto-regenerate-from-wizard-selections behavior so editing
+  // a saved persona doesn't silently overwrite its hand-tuned prompt.
+  let editingExistingPersona = false;
   const BUILTIN_PERSONAS = new Set(["True Janitor", "Formal", "Polished", "Unhinged", "Pompous 1800s Lord"]);
 
   function showStep(stepNum) {
@@ -1521,7 +1526,9 @@ function initWizard() {
     }
 
     if (stepNum === 4) {
-      generatePromptPreview();
+      if (!editingExistingPersona) {
+        generatePromptPreview();
+      }
       updateDeleteButtonVisibility();
     } else {
       if (wizardDeleteButton) {
@@ -1633,7 +1640,8 @@ function initWizard() {
   }
 
   // When the entered name matches an existing persona, pull its saved v2 fields
-  // into the Advanced block so editing preserves (and shows) them.
+  // AND its prompt into step 4 so editing preserves (and shows) them instead of
+  // silently overwriting the prompt with a freshly wizard-generated one.
   async function loadExistingPersonaAdvanced() {
     const name = wizardPersonaName?.value?.trim();
     if (!name || !loadedPersonas || !loadedPersonas[name]) {
@@ -1642,6 +1650,15 @@ function initWizard() {
     try {
       const persona = await getPersonaV2(name);
       populateAdvancedPersonaFields(persona);
+      if (persona && typeof persona.prompt === 'string' && wizardPromptPreview) {
+        wizardPromptPreview.value = persona.prompt;
+      }
+      editingExistingPersona = true;
+      setMessage(
+        wizardMessage,
+        `Loaded "${name}" — its existing prompt is shown below. Use "Regenerate from wizard" to replace it instead.`,
+        'info',
+      );
     } catch (err) {
       // Non-fatal: leave Advanced fields as-is if the fetch fails.
       console.warn('Could not load persona advanced fields:', err);
@@ -1668,9 +1685,22 @@ function initWizard() {
     updateDeleteButtonVisibility();
   });
 
-  // Fires on blur / Enter — load an existing persona's advanced fields if matched.
+  // Fires on blur / Enter — load an existing persona's advanced fields (and
+  // prompt) if matched; otherwise this is a new persona, so make sure any
+  // previously-loaded existing persona's state doesn't leak into it.
   wizardPersonaName?.addEventListener('change', () => {
-    loadExistingPersonaAdvanced();
+    const name = wizardPersonaName?.value?.trim();
+    if (name && loadedPersonas && loadedPersonas[name]) {
+      loadExistingPersonaAdvanced();
+    } else {
+      editingExistingPersona = false;
+      resetAdvancedPersonaFields();
+    }
+  });
+
+  wizardRegeneratePromptButton?.addEventListener('click', () => {
+    editingExistingPersona = false;
+    generatePromptPreview();
   });
 
   wizardPrevButton?.addEventListener('click', () => {
@@ -1713,6 +1743,8 @@ function initWizard() {
         setTimeout(() => {
           showStep(1);
           if (wizardPersonaName) wizardPersonaName.value = '';
+          if (wizardPromptPreview) wizardPromptPreview.value = '';
+          editingExistingPersona = false;
           resetAdvancedPersonaFields();
           if (wizardCustomRole) wizardCustomRole.value = '';
           if (wizardCustomTone) wizardCustomTone.value = '';
@@ -1754,6 +1786,9 @@ function initWizard() {
       setTimeout(() => {
         showStep(1);
         if (wizardPersonaName) wizardPersonaName.value = '';
+        if (wizardPromptPreview) wizardPromptPreview.value = '';
+        editingExistingPersona = false;
+        resetAdvancedPersonaFields();
         setMessage(wizardMessage, '', 'info');
       }, 1500);
     } catch (err) {

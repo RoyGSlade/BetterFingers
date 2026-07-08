@@ -243,9 +243,10 @@ tick the boxes here. Expected end state: ~285+ tests, all HIGH/MED findings
 closed, LOWs closed except the explicit out-of-scope features.
 
 ## Progress
-- [ ] Phase 0 — env-dependent test
-- [ ] Phase 1 — privacy wipe completeness
-- [ ] Phase 2 — persona edit prompt preservation (+ preview reset on delete)
+- [x] Phase 0 — env-dependent test (af15b2c)
+- [x] Phase 1 — privacy wipe completeness (28154a9; also fixed a latent
+      history_store.init() path-keying bug found while testing)
+- [x] Phase 2 — persona edit prompt preservation (+ preview reset on delete)
 - [ ] Phase 3 — dashboard reopen from tray
 - [ ] Phase 4 — history retention, single profile read, persona deepcopy, dead deps
 - [ ] Phase 5 — race guards, escaping, builtins endpoint, hidden-poll, [hidden] CSS

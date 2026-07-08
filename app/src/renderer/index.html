@@ -569,9 +569,12 @@
                         <input id="wizardPersonaName" class="settings-input" type="text" placeholder="e.g. Friendly Editor" />
                       </label>
                       <label>
-                        <span class="status-label">Generated Prompt Preview</span>
-                        <textarea id="wizardPromptPreview" class="settings-input textarea-medium" readonly></textarea>
+                        <span class="status-label">Prompt</span>
+                        <textarea id="wizardPromptPreview" class="settings-input textarea-medium"></textarea>
                       </label>
+                      <div class="action-row">
+                        <button id="wizardRegeneratePromptButton" class="secondary-button" type="button">Regenerate from wizard</button>
+                      </div>
                     </div>
                     <details id="wizardAdvanced" class="mt-12">
                       <summary class="status-label">Advanced (optional)</summary>
