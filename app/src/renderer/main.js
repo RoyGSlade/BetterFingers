@@ -1302,6 +1302,7 @@ async function refreshHealth() {
     if (backendDetailEl) {
       backendDetailEl.textContent = 'FastAPI /health responded successfully';
     }
+    return true;
   } catch (error) {
     setBadgeState(backendStatusEl, 'offline', 'danger');
     if (backendDetailEl) {
@@ -1309,6 +1310,7 @@ async function refreshHealth() {
     }
     setBadgeState(transcriberStatusEl, 'offline', 'danger');
     setBadgeState(llmStatusEl, 'offline', 'danger');
+    return false;
   }
 }
 
@@ -3079,44 +3081,74 @@ async function copyCurrentDraftText() {
   setMessage(draftMessageEl, 'Cleaned output copied to clipboard.', 'success');
 }
 
-async function bootstrap() {
-  await refreshHealth();
+let bootstrapNeedsRetry = false;
+
+// Fetches cold app state (profiles, doctor, models, ...). On a slow/cold
+// backend start these can race ahead of the Python process finishing
+// startup and fail outright; unlike health/runtime they were never retried,
+// which could permanently strand e.g. the profile list empty for the rest
+// of the session. Each failure flips bootstrapNeedsRetry so the health
+// poll below re-runs this once the backend is confirmed reachable.
+async function runBootstrapFetches() {
   await Promise.all([
     refreshRuntime().catch(() => {
       setBadgeState(transcriberStatusEl, 'offline', 'danger');
       setBadgeState(llmStatusEl, 'offline', 'danger');
       renderDetailList(runtimeStatusListEl, {});
+      bootstrapNeedsRetry = true;
     }),
     refreshCapabilities().catch(() => {
       renderDetailList(capabilitiesListEl, {});
+      bootstrapNeedsRetry = true;
     }),
     refreshDrafts().catch(() => {
       renderDraft(null);
+      bootstrapNeedsRetry = true;
     }),
     refreshOutputSettings().catch(() => {
       if (outputSettingsSummaryEl) {
         outputSettingsSummaryEl.textContent = 'Output settings unavailable.';
       }
+      bootstrapNeedsRetry = true;
     }),
     refreshProfiles().catch((error) => {
       setMessage(profileMessageEl, `Profiles unavailable: ${error.message}`, 'danger');
+      bootstrapNeedsRetry = true;
     }),
     refreshModels().catch((error) => {
       setMessage(modelMessageEl, `Models unavailable: ${error.message}`, 'danger');
+      bootstrapNeedsRetry = true;
     }),
-    refreshDiagnostics().catch(() => {}),
-    refreshDoctor().catch(() => {}),
-    refreshSidecarLogs().catch(() => {}),
-    refreshPttAvailability().catch(() => {}),
+    refreshDiagnostics().catch(() => {
+      bootstrapNeedsRetry = true;
+    }),
+    refreshDoctor().catch(() => {
+      bootstrapNeedsRetry = true;
+    }),
+    refreshSidecarLogs().catch(() => {
+      bootstrapNeedsRetry = true;
+    }),
+    refreshPttAvailability().catch(() => {
+      bootstrapNeedsRetry = true;
+    }),
   ]);
+}
 
-  healthRefreshTimer = setInterval(() => {
-    refreshHealth();
+async function bootstrap() {
+  await refreshHealth();
+  await runBootstrapFetches();
+
+  healthRefreshTimer = setInterval(async () => {
+    const healthy = await refreshHealth();
     refreshSidecarStatus().catch(() => {});
     refreshRuntime().catch(() => {
       setBadgeState(transcriberStatusEl, 'offline', 'danger');
       setBadgeState(llmStatusEl, 'offline', 'danger');
     });
+    if (healthy && bootstrapNeedsRetry) {
+      bootstrapNeedsRetry = false;
+      runBootstrapFetches().catch(() => {});
+    }
   }, 3000);
 
   // React to sidecar lifecycle pushes (crash / restart / recovery) immediately
