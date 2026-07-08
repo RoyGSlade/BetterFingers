@@ -15,7 +15,16 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForHealthy(url, timeoutMs = 30000) {
+// The backend enforces BETTERFINGERS_AUTH_TOKEN on every non-/ws/ route,
+// including /health and /runtime/version. The main process spawns the backend
+// with that token, so its own health/version probes must present it too —
+// otherwise every probe comes back 401, waitForHealthy() never sees an OK
+// response, and startup times out and kills the backend it just launched.
+function authHeaders(token) {
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+async function waitForHealthy(url, headers = {}, timeoutMs = 30000) {
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < timeoutMs) {
@@ -23,7 +32,7 @@ async function waitForHealthy(url, timeoutMs = 30000) {
       const controller = new AbortController();
       const tid = setTimeout(() => controller.abort(), 3000);
       try {
-        const response = await fetch(url, { cache: 'no-store', signal: controller.signal });
+        const response = await fetch(url, { cache: 'no-store', headers, signal: controller.signal });
         if (response.ok) {
           return await response.json();
         }
@@ -62,11 +71,11 @@ function isTcpPortOpen(host, port, timeoutMs = 800) {
   });
 }
 
-async function tryReadHealth(url) {
+async function tryReadHealth(url, headers = {}) {
   const controller = new AbortController();
   const tid = setTimeout(() => controller.abort(), 3000);
   try {
-    const response = await fetch(url, { cache: 'no-store', signal: controller.signal });
+    const response = await fetch(url, { cache: 'no-store', headers, signal: controller.signal });
     if (!response.ok) {
       return null;
     }
@@ -166,6 +175,7 @@ function createSidecar({
   onStatusChange = null,
 } = {}) {
   const healthUrl = `http://${host}:${port}/health`;
+  const backendHeaders = authHeaders(authToken);
   const isPackaged = app.isPackaged;
   const backendEnv = {
     ...process.env,
@@ -280,7 +290,7 @@ function createSidecar({
 
         const portOpen = await isTcpPortOpen(host, port);
         if (portOpen) {
-          const existingHealth = await tryReadHealth(healthUrl);
+          const existingHealth = await tryReadHealth(healthUrl, backendHeaders);
           if (existingHealth?.status) {
             setStatus({
               state: 'external',
@@ -373,7 +383,7 @@ function createSidecar({
 
       try {
         const result = await Promise.race([
-          waitForHealthy(healthUrl),
+          waitForHealthy(healthUrl, backendHeaders),
           exitPromise,
         ].filter(Boolean));
 
@@ -387,7 +397,7 @@ function createSidecar({
           const versionTid = setTimeout(() => versionController.abort(), 3000);
           let res;
           try {
-            res = await fetch(versionUrl, { cache: 'no-store', signal: versionController.signal });
+            res = await fetch(versionUrl, { cache: 'no-store', headers: backendHeaders, signal: versionController.signal });
           } finally {
             clearTimeout(versionTid);
           }
@@ -471,7 +481,7 @@ function createSidecar({
         return;
       }
 
-      const health = await tryReadHealth(healthUrl);
+      const health = await tryReadHealth(healthUrl, backendHeaders);
       if (health) {
         consecutiveHealthFailures = 0;
         if (status.state === 'unhealthy') {
