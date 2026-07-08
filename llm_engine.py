@@ -1101,6 +1101,7 @@ class LLMEngine:
         context_rules=True,
         max_output_tokens=None,
         chunk_size=750,
+        progress_callback=None,
     ):
         """
         Process text through the sidecar with preset-based prompts.
@@ -1154,7 +1155,7 @@ class LLMEngine:
 
         temperature = 0.05 if strict_janitor_mode else 0.3
 
-        # For long texts, chunk and process by word count
+        # For long texts, chunk and process (sentence-aware)
         if len(user_text.split()) > chunk_size:
             return self._process_chunked(
                 user_text,
@@ -1162,6 +1163,7 @@ class LLMEngine:
                 temperature=temperature,
                 max_output_tokens=max_output_tokens,
                 chunk_size_words=chunk_size,
+                progress_callback=progress_callback,
             )
 
         return self._call_api(
@@ -1207,20 +1209,34 @@ class LLMEngine:
             logging.error(f"API Error: {e}")
             return text
 
-    def _process_chunked(self, user_text, system_prompt, temperature=0.3, max_output_tokens=None, chunk_size_words=750):
+    def _process_chunked(self, user_text, system_prompt, temperature=0.3, max_output_tokens=None, chunk_size_words=750, progress_callback=None):
         """Process long text via sentence-aware chunking (paragraph → sentence →
-        word fallback), passing overlap context so boundaries stay coherent."""
+        word fallback), passing overlap context so boundaries stay coherent.
+
+        ``progress_callback`` (optional) is invoked with dicts describing chunk
+        progress so callers can surface "processing chunk N of M" to the user."""
         chunks = split_text_for_llm_chunks(user_text, chunk_size_words, overlap_words=40)
         if not chunks:
             return user_text
 
+        chunk_count = len(chunks)
         logging.info(
             f"📦 Sentence-aware chunking {len(user_text.split())} words into "
-            f"{len(chunks)} chunks (target {chunk_size_words} words)"
+            f"{chunk_count} chunks (target {chunk_size_words} words)"
         )
 
+        def _notify(update):
+            if progress_callback:
+                try:
+                    progress_callback(update)
+                except Exception as exc:
+                    logging.debug(f"Chunk progress callback failed: {exc}")
+
+        _notify({"status": "chunking_started", "chunk_count": chunk_count})
+
         processed = []
-        for chunk in chunks:
+        for idx, chunk in enumerate(chunks):
+            _notify({"status": "chunking_progress", "chunk_index": idx + 1, "chunk_count": chunk_count})
             prompt = system_prompt
             if chunk.get("context"):
                 prompt = (

@@ -139,7 +139,7 @@ class Phase2PassThroughTest(unittest.TestCase):
         captured = {}
 
         class RecordingEngine:
-            def process_fast_lane(self, text, preset, max_output_tokens=None, chunk_size=None):
+            def process_fast_lane(self, text, preset, max_output_tokens=None, chunk_size=None, progress_callback=None):
                 captured["max_output_tokens"] = max_output_tokens
                 captured["chunk_size"] = chunk_size
                 return f"clean: {text}"

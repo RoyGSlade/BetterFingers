@@ -1134,11 +1134,34 @@ def process_recording_result(recording_result):
             completion_tokens = 1600
 
         _llm_start = time.perf_counter()
+        # Long recordings (word count over the chunk threshold) get progress
+        # notifications so the user sees chunk-by-chunk progress instead of a
+        # silent wait. The review overlay stays closed until preview_ready.
+        will_chunk = len(str(raw_text or "").split()) > llm_chunk_size
+
+        def _chunk_progress(update):
+            if not isinstance(update, dict):
+                return
+            status = update.get("status")
+            if not status:
+                return
+            broadcast_status_threadsafe(
+                status,
+                {k: v for k, v in update.items() if k != "status"},
+            )
+
+        if will_chunk:
+            broadcast_status_threadsafe(
+                "long_recording_detected",
+                {"word_count": len(raw_text.split()), "chunk_size": llm_chunk_size},
+            )
+
         final_text = engine.process_fast_lane(
             raw_text,
             preset,
             max_output_tokens=completion_tokens,
             chunk_size=llm_chunk_size,
+            progress_callback=_chunk_progress if will_chunk else None,
         )
         llm_ms = (time.perf_counter() - _llm_start) * 1000.0
 

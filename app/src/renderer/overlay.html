@@ -110,6 +110,9 @@
         } else if (status === 'transcribing' || status === 'rewriting' || status === 'processing') {
           dot.classList.add('processing');
           text.textContent = 'Processing...';
+        } else if (status === 'long_recording_detected' || status === 'chunking_started' || status === 'chunking_progress' || status === 'chunking_stitching') {
+          dot.classList.add('processing');
+          text.textContent = payload.message || 'Processing long recording...';
         } else if (status === 'preview_ready') {
           dot.classList.add('success');
           container.classList.add('success');

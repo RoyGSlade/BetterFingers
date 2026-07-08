@@ -23,8 +23,25 @@ class EmptyTranscriber(DummyTranscriber):
 
 
 class DummyEngine:
-    def process_fast_lane(self, text, preset, max_output_tokens=None, chunk_size=None):
+    def process_fast_lane(self, text, preset, max_output_tokens=None, chunk_size=None, progress_callback=None):
         return f"{preset}: {text}"
+
+
+class ProgressReportingEngine:
+    """Simulates the engine's chunk-progress callbacks for long recordings."""
+
+    def process_fast_lane(self, text, preset, max_output_tokens=None, chunk_size=None, progress_callback=None):
+        if progress_callback:
+            progress_callback({"status": "chunking_started", "chunk_count": 3})
+            for i in range(1, 4):
+                progress_callback({"status": "chunking_progress", "chunk_index": i, "chunk_count": 3})
+        return f"{preset}: cleaned"
+
+
+class LongTranscriber(DummyTranscriber):
+    def transcribe(self, audio_data):
+        self.calls.append(audio_data)
+        return " ".join(["word"] * 60)
 
 
 class DummyRewriteEngine:
@@ -212,6 +229,58 @@ class ServerDraftTests(unittest.TestCase):
         self.assertEqual(statuses[2][1]["final_text"], "True Janitor: raw transcript")
         self.assertEqual(draft["metadata"]["sample_rate"], 16000)
         self.assertEqual(draft["metadata"]["stop_reason"], "manual")
+
+    def test_long_recording_emits_progress_statuses(self):
+        import os
+        import tempfile
+        import utils
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        original = os.environ.get("APPDATA")
+        os.environ["APPDATA"] = tmp.name
+        if original is None:
+            self.addCleanup(lambda: os.environ.pop("APPDATA", None))
+        else:
+            self.addCleanup(lambda: os.environ.__setitem__("APPDATA", original))
+
+        profile = utils._profile_defaults()
+        profile["llm_chunk_size"] = 50  # 60-word transcript will chunk
+        utils.save_profile("LongTest", profile)
+        utils.set_last_active_profile("LongTest")
+
+        statuses = []
+        with patch.object(server, "Transcriber", LongTranscriber), patch.object(
+            server, "get_engine", return_value=ProgressReportingEngine()
+        ), patch.object(server, "broadcast_status_threadsafe", side_effect=lambda status, data=None: statuses.append((status, data or {}))):
+            draft = server.process_recording_result(DummyRecordingResult())
+
+        names = [s for s, _ in statuses]
+        self.assertIn("long_recording_detected", names)
+        self.assertIn("chunking_started", names)
+        self.assertIn("chunking_progress", names)
+        # long_recording_detected carries word count + chunk size.
+        lrd = next(d for s, d in statuses if s == "long_recording_detected")
+        self.assertEqual(lrd["chunk_size"], 50)
+        self.assertGreater(lrd["word_count"], 50)
+        # chunking_progress carries chunk index/count.
+        prog = [d for s, d in statuses if s == "chunking_progress"]
+        self.assertEqual(prog[0]["chunk_index"], 1)
+        self.assertEqual(prog[0]["chunk_count"], 3)
+        # Detection precedes the first chunk-progress update; still ends ready.
+        self.assertLess(names.index("long_recording_detected"), names.index("chunking_progress"))
+        self.assertEqual(draft["status"], "pending")
+
+    def test_short_recording_does_not_emit_long_recording_status(self):
+        statuses = []
+        with patch.object(server, "Transcriber", DummyTranscriber), patch.object(
+            server, "get_engine", return_value=DummyEngine()
+        ), patch.object(server, "broadcast_status_threadsafe", side_effect=lambda status, data=None: statuses.append((status, data or {}))):
+            server.process_recording_result(DummyRecordingResult())
+
+        names = [s for s, _ in statuses]
+        self.assertNotIn("long_recording_detected", names)
+        self.assertNotIn("chunking_progress", names)
 
     def test_on_recording_complete_processes_recording_in_background_worker(self):
         with patch.object(server.threading, "Thread", ImmediateThread), patch.object(

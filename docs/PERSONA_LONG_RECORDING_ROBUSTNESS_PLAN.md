@@ -188,6 +188,22 @@ Files:
 
 ## Phase 4: Long Recording Progress Notifications
 
+> **Status: ✅ DONE (2026-07-08).** `process_fast_lane()` / `_process_chunked()`
+> now take an optional `progress_callback` and emit
+> `{"status": "chunking_started", chunk_count}` then per-chunk
+> `{"status": "chunking_progress", chunk_index, chunk_count}`.
+> `server.process_recording_result()` broadcasts `long_recording_detected`
+> (`word_count`, `chunk_size`) when the transcript exceeds the chunk threshold and
+> passes a callback that rebroadcasts the engine's chunk statuses. Renderer
+> (`main.js`) shows a status-rail message ("Processing chunk 2 of 5…") and keeps
+> the review overlay closed — it still only opens on `preview_ready`. Overlay
+> (`overlay.html`) + main-process overlay gating (`ipc.js`) + tray state
+> (`tray.js`) recognise the chunking statuses as a processing state. Chunk
+> failures already fall through to the recoverable error-draft path (raw audio is
+> persisted up front). `chunking_stitching` status is wired through the UI now;
+> it will actually fire in Phase 5. Tests: two new cases in
+> `tests/test_server_drafts.py` (long vs short recording). Suite 324 green.
+
 ### Problem
 
 The user gets statuses such as `transcribing`, `rewriting`, and `preview_ready`, but not "long recording detected" or chunk progress.

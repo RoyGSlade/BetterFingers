@@ -991,6 +991,14 @@ function sendOverlayUpdate(message) {
     overlayPayload.message = message?.error || 'No usable audio';
   } else if (status === 'draft_error') {
     overlayPayload.message = message?.error || 'Draft failed';
+  } else if (status === 'long_recording_detected') {
+    overlayPayload.message = 'Long recording…';
+  } else if (status === 'chunking_started') {
+    overlayPayload.message = message?.chunk_count ? `Processing ${message.chunk_count} chunks` : 'Processing…';
+  } else if (status === 'chunking_progress') {
+    overlayPayload.message = `Chunk ${message?.chunk_index} of ${message?.chunk_count}`;
+  } else if (status === 'chunking_stitching') {
+    overlayPayload.message = 'Smoothing…';
   } else if (status === 'selection_capture_failed') {
     overlayPayload.message = message?.message || 'Selection unavailable';
   } else if (status === 'emergency_stop') {
@@ -3023,6 +3031,23 @@ function updateVoiceStatus(message) {
       message.status === 'preview_ready' ? 'success' : 'danger',
     );
     refreshDrafts().catch(() => {});
+  }
+
+  // Long-recording progress: keep the review overlay closed (it only opens on
+  // preview_ready above) and surface chunk-by-chunk progress in the status rail.
+  if (['long_recording_detected', 'chunking_started', 'chunking_progress', 'chunking_stitching'].includes(message.status)) {
+    let progressText;
+    if (message.status === 'long_recording_detected') {
+      progressText = 'Long recording detected. Processing…';
+    } else if (message.status === 'chunking_started') {
+      const n = message.chunk_count;
+      progressText = n ? `Long recording detected. Processing ${n} chunk${n === 1 ? '' : 's'}…` : 'Processing long recording…';
+    } else if (message.status === 'chunking_progress') {
+      progressText = `Processing chunk ${message.chunk_index} of ${message.chunk_count}…`;
+    } else {
+      progressText = 'Smoothing chunk transitions…';
+    }
+    setMessage(draftMessageEl, progressText, 'warning');
   }
 
   if (['draft_accepted', 'draft_declined'].includes(message.status)) {

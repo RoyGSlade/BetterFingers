@@ -49,6 +49,9 @@ function loadIconForState(state) {
 // Collapse the many backend status strings into one of our icon states.
 function normalizeTrayState(status) {
   const s = String(status || '').toLowerCase();
+  // 'long_recording_detected' is a processing state, not an active recording,
+  // so check the chunking/processing states before the generic 'recording' match.
+  if (s.startsWith('chunking') || s === 'long_recording_detected') return 'processing';
   if (s.includes('recording')) return 'recording';
   if (s === 'transcribing' || s === 'rewriting' || s === 'processing') return 'processing';
   if (s === 'listening') return 'listening';

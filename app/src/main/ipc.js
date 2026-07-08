@@ -130,6 +130,10 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthT
       status === 'transcribing' ||
       status === 'rewriting' ||
       status === 'processing' ||
+      status === 'long_recording_detected' ||
+      status === 'chunking_started' ||
+      status === 'chunking_progress' ||
+      status === 'chunking_stitching' ||
       transientStatuses.has(status)
     ) {
       if (!overlay.isVisible()) {
