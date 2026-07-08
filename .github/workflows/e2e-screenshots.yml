@@ -47,6 +47,11 @@ jobs:
       - name: Install Xvfb
         run: sudo apt-get update && sudo apt-get install -y xvfb
 
+      # Ubuntu 24.04 runners restrict unprivileged user namespaces via
+      # AppArmor, which crashes Electron/Chromium's sandbox on launch.
+      - name: Allow unprivileged user namespaces (Electron sandbox)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Build Electron app
         working-directory: app
         run: npm run build
