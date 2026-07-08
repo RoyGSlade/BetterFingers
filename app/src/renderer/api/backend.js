@@ -419,6 +419,10 @@ async function fetchPersonas(timeoutMs = 2500) {
   return fetchJson(PERSONAS_URL, timeoutMs);
 }
 
+async function fetchBuiltinPersonaNames(timeoutMs = 2500) {
+  return fetchJson(`${BACKEND_ORIGIN}/personas-builtins`, timeoutMs);
+}
+
 async function fetchTtsVoices(timeoutMs = 2500) {
   return fetchJson(TTS_VOICES_URL, timeoutMs);
 }
@@ -627,6 +631,7 @@ export {
   addMacro,
   deleteMacro,
   fetchPersonas,
+  fetchBuiltinPersonaNames,
   getPersonaV2,
   fetchTtsVoices,
   savePersona,

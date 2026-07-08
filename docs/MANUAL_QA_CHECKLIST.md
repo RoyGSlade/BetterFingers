@@ -116,6 +116,23 @@ files involved so a failure is easy to trace.
   torn down cleanly (check for orphaned `server.py` processes after quit).
   _Files: `app/src/main/main.js`, `app/src/main/windows.js`._
 
+## Renderer polish (bugfix Phase 5)
+
+- ☐ Minimize/switch away from the app for >3s, then switch back — the health/
+  runtime badges resolve immediately (no stale "offline" flash while backend
+  is actually fine); poll doesn't run while the window is hidden (check no
+  console spam / network calls in devtools while minimized).
+- ☐ Persona name field: type an existing persona's name, then quickly retype
+  a different name before the Advanced-fields fetch resolves — the loaded
+  fields match the LAST name typed, not a stale response.
+- ☐ Trigger a history search / macros / dictionary error (e.g. stop the
+  sidecar) with a name containing `<`, `>`, or `&` in the error text — the
+  error renders as plain text, not broken/executed HTML.
+- ☐ Built-in personas (True Janitor, Formal, Polished, Unhinged, Pompous
+  1800s Lord) still can't be deleted without the allow-builtin override; this
+  list now comes from `GET /personas-builtins` instead of a hardcoded set.
+  _Files: `app/src/renderer/main.js`, `server.py` `/personas-builtins`._
+
 ---
 
 ## Regression sanity (every session)

@@ -108,6 +108,17 @@ class PersonaRoutesTests(unittest.TestCase):
                 resp = client.get("/personas/DoesNotExist")
                 self.assertEqual(resp.status_code, 404)
 
+    def test_builtins_route_lists_default_personas(self):
+        with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ):
+            with self._client() as client:
+                resp = client.get("/personas-builtins")
+                self.assertEqual(resp.status_code, 200, resp.text)
+                names = set(resp.json()["builtins"])
+                self.assertEqual(names, set(llm_engine.get_builtin_persona_names()))
+                self.assertIn("True Janitor", names)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -249,5 +249,5 @@ closed, LOWs closed except the explicit out-of-scope features.
 - [x] Phase 2 — persona edit prompt preservation (+ preview reset on delete)
 - [x] Phase 3 — dashboard reopen from tray
 - [x] Phase 4 — history retention, single profile read, persona deepcopy, dead deps
-- [ ] Phase 5 — race guards, escaping, builtins endpoint, hidden-poll, [hidden] CSS
+- [x] Phase 5 — race guards, escaping, builtins endpoint, hidden-poll, [hidden] CSS
 - [ ] Phase 6 — stage timing, corrupt-store visibility, gitignore, unused import, doc note

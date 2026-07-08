@@ -269,6 +269,11 @@ def is_builtin_persona(name):
     return key in _DEFAULT_PERSONAS
 
 
+def get_builtin_persona_names():
+    """Names of the built-in (non-deletable-without-override) personas."""
+    return list(_DEFAULT_PERSONAS.keys())
+
+
 def load_personas_v2(force_reload=False):
     """Load personas as schema v2 dicts: {name: {prompt, temperature, ...}}.
 

@@ -1780,6 +1780,14 @@ async def list_personas_route():
     return load_personas(force_reload=True)
 
 
+@app.get("/personas-builtins")
+async def list_builtin_persona_names_route():
+    """Names of the built-in personas, so the renderer doesn't have to keep
+    its own hardcoded list in sync with llm_engine._DEFAULT_PERSONAS."""
+    from llm_engine import get_builtin_persona_names
+    return {"builtins": get_builtin_persona_names()}
+
+
 @app.get("/personas/{name}")
 async def get_persona_route(name: str):
     """Return the full schema v2 persona dict for the editor."""

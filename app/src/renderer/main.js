@@ -55,6 +55,7 @@ import {
   refreshAudioDevices,
   fetchVersion,
   fetchPersonas,
+  fetchBuiltinPersonaNames,
   getPersonaV2,
   fetchTtsVoices,
   savePersona,
@@ -753,16 +754,19 @@ async function populateOnboardingRecommendation() {
   if (!box) return;
   try {
     const payload = await fetchModelRecommendation();
+    // The user may have left this onboarding step (or the app) while the
+    // request was in flight — don't populate a box that's no longer shown.
+    if (!box.isConnected) return;
     const rec = payload?.recommendation;
     if (!rec) return;
     const llm = rec.llm?.models?.find((m) => m.id === rec.llm.recommended);
     const whisper = rec.whisper?.recommended;
-    const llmNote = llm?.note ? ` — ${llm.note}` : '';
+    const llmNote = llm?.note ? ` — ${escapeHtml(llm.note)}` : '';
     box.innerHTML =
-      `<strong>Recommended for your hardware (${rec.tier_label ?? rec.tier})</strong>` +
-      (rec.tier_guidance ? `<p class="section-desc">${rec.tier_guidance}</p>` : '') +
-      `<ul><li><strong>Language model:</strong> ${llm?.name ?? rec.llm?.recommended ?? '—'}${llmNote}</li>` +
-      `<li><strong>Speech model:</strong> ${whisper ?? '—'}</li></ul>`;
+      `<strong>Recommended for your hardware (${escapeHtml(rec.tier_label ?? rec.tier)})</strong>` +
+      (rec.tier_guidance ? `<p class="section-desc">${escapeHtml(rec.tier_guidance)}</p>` : '') +
+      `<ul><li><strong>Language model:</strong> ${escapeHtml(llm?.name ?? rec.llm?.recommended ?? '—')}${llmNote}</li>` +
+      `<li><strong>Speech model:</strong> ${escapeHtml(whisper ?? '—')}</li></ul>`;
     box.hidden = false;
   } catch (error) {
     // Recommendation is a nice-to-have; leave the box hidden if it can't load.
@@ -1271,7 +1275,7 @@ function handleHistorySearch(query) {
       renderHistoryResults(payload?.results || []);
     } catch (error) {
       if (draftHistoryListEl) {
-        draftHistoryListEl.innerHTML = `<span class="empty-state">Search failed: ${error.message}</span>`;
+        draftHistoryListEl.innerHTML = `<span class="empty-state">Search failed: ${escapeHtml(error.message)}</span>`;
       }
     }
   }, 250);
@@ -1493,7 +1497,23 @@ function initWizard() {
   // suppresses the auto-regenerate-from-wizard-selections behavior so editing
   // a saved persona doesn't silently overwrite its hand-tuned prompt.
   let editingExistingPersona = false;
+  // Hardcoded fallback in case /personas-builtins can't be reached; refreshed
+  // below from the server so this never has to be kept in sync by hand.
   const BUILTIN_PERSONAS = new Set(["True Janitor", "Formal", "Polished", "Unhinged", "Pompous 1800s Lord"]);
+
+  (async function refreshBuiltinPersonaNames() {
+    try {
+      const payload = await fetchBuiltinPersonaNames();
+      const names = Array.isArray(payload?.builtins) ? payload.builtins : null;
+      if (names && names.length) {
+        BUILTIN_PERSONAS.clear();
+        names.forEach((name) => BUILTIN_PERSONAS.add(name));
+      }
+    } catch (err) {
+      // Non-fatal: keep the hardcoded fallback set above.
+      console.warn('Could not load builtin persona names:', err);
+    }
+  })();
 
   function showStep(stepNum) {
     currentStep = stepNum;
@@ -1649,6 +1669,11 @@ function initWizard() {
     }
     try {
       const persona = await getPersonaV2(name);
+      // The name field may have changed (or the user moved on) while this
+      // request was in flight — don't apply a stale response.
+      if (wizardPersonaName?.value?.trim() !== name) {
+        return;
+      }
       populateAdvancedPersonaFields(persona);
       if (persona && typeof persona.prompt === 'string' && wizardPromptPreview) {
         wizardPromptPreview.value = persona.prompt;
@@ -1811,12 +1836,12 @@ async function renderModelRecommendation() {
     }
     const llm = rec.llm?.models?.find((m) => m.id === rec.llm.recommended);
     const whisper = rec.whisper?.recommended;
-    const llmNote = llm?.note ? ` — ${llm.note}` : '';
+    const llmNote = llm?.note ? ` — ${escapeHtml(llm.note)}` : '';
     el.innerHTML =
-      `<strong>Recommended for your hardware (${rec.tier_label ?? rec.tier})</strong>` +
-      (rec.tier_guidance ? `<p class="section-desc">${rec.tier_guidance}</p>` : '') +
-      `<ul><li><strong>Language model:</strong> ${llm?.name ?? rec.llm?.recommended ?? '—'}${llmNote}</li>` +
-      `<li><strong>Speech model:</strong> ${whisper ?? '—'}</li></ul>`;
+      `<strong>Recommended for your hardware (${escapeHtml(rec.tier_label ?? rec.tier)})</strong>` +
+      (rec.tier_guidance ? `<p class="section-desc">${escapeHtml(rec.tier_guidance)}</p>` : '') +
+      `<ul><li><strong>Language model:</strong> ${escapeHtml(llm?.name ?? rec.llm?.recommended ?? '—')}${llmNote}</li>` +
+      `<li><strong>Speech model:</strong> ${escapeHtml(whisper ?? '—')}</li></ul>`;
     el.classList.remove('hidden');
   } catch (error) {
     el.classList.add('hidden');
@@ -2121,7 +2146,7 @@ async function refreshPrivacy() {
         .join('');
     }
   } catch (error) {
-    if (netEl) netEl.innerHTML = `<span class="empty-state">Privacy report unavailable: ${error.message}</span>`;
+    if (netEl) netEl.innerHTML = `<span class="empty-state">Privacy report unavailable: ${escapeHtml(error.message)}</span>`;
   }
 }
 
@@ -2202,7 +2227,7 @@ async function refreshMacros() {
     const payload = await fetchMacros();
     renderMacros(payload?.macros || []);
   } catch (error) {
-    el.innerHTML = `<span class="empty-state">Macros unavailable: ${error.message}</span>`;
+    el.innerHTML = `<span class="empty-state">Macros unavailable: ${escapeHtml(error.message)}</span>`;
   }
 }
 
@@ -2239,7 +2264,7 @@ async function refreshDictionary() {
     const payload = await fetchDictionary();
     renderDictionaryTerms(payload?.terms || []);
   } catch (error) {
-    el.innerHTML = `<span class="empty-state">Dictionary unavailable: ${error.message}</span>`;
+    el.innerHTML = `<span class="empty-state">Dictionary unavailable: ${escapeHtml(error.message)}</span>`;
   }
 }
 
@@ -3145,14 +3170,29 @@ async function bootstrap() {
     refreshPttAvailability().catch(() => {}),
   ]);
 
-  healthRefreshTimer = setInterval(() => {
+  const pollHealth = () => {
     refreshHealth();
     refreshSidecarStatus().catch(() => {});
     refreshRuntime().catch(() => {
       setBadgeState(transcriberStatusEl, 'offline', 'danger');
       setBadgeState(llmStatusEl, 'offline', 'danger');
     });
+  };
+
+  healthRefreshTimer = setInterval(() => {
+    // Skip while the window is hidden/minimized — no point polling a UI
+    // nobody can see.
+    if (document.hidden) return;
+    pollHealth();
   }, 3000);
+
+  // Catch up immediately when the window becomes visible again instead of
+  // waiting up to 3s for the next tick.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      pollHealth();
+    }
+  });
 
   // React to sidecar lifecycle pushes (crash / restart / recovery) immediately
   // instead of waiting for the next poll tick.

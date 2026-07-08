@@ -930,7 +930,8 @@ h1 {
   border-left-color: #54a0ff;
 }
 
-.hidden {
+.hidden,
+[hidden] {
   display: none !important;
 }
 
