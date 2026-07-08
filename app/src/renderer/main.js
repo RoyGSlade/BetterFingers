@@ -3140,36 +3140,58 @@ async function copyCurrentDraftText() {
   setMessage(draftMessageEl, 'Cleaned output copied to clipboard.', 'success');
 }
 
-async function bootstrap() {
-  await refreshHealth();
-  await Promise.all([
+// The renderer loads from Vite instantly, but the Python sidecar takes a couple
+// of seconds to come up — so the very first data load can race it and every
+// fetch fails with ERR_CONNECTION_REFUSED (leaving settings fields empty,
+// personas/voices unloaded). We track whether that load succeeded so it can be
+// retried once the backend is actually reachable (see the sidecar-status hook).
+let initialDataLoaded = false;
+
+async function loadInitialData() {
+  const results = await Promise.allSettled([
     refreshRuntime().catch(() => {
       setBadgeState(transcriberStatusEl, 'offline', 'danger');
       setBadgeState(llmStatusEl, 'offline', 'danger');
       renderDetailList(runtimeStatusListEl, {});
+      throw new Error('runtime');
     }),
     refreshCapabilities().catch(() => {
       renderDetailList(capabilitiesListEl, {});
+      throw new Error('capabilities');
     }),
     refreshDrafts().catch(() => {
       renderDraft(null);
+      throw new Error('drafts');
     }),
     refreshOutputSettings().catch(() => {
       if (outputSettingsSummaryEl) {
         outputSettingsSummaryEl.textContent = 'Output settings unavailable.';
       }
+      throw new Error('output-settings');
     }),
     refreshProfiles().catch((error) => {
       setMessage(profileMessageEl, `Profiles unavailable: ${error.message}`, 'danger');
+      throw error;
     }),
     refreshModels().catch((error) => {
       setMessage(modelMessageEl, `Models unavailable: ${error.message}`, 'danger');
+      throw error;
     }),
     refreshDiagnostics().catch(() => {}),
     refreshDoctor().catch(() => {}),
     refreshSidecarLogs().catch(() => {}),
     refreshPttAvailability().catch(() => {}),
   ]);
+  // Consider the load a success only if the profile settings actually loaded —
+  // that's what backs the settings form (and its save-blocking validation).
+  const profilesResult = results[4];
+  initialDataLoaded = profilesResult.status === 'fulfilled';
+  return initialDataLoaded;
+}
+
+async function bootstrap() {
+  await refreshHealth();
+  await loadInitialData();
 
   const pollHealth = () => {
     refreshHealth();
@@ -3178,6 +3200,11 @@ async function bootstrap() {
       setBadgeState(transcriberStatusEl, 'offline', 'danger');
       setBadgeState(llmStatusEl, 'offline', 'danger');
     });
+    // Fallback: if the startup race left us un-loaded and we never caught the
+    // sidecar 'ready' push, retry the load as soon as a poll succeeds.
+    if (!initialDataLoaded) {
+      loadInitialData().catch(() => {});
+    }
   };
 
   healthRefreshTimer = setInterval(() => {
@@ -3197,10 +3224,19 @@ async function bootstrap() {
 
   // React to sidecar lifecycle pushes (crash / restart / recovery) immediately
   // instead of waiting for the next poll tick.
+  let lastSidecarState = null;
   window.betterFingers?.onSidecarStatus?.((status) => {
     if (!status) return;
     updateBackendBanner(status);
     refreshSidecarStatus().catch(() => {});
+    // When the backend first becomes reachable (or recovers after a restart),
+    // (re)load the data that failed during the startup race so the settings
+    // form, personas and voices actually populate.
+    const becameReady = status.state === 'ready' && lastSidecarState !== 'ready';
+    lastSidecarState = status.state;
+    if (becameReady) {
+      loadInitialData().catch(() => {});
+    }
     // These pushes are transition-based, so toasting here won't spam.
     if (status.state === 'crashed') {
       showToast(status.message || 'The backend stopped and could not recover.', 'danger', 0);
