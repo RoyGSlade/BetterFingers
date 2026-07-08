@@ -30,6 +30,75 @@ SIDECAR_PORT = 8080
 CHUNK_SIZE = 2000
 DEFAULT_MAX_OUTPUT_TOKENS = 1100
 
+# Split on whitespace that follows sentence-ending punctuation.
+_SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def split_text_for_llm_chunks(text, target_words, overlap_words=40):
+    """Split text into ordered chunks near ``target_words``, preferring paragraph
+    then sentence boundaries, with a word-count fallback only when a single
+    sentence is itself longer than the target.
+
+    Returns a list of dicts ``{"text": segment, "context": prefix}`` where the
+    ``text`` fields form a clean partition of the source (so joining the model's
+    per-chunk outputs never duplicates content) and ``context`` carries up to
+    ``overlap_words`` trailing words from the previous chunk for continuity only
+    — it is passed to the model as context and never emitted in the output.
+    """
+    text = str(text or "")
+    try:
+        target = max(1, int(target_words))
+    except (TypeError, ValueError):
+        target = 750
+    try:
+        overlap = max(0, int(overlap_words))
+    except (TypeError, ValueError):
+        overlap = 0
+
+    if not text.strip():
+        return []
+
+    # 1. Break into paragraphs, then sentences within each paragraph.
+    segments = []
+    for para in re.split(r"\n\s*\n", text):
+        para = para.strip()
+        if not para:
+            continue
+        for sent in _SENTENCE_END_RE.split(para):
+            sent = sent.strip()
+            if sent:
+                segments.append(sent)
+    if not segments:
+        segments = [text.strip()]
+
+    # 2. Greedily pack sentences up to the target word count. A sentence longer
+    #    than the target becomes its own (oversized) chunk rather than being
+    #    split mid-sentence.
+    chunks = []
+    current = []
+    current_words = 0
+    for sent in segments:
+        w = len(sent.split())
+        if current and current_words + w > target:
+            chunks.append(" ".join(current))
+            current = [sent]
+            current_words = w
+        else:
+            current.append(sent)
+            current_words += w
+    if current:
+        chunks.append(" ".join(current))
+
+    # 3. Attach trailing-word overlap context from the previous chunk.
+    result = []
+    for i, chunk in enumerate(chunks):
+        context = ""
+        if i > 0 and overlap > 0:
+            prev_words = chunks[i - 1].split()
+            context = " ".join(prev_words[-overlap:])
+        result.append({"text": chunk, "context": context})
+    return result
+
 # Default personas (used to create personas.yaml if missing)
 _DEFAULT_PERSONAS = {
     "True Janitor": (
@@ -1139,34 +1208,33 @@ class LLMEngine:
             return text
 
     def _process_chunked(self, user_text, system_prompt, temperature=0.3, max_output_tokens=None, chunk_size_words=750):
-        """Process long text by chunking by word count."""
-        logging.info(f"📦 Chunking {len(user_text.split())} words into chunks of {chunk_size_words}")
-        
-        chunks = []
-        words = user_text.split()
-        current_chunk = []
-        
-        for word in words:
-            if len(current_chunk) >= chunk_size_words:
-                chunks.append(' '.join(current_chunk))
-                current_chunk = [word]
-            else:
-                current_chunk.append(word)
-        
-        if current_chunk:
-            chunks.append(' '.join(current_chunk))
-        
-        logging.info(f"   Processing {len(chunks)} chunks...")
-        
-        processed = [
-            self._call_api(
-                chunk,
-                system_prompt,
-                temperature=temperature,
-                max_output_tokens=max_output_tokens,
+        """Process long text via sentence-aware chunking (paragraph → sentence →
+        word fallback), passing overlap context so boundaries stay coherent."""
+        chunks = split_text_for_llm_chunks(user_text, chunk_size_words, overlap_words=40)
+        if not chunks:
+            return user_text
+
+        logging.info(
+            f"📦 Sentence-aware chunking {len(user_text.split())} words into "
+            f"{len(chunks)} chunks (target {chunk_size_words} words)"
+        )
+
+        processed = []
+        for chunk in chunks:
+            prompt = system_prompt
+            if chunk.get("context"):
+                prompt = (
+                    f"{system_prompt}\n\nPRECEDING CONTEXT (for continuity only — do NOT "
+                    f"repeat it in your output):\n{chunk['context']}"
+                )
+            processed.append(
+                self._call_api(
+                    chunk["text"],
+                    prompt,
+                    temperature=temperature,
+                    max_output_tokens=max_output_tokens,
+                )
             )
-            for chunk in chunks
-        ]
         return ' '.join(processed)
 
     def process_custom_prompt(self, user_text, system_prompt, max_output_tokens=None, chunk_size=750):

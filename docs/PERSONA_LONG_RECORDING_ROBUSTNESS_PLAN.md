@@ -145,6 +145,18 @@ Files:
 
 ## Phase 3: Sentence-Aware Chunking
 
+> **Status: ✅ DONE (2026-07-08).** Added module-level
+> `split_text_for_llm_chunks(text, target_words, overlap_words=40)` in
+> `llm_engine.py`: splits on paragraph → sentence boundaries, falls back to a
+> single oversized chunk only when one sentence exceeds the target, and returns
+> `{"text", "context"}` dicts. The `text` fields form a clean partition (joining
+> per-chunk output never duplicates), while `context` carries the previous
+> chunk's trailing `overlap_words` for continuity — passed to the model as
+> context, never emitted. `_process_chunked()` now uses it and injects the
+> overlap as a "do not repeat" context preamble. Tests:
+> `tests/test_llm_chunking.py` (8 tests); runtime-checked on real prose (every
+> chunk ends on a sentence boundary, ≤target words, no tokens lost/duplicated).
+
 ### Problem
 
 Current chunking splits on word count only. This can break paragraphs, lists, and sentences in awkward places.
