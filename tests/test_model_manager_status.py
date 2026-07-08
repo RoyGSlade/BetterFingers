@@ -236,6 +236,8 @@ class ModelManagerStatusTests(unittest.TestCase):
             with patch.dict(os.environ, {}, clear=True), patch(
                 "model_manager.sys.platform", "linux"
             ), patch("model_manager.get_models_dir", return_value=tmp), patch(
+                "model_manager.get_repo_root", return_value=tmp
+            ), patch(
                 "model_manager.get_model_path", return_value=model_path
             ), patch("model_manager.download_file", side_effect=fake_download) as download_file:
                 result = check_and_download_resources(model_id="gemma-4-12b-q4")
