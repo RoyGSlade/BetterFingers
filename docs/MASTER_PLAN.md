@@ -9,6 +9,16 @@ M (≤1 week), L (1–3 weeks), XL (3+ weeks).
 
 ## Implementation progress (branch: master-plan)
 
+**2026-07-08 — Post-merge bugfix pass complete.** A full gap review (setup/deps/docs,
+backend runtime, renderer UI/UX, Electron main process) found 3 HIGH, 8 MEDIUM, and
+11 LOW issues in the merged tree; all are now fixed across 7 phases (see
+`docs/BUGFIX_PLAN.md` for the full list + rationale). Highlights: `/privacy/wipe` now
+actually clears the searchable-history DB and on-disk recordings; the persona editor no
+longer silently overwrites an existing prompt; the dashboard window is recoverable after
+being closed (previously required quitting the whole app); and a real production bug was
+found and fixed along the way — `macros.py`'s `get_macros()` crashed on every read after
+any macro was ever saved. Suite grew 276 → 307, all green, tree clean.
+
 - [x] **C10 — Latency HUD.** server.py times STT + LLM stages per utterance, keeps the
   last 50 samples, exposes `GET /metrics` (avg/p50/p95/last per stage). Renderer shows a
   "Pipeline latency" table in the Diagnostics tab, refreshed with diagnostics.
