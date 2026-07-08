@@ -1,6 +1,7 @@
 const { test, expect } = require('@playwright/test');
 const { _electron: electron } = require('playwright');
 const path = require('node:path');
+const { dismissOnboardingIfPresent } = require('./helpers/onboarding');
 
 test.describe('BetterFingers Electron App Tests', () => {
   let app;
@@ -13,7 +14,7 @@ test.describe('BetterFingers Electron App Tests', () => {
       args: ['.'],
       env: {
         ...process.env,
-        BETTERFINGERS_PYTHON: 'python3', // Use system python3
+        BETTERFINGERS_PYTHON: process.env.BETTERFINGERS_PYTHON || 'python3',
       },
     });
 
@@ -29,6 +30,25 @@ test.describe('BetterFingers Electron App Tests', () => {
 
     await window.waitForLoadState('domcontentloaded');
     await window.waitForSelector('#backendStatus', { state: 'attached', timeout: 15000 });
+    await dismissOnboardingIfPresent(window);
+
+    // Wait for the backend to be genuinely ready, then confirm the renderer's
+    // one-shot bootstrap fetches (profiles, doctor, models) actually landed.
+    // On a cold launch those fetches can race ahead of the Python backend
+    // finishing startup and fail with no retry (only /health is re-polled),
+    // leaving e.g. #profileSelect permanently empty. A reload re-runs
+    // bootstrap after the backend is already confirmed listening.
+    await expect(window.locator('#backendStatus')).toHaveText(/ready|active|running|external/i, { timeout: 15000 });
+    const profileSelect = window.locator('#profileSelect');
+    const profilesLoaded = await profileSelect.evaluate((el) => Boolean(el.value)).catch(() => false);
+    if (!profilesLoaded) {
+      await window.reload();
+      await window.waitForLoadState('domcontentloaded');
+      await window.waitForSelector('#backendStatus', { state: 'attached', timeout: 15000 });
+      await dismissOnboardingIfPresent(window);
+      await expect(window.locator('#backendStatus')).toHaveText(/ready|active|running|external/i, { timeout: 15000 });
+    }
+    await expect.poll(() => profileSelect.evaluate((el) => Boolean(el.value)), { timeout: 15000 }).toBe(true);
   });
 
   test.afterAll(async () => {
@@ -150,8 +170,10 @@ test.describe('BetterFingers Electron App Tests', () => {
     const saveButton = window.locator('#saveProfileButton');
     await expect(saveButton).toBeDisabled();
 
-    // Restore different values using clear button
+    // Restore both fields using their clear buttons so later tests start clean
     await window.click('.setting-row:has(#settingForceStopKey) .clear-hotkey-btn');
+    await window.click('.setting-row:has(#settingHotkey) .clear-hotkey-btn');
+    await window.click('#discardProfileChangesButton');
   });
 
   test('Dirty-state appears and discard hides dirty state', async () => {
@@ -254,5 +276,20 @@ test.describe('BetterFingers Electron App Tests', () => {
   test('Capture screenshot of dashboard', async () => {
     await window.click('#tabButtonDashboard');
     await window.screenshot({ path: 'artifacts/betterfingers-dashboard-verified.png' });
+  });
+
+  test('Capture screenshots of every top-level page', async () => {
+    const pages = [
+      { tabButton: '#tabButtonDashboard', tabPanel: '#tabDashboard', name: 'dashboard' },
+      { tabButton: '#tabButtonSettings', tabPanel: '#tabSettings', name: 'settings' },
+      { tabButton: '#tabButtonModels', tabPanel: '#tabModels', name: 'models' },
+      { tabButton: '#tabButtonDiagnostics', tabPanel: '#tabDiagnostics', name: 'diagnostics' },
+    ];
+
+    for (const { tabButton, tabPanel, name } of pages) {
+      await window.click(tabButton);
+      await expect(window.locator(tabPanel)).toBeVisible();
+      await window.screenshot({ path: `artifacts/betterfingers-page-${name}.png` });
+    }
   });
 });

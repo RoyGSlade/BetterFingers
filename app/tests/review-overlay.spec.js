@@ -1,6 +1,7 @@
 const { test, expect } = require('@playwright/test');
 const { _electron: electron } = require('playwright');
 const path = require('node:path');
+const { dismissOnboardingIfPresent } = require('./helpers/onboarding');
 
 test.describe('BetterFingers Review Overlay Tests', () => {
   let app;
@@ -14,7 +15,7 @@ test.describe('BetterFingers Review Overlay Tests', () => {
       args: ['.'],
       env: {
         ...process.env,
-        BETTERFINGERS_PYTHON: 'python3', // Use system python3
+        BETTERFINGERS_PYTHON: process.env.BETTERFINGERS_PYTHON || 'python3',
       },
     });
 
@@ -30,9 +31,10 @@ test.describe('BetterFingers Review Overlay Tests', () => {
 
     await mainWindow.waitForLoadState('domcontentloaded');
     await mainWindow.waitForSelector('#backendStatus', { state: 'attached', timeout: 15000 });
+    await dismissOnboardingIfPresent(mainWindow);
     const statusLocator = mainWindow.locator('#backendStatus');
     await expect(statusLocator).toHaveText(/ready|active|running|external/i, { timeout: 15000 });
-    
+
     // Wait for WebSocket stream connection to be fully connected
     const wsConnection = mainWindow.locator('#wsConnection');
     await expect(wsConnection).toHaveText(/connected/i, { timeout: 15000 });

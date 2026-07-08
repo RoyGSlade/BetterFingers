@@ -33,3 +33,10 @@ env/
 
 # Repo-local runtime assets
 .betterfingers/
+
+# Playwright run output (regenerated every run; churns the tree)
+app/test-results/
+app/playwright-report/
+# Per-run QA screenshots. Curated reg-actions baselines get checked in
+# deliberately under a separate path, not this one.
+app/artifacts/
