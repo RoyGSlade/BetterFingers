@@ -67,9 +67,10 @@ function buildMenu({ getMainWindow, onShow, onQuit, onToggleRecording }) {
     {
       label: 'Open Dashboard',
       click: () => {
-        const window = getMainWindow?.();
-        if (window && onShow) {
-          onShow(window);
+        // onShow recreates the dashboard when it has been closed, so call it
+        // unconditionally rather than gating on getMainWindow() being non-null.
+        if (onShow) {
+          onShow();
         }
       },
     },
@@ -94,9 +95,8 @@ function createTray({ getMainWindow, onShow, onQuit, onToggleRecording }) {
   rebuildMenu();
 
   tray.on('click', () => {
-    const window = getMainWindow?.();
-    if (window && onShow) {
-      onShow(window);
+    if (onShow) {
+      onShow();
     }
   });
 

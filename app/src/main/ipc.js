@@ -2,9 +2,13 @@ const { clipboard, ipcMain, shell } = require('electron');
 
 let overlayHideTimer = null;
 
-function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthToken, onQuit, onShow } = {}) {
+function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthToken, getBackendOrigin, onQuit, onShow } = {}) {
   ipcMain.on('app:get-auth-token-sync', (event) => {
     event.returnValue = typeof getAuthToken === 'function' ? getAuthToken() : '';
+  });
+
+  ipcMain.on('app:get-backend-origin-sync', (event) => {
+    event.returnValue = typeof getBackendOrigin === 'function' ? getBackendOrigin() : '';
   });
 
   ipcMain.handle('app:quit', async () => {
@@ -36,9 +40,10 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthT
   });
 
   ipcMain.handle('app:show', () => {
-    const window = getMainWindow?.();
-    if (window && onShow) {
-      onShow(window);
+    // Call onShow unconditionally: it recreates the dashboard window when it
+    // has been closed (getMainWindow() returns null in that case).
+    if (onShow) {
+      onShow();
     }
     return true;
   });

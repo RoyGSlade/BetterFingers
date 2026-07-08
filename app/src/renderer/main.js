@@ -2761,23 +2761,27 @@ function updatePlatformWarnings(capabilities) {
     }
   }
 
+  // Audio ducking is available on Windows and on Linux with pactl/PipeWire;
+  // trust the backend capability rather than assuming Windows-only.
+  const supportsAudioDucking = Boolean(capabilities.supports_audio_ducking);
+
   const audioDuckingWarning = document.getElementById('audioDuckingWarning');
   if (audioDuckingWarning) {
-    if (isWindows) {
+    if (supportsAudioDucking) {
       audioDuckingWarning.classList.add('hidden');
     } else {
       audioDuckingWarning.classList.remove('hidden');
-      audioDuckingWarning.innerHTML = '<strong>Audio Ducking Warning:</strong> Dynamic volume ducking is only supported on Windows. Please manually pause background media players during speech capture.';
+      audioDuckingWarning.innerHTML = '<strong>Audio Ducking Warning:</strong> Dynamic volume ducking isn\'t available on this system (needs Windows, or Linux with <code>pactl</code>/PipeWire). Please manually pause background media players during speech capture.';
     }
   }
 
   // Enforce disabling of platform-unsupported controls dynamically
   const audioDuckingInput = settingEls.audio_ducking;
   if (audioDuckingInput) {
-    if (!isWindows) {
+    if (!supportsAudioDucking) {
       audioDuckingInput.checked = false;
       audioDuckingInput.disabled = true;
-      audioDuckingInput.title = "Audio ducking is only supported on Windows.";
+      audioDuckingInput.title = "Audio ducking needs Windows, or Linux with pactl/PipeWire.";
     } else {
       audioDuckingInput.disabled = false;
       audioDuckingInput.title = "";
@@ -2796,7 +2800,7 @@ function updatePlatformWarnings(capabilities) {
     }
   }
 
-  addPlatformBadge('settingAudioDucking', isWindows ? 'Windows' : 'Windows Only', isWindows ? 'success' : 'danger');
+  addPlatformBadge('settingAudioDucking', supportsAudioDucking ? 'Supported' : 'Unsupported', supportsAudioDucking ? 'success' : 'danger');
   addPlatformBadge('settingInstantTyping', (isLinux && isWayland) ? 'Wayland Limitation' : '', 'danger');
   addPlatformBadge('settingHotkey', (isLinux && isWayland) ? 'Global shortcut depends on Wayland compositor' : '', 'danger');
 }
@@ -2995,6 +2999,7 @@ function updateVoiceStatus(message) {
       token_count: message.token_count,
       token_limit: message.token_limit,
       long_text: message.long_text,
+      confidence: message.confidence,
     };
     renderDraft(draft);
     if (message.status === 'preview_ready') {

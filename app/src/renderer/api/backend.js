@@ -1,4 +1,4 @@
-const BACKEND_ORIGIN = 'http://127.0.0.1:8000';
+const BACKEND_ORIGIN = window.betterFingers?.backendOrigin || 'http://127.0.0.1:8000';
 const HEALTH_URL = `${BACKEND_ORIGIN}/health`;
 const RUNTIME_STATUS_URL = `${BACKEND_ORIGIN}/runtime/status`;
 const RUNTIME_WARMUP_URL = `${BACKEND_ORIGIN}/runtime/warmup`;
@@ -15,7 +15,7 @@ const SETTINGS_PROFILES_URL = `${BACKEND_ORIGIN}/settings/profiles`;
 const MODELS_LLM_URL = `${BACKEND_ORIGIN}/models/llm`;
 const MODELS_WHISPER_URL = `${BACKEND_ORIGIN}/models/whisper`;
 const MODELS_UNLOAD_URL = `${BACKEND_ORIGIN}/models/unload`;
-const VOICE_STATUS_WS_URL = 'ws://127.0.0.1:8000/ws/voice_status';
+const VOICE_STATUS_WS_URL = `${BACKEND_ORIGIN.replace(/^http/, 'ws')}/ws/voice_status`;
 const DOCTOR_URL = `${BACKEND_ORIGIN}/doctor`;
 const REFRESH_AUDIO_DEVICES_URL = `${BACKEND_ORIGIN}/runtime/audio-devices/refresh`;
 const RUNTIME_VERSION_URL = `${BACKEND_ORIGIN}/runtime/version`;

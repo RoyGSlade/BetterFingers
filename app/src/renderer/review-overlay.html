@@ -299,7 +299,11 @@
     </div>
 
     <script>
-      const BACKEND_ORIGIN = 'http://127.0.0.1:8000';
+      const BACKEND_ORIGIN = window.betterFingers?.backendOrigin || 'http://127.0.0.1:8000';
+      const AUTH_TOKEN = window.betterFingers?.authToken || '';
+      function authHeaders() {
+        return AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {};
+      }
       const statusEl = document.getElementById('status');
       const rawTextEl = document.getElementById('rawText');
       const finalTextEl = document.getElementById('finalText');
@@ -419,6 +423,7 @@
           const response = await fetch(url, {
             cache: 'no-store',
             ...options,
+            headers: { ...authHeaders(), ...(options.headers || {}) },
             signal: controller.signal,
           });
           if (!response.ok) {

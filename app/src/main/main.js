@@ -7,7 +7,7 @@ const { createSidecar } = require('./sidecar');
 const { createTray } = require('./tray');
 const { registerIpc } = require('./ipc');
 const { unregisterAllHotkeys, triggerBackendAction } = require('./hotkeys');
-const { BACKEND_HOST, BACKEND_PORT } = require('./config');
+const { BACKEND_HOST, BACKEND_PORT, BACKEND_ORIGIN } = require('./config');
 
 const authToken = randomUUID();
 
@@ -89,6 +89,7 @@ function bootstrapApp() {
     getSidecarStatus: () => sidecar?.getStatus?.() ?? { state: 'unknown', message: 'Sidecar is unavailable.' },
     getSidecarLogs: () => sidecar?.getLogs?.() ?? [],
     getAuthToken: () => authToken,
+    getBackendOrigin: () => BACKEND_ORIGIN,
     onQuit: requestQuit,
     onShow: () => focusMainWindow(ensureMainWindow()),
   });

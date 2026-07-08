@@ -1,7 +1,7 @@
 # Manual QA checklist
 
 Manual verification steps for every feature shipped during the MASTER_PLAN
-loop. The automated suite (`python3 -m pytest`, 262 tests) covers the pure
+loop. The automated suite (`python3 -m pytest`, 307 tests) covers the pure
 logic; this checklist covers what needs a **running app + sidecar** to confirm.
 
 How to run the app for QA:
@@ -151,6 +151,6 @@ files involved so a failure is easy to trace.
 
 ## Regression sanity (every session)
 
-- ☐ `python3 -m pytest -q` → 262+ passing.
+- ☐ `python3 -m pytest -q` → 307+ passing.
 - ☐ `node --check app/src/renderer/main.js && node --check app/src/renderer/api/backend.js`.
 - ☐ App launches, records one utterance end-to-end (record → draft → send).

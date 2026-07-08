@@ -7,14 +7,20 @@ test.describe('BetterFingers Electron App Tests', () => {
   let window;
 
   test.beforeAll(async () => {
+    // Inherit the parent env but strip the vars that make Electron start as a
+    // plain Node process (ELECTRON_RUN_AS_NODE) instead of opening a window.
+    // A shell that has one exported — common under some test runners/CI — would
+    // otherwise silently break the launch with no window ever appearing.
+    const launchEnv = { ...process.env };
+    delete launchEnv.ELECTRON_RUN_AS_NODE;
+    delete launchEnv.ELECTRON_NO_ATTACH_CONSOLE;
+    launchEnv.BETTERFINGERS_PYTHON = launchEnv.BETTERFINGERS_PYTHON || 'python3'; // Use system python3
+
     // Launch Electron app
     app = await electron.launch({
       cwd: path.resolve(__dirname, '..'),
       args: ['.'],
-      env: {
-        ...process.env,
-        BETTERFINGERS_PYTHON: 'python3', // Use system python3
-      },
+      env: launchEnv,
     });
 
     // Wait for the main window (index.html) to open and load
@@ -27,6 +33,16 @@ test.describe('BetterFingers Electron App Tests', () => {
       });
     }
 
+    await window.waitForLoadState('domcontentloaded');
+    await window.waitForSelector('#backendStatus', { state: 'attached', timeout: 15000 });
+
+    // On a clean profile the first-run onboarding overlay is modal and blocks
+    // the tab/settings clicks these tests perform. Mark onboarding complete and
+    // reload so every test below runs against the dismissed dashboard.
+    await window.addInitScript(() => {
+      try { localStorage.setItem('bf_onboarding_complete', 'true'); } catch (_e) {}
+    });
+    await window.reload();
     await window.waitForLoadState('domcontentloaded');
     await window.waitForSelector('#backendStatus', { state: 'attached', timeout: 15000 });
   });
