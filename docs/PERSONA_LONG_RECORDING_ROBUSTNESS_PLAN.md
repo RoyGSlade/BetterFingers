@@ -296,6 +296,24 @@ Files:
 
 ## Phase 6: Use Persona v2 Fields During Inference
 
+> **Status: ✅ DONE (2026-07-08).** Added `get_persona_runtime(name)` (normalized
+> v2 persona with default-persona fallback), `compose_persona_system_prompt(persona)`
+> (prompt + FORMAT RULES from `format.caps`/`punctuation`/`signoff` + non-global
+> `dictionary_scope`; a prompt-only persona returns exactly its prompt) and
+> `compose_persona_messages(persona, user_text)` (system + up to 5 few-shot
+> user/assistant turns + user text) in `llm_engine.py`. `process_fast_lane()` now
+> composes the system prompt from the persona, applies `persona.temperature` as an
+> override (else the strict/default heuristic), and threads `few_shot` through
+> `_process_chunked()` → `_call_api()` (which builds messages via a shared
+> `_build_chat_messages()` and now allows temperatures up to 2.0). `model_hint` is
+> left as metadata only (no routing yet), per plan. **Scope note:** initial
+> dictation still uses the "True Janitor" preset (server unchanged — the active
+> profile's `current_preset` drives the settings UI, and wiring it into dictation
+> would change behavior + break tests; deferred). Few-shot capped at 5
+> (`MAX_FEW_SHOT_EXAMPLES`). Tests: 9 new in `tests/test_llm_persona_management.py`
+> (composition, few-shot turns/cap, invalid-field safety, temperature+few_shot
+> reaching `_call_api`, prompt-only unchanged). Runtime-verified. Suite 338 green.
+
 ### Problem
 
 Persona v2 fields are persisted, but `process_fast_lane()` mostly uses `load_personas()`, the legacy `{name: prompt}` view.

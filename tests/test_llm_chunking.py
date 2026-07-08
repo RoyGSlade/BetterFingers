@@ -82,7 +82,7 @@ class StitchPassTest(unittest.TestCase):
         engine = self._engine()
         calls = []
 
-        def fake_call_api(text, system_prompt, temperature=0.3, max_output_tokens=None):
+        def fake_call_api(text, system_prompt, temperature=0.3, max_output_tokens=None, few_shot=None):
             calls.append(system_prompt)
             return text
 
@@ -97,7 +97,7 @@ class StitchPassTest(unittest.TestCase):
         engine = self._engine()
         calls = []
 
-        def fake_call_api(text, system_prompt, temperature=0.3, max_output_tokens=None):
+        def fake_call_api(text, system_prompt, temperature=0.3, max_output_tokens=None, few_shot=None):
             calls.append(system_prompt)
             return text
 
@@ -116,7 +116,7 @@ class StitchPassTest(unittest.TestCase):
     def test_stitch_failure_returns_joined_chunks(self):
         engine = self._engine()
 
-        def flaky_call_api(text, system_prompt, temperature=0.3, max_output_tokens=None):
+        def flaky_call_api(text, system_prompt, temperature=0.3, max_output_tokens=None, few_shot=None):
             if "Smooth ONLY the transitions" in system_prompt:
                 raise RuntimeError("stitch boom")
             return text

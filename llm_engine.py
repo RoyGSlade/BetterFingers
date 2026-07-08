@@ -409,6 +409,92 @@ def get_persona_prompt(name, default=""):
     return str(default or "")
 
 
+# Cap few-shot examples to keep context small (plan risk note: 3–5).
+MAX_FEW_SHOT_EXAMPLES = 5
+
+
+def get_persona_runtime(name):
+    """Return the runtime schema-v2 persona for ``name``, falling back to the
+    default persona when the name is unknown. Always returns a normalized dict
+    so callers can rely on every v2 field being present."""
+    persona = get_persona(name)
+    if persona:
+        return persona
+    key = str(name or "").strip()
+    if key in INTERNAL_PRESETS:
+        return normalize_persona(INTERNAL_PRESETS[key])
+    return normalize_persona(_DEFAULT_PERSONAS.get("True Janitor", ""))
+
+
+def compose_persona_system_prompt(persona):
+    """Combine a persona's prompt with its format rules and dictionary scope into
+    one system prompt. A persona carrying only a prompt (default format/scope)
+    returns exactly that prompt, so prompt-only legacy personas are unchanged."""
+    persona = normalize_persona(persona)
+    parts = []
+    base = str(persona.get("prompt", "") or "").strip()
+    if base:
+        parts.append(base)
+
+    fmt = persona.get("format", {}) or {}
+    fmt_rules = []
+    caps = str(fmt.get("caps", "none") or "none").strip().lower()
+    caps_map = {
+        "upper": "Write the output in ALL UPPERCASE.",
+        "lower": "Write the output in all lowercase.",
+        "sentence": "Use sentence case for the output.",
+        "title": "Use Title Case For The Output.",
+    }
+    if caps in caps_map:
+        fmt_rules.append(caps_map[caps])
+    if fmt.get("punctuation", True) is False:
+        fmt_rules.append("Do not add punctuation.")
+    signoff = str(fmt.get("signoff", "") or "").strip()
+    if signoff:
+        fmt_rules.append(f"End the output with this sign-off on its own line: {signoff}")
+    if fmt_rules:
+        parts.append("FORMAT RULES: " + " ".join(fmt_rules))
+
+    scope = str(persona.get("dictionary_scope", "global") or "global").strip().lower()
+    if scope and scope != "global":
+        parts.append(f"DICTIONARY SCOPE: prefer terminology from the '{scope}' dictionary scope.")
+
+    return "\n\n".join(parts)
+
+
+def _build_chat_messages(system_prompt, user_text, few_shot=None, max_examples=MAX_FEW_SHOT_EXAMPLES):
+    """Assemble OpenAI-style chat messages: a system turn, then up to
+    ``max_examples`` few-shot user/assistant turns, then the user content."""
+    messages = [{"role": "system", "content": str(system_prompt or "")}]
+    if few_shot:
+        for item in list(few_shot)[:max_examples]:
+            if not isinstance(item, dict):
+                continue
+            raw = str(item.get("raw", "") or "").strip()
+            out = str(item.get("out", "") or "").strip()
+            if raw and out:
+                messages.append({"role": "user", "content": raw})
+                messages.append({"role": "assistant", "content": out})
+    messages.append({"role": "user", "content": str(user_text or "")})
+    return messages
+
+
+def compose_persona_messages(persona, user_text):
+    """Build chat messages for a persona: composed system prompt + few-shot turns
+    (capped at MAX_FEW_SHOT_EXAMPLES) + the user text. Few-shot examples become
+    real user/assistant turns rather than being inlined into the system prompt."""
+    persona = normalize_persona(persona)
+    system_prompt = compose_persona_system_prompt(persona)
+    return _build_chat_messages(system_prompt, user_text, persona.get("few_shot"))
+
+
+def _clamp_persona_temperature(value, fallback):
+    try:
+        return max(0.0, min(2.0, float(value)))
+    except (TypeError, ValueError):
+        return fallback
+
+
 def upsert_persona(name, persona):
     """Create or update a persona.
 
@@ -1112,14 +1198,17 @@ class LLMEngine:
             logging.warning("LLM not ready, returning original text.")
             return user_text
 
-        # Load personas dynamically
-        personas = load_personas()
-
-        # Select prompt (user-visible presets plus internal presets for server workflows)
+        # Select the persona. Internal presets stay plain-prompt; user personas
+        # are composed from their schema-v2 fields (prompt + format + scope) and
+        # can carry a temperature override and few-shot examples.
+        persona = None
+        few_shot = None
         if preset_name in INTERNAL_PRESETS:
             system_prompt = INTERNAL_PRESETS[preset_name]
         else:
-            system_prompt = personas.get(preset_name, personas.get("True Janitor", _DEFAULT_PERSONAS["True Janitor"]))
+            persona = get_persona_runtime(preset_name)
+            system_prompt = compose_persona_system_prompt(persona)
+            few_shot = persona.get("few_shot") or None
 
         strict_janitor_mode = str(preset_name or "").strip().lower() == "true janitor"
         if strict_janitor_mode:
@@ -1154,7 +1243,11 @@ class LLMEngine:
         if rules_text:
             system_prompt += rules_text
 
-        temperature = 0.05 if strict_janitor_mode else 0.3
+        # A persona temperature (when set) overrides the strict/default heuristic.
+        if persona is not None and persona.get("temperature") is not None:
+            temperature = _clamp_persona_temperature(persona["temperature"], 0.3)
+        else:
+            temperature = 0.05 if strict_janitor_mode else 0.3
 
         # For long texts, chunk and process (sentence-aware)
         if len(user_text.split()) > chunk_size:
@@ -1166,6 +1259,7 @@ class LLMEngine:
                 chunk_size_words=chunk_size,
                 progress_callback=progress_callback,
                 stitch_pass=stitch_pass,
+                few_shot=few_shot,
             )
 
         return self._call_api(
@@ -1173,15 +1267,20 @@ class LLMEngine:
             system_prompt,
             temperature=temperature,
             max_output_tokens=max_output_tokens,
+            few_shot=few_shot,
         )
 
-    def _call_api(self, text, system_prompt, temperature=0.3, max_output_tokens=None):
-        """Make a single API call to the sidecar with a given system prompt."""
+    def _call_api(self, text, system_prompt, temperature=0.3, max_output_tokens=None, few_shot=None):
+        """Make a single API call to the sidecar with a given system prompt.
+
+        ``few_shot`` (optional list of {"raw","out"}) is inserted as real
+        user/assistant example turns before the user content."""
         try:
             safe_temperature = float(temperature)
         except Exception:
             safe_temperature = 0.3
-        safe_temperature = max(0.0, min(1.0, safe_temperature))
+        # Honour persona temperatures up to 2.0 (llama-server's ceiling).
+        safe_temperature = max(0.0, min(2.0, safe_temperature))
         try:
             safe_max_tokens = int(max_output_tokens if max_output_tokens is not None else DEFAULT_MAX_OUTPUT_TOKENS)
         except Exception:
@@ -1189,10 +1288,7 @@ class LLMEngine:
         safe_max_tokens = max(64, min(4096, safe_max_tokens))
 
         payload = {
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": text}
-            ],
+            "messages": _build_chat_messages(system_prompt, text, few_shot),
             "temperature": safe_temperature,
             "max_tokens": safe_max_tokens,
             "stream": False
@@ -1234,7 +1330,7 @@ class LLMEngine:
             logging.warning(f"Stitch pass failed, returning joined chunks: {exc}")
             return joined_text
 
-    def _process_chunked(self, user_text, system_prompt, temperature=0.3, max_output_tokens=None, chunk_size_words=750, progress_callback=None, stitch_pass=False):
+    def _process_chunked(self, user_text, system_prompt, temperature=0.3, max_output_tokens=None, chunk_size_words=750, progress_callback=None, stitch_pass=False, few_shot=None):
         """Process long text via sentence-aware chunking (paragraph → sentence →
         word fallback), passing overlap context so boundaries stay coherent.
 
@@ -1274,6 +1370,7 @@ class LLMEngine:
                     prompt,
                     temperature=temperature,
                     max_output_tokens=max_output_tokens,
+                    few_shot=few_shot,
                 )
             )
 
