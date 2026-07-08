@@ -5,6 +5,7 @@ Uses a local llama-server.exe subprocess for inference.
 Implements process-level singleton to prevent multiple server instances.
 """
 
+import copy
 import os
 import subprocess
 import time
@@ -309,12 +310,16 @@ def load_personas(force_reload=False):
 
 
 def get_persona(name):
-    """Return the full schema v2 dict for a persona, or None if absent."""
+    """Return the full schema v2 dict for a persona, or None if absent.
+
+    Deep-copied so callers (e.g. the /personas/{name} route) can't mutate
+    nested fields like voice/format/few_shot and corrupt the shared cache.
+    """
     personas = load_personas_v2()
     key = str(name or "").strip()
     with _personas_lock:
         entry = personas.get(key)
-    return dict(entry) if entry else None
+        return copy.deepcopy(entry) if entry else None
 
 
 def get_fast_lane_preset_names():

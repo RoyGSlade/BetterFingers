@@ -15,6 +15,13 @@ from utils import get_user_data_path
 _lock = threading.Lock()
 _initialized_path = None
 
+# Unlike recordings.py's MAX_RECORDINGS, this store previously had no retention
+# limit and accumulated every draft forever. Cap it so the DB doesn't grow
+# unbounded across months of use.
+MAX_HISTORY_RECORDS = 5000
+_PRUNE_EVERY_N_WRITES = 100
+_write_count = 0
+
 
 def get_db_path():
     return os.path.join(get_user_data_path(), "history.db")
@@ -84,6 +91,10 @@ def init():
                 conn.close()
         except Exception as exc:
             logging.warning(f"history_store init failed: {exc}")
+            return
+    # Outside the lock (prune_history takes it itself); catches a store that
+    # grew past the limit before this version, or between app runs.
+    prune_history()
 
 
 def _row_from_draft(draft):
@@ -98,6 +109,7 @@ def _row_from_draft(draft):
 
 
 def upsert_draft(draft):
+    global _write_count
     if not isinstance(draft, dict) or draft.get("id") is None:
         return
     init()
@@ -127,6 +139,10 @@ def upsert_draft(draft):
                 conn.close()
         except Exception as exc:
             logging.debug(f"history_store upsert failed: {exc}")
+
+    _write_count += 1
+    if _write_count % _PRUNE_EVERY_N_WRITES == 0:
+        prune_history()
 
 
 def upsert_many(drafts):
@@ -205,6 +221,36 @@ def count():
             finally:
                 conn.close()
         except Exception:
+            return 0
+
+
+def prune_history(max_keep=MAX_HISTORY_RECORDS):
+    """Delete rows beyond the newest max_keep (by created_at, then id).
+
+    The FTS index stays in sync automatically via the drafts_ad trigger.
+    Returns the number of rows removed.
+    """
+    init()
+    with _lock:
+        try:
+            conn = _connect()
+            try:
+                cur = conn.execute(
+                    """
+                    DELETE FROM drafts WHERE id IN (
+                        SELECT id FROM drafts
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT -1 OFFSET ?
+                    )
+                    """,
+                    (int(max_keep),),
+                )
+                conn.commit()
+                return max(cur.rowcount, 0)
+            finally:
+                conn.close()
+        except Exception as exc:
+            logging.warning(f"history_store prune failed: {exc}")
             return 0
 
 

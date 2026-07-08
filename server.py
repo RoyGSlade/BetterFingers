@@ -298,22 +298,27 @@ def is_lazy_startup_enabled():
     return os.getenv("BETTERFINGERS_LAZY_STARTUP") == "1"
 
 
-def voice_commands_enabled():
-    """Whether spoken dictation commands (C2) are applied. Per-profile, default on."""
+def get_pipeline_flags():
+    """Per-profile toggles used on the hot dictation path, read with a single
+    load_profile() call rather than one per flag (each call is disk I/O)."""
     try:
         config = load_profile(get_last_active_profile())
     except Exception:
-        return True
-    return bool(config.get("voice_commands_enabled", True))
+        config = {}
+    return {
+        "voice_commands": bool(config.get("voice_commands_enabled", True)),
+        "macros": bool(config.get("macros_enabled", True)),
+    }
+
+
+def voice_commands_enabled():
+    """Whether spoken dictation commands (C2) are applied. Per-profile, default on."""
+    return get_pipeline_flags()["voice_commands"]
 
 
 def macros_enabled():
     """Whether voice macros (C11) are expanded. Per-profile, default on."""
-    try:
-        config = load_profile(get_last_active_profile())
-    except Exception:
-        return True
-    return bool(config.get("macros_enabled", True))
+    return get_pipeline_flags()["macros"]
 
 
 def get_model_residency_settings():
@@ -1039,11 +1044,13 @@ def process_recording_result(recording_result):
         # Post-ASR correction snaps near-miss tokens back to dictionary terms.
         if raw_text and dict_terms:
             raw_text = dictionary.correct_text(raw_text, dict_terms)
+        # Single profile read backs both toggles below (each load_profile() call is disk I/O).
+        pipeline_flags = get_pipeline_flags()
         # Spoken dictation commands (C2): "new paragraph", "period", "all caps", ...
-        if raw_text and voice_commands_enabled():
+        if raw_text and pipeline_flags["voice_commands"]:
             raw_text = dictation_commands.apply_commands(raw_text)
         # Voice macros (C11): expand user snippets like "my address".
-        if raw_text and macros_enabled():
+        if raw_text and pipeline_flags["macros"]:
             raw_text = macros.apply_macros(raw_text)
         stt_ms = (time.perf_counter() - _stt_start) * 1000.0
 

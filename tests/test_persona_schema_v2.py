@@ -168,6 +168,31 @@ class UpsertV2Tests(_TempAppdataMixin, unittest.TestCase):
         self.assertFalse(ok)
 
 
+class GetPersonaCopyTests(_TempAppdataMixin, unittest.TestCase):
+    """get_persona() must return an isolated copy — mutating nested fields
+    (voice/format/few_shot) must never corrupt the shared in-memory cache."""
+
+    def test_mutating_nested_dict_does_not_corrupt_cache(self):
+        llm_engine.upsert_persona("Mutable", {"prompt": "P", "voice": {"base": "af_heart", "speed": 1.0}})
+
+        entry = llm_engine.get_persona("Mutable")
+        entry["voice"]["speed"] = 99.0
+        entry["format"]["signoff"] = "-hacked"
+
+        fresh = llm_engine.get_persona("Mutable")
+        self.assertEqual(fresh["voice"]["speed"], 1.0)
+        self.assertEqual(fresh["format"]["signoff"], "")
+
+    def test_mutating_few_shot_list_does_not_corrupt_cache(self):
+        llm_engine.upsert_persona("Mutable2", {"prompt": "P", "few_shot": [{"raw": "hi", "out": "Hello."}]})
+
+        entry = llm_engine.get_persona("Mutable2")
+        entry["few_shot"].append({"raw": "bye", "out": "Goodbye."})
+
+        fresh = llm_engine.get_persona("Mutable2")
+        self.assertEqual(len(fresh["few_shot"]), 1)
+
+
 class DeleteV2Tests(_TempAppdataMixin, unittest.TestCase):
     def test_delete_custom_persona(self):
         llm_engine.upsert_persona("Temp", "x")
