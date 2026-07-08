@@ -1129,9 +1129,11 @@ def process_recording_result(recording_result):
             config = load_profile(get_last_active_profile())
             llm_chunk_size = config.get("llm_chunk_size", 750)
             completion_tokens = int(config.get("max_completion_tokens") or config.get("output_token_limit", 1600) or 1600)
+            stitch_enabled = bool(config.get("long_recording_stitch_pass_enabled", True))
         except Exception:
             llm_chunk_size = 750
             completion_tokens = 1600
+            stitch_enabled = True
 
         _llm_start = time.perf_counter()
         # Long recordings (word count over the chunk threshold) get progress
@@ -1162,6 +1164,7 @@ def process_recording_result(recording_result):
             max_output_tokens=completion_tokens,
             chunk_size=llm_chunk_size,
             progress_callback=_chunk_progress if will_chunk else None,
+            stitch_pass=stitch_enabled,
         )
         llm_ms = (time.perf_counter() - _llm_start) * 1000.0
 

@@ -1102,6 +1102,7 @@ class LLMEngine:
         max_output_tokens=None,
         chunk_size=750,
         progress_callback=None,
+        stitch_pass=False,
     ):
         """
         Process text through the sidecar with preset-based prompts.
@@ -1164,6 +1165,7 @@ class LLMEngine:
                 max_output_tokens=max_output_tokens,
                 chunk_size_words=chunk_size,
                 progress_callback=progress_callback,
+                stitch_pass=stitch_pass,
             )
 
         return self._call_api(
@@ -1209,7 +1211,30 @@ class LLMEngine:
             logging.error(f"API Error: {e}")
             return text
 
-    def _process_chunked(self, user_text, system_prompt, temperature=0.3, max_output_tokens=None, chunk_size_words=750, progress_callback=None):
+    def _stitch_chunks(self, joined_text, temperature=0.2, max_output_tokens=None):
+        """Lightweight final pass that only smooths seams between already-cleaned
+        chunks. Never summarizes or adds ideas. Returns the joined text unchanged
+        if the stitch call fails, so chunked work is never lost."""
+        stitch_prompt = (
+            "You are joining several already-cleaned text segments into one continuous "
+            "passage. Smooth ONLY the transitions between segments and remove any "
+            "duplicated overlap at the seams. Do NOT summarize, do NOT add or remove "
+            "ideas, and do NOT change wording except at the seams. Return only the "
+            "joined text."
+        )
+        try:
+            stitched = self._call_api(
+                joined_text,
+                stitch_prompt,
+                temperature=min(float(temperature), 0.2),
+                max_output_tokens=max_output_tokens,
+            )
+            return stitched or joined_text
+        except Exception as exc:
+            logging.warning(f"Stitch pass failed, returning joined chunks: {exc}")
+            return joined_text
+
+    def _process_chunked(self, user_text, system_prompt, temperature=0.3, max_output_tokens=None, chunk_size_words=750, progress_callback=None, stitch_pass=False):
         """Process long text via sentence-aware chunking (paragraph → sentence →
         word fallback), passing overlap context so boundaries stay coherent.
 
@@ -1251,7 +1276,13 @@ class LLMEngine:
                     max_output_tokens=max_output_tokens,
                 )
             )
-        return ' '.join(processed)
+
+        joined = ' '.join(processed)
+        # Optional stitch pass smooths seams once there is more than one chunk.
+        if stitch_pass and chunk_count > 1:
+            _notify({"status": "chunking_stitching", "chunk_count": chunk_count})
+            return self._stitch_chunks(joined, temperature=temperature, max_output_tokens=max_output_tokens)
+        return joined
 
     def process_custom_prompt(self, user_text, system_prompt, max_output_tokens=None, chunk_size=750):
         """

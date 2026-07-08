@@ -1,8 +1,10 @@
-"""Phase 3: sentence-aware chunking for long LLM inputs."""
+"""Phase 3: sentence-aware chunking for long LLM inputs.
+Phase 5: optional stitch pass over multi-chunk output."""
 
 import unittest
+from unittest.mock import patch
 
-from llm_engine import split_text_for_llm_chunks
+from llm_engine import LLMEngine, split_text_for_llm_chunks
 
 
 class SplitTextForLLMChunksTest(unittest.TestCase):
@@ -64,6 +66,67 @@ class SplitTextForLLMChunksTest(unittest.TestCase):
         # is preserved in order.
         rejoined = " ".join(c["text"] for c in chunks)
         self.assertEqual(rejoined.split(), text.split())
+
+
+class StitchPassTest(unittest.TestCase):
+    def _engine(self):
+        engine = LLMEngine.__new__(LLMEngine)
+        engine.api_url = "http://127.0.0.1:8080"
+        return engine
+
+    def _long_text(self):
+        # 5 sentences of ~8 words; target 10 words forces multiple chunks.
+        return " ".join(f"This is chunk sentence number {i} right here." for i in range(6))
+
+    def test_stitch_pass_runs_once_over_joined_output_when_enabled(self):
+        engine = self._engine()
+        calls = []
+
+        def fake_call_api(text, system_prompt, temperature=0.3, max_output_tokens=None):
+            calls.append(system_prompt)
+            return text
+
+        with patch.object(engine, "_call_api", side_effect=fake_call_api):
+            engine._process_chunked(self._long_text(), "SYS", chunk_size_words=10, stitch_pass=True)
+
+        # Last call is the stitch pass with the seam-smoothing prompt.
+        self.assertIn("Smooth ONLY the transitions", calls[-1])
+        self.assertEqual(sum(1 for p in calls if "Smooth ONLY the transitions" in p), 1)
+
+    def test_no_stitch_when_disabled(self):
+        engine = self._engine()
+        calls = []
+
+        def fake_call_api(text, system_prompt, temperature=0.3, max_output_tokens=None):
+            calls.append(system_prompt)
+            return text
+
+        with patch.object(engine, "_call_api", side_effect=fake_call_api):
+            engine._process_chunked(self._long_text(), "SYS", chunk_size_words=10, stitch_pass=False)
+
+        self.assertFalse(any("Smooth ONLY the transitions" in p for p in calls))
+
+    def test_no_stitch_for_single_chunk(self):
+        engine = self._engine()
+        calls = []
+        with patch.object(engine, "_call_api", side_effect=lambda text, sp, **kw: calls.append(sp) or text):
+            engine._process_chunked("Short single chunk here.", "SYS", chunk_size_words=100, stitch_pass=True)
+        self.assertFalse(any("Smooth ONLY the transitions" in p for p in calls))
+
+    def test_stitch_failure_returns_joined_chunks(self):
+        engine = self._engine()
+
+        def flaky_call_api(text, system_prompt, temperature=0.3, max_output_tokens=None):
+            if "Smooth ONLY the transitions" in system_prompt:
+                raise RuntimeError("stitch boom")
+            return text
+
+        with patch.object(engine, "_call_api", side_effect=flaky_call_api):
+            result = engine._process_chunked(self._long_text(), "SYS", chunk_size_words=10, stitch_pass=True)
+
+        # Work is preserved: joined chunk output is returned despite stitch failure.
+        self.assertTrue(result.strip())
+        self.assertIn("chunk sentence number 0", result)
 
 
 if __name__ == "__main__":

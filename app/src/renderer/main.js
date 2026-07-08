@@ -208,6 +208,7 @@ const settingEls = {
   current_preset: document.getElementById('settingCurrentPreset'),
   max_completion_tokens: document.getElementById('settingMaxCompletionTokens'),
   long_draft_warning_words: document.getElementById('settingLongDraftWarningWords'),
+  long_recording_stitch_pass_enabled: document.getElementById('settingStitchPass'),
   llm_chunk_size: document.getElementById('settingLlmChunkSize'),
   whisper_chunk_size: document.getElementById('settingWhisperChunkSize'),
   review_tts_voice_hint: document.getElementById('settingReviewTtsVoiceHint'),

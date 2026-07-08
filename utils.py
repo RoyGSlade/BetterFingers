@@ -292,6 +292,10 @@ def _sanitize_profile_values(config, defaults):
         cfg.get("organic_formatting_enabled", d["organic_formatting_enabled"]),
         d["organic_formatting_enabled"],
     )
+    cfg["long_recording_stitch_pass_enabled"] = _coerce_bool(
+        cfg.get("long_recording_stitch_pass_enabled", d["long_recording_stitch_pass_enabled"]),
+        d["long_recording_stitch_pass_enabled"],
+    )
     cfg["use_gpu"] = _coerce_bool(cfg.get("use_gpu", d["use_gpu"]), d["use_gpu"])
     cfg["model_keep_llm_loaded"] = _coerce_bool(
         cfg.get("model_keep_llm_loaded", d["model_keep_llm_loaded"]),
@@ -646,6 +650,7 @@ def _profile_defaults():
         "output_token_limit": 1100,  # legacy alias for max_completion_tokens
         "max_completion_tokens": 1600,
         "long_draft_warning_words": 1200,
+        "long_recording_stitch_pass_enabled": True,
         "llm_chunk_size": 750,
         "whisper_chunk_size": 1000,
         "draft_history_limit": 80,

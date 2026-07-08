@@ -251,6 +251,19 @@ Files:
 
 ## Phase 5: Optional Stitch Pass
 
+> **Status: ✅ DONE (2026-07-08).** Added `LLMEngine._stitch_chunks()` — a light
+> final pass with a seam-only prompt ("Smooth ONLY the transitions… do NOT
+> summarize, add, or remove ideas"), running at temperature ≤0.2. `process_fast_lane()`
+> / `_process_chunked()` take a `stitch_pass` flag; when set and there is >1 chunk,
+> the joined output is stitched and a `chunking_stitching` status is emitted first.
+> On any stitch failure the joined chunk output is returned unchanged, so chunked
+> work is never lost. New profile flag `long_recording_stitch_pass_enabled`
+> (default `true`) in defaults + sanitize, surfaced as a toggle (`settingStitchPass`)
+> in the AI-cleanup settings and wired through `settingEls`.
+> `server.process_recording_result()` reads the flag and passes it to the engine.
+> Tests: 4 engine cases in `tests/test_llm_chunking.py` (runs once / disabled /
+> single-chunk / failure-returns-joined) + a server disabled-path case. Suite 329.
+
 ### Problem
 
 Chunked output can be locally correct but globally uneven at boundaries.

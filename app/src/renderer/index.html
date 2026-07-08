@@ -515,6 +515,19 @@
                     <input id="settingWhisperChunkSize" class="settings-input w-120" type="number" min="50" max="5000" />
                   </div>
                 </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingStitchPass">Long Recording Stitch Pass</label>
+                    <span class="setting-desc">After chunked cleanup, run a light pass that smooths transitions between chunks. Never summarizes.</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="custom-switch-label">
+                      <input id="settingStitchPass" type="checkbox" />
+                      <span class="custom-switch-slider"></span>
+                    </label>
+                  </div>
+                </div>
               </div>
 
               <!-- Wizard Container -->
