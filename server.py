@@ -533,16 +533,44 @@ def get_active_token_limit():
         return 1100
 
 
+def get_active_completion_tokens():
+    """Per-call LLM completion ceiling. Prefers max_completion_tokens, falls back
+    to the legacy output_token_limit alias, then the engine default."""
+    try:
+        config = load_profile(get_last_active_profile())
+        value = config.get("max_completion_tokens")
+        if value in (None, ""):
+            value = config.get("output_token_limit", 1600)
+        return int(value or 1600)
+    except Exception as exc:
+        logging.warning(f"Failed loading active profile completion tokens: {exc}")
+        return 1600
+
+
+def get_active_long_draft_warning_words():
+    """Word count above which a final draft is flagged as long in the UI. This is
+    intentionally separate from the LLM completion cap."""
+    try:
+        config = load_profile(get_last_active_profile())
+        value = config.get("long_draft_warning_words")
+        if value in (None, ""):
+            value = config.get("output_token_limit", 1200)
+        return int(value or 1200)
+    except Exception as exc:
+        logging.warning(f"Failed loading active profile long-draft warning: {exc}")
+        return 1200
+
+
 def count_draft_tokens(text):
     return len(str(text or "").split())
 
 
 def update_draft_review_fields(draft):
-    token_limit = get_active_token_limit()
+    warning_words = get_active_long_draft_warning_words()
     token_count = count_draft_tokens(draft.get("final_text") or draft.get("raw_text") or "")
     draft["token_count"] = token_count
-    draft["token_limit"] = token_limit
-    draft["long_text"] = token_count > token_limit
+    draft["token_limit"] = warning_words
+    draft["long_text"] = token_count > warning_words
     draft["review_state"] = draft.get("review_state") or "ready"
     return draft
 
@@ -1095,15 +1123,23 @@ def process_recording_result(recording_result):
         check_cancelled()
         broadcast_status_threadsafe("rewriting")
         engine = get_selected_llm_engine()
-        # Retrieve llm_chunk_size from active profile
+        # Retrieve llm_chunk_size + completion cap from active profile so initial
+        # dictation cleanup uses the same per-call token ceiling as rewrites.
         try:
             config = load_profile(get_last_active_profile())
             llm_chunk_size = config.get("llm_chunk_size", 750)
+            completion_tokens = int(config.get("max_completion_tokens") or config.get("output_token_limit", 1600) or 1600)
         except Exception:
             llm_chunk_size = 750
-        
+            completion_tokens = 1600
+
         _llm_start = time.perf_counter()
-        final_text = engine.process_fast_lane(raw_text, preset, chunk_size=llm_chunk_size)
+        final_text = engine.process_fast_lane(
+            raw_text,
+            preset,
+            max_output_tokens=completion_tokens,
+            chunk_size=llm_chunk_size,
+        )
         llm_ms = (time.perf_counter() - _llm_start) * 1000.0
 
         check_cancelled()
@@ -2495,7 +2531,7 @@ def rewrite_draft_text(text, action, custom_instruction=""):
         llm_chunk_size = 750
 
     engine = get_selected_llm_engine()
-    token_limit = get_active_token_limit()
+    token_limit = get_active_completion_tokens()
     if hasattr(engine, "rewrite_text"):
         return (
             engine.rewrite_text(

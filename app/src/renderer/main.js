@@ -206,7 +206,8 @@ const settingEls = {
   voice_mute_key: document.getElementById('settingVoiceMuteKey'),
   send_mode: document.getElementById('settingSendMode'),
   current_preset: document.getElementById('settingCurrentPreset'),
-  output_token_limit: document.getElementById('settingOutputTokenLimit'),
+  max_completion_tokens: document.getElementById('settingMaxCompletionTokens'),
+  long_draft_warning_words: document.getElementById('settingLongDraftWarningWords'),
   llm_chunk_size: document.getElementById('settingLlmChunkSize'),
   whisper_chunk_size: document.getElementById('settingWhisperChunkSize'),
   review_tts_voice_hint: document.getElementById('settingReviewTtsVoiceHint'),
@@ -2534,14 +2535,25 @@ function updateSaveButtonState() {
 }
 
 function runValidation() {
-  // 1. Output Token Limit (900 - 1200)
-  const tokenLimitEl = settingEls.output_token_limit;
-  if (tokenLimitEl) {
-    const val = parseInt(tokenLimitEl.value, 10);
-    if (isNaN(val) || val < 900 || val > 1200) {
-      setValidationError('output_token_limit', 'Token limit must be between 900 and 1200.');
+  // 1a. Max Completion Tokens (512 - 4096)
+  const maxCompletionEl = settingEls.max_completion_tokens;
+  if (maxCompletionEl) {
+    const val = parseInt(maxCompletionEl.value, 10);
+    if (isNaN(val) || val < 512 || val > 4096) {
+      setValidationError('max_completion_tokens', 'Max completion tokens must be between 512 and 4096.');
     } else {
-      clearValidationError('output_token_limit');
+      clearValidationError('max_completion_tokens');
+    }
+  }
+
+  // 1b. Long Draft Warning (words) (300 - 10000)
+  const longWarnEl = settingEls.long_draft_warning_words;
+  if (longWarnEl) {
+    const val = parseInt(longWarnEl.value, 10);
+    if (isNaN(val) || val < 300 || val > 10000) {
+      setValidationError('long_draft_warning_words', 'Long draft warning must be between 300 and 10000 words.');
+    } else {
+      clearValidationError('long_draft_warning_words');
     }
   }
 

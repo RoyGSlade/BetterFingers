@@ -437,6 +437,20 @@ def _sanitize_profile_values(config, defaults):
         minimum=900,
         maximum=1200,
     )
+    # max_completion_tokens is the real per-call LLM completion ceiling;
+    # long_draft_warning_words only drives the "this draft is long" UI warning.
+    cfg["max_completion_tokens"] = _coerce_int(
+        cfg.get("max_completion_tokens", d["max_completion_tokens"]),
+        d["max_completion_tokens"],
+        minimum=512,
+        maximum=4096,
+    )
+    cfg["long_draft_warning_words"] = _coerce_int(
+        cfg.get("long_draft_warning_words", d["long_draft_warning_words"]),
+        d["long_draft_warning_words"],
+        minimum=300,
+        maximum=10000,
+    )
     cfg["llm_chunk_size"] = _coerce_int(
         cfg.get("llm_chunk_size", d.get("llm_chunk_size", 750)),
         d.get("llm_chunk_size", 750),
@@ -594,6 +608,22 @@ def _migrate_output_delivery(config):
     return config
 
 
+def _apply_completion_token_alias(data):
+    """Map the legacy ``output_token_limit`` onto ``max_completion_tokens`` for
+    profiles saved before the two token concepts were split. Operates on the raw
+    loaded dict *before* it is merged with defaults, so we can tell whether the
+    new field was actually stored or is about to be filled in from defaults."""
+    if not isinstance(data, dict):
+        return data
+    if "max_completion_tokens" not in data and "output_token_limit" in data:
+        try:
+            legacy = int(data["output_token_limit"])
+            data["max_completion_tokens"] = max(512, min(4096, legacy))
+        except (TypeError, ValueError):
+            pass
+    return data
+
+
 def _profile_defaults():
     return {
         "hotkey": "f8",
@@ -613,7 +643,9 @@ def _profile_defaults():
         "auto_submit": False,
         "sign_off_text": "",
         "send_mode": "review_first",
-        "output_token_limit": 1100,
+        "output_token_limit": 1100,  # legacy alias for max_completion_tokens
+        "max_completion_tokens": 1600,
+        "long_draft_warning_words": 1200,
         "llm_chunk_size": 750,
         "whisper_chunk_size": 1000,
         "draft_history_limit": 80,
@@ -693,6 +725,7 @@ def load_profile(profile_name="Default"):
                 try:
                     with open(legacy_config, "r") as f:
                         data = yaml.safe_load(f) or {}
+                        _apply_completion_token_alias(data)
                         # Merge with defaults to ensure all keys exist
                         migrated = copy.deepcopy(defaults)
                         migrated.update(data)
@@ -715,6 +748,7 @@ def load_profile(profile_name="Default"):
     try:
         with open(file_path, "r") as f:
             data = yaml.safe_load(f) or {}
+            _apply_completion_token_alias(data)
             # Merge with defaults to ensure missing keys don't break things
             final_data = copy.deepcopy(defaults)
             final_data.update(data)
@@ -736,6 +770,24 @@ def validate_profile_settings(data: dict):
             raise ValueError("Output Token Limit must be an integer.")
         if not (900 <= val <= 1200):
             raise ValueError("Output Token Limit must be between 900 and 1200.")
+
+    max_completion = data.get("max_completion_tokens")
+    if max_completion is not None:
+        try:
+            val = int(max_completion)
+        except (TypeError, ValueError):
+            raise ValueError("Max Completion Tokens must be an integer.")
+        if not (512 <= val <= 4096):
+            raise ValueError("Max Completion Tokens must be between 512 and 4096.")
+
+    long_warning = data.get("long_draft_warning_words")
+    if long_warning is not None:
+        try:
+            val = int(long_warning)
+        except (TypeError, ValueError):
+            raise ValueError("Long Draft Warning must be an integer.")
+        if not (300 <= val <= 10000):
+            raise ValueError("Long Draft Warning must be between 300 and 10000.")
 
     llm_chunk = data.get("llm_chunk_size")
     if llm_chunk is not None:

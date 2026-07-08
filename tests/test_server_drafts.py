@@ -23,7 +23,7 @@ class EmptyTranscriber(DummyTranscriber):
 
 
 class DummyEngine:
-    def process_fast_lane(self, text, preset, chunk_size=None):
+    def process_fast_lane(self, text, preset, max_output_tokens=None, chunk_size=None):
         return f"{preset}: {text}"
 
 

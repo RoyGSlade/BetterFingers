@@ -478,11 +478,21 @@
 
                 <div class="setting-row">
                   <div class="setting-info">
-                    <label class="status-label" for="settingOutputTokenLimit">Output Token Limit</label>
-                    <span class="setting-desc">Hard ceiling for LLM completion tokens (900 - 1200).</span>
+                    <label class="status-label" for="settingMaxCompletionTokens">Max Completion Tokens</label>
+                    <span class="setting-desc">Per-call ceiling for how much the LLM may generate (512 - 4096).</span>
                   </div>
                   <div class="setting-control">
-                    <input id="settingOutputTokenLimit" class="settings-input w-120" type="number" min="900" max="1200" />
+                    <input id="settingMaxCompletionTokens" class="settings-input w-120" type="number" min="512" max="4096" />
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingLongDraftWarningWords">Long Draft Warning (words)</label>
+                    <span class="setting-desc">Warn when a final draft exceeds this many words (300 - 10000). Does not limit generation.</span>
+                  </div>
+                  <div class="setting-control">
+                    <input id="settingLongDraftWarningWords" class="settings-input w-120" type="number" min="300" max="10000" />
                   </div>
                 </div>
 
