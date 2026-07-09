@@ -1,16 +1,19 @@
 # Remaining work — honest scoping
 
-As of the MASTER_PLAN loop pause. The suite is at **262 passing**. Sixteen
+As of the MASTER_PLAN loop pause. The suite is at **276 passing**. Sixteen
 roadmap items are complete or advanced: **C1, C2, C4, C6, C7, C8, C9, C10, C11,
 U2, U3, U4, U5, U6, U7, U8** (see the "Implementation progress" log at the top
 of `MASTER_PLAN.md` for per-item detail and deferred sub-parts).
 
-The loop paused here because **every remaining item needs something this
-environment can't provide** — real GPUs, uninstalled heavy ML dependencies, a
-running packaged app, or per-OS window/native APIs. Continuing autonomously
-would mean writing code that can't be verified, which the loop is explicitly
-directed not to do. Each item below states exactly what's blocking it and the
-first concrete step for a human (or a suitably-provisioned environment).
+The loop originally paused here because most remaining items need something the
+**autonomous CI-style loop environment can't provision** — a real GPU, heavy ML
+dependencies, a packaged app, or per-OS window/native APIs — and writing code
+that can't be verified is explicitly out of bounds. Note this is about the loop's
+provisioning, not hardware limits in general: on a suitably-equipped local
+machine (e.g. an RTX 4060 Ti with a live display and the deps installed),
+Playwright + Electron drive the real app end-to-end, and U1 has since been
+advanced that way (see below). Each item below states exactly what's blocking it
+and the first concrete step for a human (or a suitably-provisioned environment).
 
 ---
 
@@ -35,11 +38,44 @@ environment:
 
 ## Not started — blocked
 
-- **U1 — Screenshot QA of every page.** Needs a Playwright `_electron` harness, a
-  **pinned Linux CI image**, and `reg-actions` for PR diffs, plus stubs for
-  tray/native dialogs. Cannot be verified without a running Electron app in CI.
-  _First step: add a `playwright.config`, a smoke spec that launches the app and
-  screenshots the main view, and a GitHub Actions job on a pinned image._
+- **U1 — Screenshot QA of every page.** First step done: `app/playwright.config.js`,
+  an `app/tests/electron-smoke.spec.js` smoke spec (launches the packaged app,
+  walks Dashboard/Settings/Models/Diagnostics, screenshots every top-level page),
+  and `.github/workflows/e2e-screenshots.yml` on a pinned `ubuntu-24.04` image
+  with `xvfb-run`. The smoke spec is 13/13 green locally.
+  Along the way, fixed real bugs the specs surfaced:
+  - A first-run onboarding modal that blocked every click on a fresh profile
+    (now dismissed via `tests/helpers/onboarding.js`).
+  - A cold-start race in `bootstrap()` (`app/src/renderer/main.js`) where the
+    one-shot profiles/doctor/models fetch could lose the race against the
+    Python backend finishing startup and fail with no retry — only `/health`
+    was re-polled — permanently stranding `#profileSelect` empty for the rest
+    of the session (silently no-opping Discard). **Fixed**: the bootstrap
+    fetches now live in `runBootstrapFetches()`, and the existing 3s
+    health-poll timer re-runs them once if any failed and the backend has
+    since become reachable, via a `bootstrapNeedsRetry` flag. Verified it
+    self-heals within ~3-8s of a racy cold start with no reload needed.
+  - **A real, shipped bug in the review overlay**: `app/src/renderer/review-overlay.html`
+    has its own hand-rolled `fetchJson`/`postJson` (separate from the shared
+    `src/renderer/api/backend.js` the main dashboard uses) that never attached
+    an `Authorization` header, even though `window.betterFingers.authToken` is
+    available in that window via the shared preload script. Every backend call
+    from the review overlay — Read/TTS, Change/Instruct rewrite, Send, Accept —
+    was silently 401ing whenever `BETTERFINGERS_AUTH_TOKEN` is set, which
+    Electron's main process always sets. This made the entire review overlay
+    non-functional for real users, not just in tests. **Fixed**: added the same
+    `Authorization: Bearer` header pattern used in `backend.js`. With that one
+    fix, `app/tests/review-overlay.spec.js` went from 2/6 to a clean 6/6,
+    including the Read/TTS flow — no TTS voice or model download was ever
+    actually missing; everything was just failing auth.
+  Both specs together: 19/19 green, ~27s full run.
+  Remaining for full U1 scope: `review-overlay.spec.js` isn't wired into the
+  CI job yet — it passes *locally* because this dev machine happens to already
+  have a Gemma 4 12B model + `llama-server` on disk at a legacy install path
+  (auto-discovered by `model_manager.py`'s search paths), but a bare CI
+  checkout has neither that model nor a TTS voice, so it would fail there on
+  provisioning grounds alone. `reg-actions` PR-diffing is also still
+  deferred — no baseline screenshots are checked in yet to diff against.
 
 - **U9 — Cross-vendor efficiency (Vulkan/CUDA builds).** Ship Vulkan
   llama-server/whisper.cpp as default with a CUDA variant on NVIDIA detect;

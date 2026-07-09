@@ -1330,6 +1330,7 @@ async function refreshHealth() {
     if (backendDetailEl) {
       backendDetailEl.textContent = 'FastAPI /health responded successfully';
     }
+    return true;
   } catch (error) {
     setBadgeState(backendStatusEl, 'offline', 'danger');
     if (backendDetailEl) {
@@ -1337,6 +1338,7 @@ async function refreshHealth() {
     }
     setBadgeState(transcriberStatusEl, 'offline', 'danger');
     setBadgeState(llmStatusEl, 'offline', 'danger');
+    return false;
   }
 }
 
@@ -3379,10 +3381,18 @@ async function loadInitialData() {
       setMessage(modelMessageEl, `Models unavailable: ${error.message}`, 'danger');
       throw error;
     }),
-    refreshDiagnostics().catch(() => {}),
-    refreshDoctor().catch(() => {}),
-    refreshSidecarLogs().catch(() => {}),
-    refreshPttAvailability().catch(() => {}),
+    refreshDiagnostics().catch(() => {
+      throw new Error('diagnostics');
+    }),
+    refreshDoctor().catch(() => {
+      throw new Error('doctor');
+    }),
+    refreshSidecarLogs().catch(() => {
+      throw new Error('sidecar-logs');
+    }),
+    refreshPttAvailability().catch(() => {
+      throw new Error('ptt-availability');
+    }),
   ]);
   // Consider the load a success only if the profile settings actually loaded —
   // that's what backs the settings form (and its save-blocking validation).

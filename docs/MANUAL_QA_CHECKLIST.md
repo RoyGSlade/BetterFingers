@@ -1,8 +1,35 @@
 # Manual QA checklist
 
 Manual verification steps for every feature shipped during the MASTER_PLAN
-loop. The automated suite (`python3 -m pytest`, 307 tests) covers the pure
-logic; this checklist covers what needs a **running app + sidecar** to confirm.
+loop. The automated suites — `python3 -m pytest` (307 tests, pure logic) and
+`cd app && npx playwright test` (19 e2e tests: dashboard walk, settings
+dirty-state, review overlay flows) — cover a lot of ground now; this checklist
+covers what still needs **human senses** (ears for audio, a real mic, real
+target apps for injection) or judgment.
+
+## Final human pass — priority order (~15 min)
+
+The fastest high-value pass, ordered by risk. Items 1–2 exercise the two
+bugs fixed on 2026-07-08; they were real shipped breakage.
+
+1. ☐ **Review overlay end-to-end (auth fix).** Dictate an utterance, open the
+   review overlay, then: **Read** (TTS audibly plays), **Change** with a spoken
+   instruction (rewrite lands), **Send/Accept** (text injects). Until 2026-07-08
+   every one of these silently 401'd — the Playwright suite now covers the
+   plumbing 6/6, but audio quality and injection into a real target app need
+   ears and eyes.
+2. ☐ **Cold-start resilience (bootstrap retry fix).** Quit everything, start
+   the app fresh (worst case: right after boot), and confirm the profile
+   dropdown populates within ~10s without a manual reload — even if the
+   backend is slow to come up.
+3. ☐ **One full dictation round-trip** into a real app (record → draft →
+   correction → inject).
+4. ☐ **Push-to-talk while unfocused** (hold-to-talk from another app / tray).
+5. ☐ **TTS normalization by ear** ("$5", "Dr.", a URL — natural, not
+   character-by-character).
+
+Everything below is per-feature detail if something above misbehaves or you
+have more time.
 
 How to run the app for QA:
 
@@ -111,6 +138,20 @@ files involved so a failure is easy to trace.
   are unit-tested; the **slider editor + saving blended voicepacks is not yet
   wired** (see REMAINING_WORK). Confirm base voices still play.
 
+## Review overlay (2026-07-08 auth fix)
+
+Context: the overlay's hand-rolled fetch never sent `Authorization`, so every
+backend call from it 401'd whenever the auth token was set (always, under
+Electron). Fixed in `app/src/renderer/review-overlay.html`; the Playwright
+suite (`app/tests/review-overlay.spec.js`, 6/6) now guards the flows, but
+verify the human-perceivable parts once:
+
+- ☐ **Read:** TTS audio actually plays and matches the draft text.
+- ☐ **Change (voice) / Instruct (typed):** the rewrite visibly updates the
+  final text and "rewriting" state resolves.
+- ☐ **Send / Accept:** accepted text is injected into the focused app.
+- ☐ **Cancel:** overlay hides, nothing injects.
+
 ## Global hotkey / push-to-talk (migration)
 
 - ☐ Hold-to-talk: audio records only while the key is held (key-up ends it).
@@ -152,5 +193,8 @@ files involved so a failure is easy to trace.
 ## Regression sanity (every session)
 
 - ☐ `python3 -m pytest -q` → 307+ passing.
+- ☐ `cd app && npx playwright test` → 19+ passing (needs a local LLM model +
+  llama-server on disk for the review-overlay spec; close any running
+  BetterFingers instance first — it holds the Electron single-instance lock).
 - ☐ `node --check app/src/renderer/main.js && node --check app/src/renderer/api/backend.js`.
 - ☐ App launches, records one utterance end-to-end (record → draft → send).
