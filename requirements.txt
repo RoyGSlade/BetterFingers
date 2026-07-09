@@ -21,6 +21,7 @@ huggingface_hub             # Model cache management (Whisper)
 pyyaml                      # Profile / config files
 
 # ---- Sidecar API ----
+mcp                         # MCP client SDK (C12 — persona tool integration)
 fastapi                     # REST + WebSocket server
 uvicorn                     # ASGI server
 websockets                  # WebSocket protocol support

@@ -30,6 +30,7 @@ import dictionary
 import dictation_commands
 import macros
 import history_store
+import mcp_client
 from model_manager import (
     DEFAULT_MODEL,
     AVAILABLE_MODELS,
@@ -2343,6 +2344,28 @@ async def privacy_wipe(request: PrivacyWipeRequest = PrivacyWipeRequest()):
 
     broadcast_status_threadsafe("draft_history_cleared")
     return {"ok": True, "cleared": cleared, "message": "Your data was wiped."}
+
+
+@app.get("/mcp/status")
+async def mcp_status():
+    return mcp_client.status()
+
+
+@app.get("/mcp/servers")
+async def mcp_servers():
+    return {"ok": True, "servers": mcp_client.list_servers()}
+
+
+@app.get("/mcp/servers/{server_name}/tools")
+async def mcp_server_tools(server_name: str):
+    try:
+        return await run_in_threadpool(mcp_client.list_tools, server_name)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"MCP server '{server_name}' is not configured.")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @app.get("/recordings")

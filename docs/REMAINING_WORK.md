@@ -107,11 +107,13 @@ environment:
   dependency + a trained model file**, neither present. _First step: add the dep,
   ship a stock wake model behind a toggle, then train the custom phrase._
 
-- **C12 — MCP client.** An `mcp` SDK client in the sidecar + `mcpServers` config
-  + a llama-server tools bridge + per-persona tool allowlist & permission
-  prompts. **`python3 -c "import mcp"` fails** — the SDK isn't installed.
-  _First step: add `mcp` to `requirements.txt`, then a minimal client that lists
-  a configured server's tools behind a settings flag._
+- **C12 — MCP client.** First step DONE (2026-07-08): `mcp` SDK in
+  `requirements.txt`, `mcp_client.py` (Claude-Desktop-style
+  `<userdata>/mcp_servers.json`, feature-flagged off by default, fully
+  defensive), read-only endpoints `GET /mcp/status`, `GET /mcp/servers`,
+  `GET /mcp/servers/{name}/tools`, with unit + live-stdio-round-trip tests.
+  Remaining: tool *invocation*, the llama-server tools bridge, per-persona
+  tool allowlist, and permission-prompt UX.
 
 ---
 
