@@ -9,6 +9,7 @@ import numpy as np
 import sounddevice as sd
 
 from audio_ducker import AudioDucker
+from audio_gate import TrailingSilenceDetector
 from utils import load_profile
 
 
@@ -41,8 +42,34 @@ class AudioRecorder:
         self.chunk_worker = None
         self.chunk_worker_running = False
 
+        # Hands-free auto-stop (Phase 10): built per-recording from the profile.
+        self.on_auto_stop: Optional[Callable[[str], None]] = None
+        self._auto_stop_detector: Optional[TrailingSilenceDetector] = None
+
     def set_chunk_callback(self, callback: Optional[Callable[[np.ndarray, int], None]]):
         self.chunk_callback = callback
+
+    def set_auto_stop_callback(self, callback: Optional[Callable[[str], None]]):
+        """Called (on a fresh thread) with a stop reason when trailing silence
+        is detected. The owner should route it to its normal stop path."""
+        self.on_auto_stop = callback
+
+    def _build_auto_stop_detector(self, config):
+        """Construct a TrailingSilenceDetector from profile config, or None when
+        the feature is disabled. Silence thresholds default to the no-audio gate
+        values so there is one silence definition to tune."""
+        try:
+            if not config.get("auto_stop_after_silence_enabled", False):
+                return None
+            return TrailingSilenceDetector(
+                silence_ms=config.get("auto_stop_silence_ms", 900),
+                min_recording_ms=config.get("auto_stop_min_recording_ms", 700),
+                rms_threshold=config.get("auto_stop_rms_threshold", config.get("no_audio_min_rms", 0.003)),
+                peak_threshold=config.get("auto_stop_peak_threshold", config.get("no_audio_min_peak", 0.015)),
+            )
+        except Exception as exc:
+            logging.debug(f"Auto-stop detector setup failed: {exc}")
+            return None
 
     def start_recording(self, profile_name="Default"):
         with self.lock:
@@ -53,10 +80,12 @@ class AudioRecorder:
             self.recording = True
             self.frames = []
             self.started_at = time.time()
+            self._auto_stop_detector = None
             logging.info("Recording started.")
 
             try:
                 config = load_profile(profile_name)
+                self._auto_stop_detector = self._build_auto_stop_detector(config)
                 if config.get("audio_ducking", False):
                     duck_level_percent = float(config.get("audio_ducking_level_percent", 18.0))
                     restore_fallback_percent = float(
@@ -107,6 +136,7 @@ class AudioRecorder:
                 )
 
             self.recording = False
+            self._auto_stop_detector = None
             logging.info(f"Recording stopped. reason={stop_reason}")
 
             try:
@@ -178,12 +208,36 @@ class AudioRecorder:
                 continue
             if item is None:
                 continue
-            if not self.chunk_callback:
-                continue
-            try:
-                self.chunk_callback(item, self.sample_rate)
-            except Exception as exc:
-                logging.debug(f"Chunk callback error: {exc}")
+            if self.chunk_callback:
+                try:
+                    self.chunk_callback(item, self.sample_rate)
+                except Exception as exc:
+                    logging.debug(f"Chunk callback error: {exc}")
+            self._feed_auto_stop_detector(item)
+
+    def _feed_auto_stop_detector(self, item):
+        detector = self._auto_stop_detector
+        callback = self.on_auto_stop
+        if detector is None or callback is None:
+            return
+        try:
+            arr = np.asarray(item, dtype=np.float32).flatten()
+            n = int(arr.size)
+            if n == 0:
+                return
+            rms = float(np.sqrt(np.mean(np.square(arr))))
+            peak = float(np.max(np.abs(arr)))
+            chunk_ms = (n / float(self.sample_rate)) * 1000.0
+            if detector.update(rms, peak, chunk_ms):
+                # Clear first so no further chunk can re-fire, then run the stop
+                # on a fresh thread — calling stop from this worker would join
+                # this very thread.
+                self._auto_stop_detector = None
+                threading.Thread(
+                    target=callback, args=("trailing_silence",), daemon=True
+                ).start()
+        except Exception as exc:
+            logging.debug(f"Auto-stop detector error: {exc}")
 
     def _audio_callback(self, indata, frames, time_info, status):
         del frames, time_info

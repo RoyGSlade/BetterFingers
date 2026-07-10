@@ -266,6 +266,22 @@ def _sanitize_profile_values(config, defaults):
         minimum=0.0,
         maximum=1.0,
     )
+    cfg["auto_stop_after_silence_enabled"] = _coerce_bool(
+        cfg.get("auto_stop_after_silence_enabled", d["auto_stop_after_silence_enabled"]),
+        d["auto_stop_after_silence_enabled"],
+    )
+    cfg["auto_stop_silence_ms"] = _coerce_int(
+        cfg.get("auto_stop_silence_ms", d["auto_stop_silence_ms"]),
+        d["auto_stop_silence_ms"],
+        minimum=250,
+        maximum=5000,
+    )
+    cfg["auto_stop_min_recording_ms"] = _coerce_int(
+        cfg.get("auto_stop_min_recording_ms", d["auto_stop_min_recording_ms"]),
+        d["auto_stop_min_recording_ms"],
+        minimum=0,
+        maximum=10000,
+    )
     cfg["chat_close_action"] = _coerce_choice(
         cfg.get("chat_close_action", d["chat_close_action"]),
         d["chat_close_action"],
@@ -670,6 +686,12 @@ def _profile_defaults():
         "confidence_force_review_enabled": True,
         "confidence_force_review_below": 0.55,
         "confidence_auto_send_above": 0.85,
+        # Hands-free auto-stop after trailing silence (Phase 10). Off by default;
+        # silence is defined by the no-audio gate thresholds unless the optional
+        # auto_stop_rms_threshold / auto_stop_peak_threshold overrides are set.
+        "auto_stop_after_silence_enabled": False,
+        "auto_stop_silence_ms": 900,
+        "auto_stop_min_recording_ms": 700,
         "output_token_limit": 1100,  # legacy alias for max_completion_tokens
         "max_completion_tokens": 1600,
         "long_draft_warning_words": 1200,
@@ -856,6 +878,24 @@ def validate_profile_settings(data: dict):
                 raise ValueError(f"{_conf_label} must be a number.")
             if not (0.0 <= val <= 1.0):
                 raise ValueError(f"{_conf_label} must be between 0.0 and 1.0.")
+
+    auto_stop_silence = data.get("auto_stop_silence_ms")
+    if auto_stop_silence is not None:
+        try:
+            val = int(auto_stop_silence)
+        except (TypeError, ValueError):
+            raise ValueError("Auto-Stop Silence must be an integer (ms).")
+        if not (250 <= val <= 5000):
+            raise ValueError("Auto-Stop Silence must be between 250 and 5000 ms.")
+
+    auto_stop_min = data.get("auto_stop_min_recording_ms")
+    if auto_stop_min is not None:
+        try:
+            val = int(auto_stop_min)
+        except (TypeError, ValueError):
+            raise ValueError("Auto-Stop Minimum Recording must be an integer (ms).")
+        if not (0 <= val <= 10000):
+            raise ValueError("Auto-Stop Minimum Recording must be between 0 and 10000 ms.")
 
     no_audio_duration = data.get("no_audio_min_duration_sec")
     if no_audio_duration is not None:

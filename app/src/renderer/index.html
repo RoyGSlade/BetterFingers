@@ -341,6 +341,36 @@
                 </div>
                 <div class="setting-row">
                   <div class="setting-info">
+                    <label class="status-label" for="settingAutoStopSilence">Auto-stop on silence</label>
+                    <span class="setting-desc">Automatically stop recording after you go quiet. Useful for hands-free / wake-word capture; off by default.</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="custom-switch-label">
+                      <input id="settingAutoStopSilence" type="checkbox" />
+                      <span class="custom-switch-slider"></span>
+                    </label>
+                  </div>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingAutoStopSilenceMs">Silence before stop (ms)</label>
+                    <span class="setting-desc">How long the trailing silence must last before recording stops (250–5000).</span>
+                  </div>
+                  <div class="setting-control">
+                    <input id="settingAutoStopSilenceMs" class="settings-input w-120" type="number" min="250" max="5000" step="50" />
+                  </div>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingAutoStopMinMs">Minimum recording (ms)</label>
+                    <span class="setting-desc">Ignore silence until the recording has run at least this long (0–10000).</span>
+                  </div>
+                  <div class="setting-control">
+                    <input id="settingAutoStopMinMs" class="settings-input w-120" type="number" min="0" max="10000" step="50" />
+                  </div>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-info">
                     <label class="status-label" for="settingVoiceCommands">Voice commands</label>
                     <span class="setting-desc">Say "new paragraph", "period", "all caps word", etc. and have them formatted. Turn off if it interferes with normal dictation.</span>
                   </div>

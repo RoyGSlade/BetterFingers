@@ -229,6 +229,9 @@ const settingEls = {
   confidence_force_review_enabled: document.getElementById('settingConfidenceForceReview'),
   confidence_force_review_below: document.getElementById('settingConfidenceForceReviewBelow'),
   confidence_auto_send_above: document.getElementById('settingConfidenceAutoSendAbove'),
+  auto_stop_after_silence_enabled: document.getElementById('settingAutoStopSilence'),
+  auto_stop_silence_ms: document.getElementById('settingAutoStopSilenceMs'),
+  auto_stop_min_recording_ms: document.getElementById('settingAutoStopMinMs'),
   current_preset: document.getElementById('settingCurrentPreset'),
   max_completion_tokens: document.getElementById('settingMaxCompletionTokens'),
   long_draft_warning_words: document.getElementById('settingLongDraftWarningWords'),
@@ -3655,6 +3658,26 @@ function runValidation() {
       } else {
         clearValidationError(key);
       }
+    }
+  }
+
+  // 7c. Auto-stop after silence (ms ranges)
+  const autoStopSilenceEl = settingEls.auto_stop_silence_ms;
+  if (autoStopSilenceEl) {
+    const val = parseInt(autoStopSilenceEl.value, 10);
+    if (isNaN(val) || val < 250 || val > 5000) {
+      setValidationError('auto_stop_silence_ms', 'Auto-stop silence must be between 250 and 5000 ms.');
+    } else {
+      clearValidationError('auto_stop_silence_ms');
+    }
+  }
+  const autoStopMinEl = settingEls.auto_stop_min_recording_ms;
+  if (autoStopMinEl) {
+    const val = parseInt(autoStopMinEl.value, 10);
+    if (isNaN(val) || val < 0 || val > 10000) {
+      setValidationError('auto_stop_min_recording_ms', 'Auto-stop minimum recording must be between 0 and 10000 ms.');
+    } else {
+      clearValidationError('auto_stop_min_recording_ms');
     }
   }
 

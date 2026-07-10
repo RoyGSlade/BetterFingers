@@ -49,6 +49,11 @@ class HotkeyManager:
         self.is_busy_callback = is_busy_callback
         self.on_watchdog_timeout = on_watchdog_timeout_callback
         self._watchdog_timer = None
+        # Hands-free auto-stop (Phase 10): the recorder calls this on a fresh
+        # thread when trailing silence is detected. Route it through the normal
+        # stop path (idempotent — a no-op if a manual stop already ran).
+        if hasattr(self.recorder, "set_auto_stop_callback"):
+            self.recorder.set_auto_stop_callback(self._on_auto_stop)
         self.current_profile = "Default"
 
         self.state_lock = threading.RLock()
@@ -232,6 +237,13 @@ class HotkeyManager:
 
     def request_stop(self, reason="manual"):
         self._stop_recording(reason=reason)
+
+    def _on_auto_stop(self, reason="trailing_silence"):
+        # Invoked from a recorder worker thread on trailing-silence detection.
+        # _stop_recording is guarded by is_recording, so a race with a manual
+        # stop is harmless.
+        if self.is_recording:
+            self._stop_recording(reason=reason)
 
     def request_toggle(self, reason="manual_button"):
         if self.is_recording:

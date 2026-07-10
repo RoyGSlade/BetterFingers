@@ -245,11 +245,20 @@ repeatedly, not once.
       ("Recording stopped after max duration."); the renderer now surfaces it as a warning
       toast. Backend covered by `test_server_amplitude_watchdog.py` +
       `test_hotkey_manager_tts.py`.
-- [ ] **Auto-stop after trailing silence** (not started). Streaming silence state machine
-      over recorder chunk stats; profile fields `auto_stop_after_silence_enabled` (default
-      false), `auto_stop_silence_ms` (900, 250–5000), `auto_stop_min_recording_ms` (700),
-      RMS/peak thresholds defaulting to the no-audio gate values. Short pauses must not
-      stop recording; stop reason persisted in recording metadata.
+- [x] **Auto-stop after trailing silence** — *done*. Pure
+      `audio_gate.TrailingSilenceDetector` (only counts silence after speech; a louder
+      chunk resets it, so mid-sentence pauses don't trip it; fires once after
+      `min_recording_ms` + `silence_ms`). The recorder builds it per-recording from the
+      profile and feeds per-chunk rms/peak on its worker thread, firing
+      `on_auto_stop("trailing_silence")` on a fresh thread (never stops from the worker
+      that would join itself); `hotkey_manager._on_auto_stop` routes it through the normal
+      idempotent stop path, so the reason lands in recording metadata via the existing
+      `stop_reason` plumbing. Profile fields `auto_stop_after_silence_enabled` (default
+      false), `auto_stop_silence_ms` (900, 250–5000), `auto_stop_min_recording_ms`
+      (700, 0–10000); silence thresholds reuse the no-audio gate values unless the optional
+      `auto_stop_rms_threshold`/`auto_stop_peak_threshold` overrides are set. Settings UI +
+      client/server validation. Covered by `tests/test_auto_stop_silence.py`. Off by
+      default; end-to-end hands-free behavior needs a live mic, so verified by unit tests.
 - [x] **Confidence-gated send policy** — *done*. Profile fields
       `confidence_force_review_enabled` (default true), `confidence_force_review_below`
       (0.55), `confidence_auto_send_above` (0.85) in `utils.py` (sanitized + validated).
