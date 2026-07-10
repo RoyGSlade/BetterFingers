@@ -277,9 +277,11 @@ repeatedly, not once.
       updates live as the user edits. The pure formatter lives in
       `app/src/renderer/lib/draftSummary.mjs` (vite-bundled into the overlay, unit-tested
       with `node --test` via `npm run test:unit`); a Playwright assertion in
-      `review-overlay.spec.js` covers the rendered DOM. Remaining sub-item: optional
-      heartbeat so a long *non-chunked* LLM call keeps status fresh past ~8s (nice-to-have;
-      the `rewriting` status already stays visible).
+      `review-overlay.spec.js` covers the rendered DOM.
+- [x] **Long non-chunked LLM heartbeat** — *done*. `server._StatusHeartbeat` re-broadcasts
+      the `rewriting` status (with `elapsed_ms`) on a 4s interval while a non-chunked LLM
+      cleanup runs, so a long single-utterance rewrite doesn't look frozen (chunked work
+      already emits per-chunk progress). Covered by `tests/test_status_heartbeat.py`.
 - [x] **Cross-test state leak fixed** — `server.transcriber`/`tts_engine` module globals
       leaked across tests, so `test_token_concepts.py::Phase2PassThroughTest` failed only in
       the full run. An autouse fixture in `tests/conftest.py` now resets both around every

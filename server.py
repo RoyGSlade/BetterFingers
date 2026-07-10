@@ -1145,6 +1145,43 @@ def get_pipeline_metrics_summary():
     }
 
 
+class _StatusHeartbeat:
+    """Re-broadcast a status on an interval so a long, non-chunked stage (e.g. an
+    LLM cleanup of a big-but-under-the-chunk-threshold utterance) doesn't look
+    frozen in the UI. Chunked work already emits per-chunk progress, so this only
+    wraps the non-chunked path. ``stop()`` is idempotent and joins the thread."""
+
+    def __init__(self, status, interval_s=4.0):
+        self._status = status
+        self._interval = max(0.5, float(interval_s))
+        self._stop = threading.Event()
+        self._thread = None
+        self._start_ts = 0.0
+
+    def start(self):
+        self._start_ts = time.time()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        return self
+
+    def _run(self):
+        # wait() returns True only when stop() is set, so the loop ticks once per
+        # interval until stopped and never fires an immediate duplicate.
+        while not self._stop.wait(self._interval):
+            try:
+                elapsed_ms = round((time.time() - self._start_ts) * 1000.0)
+                broadcast_status_threadsafe(self._status, {"elapsed_ms": elapsed_ms, "heartbeat": True})
+            except Exception as exc:
+                logging.debug(f"Status heartbeat broadcast failed: {exc}")
+
+    def stop(self):
+        self._stop.set()
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=1.0)
+        self._thread = None
+
+
 def process_recording_result(recording_result):
     global is_processing_draft
     with draft_lock:
@@ -1300,14 +1337,22 @@ def process_recording_result(recording_result):
                 {"word_count": len(raw_text.split()), "chunk_size": llm_chunk_size},
             )
 
-        final_text = engine.process_fast_lane(
-            raw_text,
-            preset,
-            max_output_tokens=completion_tokens,
-            chunk_size=llm_chunk_size,
-            progress_callback=_chunk_progress if will_chunk else None,
-            stitch_pass=stitch_enabled,
-        )
+        # A non-chunked LLM call emits no progress; a heartbeat keeps the
+        # "rewriting" status fresh so a long single-utterance cleanup doesn't
+        # look frozen. Chunked work already reports per-chunk progress.
+        heartbeat = None if will_chunk else _StatusHeartbeat("rewriting").start()
+        try:
+            final_text = engine.process_fast_lane(
+                raw_text,
+                preset,
+                max_output_tokens=completion_tokens,
+                chunk_size=llm_chunk_size,
+                progress_callback=_chunk_progress if will_chunk else None,
+                stitch_pass=stitch_enabled,
+            )
+        finally:
+            if heartbeat is not None:
+                heartbeat.stop()
         llm_ms = (time.perf_counter() - _llm_start) * 1000.0
 
         check_cancelled()
