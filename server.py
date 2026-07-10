@@ -34,6 +34,7 @@ import voice_presets
 import voice_clone_qa
 import history_store
 import mcp_client
+from job_manager import JOBS, JobState
 import voice_commands
 import voice_edit_commands
 from utterance_history import Utterance, utterance_history
@@ -125,6 +126,10 @@ draft_lock = threading.RLock()
 MAX_DRAFT_HISTORY = 100
 is_processing_draft = False
 cancellation_event = threading.Event()
+# The dictation pipeline is the first consumer of the central job registry
+# (§6.3). Only one dictation runs at a time (guarded by is_processing_draft), so
+# a single active-id pointer lets the /jobs cancel route target it.
+_active_dictation_job_id = None
 runtime_error_history = []
 runtime_error_lock = threading.Lock()
 MAX_RUNTIME_ERROR_HISTORY = 50
@@ -1026,6 +1031,8 @@ def handle_primary_action():
 def emergency_stop_runtime():
     # Signal cancellation of draft processing
     cancellation_event.set()
+    if _active_dictation_job_id:
+        JOBS.request_cancel(_active_dictation_job_id)
 
     # Silence any active TTS speech
     if tts_engine is not None:
@@ -1145,6 +1152,14 @@ def get_pipeline_metrics_summary():
     }
 
 
+# The real Thread class, captured at import. The heartbeat is inherently async —
+# its wait-loop only exits once stop() is called from another thread. A test that
+# patches threading.Thread to run workers synchronously (ImmediateThread) would
+# otherwise turn start() into an infinite synchronous loop, so it must not be
+# affected by that patch.
+_REAL_THREAD_CLS = threading.Thread
+
+
 class _StatusHeartbeat:
     """Re-broadcast a status on an interval so a long, non-chunked stage (e.g. an
     LLM cleanup of a big-but-under-the-chunk-threshold utterance) doesn't look
@@ -1160,7 +1175,7 @@ class _StatusHeartbeat:
 
     def start(self):
         self._start_ts = time.time()
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread = _REAL_THREAD_CLS(target=self._run, daemon=True)
         self._thread.start()
         return self
 
@@ -1183,13 +1198,18 @@ class _StatusHeartbeat:
 
 
 def process_recording_result(recording_result):
-    global is_processing_draft
+    global is_processing_draft, _active_dictation_job_id
     with draft_lock:
         is_processing_draft = True
     cancellation_event.clear()
 
+    # Register this dictation as a job so the UI can observe/cancel it (§6.3).
+    job = JOBS.create("dictation", label="Dictation")
+    _active_dictation_job_id = job.id
+    JOBS.transition(job.id, JobState.TRANSCRIBING)
+
     def check_cancelled():
-        if cancellation_event.is_set():
+        if cancellation_event.is_set() or JOBS.is_cancel_requested(job.id):
             raise InterruptedError("Operation cancelled by user.")
 
     preset = "True Janitor"
@@ -1297,10 +1317,12 @@ def process_recording_result(recording_result):
                     "long_text": draft["long_text"],
                 },
             )
+            JOBS.complete(job.id, result_ref=f"draft:{draft['id']}")
             return draft
 
         check_cancelled()
         broadcast_status_threadsafe("rewriting")
+        JOBS.transition(job.id, JobState.REFINING)
         engine = get_selected_llm_engine()
         # Retrieve llm_chunk_size + completion cap from active profile so initial
         # dictation cleanup uses the same per-call token ceiling as rewrites.
@@ -1398,9 +1420,12 @@ def process_recording_result(recording_result):
                 "force_review_reason": draft["force_review_reason"],
             },
         )
+        JOBS.transition(job.id, JobState.REVIEW_READY)
+        JOBS.complete(job.id, result_ref=f"draft:{draft['id']}")
         return draft
     except InterruptedError as exc:
         logging.info("Recording processing was cancelled by the user.")
+        JOBS.mark_cancelled(job.id)
         draft = create_draft(
             raw_text,
             "",
@@ -1426,6 +1451,7 @@ def process_recording_result(recording_result):
         return draft
     except Exception as exc:
         logging.error(f"Recording processing failed: {exc}")
+        JOBS.fail(job.id, str(exc))
         record_runtime_error("recording", str(exc))
         draft = create_draft(
             raw_text,
@@ -1453,6 +1479,11 @@ def process_recording_result(recording_result):
     finally:
         with draft_lock:
             is_processing_draft = False
+        # Guarantee the job reaches a terminal state even on an unexpected exit.
+        active = JOBS.get(job.id)
+        if active is not None and not active.is_terminal:
+            JOBS.fail(job.id, "processing ended without a terminal state")
+        _active_dictation_job_id = None
         broadcast_status_threadsafe("idle")
 
 
@@ -2531,6 +2562,34 @@ async def unload_model_component(component: str):
 @app.get("/metrics")
 async def pipeline_metrics_endpoint():
     return get_pipeline_metrics_summary()
+
+
+@app.get("/jobs")
+async def list_jobs_endpoint(active: int = 0):
+    """Central job registry (§6.3): what work is running or recently finished."""
+    return {"ok": True, "jobs": JOBS.list(active_only=bool(active))}
+
+
+@app.get("/jobs/{job_id}")
+async def get_job_endpoint(job_id: str):
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"ok": True, "job": job.to_public()}
+
+
+@app.post("/jobs/{job_id}/cancel")
+async def cancel_job_endpoint(job_id: str):
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    JOBS.request_cancel(job_id)
+    # For the active dictation job, also trip the pipeline's cancellation event so
+    # check_cancelled() unwinds process_recording_result promptly.
+    if job_id == _active_dictation_job_id:
+        cancellation_event.set()
+    updated = JOBS.get(job_id)
+    return {"ok": True, "job": updated.to_public() if updated else None}
 
 
 def _path_size_bytes(path):

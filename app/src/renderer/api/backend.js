@@ -188,6 +188,15 @@ async function deleteRecording(recId, timeoutMs = 10000) {
   return deleteJson(`${BACKEND_ORIGIN}/recordings/${encodeURIComponent(recId)}`, timeoutMs);
 }
 
+async function fetchJobs(activeOnly = false, timeoutMs = 2500) {
+  const query = activeOnly ? '?active=1' : '';
+  return fetchJson(`${BACKEND_ORIGIN}/jobs${query}`, timeoutMs);
+}
+
+async function cancelJob(jobId, timeoutMs = 5000) {
+  return postJson(`${BACKEND_ORIGIN}/jobs/${encodeURIComponent(jobId)}/cancel`, {}, timeoutMs);
+}
+
 async function clearRecordings(timeoutMs = 10000) {
   return deleteJson(`${BACKEND_ORIGIN}/recordings`, timeoutMs);
 }
@@ -700,6 +709,8 @@ export {
   retranscribeRecording,
   deleteRecording,
   clearRecordings,
+  fetchJobs,
+  cancelJob,
   fetchDictionary,
   addDictionaryTerm,
   deleteDictionaryTerm,

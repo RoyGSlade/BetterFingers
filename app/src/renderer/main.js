@@ -21,6 +21,8 @@ import {
   fetchRecordings,
   retranscribeRecording,
   deleteRecording,
+  fetchJobs,
+  cancelJob,
   clearRecordings,
   fetchDictionary,
   addDictionaryTerm,
@@ -3383,6 +3385,56 @@ async function refreshRecordings() {
   }
 }
 
+const JOB_STATE_LABELS = {
+  queued: 'Queued',
+  loading: 'Loading',
+  capturing: 'Capturing',
+  transcribing: 'Transcribing',
+  refining: 'Refining',
+  stitching: 'Stitching',
+  review_ready: 'Ready for review',
+  injecting: 'Injecting',
+  completed: 'Completed',
+  failed: 'Failed',
+  cancelled: 'Cancelled',
+};
+
+// Show only work that is still running; finished jobs are just noise here.
+async function refreshJobs() {
+  const el = document.getElementById('jobsList');
+  if (!el) return;
+  try {
+    const payload = await fetchJobs(true);
+    const items = payload?.jobs || [];
+    if (!items.length) {
+      el.innerHTML = '<p class="empty-state">No active jobs.</p>';
+      return;
+    }
+    el.innerHTML = items
+      .map((job) => {
+        const stateLabel = JOB_STATE_LABELS[job.state] || job.state;
+        const pct = typeof job.progress === 'number' ? ` · ${Math.round(job.progress * 100)}%` : '';
+        const cancelling = job.cancel_requested ? ' · cancelling…' : '';
+        return `<div class="job-row" data-job-id="${escapeHtml(job.id)}">` +
+          `<span class="job-meta">${escapeHtml(job.label || job.kind)} — ${escapeHtml(stateLabel)}${pct}${cancelling}</span>` +
+          `<button class="secondary-button job-cancel" type="button" data-job-id="${escapeHtml(job.id)}"${job.cancel_requested ? ' disabled' : ''}>Cancel</button>` +
+          `</div>`;
+      })
+      .join('');
+  } catch (error) {
+    el.innerHTML = `<p class="empty-state">Jobs unavailable: ${escapeHtml(error.message)}</p>`;
+  }
+}
+
+async function handleCancelJob(jobId) {
+  try {
+    await cancelJob(jobId);
+    await refreshJobs();
+  } catch (error) {
+    showToast(`Cancel failed: ${error.message}`, 'danger');
+  }
+}
+
 async function handleRetranscribeRecording(recId) {
   showToast('Re-transcribing…', 'info', 2500);
   try {
@@ -3413,6 +3465,7 @@ async function refreshDiagnostics() {
     }),
     fetchMetrics().then(renderMetricsHud).catch(() => {}),
     refreshRecordings().catch(() => {}),
+    refreshJobs().catch(() => {}),
     fetchDiagnosticsPaths().then((paths) => {
       renderDetailList(diagnosticsPathsListEl, paths, [
         'debug_log_path',
@@ -4731,6 +4784,13 @@ document.getElementById('recordingsList')?.addEventListener('click', (event) => 
   const discard = event.target.closest('.recording-discard');
   if (discard?.dataset.recId) {
     handleDiscardRecording(discard.dataset.recId);
+  }
+});
+
+document.getElementById('jobsList')?.addEventListener('click', (event) => {
+  const cancel = event.target.closest('.job-cancel');
+  if (cancel?.dataset.jobId) {
+    handleCancelJob(cancel.dataset.jobId);
   }
 });
 

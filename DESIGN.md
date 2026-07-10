@@ -299,11 +299,30 @@ review-ready → injecting → completed | failed | cancelled
 ```
 
 Every job: stable ID, progress, cancellation, recoverable artifacts, resource estimate,
-user-visible status, clear retry semantics. Explicit answers required for: cancel STT;
-cancel LLM cleanup without losing raw transcript; second dictation while first refines;
-TTS during Whisper GPU use; model switch unloads predecessor; low-disk behavior; queued
-long recordings; abandoned-task cleanup. Model-download cancel + concurrent LLM/Whisper
-download progress UI (an old migration-plan leftover) fold in here.
+user-visible status, clear retry semantics.
+
+- [x] **Job registry core + dictation integration** — *done*. `job_manager.py`: pure,
+      thread-safe `JobManager`/`Job` with the state machine above, stable 12-char ids,
+      clamped progress, cooperative cancellation (`request_cancel` → worker observes →
+      `mark_cancelled`) plus immediate `cancel`, terminal-state guards, bounded retention
+      (oldest finished jobs pruned, active never dropped), and a `subscribe` hook. The
+      dictation pipeline is the first consumer: `process_recording_result` registers a job
+      and drives it QUEUED → TRANSCRIBING → REFINING → REVIEW_READY → COMPLETED (or
+      FAILED / CANCELLED), with `check_cancelled()` also honoring the job's cancel flag and
+      a `finally` that guarantees a terminal state. REST-only surface (no WS pollution):
+      `GET /jobs[?active=1]`, `GET /jobs/{id}`, `POST /jobs/{id}/cancel` (trips the
+      pipeline's cancellation event for the active dictation job); `emergency_stop_runtime`
+      also cancels it. Diagnostics "Active jobs" panel lists running work with a Cancel
+      button. Covered by `tests/test_job_manager.py` (14) + `tests/test_server_jobs.py`
+      (7, incl. lifecycle + endpoints + cancel-trips-event); renderer via `node --check` +
+      production build.
+- [ ] **Remaining job-manager breadth** (incremental, on the same foundation): register
+      TTS, voice cloning, model loads, and model downloads as jobs; resource-estimate
+      population; retry semantics wired to the existing recording-recovery path;
+      model-download cancel + concurrent LLM/Whisper download progress UI. Explicit answers
+      still owed for: cancel LLM cleanup without losing the raw transcript; second dictation
+      while the first refines; TTS during Whisper GPU use; model switch unloads predecessor;
+      low-disk behavior; abandoned-task cleanup sweep.
 
 ---
 
