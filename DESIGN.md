@@ -355,6 +355,17 @@ restoration, focus-loss behavior, elevated-window behavior, average latency.
       `restore_clipboard_after_paste` (default true, sanitized) + settings toggle. Covered
       by `tests/test_clipboard_restore.py` (8). This satisfies the §6.1 clipboard-restoration
       reliability check for the paste path (Windows rich-format restore remains a follow-on).
+- [x] **Injection capability now detected honestly** — *done* (found by an end-to-end test:
+      real YouTube audio → Whisper → attempt injection). On a stock Linux box without
+      `xclip`/`xsel`/`wl-clipboard`, `pyperclip` has no clipboard backend and the `keyboard`
+      fallback needs root — so injection fails at runtime, yet the app used to report
+      `injection_method: "paste"` and `supports_basic_clipboard: True` unconditionally for
+      all Linux. `platform_capabilities` now actually detects a clipboard backend
+      (`_detect_clipboard_backend`), so `supports_basic_clipboard`/`injection_method` are
+      truthful (`"none"` here), and `injection_hint()` + a renderer warning tell the user to
+      install `xclip`/`wl-clipboard`. Covered by `tests/test_injection_method_selection.py`
+      (backend detection + hint). This is exactly the class of gap the matrix exists to
+      surface — the app no longer promises injection it can't deliver.
 - [ ] **Fill the matrix against real apps** — `needs-hardware`. Run the probe across the
       starting matrix (Chrome, Google Docs, Outlook, Word, VS Code, Discord, Slack, Notepad,
       a terminal, an EHR-like web form, a remote-desktop environment) on each platform.

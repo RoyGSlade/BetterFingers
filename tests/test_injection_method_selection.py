@@ -67,11 +67,62 @@ class DetectInjectionMethodTests(unittest.TestCase):
             self.assertEqual(platform_capabilities.detect_injection_method(), "none")
 
 
+class ClipboardBackendDetectionTests(unittest.TestCase):
+    """A stock Linux box without xclip/xsel/wl-clipboard has no working clipboard,
+    so injection is genuinely unavailable — the app must not claim otherwise."""
+
+    def _detect(self, *, windows=False, macos=False, linux=True, wayland=False, tools=()):
+        with patch.object(platform_capabilities, "is_windows", windows), patch.object(
+            platform_capabilities, "is_macos", macos
+        ), patch.object(platform_capabilities, "is_linux", linux), patch.object(
+            platform_capabilities, "is_wayland", wayland
+        ), patch("platform_capabilities.shutil.which", _which_map(tools)):
+            return platform_capabilities._detect_clipboard_backend()
+
+    def test_windows_native(self):
+        self.assertEqual(self._detect(windows=True, linux=False), "native")
+
+    def test_macos_native(self):
+        self.assertEqual(self._detect(macos=True, linux=False), "native")
+
+    def test_linux_x11_prefers_xclip(self):
+        self.assertEqual(self._detect(tools=["xclip", "xsel"]), "xclip")
+
+    def test_linux_x11_xsel_fallback(self):
+        self.assertEqual(self._detect(tools=["xsel"]), "xsel")
+
+    def test_linux_wayland_wl_copy(self):
+        self.assertEqual(self._detect(wayland=True, tools=["wl-copy"]), "wl-copy")
+
+    def test_linux_no_backend_is_empty(self):
+        self.assertEqual(self._detect(tools=[]), "")
+
+
+class InjectionHintTests(unittest.TestCase):
+    def test_no_hint_when_injection_available(self):
+        with patch.object(platform_capabilities, "injection_method", "paste"):
+            self.assertEqual(platform_capabilities.injection_hint(), "")
+
+    def test_linux_x11_hint_names_xclip(self):
+        with patch.object(platform_capabilities, "injection_method", "none"), patch.object(
+            platform_capabilities, "is_linux", True
+        ), patch.object(platform_capabilities, "is_wayland", False):
+            self.assertIn("xclip", platform_capabilities.injection_hint())
+
+    def test_linux_wayland_hint_names_wl_clipboard(self):
+        with patch.object(platform_capabilities, "injection_method", "none"), patch.object(
+            platform_capabilities, "is_linux", True
+        ), patch.object(platform_capabilities, "is_wayland", True):
+            self.assertIn("wl-clipboard", platform_capabilities.injection_hint())
+
+
 class CapabilitiesFieldTests(unittest.TestCase):
     def test_capabilities_expose_injection_fields(self):
         caps = platform_capabilities.get_capabilities()
         self.assertIn("injection_method", caps)
         self.assertIn("supports_typing", caps)
+        self.assertIn("clipboard_backend", caps)
+        self.assertIn("injection_hint", caps)
         self.assertIn(
             caps["injection_method"],
             {"pydirectinput", "xdotool", "wtype", "ydotool", "paste", "none"},

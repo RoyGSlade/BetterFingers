@@ -19,6 +19,29 @@ is_wayland = session_type == "wayland" or bool(os.getenv("WAYLAND_DISPLAY"))
 is_x11 = session_type == "x11" or bool(os.getenv("DISPLAY"))
 
 
+def _detect_clipboard_backend():
+    """Name of a working clipboard mechanism, or "" if none is available.
+
+    On Linux, pyperclip drives the clipboard through an external tool; without
+    one, *both* copy and paste fail at runtime — so clipboard-paste injection is
+    not actually available even though the platform "has a clipboard". Windows and
+    macOS ship a native mechanism. Assuming Linux always has a clipboard (the old
+    behavior) made the app report a "paste" injection method that then failed on
+    a stock box without xclip/xsel/wl-clipboard.
+    """
+    if is_windows or is_macos:
+        return "native"
+    if is_linux:
+        if is_wayland and shutil.which("wl-copy"):
+            return "wl-copy"
+        for tool in ("xclip", "xsel"):
+            if shutil.which(tool):
+                return tool
+        if shutil.which("wl-copy"):  # also works under some XWayland setups
+            return "wl-copy"
+    return ""
+
+
 def detect_injection_method():
     """Pick the best available text-injection backend for this platform.
 
@@ -51,7 +74,9 @@ def detect_injection_method():
     return "none"
 
 
-supports_basic_clipboard = is_windows or is_macos or is_linux
+clipboard_backend = _detect_clipboard_backend()
+# Real capability: on Linux this is False without xclip/xsel/wl-clipboard.
+supports_basic_clipboard = bool(clipboard_backend)
 supports_rich_clipboard_restore = is_windows
 supports_global_hotkeys = is_windows or is_macos or (is_linux and is_x11)
 # Linux audio ducking is best-effort via PipeWire/PulseAudio's `pactl`.
@@ -65,6 +90,16 @@ injection_method = detect_injection_method()
 supports_typing = injection_method not in ("paste", "none")
 # We can inject input as long as we have at least a working paste path.
 supports_input_injection = injection_method != "none"
+
+
+def injection_hint():
+    """User-facing guidance when injection is unavailable, else ""."""
+    if injection_method != "none":
+        return ""
+    if is_linux:
+        tool = "wl-clipboard" if is_wayland else "xclip (or xsel)"
+        return f"Text injection is unavailable: install {tool} to enable clipboard paste."
+    return "Text injection is unavailable on this system."
 
 
 def get_capabilities():
@@ -85,4 +120,6 @@ def get_capabilities():
         "supports_tts": supports_tts,
         "injection_method": injection_method,
         "supports_typing": supports_typing,
+        "clipboard_backend": clipboard_backend,
+        "injection_hint": injection_hint(),
     }

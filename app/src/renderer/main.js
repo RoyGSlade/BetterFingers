@@ -3885,6 +3885,19 @@ function updatePlatformWarnings(capabilities) {
     }
   }
 
+  // Injection genuinely unavailable (e.g. Linux without xclip/xsel/wl-clipboard):
+  // surface the backend's actionable hint instead of silently failing at send time.
+  const injectionUnavailableWarning = document.getElementById('injectionUnavailableWarning');
+  if (injectionUnavailableWarning) {
+    const hint = capabilities.injection_hint;
+    if (capabilities.supports_input_injection === false && hint) {
+      injectionUnavailableWarning.innerHTML = `<strong>Text injection unavailable:</strong> ${escapeHtml(hint)}`;
+      injectionUnavailableWarning.classList.remove('hidden');
+    } else {
+      injectionUnavailableWarning.classList.add('hidden');
+    }
+  }
+
   // Audio ducking is available on Windows and on Linux with pactl/PipeWire;
   // trust the backend capability rather than assuming Windows-only.
   const supportsAudioDucking = Boolean(capabilities.supports_audio_ducking);
