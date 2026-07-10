@@ -551,9 +551,14 @@ fixture versions.
 - [ ] **Golden audio suite completion (C9):** check in real `.wav`/`.txt` fixtures +
       `test_golden_audio.py` runner that skips without a model; CI job per configured STT
       model.
-- [ ] **Screenshot QA completion (U1):** wire `review-overlay.spec.js` into CI (needs
-      provisioned model/TTS in the runner); check in baseline screenshots; reg-actions
-      PR diffing.
+- [~] **Screenshot QA completion (U1):** *`review-overlay.spec.js` now wired into CI.* Its
+      TTS/LLM tests (Read/Change/Instruct) are gated behind `BETTERFINGERS_E2E_MODEL=1`; the
+      model-free subset (overlay open, badges/buttons, live word-count summary, cancel,
+      dashboard-after) runs from the mock-draft endpoint with no model, and the workflow now
+      runs the full Playwright suite. Verified locally: smoke 14/14 + overlay 4 passed / 3
+      gated, with real dashboard/settings/models/diagnostics/overlay screenshots. *Remaining:*
+      check in curated baselines under a deliberate path (not the gitignored per-run
+      `app/artifacts/`) + reg-actions PR diffing — a cohesive visual-regression unit.
 
 ### M6 — Architecture decomposition (extract one domain at a time, tests stay green)
 

@@ -56,14 +56,15 @@ jobs:
         working-directory: app
         run: npm run build
 
-      # Only the smoke spec runs in CI for now. review-overlay.spec.js exercises
-      # TTS/LLM rewrite flows that need a real model + llama-server on disk;
-      # this job doesn't provision either. See DESIGN.md §10 M5 (U1).
-      - name: Run Electron smoke/screenshot suite
+      # Both specs run model-free here: the smoke spec needs no model, and
+      # review-overlay.spec.js opens from a mock draft and skips its TTS/LLM tests
+      # unless BETTERFINGERS_E2E_MODEL=1 (this job provisions no model). Run the
+      # whole Playwright suite. See DESIGN.md §10 M5 (U1).
+      - name: Run Electron smoke + review-overlay screenshot suites
         working-directory: app
         env:
           BETTERFINGERS_PYTHON: python
-        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" npx playwright test tests/electron-smoke.spec.js
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" npx playwright test
 
       - name: Upload screenshot artifacts
         if: always()

@@ -3,6 +3,14 @@ const { _electron: electron } = require('playwright');
 const path = require('node:path');
 const { dismissOnboardingIfPresent } = require('./helpers/onboarding');
 
+// The overlay opens from a mock draft (POST /drafts/test-mock) which needs no
+// model, so structure/summary/cancel assertions run anywhere — including CI. The
+// Read (TTS), Change and Instruct (LLM rewrite) tests need a live llama-server +
+// TTS model on disk, which CI does not provision. Gate those behind an opt-in env
+// flag so the model-free subset is CI-wireable; set BETTERFINGERS_E2E_MODEL=1 to
+// run the full flow on a machine that has the model + sidecar. See DESIGN §10 (U1).
+const MODEL_E2E = process.env.BETTERFINGERS_E2E_MODEL === '1';
+
 test.describe('BetterFingers Review Overlay Tests', () => {
   let app;
   let mainWindow;
@@ -80,6 +88,9 @@ test.describe('BetterFingers Review Overlay Tests', () => {
     await expect(reviewWindow.locator('#instructButton')).toBeVisible();
     await expect(reviewWindow.locator('#readButton')).toBeVisible();
     await expect(reviewWindow.locator('#cancelButton')).toBeVisible();
+
+    // Baseline screenshot of the review overlay for visual QA.
+    await reviewWindow.screenshot({ path: 'artifacts/betterfingers-review-overlay.png' });
   });
 
   test('Draft summary shows the word count and updates live on edit', async () => {
@@ -99,6 +110,7 @@ test.describe('BetterFingers Review Overlay Tests', () => {
   });
 
   test('Read button calls TTS path and enters speaking state, then stop halts it', async () => {
+    test.skip(!MODEL_E2E, 'Needs a live TTS model; set BETTERFINGERS_E2E_MODEL=1 to run.');
     const readButton = reviewWindow.locator('#readButton');
     const statusBadge = reviewWindow.locator('#statusBadge');
 
@@ -117,6 +129,7 @@ test.describe('BetterFingers Review Overlay Tests', () => {
   });
 
   test('Change button triggers rewrite and enters rewriting state', async () => {
+    test.skip(!MODEL_E2E, 'Needs a live llama-server; set BETTERFINGERS_E2E_MODEL=1 to run.');
     const changeButton = reviewWindow.locator('#changeButton');
     const statusBadge = reviewWindow.locator('#statusBadge');
 
@@ -128,6 +141,7 @@ test.describe('BetterFingers Review Overlay Tests', () => {
   });
 
   test('Instruct button toggles custom instruction row and typing run rewrite works', async () => {
+    test.skip(!MODEL_E2E, 'Needs a live llama-server; set BETTERFINGERS_E2E_MODEL=1 to run.');
     const instructButton = reviewWindow.locator('#instructButton');
     const instructionRow = reviewWindow.locator('#instructionRow');
     const instructionText = reviewWindow.locator('#instructionText');
