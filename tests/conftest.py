@@ -12,7 +12,10 @@ unaffected. Set BETTERFINGERS_LAZY_STARTUP="" in the environment to force
 eager startup for the whole suite if ever needed.
 """
 import os
+import sys
 import tempfile
+
+import pytest
 
 os.environ.setdefault("BETTERFINGERS_LAZY_STARTUP", "1")
 
@@ -40,3 +43,32 @@ with open(os.path.join(_profiles, "Default.yaml"), "w") as _fh:
         "model_keep_stt_loaded: false\n"
         "model_keep_tts_loaded: false\n"
     )
+
+
+@pytest.fixture(autouse=True)
+def _reset_server_model_singletons():
+    """Reset server.py's module-level model singletons around every test.
+
+    `server.transcriber` and `server.tts_engine` are process-global caches
+    (server.ensure_transcriber_initialized / get_tts_engine populate them
+    lazily). A test that installs one — directly, or by running the pipeline
+    with server.Transcriber patched to a dummy — leaves it set, so a later
+    test that patches server.Transcriber but assumes a fresh global silently
+    runs against the leaked instance instead of its own dummy. That is an
+    order-dependent failure (e.g. test_token_concepts passed alone but failed
+    in the full suite). Several test files already reset these by hand in
+    setUp/tearDown; centralizing it here makes every test hermetic regardless
+    of collection order. Only touches the module if it is already imported, so
+    tests that never load `server` are unaffected.
+    """
+    def _reset():
+        server_mod = sys.modules.get("server")
+        if server_mod is None:
+            return
+        for _name in ("transcriber", "tts_engine"):
+            if hasattr(server_mod, _name):
+                setattr(server_mod, _name, None)
+
+    _reset()
+    yield
+    _reset()

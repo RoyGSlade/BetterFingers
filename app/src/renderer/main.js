@@ -4061,6 +4061,14 @@ function updateVoiceStatus(message) {
     setMessage(draftMessageEl, progressText, 'warning');
   }
 
+  // Missed-release watchdog (Phase 11): a stranded recording was force-stopped
+  // after max_recording_seconds. Surface it as a warning so it doesn't look like
+  // a silent glitch.
+  if (message.status === 'watchdog_timeout_warning') {
+    showToast(message.message || 'Recording stopped after max duration.', 'warning');
+    setMessage(draftMessageEl, message.message || 'Recording stopped after max duration.', 'warning');
+  }
+
   if (['draft_accepted', 'draft_declined'].includes(message.status)) {
     refreshDrafts().catch(() => {});
     refreshOutputSettings().catch(() => {});

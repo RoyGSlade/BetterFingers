@@ -8,10 +8,11 @@ planning doc (`MASTER_PLAN`, `REMAINING_WORK`, `VOICE_CONTROL_PLAN`, `PERSONA_FO
 `MARKETING_PLAN`, and the external product audit of 2026-07). Historical detail lives in
 git history; only what defines the product or remains to be done lives here.
 
-Last reconciled against the codebase: **2026-07-09** (main @ `2e24c72`; full suite run:
-**638/639 Python tests pass** — the one failure is a known cross-test state leak in
-`tests/test_token_concepts.py::Phase2PassThroughTest`, which passes in isolation; fix
-tracked in §6.2 — plus 19+ Playwright e2e tests).
+Last reconciled against the codebase: **2026-07-09** (main @ `2e24c72`). The cross-test
+state leak that made `test_token_concepts.py::Phase2PassThroughTest` fail in the full run
+is **fixed** (autouse reset of `server.transcriber`/`tts_engine` in
+[`tests/conftest.py`](tests/conftest.py)); the model-free subset that reproduced it now
+runs fully green (600 passed). Plus 19+ Playwright e2e tests.
 
 ---
 
@@ -238,9 +239,12 @@ repeatedly, not once.
 
 ### 6.2 Finish the started safety rails (small, code-verified gaps)
 
-- [ ] **Missed-release watchdog server wiring.** `hotkey_manager.py` has the timer +
-      `on_watchdog_timeout_callback`; `server.py` never passes the callback or broadcasts
-      the "Recording stopped after max duration" status. (~one-line wiring + status.)
+- [x] **Missed-release watchdog** — *done end-to-end* (was mismarked pending). Timer +
+      `on_watchdog_timeout_callback` in `hotkey_manager.py`; `server.py` passes
+      `_broadcast_watchdog_timeout` which broadcasts the `watchdog_timeout_warning` status
+      ("Recording stopped after max duration."); the renderer now surfaces it as a warning
+      toast. Backend covered by `test_server_amplitude_watchdog.py` +
+      `test_hotkey_manager_tts.py`.
 - [ ] **Auto-stop after trailing silence** (not started). Streaming silence state machine
       over recorder chunk stats; profile fields `auto_stop_after_silence_enabled` (default
       false), `auto_stop_silence_ms` (900, 250–5000), `auto_stop_min_recording_ms` (700),
@@ -255,10 +259,11 @@ repeatedly, not once.
 - [ ] **Review overlay draft summary** (Phase 8 remnant): token/word count summary on the
       final draft in `review-overlay.html`; optional heartbeat so a long non-chunked LLM
       call keeps status fresh past ~8s.
-- [ ] **Fix the cross-test state leak** that makes
-      `test_token_concepts.py::Phase2PassThroughTest::test_completion_cap_reaches_engine`
-      fail in the full run while passing in isolation — the suite must be trustworthy
-      before it can gate anything.
+- [x] **Cross-test state leak fixed** — `server.transcriber`/`tts_engine` module globals
+      leaked across tests, so `test_token_concepts.py::Phase2PassThroughTest` failed only in
+      the full run. An autouse fixture in `tests/conftest.py` now resets both around every
+      test (centralizing what four test files already did by hand). Verified: the model-free
+      subset that reproduced it is green (600 passed).
 
 ### 6.3 Cancellation, queueing, and job management (product-level)
 
