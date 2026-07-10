@@ -171,7 +171,7 @@ M6–M7 make it **safe to extend**; M8+ is post-1.0.
 | Milestone | Theme | Gate to advance |
 |---|---|---|
 | **M0** | Release baseline & repo front door | Clean-machine reproducible build; README/SECURITY exist |
-| **M1** | Core-loop reliability + safety rails | Reliability benchmark (§6) passes |
+| **M1** | Core-loop reliability + safety rails | Reliability benchmark (§6) passes — *safety rails (§6.2), job-manager core + dictation integration (§6.3), and the benchmark harness (§6.1) are all built & tested; the remaining gate is running the harness to green on real hardware (`needs-hardware`)* |
 | **M2** | Injection compatibility | Versioned matrix for the top-10 target apps |
 | **M3** | Voice control completion | Wake→dictate→auto-stop→confirm loop, off by default, tested |
 | **M4** | Data lifecycle & at-rest trust | DataRegistry drives privacy report/wipe/export |
