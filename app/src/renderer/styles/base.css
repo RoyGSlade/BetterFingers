@@ -1726,6 +1726,170 @@ body.theme-light.high-contrast {
 .onboarding-spacer { flex: 1; }
 
 /* ==========================================
+   Persona Foundry: guided interview -> compile -> stress-test
+   ========================================== */
+.foundry-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(3, 8, 16, 0.72);
+  backdrop-filter: blur(6px);
+}
+
+.foundry-card {
+  width: min(680px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 28px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+}
+
+.foundry-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.foundry-title { margin: 0; font-size: 1.3rem; }
+.foundry-close-button {
+  padding: 2px 10px;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.foundry-chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 320px;
+  overflow-y: auto;
+  margin-bottom: 14px;
+  padding-right: 4px;
+}
+
+.foundry-bubble {
+  max-width: 85%;
+  padding: 10px 14px;
+  border-radius: 14px;
+  line-height: 1.5;
+  font-size: 0.92rem;
+}
+.foundry-bubble.question {
+  align-self: flex-start;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+.foundry-bubble.pushback {
+  align-self: flex-start;
+  background: rgba(240, 160, 40, 0.12);
+  border: 1px solid rgba(240, 160, 40, 0.35);
+  color: var(--text);
+}
+.foundry-bubble.answer {
+  align-self: flex-end;
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.foundry-choice-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.foundry-text-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+.foundry-text-row textarea { flex: 1; }
+
+.foundry-example-pair {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.foundry-collection-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.foundry-collection-list li {
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 0.88rem;
+  color: var(--muted);
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+.foundry-collection-list li strong { color: var(--text); }
+
+.foundry-stress-cases {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 14px 0;
+}
+.foundry-stress-case {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: var(--bg-soft);
+}
+.foundry-stress-case-category {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.foundry-stress-case-io { display: grid; gap: 8px; margin-bottom: 8px; }
+.foundry-stress-case-io textarea { width: 100%; }
+.foundry-stress-case-actions { display: flex; gap: 8px; }
+.foundry-stress-case[data-verdict="approved"] { border-color: var(--accent-strong); }
+.foundry-stress-case[data-verdict="rejected"] { opacity: 0.6; }
+
+.foundry-character-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px 18px;
+  background: var(--bg-soft);
+}
+.foundry-character-card h3 { margin: 0 0 4px; font-size: 1.15rem; }
+.foundry-character-card .foundry-archetype { color: var(--muted); margin: 0 0 12px; font-style: italic; }
+.foundry-character-card dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; margin: 0; }
+.foundry-character-card dt { color: var(--muted); font-size: 0.82rem; }
+.foundry-character-card dd { margin: 0; font-size: 0.88rem; }
+.foundry-reliability-score {
+  display: inline-block;
+  margin-top: 10px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+/* ==========================================
    Pipeline latency HUD (C10)
    ========================================== */
 .metrics-hud { overflow-x: auto; }
@@ -1811,6 +1975,30 @@ body.theme-light.high-contrast {
 .dictionary-chip-add:hover { background: rgba(102, 242, 193, 0.08); }
 
 /* ==========================================
+   Voice Studio (U5/U6/U7 tie-in)
+   ========================================== */
+.min-w-160 { min-width: 160px; }
+.voice-blend-rows { display: flex; flex-direction: column; gap: 10px; }
+.voice-blend-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.voice-blend-row select { flex: 1 1 160px; }
+.voice-blend-row input[type='range'] { flex: 1 1 120px; }
+.voice-blend-weight-label { min-width: 3.2em; text-align: right; }
+.voice-preset-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.voice-preset-row {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+}
+.chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip-button { border-radius: 999px; padding: 5px 14px; font-size: 0.88rem; }
+
+/* ==========================================
    Model recommendation callout (U4)
    ========================================== */
 .model-recommendation {
@@ -1850,4 +2038,84 @@ body.theme-light.high-contrast {
   white-space: pre-wrap;
   min-height: 44px;
   overflow-wrap: anywhere;
+}
+
+/* ==========================================
+   UI fixes (accessibility, overflow, hierarchy)
+   ========================================== */
+
+/* Visible keyboard focus ring on every interactive element. The custom button/
+   nav styling previously suppressed the default outline, leaving keyboard users
+   with no visible focus (WCAG 2.4.7). :focus-visible only shows for keyboard
+   navigation, not mouse clicks. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+/* Doctor cards: long backend status strings (e.g. the multi-sentence TTS
+   provider message) previously overflowed their grid track and pushed the whole
+   page into horizontal scroll, dragging status badges into the gutter. Let card
+   content shrink and wrap instead. */
+.doctor-card {
+  min-width: 0;
+}
+.doctor-card-header {
+  min-width: 0;
+  gap: 10px;
+}
+.doctor-card-header > :first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.doctor-card-status {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.doctor-card-detail {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  /* Preserve the \n line breaks in the detail text while still wrapping long
+     status strings — the inherited `white-space: pre` did not wrap. */
+  white-space: pre-wrap;
+}
+
+/* Keep multi-word action pills on one line so labels like "Make Shorter" don't
+   wrap to a ragged two-line pill. The clusters already wrap as whole buttons. */
+.review-tools .secondary-button,
+.action-row .secondary-button,
+.recording-controls .secondary-button {
+  white-space: nowrap;
+}
+
+/* Danger button tier — for destructive/stop actions (Decline, Emergency Stop)
+   so they read differently from neutral secondary actions. */
+.danger-button {
+  border-color: rgba(255, 124, 135, 0.42) !important;
+  background: rgba(255, 124, 135, 0.1) !important;
+  color: #ffb7bf !important;
+}
+.danger-button:hover {
+  border-color: rgba(255, 124, 135, 0.65) !important;
+}
+
+/* When a model "download" is actually a runtime-incompatibility error, the
+   percent + progress track are meaningless — hide them and let the message read
+   as the warning it is. */
+.model-download-progress[data-state='error'] .model-progress-track,
+.model-download-progress[data-state='error'] #llmDownloadProgressPercent {
+  display: none;
+}
+.model-download-progress[data-state='error'] {
+  border-color: rgba(255, 124, 135, 0.34);
+  background: rgba(255, 124, 135, 0.06);
+}
+.model-download-progress[data-state='error'] #llmDownloadProgressLabel {
+  color: var(--danger);
 }

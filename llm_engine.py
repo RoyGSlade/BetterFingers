@@ -228,8 +228,47 @@ def _coerce_choice(value, fallback, allowed):
     return v if v in allowed else fallback
 
 
+def _coerce_voice_blend(value):
+    """Coerce a persona's voice.blend field into {voice_name: weight}.
+
+    Any non-dict value (including the legacy schema's bare string, which was
+    never wired to real playback and so carries no reliable intent) migrates
+    to an empty blend rather than guessing — safer to let a user re-pick a
+    blend explicitly in the Voice Studio UI than silently activate unverified
+    data the first time this field finally does something.
+    """
+    if not isinstance(value, dict):
+        return {}
+    result = {}
+    for name, weight in value.items():
+        key = str(name or "").strip()
+        if not key:
+            continue
+        w = _coerce_float(weight, 0.0)
+        if w <= 0:
+            continue
+        result[key] = w
+    return result
+
+
 PERSONA_OUTPUT_POLICIES = {"preserve", "tighten", "expand", "summarize"}
 PERSONA_SAFETY_MODES = {"strict", "light", "creative"}
+
+
+def default_persona_card():
+    """Return a fully-defaulted, empty persona_card dict (Persona Foundry)."""
+    return {
+        "display_name": "",
+        "archetype": "",
+        "temperament": [],       # list[str]
+        "favorite_phrases": [],  # list[str]
+        "forbidden": [],         # list[str]
+        "signature_moves": [],   # list[str]
+        "best_use_cases": [],    # list[str]
+        "anti_examples": [],     # list[str]
+        "eval_cases": [],        # list[{"category", "input", "output", "verdict"}]
+        "reliability_score": 0,  # 0-100
+    }
 
 
 def default_persona(prompt=""):
@@ -238,7 +277,20 @@ def default_persona(prompt=""):
         "prompt": str(prompt or ""),
         "temperature": None,
         "few_shot": [],  # list of {"raw": str, "out": str}
-        "voice": {"base": "", "blend": "", "speed": 1.0},
+        "voice": {
+            "preset": "",       # name ref into voice_presets.json; resolved at read time, not here
+            "base": "",
+            "blend": {},        # {voice_name: weight}; base's own implicit weight is 1.0
+            "speed": 1.0,
+            "pitch": 0.0,       # semitones, -12..12
+            "energy": 0.5,      # 0..1, 0.5 = unity
+            "warmth": 0.0,      # 0..1, low-shelf boost
+            "brightness": 0.0,  # 0..1, high-shelf boost
+            "pause_style": "natural",  # natural | compact | dramatic
+            "stability": 0.5,   # STORED ONLY — Kokoro's ONNX style lookup has no
+                                 # sampling temperature to wire this to; same treatment
+                                 # as model_hint until an engine exposes one.
+        },
         "format": {"caps": "none", "punctuation": True, "signoff": ""},
         "dictionary_scope": "global",
         "model_hint": "",
@@ -247,6 +299,9 @@ def default_persona(prompt=""):
         "safety_mode": "strict",       # strict | light | creative
         "max_completion_tokens": None,  # per-persona override (None = profile default)
         "chunk_size": None,             # per-persona override (None = profile default)
+        # Persona Foundry: optional narrative "character card". Empty/default
+        # for every persona not built through the Foundry guided interview.
+        "persona_card": default_persona_card(),
     }
 
 
@@ -281,9 +336,16 @@ def normalize_persona(entry):
     voice = entry.get("voice", {})
     if isinstance(voice, dict):
         result["voice"] = {
+            "preset": str(voice.get("preset", "") or ""),
             "base": str(voice.get("base", "") or ""),
-            "blend": str(voice.get("blend", "") or ""),
+            "blend": _coerce_voice_blend(voice.get("blend")),
             "speed": _coerce_float(voice.get("speed", 1.0), 1.0),
+            "pitch": _coerce_float(voice.get("pitch", 0.0), 0.0),
+            "energy": _coerce_float(voice.get("energy", 0.5), 0.5),
+            "warmth": _coerce_float(voice.get("warmth", 0.0), 0.0),
+            "brightness": _coerce_float(voice.get("brightness", 0.0), 0.0),
+            "pause_style": str(voice.get("pause_style", "natural") or "natural"),
+            "stability": _coerce_float(voice.get("stability", 0.5), 0.5),
         }
 
     fmt = entry.get("format", {})
@@ -300,7 +362,65 @@ def normalize_persona(entry):
     result["safety_mode"] = _coerce_choice(entry.get("safety_mode"), "strict", PERSONA_SAFETY_MODES)
     result["max_completion_tokens"] = _coerce_int_or_none(entry.get("max_completion_tokens"), 512, 4096)
     result["chunk_size"] = _coerce_int_or_none(entry.get("chunk_size"), 50, 5000)
+    result["persona_card"] = _coerce_persona_card(entry.get("persona_card"))
     return result
+
+
+def _coerce_str_list(value):
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item or "").strip()]
+
+
+def _coerce_persona_card(value):
+    """Defensively coerce a persona_card of any shape into the full schema,
+    same pattern as ``voice``/``format`` above: type-check, coerce sub-fields,
+    drop anything unexpected, never raise."""
+    card = default_persona_card()
+    if not isinstance(value, dict):
+        return card
+    card["display_name"] = str(value.get("display_name", "") or "")
+    card["archetype"] = str(value.get("archetype", "") or "")
+    card["temperament"] = _coerce_str_list(value.get("temperament"))
+    card["favorite_phrases"] = _coerce_str_list(value.get("favorite_phrases"))
+    card["forbidden"] = _coerce_str_list(value.get("forbidden"))
+    card["signature_moves"] = _coerce_str_list(value.get("signature_moves"))
+    card["best_use_cases"] = _coerce_str_list(value.get("best_use_cases"))
+    card["anti_examples"] = _coerce_str_list(value.get("anti_examples"))
+    eval_cases = value.get("eval_cases")
+    if isinstance(eval_cases, list):
+        card["eval_cases"] = [
+            {
+                "category": str(item.get("category", "") or ""),
+                "input": str(item.get("input", "") or ""),
+                "output": str(item.get("output", "") or ""),
+                "verdict": str(item.get("verdict", "") or ""),
+            }
+            for item in eval_cases
+            if isinstance(item, dict)
+        ]
+    score = value.get("reliability_score", 0)
+    try:
+        card["reliability_score"] = max(0, min(100, int(score)))
+    except (TypeError, ValueError):
+        card["reliability_score"] = 0
+    return card
+
+
+def compute_reliability_score(persona_card, num_examples, had_contradiction, stress_approval_ratio=None):
+    """Pure heuristic score (0-100) for a Persona Foundry character card.
+
+    Base 40; +10 per example up to 3 (30 max); +10 if the interview never hit
+    an unresolved contradiction; +20 * stress-test approval ratio once a
+    stress suite has been graded (0 contribution until then)."""
+    score = 40
+    score += min(3, max(0, int(num_examples or 0))) * 10
+    if not had_contradiction:
+        score += 10
+    if stress_approval_ratio is not None:
+        ratio = max(0.0, min(1.0, float(stress_approval_ratio)))
+        score += round(20 * ratio)
+    return max(0, min(100, int(score)))
 
 
 def validate_persona(entry):
@@ -321,6 +441,9 @@ def validate_persona(entry):
             return False, "Persona temperature must be between 0.0 and 2.0."
     if not isinstance(entry.get("few_shot", []), list):
         return False, "Persona few_shot must be a list."
+    card = entry.get("persona_card", None)
+    if card is not None and not isinstance(card, dict):
+        return False, "Persona persona_card must be a mapping."
     return True, ""
 
 
@@ -585,6 +708,422 @@ def lint_persona(persona):
             pass
 
     return warnings
+
+
+# ---------------------------------------------------------------------------
+# Persona Foundry: guided interview -> compile -> stress-test.
+# See docs/PERSONA_FOUNDRY_PLAN.md. Interview navigation, vagueness checks,
+# and contradiction detection are deterministic/rule-based (fast, testable,
+# no model required); the LLM is only invoked later, at compile and
+# stress-test time, where generation is actually the point.
+# ---------------------------------------------------------------------------
+
+FOUNDRY_QUESTIONS = [
+    {"id": "role", "group": "role", "kind": "text",
+     "prompt": "What is this persona for? (e.g. editor, chaotic rewriter, executive assistant, lorekeeper, debate partner)"},
+    {"id": "character_cares", "group": "character", "kind": "text",
+     "prompt": "What does this persona care about?"},
+    {"id": "character_hates", "group": "character", "kind": "text",
+     "prompt": "What do they hate?"},
+    {"id": "character_language", "group": "character", "kind": "text",
+     "prompt": "What kind of language do they use?"},
+    {"id": "character_temperament", "group": "character", "kind": "text",
+     "prompt": "Are they warm, sharp, formal, strange, funny, or severe? Pick words or describe."},
+    {"id": "character_never", "group": "character", "kind": "text",
+     "prompt": "What should they never do?"},
+    {"id": "contract_scope", "group": "contract", "kind": "choice",
+     "prompt": "Should it only rewrite, or can it also answer questions?",
+     "choices": ["rewrite_only", "can_answer"]},
+    {"id": "contract_length", "group": "contract", "kind": "choice",
+     "prompt": "Should it preserve the original length, or is expanding/trimming okay?",
+     "choices": ["preserve_length", "flexible_length"]},
+    {"id": "contract_expand", "group": "contract", "kind": "choice",
+     "prompt": "Should it expand ideas, or stay strictly literal?",
+     "choices": ["expand_ideas", "stay_literal"]},
+    {"id": "contract_tone_shift", "group": "contract", "kind": "text",
+     "prompt": "Should it make the user sound smarter, funnier, calmer, more aggressive — or just cleaner?"},
+    {"id": "contract_profanity", "group": "contract", "kind": "choice",
+     "prompt": "Should it keep profanity, or clean it up?",
+     "choices": ["keep_profanity", "clean_profanity"]},
+    {"id": "contract_safety", "group": "contract", "kind": "choice",
+     "prompt": "Should it sanitize unsafe/sensitive content, or leave it as-is?",
+     "choices": ["sanitize", "leave_as_is"]},
+]
+FOUNDRY_QUESTION_BY_ID = {q["id"]: q for q in FOUNDRY_QUESTIONS}
+
+FOUNDRY_VAGUE_WORDS = {"good", "nice", "idk", "not sure", "whatever", "normal", "fine", "professional"}
+FOUNDRY_MIN_WORDS = 3
+FOUNDRY_MIN_EXAMPLES = 3
+FOUNDRY_MIN_ANTI_EXAMPLES = 1
+
+FOUNDRY_PUSHBACK_VAGUE = "Too vague. Give me one sentence this persona would actually write."
+FOUNDRY_PUSHBACK_CONTRADICTION = "You chose 'expand ideas' and 'preserve exact length'. Those conflict. Which matters more?"
+
+
+def foundry_new_session():
+    """Return a fresh Persona Foundry interview session dict."""
+    return {
+        "cursor": 0,
+        "answers": {},
+        "pushback_used": [],
+        "resolving_conflict": None,
+        "examples": [],
+        "anti_examples": [],
+        "collection": None,  # None | "examples" | "anti_examples"
+        "done": False,
+    }
+
+
+def _foundry_is_vague(text):
+    text = str(text or "").strip()
+    if not text:
+        return True
+    if text.lower() in FOUNDRY_VAGUE_WORDS:
+        return True
+    return len(text.split()) < FOUNDRY_MIN_WORDS
+
+
+def _foundry_contract_conflicts(answers):
+    """Deterministic contract-contradiction rules, mirroring lint_persona()'s
+    style. Returns (conflicting_question_id, pushback_text) or (None, None)."""
+    if answers.get("contract_expand") == "expand_ideas" and answers.get("contract_length") == "preserve_length":
+        return "contract_length", FOUNDRY_PUSHBACK_CONTRADICTION
+    return None, None
+
+
+def _foundry_collection_prompt(group):
+    if group == "examples":
+        return (
+            f"Give me a raw/desired example pair (need {FOUNDRY_MIN_EXAMPLES} minimum). "
+            "Raw: what the user might actually say. Desired: what this persona would write."
+        )
+    return "What would be too much? What would sound fake? What would this persona never say?"
+
+
+def foundry_next_prompt(session):
+    """Return the current-state prompt dict for the client to render — a
+    fixed question, a conflict re-ask, a collection prompt, or None if done."""
+    if session.get("done"):
+        return None
+    if session.get("resolving_conflict"):
+        return dict(FOUNDRY_QUESTION_BY_ID[session["resolving_conflict"]])
+    collection = session.get("collection")
+    if collection:
+        return {
+            "id": collection,
+            "group": collection,
+            "kind": "collection",
+            "prompt": _foundry_collection_prompt(collection),
+            "count": len(session.get(collection, [])),
+            "minimum": FOUNDRY_MIN_EXAMPLES if collection == "examples" else FOUNDRY_MIN_ANTI_EXAMPLES,
+        }
+    cursor = session.get("cursor", 0)
+    if cursor < len(FOUNDRY_QUESTIONS):
+        return dict(FOUNDRY_QUESTIONS[cursor])
+    return None
+
+
+def foundry_submit_answer(session, answer):
+    """Advance a Foundry interview session by one answer (mutates ``session``
+    in place). Returns {"pushback": str|None, "done": bool}."""
+    session.setdefault("pushback_used", [])
+    session.setdefault("answers", {})
+    session.setdefault("examples", [])
+    session.setdefault("anti_examples", [])
+    session.setdefault("resolving_conflict", None)
+
+    collection = session.get("collection")
+
+    if collection == "examples":
+        if isinstance(answer, dict) and answer.get("next"):
+            if len(session["examples"]) < FOUNDRY_MIN_EXAMPLES:
+                return {"pushback": f"I need at least {FOUNDRY_MIN_EXAMPLES} examples first.", "done": False}
+            session["collection"] = "anti_examples"
+            return {"pushback": None, "done": False}
+        raw = str(answer.get("raw", "") or "").strip() if isinstance(answer, dict) else ""
+        desired = str(answer.get("desired", "") or "").strip() if isinstance(answer, dict) else ""
+        if not raw or not desired:
+            return {"pushback": "Give me both a raw input and the desired output.", "done": False}
+        session["examples"].append({"raw": raw, "desired": desired})
+        return {"pushback": None, "done": False}
+
+    if collection == "anti_examples":
+        if isinstance(answer, dict) and answer.get("next"):
+            if len(session["anti_examples"]) < FOUNDRY_MIN_ANTI_EXAMPLES:
+                return {"pushback": "Give me at least one anti-example first.", "done": False}
+            session["done"] = True
+            return {"pushback": None, "done": True}
+        text = str(answer or "").strip()
+        if not text:
+            return {"pushback": "What would this persona never say? Give me a real line.", "done": False}
+        session["anti_examples"].append(text)
+        return {"pushback": None, "done": False}
+
+    if session["resolving_conflict"]:
+        qid = session["resolving_conflict"]
+        question = FOUNDRY_QUESTION_BY_ID[qid]
+        text = str(answer or "").strip()
+        if text not in question.get("choices", []):
+            return {"pushback": f"Pick one of: {', '.join(question['choices'])}.", "done": False}
+        session["answers"][qid] = text
+        session["resolving_conflict"] = None
+        if session["cursor"] >= len(FOUNDRY_QUESTIONS):
+            session["collection"] = "examples"
+        return {"pushback": None, "done": False}
+
+    cursor = session.get("cursor", 0)
+    if cursor >= len(FOUNDRY_QUESTIONS):
+        session["collection"] = "examples"
+        return {"pushback": None, "done": False}
+
+    question = FOUNDRY_QUESTIONS[cursor]
+    qid = question["id"]
+
+    if question["kind"] == "choice":
+        text = str(answer or "").strip()
+        if text not in question.get("choices", []):
+            return {"pushback": f"Pick one of: {', '.join(question['choices'])}.", "done": False}
+        session["answers"][qid] = text
+    else:
+        text = str(answer or "").strip()
+        if _foundry_is_vague(text) and qid not in session["pushback_used"]:
+            session["pushback_used"].append(qid)
+            return {"pushback": FOUNDRY_PUSHBACK_VAGUE, "done": False}
+        session["answers"][qid] = text
+
+    if qid == "contract_safety":
+        conflict_id, pushback = _foundry_contract_conflicts(session["answers"])
+        if conflict_id and "contract_conflict" not in session["pushback_used"]:
+            session["pushback_used"].append("contract_conflict")
+            session["resolving_conflict"] = conflict_id
+            session["cursor"] = cursor + 1
+            return {"pushback": pushback, "done": False}
+
+    session["cursor"] = cursor + 1
+    if session["cursor"] >= len(FOUNDRY_QUESTIONS):
+        session["collection"] = "examples"
+    return {"pushback": None, "done": False}
+
+
+# --- Compile: deterministic contract -> schema-v2 mapping (pure, no LLM) ---
+
+def _map_contract_to_policy(answers):
+    """Deterministic mapping from Foundry contract answers to
+    (output_policy, safety_mode). Pure, no I/O."""
+    expand = answers.get("contract_expand") == "expand_ideas"
+    stay_literal = answers.get("contract_expand") == "stay_literal"
+    preserve_length = answers.get("contract_length") == "preserve_length"
+    can_answer = answers.get("contract_scope") == "can_answer"
+    sanitize = answers.get("contract_safety") == "sanitize"
+
+    if expand:
+        output_policy = "expand"
+    elif stay_literal and preserve_length:
+        output_policy = "preserve"
+    else:
+        output_policy = "tighten"
+
+    if sanitize:
+        safety_mode = "strict"
+    elif can_answer:
+        safety_mode = "creative"
+    else:
+        safety_mode = "light"
+
+    return output_policy, safety_mode
+
+
+_FOUNDRY_TEMP_LOW_WORDS = ("severe", "precise", "dry", "formal", "strict", "clinical", "cold")
+_FOUNDRY_TEMP_HIGH_WORDS = ("wild", "chaotic", "strange", "funny", "unhinged", "playful", "weird", "silly")
+_FOUNDRY_TEMPERAMENT_VOCAB = [
+    "warm", "sharp", "formal", "strange", "funny", "severe", "dry", "precise",
+    "playful", "cold", "gentle", "blunt", "wild", "calm", "chaotic", "elegant",
+]
+_FOUNDRY_TEMPERAMENT_STOPWORDS = {
+    "a", "and", "the", "is", "are", "but", "very", "little", "bit", "not", "just", "with", "they", "them", "be",
+    "of", "to", "in", "for", "it", "on", "an", "or",
+}
+
+
+def _infer_temperature(temperament_text):
+    """Keyword-scored temperature guess from free-text temperament, clamped 0-2."""
+    text = str(temperament_text or "").lower()
+    low_hits = sum(1 for w in _FOUNDRY_TEMP_LOW_WORDS if w in text)
+    high_hits = sum(1 for w in _FOUNDRY_TEMP_HIGH_WORDS if w in text)
+    if high_hits and low_hits:
+        return 0.6
+    if low_hits:
+        return 0.3
+    if high_hits:
+        return 0.9
+    return 0.5
+
+
+def _extract_temperament_tags(text):
+    """Pull known temperament words out of free text; fall back to a handful
+    of the answer's own significant words if nothing matches the vocabulary."""
+    low = str(text or "").lower()
+    hits = [w for w in _FOUNDRY_TEMPERAMENT_VOCAB if w in low]
+    if hits:
+        return hits
+    words = [w.strip(".,!?") for w in low.split() if w.strip(".,!?") and w not in _FOUNDRY_TEMPERAMENT_STOPWORDS]
+    return words[:4]
+
+
+_FOUNDRY_PROMPT_META_SYSTEM = (
+    "You write concise system prompts for AI text-rewriting personas. "
+    "Output ONLY the system prompt text — no preamble, no quotes, no markdown."
+)
+
+
+def _foundry_meta_prompt(session):
+    """The *content* sent to the LLM to draft a persona system prompt from
+    the full interview transcript."""
+    a = session.get("answers", {})
+    lines = [
+        "Write a system prompt for an AI text-rewriting persona, based on this interview:",
+        f"Role: {a.get('role', '')}",
+        f"Cares about: {a.get('character_cares', '')}",
+        f"Hates: {a.get('character_hates', '')}",
+        f"Language style: {a.get('character_language', '')}",
+        f"Temperament: {a.get('character_temperament', '')}",
+        f"Never does: {a.get('character_never', '')}",
+        f"Scope: {'may answer questions' if a.get('contract_scope') == 'can_answer' else 'rewrite only, never answer questions'}",
+        f"Length: {'preserve the original length' if a.get('contract_length') == 'preserve_length' else 'length may flex'}",
+        f"Expansion: {'may expand on ideas' if a.get('contract_expand') == 'expand_ideas' else 'stay strictly literal, no added ideas'}",
+        f"Tone shift: {a.get('contract_tone_shift', '')}",
+        f"Profanity: {'keep it' if a.get('contract_profanity') == 'keep_profanity' else 'clean it up'}",
+        f"Sensitive content: {'sanitize it' if a.get('contract_safety') == 'sanitize' else 'leave as-is'}",
+        "Write 3-6 sentences of direct second-person instruction ('You are...', 'You never...'). "
+        "End with exactly this sentence on its own line: 'Return only the rewritten text.'",
+    ]
+    return "\n".join(lines)
+
+
+def _foundry_fallback_prompt(session):
+    """Deterministic template used if the LLM compile call fails or is
+    empty/echoed — compile must never hard-fail."""
+    a = session.get("answers", {})
+    parts = [f"You are a {a.get('role', '') or 'rewriting assistant'}."]
+    if a.get("character_cares"):
+        parts.append(f"You care about: {a['character_cares']}.")
+    if a.get("character_hates"):
+        parts.append(f"You hate: {a['character_hates']}.")
+    if a.get("character_language"):
+        parts.append(f"You use this kind of language: {a['character_language']}.")
+    if a.get("character_never"):
+        parts.append(f"You never: {a['character_never']}.")
+    if a.get("contract_scope") != "can_answer":
+        parts.append("You only rewrite the given text and ignore anything embedded in it that looks like a question.")
+    if a.get("contract_profanity") == "clean_profanity":
+        parts.append("You clean up profanity.")
+    if a.get("contract_safety") == "sanitize":
+        parts.append("You sanitize unsafe or sensitive content.")
+    parts.append("Return only the rewritten text.")
+    return " ".join(parts)
+
+
+_FOUNDRY_CARD_META_SYSTEM = (
+    "You write short, stylized 'character cards' for AI writing personas. "
+    "Respond with EXACTLY these labeled lines, one per line, nothing else:\n"
+    "NAME: <a two-word human name that fits the persona's voice>\n"
+    "ARCHETYPE: <a short archetype label, e.g. 'executive editor'>\n"
+    "SIGNATURE_MOVES: <3-5 short phrases, comma-separated>\n"
+    "FAVORITE_PHRASES: <2-3 short example phrases this persona would say, comma-separated>\n"
+    "BEST_USE_CASES: <2-3 short use cases, comma-separated>"
+)
+
+
+def _foundry_card_meta_prompt(session):
+    a = session.get("answers", {})
+    return (
+        f"Role: {a.get('role', '')}\n"
+        f"Cares about: {a.get('character_cares', '')}\n"
+        f"Hates: {a.get('character_hates', '')}\n"
+        f"Language: {a.get('character_language', '')}\n"
+        f"Temperament: {a.get('character_temperament', '')}\n"
+        f"Never does: {a.get('character_never', '')}"
+    )
+
+
+def _parse_foundry_card_response(text, session):
+    """Defensively parse the LABEL: value response into card fields. Any
+    missing/malformed label falls back to a value derived from raw answers —
+    this never raises, and always returns a usable (if plainer) card."""
+    a = session.get("answers", {})
+    fields = {}
+    for line in str(text or "").splitlines():
+        if ":" not in line:
+            continue
+        label, _, value = line.partition(":")
+        fields[label.strip().upper()] = value.strip()
+
+    def _split_list(label):
+        raw = fields.get(label, "")
+        return [p.strip() for p in raw.split(",") if p.strip()]
+
+    display_name = fields.get("NAME", "").strip()
+    if not display_name or len(display_name.split()) > 4:
+        display_name = (str(a.get("role", "")).strip() or "Custom Persona").title()[:40]
+
+    archetype = fields.get("ARCHETYPE", "").strip() or str(a.get("role", "")).strip()
+
+    return {
+        "display_name": display_name,
+        "archetype": archetype,
+        "signature_moves": _split_list("SIGNATURE_MOVES"),
+        "favorite_phrases": _split_list("FAVORITE_PHRASES"),
+        "best_use_cases": _split_list("BEST_USE_CASES"),
+    }
+
+
+# --- Stress test: fixed categories + built-in fallback seeds ---
+
+FOUNDRY_STRESS_CATEGORIES = [
+    "rambling", "angry", "short_command", "embedded_question",
+    "sensitive_text", "long_paragraph", "weird_slang",
+]
+
+FOUNDRY_STRESS_SEEDS = {
+    "rambling": "so like i was thinking maybe we should probably just go ahead and honestly i dont know just try the thing i guess and see what happens",
+    "angry": "this is completely unacceptable and I am furious that nobody told me about this before the deadline",
+    "short_command": "send it now",
+    "embedded_question": "here's the summary, by the way what time is the meeting tomorrow, anyway moving on",
+    "sensitive_text": "I've been feeling really overwhelmed and anxious about my health lately and don't know who to talk to",
+    "long_paragraph": "This is a long paragraph that keeps going and going without much of a point, testing whether the persona stays coherent over many repeated clauses and does not lose the thread. " * 4,
+    "weird_slang": "ngl this whole thing is bussin fr fr no cap deadass the vibes are immaculate rn",
+}
+
+_FOUNDRY_STRESS_META_SYSTEM = (
+    "You write short realistic test inputs for stress-testing an AI text-rewriting persona. "
+    "Respond with EXACTLY 7 lines, one per category, in this format:\n"
+    "category: input text\n"
+    "Categories, in order: rambling, angry, short_command, embedded_question, "
+    "sensitive_text, long_paragraph, weird_slang."
+)
+
+
+def _foundry_stress_meta_prompt(persona):
+    prompt = str(persona.get("prompt", "") or "")[:400]
+    return f"The persona's job: {prompt}\nWrite one tailored, nasty test input per category."
+
+
+def _parse_foundry_stress_response(text):
+    """Parse 'category: input' lines; any missing/malformed/empty category
+    falls back to its built-in seed. Always returns all 7 categories in order."""
+    found = {}
+    for line in str(text or "").splitlines():
+        if ":" not in line:
+            continue
+        label, _, value = line.partition(":")
+        key = label.strip().lower()
+        value = value.strip()
+        if key in FOUNDRY_STRESS_CATEGORIES and value:
+            found[key] = value
+    return [
+        {"category": cat, "input": found.get(cat, FOUNDRY_STRESS_SEEDS[cat])}
+        for cat in FOUNDRY_STRESS_CATEGORIES
+    ]
 
 
 def upsert_persona(name, persona):
@@ -1497,6 +2036,93 @@ class LLMEngine:
             max_output_tokens=cap,
             few_shot=persona.get("few_shot") or None,
         )
+
+    def compile_foundry_persona(self, session):
+        """Compile a completed Persona Foundry interview session into a full
+        schema-v2 persona dict + lint warnings. Two LLM calls (prompt text,
+        character card); both fall back to deterministic templates on any
+        failure or empty/echoed response — compile must never hard-fail.
+        Never saves — the caller reviews the result before POSTing it."""
+        answers = session.get("answers", {})
+
+        meta_prompt = _foundry_meta_prompt(session)
+        prompt_text = ""
+        if self.ensure_ready():
+            try:
+                prompt_text = self._call_api(
+                    meta_prompt, _FOUNDRY_PROMPT_META_SYSTEM, temperature=0.4, max_output_tokens=400,
+                ).strip()
+            except Exception:
+                prompt_text = ""
+        if not prompt_text or prompt_text == meta_prompt:
+            prompt_text = _foundry_fallback_prompt(session)
+
+        card_fields = None
+        if self.ensure_ready():
+            try:
+                raw_card = self._call_api(
+                    _foundry_card_meta_prompt(session), _FOUNDRY_CARD_META_SYSTEM,
+                    temperature=0.6, max_output_tokens=200,
+                )
+                card_fields = _parse_foundry_card_response(raw_card, session)
+            except Exception:
+                card_fields = None
+        if card_fields is None:
+            card_fields = _parse_foundry_card_response("", session)
+
+        card = default_persona_card()
+        card.update(card_fields)
+        card["forbidden"] = [answers["character_never"]] if answers.get("character_never") else []
+        card["anti_examples"] = list(session.get("anti_examples", []))
+        card["temperament"] = _extract_temperament_tags(
+            " ".join([str(answers.get("character_temperament", "")), str(answers.get("contract_tone_shift", ""))])
+        )
+
+        had_contradiction = "contract_conflict" in session.get("pushback_used", [])
+        card["reliability_score"] = compute_reliability_score(
+            card, num_examples=len(session.get("examples", [])), had_contradiction=had_contradiction,
+        )
+
+        output_policy, safety_mode = _map_contract_to_policy(answers)
+        temperature = _infer_temperature(
+            " ".join([str(answers.get("character_temperament", "")), str(answers.get("contract_tone_shift", ""))])
+        )
+        persona = normalize_persona({
+            "prompt": prompt_text,
+            "temperature": temperature,
+            "few_shot": [{"raw": e.get("raw", ""), "out": e.get("desired", "")} for e in session.get("examples", [])],
+            "output_policy": output_policy,
+            "safety_mode": safety_mode,
+            "persona_card": card,
+        })
+        warnings = lint_persona(persona)
+        return {"persona": persona, "warnings": warnings}
+
+    def generate_foundry_stress_cases(self, persona):
+        """One LLM call requesting a tailored nasty input per stress category;
+        any category that fails to parse falls back to its built-in seed."""
+        persona = normalize_persona(persona)
+        raw = ""
+        if self.ensure_ready():
+            try:
+                raw = self._call_api(
+                    _foundry_stress_meta_prompt(persona), _FOUNDRY_STRESS_META_SYSTEM,
+                    temperature=0.8, max_output_tokens=500,
+                )
+            except Exception:
+                raw = ""
+        return _parse_foundry_stress_response(raw)
+
+    def run_foundry_stress_suite(self, persona):
+        """Generate the 7 stress-test cases then run each through the
+        compiled-but-unsaved persona via run_persona_preview."""
+        persona = normalize_persona(persona)
+        cases = self.generate_foundry_stress_cases(persona)
+        results = []
+        for case in cases:
+            output = self.run_persona_preview(persona, case["input"])
+            results.append({"category": case["category"], "input": case["input"], "output": output})
+        return results
 
     def process_custom_prompt(self, user_text, system_prompt, max_output_tokens=None, chunk_size=750):
         """

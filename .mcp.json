@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "collab": {
+      "command": "python3",
+      "args": [".claude/collab-mcp/server.py"]
+    }
+  }
+}

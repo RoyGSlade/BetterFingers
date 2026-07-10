@@ -27,13 +27,86 @@
       </div>
     </div>
 
+    <!-- Persona Foundry: guided LLM interview -> compile -> stress-test -> save.
+         Separate from the manual persona wizard below; ends by calling the same
+         POST /personas save route. -->
+    <div id="foundryOverlay" class="foundry-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="foundryTitle">
+      <div class="foundry-card">
+        <div class="foundry-header">
+          <h2 id="foundryTitle" class="foundry-title">Persona Foundry</h2>
+          <button id="foundryCloseButton" class="secondary-button foundry-close-button" type="button" aria-label="Close Persona Foundry">×</button>
+        </div>
+
+        <div id="foundryScreenInterview" class="foundry-screen">
+          <div id="foundryChatLog" class="foundry-chat-log" aria-live="polite"></div>
+          <div id="foundryChoiceRow" class="foundry-choice-row hidden"></div>
+          <div id="foundryTextRow" class="foundry-text-row hidden">
+            <textarea id="foundryAnswerInput" class="settings-input textarea-small" placeholder="Type your answer..."></textarea>
+            <button id="foundrySubmitAnswerButton" class="primary-button" type="button">Send</button>
+          </div>
+        </div>
+
+        <div id="foundryScreenCollection" class="foundry-screen hidden">
+          <p id="foundryCollectionPrompt" class="wizard-desc"></p>
+          <div id="foundryExamplePairRow" class="foundry-example-pair hidden">
+            <label>
+              <span class="status-label">Raw (what the user might actually say)</span>
+              <textarea id="foundryExampleRaw" class="settings-input textarea-small"></textarea>
+            </label>
+            <label>
+              <span class="status-label">Desired (what this persona writes)</span>
+              <textarea id="foundryExampleDesired" class="settings-input textarea-small"></textarea>
+            </label>
+          </div>
+          <label id="foundryAntiExampleRow" class="hidden">
+            <span class="status-label">This persona would never say...</span>
+            <textarea id="foundryAntiExampleText" class="settings-input textarea-small"></textarea>
+          </label>
+          <ul id="foundryCollectionList" class="foundry-collection-list"></ul>
+          <div class="action-row mt-12">
+            <button id="foundryAddCollectionItemButton" class="secondary-button" type="button">Add</button>
+            <button id="foundryCollectionNextButton" class="primary-button" type="button">Continue</button>
+          </div>
+        </div>
+
+        <div id="foundryScreenStressTest" class="foundry-screen hidden">
+          <p class="wizard-desc">Here's how your persona handles hard inputs. Approve, reject, or edit each one.</p>
+          <div class="action-row mt-12">
+            <button id="foundryRunStressTestButton" class="secondary-button" type="button">Run stress test</button>
+          </div>
+          <div id="foundryStressCases" class="foundry-stress-cases"></div>
+          <div class="action-row mt-12">
+            <button id="foundryStressContinueButton" class="primary-button" type="button">Continue to character card</button>
+          </div>
+        </div>
+
+        <div id="foundryScreenReview" class="foundry-screen hidden">
+          <div id="foundryCharacterCard" class="foundry-character-card"></div>
+          <label class="mt-12">
+            <span class="status-label">Persona Name</span>
+            <input id="foundryPersonaName" class="settings-input" type="text" placeholder="e.g. Vivian Glass" />
+          </label>
+          <details class="mt-12">
+            <summary class="status-label">Compiled prompt (read-only)</summary>
+            <textarea id="foundryCompiledPrompt" class="settings-input textarea-medium" readonly></textarea>
+          </details>
+          <div id="foundryCompileWarnings" class="warmup-message mt-12" role="status" aria-live="polite"></div>
+          <div class="action-row mt-12">
+            <button id="foundrySaveButton" class="primary-button" type="button">Save Persona</button>
+          </div>
+        </div>
+
+        <div id="foundryMessage" class="warmup-message mt-12" role="status" aria-live="polite"></div>
+      </div>
+    </div>
+
     <div class="app-shell">
       <header class="hero">
         <div>
-          <p class="eyebrow">BetterFingers Electron Shell</p>
-          <h1>Backend Status Dashboard</h1>
+          <p class="eyebrow">Local voice dictation</p>
+          <h1>BetterFingers</h1>
           <p class="lede">
-            The Electron shell starts the existing FastAPI backend and keeps a live view of health and voice status.
+            Speak anywhere on your system and BetterFingers types the cleaned-up text for you — fully local, no cloud.
           </p>
         </div>
         <button id="quitButton" class="secondary-button" type="button">Quit app</button>
@@ -86,7 +159,7 @@
 
           <div class="recording-controls" aria-label="Recording controls">
             <button id="toggleRecordingButton" class="secondary-button primary-button" type="button">Start Recording</button>
-            <button id="dashboardEmergencyStopButton" class="secondary-button" type="button">Emergency Stop</button>
+            <button id="dashboardEmergencyStopButton" class="secondary-button danger-button" type="button">Emergency Stop</button>
             <span id="recordingControlStatus" class="draft-metadata">Use this if global hotkeys are unavailable.</span>
           </div>
 
@@ -118,8 +191,8 @@
 
           <div class="action-row" aria-label="Draft actions">
             <button id="copyDraftButton" class="secondary-button" type="button" disabled>Copy Cleaned Output</button>
-            <button id="acceptDraftButton" class="secondary-button" type="button" disabled>Accept</button>
-            <button id="declineDraftButton" class="secondary-button" type="button" disabled>Decline</button>
+            <button id="acceptDraftButton" class="secondary-button primary-button" type="button" disabled>Accept</button>
+            <button id="declineDraftButton" class="secondary-button danger-button" type="button" disabled>Decline</button>
             <button id="retryDraftButton" class="secondary-button" type="button" disabled>Retry</button>
             <label class="inline-send-control">
               <span class="status-label">Send action</span>
@@ -131,7 +204,7 @@
                 <option value="open_chat_then_send">Open chat then send</option>
               </select>
             </label>
-            <button id="sendDraftButton" class="secondary-button" type="button" disabled>Send / Copy</button>
+            <button id="sendDraftButton" class="secondary-button primary-button" type="button" disabled>Send / Copy</button>
           </div>
 
           <div id="draftMessage" class="warmup-message" role="status" aria-live="polite"></div>
@@ -164,7 +237,7 @@
           <div class="voice-status">
             <span id="voiceStatus" class="voice-status-value">No updates yet</span>
             <p id="voiceStatusDetail" class="voice-status-detail">
-              Listening to ws://127.0.0.1:8000/ws/voice_status
+              Waiting for voice activity…
             </p>
           </div>
         </section>
@@ -533,6 +606,10 @@
               <!-- Wizard Container -->
               <div class="setting-group">
                 <h3>AI Persona Configuration Wizard</h3>
+                <p class="setting-desc">Fill in a form yourself, or let the local LLM interview you and build one for you.</p>
+                <div class="action-row mt-12">
+                  <button id="openFoundryButton" class="secondary-button" type="button">🔨 Build with AI (Persona Foundry)</button>
+                </div>
                 <div class="wizard-container">
                   <div id="wizardStepProgress" class="wizard-progress">Step 1 of 4: Select Goal & Role</div>
                   
@@ -752,12 +829,12 @@
 
             <!-- Section: TTS / Read-Aloud -->
             <div class="settings-section hidden" data-section="tts-readaloud">
-              <h2>TTS & Read-Aloud</h2>
-              <p class="section-desc">Manage speech playback defaults and configurations.</p>
-              
+              <h2>Voice Studio</h2>
+              <p class="section-desc">Pick a voice, blend it, tune it, and save it as a reusable preset.</p>
+
               <div class="setting-group">
                 <h3>Speech Synthesizer</h3>
-                
+
                 <div class="warning-banner inline-warning" id="ttsWarningBadge" style="margin-bottom: 14px;">
                   <strong>TTS Hint:</strong> Rich read-aloud operates through Windows SAPI or local Kokoro models. Fallback/Recovery: Ensure libsndfile1 is installed on Linux if using Kokoro local playback.
                 </div>
@@ -765,7 +842,7 @@
                 <div class="setting-row">
                   <div class="setting-info">
                     <label class="status-label" for="settingReviewTtsVoiceHint">Review TTS Voice</label>
-                    <span class="setting-desc">Default voice hint selection.</span>
+                    <span class="setting-desc">Base voice — the foundation any blend/modulation below is layered onto.</span>
                   </div>
                   <div class="setting-control">
                     <select id="settingReviewTtsVoiceHint" class="settings-input min-w-200"></select>
@@ -784,13 +861,158 @@
 
                 <div class="setting-row">
                   <div class="setting-info">
+                    <label class="status-label" for="voicePreviewText">Preview text</label>
+                    <span class="setting-desc">Auditions with this text, or the built-in test phrase if left blank.</span>
+                  </div>
+                  <div class="setting-control">
+                    <textarea id="voicePreviewText" class="settings-input textarea-small" placeholder="Type or paste text to audition..."></textarea>
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
                     <span class="status-label">Voice Audition</span>
-                    <span class="setting-desc">Audition a short sample phrase with the current voice configuration.</span>
+                    <span class="setting-desc">Auditions the base voice + any blend/modulation set below.</span>
                   </div>
                   <div class="setting-control">
                     <button id="testTtsButton" class="secondary-button settings-btn" type="button">Audition Voice / Test TTS API</button>
                   </div>
                 </div>
+              </div>
+
+              <div class="setting-group">
+                <h3>Voice Presets</h3>
+                <p class="setting-desc">Saved voices — pick one to load its base/blend/modulation into the controls here.</p>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="voicePresetSelect">Load a preset</label>
+                  </div>
+                  <div class="setting-control">
+                    <select id="voicePresetSelect" class="settings-input min-w-200">
+                      <option value="">— Custom (unsaved) —</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div id="voicePresetList" class="voice-preset-list"></div>
+
+                <div class="action-row mt-12">
+                  <input id="voicePresetNameInput" class="settings-input" type="text" placeholder="Preset name, e.g. Warm Assistant" />
+                  <button id="saveVoicePresetButton" class="secondary-button settings-btn" type="button">Save As Preset</button>
+                </div>
+              </div>
+
+              <div class="setting-group">
+                <h3>Blend</h3>
+                <p class="setting-desc">Mix in up to two extra voices. Weights auto-normalize on the backend — set relative amounts, no math required.</p>
+
+                <div id="voiceBlendRows" class="voice-blend-rows"></div>
+
+                <div class="action-row mt-12">
+                  <button id="addVoiceLayerButton" class="secondary-button" type="button">+ Add voice layer</button>
+                  <button id="resetVoiceBlendButton" class="secondary-button" type="button">Reset to original</button>
+                </div>
+
+                <div class="mt-12">
+                  <span class="status-label">Quick blend</span>
+                  <div class="chip-row mt-12">
+                    <button class="secondary-button chip-button" type="button" data-blend-preset="softer">Softer</button>
+                    <button class="secondary-button chip-button" type="button" data-blend-preset="brighter">Brighter</button>
+                    <button class="secondary-button chip-button" type="button" data-blend-preset="lower">Lower</button>
+                    <button class="secondary-button chip-button" type="button" data-blend-preset="narrator">Narrator</button>
+                    <button class="secondary-button chip-button" type="button" data-blend-preset="assistant">Assistant</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="setting-group">
+                <h3>Modulation</h3>
+                <div class="settings-grid grid-cols-2">
+                  <label>
+                    <span class="status-label">Pitch (<span id="voicePitchValue">0</span> st)</span>
+                    <input id="voicePitch" class="settings-input" type="range" min="-12" max="12" step="0.5" value="0" />
+                  </label>
+                  <label>
+                    <span class="status-label">Energy (<span id="voiceEnergyValue">0.50</span>)</span>
+                    <input id="voiceEnergy" class="settings-input" type="range" min="0" max="1" step="0.05" value="0.5" />
+                  </label>
+                  <label>
+                    <span class="status-label">Warmth (<span id="voiceWarmthValue">0.00</span>)</span>
+                    <input id="voiceWarmth" class="settings-input" type="range" min="0" max="1" step="0.05" value="0" />
+                  </label>
+                  <label>
+                    <span class="status-label">Brightness (<span id="voiceBrightnessValue">0.00</span>)</span>
+                    <input id="voiceBrightness" class="settings-input" type="range" min="0" max="1" step="0.05" value="0" />
+                  </label>
+                  <label>
+                    <span class="status-label">Pause style</span>
+                    <select id="voicePauseStyle" class="settings-input">
+                      <option value="natural">Natural</option>
+                      <option value="compact">Compact</option>
+                      <option value="dramatic">Dramatic</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span class="status-label">Stability (experimental — reserved, not yet applied)</span>
+                    <input id="voiceStability" class="settings-input" type="range" min="0" max="1" step="0.05" value="0.5" disabled />
+                  </label>
+                </div>
+
+                <div class="mt-12">
+                  <span class="status-label">Quick presets</span>
+                  <div class="chip-row mt-12">
+                    <button class="secondary-button chip-button" type="button" data-mod-preset="clear">Read my draft clearly</button>
+                    <button class="secondary-button chip-button" type="button" data-mod-preset="quiet">Quiet proofread</button>
+                    <button class="secondary-button chip-button" type="button" data-mod-preset="presentation">Presentation voice</button>
+                    <button class="secondary-button chip-button" type="button" data-mod-preset="character">Character voice</button>
+                    <button class="secondary-button chip-button" type="button" data-mod-preset="fast">Fast skim</button>
+                    <button class="secondary-button chip-button" type="button" data-mod-preset="accessibility">Accessibility slow</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="setting-group">
+                <h3>Voice Cloning (Advanced)</h3>
+                <div class="warning-banner inline-warning" style="margin-bottom: 14px;">
+                  <strong>Consent required.</strong> Only clone a voice you own or have explicit permission to use. No cloning engine is installed yet — samples are validated and saved as a clone source for when one is added; they are not synthesized from today.
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="voiceCloneConsent">I own this voice, or have permission to clone it</label>
+                  </div>
+                  <div class="setting-control">
+                    <label class="custom-switch-label">
+                      <input id="voiceCloneConsent" type="checkbox" />
+                      <span class="custom-switch-slider"></span>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="voiceCloneName">Voice name</label>
+                  </div>
+                  <div class="setting-control">
+                    <input id="voiceCloneName" class="settings-input" type="text" placeholder="e.g. My Voice" disabled />
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="voiceCloneFile">Sample (3-10s, clear speech, WAV)</label>
+                  </div>
+                  <div class="setting-control">
+                    <input id="voiceCloneFile" type="file" accept="audio/wav,.wav" disabled />
+                  </div>
+                </div>
+
+                <div class="action-row mt-12">
+                  <button id="voiceCloneUploadButton" class="secondary-button settings-btn" type="button" disabled>Upload & Validate Sample</button>
+                </div>
+
+                <div id="voiceCloneResult" class="setting-desc mt-12"></div>
               </div>
             </div>
 
@@ -915,6 +1137,95 @@
                   <div class="setting-control">
                     <label class="custom-switch-label">
                       <input id="settingHighContrast" type="checkbox" />
+                      <span class="custom-switch-slider"></span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="setting-group" id="overlayAppearanceGroup">
+                <h3>Floating Overlay</h3>
+                <p class="section-desc">The little glitch ring that appears while you dictate. These apply live.</p>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingOverlaySize">Size</label>
+                    <span class="setting-desc">How large the ring appears on screen.</span>
+                  </div>
+                  <div class="setting-control">
+                    <select id="settingOverlaySize" class="settings-input min-w-200">
+                      <option value="small">Small</option>
+                      <option value="medium">Medium</option>
+                      <option value="large">Large</option>
+                      <option value="xlarge">Extra large</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingOverlayPlacement">Placement</label>
+                    <span class="setting-desc">Where on the screen the ring sits.</span>
+                  </div>
+                  <div class="setting-control">
+                    <select id="settingOverlayPlacement" class="settings-input min-w-200">
+                      <option value="top-left">Top left</option>
+                      <option value="top">Top center</option>
+                      <option value="top-right">Top right</option>
+                      <option value="left">Middle left</option>
+                      <option value="center">Center</option>
+                      <option value="right">Middle right</option>
+                      <option value="bottom-left">Bottom left</option>
+                      <option value="bottom">Bottom center</option>
+                      <option value="bottom-right">Bottom right</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingOverlayOpacity">Transparency</label>
+                    <span class="setting-desc">Lower = more see-through. <span id="overlayOpacityValue">100%</span></span>
+                  </div>
+                  <div class="setting-control">
+                    <input id="settingOverlayOpacity" type="range" min="0.15" max="1" step="0.05" value="1" class="settings-input" />
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingOverlayVibrancy">Vibrancy</label>
+                    <span class="setting-desc">Glow and intensity of the ring. <span id="overlayVibrancyValue">100%</span></span>
+                  </div>
+                  <div class="setting-control">
+                    <input id="settingOverlayVibrancy" type="range" min="0.3" max="2" step="0.1" value="1" class="settings-input" />
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingOverlayLabelPos">Status label</label>
+                    <span class="setting-desc">Where the "Recording…" text sits — or hide it.</span>
+                  </div>
+                  <div class="setting-control">
+                    <select id="settingOverlayLabelPos" class="settings-input min-w-200">
+                      <option value="hidden">Hidden</option>
+                      <option value="below">Below the ring</option>
+                      <option value="above">Above the ring</option>
+                      <option value="center">Across the center</option>
+                      <option value="beside">Beside the ring</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingOverlayAlwaysOn">Always show</label>
+                    <span class="setting-desc">Keep the ring on screen at all times, not just while dictating.</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="custom-switch-label">
+                      <input id="settingOverlayAlwaysOn" type="checkbox" />
                       <span class="custom-switch-slider"></span>
                     </label>
                   </div>
@@ -1191,8 +1502,8 @@
               </label>
               <div id="whisperModelDetails" class="model-detail-grid"></div>
               <div class="model-action-group">
-                <button id="downloadWhisperButton" class="secondary-button primary-button" type="button">Download</button>
-                <button id="testWhisperButton" class="secondary-button" type="button">Test Load</button>
+                <button id="selectWhisperModelButton" class="secondary-button primary-button" type="button">Use This</button>
+                <button id="downloadWhisperButton" class="secondary-button" type="button">Download</button>
                 <button id="deleteWhisperButton" class="secondary-button" type="button">Delete</button>
                 <button id="unloadSttButton" class="secondary-button" type="button">Unload</button>
               </div>

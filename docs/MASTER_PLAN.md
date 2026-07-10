@@ -4,7 +4,8 @@ Researched and verified 2026-07-07 (web research pass + codebase audit). Assumes
 Electron migration (ELECTRON_MIGRATION_PLAN.md) is complete: sidecar hardened, PTT
 working, packaging done, first-run state client-side, legacy tkinter tree deleted.
 
-Item codes: **U1–U11** = user's list, **C1–C12** = companion list. Effort: S (≤2 days),
+Item codes: **U1–U11** = user's list, **C1–C12** = companion list, **U12** = added
+2026-07-09 (Persona Foundry, user-requested). Effort: S (≤2 days),
 M (≤1 week), L (1–3 weeks), XL (3+ weeks).
 
 ## Implementation progress (branch: master-plan)
@@ -19,6 +20,25 @@ being closed (previously required quitting the whole app); and a real production
 found and fixed along the way — `macros.py`'s `get_macros()` crashed on every read after
 any macro was ever saved. Suite grew 276 → 307, all green, tree clean.
 
+- [x] **U12 — Persona Foundry.** Guided LLM interview that builds a persona
+  instead of a bare prompt box. New `llm_engine.py` `foundry_*` state machine
+  (12 fixed role/character/contract questions + repeatable examples/
+  anti-examples collections, deterministic — no model needed for navigation),
+  vagueness pushback (one re-ask max) and a contract-contradiction check
+  (mirrors `lint_persona()`'s style). `LLMEngine.compile_foundry_persona()`
+  drafts the system prompt + a narrative "character card" (archetype,
+  temperament, signature moves, favorite phrases, reliability score) via two
+  LLM calls, each falling back to a deterministic template on failure — never
+  hard-fails. `generate_foundry_stress_cases()`/`run_foundry_stress_suite()`
+  run the compiled-but-unsaved persona against 7 fixed nasty-input categories
+  for approve/reject/correct review before saving. New routes: `POST
+  /personas/interview/start`, `/interview/answer`, `/compile`,
+  `/test-suite/run`; schema v2 gains an optional `persona_card` field
+  (fully backward compatible). New `#foundryOverlay` modal in the renderer —
+  separate from the manual wizard, ends by calling the same `POST /personas`
+  save route. 51 new backend tests; verified end-to-end in a live browser
+  preview (real LLM compile + stress-test run, full save round-trip).
+  Plan: `docs/PERSONA_FOUNDRY_PLAN.md`.
 - [x] **C10 — Latency HUD.** server.py times STT + LLM stages per utterance, keeps the
   last 50 samples, exposes `GET /metrics` (avg/p50/p95/last per stage). Renderer shows a
   "Pipeline latency" table in the Diagnostics tab, refreshed with diagnostics.
@@ -174,6 +194,74 @@ any macro was ever saved. Suite grew 276 → 307, all green, tree clean.
   still 262 green. **U7 done** (schema v2 + migration + routes + editor). DEFERRED
   (non-blocking polish): live prompt preview, full voice base/blend/speed + few-shot
   raw→out list UI, and a `dictionary_scope` control.
+
+- [x] **U5/U6/U7 — Voice Studio (blend editor, modulation, presets, persona
+  voice, gated clone QA) → U5 audio-DSP done, U6 done, U7 voice sub-schema
+  done.** Completed the wiring/UI that U5/U6/U7's earlier entries deferred, in
+  8 phases:
+  1. **`voice_modulation.py`** (new, numpy/scipy-only): `pitch_shift_semitones`
+     (two-pass `scipy.signal.resample`, duration-preserving — the standard
+     cheap-DSP approach without a phase vocoder; chipmunk/deep-voice timbre
+     artifacts at larger shifts are an accepted tradeoff), `apply_energy_gain`
+     (RMS gain, tanh soft-limit only when it would clip), `apply_warmth_brightness`
+     (RBJ-cookbook low/high-shelf biquads via `sosfilt`), `apply_modulation`
+     orchestrator. `tts_text.apply_pause_style` (compact/natural/dramatic
+     punctuation bias, text-domain not audio). +38 unit tests.
+  2. **`tts_engine.py` real blending**, finally wiring the orphaned
+     `voice_blend.py` math core: `_resolve_voice_spec(base, blend)` extracts
+     real Kokoro-ONNX style tensors (`kokoro_onnx.voices[name]`, confirmed via
+     introspection that `create(voice=...)` already accepts a raw ndarray) and
+     blends them with `voice_blend.blend_many` (base gets implicit weight 1.0);
+     unknown blend voices / native-backend requests fall back to the base voice
+     alone, logged, never raise. Deduped `_speak_kokoro` to call
+     `_generate_kokoro_audio` (pre-existing duplication) instead of reimplementing
+     generation; modulation applied per-chunk inside `_generate_kokoro_audio`
+     (post-assembly would defeat the chunked-streaming pipeline's whole purpose);
+     audio cache key extended with blend/modulation signatures so a different
+     blend never serves stale cached audio.
+  3. **`voice_presets.py`** (new, mirrors `macros.py`'s JSON-store pattern):
+     named, reusable `{base, blend, speed, pitch, energy, warmth, brightness,
+     pause_style, stability, source}` presets. `GET/POST/DELETE /voice-presets`.
+  4. **`/tts/speak` + `/drafts/{id}/tts`** gain `blend`/`energy`/`warmth`/
+     `brightness`/`pause_style`/`preset_name` fields and finally *use* the
+     `pitch` field both routes already declared but never read. Shared
+     `_resolve_voice_and_modulation(request, config)` merges explicit fields →
+     named preset → profile defaults.
+  5. **Persona `voice` sub-schema widened**: `{preset, base, blend: dict,
+     speed, pitch, energy, warmth, brightness, pause_style, stability}` — the
+     legacy shape's `blend` was a bare string, never read by any runtime code,
+     so migration discards it (`{}`) rather than guessing at intent from
+     unverified data. `stability` is stored-only, same treatment as
+     `model_hint` (Kokoro's ONNX style lookup has no sampling temperature to
+     wire it to).
+  6. **Persona-aware voice resolution**: `/tts/speak` gains an optional
+     `persona` field. A persona's voice is either its referenced preset OR its
+     own inline fields — never merged — because `normalize_persona()` always
+     fully defaults every numeric field, so a persona with both would have its
+     own inert `speed: 1.0` mask the preset's real values before the preset
+     layer was ever reached (caught by a failing test, not by inspection).
+  7. **Frontend**: "TTS & Read-Aloud" settings expanded into **Voice Studio** —
+     preset selector/save/delete, blend editor (add-layer/remove/reset,
+     weights auto-normalize server-side so the UI never does the math),
+     modulation sliders + 5 quick-blend + 6 quick-modulation presets, preview
+     textarea, draft read-aloud upgraded to carry the same settings.
+  8. **Clone QA + consent gate**: `voice_clone_qa.py` (new, stdlib `wave` +
+     numpy — duration/noise-floor/clipping/silence checks; hard-blocks on
+     unusable samples, soft-warns on marginal ones) wired into `/tts/clone`
+     (now requires `consent`, writes a `cloned_X.meta.json` sidecar). Does
+     **not** perform actual clone synthesis — no cloning engine is installed.
+     Candidate for later: [`PatnaikAshish/kokoclone`](https://huggingface.co/PatnaikAshish/kokoclone)
+     (Apache-2.0, built directly on Kokoro-ONNX rather than a second TTS
+     engine) — but it pulls in `torch`+`torchaudio`+a git-installed voice-
+     conversion model, a real dependency-weight tradeoff to make deliberately,
+     not silently.
+
+  +~90 new unit/route tests across `voice_modulation.py`, `tts_engine.py`,
+  `voice_presets.py`, `voice_clone_qa.py`, and `server.py`'s TTS/preset/clone
+  routes; full suite green throughout. DEFERRED: native (non-ONNX) backend
+  voice blending (falls back to base voice, logged); persona-editor-scoped
+  voice UI (ships once the standalone Voice Studio schema/UI is proven);
+  `DELETE`/export routes for cloned voices; actual clone synthesis engine.
 
 - [x] **U3 — First-run wizard.** VERIFY found a **complete onboarding system already
   implemented** in `app/src/renderer/main.js` (`initOnboarding()` called at app start,
@@ -367,6 +455,7 @@ keyboard nav. Screenshot QA (U1) locks each view as it lands.
 | U5 | tts_engine: smart-split chunking, streaming playback, text normalization, loudness norm, crossfade, utterance cache | M |
 | U6 | Kokoro blend editor (sliders → save voicepack); cloning engine plugin (NeuTTS Air CPU / Chatterbox GPU) + consent flow | L |
 | U7 | Persona schema v2 + migration; Studio editor w/ live preview; per-persona voice/model | L |
+| U12 | Persona Foundry: guided interview → LLM compile → stress-test → character card | L |
 | C5 | openWakeWord integration (self-trained "hey fingers" model) + Silero VAD v6 gating; hands-free mode toggle | M |
 
 ### Phase 5 — Knowledge features — ~4 wks

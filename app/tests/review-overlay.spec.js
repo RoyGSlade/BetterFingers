@@ -156,7 +156,7 @@ test.describe('BetterFingers Review Overlay Tests', () => {
 
   test('Dashboard still functions normally after overlay closes', async () => {
     // Verify dashboard is still visible and responsive
-    await expect(mainWindow.locator('text=Backend Status Dashboard')).toBeVisible();
+    await expect(mainWindow.locator('.hero h1')).toHaveText('BetterFingers');
     
     // Check that we can navigate
     await mainWindow.click('#tabButtonSettings');

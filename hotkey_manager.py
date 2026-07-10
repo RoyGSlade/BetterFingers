@@ -38,6 +38,7 @@ class HotkeyManager:
         on_manual_send_callback=None,
         on_review_tts_callback=None,
         is_busy_callback=None,
+        on_watchdog_timeout_callback=None,
     ):
         self.recorder = recorder
         self.on_complete = on_recording_complete_callback
@@ -46,6 +47,8 @@ class HotkeyManager:
         self.on_manual_send = on_manual_send_callback
         self.on_review_tts = on_review_tts_callback
         self.is_busy_callback = is_busy_callback
+        self.on_watchdog_timeout = on_watchdog_timeout_callback
+        self._watchdog_timer = None
         self.current_profile = "Default"
 
         self.state_lock = threading.RLock()
@@ -117,6 +120,14 @@ class HotkeyManager:
         )
         self.controller_binding.validate()
 
+        # Phase 11: missed-release watchdog — stops a stranded recording if
+        # key-up/controller-up is never observed (OS/compositor/device drop).
+        try:
+            max_seconds = float(config.get("max_recording_seconds", 120))
+        except (TypeError, ValueError):
+            max_seconds = 120.0
+        self.max_recording_seconds = max(5.0, min(1800.0, max_seconds))
+
     # --- Keyboard PTT ---
     def _on_ptt_press(self, event):
         del event
@@ -171,6 +182,35 @@ class HotkeyManager:
                     self.on_force_stop()
                 except Exception as exc:
                     logging.error(f"Start-recording cleanup failed: {exc}")
+            return
+        self._arm_watchdog()
+
+    def _arm_watchdog(self):
+        self._cancel_watchdog()
+        if self.max_recording_seconds <= 0:
+            return
+        timer = threading.Timer(self.max_recording_seconds, self._watchdog_fire)
+        timer.daemon = True
+        self._watchdog_timer = timer
+        timer.start()
+
+    def _cancel_watchdog(self):
+        if self._watchdog_timer is not None:
+            self._watchdog_timer.cancel()
+            self._watchdog_timer = None
+
+    def _watchdog_fire(self):
+        if not self.is_recording:
+            return
+        logging.warning(
+            f"Recording watchdog fired after {self.max_recording_seconds}s; force-stopping stranded recording."
+        )
+        if self.on_watchdog_timeout:
+            try:
+                self.on_watchdog_timeout()
+            except Exception as exc:
+                logging.error(f"Watchdog timeout callback failed: {exc}")
+        self._stop_recording(reason="watchdog_timeout")
 
     def _stop_recording(self, reason="manual"):
         with self.state_lock:
@@ -178,6 +218,7 @@ class HotkeyManager:
                 return
             self.is_recording = False
             self.last_stop_reason = reason
+        self._cancel_watchdog()
 
         duration = max(0.0, time.time() - self.recording_start_time)
         logging.info(f"Recording STOP ({reason}) duration={duration:.2f}s")

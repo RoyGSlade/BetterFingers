@@ -1,8 +1,14 @@
 # Handoff Report — Long-Recording & Persona Robustness Work
 
 **Date:** 2026-07-08
-**Branch:** `master-plan` (pushed to `origin/master-plan`)
-**Test status:** `python3 -m pytest -q` → **350 passing**, tree clean.
+**Branch (at time of writing):** `master-plan` (pushed to `origin/master-plan`)
+**Test status (at time of writing):** `python3 -m pytest -q` → **350 passing**, tree clean.
+
+> **Update:** `master-plan` has since been merged into `main` and deleted; there
+> is no longer a `master-plan` branch to check out. `main` also picked up the
+> MCP client step (`b98c1b3`) after this report was written. Current state:
+> **361 passing** on `main`. The "Resume" instructions below are kept for
+> historical context — use `main` instead of `master-plan`.
 
 This report lets you pick the work back up from your main PC.
 
@@ -10,9 +16,9 @@ This report lets you pick the work back up from your main PC.
 
 ```bash
 git fetch origin
-git checkout master-plan
+git checkout main
 git pull            # fast-forwards to the pushed state
-python3 -m pytest -q   # expect 350 passing
+python3 -m pytest -q   # expect 361 passing
 ```
 
 The roadmap and per-phase status live in
@@ -81,8 +87,9 @@ Follow the plan's **Suggested Order**. Brief scope:
   folders, fake-detector tests.
 
 ## Notes / gotchas
-- `master-plan` is **18 commits ahead of `origin/master-plan`** as of this push
-  (now pushed, so origin is up to date).
+- `master-plan` was **18 commits ahead of `origin/master-plan`** as of this push
+  (now pushed, so origin was up to date). It has since been merged into `main`
+  and the branch no longer exists.
 - Initial dictation still uses the **True Janitor** preset by design; the active
   profile's `current_preset` drives the settings UI, not dictation cleanup
   (wiring it in would change behavior + break tests — deferred, see Phase 6 note).

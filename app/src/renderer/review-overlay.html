@@ -229,6 +229,12 @@
       .state-declined { background: rgba(255, 124, 135, 0.15); color: var(--danger); }
       .state-error { background: rgba(255, 124, 135, 0.25); color: var(--danger); }
       .state-stopped { background: rgba(255, 124, 135, 0.2); color: var(--danger); }
+      .state-confirm { background: rgba(246, 193, 95, 0.22); color: var(--warning); animation: pulse 1.5s infinite; }
+
+      .command-badge {
+        background: rgba(102, 242, 193, 0.18);
+        color: var(--accent);
+      }
 
       .tts-backend-badge {
         font-size: 0.72rem;
@@ -248,6 +254,10 @@
         color: var(--danger);
         border-color: rgba(255, 124, 135, 0.4);
       }
+      .tts-backend-badge.warning {
+        color: var(--warning, #ffc86b);
+        border-color: rgba(255, 200, 107, 0.4);
+      }
 
       @keyframes pulse {
         0% { opacity: 0.6; }
@@ -265,6 +275,7 @@
           <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
             <span id="statusBadge" class="status-badge state-pending">Draft Pending</span>
             <span id="ttsBackendBadge" class="tts-backend-badge">TTS: Loading...</span>
+            <span id="commandBadge" class="status-badge command-badge" style="display:none;"></span>
           </div>
         </div>
         <button id="closeButton" class="icon-button" type="button" title="Close">X</button>
@@ -349,7 +360,8 @@
           'copied': 'Copied Fallback',
           'declined': 'Declined',
           'error': 'Error',
-          'stopped': 'Stopped'
+          'stopped': 'Stopped',
+          'confirm': 'Confirm?'
         };
         
         statusBadge.textContent = labels[state] || state;
@@ -393,20 +405,37 @@
             ttsBadge.style.borderColor = 'rgba(102, 242, 193, 0.4)';
             ttsBadge.title = status.message || '';
           } else {
+            // TTS (read-aloud) is an optional feature — an unavailable backend is
+            // a warning, not a critical red error. Reserve danger for a genuine
+            // hard failure like a missing libsndfile dependency.
+            const hardError = Boolean(status.libsndfile_missing);
             ttsBadge.textContent = `TTS: ${status.backend}`;
-            ttsBadge.className = 'tts-backend-badge danger';
-            ttsBadge.style.borderColor = 'rgba(255, 124, 135, 0.4)';
+            ttsBadge.className = `tts-backend-badge ${hardError ? 'danger' : 'warning'}`;
+            ttsBadge.style.borderColor = hardError ? 'rgba(255, 124, 135, 0.4)' : 'rgba(255, 200, 107, 0.4)';
             ttsBadge.title = status.message || '';
-            if (status.libsndfile_missing) {
+            if (hardError) {
               setOverlayState('error', status.message);
             }
           }
         } catch (error) {
           ttsBadge.textContent = 'TTS: unavailable';
-          ttsBadge.className = 'tts-backend-badge danger';
-          ttsBadge.style.borderColor = 'rgba(255, 124, 135, 0.4)';
+          ttsBadge.className = 'tts-backend-badge warning';
+          ttsBadge.style.borderColor = 'rgba(255, 200, 107, 0.4)';
           ttsBadge.title = `Failed to fetch TTS status: ${error.message}`;
         }
+      }
+
+      let commandBadgeTimer = null;
+
+      function showCommandBadge(label) {
+        const commandBadge = document.getElementById('commandBadge');
+        if (!commandBadge || !label) return;
+        commandBadge.textContent = `Command: ${label}`;
+        commandBadge.style.display = 'inline-block';
+        clearTimeout(commandBadgeTimer);
+        commandBadgeTimer = setTimeout(() => {
+          commandBadge.style.display = 'none';
+        }, 3000);
       }
 
       function stopTtsIfSpeaking() {
@@ -629,6 +658,16 @@
           setTimeout(() => window.betterFingersReview?.hide?.(), 1200);
         } else if (status === 'draft_send_error') {
           setOverlayState('error', statusUpdate?.error || 'Send failed.');
+        } else if (status === 'command_detected') {
+          showCommandBadge(statusUpdate?.action || statusUpdate?.label || 'unknown');
+        } else if (status === 'command_needs_confirmation') {
+          showCommandBadge(statusUpdate?.action || statusUpdate?.label || 'unknown');
+          setOverlayState('confirm', 'Say "confirm" or "cancel".', 'warning');
+        } else if (status === 'scratch_last') {
+          setMessage(
+            statusUpdate?.scratched_text ? `Scratched: "${statusUpdate.scratched_text}"` : 'Scratched last utterance.',
+            'warning',
+          );
         }
       });
 

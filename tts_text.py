@@ -61,3 +61,33 @@ def normalize_for_speech(text):
     # Tidy any doubled spaces we introduced.
     result = re.sub(r"[ \t]{2,}", " ", result).strip()
     return result
+
+
+_PAUSE_STYLES = {"compact", "natural", "dramatic"}
+
+
+def apply_pause_style(text, style):
+    """Bias Kokoro's punctuation-driven pause lengths without changing the
+    words. "natural" (default, and the fallback for any unrecognized style)
+    is a no-op. "compact" shortens pauses (ellipses/dashes -> commas).
+    "dramatic" lengthens them (commas -> em dashes; sentence ends gain a
+    beat). Pure text transform — the actual pause length is Kokoro's own
+    phonemizer behavior, this only changes which punctuation it sees.
+    """
+    if not text:
+        return text
+    style_key = str(style or "natural").strip().lower()
+    if style_key not in _PAUSE_STYLES or style_key == "natural":
+        return text
+
+    result = text
+    if style_key == "compact":
+        result = re.sub(r"\.{3}", ",", result)
+        result = re.sub(r"\s+—\s+", ", ", result)
+        result = re.sub(r"\s+-\s+", ", ", result)
+    else:  # dramatic
+        result = re.sub(r",\s+", " — ", result)
+        result = re.sub(r"([.!?])\s+(?!\.)", r"\1.. ", result)
+
+    result = re.sub(r"[ \t]{2,}", " ", result).strip()
+    return result

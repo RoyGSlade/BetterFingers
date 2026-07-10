@@ -27,7 +27,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest
-          pip install pyinstaller
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install app dependencies
+        working-directory: app
+        run: npm ci
 
       - name: Run test suite
         shell: powershell
@@ -42,21 +52,23 @@ jobs:
         run: |
           python -m pytest -q tests -m smoke
 
-      - name: Build app with PyInstaller
-        shell: powershell
-        run: |
-          pyinstaller BetterFingers.spec -y
+      # Runs electron-vite build + the PyInstaller backend bundle + electron-builder's
+      # NSIS packaging in one step. Output lands in app/release/ (see
+      # directories.output in app/package.json).
+      - name: Build installer (electron-builder)
+        working-directory: app
+        run: npm run dist:win
 
       - name: Enforce payload size budget
         shell: powershell
         run: |
-          $payloadDir = "dist\\BetterFingers"
+          $payloadDir = "app\release\win-unpacked"
           if (-not (Test-Path $payloadDir)) {
-            throw "PyInstaller output not found at $payloadDir"
+            throw "electron-builder output not found at $payloadDir"
           }
           $sizeBytes = (Get-ChildItem $payloadDir -Recurse -File | Measure-Object -Property Length -Sum).Sum
           $sizeMb = [math]::Round($sizeBytes / 1MB, 2)
-          Write-Host "PyInstaller payload size: $sizeMb MB"
+          Write-Host "Packaged app size: $sizeMb MB"
           $limitMb = 2500
           if ($sizeMb -gt $limitMb) {
             throw "Payload size $sizeMb MB exceeds budget $limitMb MB"
@@ -67,35 +79,31 @@ jobs:
             Select-Object -First 15 FullName, @{Name='SizeMB';Expression={[math]::Round($_.Length / 1MB, 2)}} |
             Format-Table -AutoSize
 
-      - name: Install NSIS
+      - name: Locate installer artifact
+        id: installer
         shell: powershell
         run: |
-          choco install nsis --no-progress -y
-
-      - name: Build installer
-        shell: powershell
-        run: |
-          $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
-          if (-not (Test-Path $makensis)) {
-            throw "NSIS compiler not found at $makensis"
+          $installer = Get-ChildItem "app\release" -Filter "*.exe" | Select-Object -First 1
+          if (-not $installer) {
+            throw "No .exe installer found in app\release"
           }
-          & $makensis "installer\\BetterFingers.nsi"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "Found installer: $($installer.FullName)"
+          "path=$($installer.FullName)" >> $env:GITHUB_OUTPUT
 
       - name: Smoke check installer install/uninstall
         shell: powershell
         run: |
-          powershell -ExecutionPolicy Bypass -File tools/smoke_installer.ps1 -InstallerPath "dist\\BetterFingers_Setup.exe"
+          powershell -ExecutionPolicy Bypass -File tools/smoke_installer.ps1 -InstallerPath "${{ steps.installer.outputs.path }}"
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: BetterFingers-Installer
-          path: dist/BetterFingers_Setup.exe
+          path: ${{ steps.installer.outputs.path }}
           if-no-files-found: error
 
       - name: Publish GitHub Release Asset
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/BetterFingers_Setup.exe
+          files: ${{ steps.installer.outputs.path }}

@@ -79,9 +79,10 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthT
   });
 
   ipcMain.handle('overlay:update-status', (_event, update) => {
-    const { getOverlayWindow, getReviewWindow } = require('./windows');
+    const { getOverlayWindow, getReviewWindow, getOverlayAppearance } = require('./windows');
     const overlay = getOverlayWindow();
     const review = getReviewWindow();
+    const alwaysOn = Boolean(getOverlayAppearance().alwaysOn);
 
     if (!update || (typeof update !== 'string' && typeof update !== 'object')) {
       return false;
@@ -102,6 +103,14 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthT
       message: payload.message ? String(payload.message) : '',
       durationMs: safeDuration,
     };
+    // Pass through live mic amplitude (0..1) when present so the overlay ring can
+    // pulse to the voice during recording.
+    if (typeof payload.amplitude === 'number' && isFinite(payload.amplitude)) {
+      safePayload.amplitude = Math.max(0, Math.min(1, payload.amplitude));
+    }
+    if (payload.fallback !== undefined) {
+      safePayload.fallback = Boolean(payload.fallback);
+    }
 
     if (review && !review.isDestroyed() && review.isVisible()) {
       review.webContents.send('review:status', safePayload);
@@ -142,12 +151,22 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthT
       overlay.webContents.send('overlay:update', safePayload);
       if (transientStatuses.has(status)) {
         overlayHideTimer = setTimeout(() => {
-          if (!overlay.isDestroyed() && overlay.isVisible()) {
+          if (overlay.isDestroyed()) { overlayHideTimer = null; return; }
+          if (alwaysOn) {
+            // Keep the overlay up — just settle it back to the idle ring.
+            overlay.webContents.send('overlay:update', { status: 'idle', message: '', durationMs: 0 });
+          } else if (overlay.isVisible()) {
             overlay.hide();
           }
           overlayHideTimer = null;
         }, safePayload.durationMs);
       }
+    } else if (alwaysOn) {
+      // Idle/unknown but pinned on: keep it visible showing the idle ring.
+      if (!overlay.isVisible()) {
+        overlay.showInactive();
+      }
+      overlay.webContents.send('overlay:update', safePayload);
     } else {
       if (overlay.isVisible()) {
         overlay.hide();
@@ -166,6 +185,31 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthT
     const { hideReviewWindow } = require('./windows');
     hideReviewWindow();
     return true;
+  });
+
+  ipcMain.handle('overlay:get-appearance', () => {
+    const { getOverlayAppearance } = require('./windows');
+    return getOverlayAppearance();
+  });
+
+  ipcMain.handle('overlay:set-appearance', (_event, partial) => {
+    const { setOverlayAppearance, getOverlayWindow } = require('./windows');
+    const applied = setOverlayAppearance(partial || {});
+    // Show the overlay so the user sees the change they just made. If it's pinned
+    // always-on, leave it up; otherwise auto-hide it again after a moment.
+    const overlay = getOverlayWindow();
+    if (overlay && !overlay.isDestroyed()) {
+      overlay.webContents.send('overlay:update', { status: 'idle', message: '', durationMs: 0 });
+      if (!overlay.isVisible()) overlay.showInactive();
+      if (overlayHideTimer) clearTimeout(overlayHideTimer);
+      if (!applied.alwaysOn) {
+        overlayHideTimer = setTimeout(() => {
+          if (overlay && !overlay.isDestroyed() && overlay.isVisible()) overlay.hide();
+          overlayHideTimer = null;
+        }, 1600);
+      }
+    }
+    return applied;
   });
 }
 

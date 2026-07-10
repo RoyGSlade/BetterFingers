@@ -21,6 +21,7 @@ const REFRESH_AUDIO_DEVICES_URL = `${BACKEND_ORIGIN}/runtime/audio-devices/refre
 const RUNTIME_VERSION_URL = `${BACKEND_ORIGIN}/runtime/version`;
 const PERSONAS_URL = `${BACKEND_ORIGIN}/personas`;
 const TTS_VOICES_URL = `${BACKEND_ORIGIN}/tts/voices`;
+const VOICE_PRESETS_URL = `${BACKEND_ORIGIN}/voice-presets`;
 const AUTH_TOKEN = window.betterFingers?.authToken || '';
 
 function getHeaders() {
@@ -272,12 +273,12 @@ async function downloadWhisperModel(modelSize, preferGpu = true, timeoutMs = 180
   return postJson(`${MODELS_WHISPER_URL}/download`, { model_size: modelSize, prefer_gpu: preferGpu }, timeoutMs);
 }
 
-async function testWhisperModel(modelSize, preferGpu = true, timeoutMs = 300000) {
-  return postJson(`${MODELS_WHISPER_URL}/test`, { model_size: modelSize, prefer_gpu: preferGpu }, timeoutMs);
-}
-
 async function deleteWhisperModel(modelSize, timeoutMs = 10000) {
   return deleteJson(`${MODELS_WHISPER_URL}/${encodeURIComponent(modelSize)}`, timeoutMs);
+}
+
+async function selectWhisperModel(modelSize, timeoutMs = 15000) {
+  return postJson(`${MODELS_WHISPER_URL}/select`, { model_size: modelSize }, timeoutMs);
 }
 
 async function unloadModel(component, timeoutMs = 10000) {
@@ -383,20 +384,32 @@ async function rewriteDraft(id, { action = 'clearer', customInstruction = '' } =
   return postJson(`${DRAFTS_URL}/${id}/rewrite`, { action, custom_instruction: customInstruction }, timeoutMs);
 }
 
-async function speakDraft(id, { text = '', voiceId = 'standard_female', speed = 1.0, pitch = 1.0 } = {}, timeoutMs = 120000) {
-  return postJson(
-    `${DRAFTS_URL}/${id}/tts`,
-    { text, voice_id: voiceId, speed, pitch },
-    timeoutMs,
-  );
+function _mergeExtraFields(body, extra) {
+  if (extra && typeof extra === 'object') {
+    for (const [key, value] of Object.entries(extra)) {
+      if (value !== null && value !== undefined) {
+        body[key] = value;
+      }
+    }
+  }
+  return body;
 }
 
-async function speakTts(text, voiceId = 'standard_female', speed = 1.0, pitch = 1.0, timeoutMs = 120000) {
-  return postJson(
-    `${BACKEND_ORIGIN}/tts/speak`,
-    { text, voice_id: voiceId, speed, pitch },
-    timeoutMs,
-  );
+async function speakDraft(
+  id,
+  { text = '', voiceId = 'standard_female', speed = 1.0, pitch = 1.0, extra = {} } = {},
+  timeoutMs = 120000,
+) {
+  const body = _mergeExtraFields({ text, voice_id: voiceId, speed, pitch }, extra);
+  return postJson(`${DRAFTS_URL}/${id}/tts`, body, timeoutMs);
+}
+
+// `extra` accepts Voice Studio fields keyed exactly as the backend expects:
+// blend ({name: weight}), energy, warmth, brightness, pause_style,
+// preset_name, persona — same merge-extra pattern as savePersona() below.
+async function speakTts(text, voiceId = 'standard_female', speed = 1.0, pitch = 1.0, extra = {}, timeoutMs = 120000) {
+  const body = _mergeExtraFields({ text, voice_id: voiceId, speed, pitch }, extra);
+  return postJson(`${BACKEND_ORIGIN}/tts/speak`, body, timeoutMs);
 }
 
 async function sendDraft(id, { action = 'copy_only', openChat = false } = {}, timeoutMs = 120000) {
@@ -427,6 +440,53 @@ async function fetchTtsVoices(timeoutMs = 2500) {
   return fetchJson(TTS_VOICES_URL, timeoutMs);
 }
 
+async function fetchVoicePresets(timeoutMs = 2500) {
+  return fetchJson(VOICE_PRESETS_URL, timeoutMs);
+}
+
+async function saveVoicePreset(name, fields = {}, timeoutMs = 5000) {
+  return postJson(VOICE_PRESETS_URL, { name, ...fields }, timeoutMs);
+}
+
+async function deleteVoicePreset(name, timeoutMs = 5000) {
+  return deleteJson(`${VOICE_PRESETS_URL}/${encodeURIComponent(name)}`, timeoutMs);
+}
+
+async function cloneVoice(file, name, consent, timeoutMs = 30000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const form = new FormData();
+  form.append('file', file);
+  form.append('name', name);
+  form.append('consent', consent ? 'true' : 'false');
+
+  try {
+    const response = await fetch(`${BACKEND_ORIGIN}/tts/clone`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: form,
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      // /tts/clone's QA-rejection detail is a structured {message, warnings}
+      // object (not a string), so build the error message manually here
+      // instead of the generic getResponseErrorMessage() flattener, and
+      // attach the raw detail so callers can show individual warnings.
+      const detail = payload?.detail;
+      const message = (detail && typeof detail === 'object' ? detail.message : detail) || `Clone upload failed with status ${response.status}`;
+      const error = new Error(message);
+      error.detail = detail;
+      throw error;
+    }
+    return payload;
+  } catch (error) {
+    throw normalizeFetchError(error, timeoutMs);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function lintPersona(fields = {}, timeoutMs = 5000) {
   return postJson(`${PERSONAS_URL}/lint`, fields, timeoutMs);
 }
@@ -440,14 +500,7 @@ async function getPersonaV2(name, timeoutMs = 2500) {
 }
 
 async function savePersona(name, prompt, extra = null, timeoutMs = 5000) {
-  const body = { name, prompt };
-  if (extra && typeof extra === 'object') {
-    for (const [key, value] of Object.entries(extra)) {
-      if (value !== null && value !== undefined) {
-        body[key] = value;
-      }
-    }
-  }
+  const body = _mergeExtraFields({ name, prompt }, extra);
   return postJson(PERSONAS_URL, body, timeoutMs);
 }
 
@@ -471,6 +524,24 @@ async function deletePersona(name, timeoutMs = 5000) {
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+// --- Persona Foundry: guided interview -> compile -> stress-test. ---
+
+async function startFoundryInterview(timeoutMs = 5000) {
+  return postJson(`${PERSONAS_URL}/interview/start`, {}, timeoutMs);
+}
+
+async function answerFoundryQuestion(sessionId, answer, timeoutMs = 5000) {
+  return postJson(`${PERSONAS_URL}/interview/answer`, { session_id: sessionId, answer }, timeoutMs);
+}
+
+async function compileFoundry(sessionId, timeoutMs = 60000) {
+  return postJson(`${PERSONAS_URL}/compile`, { session_id: sessionId }, timeoutMs);
+}
+
+async function runFoundryStressTest(payload, timeoutMs = 120000) {
+  return postJson(`${PERSONAS_URL}/test-suite/run`, payload, timeoutMs);
 }
 
 async function warmupRuntime({ stt = false, llm = false, hotkeys = false } = {}, timeoutMs = 120000) {
@@ -547,7 +618,9 @@ function connectVoiceStatus({
 
     socket.addEventListener('open', () => {
       attempt = 0;
-      notifyConnectionChange('connected', VOICE_STATUS_WS_URL);
+      // 'live' rather than the raw ws:// URL — the URL is developer detail that
+      // doesn't belong in the user-facing connection pill.
+      notifyConnectionChange('connected', 'live');
     });
 
     socket.addEventListener('message', (event) => {
@@ -642,10 +715,18 @@ export {
   fetchBuiltinPersonaNames,
   getPersonaV2,
   fetchTtsVoices,
+  fetchVoicePresets,
+  saveVoicePreset,
+  deleteVoicePreset,
+  cloneVoice,
   lintPersona,
   testPersona,
   savePersona,
   deletePersona,
+  startFoundryInterview,
+  answerFoundryQuestion,
+  compileFoundry,
+  runFoundryStressTest,
   fetchDrafts,
   fetchHealth,
   fetchLatestDraft,
@@ -667,9 +748,9 @@ export {
   importProfile,
   sendDraft,
   selectLlmModel,
+  selectWhisperModel,
   speakDraft,
   speakTts,
-  testWhisperModel,
   toggleRecording,
   unloadModel,
   warmupRuntime,

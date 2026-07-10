@@ -13,21 +13,35 @@ class GetPipelineFlagsTests(unittest.TestCase):
     def test_defaults_both_on_when_absent(self):
         with patch.object(server, "load_profile", return_value={}):
             flags = server.get_pipeline_flags()
-        self.assertEqual(flags, {"voice_commands": True, "macros": True})
+        self.assertEqual(
+            flags,
+            {"voice_commands": True, "macros": True, "editing_commands": True, "app_commands": True},
+        )
 
     def test_reads_explicit_values(self):
         with patch.object(
             server,
             "load_profile",
-            return_value={"voice_commands_enabled": False, "macros_enabled": True},
+            return_value={
+                "voice_commands_enabled": False,
+                "macros_enabled": True,
+                "editing_commands_enabled": False,
+                "app_commands_enabled": False,
+            },
         ):
             flags = server.get_pipeline_flags()
-        self.assertEqual(flags, {"voice_commands": False, "macros": True})
+        self.assertEqual(
+            flags,
+            {"voice_commands": False, "macros": True, "editing_commands": False, "app_commands": False},
+        )
 
     def test_falls_back_to_enabled_on_load_profile_error(self):
         with patch.object(server, "load_profile", side_effect=RuntimeError("boom")):
             flags = server.get_pipeline_flags()
-        self.assertEqual(flags, {"voice_commands": True, "macros": True})
+        self.assertEqual(
+            flags,
+            {"voice_commands": True, "macros": True, "editing_commands": True, "app_commands": True},
+        )
 
     def test_voice_commands_enabled_delegates(self):
         with patch.object(server, "load_profile", return_value={"voice_commands_enabled": False}):
@@ -36,6 +50,14 @@ class GetPipelineFlagsTests(unittest.TestCase):
     def test_macros_enabled_delegates(self):
         with patch.object(server, "load_profile", return_value={"macros_enabled": False}):
             self.assertFalse(server.macros_enabled())
+
+    def test_editing_commands_enabled_delegates(self):
+        with patch.object(server, "load_profile", return_value={"editing_commands_enabled": False}):
+            self.assertFalse(server.editing_commands_enabled())
+
+    def test_app_commands_enabled_delegates(self):
+        with patch.object(server, "load_profile", return_value={"app_commands_enabled": False}):
+            self.assertFalse(server.app_commands_enabled())
 
 
 if __name__ == "__main__":

@@ -45,9 +45,9 @@ import {
   saveProfile,
   sendDraft,
   selectLlmModel,
+  selectWhisperModel,
   speakDraft,
   speakTts,
-  testWhisperModel,
   toggleRecording,
   unloadModel,
   warmupRuntime,
@@ -58,10 +58,18 @@ import {
   fetchBuiltinPersonaNames,
   getPersonaV2,
   fetchTtsVoices,
+  fetchVoicePresets,
+  saveVoicePreset,
+  deleteVoicePreset,
+  cloneVoice,
   lintPersona,
   testPersona,
   savePersona,
   deletePersona,
+  startFoundryInterview,
+  answerFoundryQuestion,
+  compileFoundry,
+  runFoundryStressTest,
   renameProfile,
   duplicateProfile,
   exportProfile,
@@ -145,8 +153,8 @@ const llmDownloadProgressBytesEl = document.getElementById('llmDownloadProgressB
 const selectLlmModelButton = document.getElementById('selectLlmModelButton');
 const downloadLlmModelButton = document.getElementById('downloadLlmModelButton');
 const deleteLlmModelButton = document.getElementById('deleteLlmModelButton');
+const selectWhisperModelButton = document.getElementById('selectWhisperModelButton');
 const downloadWhisperButton = document.getElementById('downloadWhisperButton');
-const testWhisperButton = document.getElementById('testWhisperButton');
 const deleteWhisperButton = document.getElementById('deleteWhisperButton');
 const unloadSttButton = document.getElementById('unloadSttButton');
 const unloadLlmButton = document.getElementById('unloadLlmButton');
@@ -392,6 +400,8 @@ function renderLlmDownloadProgress(state = null, model = null) {
   const status = String(state?.status || '').toLowerCase();
   const show = ['starting', 'downloading', 'complete', 'ready', 'already_installed', 'error'].includes(status);
   llmDownloadProgressEl.hidden = !show;
+  // Drives the error styling (hides the meaningless 0% track for runtime errors).
+  llmDownloadProgressEl.dataset.state = show ? status : '';
   if (!show) {
     return;
   }
@@ -495,12 +505,40 @@ function renderModelOverview(llmPayload, whisperPayload, selectedLlm, installedW
   }
   modelStatusSummaryEl.innerHTML = '';
 
+  // Honest LLM readiness: a model can be installed yet unable to run — most
+  // commonly because the llama-server binary is present but too old for the
+  // model (installed + binary present + not ready). Don't claim "Ready" then.
+  const llmInstalled = Boolean(selectedLlm?.installed);
+  const llmReady = selectedLlm?.ready === true;
+  const runtimeExists = Boolean(llmPayload.llama_server_exists);
+  const runtimeIncompatible = runtimeExists && llmInstalled && selectedLlm?.ready === false;
+
+  let llmState;
+  if (!llmInstalled) {
+    llmState = { value: 'Needs download', tone: 'danger' };
+  } else if (llmReady) {
+    llmState = { value: 'Ready', tone: 'success' };
+  } else if (runtimeIncompatible) {
+    llmState = { value: 'Runtime outdated', tone: 'warning' };
+  } else {
+    llmState = { value: 'Not ready', tone: 'warning' };
+  }
+
+  let runtimeState;
+  if (!runtimeExists) {
+    runtimeState = { value: 'llama-server missing', tone: 'danger' };
+  } else if (runtimeIncompatible) {
+    runtimeState = { value: 'Update required', tone: 'warning' };
+  } else {
+    runtimeState = { value: 'llama-server found', tone: 'success' };
+  }
+
   const stats = [
     {
       label: 'LLM',
-      value: selectedLlm?.installed ? 'Ready' : 'Needs download',
+      value: llmState.value,
       detail: selectedLlm?.name ?? llmPayload.selected_model_id ?? 'Unknown model',
-      tone: selectedLlm?.installed ? 'success' : 'danger',
+      tone: llmState.tone,
     },
     {
       label: 'Whisper',
@@ -510,9 +548,9 @@ function renderModelOverview(llmPayload, whisperPayload, selectedLlm, installedW
     },
     {
       label: 'Runtime',
-      value: llmPayload.llama_server_exists ? 'llama-server found' : 'llama-server missing',
+      value: runtimeState.value,
       detail: llmPayload.llama_server_path ?? 'No runtime path reported',
-      tone: llmPayload.llama_server_exists ? 'success' : 'danger',
+      tone: runtimeState.tone,
     },
   ];
 
@@ -1141,18 +1179,40 @@ function renderConfidenceBadge(draft) {
   el.classList.remove('hidden');
 }
 
+const STOP_REASON_LABELS = {
+  manual: 'stopped manually',
+  silence: 'auto-stopped on silence',
+  max_duration: 'reached max length',
+  max_recording_seconds: 'reached max length',
+  error: 'stopped on error',
+};
+
+// User-facing summary: humanized duration + stop reason. The raw signal
+// telemetry (samples/peak/rms) is developer diagnostics — kept out of the
+// primary line and surfaced as a hover tooltip instead (see formatDraftMetadataDetail).
 function formatDraftMetadata(draft) {
   const metadata = draft?.metadata ?? {};
   if (!Object.keys(metadata).length) {
     return 'No recording metadata available.';
   }
 
-  const duration = Number(metadata.duration_seconds || 0).toFixed(2);
+  const duration = Number(metadata.duration_seconds || 0).toFixed(1);
+  const stopReason = metadata.stop_reason || 'unknown';
+  const stopLabel = STOP_REASON_LABELS[stopReason] || stopReason;
+  return `${duration}s recording · ${stopLabel}`;
+}
+
+// The raw acoustic telemetry, for a hover tooltip / power users.
+function formatDraftMetadataDetail(draft) {
+  const metadata = draft?.metadata ?? {};
+  if (!Object.keys(metadata).length) {
+    return '';
+  }
   const rms = Number(metadata.rms_amplitude || 0).toFixed(5);
   const peak = Number(metadata.max_amplitude || 0).toFixed(5);
   const samples = metadata.sample_count ?? 0;
-  const stopReason = metadata.stop_reason || 'unknown';
-  return `duration ${duration}s · samples ${samples} · peak ${peak} · rms ${rms} · stop ${stopReason}`;
+  const rate = metadata.sample_rate ?? 0;
+  return `samples ${samples} @ ${rate} Hz · peak ${peak} · rms ${rms}`;
 }
 
 function renderDraft(draft) {
@@ -1173,6 +1233,7 @@ function renderDraft(draft) {
     renderTokenSummary(null);
     if (draftMetadataEl) {
       draftMetadataEl.textContent = 'No recording metadata yet.';
+      draftMetadataEl.removeAttribute('title');
     }
     setMessage(draftMessageEl, '');
     renderSendResult(null);
@@ -1194,6 +1255,12 @@ function renderDraft(draft) {
   renderConfidenceBadge(latestDraft);
   if (draftMetadataEl) {
     draftMetadataEl.textContent = formatDraftMetadata(latestDraft);
+    const detail = formatDraftMetadataDetail(latestDraft);
+    if (detail) {
+      draftMetadataEl.title = detail;
+    } else {
+      draftMetadataEl.removeAttribute('title');
+    }
   }
 
   if (latestDraft.error) {
@@ -1332,12 +1399,15 @@ async function refreshHealth() {
     }
     return true;
   } catch (error) {
-    setBadgeState(backendStatusEl, 'offline', 'danger');
+    // The Electron shell spawns the sidecar, so a failed /health poll almost
+    // always means "still starting" — show a calm amber state rather than three
+    // alarming red "offline" cards at every normal boot.
+    setBadgeState(backendStatusEl, 'starting…', 'warning');
     if (backendDetailEl) {
       backendDetailEl.textContent = 'Waiting for the Python backend to start';
     }
-    setBadgeState(transcriberStatusEl, 'offline', 'danger');
-    setBadgeState(llmStatusEl, 'offline', 'danger');
+    setBadgeState(transcriberStatusEl, 'starting…', 'warning');
+    setBadgeState(llmStatusEl, 'starting…', 'warning');
     return false;
   }
 }
@@ -1475,25 +1545,18 @@ async function refreshPersonasAndVoices() {
   try {
     const voicesData = await fetchTtsVoices();
     const voiceSelect = settingEls.review_tts_voice_hint;
+    voiceOptionsCache = [
+      ...(Array.isArray(voicesData.defaults) ? voicesData.defaults : []),
+      ...(Array.isArray(voicesData.cloned) ? voicesData.cloned.map((v) => ({ id: v.id, name: `${v.name} (Cloned)` })) : []),
+    ];
     if (voiceSelect) {
       const currentSelected = voiceSelect.value;
       voiceSelect.innerHTML = '';
-      
-      if (Array.isArray(voicesData.defaults)) {
-        for (const voice of voicesData.defaults) {
-          const option = document.createElement('option');
-          option.value = voice.id;
-          option.textContent = voice.name;
-          voiceSelect.appendChild(option);
-        }
-      }
-      if (Array.isArray(voicesData.cloned)) {
-        for (const voice of voicesData.cloned) {
-          const option = document.createElement('option');
-          option.value = voice.id;
-          option.textContent = `${voice.name} (Cloned)`;
-          voiceSelect.appendChild(option);
-        }
+      for (const voice of voiceOptionsCache) {
+        const option = document.createElement('option');
+        option.value = voice.id;
+        option.textContent = voice.name;
+        voiceSelect.appendChild(option);
       }
       if (currentSelected) {
         voiceSelect.value = currentSelected;
@@ -1502,6 +1565,368 @@ async function refreshPersonasAndVoices() {
   } catch (error) {
     console.error('Failed to load TTS voices:', error);
   }
+
+  await refreshVoicePresets().catch((error) => console.error('Failed to load voice presets:', error));
+}
+
+// --- Voice Studio: blend editor, modulation, presets (U6/U5/U7 tie-in) ---
+let voiceOptionsCache = [];
+let voiceBlendLayers = []; // [{ voiceId, weight }]
+let loadedVoicePresets = [];
+
+const VOICE_BLEND_QUICK_PRESETS = {
+  softer: { blend: { bf_emma: 0.25 }, energy: 0.35, warmth: 0.3 },
+  brighter: { blend: { af_nicole: 0.3 }, brightness: 0.35 },
+  lower: { blend: { am_michael: 0.3 }, pitch: -3 },
+  narrator: { base: 'bm_george', blend: {}, energy: 0.45, pause_style: 'natural' },
+  assistant: { base: 'af_heart', blend: {}, energy: 0.55, brightness: 0.1 },
+};
+
+const VOICE_MODULATION_QUICK_PRESETS = {
+  clear: { speed: 1.0, pitch: 0, energy: 0.6, warmth: 0.1, brightness: 0.1, pause_style: 'natural' },
+  quiet: { speed: 0.9, pitch: 0, energy: 0.3, warmth: 0.2, brightness: 0, pause_style: 'compact' },
+  presentation: { speed: 0.95, pitch: 0, energy: 0.7, warmth: 0.1, brightness: 0.2, pause_style: 'dramatic' },
+  character: { speed: 1.0, pitch: 3, energy: 0.8, warmth: 0.3, brightness: 0.1, pause_style: 'dramatic' },
+  fast: { speed: 1.8, pitch: 0, energy: 0.5, warmth: 0, brightness: 0, pause_style: 'compact' },
+  accessibility: { speed: 0.75, pitch: 0, energy: 0.5, warmth: 0, brightness: 0, pause_style: 'natural' },
+};
+
+function updateModulationLabels() {
+  const fields = [
+    ['voicePitch', 'voicePitchValue', 1],
+    ['voiceEnergy', 'voiceEnergyValue', 2],
+    ['voiceWarmth', 'voiceWarmthValue', 2],
+    ['voiceBrightness', 'voiceBrightnessValue', 2],
+  ];
+  for (const [inputId, labelId, decimals] of fields) {
+    const input = document.getElementById(inputId);
+    const label = document.getElementById(labelId);
+    if (input && label) {
+      label.textContent = parseFloat(input.value).toFixed(decimals);
+    }
+  }
+}
+
+function setModulationControls(settings) {
+  const map = {
+    voicePitch: settings.pitch,
+    voiceEnergy: settings.energy,
+    voiceWarmth: settings.warmth,
+    voiceBrightness: settings.brightness,
+  };
+  for (const [id, value] of Object.entries(map)) {
+    const el = document.getElementById(id);
+    if (el && value !== undefined && value !== null) {
+      el.value = value;
+    }
+  }
+  const pauseStyleEl = document.getElementById('voicePauseStyle');
+  if (pauseStyleEl && settings.pause_style) {
+    pauseStyleEl.value = settings.pause_style;
+  }
+  updateModulationLabels();
+}
+
+function renderVoiceBlendRows() {
+  const container = document.getElementById('voiceBlendRows');
+  if (!container) return;
+  container.innerHTML = '';
+  if (voiceBlendLayers.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'setting-desc';
+    empty.textContent = 'No blend layers — auditioning the base voice alone.';
+    container.appendChild(empty);
+    return;
+  }
+  voiceBlendLayers.forEach((layer, index) => {
+    const row = document.createElement('div');
+    row.className = 'setting-row voice-blend-row';
+
+    const select = document.createElement('select');
+    select.className = 'settings-input min-w-160';
+    for (const voice of voiceOptionsCache) {
+      const option = document.createElement('option');
+      option.value = voice.id;
+      option.textContent = voice.name;
+      select.appendChild(option);
+    }
+    select.value = layer.voiceId;
+    select.addEventListener('change', () => {
+      voiceBlendLayers[index].voiceId = select.value;
+    });
+
+    const weightInput = document.createElement('input');
+    weightInput.type = 'range';
+    weightInput.min = '0';
+    weightInput.max = '1';
+    weightInput.step = '0.05';
+    weightInput.value = String(layer.weight);
+    weightInput.className = 'settings-input';
+
+    const weightLabel = document.createElement('span');
+    weightLabel.className = 'status-label voice-blend-weight-label';
+    weightLabel.textContent = layer.weight.toFixed(2);
+    weightInput.addEventListener('input', () => {
+      voiceBlendLayers[index].weight = parseFloat(weightInput.value);
+      weightLabel.textContent = voiceBlendLayers[index].weight.toFixed(2);
+    });
+
+    const removeButton = document.createElement('button');
+    removeButton.type = 'button';
+    removeButton.className = 'secondary-button';
+    removeButton.textContent = 'Remove';
+    removeButton.addEventListener('click', () => {
+      voiceBlendLayers.splice(index, 1);
+      renderVoiceBlendRows();
+    });
+
+    row.appendChild(select);
+    row.appendChild(weightInput);
+    row.appendChild(weightLabel);
+    row.appendChild(removeButton);
+    container.appendChild(row);
+  });
+}
+
+function gatherVoiceStudioSettings() {
+  const blend = {};
+  for (const layer of voiceBlendLayers) {
+    if (layer.voiceId && layer.weight > 0) {
+      blend[layer.voiceId] = layer.weight;
+    }
+  }
+  return {
+    base: settingEls.review_tts_voice_hint?.value || 'standard_female',
+    speed: parseFloat(settingEls.review_tts_speed?.value || '1.0'),
+    blend: Object.keys(blend).length ? blend : null,
+    pitch: parseFloat(document.getElementById('voicePitch')?.value || '0'),
+    energy: parseFloat(document.getElementById('voiceEnergy')?.value || '0.5'),
+    warmth: parseFloat(document.getElementById('voiceWarmth')?.value || '0'),
+    brightness: parseFloat(document.getElementById('voiceBrightness')?.value || '0'),
+    pause_style: document.getElementById('voicePauseStyle')?.value || 'natural',
+  };
+}
+
+function applyVoicePreset(preset) {
+  if (!preset) return;
+  if (settingEls.review_tts_voice_hint && preset.base) {
+    settingEls.review_tts_voice_hint.value = preset.base;
+  }
+  if (settingEls.review_tts_speed && preset.speed !== undefined) {
+    settingEls.review_tts_speed.value = preset.speed;
+  }
+  voiceBlendLayers = Object.entries(preset.blend || {}).map(([voiceId, weight]) => ({ voiceId, weight }));
+  renderVoiceBlendRows();
+  setModulationControls(preset);
+}
+
+async function refreshVoicePresets() {
+  const data = await fetchVoicePresets();
+  loadedVoicePresets = Array.isArray(data.presets) ? data.presets : [];
+  renderVoicePresetSelect();
+  renderVoicePresetList();
+}
+
+function renderVoicePresetSelect() {
+  const select = document.getElementById('voicePresetSelect');
+  if (!select) return;
+  const current = select.value;
+  select.innerHTML = '<option value="">— Custom (unsaved) —</option>';
+  for (const preset of loadedVoicePresets) {
+    const option = document.createElement('option');
+    option.value = preset.name;
+    option.textContent = preset.name;
+    select.appendChild(option);
+  }
+  if (current && loadedVoicePresets.some((p) => p.name === current)) {
+    select.value = current;
+  }
+}
+
+function renderVoicePresetList() {
+  const container = document.getElementById('voicePresetList');
+  if (!container) return;
+  container.innerHTML = '';
+  if (loadedVoicePresets.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'setting-desc';
+    empty.textContent = 'No saved presets yet.';
+    container.appendChild(empty);
+    return;
+  }
+  for (const preset of loadedVoicePresets) {
+    const row = document.createElement('div');
+    row.className = 'setting-row voice-preset-row';
+
+    const info = document.createElement('div');
+    info.className = 'setting-info';
+    const label = document.createElement('span');
+    label.className = 'status-label';
+    label.textContent = preset.name;
+    const desc = document.createElement('span');
+    desc.className = 'setting-desc';
+    const blendKeys = Object.keys(preset.blend || {});
+    desc.textContent = `${preset.base || 'default voice'}${blendKeys.length ? ` + ${blendKeys.join(', ')}` : ''}`;
+    info.appendChild(label);
+    info.appendChild(desc);
+
+    const controls = document.createElement('div');
+    controls.className = 'setting-control';
+    const applyButton = document.createElement('button');
+    applyButton.type = 'button';
+    applyButton.className = 'secondary-button';
+    applyButton.textContent = 'Apply';
+    applyButton.addEventListener('click', () => {
+      const select = document.getElementById('voicePresetSelect');
+      if (select) select.value = preset.name;
+      applyVoicePreset(preset);
+    });
+    const deleteButton = document.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.className = 'secondary-button';
+    deleteButton.textContent = 'Delete';
+    deleteButton.addEventListener('click', async () => {
+      try {
+        await deleteVoicePreset(preset.name);
+        await refreshVoicePresets();
+      } catch (error) {
+        setMessage(profileMessageEl, `Failed to delete preset: ${error.message}`, 'danger');
+      }
+    });
+    controls.appendChild(applyButton);
+    controls.appendChild(deleteButton);
+
+    row.appendChild(info);
+    row.appendChild(controls);
+    container.appendChild(row);
+  }
+}
+
+function initVoiceStudio() {
+  renderVoiceBlendRows();
+  updateModulationLabels();
+
+  ['voicePitch', 'voiceEnergy', 'voiceWarmth', 'voiceBrightness'].forEach((id) => {
+    document.getElementById(id)?.addEventListener('input', updateModulationLabels);
+  });
+
+  document.getElementById('addVoiceLayerButton')?.addEventListener('click', () => {
+    if (voiceBlendLayers.length >= 2) return; // base + 2 extra = 3-way blend cap
+    const fallbackVoice = voiceOptionsCache[0]?.id || 'af_bella';
+    voiceBlendLayers.push({ voiceId: fallbackVoice, weight: 0.3 });
+    renderVoiceBlendRows();
+  });
+
+  document.getElementById('resetVoiceBlendButton')?.addEventListener('click', () => {
+    voiceBlendLayers = [];
+    renderVoiceBlendRows();
+  });
+
+  document.getElementById('voicePresetSelect')?.addEventListener('change', (event) => {
+    const name = event.target.value;
+    if (!name) return;
+    const preset = loadedVoicePresets.find((p) => p.name === name);
+    if (preset) applyVoicePreset(preset);
+  });
+
+  document.getElementById('saveVoicePresetButton')?.addEventListener('click', async () => {
+    const nameInput = document.getElementById('voicePresetNameInput');
+    const name = nameInput?.value?.trim();
+    if (!name) {
+      setMessage(profileMessageEl, 'A preset name is required to save.', 'danger');
+      return;
+    }
+    const settings = gatherVoiceStudioSettings();
+    try {
+      await saveVoicePreset(name, { ...settings, blend: settings.blend || {} });
+      setMessage(profileMessageEl, `Saved voice preset "${name}".`, 'success');
+      if (nameInput) nameInput.value = '';
+      await refreshVoicePresets();
+    } catch (error) {
+      setMessage(profileMessageEl, `Failed to save preset: ${error.message}`, 'danger');
+    }
+  });
+
+  document.querySelectorAll('[data-blend-preset]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const preset = VOICE_BLEND_QUICK_PRESETS[button.dataset.blendPreset];
+      if (!preset) return;
+      if (preset.base && settingEls.review_tts_voice_hint) {
+        settingEls.review_tts_voice_hint.value = preset.base;
+      }
+      voiceBlendLayers = Object.entries(preset.blend || {}).map(([voiceId, weight]) => ({ voiceId, weight }));
+      renderVoiceBlendRows();
+      setModulationControls(preset);
+    });
+  });
+
+  document.querySelectorAll('[data-mod-preset]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const preset = VOICE_MODULATION_QUICK_PRESETS[button.dataset.modPreset];
+      if (!preset) return;
+      if (settingEls.review_tts_speed && preset.speed !== undefined) {
+        settingEls.review_tts_speed.value = preset.speed;
+      }
+      setModulationControls(preset);
+    });
+  });
+
+  initVoiceCloning();
+}
+
+function initVoiceCloning() {
+  const consentEl = document.getElementById('voiceCloneConsent');
+  const nameEl = document.getElementById('voiceCloneName');
+  const fileEl = document.getElementById('voiceCloneFile');
+  const uploadButton = document.getElementById('voiceCloneUploadButton');
+  const resultEl = document.getElementById('voiceCloneResult');
+  if (!consentEl || !nameEl || !fileEl || !uploadButton || !resultEl) return;
+
+  consentEl.addEventListener('change', () => {
+    const enabled = consentEl.checked;
+    nameEl.disabled = !enabled;
+    fileEl.disabled = !enabled;
+    uploadButton.disabled = !enabled;
+    if (!enabled) {
+      resultEl.textContent = '';
+    }
+  });
+
+  uploadButton.addEventListener('click', async () => {
+    const file = fileEl.files?.[0];
+    const name = nameEl.value.trim();
+    if (!consentEl.checked) {
+      resultEl.textContent = 'Consent is required before uploading a sample.';
+      return;
+    }
+    if (!file) {
+      resultEl.textContent = 'Choose a WAV sample to upload.';
+      return;
+    }
+    if (!name) {
+      resultEl.textContent = 'A voice name is required.';
+      return;
+    }
+
+    uploadButton.disabled = true;
+    uploadButton.textContent = 'Validating...';
+    resultEl.textContent = '';
+
+    try {
+      const result = await cloneVoice(file, name, true);
+      const warnings = result.warnings || [];
+      resultEl.textContent = warnings.length
+        ? `Saved "${name}" with warnings: ${warnings.join(' ')}`
+        : `Saved "${name}" — sample passed all quality checks.`;
+      await refreshPersonasAndVoices();
+    } catch (error) {
+      const warnings = error.detail?.warnings || [];
+      resultEl.textContent = warnings.length ? warnings.join(' ') : (error.message || 'Clone upload failed.');
+    } finally {
+      uploadButton.disabled = false;
+      uploadButton.textContent = 'Upload & Validate Sample';
+    }
+  });
 }
 
 async function refreshProfiles() {
@@ -1514,6 +1939,430 @@ async function refreshProfiles() {
     window.betterFingers.updateHotkeys(payload.settings);
   }
   return payload;
+}
+
+// --- Persona Foundry: guided interview -> compile -> stress-test -> save.
+// Separate DOM tree and state from the manual persona wizard above; ends by
+// calling the same savePersona() the wizard uses. ---
+const foundryState = {
+  sessionId: null,
+  question: null,
+  examples: [],
+  antiExamples: [],
+  compiledPersona: null,
+  compiledWarnings: [],
+  stressCases: [],
+};
+
+function foundryEl(id) {
+  return document.getElementById(id);
+}
+
+function foundryResetState() {
+  foundryState.sessionId = null;
+  foundryState.question = null;
+  foundryState.examples = [];
+  foundryState.antiExamples = [];
+  foundryState.compiledPersona = null;
+  foundryState.compiledWarnings = [];
+  foundryState.stressCases = [];
+}
+
+function foundryShowScreen(name) {
+  const screens = {
+    interview: foundryEl('foundryScreenInterview'),
+    collection: foundryEl('foundryScreenCollection'),
+    stressTest: foundryEl('foundryScreenStressTest'),
+    review: foundryEl('foundryScreenReview'),
+  };
+  for (const [key, el] of Object.entries(screens)) {
+    el?.classList.toggle('hidden', key !== name);
+  }
+}
+
+function foundryAppendBubble(text, kind) {
+  const log = foundryEl('foundryChatLog');
+  if (!log || !text) return;
+  const bubble = document.createElement('div');
+  bubble.className = `foundry-bubble ${kind}`;
+  bubble.textContent = text;
+  log.appendChild(bubble);
+  log.scrollTop = log.scrollHeight;
+}
+
+function foundrySetMessage(text = '', tone = 'info') {
+  const el = foundryEl('foundryMessage');
+  if (!el) return;
+  el.textContent = text || '';
+  if (text) {
+    el.dataset.tone = tone;
+  } else {
+    delete el.dataset.tone;
+  }
+}
+
+function foundryRenderCollectionList() {
+  const list = foundryEl('foundryCollectionList');
+  if (!list) return;
+  list.innerHTML = '';
+  const isExamples = foundryState.question?.group === 'examples';
+  const items = isExamples ? foundryState.examples : foundryState.antiExamples;
+  for (const item of items) {
+    const li = document.createElement('li');
+    if (isExamples) {
+      const strong = document.createElement('strong');
+      strong.textContent = item.raw;
+      li.append(strong, document.createTextNode(` → ${item.desired}`));
+    } else {
+      li.textContent = item;
+    }
+    list.appendChild(li);
+  }
+}
+
+function foundryRenderQuestion(question) {
+  foundryState.question = question;
+  const choiceRow = foundryEl('foundryChoiceRow');
+  const textRow = foundryEl('foundryTextRow');
+  if (!question) return;
+
+  if (question.kind === 'collection') {
+    foundryShowScreen('collection');
+    const promptEl = foundryEl('foundryCollectionPrompt');
+    if (promptEl) promptEl.textContent = `${question.prompt} (${question.count}/${question.minimum} minimum)`;
+    const isExamples = question.group === 'examples';
+    foundryEl('foundryExamplePairRow')?.classList.toggle('hidden', !isExamples);
+    foundryEl('foundryAntiExampleRow')?.classList.toggle('hidden', isExamples);
+    foundryRenderCollectionList();
+    return;
+  }
+
+  foundryShowScreen('interview');
+  foundryAppendBubble(question.prompt, 'question');
+
+  if (question.kind === 'choice') {
+    choiceRow?.classList.remove('hidden');
+    textRow?.classList.add('hidden');
+    if (choiceRow) {
+      choiceRow.innerHTML = '';
+      for (const choice of question.choices || []) {
+        const btn = document.createElement('button');
+        btn.className = 'secondary-button';
+        btn.type = 'button';
+        btn.textContent = choice.replaceAll('_', ' ');
+        btn.addEventListener('click', () => foundrySubmitAnswer(choice, choice.replaceAll('_', ' ')));
+        choiceRow.appendChild(btn);
+      }
+    }
+  } else {
+    choiceRow?.classList.add('hidden');
+    textRow?.classList.remove('hidden');
+    const input = foundryEl('foundryAnswerInput');
+    if (input) {
+      input.value = '';
+      input.focus();
+    }
+  }
+}
+
+async function foundrySubmitAnswer(answer, displayText = null) {
+  if (!foundryState.sessionId) return;
+  if (displayText) {
+    foundryAppendBubble(displayText, 'answer');
+  }
+  foundrySetMessage('');
+  try {
+    const result = await answerFoundryQuestion(foundryState.sessionId, answer);
+    if (result.pushback) {
+      foundryAppendBubble(result.pushback, 'pushback');
+    }
+    if (result.done) {
+      await foundryRunCompile();
+      return;
+    }
+    foundryRenderQuestion(result.question);
+  } catch (error) {
+    foundrySetMessage(`Failed to submit answer: ${error.message}`, 'danger');
+  }
+}
+
+async function foundryRunCompile() {
+  foundryShowScreen('stressTest');
+  foundryEl('foundryStressCases')?.replaceChildren();
+  foundrySetMessage('Compiling your persona...', 'info');
+  try {
+    const result = await compileFoundry(foundryState.sessionId);
+    foundryState.compiledPersona = result.persona;
+    foundryState.compiledWarnings = result.warnings || [];
+    foundrySetMessage('');
+  } catch (error) {
+    foundrySetMessage(`Compile failed: ${error.message}`, 'danger');
+  }
+}
+
+function foundryRenderStressCase(caseData) {
+  const container = document.createElement('div');
+  container.className = 'foundry-stress-case';
+  container.dataset.verdict = caseData.verdict || 'pending';
+
+  const category = document.createElement('div');
+  category.className = 'foundry-stress-case-category';
+  category.textContent = caseData.category.replaceAll('_', ' ');
+  container.appendChild(category);
+
+  const io = document.createElement('div');
+  io.className = 'foundry-stress-case-io';
+
+  const inputLabel = document.createElement('label');
+  const inputSpan = document.createElement('span');
+  inputSpan.className = 'status-label';
+  inputSpan.textContent = 'Input';
+  const inputText = document.createElement('div');
+  inputText.textContent = caseData.input;
+  inputLabel.append(inputSpan, inputText);
+
+  const outputLabel = document.createElement('label');
+  const outputSpan = document.createElement('span');
+  outputSpan.className = 'status-label';
+  outputSpan.textContent = 'Output (editable)';
+  const outputTextarea = document.createElement('textarea');
+  outputTextarea.className = 'settings-input textarea-small';
+  outputTextarea.value = caseData.output;
+  outputTextarea.addEventListener('input', () => {
+    caseData.output = outputTextarea.value;
+  });
+  outputLabel.append(outputSpan, outputTextarea);
+
+  io.append(inputLabel, outputLabel);
+  container.appendChild(io);
+
+  const actions = document.createElement('div');
+  actions.className = 'foundry-stress-case-actions';
+  const approveBtn = document.createElement('button');
+  approveBtn.className = 'secondary-button';
+  approveBtn.type = 'button';
+  approveBtn.textContent = 'Approve';
+  approveBtn.addEventListener('click', () => {
+    caseData.verdict = 'approved';
+    container.dataset.verdict = 'approved';
+  });
+  const rejectBtn = document.createElement('button');
+  rejectBtn.className = 'secondary-button';
+  rejectBtn.type = 'button';
+  rejectBtn.textContent = 'Reject';
+  rejectBtn.addEventListener('click', () => {
+    caseData.verdict = 'rejected';
+    container.dataset.verdict = 'rejected';
+  });
+  actions.append(approveBtn, rejectBtn);
+  container.appendChild(actions);
+
+  return container;
+}
+
+async function foundryRunStressTestNow() {
+  if (!foundryState.sessionId) return;
+  const container = foundryEl('foundryStressCases');
+  foundrySetMessage('Running stress test — this can take a moment...', 'info');
+  try {
+    const result = await runFoundryStressTest({ session_id: foundryState.sessionId });
+    foundryState.stressCases = (result.cases || []).map((c) => ({ ...c, verdict: 'pending' }));
+    if (container) {
+      container.innerHTML = '';
+      for (const caseData of foundryState.stressCases) {
+        container.appendChild(foundryRenderStressCase(caseData));
+      }
+    }
+    foundrySetMessage('');
+  } catch (error) {
+    foundrySetMessage(`Stress test failed: ${error.message}`, 'danger');
+  }
+}
+
+function foundryRenderCharacterCard() {
+  const persona = foundryState.compiledPersona;
+  const card = persona?.persona_card || {};
+  const container = foundryEl('foundryCharacterCard');
+  if (!container) return;
+  container.innerHTML = '';
+
+  const name = document.createElement('h3');
+  name.textContent = card.display_name || 'Custom Persona';
+  const archetype = document.createElement('p');
+  archetype.className = 'foundry-archetype';
+  archetype.textContent = card.archetype || '';
+
+  const dl = document.createElement('dl');
+  const rows = [
+    ['Temperament', (card.temperament || []).join(', ') || '—'],
+    ['Signature moves', (card.signature_moves || []).join(', ') || '—'],
+    ['Favorite phrases', (card.favorite_phrases || []).join(', ') || '—'],
+    ['Forbidden', (card.forbidden || []).join(', ') || '—'],
+    ['Best use cases', (card.best_use_cases || []).join(', ') || '—'],
+  ];
+  for (const [term, value] of rows) {
+    const dt = document.createElement('dt');
+    dt.textContent = term;
+    const dd = document.createElement('dd');
+    dd.textContent = value;
+    dl.append(dt, dd);
+  }
+
+  const score = document.createElement('div');
+  score.className = 'foundry-reliability-score';
+  score.textContent = `Reliability: ${card.reliability_score ?? 0}/100`;
+
+  container.append(name, archetype, dl, score);
+
+  const nameInput = foundryEl('foundryPersonaName');
+  if (nameInput) nameInput.value = card.display_name || '';
+  const promptEl = foundryEl('foundryCompiledPrompt');
+  if (promptEl) promptEl.value = persona?.prompt || '';
+  const warningsEl = foundryEl('foundryCompileWarnings');
+  if (warningsEl) {
+    if (foundryState.compiledWarnings.length) {
+      warningsEl.textContent = foundryState.compiledWarnings.join(' ');
+      warningsEl.dataset.tone = 'warning';
+    } else {
+      warningsEl.textContent = '';
+      delete warningsEl.dataset.tone;
+    }
+  }
+}
+
+async function foundryOpen() {
+  const overlay = foundryEl('foundryOverlay');
+  if (!overlay) return;
+  foundryResetState();
+  const chatLog = foundryEl('foundryChatLog');
+  if (chatLog) chatLog.innerHTML = '';
+  foundryEl('foundryCollectionList')?.replaceChildren();
+  foundryEl('foundryStressCases')?.replaceChildren();
+  foundryEl('foundryCharacterCard')?.replaceChildren();
+  foundrySetMessage('');
+  overlay.classList.remove('hidden');
+  foundryShowScreen('interview');
+  try {
+    const result = await startFoundryInterview();
+    foundryState.sessionId = result.session_id;
+    foundryRenderQuestion(result.question);
+  } catch (error) {
+    foundrySetMessage(`Couldn't start the interview: ${error.message}`, 'danger');
+  }
+}
+
+function foundryClose() {
+  foundryEl('foundryOverlay')?.classList.add('hidden');
+}
+
+async function foundrySave() {
+  const persona = foundryState.compiledPersona;
+  if (!persona) return;
+  const name = foundryEl('foundryPersonaName')?.value?.trim();
+  if (!name) {
+    foundrySetMessage('Give this persona a name first.', 'danger');
+    return;
+  }
+  const approvedOrRejected = foundryState.stressCases.filter((c) => c.verdict !== 'pending');
+  const card = { ...(persona.persona_card || {}) };
+  if (approvedOrRejected.length) {
+    card.eval_cases = approvedOrRejected.map((c) => ({
+      category: c.category, input: c.input, output: c.output, verdict: c.verdict,
+    }));
+  }
+  const { prompt, ...extra } = persona;
+  extra.persona_card = card;
+  try {
+    await savePersona(name, prompt, extra);
+    await refreshPersonasAndVoices();
+    showToast(`Saved persona "${name}".`, 'success');
+    foundryClose();
+  } catch (error) {
+    foundrySetMessage(`Save failed: ${error.message}`, 'danger');
+  }
+}
+
+function initFoundry() {
+  const overlay = foundryEl('foundryOverlay');
+  if (!overlay) return;
+
+  foundryEl('openFoundryButton')?.addEventListener('click', () => { foundryOpen(); });
+  foundryEl('foundryCloseButton')?.addEventListener('click', () => { foundryClose(); });
+
+  foundryEl('foundrySubmitAnswerButton')?.addEventListener('click', () => {
+    const input = foundryEl('foundryAnswerInput');
+    const text = input?.value?.trim();
+    if (!text) return;
+    foundrySubmitAnswer(text, text);
+  });
+  foundryEl('foundryAnswerInput')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      foundryEl('foundrySubmitAnswerButton')?.click();
+    }
+  });
+
+  foundryEl('foundryAddCollectionItemButton')?.addEventListener('click', async () => {
+    const isExamples = foundryState.question?.group === 'examples';
+    let answer;
+    if (isExamples) {
+      const raw = foundryEl('foundryExampleRaw');
+      const desired = foundryEl('foundryExampleDesired');
+      const rawVal = raw?.value?.trim();
+      const desiredVal = desired?.value?.trim();
+      if (!rawVal || !desiredVal) {
+        foundrySetMessage('Give me both a raw input and the desired output.', 'danger');
+        return;
+      }
+      answer = { raw: rawVal, desired: desiredVal };
+      foundryState.examples.push(answer);
+      if (raw) raw.value = '';
+      if (desired) desired.value = '';
+    } else {
+      const textEl = foundryEl('foundryAntiExampleText');
+      const val = textEl?.value?.trim();
+      if (!val) {
+        foundrySetMessage('What would this persona never say? Give me a real line.', 'danger');
+        return;
+      }
+      answer = val;
+      foundryState.antiExamples.push(val);
+      if (textEl) textEl.value = '';
+    }
+    try {
+      const result = await answerFoundryQuestion(foundryState.sessionId, answer);
+      foundrySetMessage('');
+      foundryRenderQuestion(result.question);
+    } catch (error) {
+      foundrySetMessage(`Failed: ${error.message}`, 'danger');
+    }
+  });
+
+  foundryEl('foundryCollectionNextButton')?.addEventListener('click', async () => {
+    try {
+      const result = await answerFoundryQuestion(foundryState.sessionId, { next: true });
+      if (result.pushback) {
+        foundrySetMessage(result.pushback, 'danger');
+        return;
+      }
+      foundrySetMessage('');
+      if (result.done) {
+        await foundryRunCompile();
+        return;
+      }
+      foundryRenderQuestion(result.question);
+    } catch (error) {
+      foundrySetMessage(`Failed: ${error.message}`, 'danger');
+    }
+  });
+
+  foundryEl('foundryRunStressTestButton')?.addEventListener('click', () => { foundryRunStressTestNow(); });
+  foundryEl('foundryStressContinueButton')?.addEventListener('click', () => {
+    foundryShowScreen('review');
+    foundryRenderCharacterCard();
+  });
+
+  foundryEl('foundrySaveButton')?.addEventListener('click', () => { foundrySave(); });
 }
 
 function initWizard() {
@@ -3320,9 +4169,14 @@ async function runDraftTts(selectedOnly = false) {
 
   try {
     await saveCurrentDraftEdit({ silent: true });
-    const voiceId = settingEls.review_tts_voice_hint?.value || 'standard_female';
-    const speed = parseFloat(settingEls.review_tts_speed?.value || '1.0');
-    const result = await speakDraft(latestDraft.id, { text, voiceId, speed });
+    const settings = gatherVoiceStudioSettings();
+    const result = await speakDraft(latestDraft.id, {
+      text, voiceId: settings.base, speed: settings.speed, pitch: settings.pitch,
+      extra: {
+        blend: settings.blend, energy: settings.energy, warmth: settings.warmth,
+        brightness: settings.brightness, pause_style: settings.pause_style,
+      },
+    });
     setMessage(draftMessageEl, result?.message || 'Draft read-aloud request sent.', result?.ok === false ? 'warning' : 'success');
   } catch (error) {
     setMessage(draftMessageEl, `Read aloud failed: ${error.message}`, 'danger');
@@ -3466,6 +4320,7 @@ async function bootstrap() {
   });
 
   initWizard();
+  initFoundry();
   initSettingsPanel();
   initOnboarding();
 }
@@ -3586,15 +4441,21 @@ function initSettingsPanel() {
 
   const testTtsButton = document.getElementById('testTtsButton');
   testTtsButton?.addEventListener('click', async () => {
-    const text = "This is a test of the BetterFingers text to speech voice synthesis.";
-    const voiceId = settingEls.review_tts_voice_hint?.value || 'standard_female';
-    const speed = parseFloat(settingEls.review_tts_speed?.value || '1.0');
+    const previewText = document.getElementById('voicePreviewText')?.value?.trim();
+    const text = previewText || "This is a test of the BetterFingers text to speech voice synthesis.";
+    const settings = gatherVoiceStudioSettings();
 
     testTtsButton.disabled = true;
     testTtsButton.textContent = 'Speaking...';
 
     try {
-      const res = await speakTts(text, voiceId, speed);
+      const res = await speakTts(text, settings.base, settings.speed, settings.pitch, {
+        blend: settings.blend,
+        energy: settings.energy,
+        warmth: settings.warmth,
+        brightness: settings.brightness,
+        pause_style: settings.pause_style,
+      });
       setMessage(profileMessageEl, `TTS Audition: ${res.message}`, 'success');
     } catch (error) {
       setMessage(profileMessageEl, `TTS Audition failed: ${error.message}`, 'danger');
@@ -3603,6 +4464,8 @@ function initSettingsPanel() {
       testTtsButton.textContent = 'Audition Voice / Test TTS API';
     }
   });
+
+  initVoiceStudio();
 
   const testPasteCopyButton = document.getElementById('testPasteCopyButton');
   testPasteCopyButton?.addEventListener('click', async () => {
@@ -4082,14 +4945,14 @@ deleteLlmModelButton?.addEventListener('click', () => {
   runModelAction(deleteLlmModelButton, 'Delete LLM', () => deleteLlmModel(modelId));
 });
 
+selectWhisperModelButton?.addEventListener('click', () => {
+  const modelSize = whisperModelSelectEl?.value;
+  runModelAction(selectWhisperModelButton, 'Select Whisper', () => selectWhisperModel(modelSize));
+});
+
 downloadWhisperButton?.addEventListener('click', () => {
   const modelSize = whisperModelSelectEl?.value;
   runModelAction(downloadWhisperButton, 'Download Whisper', () => downloadWhisperModel(modelSize));
-});
-
-testWhisperButton?.addEventListener('click', () => {
-  const modelSize = whisperModelSelectEl?.value;
-  runModelAction(testWhisperButton, 'Test Whisper', () => testWhisperModel(modelSize));
 });
 
 deleteWhisperButton?.addEventListener('click', () => {
@@ -4418,13 +5281,36 @@ async function refreshDoctor(refreshAudio = false) {
       } else if (sub.id === 'llm') {
         const isReady = sub.data.ready;
         const isInit = sub.data.initialized;
-        badge.textContent = isReady ? 'Ready' : isInit ? 'Warming Up' : 'Offline';
-        badge.dataset.tone = isReady ? 'success' : isInit ? 'warning' : 'danger';
+        // The llama-server binary can exist yet be too old to run the selected
+        // model (runtime_compatible === false). That's a permanent block, not a
+        // transient "Warming Up" — surface it honestly.
+        const runtimeIncompatible = sub.data.llama_server_exists && sub.data.runtime_compatible === false;
+        if (isReady) {
+          badge.textContent = 'Ready';
+          badge.dataset.tone = 'success';
+        } else if (runtimeIncompatible) {
+          badge.textContent = 'Runtime outdated';
+          badge.dataset.tone = 'warning';
+        } else if (isInit) {
+          badge.textContent = 'Warming Up';
+          badge.dataset.tone = 'warning';
+        } else {
+          badge.textContent = 'Offline';
+          badge.dataset.tone = 'danger';
+        }
         detailsText = `Initialized: ${isInit ? 'Yes' : 'No'}\nReady: ${isReady ? 'Yes' : 'No'}\nSelected Model: ${sub.data.model_id ?? 'None'}\nllama-server: ${sub.data.llama_server_exists ? 'Found' : 'Missing'}`;
+        if (runtimeIncompatible) {
+          const needBuild = sub.data.required_runtime_build;
+          const haveBuild = sub.data.runtime_build;
+          detailsText += `\nRuntime: outdated (have build ${haveBuild ?? '?'}, need ${needBuild ?? '?'}+)`;
+          recoveryTriggers.push('outdated_runtime');
+        }
         if (!sub.data.llama_server_exists) {
           recoveryTriggers.push('missing_llama_server');
         }
-        if (!isInit && sub.data.llama_server_exists && !sub.data.model_exists) {
+        // Only prompt to download the model when the runtime is actually usable —
+        // otherwise "download the model" misdiagnoses a runtime problem.
+        if (!isInit && sub.data.llama_server_exists && !runtimeIncompatible && !sub.data.model_exists) {
           recoveryTriggers.push('missing_model');
         }
       } else if (sub.id === 'tts') {
@@ -4536,15 +5422,21 @@ async function refreshDoctor(refreshAudio = false) {
       
       if (uniqueTriggers.length > 0) {
         doctorRecoveryPanel.classList.remove('hidden');
+        // Client-side recovery guidance for triggers the backend doesn't supply
+        // text for (e.g. an outdated llama-server runtime).
+        const clientRecovery = {
+          outdated_runtime: 'Your llama-server binary is too old to run the selected model. Update llama-server (Models screen → re-run the runtime setup, or rebuild it) to a build that meets the model\'s minimum.',
+        };
         for (const trigger of uniqueTriggers) {
-          const recommendation = doctor.recovery[trigger];
+          const recommendation = doctor.recovery[trigger] ?? clientRecovery[trigger];
           if (recommendation) {
             const item = document.createElement('div');
             item.className = 'recovery-item';
-            
+
             const labelMap = {
               missing_model: 'Model Download Needed',
               missing_llama_server: 'llama-server Required',
+              outdated_runtime: 'Runtime Update Needed',
               port_conflict: 'Port Conflict',
               microphone_unavailable: 'Microphone Not Found',
               unsupported_wayland_injection: 'Wayland Restriction',
@@ -4604,3 +5496,51 @@ bootstrap().catch((error) => {
   setBadgeState(transcriberStatusEl, 'offline', 'danger');
   setBadgeState(llmStatusEl, 'offline', 'danger');
 });
+
+// Floating-overlay appearance controls. These talk directly to the Electron main
+// process (window.betterFingers.*OverlayAppearance) and persist there, so they
+// work without the Python profile round-trip. In a plain browser (no Electron
+// bridge) the whole group is hidden.
+function initOverlayAppearanceControls() {
+  const bridge = window.betterFingers;
+  const group = document.getElementById('overlayAppearanceGroup');
+  if (!bridge?.getOverlayAppearance || !bridge?.setOverlayAppearance) {
+    if (group) group.style.display = 'none';
+    return;
+  }
+  const sizeEl = document.getElementById('settingOverlaySize');
+  const placeEl = document.getElementById('settingOverlayPlacement');
+  const opacityEl = document.getElementById('settingOverlayOpacity');
+  const opacityValEl = document.getElementById('overlayOpacityValue');
+  const vibEl = document.getElementById('settingOverlayVibrancy');
+  const vibValEl = document.getElementById('overlayVibrancyValue');
+  const labelPosEl = document.getElementById('settingOverlayLabelPos');
+  const alwaysOnEl = document.getElementById('settingOverlayAlwaysOn');
+  if (!sizeEl || !placeEl || !opacityEl || !vibEl || !labelPosEl || !alwaysOnEl) return;
+
+  const pct = (v) => `${Math.round(Number(v) * 100)}%`;
+
+  bridge.getOverlayAppearance().then((a) => {
+    if (!a) return;
+    sizeEl.value = a.size ?? 'medium';
+    placeEl.value = a.placement ?? 'bottom-right';
+    opacityEl.value = String(a.opacity ?? 1);
+    if (opacityValEl) opacityValEl.textContent = pct(a.opacity ?? 1);
+    vibEl.value = String(a.vibrancy ?? 1);
+    if (vibValEl) vibValEl.textContent = pct(a.vibrancy ?? 1);
+    labelPosEl.value = a.labelPos ?? 'hidden';
+    alwaysOnEl.checked = Boolean(a.alwaysOn);
+  }).catch(() => {});
+
+  const push = (patch) => { bridge.setOverlayAppearance(patch).catch(() => {}); };
+  sizeEl.addEventListener('change', () => push({ size: sizeEl.value }));
+  placeEl.addEventListener('change', () => push({ placement: placeEl.value }));
+  opacityEl.addEventListener('input', () => { if (opacityValEl) opacityValEl.textContent = pct(opacityEl.value); });
+  opacityEl.addEventListener('change', () => push({ opacity: Number(opacityEl.value) }));
+  vibEl.addEventListener('input', () => { if (vibValEl) vibValEl.textContent = pct(vibEl.value); });
+  vibEl.addEventListener('change', () => push({ vibrancy: Number(vibEl.value) }));
+  labelPosEl.addEventListener('change', () => push({ labelPos: labelPosEl.value }));
+  alwaysOnEl.addEventListener('change', () => push({ alwaysOn: alwaysOnEl.checked }));
+}
+
+initOverlayAppearanceControls();

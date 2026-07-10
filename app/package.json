@@ -24,6 +24,7 @@
   "build": {
     "appId": "com.betterfingers.desktop",
     "productName": "BetterFingers",
+    "icon": "build/icon.png",
     "asar": true,
     "asarUnpack": [
       "**/node_modules/uiohook-napi/**"

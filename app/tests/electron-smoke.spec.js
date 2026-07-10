@@ -74,7 +74,7 @@ test.describe('BetterFingers Electron App Tests', () => {
   });
 
   test('Launches and shows main dashboard header', async () => {
-    await expect(window.locator('text=Backend Status Dashboard')).toBeVisible();
+    await expect(window.locator('.hero h1')).toHaveText('BetterFingers');
     await expect(window.locator('#backendStatus')).toBeVisible();
   });
 
@@ -119,6 +119,24 @@ test.describe('BetterFingers Electron App Tests', () => {
     await expect(window.locator('.settings-section[data-section="general"]')).toHaveClass(/hidden/);
   });
 
+  test('Persona Foundry opens, starts an interview, and closes cleanly', async () => {
+    await window.click('#tabButtonSettings');
+    await window.click('.settings-nav-button[data-section="ai-cleanup"]');
+
+    const openButton = window.locator('#openFoundryButton');
+    await expect(openButton).toBeVisible();
+    await openButton.click();
+
+    const overlay = window.locator('#foundryOverlay');
+    await expect(overlay).toBeVisible();
+    // First question (role) loads via a real interview/start round-trip —
+    // no LLM call is involved (deterministic interview engine).
+    await expect(window.locator('#foundryChatLog .foundry-bubble.question').first()).toBeVisible({ timeout: 10000 });
+
+    await window.click('#foundryCloseButton');
+    await expect(overlay).not.toBeVisible();
+  });
+
   test('Search filters rows', async () => {
     await window.click('#tabButtonSettings');
     const searchInput = window.locator('#settingsSearchInput');
@@ -145,16 +163,16 @@ test.describe('BetterFingers Electron App Tests', () => {
 
   test('Invalid token limit blocks save', async () => {
     await window.click('#tabButtonSettings');
-    
-    // Go to AI Cleanup section where Output Token Limit is located
+
+    // Go to AI Cleanup section where Max Completion Tokens is located
     await window.click('.settings-nav-button[data-section="ai-cleanup"]');
-    
-    const tokenLimitInput = window.locator('#settingOutputTokenLimit');
+
+    const tokenLimitInput = window.locator('#settingMaxCompletionTokens');
     await expect(tokenLimitInput).toBeVisible();
 
-    // Fill with invalid value (allowed range: 900 - 1200)
-    await tokenLimitInput.fill('800');
-    
+    // Fill with invalid value (allowed range: 512 - 4096)
+    await tokenLimitInput.fill('100');
+
     // Check that Save button is disabled
     const saveButton = window.locator('#saveProfileButton');
     await expect(saveButton).toBeDisabled();
@@ -195,8 +213,8 @@ test.describe('BetterFingers Electron App Tests', () => {
     await window.click('#tabButtonSettings');
     await window.click('.settings-nav-button[data-section="ai-cleanup"]');
 
-    const tokenLimitInput = window.locator('#settingOutputTokenLimit');
-    
+    const tokenLimitInput = window.locator('#settingMaxCompletionTokens');
+
     // Make a change
     await tokenLimitInput.fill('1050');
 

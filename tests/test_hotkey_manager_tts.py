@@ -112,5 +112,116 @@ class HotkeyManagerTTSTests(unittest.TestCase):
             start_mock.assert_called_once()
 
 
+class HotkeyManagerWatchdogTests(unittest.TestCase):
+    @staticmethod
+    def _config(max_recording_seconds=None):
+        config = {
+            "hotkey": "f8",
+            "force_stop_key": "",
+            "manual_send_hotkey": "",
+            "review_tts_hotkey": "ctrl+shift+space",
+            "recording_mode": "toggle",
+            "controller_enabled": False,
+            "controller_binding": {
+                "style": "single",
+                "events": ["button:4"],
+                "sequence_window_ms": 400,
+                "axis_threshold": 0.6,
+                "device_scope": "any_device",
+            },
+        }
+        if max_recording_seconds is not None:
+            config["max_recording_seconds"] = max_recording_seconds
+        return config
+
+    @patch("hotkey_manager.load_profile")
+    def test_defaults_to_120_seconds(self, load_profile):
+        load_profile.return_value = self._config()
+        manager = HotkeyManager(
+            recorder=_DummyRecorder(),
+            on_recording_complete_callback=lambda _result: None,
+            on_recording_start_callback=lambda: None,
+        )
+        self.assertEqual(manager.max_recording_seconds, 120.0)
+
+    @patch("hotkey_manager.load_profile")
+    def test_clamps_to_valid_range(self, load_profile):
+        load_profile.return_value = self._config(max_recording_seconds=1)
+        manager = HotkeyManager(
+            recorder=_DummyRecorder(),
+            on_recording_complete_callback=lambda _result: None,
+            on_recording_start_callback=lambda: None,
+        )
+        self.assertEqual(manager.max_recording_seconds, 5.0)
+
+        load_profile.return_value = self._config(max_recording_seconds=5000)
+        manager = HotkeyManager(
+            recorder=_DummyRecorder(),
+            on_recording_complete_callback=lambda _result: None,
+            on_recording_start_callback=lambda: None,
+        )
+        self.assertEqual(manager.max_recording_seconds, 1800.0)
+
+    @patch("hotkey_manager.load_profile")
+    def test_start_recording_arms_watchdog_timer(self, load_profile):
+        load_profile.return_value = self._config(max_recording_seconds=120)
+        manager = HotkeyManager(
+            recorder=_DummyRecorder(),
+            on_recording_complete_callback=lambda _result: None,
+            on_recording_start_callback=lambda: None,
+        )
+        manager._start_recording(reason="manual")
+        self.assertIsNotNone(manager._watchdog_timer)
+        manager._stop_recording(reason="manual")
+
+    @patch("hotkey_manager.load_profile")
+    def test_normal_stop_cancels_watchdog(self, load_profile):
+        load_profile.return_value = self._config(max_recording_seconds=120)
+        manager = HotkeyManager(
+            recorder=_DummyRecorder(),
+            on_recording_complete_callback=lambda _result: None,
+            on_recording_start_callback=lambda: None,
+        )
+        manager._start_recording(reason="manual")
+        manager._stop_recording(reason="manual")
+        self.assertIsNone(manager._watchdog_timer)
+
+    @patch("hotkey_manager.load_profile")
+    def test_watchdog_fire_force_stops_and_calls_callback(self, load_profile):
+        load_profile.return_value = self._config(max_recording_seconds=120)
+        completed = []
+        warnings = {"count": 0}
+
+        manager = HotkeyManager(
+            recorder=_DummyRecorder(),
+            on_recording_complete_callback=lambda result: completed.append(result),
+            on_recording_start_callback=lambda: None,
+            on_watchdog_timeout_callback=lambda: warnings.__setitem__("count", warnings["count"] + 1),
+        )
+        manager._start_recording(reason="manual")
+        manager._watchdog_fire()
+
+        self.assertFalse(manager.is_recording)
+        self.assertEqual(manager.last_stop_reason, "watchdog_timeout")
+        self.assertEqual(warnings["count"], 1)
+        self.assertEqual(len(completed), 1)
+
+    @patch("hotkey_manager.load_profile")
+    def test_watchdog_fire_is_noop_if_already_stopped(self, load_profile):
+        load_profile.return_value = self._config(max_recording_seconds=120)
+        completed = []
+
+        manager = HotkeyManager(
+            recorder=_DummyRecorder(),
+            on_recording_complete_callback=lambda result: completed.append(result),
+            on_recording_start_callback=lambda: None,
+        )
+        manager._start_recording(reason="manual")
+        manager._stop_recording(reason="manual")
+        manager._watchdog_fire()
+
+        self.assertEqual(len(completed), 1)  # only the manual stop, watchdog was a no-op
+
+
 if __name__ == "__main__":
     unittest.main()

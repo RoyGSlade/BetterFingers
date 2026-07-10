@@ -52,7 +52,11 @@ class PersonaRoutesTests(unittest.TestCase):
                 data = got.json()
                 self.assertEqual(data["prompt"], "Clean it.")
                 self.assertIsNone(data["temperature"])
-                self.assertEqual(data["voice"], {"base": "", "blend": "", "speed": 1.0})
+                self.assertEqual(data["voice"], {
+                    "preset": "", "base": "", "blend": {}, "speed": 1.0, "pitch": 0.0,
+                    "energy": 0.5, "warmth": 0.0, "brightness": 0.0,
+                    "pause_style": "natural", "stability": 0.5,
+                })
 
     def test_rich_post_round_trips_through_get(self):
         with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(

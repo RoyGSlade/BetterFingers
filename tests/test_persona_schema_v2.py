@@ -13,7 +13,11 @@ class NormalizePersonaTests(unittest.TestCase):
         self.assertEqual(entry["prompt"], "Rewrite only.")
         self.assertIsNone(entry["temperature"])
         self.assertEqual(entry["few_shot"], [])
-        self.assertEqual(entry["voice"], {"base": "", "blend": "", "speed": 1.0})
+        self.assertEqual(entry["voice"], {
+            "preset": "", "base": "", "blend": {}, "speed": 1.0, "pitch": 0.0,
+            "energy": 0.5, "warmth": 0.0, "brightness": 0.0,
+            "pause_style": "natural", "stability": 0.5,
+        })
         self.assertEqual(entry["format"], {"caps": "none", "punctuation": True, "signoff": ""})
         self.assertEqual(entry["dictionary_scope"], "global")
         self.assertEqual(entry["model_hint"], "")
@@ -48,6 +52,60 @@ class NormalizePersonaTests(unittest.TestCase):
 
     def test_bad_temperature_becomes_none(self):
         self.assertIsNone(llm_engine.normalize_persona({"prompt": "P", "temperature": "hot"})["temperature"])
+
+
+class VoiceSubSchemaTests(unittest.TestCase):
+    def test_dict_blend_round_trips(self):
+        entry = llm_engine.normalize_persona({
+            "prompt": "P", "voice": {"base": "af_heart", "blend": {"am_adam": 0.2}},
+        })
+        self.assertEqual(entry["voice"]["blend"], {"am_adam": 0.2})
+        self.assertEqual(entry["voice"]["base"], "af_heart")
+
+    def test_legacy_string_blend_migrates_to_empty_dict(self):
+        # The legacy schema's bare string was never wired to real playback,
+        # so there's no reliable voice name to preserve — safer to discard.
+        entry = llm_engine.normalize_persona({"prompt": "P", "voice": {"blend": "af_bella"}})
+        self.assertEqual(entry["voice"]["blend"], {})
+
+    def test_invalid_blend_entries_dropped(self):
+        entry = llm_engine.normalize_persona({
+            "prompt": "P",
+            "voice": {"blend": {"am_adam": "0.3", "bad": "nope", "negative": -1, "": 0.5, "zero": 0}},
+        })
+        self.assertEqual(entry["voice"]["blend"], {"am_adam": 0.3})
+
+    def test_modulation_fields_coerced_with_defaults(self):
+        entry = llm_engine.normalize_persona({
+            "prompt": "P",
+            "voice": {"pitch": "2", "energy": "0.9", "warmth": "bad", "pause_style": "dramatic"},
+        })
+        self.assertEqual(entry["voice"]["pitch"], 2.0)
+        self.assertEqual(entry["voice"]["energy"], 0.9)
+        self.assertEqual(entry["voice"]["warmth"], 0.0)  # bad value -> default
+        self.assertEqual(entry["voice"]["pause_style"], "dramatic")
+        self.assertEqual(entry["voice"]["brightness"], 0.0)  # unset -> default
+
+    def test_stability_is_stored_only(self):
+        # No runtime effect (see voice_modulation.py) — just confirm it
+        # round-trips like any other stored field.
+        entry = llm_engine.normalize_persona({"prompt": "P", "voice": {"stability": 0.8}})
+        self.assertEqual(entry["voice"]["stability"], 0.8)
+
+    def test_preset_field_stored_as_authored_string(self):
+        entry = llm_engine.normalize_persona({"prompt": "P", "voice": {"preset": "Warm Assistant"}})
+        self.assertEqual(entry["voice"]["preset"], "Warm Assistant")
+
+    def test_base_not_alias_resolved_at_normalize_time(self):
+        # Alias resolution (e.g. "english" -> "af_heart") happens at
+        # consumption time in tts_engine._resolve_voice_spec, not here.
+        entry = llm_engine.normalize_persona({"prompt": "P", "voice": {"base": "english"}})
+        self.assertEqual(entry["voice"]["base"], "english")
+
+    def test_non_dict_voice_falls_back_to_full_default(self):
+        entry = llm_engine.normalize_persona({"prompt": "P", "voice": "not a dict"})
+        self.assertEqual(entry["voice"]["blend"], {})
+        self.assertEqual(entry["voice"]["base"], "")
 
 
 class ValidatePersonaTests(unittest.TestCase):
@@ -191,6 +249,77 @@ class GetPersonaCopyTests(_TempAppdataMixin, unittest.TestCase):
 
         fresh = llm_engine.get_persona("Mutable2")
         self.assertEqual(len(fresh["few_shot"]), 1)
+
+
+class PersonaCardTests(unittest.TestCase):
+    def test_default_persona_has_empty_card(self):
+        entry = llm_engine.default_persona("P")
+        self.assertEqual(entry["persona_card"], llm_engine.default_persona_card())
+
+    def test_legacy_string_and_none_get_empty_card(self):
+        self.assertEqual(llm_engine.normalize_persona("Rewrite only.")["persona_card"]["reliability_score"], 0)
+        self.assertEqual(llm_engine.normalize_persona(None)["persona_card"], llm_engine.default_persona_card())
+
+    def test_full_card_round_trips_and_coerces(self):
+        raw = {
+            "prompt": "P",
+            "persona_card": {
+                "display_name": "Vivian Glass",
+                "archetype": "executive editor",
+                "temperament": ["precise", "dry", 7, None],
+                "favorite_phrases": ["Cut the hedging."],
+                "forbidden": ["do not apologize"],
+                "signature_moves": ["tighten verbs"],
+                "best_use_cases": ["email", "proposals"],
+                "anti_examples": ["sounds fake if too warm"],
+                "eval_cases": [{"category": "angry", "input": "ugh", "output": "Understood.", "verdict": "approved"}, "junk"],
+                "reliability_score": "85",
+            },
+        }
+        entry = llm_engine.normalize_persona(raw)
+        card = entry["persona_card"]
+        self.assertEqual(card["display_name"], "Vivian Glass")
+        self.assertEqual(card["archetype"], "executive editor")
+        self.assertEqual(card["temperament"], ["precise", "dry", "7"])
+        self.assertEqual(card["favorite_phrases"], ["Cut the hedging."])
+        self.assertEqual(len(card["eval_cases"]), 1)
+        self.assertEqual(card["eval_cases"][0]["category"], "angry")
+        self.assertEqual(card["reliability_score"], 85)
+
+    def test_malformed_card_is_defensive(self):
+        self.assertEqual(llm_engine.normalize_persona({"prompt": "P", "persona_card": "junk"})["persona_card"], llm_engine.default_persona_card())
+        self.assertEqual(llm_engine.normalize_persona({"prompt": "P", "persona_card": {"reliability_score": "not a number"}})["persona_card"]["reliability_score"], 0)
+        self.assertEqual(llm_engine.normalize_persona({"prompt": "P", "persona_card": {"reliability_score": 999}})["persona_card"]["reliability_score"], 100)
+
+    def test_validate_rejects_non_dict_card_only_when_present(self):
+        ok, _ = llm_engine.validate_persona({"prompt": "P"})
+        self.assertTrue(ok)
+        entry = llm_engine.normalize_persona({"prompt": "P"})
+        entry["persona_card"] = "not a dict"
+        ok, msg = llm_engine.validate_persona(entry)
+        self.assertFalse(ok)
+        self.assertIn("persona_card", msg.lower())
+
+
+class ReliabilityScoreTests(unittest.TestCase):
+    def test_base_score_with_no_examples_and_a_contradiction(self):
+        self.assertEqual(llm_engine.compute_reliability_score({}, num_examples=0, had_contradiction=True), 40)
+
+    def test_examples_cap_at_three(self):
+        self.assertEqual(llm_engine.compute_reliability_score({}, num_examples=3, had_contradiction=True), 70)
+        self.assertEqual(llm_engine.compute_reliability_score({}, num_examples=10, had_contradiction=True), 70)
+
+    def test_no_contradiction_bonus(self):
+        self.assertEqual(llm_engine.compute_reliability_score({}, num_examples=0, had_contradiction=False), 50)
+
+    def test_stress_approval_ratio_contributes_up_to_twenty(self):
+        full = llm_engine.compute_reliability_score({}, num_examples=3, had_contradiction=False, stress_approval_ratio=1.0)
+        self.assertEqual(full, 100)
+        half = llm_engine.compute_reliability_score({}, num_examples=0, had_contradiction=True, stress_approval_ratio=0.5)
+        self.assertEqual(half, 50)
+
+    def test_score_clamped_to_0_100(self):
+        self.assertEqual(llm_engine.compute_reliability_score({}, num_examples=-5, had_contradiction=True), 40)
 
 
 class DeleteV2Tests(_TempAppdataMixin, unittest.TestCase):

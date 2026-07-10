@@ -4,9 +4,7 @@
     <meta charset="UTF-8" />
     <title>BetterFingers Overlay</title>
     <style>
-      * {
-        box-sizing: border-box;
-      }
+      * { box-sizing: border-box; }
       body {
         margin: 0;
         padding: 0;
@@ -15,129 +13,130 @@
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         user-select: none;
       }
-      .overlay-container {
+      /* Just the glitch circle (its background is a circular disc drawn in-canvas,
+         not a box). The whole window is the drag handle. */
+      .overlay-wrap {
+        position: relative;
         display: flex;
         align-items: center;
-        gap: 12px;
-        padding: 8px 16px;
-        background: rgba(13, 17, 31, 0.85);
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-        border: 1px solid rgba(20, 184, 166, 0.35);
-        border-radius: 20px;
-        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
-        color: #f5f5f5;
+        justify-content: center;
+        gap: 8px;
         width: 100vw;
         height: 100vh;
         -webkit-app-region: drag;
       }
-      .overlay-container.success {
-        border-color: rgba(102, 242, 193, 0.45);
-      }
-      .overlay-container.warning {
-        border-color: rgba(251, 191, 36, 0.55);
-      }
-      .overlay-container.danger {
-        border-color: rgba(255, 124, 135, 0.55);
-      }
-      .dot {
-        width: 14px;
-        height: 14px;
-        border-radius: 50%;
-        background-color: #9ca3af;
+      .overlay-wrap.pos-beside { flex-direction: row; }
+      .overlay-wrap.pos-above { flex-direction: column-reverse; gap: 2px; }
+      .overlay-wrap.pos-below { flex-direction: column; gap: 2px; }
+      .status-ring {
         flex-shrink: 0;
-      }
-      .dot.recording {
-        background-color: #ff3b30;
-        animation: pulse 1.2s infinite alternate;
-        box-shadow: 0 0 10px #ff3b30;
-      }
-      .dot.processing {
-        background-color: transparent;
-        border: 2px dashed #fbbf24;
-        animation: spin 1s infinite linear;
-      }
-      .dot.success {
-        background-color: #66f2c1;
-        box-shadow: 0 0 10px rgba(102, 242, 193, 0.65);
-      }
-      .dot.warning {
-        background-color: #fbbf24;
-        box-shadow: 0 0 10px rgba(251, 191, 36, 0.6);
-      }
-      .dot.danger {
-        background-color: #ff7c87;
-        box-shadow: 0 0 10px rgba(255, 124, 135, 0.62);
+        display: block;
+        /* width/height set inline from the size setting */
       }
       .status-text {
         font-size: 13px;
         font-weight: 600;
-        letter-spacing: 0;
+        color: #f5f5f5;
         white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        /* Readable while floating over arbitrary desktop content, no box needed. */
+        text-shadow: 0 1px 5px rgba(0, 0, 0, 0.95), 0 0 3px rgba(0, 0, 0, 0.9);
       }
-      @keyframes pulse {
-        0% { transform: scale(0.85); opacity: 0.6; }
-        100% { transform: scale(1.15); opacity: 1; }
+      /* "Across the centre" — overlay the label on top of the ring's middle. */
+      .overlay-wrap.pos-center .status-text {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        text-align: center;
       }
-      @keyframes spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
-      }
+      .status-text.hidden { display: none; }
     </style>
   </head>
   <body>
-    <div class="overlay-container">
-      <div id="statusDot" class="dot"></div>
-      <div id="statusText" class="status-text">Ready</div>
+    <div class="overlay-wrap" id="overlayWrap">
+      <canvas id="statusRing" class="status-ring" width="70" height="70" style="width: 70px; height: 70px;"></canvas>
+      <div id="statusText" class="status-text hidden">Ready</div>
     </div>
 
-    <script>
-      // Listen for IPC messages to update status
+    <script type="module">
+      import { createGlitchRing } from './glitch-ring.js';
+
+      const wrap = document.getElementById('overlayWrap');
+      const canvas = document.getElementById('statusRing');
+      const textEl = document.getElementById('statusText');
+      const ring = createGlitchRing(canvas, { state: 'idle', compact: false, theme: 'cobalt' });
+
+      const SIZE_PX = { small: 46, medium: 70, large: 108, xlarge: 150 };
+      const POSITIONS = new Set(['beside', 'above', 'below', 'center']);
+
+      // Apply the user's overlay appearance (ring size, vibrancy, label position).
+      // Window geometry (placement/opacity/bounds) is handled by the main process.
+      function applyAppearance(a) {
+        const px = SIZE_PX[a?.size] || SIZE_PX.medium;
+        canvas.style.width = px + 'px';
+        canvas.style.height = px + 'px';
+        ring.setCompact(px < 60);
+        ring.setVibrancy(typeof a?.vibrancy === 'number' ? a.vibrancy : 1);
+        const pos = POSITIONS.has(a?.labelPos) ? a.labelPos : 'hidden';
+        wrap.className = 'overlay-wrap' + (pos !== 'hidden' ? ' pos-' + pos : '');
+        textEl.classList.toggle('hidden', pos === 'hidden');
+      }
+
+      // Map an IPC status payload to { ring state, text }.
+      function interpret(status, payload) {
+        switch (status) {
+          case 'recording_started':
+          case 'recording':
+            return { ring: 'recording', text: 'Recording...' };
+          case 'listening':
+          case 'recording_armed':
+            return { ring: 'listening', text: payload.message || 'Listening...' };
+          case 'transcribing':
+          case 'rewriting':
+          case 'processing':
+            return { ring: 'transcribing', text: 'Processing...' };
+          case 'long_recording_detected':
+          case 'chunking_started':
+          case 'chunking_progress':
+            return { ring: 'transcribing', text: payload.message || 'Processing...' };
+          case 'chunking_stitching':
+            return { ring: 'stitching', text: payload.message || 'Stitching...' };
+          case 'preview_ready':
+            return { ring: 'ready', text: payload.message || 'Draft ready' };
+          case 'draft_sent':
+            return payload.fallback
+              ? { ring: 'warning', text: payload.message || 'Copied as fallback' }
+              : { ring: 'ready', text: payload.message || 'Sent' };
+          case 'selection_captured':
+            return { ring: 'ready', text: payload.message || 'Selection captured' };
+          case 'emergency_stop':
+            return { ring: 'warning', text: payload.message || 'Stopped' };
+          case 'draft_blocked':
+          case 'draft_error':
+          case 'draft_send_error':
+          case 'selection_capture_failed':
+            return { ring: 'error', text: payload.message || 'Needs attention' };
+          default:
+            return { ring: 'idle', text: status };
+        }
+      }
+
       window.betterFingersOverlay?.onStatusUpdate((update) => {
         const payload = typeof update === 'string' ? { status: update } : (update || {});
         const status = payload.status || 'unknown';
-        const dot = document.getElementById('statusDot');
-        const text = document.getElementById('statusText');
-        const container = document.querySelector('.overlay-container');
-        
-        dot.className = 'dot';
-        container.className = 'overlay-container';
-        if (status === 'recording_started' || status === 'recording') {
-          dot.classList.add('recording');
-          text.textContent = 'Recording...';
-        } else if (status === 'transcribing' || status === 'rewriting' || status === 'processing') {
-          dot.classList.add('processing');
-          text.textContent = 'Processing...';
-        } else if (status === 'long_recording_detected' || status === 'chunking_started' || status === 'chunking_progress' || status === 'chunking_stitching') {
-          dot.classList.add('processing');
-          text.textContent = payload.message || 'Processing long recording...';
-        } else if (status === 'preview_ready') {
-          dot.classList.add('success');
-          container.classList.add('success');
-          text.textContent = payload.message || 'Draft ready';
-        } else if (status === 'draft_sent') {
-          const tone = payload.fallback ? 'warning' : 'success';
-          dot.classList.add(tone);
-          container.classList.add(tone);
-          text.textContent = payload.message || (payload.fallback ? 'Copied as fallback' : 'Sent');
-        } else if (status === 'draft_blocked' || status === 'draft_error' || status === 'draft_send_error' || status === 'selection_capture_failed') {
-          dot.classList.add('danger');
-          container.classList.add('danger');
-          text.textContent = payload.message || 'Needs attention';
-        } else if (status === 'selection_captured') {
-          dot.classList.add('success');
-          container.classList.add('success');
-          text.textContent = payload.message || 'Selection captured';
-        } else if (status === 'emergency_stop') {
-          dot.classList.add('warning');
-          container.classList.add('warning');
-          text.textContent = payload.message || 'Stopped';
+        const { ring: ringState, text: label } = interpret(status, payload);
+        ring.setState(ringState);
+        textEl.textContent = label;
+        // Live mic RMS (when the backend includes it) pulses the ring + wave.
+        if (status === 'recording' && typeof payload.amplitude === 'number') {
+          ring.setAmplitude(payload.amplitude);
         } else {
-          text.textContent = status;
+          ring.setAmplitude(null);
         }
       });
+
+      // Appearance pushed by the main process on load and whenever settings change.
+      window.betterFingersOverlay?.onAppearance?.((a) => applyAppearance(a));
     </script>
   </body>
 </html>

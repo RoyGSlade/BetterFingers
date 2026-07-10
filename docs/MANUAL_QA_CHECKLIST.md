@@ -1,8 +1,8 @@
 # Manual QA checklist
 
 Manual verification steps for every feature shipped during the MASTER_PLAN
-loop. The automated suites — `python3 -m pytest` (307 tests, pure logic) and
-`cd app && npx playwright test` (19 e2e tests: dashboard walk, settings
+loop. The automated suites — `python3 -m pytest` (361+ tests, pure logic) and
+`cd app && npx playwright test` (19+ e2e tests: dashboard walk, settings
 dirty-state, review overlay flows) — cover a lot of ground now; this checklist
 covers what still needs **human senses** (ears for audio, a real mic, real
 target apps for injection) or judgment.
@@ -90,6 +90,50 @@ files involved so a failure is easy to trace.
   clear (no stale data left visible for the next persona created).
 - ☐ On disk, `personas.yaml` now has `schema_version: 2` and nested dicts.
   _Files: `llm_engine.py`, `server.py` `/personas*`, `app/src/renderer/*`._
+
+## Persona Foundry — guided interview builder (docs/PERSONA_FOUNDRY_PLAN.md)
+
+- ☐ Settings → AI Cleanup → **"🔨 Build with AI (Persona Foundry)"** opens a
+  modal (separate from the manual wizard below it) with the first question
+  ("What is this persona for?").
+- ☐ Type a vague one-word answer (e.g. "good") → get pushed back once
+  ("Too vague...") on the *same* question; answer again (even vaguely) →
+  it's accepted and the interview advances.
+- ☐ Walk through the 6 character questions, then the 6 contract questions
+  (scope/length/expand/tone/profanity/safety) — choice questions render as
+  quick-select buttons, text questions as a textbox + Send.
+- ☐ Deliberately pick **"expand ideas"** and **"preserve the original
+  length"** → after the last contract question, get pushed back with the
+  contradiction called out by name; picking a different length resolves it
+  and moves on (picking the same value again is accepted — only one re-ask).
+- ☐ Examples screen: "Continue" is rejected until 3 raw/desired pairs are
+  added; each pair appears in the list immediately.
+- ☐ Anti-examples screen: same pattern, minimum 1.
+- ☐ After the last anti-example + Continue, the modal compiles (spinner/
+  message while `POST /personas/compile` runs) and lands on the **stress
+  test** screen.
+- ☐ Click **"Run stress test"** → 7 category cards appear (rambling, angry,
+  short command, embedded question, sensitive text, long paragraph, weird
+  slang), each with the generated input and an editable output textarea +
+  Approve/Reject buttons.
+- ☐ Click **"Continue to character card"** → review screen shows a stylized
+  name, archetype, temperament/signature-moves/favorite-phrases/forbidden/
+  best-use-cases, and a reliability score badge; the persona name field is
+  pre-filled and editable; the compiled prompt is visible (read-only) in a
+  collapsible section.
+- ☐ Click **Save Persona** → success toast, modal closes, and the new
+  persona appears in every persona dropdown (manual wizard, profile
+  settings) without a page reload.
+- ☐ Re-open the saved persona in the **manual** wizard (`GET /personas/{name}`)
+  → its `persona_card` (character-card data) is present on disk / via the API
+  even though the manual wizard UI doesn't render it.
+- ☐ Actually dictate something and select the Foundry-built persona as the
+  active preset → the rewrite reflects its compiled prompt/temperature/
+  few-shot examples.
+  _Files: `llm_engine.py` (`foundry_*`, `compile_foundry_persona`,
+  `*_stress_*`), `server.py` (`/personas/interview/*`, `/personas/compile`,
+  `/personas/test-suite/run`), `app/src/renderer/{index.html,main.js,
+  styles/base.css,api/backend.js}`._
 
 ## Dictation pipeline add-ons (C1, C2, C4, C11)
 
@@ -192,7 +236,7 @@ verify the human-perceivable parts once:
 
 ## Regression sanity (every session)
 
-- ☐ `python3 -m pytest -q` → 307+ passing.
+- ☐ `python3 -m pytest -q` → 361+ passing.
 - ☐ `cd app && npx playwright test` → 19+ passing (needs a local LLM model +
   llama-server on disk for the review-overlay spec; close any running
   BetterFingers instance first — it holds the Electron single-instance lock).

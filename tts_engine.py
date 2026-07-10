@@ -6,12 +6,14 @@ import queue
 import re
 import sys
 import threading
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 import sounddevice as sd
 from utils import get_user_data_path
-from tts_text import normalize_for_speech
+from tts_text import apply_pause_style, normalize_for_speech
+import voice_blend
+import voice_modulation
 
 # Regex-based pronunciation fixes
 _PRONUNCIATION_MAP = {
@@ -21,6 +23,37 @@ _PRONUNCIATION_MAP = {
     r"\bLLM\b": "L L M",
     r"\bTTS\b": "T T S",
 }
+
+
+def _blend_signature(blend: Optional[dict]) -> tuple:
+    """Deterministic, hashable summary of a blend dict for cache keys."""
+    if not blend:
+        return ()
+    parts = []
+    for k, v in blend.items():
+        try:
+            parts.append((str(k), round(float(v), 4)))
+        except (TypeError, ValueError):
+            parts.append((str(k), 0.0))
+    return tuple(sorted(parts))
+
+
+def _modulation_signature(modulation: Optional[dict]) -> tuple:
+    """Deterministic, hashable summary of a modulation dict for cache keys."""
+    if not modulation:
+        return ()
+    keys = ("pitch", "energy", "warmth", "brightness", "pause_style")
+    parts = []
+    for key in keys:
+        value = modulation.get(key)
+        if key == "pause_style":
+            parts.append(str(value or ""))
+        else:
+            try:
+                parts.append(round(float(value), 3) if value is not None else 0.0)
+            except (TypeError, ValueError):
+                parts.append(0.0)
+    return tuple(parts)
 
 
 class ReviewTTSEngine:
@@ -170,7 +203,14 @@ class ReviewTTSEngine:
                 "message": self._status_message,
             }
 
-    def speak(self, text: str, speed: float = 1.5, voice_hint: str = "english") -> Dict[str, object]:
+    def speak(
+        self,
+        text: str,
+        speed: float = 1.5,
+        voice_hint: str = "english",
+        blend: Optional[dict] = None,
+        modulation: Optional[dict] = None,
+    ) -> Dict[str, object]:
         phrase = (text or "").strip()
         if not phrase:
             return {
@@ -191,9 +231,12 @@ class ReviewTTSEngine:
             # 1b. Apply pronunciation fixes
             for pattern, replacement in _PRONUNCIATION_MAP.items():
                 text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+            # 1c. Bias punctuation-driven pause length (no-op for "natural").
+            if modulation:
+                text = apply_pause_style(text, modulation.get("pause_style"))
 
             # 2. Check Cache
-            cache_key = (text, speed, voice_hint)
+            cache_key = (text, speed, voice_hint, _blend_signature(blend), _modulation_signature(modulation))
             if cache_key in self._audio_cache:
                 logging.info("TTS Cache Hit")
                 audio, rate = self._audio_cache[cache_key]
@@ -228,6 +271,8 @@ class ReviewTTSEngine:
                 "text": phrase,
                 "speed": float(speed),
                 "voice_hint": (voice_hint or "english").strip() or "english",
+                "blend": blend or None,
+                "modulation": modulation or None,
             }
             try:
                 self._queue.put_nowait(payload)
@@ -322,6 +367,8 @@ class ReviewTTSEngine:
 
             speed = float(item.get("speed", 1.5))
             voice_hint = (item.get("voice_hint", "english") or "english").strip() or "english"
+            blend = item.get("blend") or None
+            modulation = item.get("modulation") or None
 
             try:
                 backend = self.backend()
@@ -341,7 +388,10 @@ class ReviewTTSEngine:
                         except Exception as e:
                             logging.warning(f"TTS on_start callback error: {e}")
                     try:
-                        self._speak_kokoro_chunked(text=text, speed=speed, voice_hint=voice_hint)
+                        self._speak_kokoro_chunked(
+                            text=text, speed=speed, voice_hint=voice_hint,
+                            blend=blend, modulation=modulation,
+                        )
                     finally:
                         if self.on_stop:
                             try:
@@ -600,63 +650,80 @@ class ReviewTTSEngine:
                 return voice
         return "af_heart"
 
-    def _speak_kokoro(self, text: str, speed: float, voice_hint: str):
+    def _resolve_voice_spec(self, base: str, blend: Optional[dict]) -> Union[str, np.ndarray]:
+        """Resolve a base voice hint + optional blend dict into either a
+        plain (alias-resolved) voice-id string, or a blended style tensor
+        ready to hand straight to kokoro-onnx's `create(voice=...)`.
+
+        Never raises: unknown blend voices are dropped (logged) and blending
+        silently falls back to the base voice alone when the ONNX voices
+        table isn't available (e.g. the native/SAPI backends don't support
+        raw tensor voices).
+        """
+        base_voice = self._resolve_kokoro_voice(base)
+        blend = blend or {}
+        if not blend:
+            return base_voice
+
+        if self._kokoro_runtime != "onnx" or self._kokoro_onnx is None:
+            logging.info(
+                "Voice blending requested but only supported on the ONNX backend; using base voice %r.",
+                base_voice,
+            )
+            return base_voice
+
+        names = [base_voice]
+        weights = [1.0]
+        for name, weight in blend.items():
+            resolved = self._resolve_kokoro_voice(name)
+            if not self._onnx_voice_exists(resolved):
+                logging.warning("Unknown blend voice %r (resolved %r); skipping.", name, resolved)
+                continue
+            try:
+                w = float(weight)
+            except (TypeError, ValueError):
+                continue
+            if w <= 0:
+                continue
+            names.append(resolved)
+            weights.append(w)
+
+        if len(names) < 2:
+            return base_voice
+
+        if not self._onnx_voice_exists(base_voice):
+            logging.warning("Base voice %r not found for blending; using first available voice.", base_voice)
+            return self._first_onnx_voice() or base_voice
+
+        try:
+            tensors = [self._kokoro_onnx.voices[name] for name in names]
+            blended = voice_blend.blend_many(tensors, weights=weights)
+        except Exception as exc:
+            logging.warning("Voice blend failed (%s); using base voice %r.", exc, base_voice)
+            return base_voice
+        return blended
+
+    def _speak_kokoro(
+        self,
+        text: str,
+        speed: float,
+        voice_hint: str,
+        voice_spec: Optional[Union[str, np.ndarray]] = None,
+        modulation: Optional[dict] = None,
+    ):
         try:
             import sounddevice as sd
         except Exception as exc:
             raise RuntimeError(f"sounddevice unavailable for Kokoro playback ({exc}).")
 
-        if self._kokoro_runtime == "native":
-            if self._kokoro_pipeline is None:
-                raise RuntimeError("Kokoro pipeline is not initialized.")
-
-            voice = self._resolve_kokoro_voice(voice_hint)
-            generated = self._kokoro_pipeline(text, voice=voice, speed=max(0.5, min(3.0, float(speed))))
-
-            chunks = []
-            for item in generated:
-                audio = None
-                if isinstance(item, tuple):
-                    if len(item) >= 3:
-                        audio = item[2]
-                    elif len(item) > 0:
-                        audio = item[-1]
-                else:
-                    audio = item
-                if audio is None:
-                    continue
-                arr = np.asarray(audio, dtype=np.float32).flatten()
-                if arr.size > 0:
-                    chunks.append(arr)
-
-            if not chunks:
-                raise RuntimeError("Kokoro generated no audio frames.")
-
-            merged = np.concatenate(chunks, axis=0)
-            sd.stop()
-            sd.play(merged, samplerate=24000, blocking=True)
-            return
-
-        if self._kokoro_runtime == "onnx":
-            if self._kokoro_onnx is None:
-                raise RuntimeError("kokoro-onnx engine is not initialized.")
-            voice = self._resolve_kokoro_voice(voice_hint)
-            if not self._onnx_voice_exists(voice):
-                voice = self._first_onnx_voice() or "af_heart"
-            audio, sample_rate = self._kokoro_onnx.create(
-                text=text,
-                voice=voice,
-                speed=max(0.5, min(2.0, float(speed))),
-                lang="en-us",
-            )
-            merged = np.asarray(audio, dtype=np.float32).flatten()
-            if merged.size == 0:
-                raise RuntimeError("kokoro-onnx generated no audio frames.")
-            sd.stop()
-            sd.play(merged, samplerate=int(sample_rate), blocking=True)
-            return
-
-        raise RuntimeError("Kokoro backend is not initialized.")
+        audio_tuple = self._generate_kokoro_audio(
+            text, speed, voice_hint, voice_spec=voice_spec, modulation=modulation,
+        )
+        if audio_tuple is None:
+            raise RuntimeError("Kokoro generated no audio frames.")
+        merged, sample_rate = audio_tuple
+        sd.stop()
+        sd.play(merged, samplerate=sample_rate, blocking=True)
 
     def _onnx_voice_exists(self, voice: str) -> bool:
         voices = getattr(self._kokoro_onnx, "voices", None)
@@ -861,33 +928,46 @@ class ReviewTTSEngine:
                 
         return saved_files
 
-    def _speak_kokoro_chunked(self, text: str, speed: float, voice_hint: str):
+    def _speak_kokoro_chunked(
+        self,
+        text: str,
+        speed: float,
+        voice_hint: str,
+        blend: Optional[dict] = None,
+        modulation: Optional[dict] = None,
+    ):
         """Speak text with concurrent generation and playback to avoid pauses between chunks."""
         chunks = self._split_text_for_tts(text=text, max_chars=self.MAX_KOKORO_TEXT_CHARS)
-        
+
         if not chunks:
             return
-            
+
+        # Resolve once (base + blend don't vary per chunk) and reuse for every chunk.
+        voice_spec = self._resolve_voice_spec(voice_hint, blend)
+
         if len(chunks) == 1:
             # Single chunk - no need for concurrent processing
-            self._speak_kokoro(text=chunks[0], speed=speed, voice_hint=voice_hint)
+            self._speak_kokoro(
+                text=chunks[0], speed=speed, voice_hint=voice_hint,
+                voice_spec=voice_spec, modulation=modulation,
+            )
             return
-            
+
         logging.debug("Chunking TTS input into %d segments for Kokoro playback.", len(chunks))
-        
+
         try:
             import sounddevice as sd
         except Exception as exc:
             raise RuntimeError(f"sounddevice unavailable for Kokoro playback ({exc}).")
-        
+
         # Use a queue to hold pre-generated audio chunks
         audio_queue = queue.Queue(maxsize=3)  # Buffer up to 3 chunks ahead
         generation_done = threading.Event()
         generation_error = [None]  # Use list to allow mutation in nested function
-        
+
         full_audio_buffer = []  # For caching
 
-        
+
         def generate_audio_chunks():
             """Background thread that generates audio chunks ahead of playback."""
             try:
@@ -895,7 +975,9 @@ class ReviewTTSEngine:
                     # Allow direct/manual invocations of _speak_kokoro_chunked outside worker loop.
                     if self._worker is not None and not self._worker_running:
                         break
-                    audio_data = self._generate_kokoro_audio(chunk_text, speed, voice_hint)
+                    audio_data = self._generate_kokoro_audio(
+                        chunk_text, speed, voice_hint, voice_spec=voice_spec, modulation=modulation,
+                    )
                     if audio_data is not None:
                         audio_queue.put(audio_data, timeout=30)
             except Exception as e:
@@ -950,7 +1032,8 @@ class ReviewTTSEngine:
                 if len(self._audio_cache) >= self._cache_max_size:
                     self._audio_cache.popitem(last=False)
                 # Store with the same key used in speak()
-                self._audio_cache[(text, speed, voice_hint)] = (final_audio, sample_rate)
+                cache_key = (text, speed, voice_hint, _blend_signature(blend), _modulation_signature(modulation))
+                self._audio_cache[cache_key] = (final_audio, sample_rate)
                 logging.debug("Cached audio for: %r", text)
             except Exception as e:
                 logging.warning(f"Failed to cache audio: {e}")
@@ -958,15 +1041,35 @@ class ReviewTTSEngine:
         if generation_error[0]:
             raise generation_error[0]
 
-    def _generate_kokoro_audio(self, text: str, speed: float, voice_hint: str):
-        """Generate audio for a single chunk without playing it. Returns (audio_array, sample_rate) or None."""
+    def _generate_kokoro_audio(
+        self,
+        text: str,
+        speed: float,
+        voice_hint: str,
+        voice_spec: Optional[Union[str, np.ndarray]] = None,
+        modulation: Optional[dict] = None,
+    ):
+        """Generate audio for a single chunk without playing it. Returns (audio_array, sample_rate) or None.
+
+        `voice_spec`, if given, is either a resolved voice-id string or a
+        blended style tensor (see `_resolve_voice_spec`) and takes priority
+        over `voice_hint`. `modulation`, if given, is applied to the
+        generated audio before it's returned (see voice_modulation.apply_modulation).
+        Both default to None so existing callers (e.g. `render_prepared_chunks`)
+        see identical behavior to before this parameter was added.
+        """
         if self._kokoro_runtime == "native":
             if self._kokoro_pipeline is None:
                 raise RuntimeError("Kokoro pipeline is not initialized.")
-            
-            voice = self._resolve_kokoro_voice(voice_hint)
+
+            if isinstance(voice_spec, np.ndarray):
+                # Native backend doesn't accept raw tensor voices; fall back
+                # to the (alias-resolved) base voice hint.
+                voice = self._resolve_kokoro_voice(voice_hint)
+            else:
+                voice = voice_spec if voice_spec else self._resolve_kokoro_voice(voice_hint)
             generated = self._kokoro_pipeline(text, voice=voice, speed=max(0.5, min(3.0, float(speed))))
-            
+
             audio_chunks = []
             for item in generated:
                 audio = None
@@ -982,19 +1085,23 @@ class ReviewTTSEngine:
                 arr = np.asarray(audio, dtype=np.float32).flatten()
                 if arr.size > 0:
                     audio_chunks.append(arr)
-            
+
             if not audio_chunks:
                 return None
-            
+
             merged = np.concatenate(audio_chunks, axis=0)
+            merged = voice_modulation.apply_modulation(merged, 24000, modulation)
             return (merged, 24000)
-        
+
         if self._kokoro_runtime == "onnx":
             if self._kokoro_onnx is None:
                 raise RuntimeError("kokoro-onnx engine is not initialized.")
-            voice = self._resolve_kokoro_voice(voice_hint)
-            if not self._onnx_voice_exists(voice):
-                voice = self._first_onnx_voice() or "af_heart"
+            if isinstance(voice_spec, np.ndarray):
+                voice = voice_spec
+            else:
+                voice = voice_spec if voice_spec else self._resolve_kokoro_voice(voice_hint)
+                if not self._onnx_voice_exists(voice):
+                    voice = self._first_onnx_voice() or "af_heart"
             audio, sample_rate = self._kokoro_onnx.create(
                 text=text,
                 voice=voice,
@@ -1004,6 +1111,7 @@ class ReviewTTSEngine:
             merged = np.asarray(audio, dtype=np.float32).flatten()
             if merged.size == 0:
                 return None
+            merged = voice_modulation.apply_modulation(merged, int(sample_rate), modulation)
             return (merged, int(sample_rate))
-        
+
         raise RuntimeError("Kokoro backend is not initialized.")

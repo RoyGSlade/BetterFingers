@@ -39,3 +39,6 @@ app/playwright-report/
 # Per-run QA screenshots. Curated reg-actions baselines get checked in
 # deliberately under a separate path, not this one.
 app/artifacts/
+
+# multi-session collab runtime state
+.claude/collab/

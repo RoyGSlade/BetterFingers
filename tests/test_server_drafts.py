@@ -56,8 +56,11 @@ class DummyTTSEngine:
     def __init__(self):
         self.calls = []
 
-    def speak(self, text, speed=1.0, voice_hint="english"):
-        self.calls.append({"text": text, "speed": speed, "voice_hint": voice_hint})
+    def speak(self, text, speed=1.0, voice_hint="english", blend=None, modulation=None):
+        self.calls.append({
+            "text": text, "speed": speed, "voice_hint": voice_hint,
+            "blend": blend, "modulation": modulation,
+        })
         return {"ok": True, "backend": "kokoro_onnx", "fallback": False, "message": "queued"}
 
 
@@ -427,7 +430,11 @@ class ServerDraftTests(unittest.TestCase):
         self.assertTrue(data["ok"])
         self.assertEqual(data["backend"], "kokoro_onnx")
         self.assertEqual(data["text_length"], len("selected words"))
-        self.assertEqual(tts.calls[0], {"text": "selected words", "speed": 1.4, "voice_hint": "af_heart"})
+        self.assertEqual(tts.calls[0], {
+            "text": "selected words", "speed": 1.4, "voice_hint": "af_heart",
+            "blend": None,
+            "modulation": {"pitch": 0.0, "energy": 0.5, "warmth": 0.0, "brightness": 0.0, "pause_style": "natural"},
+        })
         self.assertEqual(statuses[0][0], "draft_tts_requested")
 
     def test_tts_speak_calls_runtime_engine(self):
@@ -444,7 +451,229 @@ class ServerDraftTests(unittest.TestCase):
         data = response.json()
         self.assertTrue(data["ok"])
         self.assertEqual(data["status"], "success")
-        self.assertEqual(tts.calls[0], {"text": "hello there", "speed": 1.2, "voice_hint": "am_puck"})
+        self.assertEqual(tts.calls[0], {
+            "text": "hello there", "speed": 1.2, "voice_hint": "am_puck",
+            "blend": None,
+            "modulation": {"pitch": 0.0, "energy": 0.5, "warmth": 0.0, "brightness": 0.0, "pause_style": "natural"},
+        })
+
+    def test_tts_speak_passes_through_blend_and_modulation_fields(self):
+        tts = DummyTTSEngine()
+
+        with patch.object(server, "ensure_tts_initialized", return_value=tts), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ):
+            with TestClient(server.app) as client:
+                response = client.post(
+                    "/tts/speak",
+                    json={
+                        "text": "hello", "voice_id": "af_heart", "speed": 1.0,
+                        "blend": {"am_adam": 0.3}, "pitch": 2.0, "energy": 0.9,
+                        "warmth": 0.4, "brightness": 0.1, "pause_style": "dramatic",
+                    },
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(tts.calls[0]["blend"], {"am_adam": 0.3})
+        self.assertEqual(
+            tts.calls[0]["modulation"],
+            {"pitch": 2.0, "energy": 0.9, "warmth": 0.4, "brightness": 0.1, "pause_style": "dramatic"},
+        )
+
+    def _isolate_user_data(self):
+        import os
+        import tempfile
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        original = os.environ.get("APPDATA")
+        os.environ["APPDATA"] = tmp.name
+        if original is None:
+            self.addCleanup(lambda: os.environ.pop("APPDATA", None))
+        else:
+            self.addCleanup(lambda: os.environ.__setitem__("APPDATA", original))
+
+    def test_tts_speak_uses_preset_when_no_explicit_fields(self):
+        self._isolate_user_data()
+        import voice_presets
+        voice_presets.save_preset(
+            "Warm Assistant", base="af_bella", blend={"am_adam": 0.2}, speed=1.1, pitch=1.0,
+        )
+        tts = DummyTTSEngine()
+
+        with patch.object(server, "ensure_tts_initialized", return_value=tts), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ):
+            with TestClient(server.app) as client:
+                response = client.post(
+                    "/tts/speak",
+                    json={"text": "hello", "preset_name": "Warm Assistant"},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(tts.calls[0]["voice_hint"], "af_bella")
+        self.assertEqual(tts.calls[0]["speed"], 1.1)
+        self.assertEqual(tts.calls[0]["blend"], {"am_adam": 0.2})
+        self.assertEqual(tts.calls[0]["modulation"]["pitch"], 1.0)
+
+    def test_tts_speak_explicit_fields_override_preset(self):
+        self._isolate_user_data()
+        import voice_presets
+        voice_presets.save_preset("Warm Assistant", base="af_bella", speed=1.1)
+        tts = DummyTTSEngine()
+
+        with patch.object(server, "ensure_tts_initialized", return_value=tts), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ):
+            with TestClient(server.app) as client:
+                response = client.post(
+                    "/tts/speak",
+                    json={"text": "hello", "preset_name": "Warm Assistant", "voice_id": "am_puck", "speed": 2.0},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(tts.calls[0]["voice_hint"], "am_puck")
+        self.assertEqual(tts.calls[0]["speed"], 2.0)
+
+    def test_tts_speak_dangling_preset_name_falls_back_gracefully(self):
+        self._isolate_user_data()
+        tts = DummyTTSEngine()
+
+        with patch.object(server, "ensure_tts_initialized", return_value=tts), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ):
+            with TestClient(server.app) as client:
+                response = client.post(
+                    "/tts/speak",
+                    json={"text": "hello", "preset_name": "does not exist"},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        # Dangling preset falls back to the profile default (unchanged pre-existing
+        # behavior), not a hardcoded "standard_female" — that's the config-less fallback.
+        self.assertEqual(tts.calls[0]["voice_hint"], "english")
+
+    def test_voice_presets_crud_routes(self):
+        self._isolate_user_data()
+
+        with patch.object(server, "Transcriber", DummyTranscriber):
+            with TestClient(server.app) as client:
+                empty = client.get("/voice-presets")
+                self.assertEqual(empty.json()["presets"], [])
+
+                saved = client.post("/voice-presets", json={"name": "Crisp Editor", "base": "am_puck", "speed": 1.2})
+                self.assertEqual(saved.status_code, 200)
+                self.assertEqual(len(saved.json()["presets"]), 1)
+                self.assertEqual(saved.json()["presets"][0]["base"], "am_puck")
+
+                listed = client.get("/voice-presets")
+                self.assertEqual(len(listed.json()["presets"]), 1)
+
+                deleted = client.delete("/voice-presets/Crisp Editor")
+                self.assertEqual(deleted.json()["presets"], [])
+
+    def test_voice_presets_blank_name_rejected(self):
+        self._isolate_user_data()
+        with patch.object(server, "Transcriber", DummyTranscriber):
+            with TestClient(server.app) as client:
+                response = client.post("/voice-presets", json={"name": "   "})
+        self.assertEqual(response.status_code, 400)
+
+    def test_tts_speak_uses_persona_voice_when_persona_has_identity(self):
+        self._isolate_user_data()
+        import llm_engine
+        llm_engine.upsert_persona("Narrator", {
+            "prompt": "Read it clearly.",
+            "voice": {"base": "bm_george", "pitch": -1.0, "energy": 0.8},
+        })
+        tts = DummyTTSEngine()
+
+        with patch.object(server, "ensure_tts_initialized", return_value=tts), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ):
+            with TestClient(server.app) as client:
+                response = client.post("/tts/speak", json={"text": "hello", "persona": "Narrator"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(tts.calls[0]["voice_hint"], "bm_george")
+        self.assertEqual(tts.calls[0]["modulation"]["pitch"], -1.0)
+        self.assertEqual(tts.calls[0]["modulation"]["energy"], 0.8)
+
+    def test_tts_speak_persona_without_voice_identity_falls_through_to_profile(self):
+        self._isolate_user_data()
+        import llm_engine
+        # A persona whose voice was never configured (all defaults) must not
+        # override the profile default with its inert base="" / energy=0.5 etc.
+        llm_engine.upsert_persona("Plain", {"prompt": "Just rewrite it."})
+        tts = DummyTTSEngine()
+
+        with patch.object(server, "ensure_tts_initialized", return_value=tts), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ):
+            with TestClient(server.app) as client:
+                response = client.post("/tts/speak", json={"text": "hello", "persona": "Plain"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(tts.calls[0]["voice_hint"], "english")  # profile default, not persona's inert ""
+
+    def test_tts_speak_persona_preset_used_when_persona_base_unset(self):
+        self._isolate_user_data()
+        import llm_engine
+        import voice_presets
+        voice_presets.save_preset("Presentation Voice", base="am_michael", speed=1.05)
+        llm_engine.upsert_persona("Presenter", {
+            "prompt": "Present it.", "voice": {"preset": "Presentation Voice"},
+        })
+        tts = DummyTTSEngine()
+
+        with patch.object(server, "ensure_tts_initialized", return_value=tts), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ):
+            with TestClient(server.app) as client:
+                response = client.post("/tts/speak", json={"text": "hello", "persona": "Presenter"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(tts.calls[0]["voice_hint"], "am_michael")
+        self.assertEqual(tts.calls[0]["speed"], 1.05)
+
+    def test_tts_speak_explicit_field_overrides_persona(self):
+        self._isolate_user_data()
+        import llm_engine
+        llm_engine.upsert_persona("Narrator", {
+            "prompt": "Read it.", "voice": {"base": "bm_george"},
+        })
+        tts = DummyTTSEngine()
+
+        with patch.object(server, "ensure_tts_initialized", return_value=tts), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ):
+            with TestClient(server.app) as client:
+                response = client.post(
+                    "/tts/speak", json={"text": "hello", "persona": "Narrator", "voice_id": "am_puck"},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(tts.calls[0]["voice_hint"], "am_puck")
+
+    def test_tts_speak_request_preset_wins_over_persona(self):
+        self._isolate_user_data()
+        import llm_engine
+        import voice_presets
+        voice_presets.save_preset("Explicit Preset", base="af_sarah")
+        llm_engine.upsert_persona("Narrator", {"prompt": "Read it.", "voice": {"base": "bm_george"}})
+        tts = DummyTTSEngine()
+
+        with patch.object(server, "ensure_tts_initialized", return_value=tts), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ):
+            with TestClient(server.app) as client:
+                response = client.post(
+                    "/tts/speak",
+                    json={"text": "hello", "persona": "Narrator", "preset_name": "Explicit Preset"},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(tts.calls[0]["voice_hint"], "af_sarah")
 
     def test_send_draft_copy_only_marks_sent(self):
         draft = server.create_draft("raw", "final")
@@ -625,6 +854,104 @@ class ServerDraftTests(unittest.TestCase):
 
         self.assertEqual(draft["status"], "error")
         self.assertIn("Operation cancelled by user", draft["error"])
+
+    def _wav_bytes(self, seconds=3, silent=False):
+        import io
+        import wave
+        import numpy as np
+
+        sample_rate = 24000
+        if silent:
+            audio = np.zeros(int(seconds * sample_rate), dtype=np.float32)
+        else:
+            t = np.linspace(0, seconds, int(seconds * sample_rate), endpoint=False)
+            audio = (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+        pcm16 = np.clip(audio * 32767.0, -32768, 32767).astype(np.int16)
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(sample_rate)
+            handle.writeframes(pcm16.tobytes())
+        buf.seek(0)
+        return buf
+
+    def test_tts_clone_requires_consent(self):
+        self._isolate_user_data()
+        with patch.object(server, "Transcriber", DummyTranscriber):
+            with TestClient(server.app) as client:
+                response = client.post(
+                    "/tts/clone",
+                    files={"file": ("sample.wav", self._wav_bytes(), "audio/wav")},
+                    data={"name": "My Voice", "consent": "false"},
+                )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("consent", response.json()["detail"].lower())
+
+    def test_tts_clone_rejects_bad_sample(self):
+        self._isolate_user_data()
+        with patch.object(server, "Transcriber", DummyTranscriber):
+            with TestClient(server.app) as client:
+                response = client.post(
+                    "/tts/clone",
+                    files={"file": ("sample.wav", self._wav_bytes(seconds=3, silent=True), "audio/wav")},
+                    data={"name": "Silent Voice", "consent": "true"},
+                )
+        self.assertEqual(response.status_code, 400)
+        detail = response.json()["detail"]
+        self.assertIn("warnings", detail)
+        self.assertTrue(detail["warnings"])
+
+    def test_tts_clone_saves_valid_sample_with_meta(self):
+        self._isolate_user_data()
+        import json
+        import os
+        with patch.object(server, "Transcriber", DummyTranscriber):
+            with TestClient(server.app) as client:
+                response = client.post(
+                    "/tts/clone",
+                    files={"file": ("sample.wav", self._wav_bytes(), "audio/wav")},
+                    data={"name": "My Voice", "consent": "true"},
+                )
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()
+        self.assertEqual(data["voice_id"], "cloned_My_Voice")
+
+        meta_path = os.path.join(str(server.get_voices_dir()), "cloned_My_Voice.meta.json")
+        self.assertTrue(os.path.exists(meta_path))
+        with open(meta_path, encoding="utf-8") as handle:
+            meta = json.load(handle)
+        self.assertTrue(meta["cloned_voice"])
+        self.assertTrue(meta["consent"])
+        self.assertIn("qa", meta)
+        self.assertIn("created_at", meta)
+
+    def test_tts_clone_blank_name_rejected(self):
+        self._isolate_user_data()
+        with patch.object(server, "Transcriber", DummyTranscriber):
+            with TestClient(server.app) as client:
+                response = client.post(
+                    "/tts/clone",
+                    files={"file": ("sample.wav", self._wav_bytes(), "audio/wav")},
+                    data={"name": "   ", "consent": "true"},
+                )
+        self.assertEqual(response.status_code, 400)
+
+    def test_tts_voices_surfaces_clone_meta(self):
+        self._isolate_user_data()
+        with patch.object(server, "Transcriber", DummyTranscriber):
+            with TestClient(server.app) as client:
+                client.post(
+                    "/tts/clone",
+                    files={"file": ("sample.wav", self._wav_bytes(), "audio/wav")},
+                    data={"name": "My Voice", "consent": "true"},
+                )
+                voices = client.get("/tts/voices").json()
+
+        cloned = next((v for v in voices["cloned"] if v["id"] == "cloned_My_Voice"), None)
+        self.assertIsNotNone(cloned)
+        self.assertTrue(cloned["meta"]["cloned_voice"])
+        self.assertTrue(cloned["meta"]["consent"])
 
 
 if __name__ == "__main__":

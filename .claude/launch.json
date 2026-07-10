@@ -1,0 +1,29 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "collab-viewer",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [".claude/collab-mcp/viewer.py"],
+      "port": 4517
+    },
+    {
+      "name": "renderer-static-preview",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "4518", "--directory", "app/src/renderer"],
+      "port": 4518
+    },
+    {
+      "name": "backend-preview",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["BETTERFINGERS_LAZY_STARTUP=1", "XDG_DATA_HOME=/tmp/betterfingers-preview-data", "XDG_CONFIG_HOME=/tmp/betterfingers-preview-data", "APPDATA=/tmp/betterfingers-preview-data", "python3", "server.py", "--port", "8001"],
+      "port": 8001
+    },
+    {
+      "name": "foundry-renderer-preview-v2",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "4520", "--directory", "/tmp/foundry-preview-renderer"],
+      "port": 4520
+    }
+  ]
+}

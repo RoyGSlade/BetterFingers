@@ -5,6 +5,7 @@ import tempfile
 import logging
 import threading
 import time
+import uuid
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,8 +30,13 @@ import recordings
 import dictionary
 import dictation_commands
 import macros
+import voice_presets
+import voice_clone_qa
 import history_store
 import mcp_client
+import voice_commands
+import voice_edit_commands
+from utterance_history import Utterance, utterance_history
 from model_manager import (
     DEFAULT_MODEL,
     AVAILABLE_MODELS,
@@ -309,6 +315,8 @@ def get_pipeline_flags():
     return {
         "voice_commands": bool(config.get("voice_commands_enabled", True)),
         "macros": bool(config.get("macros_enabled", True)),
+        "editing_commands": bool(config.get("editing_commands_enabled", True)),
+        "app_commands": bool(config.get("app_commands_enabled", True)),
     }
 
 
@@ -320,6 +328,21 @@ def voice_commands_enabled():
 def macros_enabled():
     """Whether voice macros (C11) are expanded. Per-profile, default on."""
     return get_pipeline_flags()["macros"]
+
+
+def editing_commands_enabled():
+    """Whether phrase-history editing commands ("scratch that", "delete last
+    word", ...) are applied. Per-profile, default on. Distinct from
+    voice_commands_enabled(), which gates the pure formatting pass in
+    dictation_commands.py."""
+    return get_pipeline_flags()["editing_commands"]
+
+
+def app_commands_enabled():
+    """Whether app-control voice commands ("send it", "emergency stop", ...)
+    are recognized. Per-profile, default on — safety comes from context
+    gating in voice_commands.parse_command, not from this toggle."""
+    return get_pipeline_flags()["app_commands"]
 
 
 def get_model_residency_settings():
@@ -420,6 +443,39 @@ def get_runtime_status_snapshot():
     }
 
 
+_last_amplitude_broadcast = 0.0
+_AMPLITUDE_BROADCAST_INTERVAL_S = 0.08
+
+
+def _broadcast_recording_amplitude(chunk, sample_rate):
+    """Chunk callback (runs on AudioRecorder's chunk-worker thread, not the
+    audio callback itself): throttled real-time mic RMS so the renderer's
+    glitch-ring can pulse to the voice during 'recording'."""
+    del sample_rate
+    global _last_amplitude_broadcast
+    now = time.time()
+    if now - _last_amplitude_broadcast < _AMPLITUDE_BROADCAST_INTERVAL_S:
+        return
+    _last_amplitude_broadcast = now
+    import numpy as np
+
+    try:
+        amplitude = float(np.sqrt(np.mean(np.square(chunk)))) if getattr(chunk, "size", 0) else 0.0
+    except Exception:
+        amplitude = 0.0
+    broadcast_status_threadsafe("recording", {"amplitude": amplitude})
+
+
+def _broadcast_watchdog_timeout():
+    """Phase 11: the missed-release watchdog fired — recording was force-
+    stopped after max_recording_seconds. Surface it so it doesn't look like
+    a silent glitch."""
+    broadcast_status_threadsafe(
+        "watchdog_timeout_warning",
+        {"message": "Recording stopped after max duration."},
+    )
+
+
 def start_hotkey_manager():
     global hotkey_manager, hotkey_manager_started, hotkey_recorder
 
@@ -435,6 +491,7 @@ def start_hotkey_manager():
     from recorder import AudioRecorder
 
     recorder = AudioRecorder()
+    recorder.set_chunk_callback(_broadcast_recording_amplitude)
     manager = HotkeyManager(
         recorder=recorder,
         on_recording_complete_callback=on_recording_complete,
@@ -443,6 +500,7 @@ def start_hotkey_manager():
         on_manual_send_callback=handle_primary_action,
         on_review_tts_callback=handle_review_tts_shortcut,
         is_busy_callback=lambda: is_processing_draft,
+        on_watchdog_timeout_callback=_broadcast_watchdog_timeout,
     )
     try:
         manager.update_config(get_last_active_profile())
@@ -1081,6 +1139,31 @@ def process_recording_result(recording_result):
             raw_text = dictionary.correct_text(raw_text, dict_terms)
         # Single profile read backs both toggles below (each load_profile() call is disk I/O).
         pipeline_flags = get_pipeline_flags()
+        # Phrase-history "scratch that": undo the previous utterance instead of
+        # treating this one as new dictation. Checked before any other pass so
+        # the command phrase itself never reaches the LLM.
+        if raw_text and pipeline_flags["editing_commands"]:
+            edit_cmd = voice_edit_commands.parse_edit_command(raw_text)
+            if edit_cmd and edit_cmd.action == "scratch_that":
+                popped = utterance_history.pop_last()
+                draft = create_draft(
+                    raw_text,
+                    "",
+                    preset=preset,
+                    status="scratch",
+                    metadata=metadata,
+                    recording_result=recording_result,
+                )
+                broadcast_status_threadsafe(
+                    "scratch_last",
+                    {
+                        "draft_id": draft["id"],
+                        "scratched_draft_id": popped.target_draft_id if popped else None,
+                        "scratched_text": popped.final_text if popped else "",
+                    },
+                )
+                return draft
+            raw_text = voice_edit_commands.apply_inline_edits(raw_text)
         # Spoken dictation commands (C2): "new paragraph", "period", "all caps", ...
         if raw_text and pipeline_flags["voice_commands"]:
             raw_text = dictation_commands.apply_commands(raw_text)
@@ -1178,6 +1261,17 @@ def process_recording_result(recording_result):
             recording_result=recording_result,
             confidence=confidence,
         )
+        if pipeline_flags["editing_commands"]:
+            utterance_history.record(
+                Utterance(
+                    raw_transcript=raw_text,
+                    final_text=final_text,
+                    emitted_length=len(final_text or ""),
+                    target_draft_id=draft["id"],
+                    timestamp=time.time(),
+                    injected=False,
+                )
+            )
         record_pipeline_metrics(
             stt_ms=stt_ms,
             post_ms=post_ms,
@@ -1831,6 +1925,100 @@ async def settings_export_profile(profile_name: str):
     }
 
 
+# --- Persona Foundry: guided interview -> compile -> stress-test. ---
+# In-memory only (like draft_queue) — losing an in-progress session on
+# restart is acceptable. Capped at 20 concurrent sessions; oldest evicted.
+_foundry_sessions = {}
+_FOUNDRY_SESSION_CAP = 20
+
+
+def _foundry_evict_if_full():
+    if len(_foundry_sessions) < _FOUNDRY_SESSION_CAP:
+        return
+    oldest_id = min(_foundry_sessions, key=lambda sid: _foundry_sessions[sid].get("created", 0))
+    _foundry_sessions.pop(oldest_id, None)
+
+
+def _foundry_get_session(session_id):
+    session = _foundry_sessions.get(str(session_id or ""))
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Foundry session '{session_id}' not found.")
+    return session
+
+
+class FoundryAnswerRequest(BaseModel):
+    session_id: str
+    answer: typing.Any = None
+
+
+class FoundrySessionRequest(BaseModel):
+    session_id: str
+
+
+class FoundryStressTestRequest(BaseModel):
+    session_id: Optional[str] = None
+    persona: Optional[dict] = None
+
+
+@app.post("/personas/interview/start")
+async def start_foundry_interview():
+    from llm_engine import foundry_new_session, foundry_next_prompt
+    _foundry_evict_if_full()
+    session = foundry_new_session()
+    session["created"] = time.monotonic()
+    session_id = str(uuid.uuid4())
+    _foundry_sessions[session_id] = session
+    return {"session_id": session_id, "question": foundry_next_prompt(session), "done": False}
+
+
+@app.post("/personas/interview/answer")
+async def answer_foundry_interview(request: FoundryAnswerRequest):
+    from llm_engine import foundry_next_prompt, foundry_submit_answer
+    session = _foundry_get_session(request.session_id)
+    result = foundry_submit_answer(session, request.answer)
+    return {
+        "question": foundry_next_prompt(session),
+        "pushback": result.get("pushback"),
+        "done": bool(result.get("done")),
+    }
+
+
+@app.post("/personas/compile")
+async def compile_foundry_persona_route(request: FoundrySessionRequest):
+    session = _foundry_get_session(request.session_id)
+    if not session.get("done"):
+        raise HTTPException(status_code=400, detail="Interview is not complete yet.")
+    engine = get_selected_llm_engine()
+    try:
+        result = engine.compile_foundry_persona(session)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Persona compile failed: {exc}")
+    return result
+
+
+@app.post("/personas/test-suite/run")
+async def run_foundry_stress_suite_route(request: FoundryStressTestRequest):
+    from llm_engine import normalize_persona
+    engine = get_selected_llm_engine()
+    if request.persona is not None:
+        persona = normalize_persona(request.persona)
+    elif request.session_id is not None:
+        session = _foundry_get_session(request.session_id)
+        if not session.get("done"):
+            raise HTTPException(status_code=400, detail="Interview is not complete yet.")
+        try:
+            persona = engine.compile_foundry_persona(session)["persona"]
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Persona compile failed: {exc}")
+    else:
+        raise HTTPException(status_code=400, detail="Provide either session_id or persona.")
+    try:
+        cases = engine.run_foundry_stress_suite(persona)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Stress test failed: {exc}")
+    return {"cases": cases}
+
+
 class PersonaRequest(BaseModel):
     name: str
     prompt: str
@@ -1847,6 +2035,8 @@ class PersonaRequest(BaseModel):
     safety_mode: Optional[str] = None
     max_completion_tokens: Optional[int] = None
     chunk_size: Optional[int] = None
+    # Persona Foundry field:
+    persona_card: Optional[dict] = None
 
 
 @app.get("/personas")
@@ -1881,7 +2071,7 @@ async def save_persona_route(request: PersonaRequest):
     payload = {"prompt": request.prompt}
     for key in (
         "temperature", "model_hint", "dictionary_scope", "voice", "format", "few_shot",
-        "output_policy", "safety_mode", "max_completion_tokens", "chunk_size",
+        "output_policy", "safety_mode", "max_completion_tokens", "chunk_size", "persona_card",
     ):
         value = getattr(request, key)
         if value is not None:
@@ -2130,6 +2320,21 @@ def test_whisper(request: WhisperModelRequest):
     except Exception as exc:
         logging.exception("Whisper test failed")
         return {"ok": False, "message": str(exc)}
+
+
+@app.post("/models/whisper/select")
+async def select_whisper_model(request: WhisperModelRequest):
+    if request.model_size not in SUPPORTED_MODEL_SIZES:
+        raise HTTPException(status_code=400, detail="Unsupported Whisper model")
+    # The active Whisper model is the active profile's `model_size`; persist the
+    # choice there and reload the live transcriber so it takes effect immediately.
+    profile_name = get_last_active_profile()
+    cfg = load_profile(profile_name)
+    cfg["model_size"] = request.model_size
+    save_runtime_profile(profile_name, cfg)
+    if transcriber is not None:
+        transcriber.reload_profile(profile_name)
+    return await list_whisper_models()
 
 
 @app.post("/models/unload/{component}")
@@ -2463,6 +2668,42 @@ async def delete_macro_endpoint(trigger: str):
     return {"ok": True, "macros": macros.remove_macro(trigger)}
 
 
+class VoicePresetRequest(BaseModel):
+    name: str
+    base: Optional[str] = None
+    blend: Optional[dict] = None
+    speed: Optional[float] = None
+    pitch: Optional[float] = None
+    energy: Optional[float] = None
+    warmth: Optional[float] = None
+    brightness: Optional[float] = None
+    pause_style: Optional[str] = None
+    stability: Optional[float] = None
+    source: Optional[str] = None
+
+
+@app.get("/voice-presets")
+async def get_voice_presets_endpoint():
+    return {"ok": True, "presets": voice_presets.get_presets()}
+
+
+@app.post("/voice-presets")
+async def save_voice_preset_endpoint(request: VoicePresetRequest):
+    if not str(request.name or "").strip():
+        raise HTTPException(status_code=400, detail="A preset name is required.")
+    fields = {
+        key: value
+        for key, value in request.model_dump(exclude={"name"}).items()
+        if value is not None
+    }
+    return {"ok": True, "presets": voice_presets.save_preset(request.name, **fields)}
+
+
+@app.delete("/voice-presets/{name}")
+async def delete_voice_preset_endpoint(name: str):
+    return {"ok": True, "presets": voice_presets.delete_preset(name)}
+
+
 @app.get("/history/search")
 async def history_search(q: str = "", limit: int = 50):
     limit = max(1, min(200, int(limit or 50)))
@@ -2604,6 +2845,108 @@ class DraftTtsRequest(BaseModel):
     voice_id: Optional[str] = None
     speed: Optional[float] = None
     pitch: Optional[float] = None
+    blend: Optional[dict] = None
+    energy: Optional[float] = None
+    warmth: Optional[float] = None
+    brightness: Optional[float] = None
+    pause_style: Optional[str] = None
+    preset_name: Optional[str] = None
+    persona: Optional[str] = None
+
+
+def _find_voice_preset(name, presets=None):
+    key = str(name or "").strip().lower()
+    if not key:
+        return None
+    presets = presets if presets is not None else voice_presets.get_presets()
+    return next((p for p in presets if p["name"].lower() == key), None)
+
+
+def _resolve_voice_and_modulation(request, config):
+    """Merge, highest priority first: explicit request fields -> a named
+    voice preset (if request.preset_name is given) -> the active persona's
+    voice (if request.persona is given and the persona has a deliberate
+    voice identity — see below), which is either its referenced preset
+    (persona.voice.preset) or its own inline fields, never a blend of both
+    -> profile defaults, into (voice_id, speed, blend, modulation) ready for
+    engine.speak(). Shared by both /tts/speak and /drafts/{id}/tts so the
+    fallback chain lives in one place.
+
+    A persona only contributes voice defaults when it has an actual voice
+    identity — persona.voice.base or persona.voice.preset non-empty.
+    normalize_persona() always fully defaults every numeric field (energy,
+    pitch, ...), so an untouched persona's voice dict is indistinguishable
+    from a deliberately-configured one except via base/preset; without this
+    gate, every persona would silently override profile-level speed/voice
+    defaults even when its voice was never configured.
+    """
+    presets_cache = None
+
+    def get_presets_cached():
+        nonlocal presets_cache
+        if presets_cache is None:
+            presets_cache = voice_presets.get_presets()
+        return presets_cache
+
+    layers = []
+
+    request_name = str(getattr(request, "preset_name", "") or "").strip()
+    if request_name:
+        preset = _find_voice_preset(request_name, get_presets_cached())
+        if preset is not None:
+            layers.append(preset)
+
+    persona_name = str(getattr(request, "persona", "") or "").strip()
+    if persona_name:
+        from llm_engine import get_persona
+        persona = get_persona(persona_name)
+        persona_voice = (persona or {}).get("voice", {}) or {}
+        has_voice_identity = bool(str(persona_voice.get("base", "") or "").strip()) or bool(
+            str(persona_voice.get("preset", "") or "").strip()
+        )
+        if has_voice_identity:
+            # A persona's voice is either "use this preset" or "use these inline
+            # fields" — not a merge of both. normalize_persona() fully defaults
+            # every numeric field (speed, pitch, ...), so if both were layered
+            # the persona's own defaulted values (e.g. speed=1.0) would always
+            # mask the preset's real values before the preset layer is ever
+            # reached. A dangling preset reference falls back to the persona's
+            # own inline fields rather than erroring.
+            persona_preset_name = str(persona_voice.get("preset", "") or "").strip()
+            persona_preset = _find_voice_preset(persona_preset_name, get_presets_cached()) if persona_preset_name else None
+            if persona_preset is not None:
+                layers.append(persona_preset)
+            else:
+                layers.append({k: v for k, v in persona_voice.items() if k not in ("preset", "stability")})
+
+    def pick(request_val, field, config_key=None, fallback=None):
+        if request_val is not None:
+            return request_val
+        for layer in layers:
+            layer_val = layer.get(field)
+            if layer_val not in (None, ""):
+                return layer_val
+        if config_key is not None:
+            config_val = config.get(config_key)
+            if config_val not in (None, ""):
+                return config_val
+        return fallback
+
+    req_voice = pick(request.voice_id, "base", "review_tts_voice_hint", "standard_female")
+    req_speed = pick(request.speed, "speed", "review_tts_speed", 1.0)
+    voice_id = normalize_tts_voice_id(req_voice)
+    speed = max(0.5, min(3.0, float(req_speed)))
+
+    blend = pick(request.blend, "blend", fallback=None) or None
+
+    modulation = {
+        "pitch": pick(request.pitch, "pitch", fallback=0.0),
+        "energy": pick(getattr(request, "energy", None), "energy", fallback=0.5),
+        "warmth": pick(getattr(request, "warmth", None), "warmth", fallback=0.0),
+        "brightness": pick(getattr(request, "brightness", None), "brightness", fallback=0.0),
+        "pause_style": pick(getattr(request, "pause_style", None), "pause_style", fallback="natural"),
+    }
+    return voice_id, speed, blend, modulation
 
 
 def get_rewrite_instruction(action, custom_instruction=""):
@@ -2754,16 +3097,7 @@ async def speak_draft(draft_id: int, request: DraftTtsRequest):
     except Exception:
         config = {}
 
-    req_voice = request.voice_id
-    if req_voice is None:
-        req_voice = config.get("review_tts_voice_hint") or "standard_female"
-
-    req_speed = request.speed
-    if req_speed is None:
-        req_speed = config.get("review_tts_speed") or 1.0
-
-    voice_id = normalize_tts_voice_id(req_voice)
-    speed = max(0.5, min(3.0, float(req_speed)))
+    voice_id, speed, blend, modulation = _resolve_voice_and_modulation(request, config)
     logging.info(f"Draft TTS Request: draft={draft_id} '{text[:20]}...' | Voice: {voice_id} | Speed: {speed}x")
 
     engine = ensure_tts_initialized()
@@ -2779,7 +3113,7 @@ async def speak_draft(draft_id: int, request: DraftTtsRequest):
         record_runtime_error("tts", result["message"], {"action": "draft_tts", "draft_id": draft_id})
         return result
 
-    result = engine.speak(text, speed=speed, voice_hint=voice_id)
+    result = engine.speak(text, speed=speed, voice_hint=voice_id, blend=blend, modulation=modulation)
     result.update(
         {
             "status": "success" if result.get("ok") else "error",
@@ -2799,6 +3133,88 @@ class DraftSendRequest(BaseModel):
 @app.post("/drafts/{draft_id}/send")
 async def send_draft(draft_id: int, request: DraftSendRequest = DraftSendRequest()):
     return send_draft_by_id(draft_id, action=request.action, open_chat=request.open_chat)
+
+
+class VoiceCommandExecuteRequest(BaseModel):
+    text: str
+    draft_id: Optional[int] = None
+    context: dict = {}
+    confirm: bool = False
+
+
+_REWRITE_ACTION_FOR = {"rewrite_shorter": "shorter", "rewrite_clearer": "clearer"}
+_DRAFT_DEPENDENT_ACTIONS = {"cancel", "send", "copy", "read_back", "retry", *_REWRITE_ACTION_FOR}
+
+
+@app.post("/voice-commands/execute")
+async def execute_voice_command(request: VoiceCommandExecuteRequest):
+    """Real trigger point for app-control voice commands (task 9): classify
+    `text` via voice_commands.parse_command, then execute the resolved
+    action against the existing draft/runtime functions. `emergency_stop`
+    always executes; anything else with requires_confirmation=True only
+    executes when `confirm=True` is sent as a follow-up call."""
+    if not app_commands_enabled():
+        return {"ok": False, "reason": "disabled"}
+
+    intent = voice_commands.parse_command(request.text, request.context)
+    if intent is None:
+        return {"ok": False, "reason": "no_command_recognized"}
+
+    broadcast_status_threadsafe(
+        "command_detected",
+        {"action": intent.action, "kind": intent.kind, "confidence": intent.confidence},
+    )
+
+    if intent.requires_confirmation and not request.confirm:
+        broadcast_status_threadsafe(
+            "command_needs_confirmation",
+            {"action": intent.action, "kind": intent.kind},
+        )
+        return {"ok": False, "reason": "needs_confirmation", "action": intent.action}
+
+    draft_id = request.draft_id
+    try:
+        if intent.action == "emergency_stop":
+            emergency_stop_runtime()
+            return {"ok": True, "action": intent.action}
+        if intent.action == "start_recording":
+            start_recording_runtime()
+            return {"ok": True, "action": intent.action}
+        if intent.action == "stop_recording":
+            stop_recording_runtime()
+            return {"ok": True, "action": intent.action}
+        if intent.action not in _DRAFT_DEPENDENT_ACTIONS:
+            return {"ok": False, "reason": "not_implemented", "action": intent.action}
+
+        if draft_id is None:
+            return {"ok": False, "reason": "no_draft", "action": intent.action}
+
+        if intent.action == "cancel":
+            result = await decline_draft(draft_id)
+        elif intent.action == "send":
+            result = send_draft_by_id(draft_id)
+        elif intent.action == "copy":
+            draft = get_draft_by_id(draft_id)
+            if draft is None:
+                return {"ok": False, "reason": "no_draft", "action": intent.action}
+            copy_text_to_clipboard(draft.get("final_text", ""))
+            result = {"draft_id": draft_id}
+        elif intent.action == "read_back":
+            draft = get_draft_by_id(draft_id)
+            if draft is None:
+                return {"ok": False, "reason": "no_draft", "action": intent.action}
+            speak_text_aloud(draft.get("final_text", ""))
+            result = {"draft_id": draft_id}
+        elif intent.action in _REWRITE_ACTION_FOR:
+            result = await rewrite_draft(draft_id, DraftRewriteRequest(action=_REWRITE_ACTION_FOR[intent.action]))
+        else:  # intent.action == "retry"
+            result = await retry_draft(draft_id)
+        return {"ok": True, "action": intent.action, "result": result}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logging.exception("Voice command execution failed")
+        return {"ok": False, "reason": "error", "action": intent.action, "error": str(exc)}
 
 
 @app.post("/runtime/primary-action")
@@ -2947,6 +3363,13 @@ class TTSRequest(BaseModel):
     voice_id: Optional[str] = None
     speed: Optional[float] = None
     pitch: Optional[float] = None
+    blend: Optional[dict] = None
+    energy: Optional[float] = None
+    warmth: Optional[float] = None
+    brightness: Optional[float] = None
+    pause_style: Optional[str] = None
+    preset_name: Optional[str] = None
+    persona: Optional[str] = None
 
 @app.post("/tts/speak")
 async def tts_speak(request: TTSRequest):
@@ -2960,16 +3383,7 @@ async def tts_speak(request: TTSRequest):
     except Exception:
         config = {}
 
-    req_voice = request.voice_id
-    if req_voice is None:
-        req_voice = config.get("review_tts_voice_hint") or "standard_female"
-
-    req_speed = request.speed
-    if req_speed is None:
-        req_speed = config.get("review_tts_speed") or 1.0
-
-    voice_id = normalize_tts_voice_id(req_voice)
-    speed = max(0.5, min(3.0, float(req_speed)))
+    voice_id, speed, blend, modulation = _resolve_voice_and_modulation(request, config)
     logging.info(f"TTS Request: '{text[:20]}...' | Voice: {voice_id} | Speed: {speed}x")
 
     engine = ensure_tts_initialized()
@@ -2978,7 +3392,7 @@ async def tts_speak(request: TTSRequest):
         record_runtime_error("tts", message, {"action": "tts_speak"})
         return {"ok": False, "status": "error", "message": message, "error": "tts_unavailable"}
 
-    result = engine.speak(text, speed=speed, voice_hint=voice_id)
+    result = engine.speak(text, speed=speed, voice_hint=voice_id, blend=blend, modulation=modulation)
     result["status"] = "success" if result.get("ok") else "error"
     return result
 
@@ -3051,33 +3465,90 @@ async def get_tts_status():
     }
 
 @app.post("/tts/clone")
-async def tts_clone(file: UploadFile = File(...), name: str = "My Voice"):
-    # Ensure directory exists
-    voices_dir = get_voices_dir()
-    
+async def tts_clone(file: UploadFile = File(...), name: str = Form("My Voice"), consent: bool = Form(...)):
+    """Save an uploaded sample as a clone source, gated on explicit consent
+    and basic quality checks (voice_clone_qa). This does NOT perform actual
+    voice-cloning synthesis — no cloning engine is installed (see
+    docs/MASTER_PLAN.md U6 / the plan doc's kokoclone note); it only gates
+    and tags what gets saved, so a real engine can be wired in later without
+    revisiting this validation/consent layer.
+    """
+    import json
+
+    if not consent:
+        raise HTTPException(
+            status_code=400,
+            detail="Voice cloning requires explicit consent that you own this voice or have permission to clone it.",
+        )
+
     safe_name = "".join([c for c in name if c.isalnum() or c in (' ', '_', '-')]).strip().replace(" ", "_")
-    target_path = voices_dir / f"cloned_{safe_name}.wav" # Saving wav for now, real impl extracts embedding
-    
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="A voice name is required.")
+
+    voices_dir = get_voices_dir()
+    target_path = voices_dir / f"cloned_{safe_name}.wav"
+    tmp_path = None
     try:
-        with open(target_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-            
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+        tmp_path = tmp.name
+        with tmp:
+            shutil.copyfileobj(file.file, tmp)
+
+        ok, warnings = voice_clone_qa.check_file(tmp_path)
+        if not ok:
+            raise HTTPException(
+                status_code=400,
+                detail={"message": "Sample failed quality checks.", "warnings": warnings},
+            )
+
+        shutil.move(tmp_path, target_path)
+        tmp_path = None
+
+        meta = {
+            "cloned_voice": True,
+            "consent": True,
+            "qa": {"warnings": warnings},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        meta_path = voices_dir / f"cloned_{safe_name}.meta.json"
+        with open(meta_path, "w", encoding="utf-8") as handle:
+            json.dump(meta, handle, indent=2)
+
         logging.info(f"Voice cloned: {safe_name} saved to {target_path}")
-        return {"status": "success", "voice_id": f"cloned_{safe_name}", "path": str(target_path)}
+        return {"status": "success", "voice_id": f"cloned_{safe_name}", "path": str(target_path), "warnings": warnings}
+    except HTTPException:
+        raise
     except Exception as e:
         logging.error(f"Cloning failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 @app.get("/tts/voices")
 async def list_voices():
+    import json
+
     voices_dir = get_voices_dir()
-    
+
     cloned = []
     if os.path.exists(voices_dir):
         for f in os.listdir(voices_dir):
             if f.endswith(".wav") or f.endswith(".npy"):
-                cloned.append({"id": f.split('.')[0], "name": f.split('.')[0].replace("cloned_", "").replace("_", " ")})
-                
+                voice_id = f.split('.')[0]
+                entry = {"id": voice_id, "name": voice_id.replace("cloned_", "").replace("_", " ")}
+                meta_path = os.path.join(voices_dir, f"{voice_id}.meta.json")
+                if os.path.exists(meta_path):
+                    try:
+                        with open(meta_path, "r", encoding="utf-8") as handle:
+                            entry["meta"] = json.load(handle)
+                    except (OSError, ValueError):
+                        pass
+                cloned.append(entry)
+
     defaults = [
         {"id": "af_heart", "name": "Kokoro Heart"},
         {"id": "af_bella", "name": "Kokoro Bella"},
