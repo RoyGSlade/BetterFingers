@@ -155,6 +155,15 @@ all 22 findings of the post-merge gap review closed (privacy wipe completeness, 
 prompt preservation, window lifecycle, history retention, deepcopy hardening, dead deps
 removed, race guards, HTML escaping, corrupt-store `.corrupt` quarantine, etc.).
 
+**LLM cleanup reliability (found + fixed live, 2026-07-10).** `_call_api` used a fixed 30s
+HTTP read timeout with `DEFAULT_MAX_OUTPUT_TOKENS=1100`. On the CPU floor tier a longer
+dictation's persona cleanup runs past 30s, so the request timed out and the engine
+*silently returned the raw, uncleaned text* (while llama-server kept churning its single
+slot). Now `compute_api_read_timeout()` scales the read timeout to the token budget
+(pessimistic 8 tok/s, floored/ceilinged), so legitimate CPU cleanups finish. Verified end
+to end against a live gemma-4 llama-server: a 94-word dictation that silently no-op'd at 30s
+now cleans correctly in ~50s. Covered by `tests/test_api_timeout.py`.
+
 **Known intentional behaviors (not bugs):**
 - Initial dictation cleanup uses the **True Janitor** preset regardless of the profile's
   `current_preset` (wiring the active preset into dictation is M5 work — behavior change).

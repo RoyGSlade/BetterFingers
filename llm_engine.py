@@ -29,6 +29,27 @@ from model_manager import (
 SIDECAR_PORT = 8080
 CHUNK_SIZE = 2000
 DEFAULT_MAX_OUTPUT_TOKENS = 1100
+# Assumed generation speed for sizing the HTTP read timeout. Deliberately
+# pessimistic (CPU-only floor tier); GPUs finish far sooner and the model stops
+# when done, so a generous timeout never costs a fast machine anything.
+_ASSUMED_TOKENS_PER_SEC = 8.0
+
+
+def compute_api_read_timeout(max_tokens, tokens_per_second=_ASSUMED_TOKENS_PER_SEC, floor=45, ceiling=180):
+    """Scale the HTTP read timeout to the requested token budget.
+
+    A fixed 30s timeout silently fails on CPU: a longer dictation's cleanup
+    generates enough tokens to exceed it, the request times out, and the engine
+    returns the *raw, uncleaned* text as if nothing happened (while llama-server
+    keeps churning its single slot). Sizing the timeout to how long that many
+    tokens could actually take lets legitimate cleanups finish. Pure/testable.
+    """
+    try:
+        toks = int(max_tokens)
+    except (TypeError, ValueError):
+        toks = DEFAULT_MAX_OUTPUT_TOKENS
+    estimate = toks / max(1.0, float(tokens_per_second)) + 20.0
+    return int(max(floor, min(ceiling, estimate)))
 
 # Split on whitespace that follows sentence-ending punctuation.
 _SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
@@ -1934,7 +1955,9 @@ class LLMEngine:
             response = requests.post(
                 f"{self.api_url}/v1/chat/completions",
                 json=payload,
-                timeout=30
+                # (connect, read): read scales with the token budget so a slow CPU
+                # cleanup completes instead of timing out and silently returning raw.
+                timeout=(5, compute_api_read_timeout(safe_max_tokens)),
             )
             response.raise_for_status()
             result = response.json()
