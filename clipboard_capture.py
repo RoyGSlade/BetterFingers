@@ -66,6 +66,33 @@ def _clipboard_set_text(value: str) -> bool:
         return False
 
 
+def get_clipboard_text() -> str:
+    """Public cross-platform snapshot of the current clipboard text."""
+    return _clipboard_get_text()
+
+
+def schedule_text_clipboard_restore(prior_text: str, injected_text: str, delay_ms: int = 300):
+    """Restore the user's prior clipboard after a paste-injection, on a background
+    thread. Only restores if ``injected_text`` is *still* on the clipboard — i.e.
+    the paste consumed it and the user hasn't copied anything new — so it never
+    clobbers a fresh copy. Fire-and-forget; a no-op when nothing changed.
+
+    The delay lets the target app's paste read our text before we swap it back."""
+    if prior_text == injected_text:
+        return
+
+    def _worker():
+        try:
+            time.sleep(max(0, int(delay_ms)) / 1000.0)
+            current = _clipboard_get_text()
+            if current == injected_text:
+                _clipboard_set_text(prior_text)
+        except Exception as exc:
+            logging.debug(f"Clipboard text restore skipped: {exc}")
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
 def _sanitize_tts_text(text: str) -> str:
     value = (text or "").strip()
     if len(value) <= _MAX_TTS_CHARS:

@@ -9,6 +9,7 @@ import sys
 import keyboard
 import pyperclip
 
+import clipboard_capture
 import platform_capabilities
 
 IS_WINDOWS = platform_capabilities.IS_WINDOWS
@@ -209,10 +210,20 @@ class InputInjector:
     def _paste_raw(self, text: str):
         """Copy already-composed text to the clipboard and paste it.
 
-        This is the guaranteed universal fallback across all platforms.
+        This is the guaranteed universal fallback across all platforms. Unless
+        disabled, the user's prior clipboard is restored shortly after the paste
+        so injecting a draft doesn't destroy whatever they had copied.
         """
         if not text:
             return
+        restore = bool(self.config.get("restore_clipboard_after_paste", True))
+        prior_clipboard = None
+        if restore:
+            try:
+                prior_clipboard = clipboard_capture.get_clipboard_text()
+            except Exception as exc:
+                logging.debug(f"Could not snapshot clipboard before paste: {exc}")
+                prior_clipboard = None
         try:
             pyperclip.copy(text)
             self._send_paste_hotkey()
@@ -222,6 +233,9 @@ class InputInjector:
                 keyboard.write(text, delay=0)
             except Exception as fallback_exc:
                 logging.error(f"Fallback typing failed: {fallback_exc}")
+            return
+        if restore and prior_clipboard is not None:
+            clipboard_capture.schedule_text_clipboard_restore(prior_clipboard, text)
 
     def paste_text(self, text: str):
         text = self._compose_output_text(text)

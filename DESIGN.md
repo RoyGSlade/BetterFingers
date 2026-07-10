@@ -338,14 +338,30 @@ harness, not tribal memory: for each target record app/version, OS, injection me
 plain-text / multiline / Unicode / punctuation success, selection replacement, clipboard
 restoration, focus-loss behavior, elevated-window behavior, average latency.
 
-Starting matrix (versioned in-repo, updated per release): Chrome text input, Google Docs,
-Outlook, Word, VS Code, Discord, Slack, Notepad, a terminal, one EHR-like web form, one
-remote-desktop environment. Known failure surfaces to probe: elevated windows, secure
-fields, browser/Electron editors, games, RDP/Citrix, Wayland, full-screen apps, clipboard
-managers, IMEs, rich-text editors, apps that modify selection during injection.
-
-Publish results as the per-platform capability matrix (§10, M7) — support promises must
-not outrun reality.
+- [x] **Matrix framework + probe** — *done*. `injection_matrix.py` (pure, tested): per
+      target (app × platform) tracks each dimension as pass/fail/partial/untested, with
+      method/version/latency; `overall` requires the load-bearing dimensions (plain_text +
+      clipboard_restore) and fails if any dimension fails; coverage stats, JSON round-trip,
+      Markdown capability-table rendering; `DEFAULT_TARGETS` = the starting app list,
+      `TEST_STRINGS` = the injection battery. `tools/injection_probe.py` is the interactive
+      operator harness (inject battery via the real `InputInjector`, time it, record
+      verdicts, merge into a versioned matrix JSON; `--render` prints the table). Covered by
+      `tests/test_injection_matrix.py` (10).
+- [x] **Clipboard restoration** — *done* (found missing during M2). The paste-injection
+      path (`injector._paste_raw`) previously clobbered the clipboard permanently. It now
+      snapshots the prior clipboard and restores it shortly after the paste
+      (`clipboard_capture.schedule_text_clipboard_restore`), but only if the injected text
+      is still on the clipboard — so a fresh copy is never overwritten. Profile field
+      `restore_clipboard_after_paste` (default true, sanitized) + settings toggle. Covered
+      by `tests/test_clipboard_restore.py` (8). This satisfies the §6.1 clipboard-restoration
+      reliability check for the paste path (Windows rich-format restore remains a follow-on).
+- [ ] **Fill the matrix against real apps** — `needs-hardware`. Run the probe across the
+      starting matrix (Chrome, Google Docs, Outlook, Word, VS Code, Discord, Slack, Notepad,
+      a terminal, an EHR-like web form, a remote-desktop environment) on each platform.
+      Known failure surfaces to probe: elevated windows, secure fields, browser/Electron
+      editors, games, RDP/Citrix, Wayland, full-screen apps, clipboard managers, IMEs,
+      rich-text editors, apps that modify selection during injection. Publish results as the
+      per-platform capability matrix (§10, M7) — support promises must not outrun reality.
 
 ---
 

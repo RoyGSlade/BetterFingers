@@ -247,6 +247,7 @@ const settingEls = {
   no_audio_min_peak: document.getElementById('settingNoAudioPeak'),
   auto_submit: document.getElementById('settingAutoSubmit'),
   instant_typing: document.getElementById('settingInstantTyping'),
+  restore_clipboard_after_paste: document.getElementById('settingRestoreClipboard'),
   voice_commands_enabled: document.getElementById('settingVoiceCommands'),
   macros_enabled: document.getElementById('settingMacrosEnabled'),
   audio_ducking: document.getElementById('settingAudioDucking'),
@@ -1479,7 +1480,7 @@ function renderProfileSettings(settings) {
     }
     if (el.type === 'checkbox') {
       // Some toggles default ON when the profile hasn't stored them yet.
-      const defaultOnKeys = new Set(['voice_commands_enabled', 'macros_enabled', 'confidence_force_review_enabled']);
+      const defaultOnKeys = new Set(['voice_commands_enabled', 'macros_enabled', 'confidence_force_review_enabled', 'restore_clipboard_after_paste']);
       const stored = activeProfileSettings[key];
       const value = stored === undefined && defaultOnKeys.has(key) ? true : Boolean(stored);
       el.checked = el.disabled ? false : value;

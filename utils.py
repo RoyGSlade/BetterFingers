@@ -317,6 +317,10 @@ def _sanitize_profile_values(config, defaults):
     cfg["audio_ducking"] = _coerce_bool(cfg.get("audio_ducking", d["audio_ducking"]), d["audio_ducking"])
     cfg["auto_submit"] = _coerce_bool(cfg.get("auto_submit", d["auto_submit"]), d["auto_submit"])
     cfg["instant_typing"] = _coerce_bool(cfg.get("instant_typing", d["instant_typing"]), d["instant_typing"])
+    cfg["restore_clipboard_after_paste"] = _coerce_bool(
+        cfg.get("restore_clipboard_after_paste", d["restore_clipboard_after_paste"]),
+        d["restore_clipboard_after_paste"],
+    )
     cfg["review_tts_enabled"] = _coerce_bool(cfg.get("review_tts_enabled", d["review_tts_enabled"]), d["review_tts_enabled"])
     cfg["llm_enabled"] = _coerce_bool(cfg.get("llm_enabled", d["llm_enabled"]), d["llm_enabled"])
     cfg["true_gen"] = _coerce_bool(cfg.get("true_gen", d["true_gen"]), d["true_gen"])
@@ -671,6 +675,9 @@ def _profile_defaults():
         "min_key_hold": 0.015,
         "max_key_hold": 0.035,
         "instant_typing": False,
+        # After a paste-injection, restore the user's prior clipboard so a draft
+        # doesn't clobber whatever they had copied (§7 clipboard restoration).
+        "restore_clipboard_after_paste": True,
         "chat_open_key": "",
         "voice_mute_key": "",
         "audio_ducking": False,
