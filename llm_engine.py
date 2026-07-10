@@ -1961,7 +1961,17 @@ class LLMEngine:
             )
             response.raise_for_status()
             result = response.json()
-            return result['choices'][0]['message']['content'].strip()
+            cleaned = result['choices'][0]['message']['content'].strip()
+            # An empty completion for non-empty input is a failure, not a clean.
+            # llama-server can return "" when its slot is still churning (seen live
+            # after a prior request timed out). Emitting it would silently replace
+            # the user's dictation with nothing — and the main dictation path has no
+            # raw fallback, so that empty string gets stored and injected as-is.
+            # Falling back to raw is never worse than raw; empty is data loss.
+            if not cleaned and str(text or "").strip():
+                logging.error("API returned empty completion for non-empty input; returning raw text.")
+                return text
+            return cleaned
         except Exception as e:
             logging.error(f"API Error: {e}")
             return text

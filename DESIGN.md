@@ -164,6 +164,16 @@ slot). Now `compute_api_read_timeout()` scales the read timeout to the token bud
 to end against a live gemma-4 llama-server: a 94-word dictation that silently no-op'd at 30s
 now cleans correctly in ~50s. Covered by `tests/test_api_timeout.py`.
 
+**LLM cleanup empty-output guard (sibling bug, found + fixed 2026-07-10).** Working backward
+from the timeout fix: `_call_api` returned the model's completion verbatim, so an *empty*
+completion (`""`) for real speech was handed straight back. llama-server genuinely emits `""`
+when its slot is still churning (e.g. right after a prior request timed out). The main
+dictation path (`server.py`) has **no raw fallback** — that empty string became the draft and
+would be injected, silently replacing the user's dictation with nothing (data loss, strictly
+worse than returning raw). Now an empty/whitespace completion for non-empty input falls back
+to the raw text at the source, protecting all four callers at once. Covered by
+`tests/test_llm_empty_output_guard.py`.
+
 **Known intentional behaviors (not bugs):**
 - Initial dictation cleanup uses the **True Janitor** preset regardless of the profile's
   `current_preset` (wiring the active preset into dictation is M5 work — behavior change).
@@ -209,12 +219,13 @@ only committed configuration plus documented model downloads.
       is fully unpinned and Electron deps use caret ranges.
 - [ ] **Pin the toolchain.** Python, Node, npm, PyInstaller, electron-builder, Electron
       itself; sidecar model/runtime versions; GitHub Actions by commit SHA.
-- [ ] **Root `README.md`** (currently missing): one-paragraph description, 30-second
-      workflow, feature matrix, supported OSes, hardware tiers (§12), privacy model,
-      install steps, dev setup (§13), architecture diagram, known limitations, roadmap
-      boundaries, license, screenshots, demo GIF, "A Source Arcanum project".
-- [ ] **`SECURITY.md`** + a security-issue reporting channel.
-- [ ] **`.github/FUNDING.yml`** (GitHub Sponsors + Ko-fi) — free-forever is the moat;
+- [x] **Root `README.md`** — *done* (description, 30-second workflow, feature matrix,
+      supported OSes, hardware tiers (§12), privacy model, install + dev setup (§13),
+      architecture diagram, known limitations, roadmap boundaries, MIT license, "A Source
+      Arcanum project"). *Remaining:* screenshots + demo GIF (`needs-manual-qa` — real
+      captures of the running app).
+- [x] **`SECURITY.md`** + a security-issue reporting channel — *done*.
+- [x] **`.github/FUNDING.yml`** (GitHub Sponsors + Ko-fi) — *done*. Free-forever is the moat;
       the donate button is the sustainability model.
 - [ ] **Release integrity:** SHA-256 checksums for artifacts; SBOM (CycloneDX or SPDX);
       GitHub artifact attestations/provenance.
