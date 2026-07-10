@@ -124,6 +124,13 @@
         outline: none;
       }
 
+      .draft-summary {
+        padding: 2px 11px 0;
+        color: var(--muted);
+        font-size: 0.72rem;
+        text-align: right;
+      }
+
       textarea:focus {
         border-color: rgba(102, 242, 193, 0.55);
       }
@@ -285,6 +292,7 @@
         <div class="text-stack">
           <div id="rawText" class="raw">No transcript yet.</div>
           <textarea id="finalText" spellcheck="true" placeholder="Cleaned output will appear here."></textarea>
+          <div id="draftSummary" class="draft-summary" aria-live="polite"></div>
         </div>
         <div id="instructionRow" class="instruction-row hidden">
           <textarea id="instructionText" placeholder="Record or type what you want changed."></textarea>
@@ -309,6 +317,15 @@
       </footer>
     </div>
 
+    <script type="module">
+      // Expose the pure summary formatter to the classic script below. Module
+      // scripts run before the load event but after the classic script's
+      // synchronous body; renderDraft only runs on later IPC/user events, so the
+      // global is always set by the time it is called.
+      import { formatDraftSummary } from './lib/draftSummary.mjs';
+      window.__formatDraftSummary = formatDraftSummary;
+    </script>
+
     <script>
       const BACKEND_ORIGIN = window.betterFingers?.backendOrigin || 'http://127.0.0.1:8000';
       const AUTH_TOKEN = window.betterFingers?.authToken || '';
@@ -318,7 +335,24 @@
       const statusEl = document.getElementById('status');
       const rawTextEl = document.getElementById('rawText');
       const finalTextEl = document.getElementById('finalText');
+      const draftSummaryEl = document.getElementById('draftSummary');
       const messageEl = document.getElementById('message');
+
+      // Draft word/length summary (Phase 8). Computed live from the textarea so
+      // the count stays accurate while the user edits. Falls back to a bare word
+      // count if the module helper somehow has not loaded yet.
+      function updateDraftSummary() {
+        if (!draftSummaryEl) return;
+        const text = finalTextEl?.value || '';
+        const limit = currentDraft?.token_limit;
+        if (typeof window.__formatDraftSummary === 'function') {
+          draftSummaryEl.textContent = window.__formatDraftSummary(text, limit);
+        } else {
+          const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+          draftSummaryEl.textContent = `${words} word${words === 1 ? '' : 's'}`;
+        }
+      }
+      finalTextEl?.addEventListener('input', updateDraftSummary);
       const instructionRow = document.getElementById('instructionRow');
       const instructionTextEl = document.getElementById('instructionText');
       const acceptButton = document.getElementById('acceptButton');
@@ -491,7 +525,8 @@
         statusEl.textContent = draft?.id ? `Draft #${draft.id}` : 'Waiting for draft';
         rawTextEl.textContent = draft?.raw_text || 'No transcript yet.';
         finalTextEl.value = draft?.final_text || '';
-        
+        updateDraftSummary();
+
         const stateMap = {
           'pending': 'pending',
           'accepted': 'accepted',

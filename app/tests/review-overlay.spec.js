@@ -82,6 +82,22 @@ test.describe('BetterFingers Review Overlay Tests', () => {
     await expect(reviewWindow.locator('#cancelButton')).toBeVisible();
   });
 
+  test('Draft summary shows the word count and updates live on edit', async () => {
+    const summary = reviewWindow.locator('#draftSummary');
+    await expect(summary).toBeVisible();
+    // Mock draft final text is "Mock cleaned and polished output." -> 5 words.
+    await expect(summary).toHaveText(/^5 words$/);
+
+    // Editing the final text recomputes the count live...
+    const finalText = reviewWindow.locator('#finalText');
+    await finalText.fill('one two three');
+    await expect(summary).toHaveText(/^3 words$/);
+
+    // ...then restore the original so later tests see the unedited draft.
+    await finalText.fill('Mock cleaned and polished output.');
+    await expect(summary).toHaveText(/^5 words$/);
+  });
+
   test('Read button calls TTS path and enters speaking state, then stop halts it', async () => {
     const readButton = reviewWindow.locator('#readButton');
     const statusBadge = reviewWindow.locator('#statusBadge');

@@ -272,9 +272,14 @@ repeatedly, not once.
       `tests/test_confidence_send_policy.py`. Completes C4's deferred silent-inject
       threshold. Not browser-preview-verifiable end-to-end (needs a real ASR-confidence
       draft + native send), so verified by unit tests + `node --check`.
-- [ ] **Review overlay draft summary** (Phase 8 remnant): token/word count summary on the
-      final draft in `review-overlay.html`; optional heartbeat so a long non-chunked LLM
-      call keeps status fresh past ~8s.
+- [x] **Review overlay draft summary** — *done*. A word-count summary (with a "long draft"
+      flag past the warning threshold) renders under the draft in `review-overlay.html` and
+      updates live as the user edits. The pure formatter lives in
+      `app/src/renderer/lib/draftSummary.mjs` (vite-bundled into the overlay, unit-tested
+      with `node --test` via `npm run test:unit`); a Playwright assertion in
+      `review-overlay.spec.js` covers the rendered DOM. Remaining sub-item: optional
+      heartbeat so a long *non-chunked* LLM call keeps status fresh past ~8s (nice-to-have;
+      the `rewriting` status already stays visible).
 - [x] **Cross-test state leak fixed** — `server.transcriber`/`tts_engine` module globals
       leaked across tests, so `test_token_concepts.py::Phase2PassThroughTest` failed only in
       the full run. An autouse fixture in `tests/conftest.py` now resets both around every
@@ -582,6 +587,8 @@ env respected end-to-end). Linux llama-server lives at
 ### Automated gates (every session)
 
 - `python3 -m pytest -q` — full Python suite green (639 tests as of this writing).
+- `cd app && npm run test:unit` — Node's built-in runner over `app/tests/**/*.test.mjs`
+  (pure renderer-helper units, e.g. the draft-summary formatter). Fast, no Electron.
 - `cd app && npx playwright test` — 19+ e2e (review-overlay spec needs a local LLM +
   llama-server; close any running instance first — single-instance lock).
 - `node --check` on touched renderer JS.
