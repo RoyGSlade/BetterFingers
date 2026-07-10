@@ -1,0 +1,203 @@
+{
+  "version": 1,
+  "results": [
+    {
+      "app": "Chrome text input",
+      "platform": "linux-x11",
+      "injection_method": "",
+      "app_version": "",
+      "latency_ms": null,
+      "notes": "",
+      "dimensions": {
+        "plain_text": "untested",
+        "multiline": "untested",
+        "unicode": "untested",
+        "punctuation": "untested",
+        "selection_replace": "untested",
+        "clipboard_restore": "untested",
+        "focus_loss": "untested",
+        "elevated": "untested"
+      }
+    },
+    {
+      "app": "Google Docs",
+      "platform": "linux-x11",
+      "injection_method": "",
+      "app_version": "",
+      "latency_ms": null,
+      "notes": "",
+      "dimensions": {
+        "plain_text": "untested",
+        "multiline": "untested",
+        "unicode": "untested",
+        "punctuation": "untested",
+        "selection_replace": "untested",
+        "clipboard_restore": "untested",
+        "focus_loss": "untested",
+        "elevated": "untested"
+      }
+    },
+    {
+      "app": "Outlook",
+      "platform": "linux-x11",
+      "injection_method": "",
+      "app_version": "",
+      "latency_ms": null,
+      "notes": "",
+      "dimensions": {
+        "plain_text": "untested",
+        "multiline": "untested",
+        "unicode": "untested",
+        "punctuation": "untested",
+        "selection_replace": "untested",
+        "clipboard_restore": "untested",
+        "focus_loss": "untested",
+        "elevated": "untested"
+      }
+    },
+    {
+      "app": "Word",
+      "platform": "linux-x11",
+      "injection_method": "",
+      "app_version": "",
+      "latency_ms": null,
+      "notes": "",
+      "dimensions": {
+        "plain_text": "untested",
+        "multiline": "untested",
+        "unicode": "untested",
+        "punctuation": "untested",
+        "selection_replace": "untested",
+        "clipboard_restore": "untested",
+        "focus_loss": "untested",
+        "elevated": "untested"
+      }
+    },
+    {
+      "app": "VS Code",
+      "platform": "linux-x11",
+      "injection_method": "",
+      "app_version": "",
+      "latency_ms": null,
+      "notes": "",
+      "dimensions": {
+        "plain_text": "untested",
+        "multiline": "untested",
+        "unicode": "untested",
+        "punctuation": "untested",
+        "selection_replace": "untested",
+        "clipboard_restore": "untested",
+        "focus_loss": "untested",
+        "elevated": "untested"
+      }
+    },
+    {
+      "app": "Discord",
+      "platform": "linux-x11",
+      "injection_method": "",
+      "app_version": "",
+      "latency_ms": null,
+      "notes": "",
+      "dimensions": {
+        "plain_text": "untested",
+        "multiline": "untested",
+        "unicode": "untested",
+        "punctuation": "untested",
+        "selection_replace": "untested",
+        "clipboard_restore": "untested",
+        "focus_loss": "untested",
+        "elevated": "untested"
+      }
+    },
+    {
+      "app": "Slack",
+      "platform": "linux-x11",
+      "injection_method": "",
+      "app_version": "",
+      "latency_ms": null,
+      "notes": "",
+      "dimensions": {
+        "plain_text": "untested",
+        "multiline": "untested",
+        "unicode": "untested",
+        "punctuation": "untested",
+        "selection_replace": "untested",
+        "clipboard_restore": "untested",
+        "focus_loss": "untested",
+        "elevated": "untested"
+      }
+    },
+    {
+      "app": "Notepad",
+      "platform": "linux-x11",
+      "injection_method": "",
+      "app_version": "",
+      "latency_ms": null,
+      "notes": "",
+      "dimensions": {
+        "plain_text": "untested",
+        "multiline": "untested",
+        "unicode": "untested",
+        "punctuation": "untested",
+        "selection_replace": "untested",
+        "clipboard_restore": "untested",
+        "focus_loss": "untested",
+        "elevated": "untested"
+      }
+    },
+    {
+      "app": "Terminal",
+      "platform": "linux-x11",
+      "injection_method": "xdotool",
+      "app_version": "gnome-terminal",
+      "latency_ms": null,
+      "notes": "Verified live: real InputInjector -> xdotool XTEST, exact readback (plain + punctuation + Unicode).",
+      "dimensions": {
+        "plain_text": "pass",
+        "multiline": "untested",
+        "unicode": "pass",
+        "punctuation": "pass",
+        "selection_replace": "untested",
+        "clipboard_restore": "pass",
+        "focus_loss": "untested",
+        "elevated": "untested"
+      }
+    },
+    {
+      "app": "EHR-like web form",
+      "platform": "linux-x11",
+      "injection_method": "",
+      "app_version": "",
+      "latency_ms": null,
+      "notes": "",
+      "dimensions": {
+        "plain_text": "untested",
+        "multiline": "untested",
+        "unicode": "untested",
+        "punctuation": "untested",
+        "selection_replace": "untested",
+        "clipboard_restore": "untested",
+        "focus_loss": "untested",
+        "elevated": "untested"
+      }
+    },
+    {
+      "app": "Remote desktop",
+      "platform": "linux-x11",
+      "injection_method": "",
+      "app_version": "",
+      "latency_ms": null,
+      "notes": "",
+      "dimensions": {
+        "plain_text": "untested",
+        "multiline": "untested",
+        "unicode": "untested",
+        "punctuation": "untested",
+        "selection_replace": "untested",
+        "clipboard_restore": "untested",
+        "focus_loss": "untested",
+        "elevated": "untested"
+      }
+    }
+  ]
+}

@@ -366,9 +366,17 @@ restoration, focus-loss behavior, elevated-window behavior, average latency.
       install `xclip`/`wl-clipboard`. Covered by `tests/test_injection_method_selection.py`
       (backend detection + hint). This is exactly the class of gap the matrix exists to
       surface — the app no longer promises injection it can't deliver.
-- [ ] **Fill the matrix against real apps** — `needs-hardware`. Run the probe across the
-      starting matrix (Chrome, Google Docs, Outlook, Word, VS Code, Discord, Slack, Notepad,
-      a terminal, an EHR-like web form, a remote-desktop environment) on each platform.
+- [x] **End-to-end injection verified on Linux X11** — the full loop was proven live: real
+      YouTube audio → Whisper → the real `InputInjector` → `xdotool` XTEST → **exact**
+      readback in a live window, for both plain text and Unicode/punctuation
+      (`It's been great… café—naïve, 50% "done" (test) — Ω≈ç.`). First real data point
+      recorded in `injection-matrix.json` (Terminal, linux-x11, xdotool:
+      plain/punctuation/unicode/clipboard_restore all pass — xdotool types directly and
+      never touches the clipboard). Note: xdotool typing needs no root; the clipboard-paste
+      path's `keyboard` Ctrl+V *does* need root on Linux, so xdotool is the real Linux path.
+- [ ] **Fill the rest of the matrix against real apps** — `needs-hardware`. Run the probe
+      across the starting matrix (Chrome, Google Docs, Outlook, Word, VS Code, Discord,
+      Slack, Notepad, an EHR-like web form, a remote-desktop environment) on each platform.
       Known failure surfaces to probe: elevated windows, secure fields, browser/Electron
       editors, games, RDP/Citrix, Wayland, full-screen apps, clipboard managers, IMEs,
       rich-text editors, apps that modify selection during injection. Publish results as the
