@@ -222,16 +222,21 @@ only committed configuration plus documented model downloads.
 
 ### 6.1 The reliability benchmark (the gate everything waits on)
 
-Automate what can be automated; script the manual remainder. Track pass/fail per run:
-
-- 100 consecutive dictations without unrecoverable failure.
-- 50 app restarts with backend startup recovery (no stranded UI, profile select populated).
-- Long-recording success at 5 / 15 / 30 / 60 minutes.
-- Audio-device unplug/replug recovery; sleep/resume recovery.
-- Model crash → restart recovery (bounded auto-restart already exists; verify under load).
-- Clipboard restoration correctness after injection.
-- No lost audio after interrupted processing (kill the sidecar mid-pipeline; recover).
-- Injection success across the M2 top-10 matrix.
+- [x] **Harness built** — `reliability_benchmark.py` (pure, unit-tested runner + report:
+      `run_repeated`/`run_once` never raise, they *record* failures; `BenchmarkReport`
+      computes one pass/fail gate where an unperformed manual check counts as *incomplete*,
+      not passed — silence is not success) + `tools/reliability_benchmark.py` (HTTP glue to
+      drive a live sidecar: a headless dictation core-loop over mock-draft → review →
+      accept → decline, backend-health-stability, recovery-bin + job-registry reachability;
+      emits a summary + JSON, exit 0 iff the gate passes). Covered by
+      `tests/test_reliability_benchmark.py` (15) incl. a fake-backend `build_report`.
+- [ ] **Run it to a green gate** — `needs-hardware`. The harness automates the plumbing,
+      but the full gate is only satisfiable on a provisioned machine (real mic + models +
+      target apps + sleep/resume). Track pass/fail per run for: 100 consecutive dictations;
+      50 app restarts with backend startup recovery; long-recording success at 5/15/30/60
+      min; audio-device unplug/replug; sleep/resume; model crash → restart recovery;
+      clipboard restoration; no lost audio after an interrupted pipeline; injection across
+      the M2 top-10 matrix. The manual checklist is enumerated in `MANUAL_CHECKS`.
 
 The core-loop suite (start → record → stop → transcribe → refine → review → edit → read
 aloud → inject → restore clipboard → save history → recover from backend restart) runs
