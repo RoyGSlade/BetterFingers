@@ -582,6 +582,29 @@ def get_persona_prompt(name, default=""):
     return str(default or "")
 
 
+def resolve_dictation_preset(current_preset):
+    """Resolve a profile's ``current_preset`` to a preset name safe to drive
+    dictation cleanup.
+
+    Falls back to ``"True Janitor"`` when the value is empty, or when it names a
+    persona that no longer exists (deleted or renamed after selection). A stale
+    selection must never break the core loop by pointing at a missing persona,
+    and the safe strict-cleanup default is what an unconfigured profile expects.
+    """
+    name = str(current_preset or "").strip()
+    if not name:
+        return "True Janitor"
+    if name in INTERNAL_PRESETS:
+        return name
+    if get_persona(name) is not None:
+        return name
+    logging.warning(
+        "current_preset %r not found (deleted/renamed?); falling back to True Janitor for dictation.",
+        name,
+    )
+    return "True Janitor"
+
+
 # Cap few-shot examples to keep context small (plan risk note: 3–5).
 MAX_FEW_SHOT_EXAMPLES = 5
 

@@ -15,7 +15,13 @@ class GetPipelineFlagsTests(unittest.TestCase):
             flags = server.get_pipeline_flags()
         self.assertEqual(
             flags,
-            {"voice_commands": True, "macros": True, "editing_commands": True, "app_commands": True},
+            {
+                "voice_commands": True,
+                "macros": True,
+                "editing_commands": True,
+                "app_commands": True,
+                "current_preset": "True Janitor",
+            },
         )
 
     def test_reads_explicit_values(self):
@@ -32,15 +38,39 @@ class GetPipelineFlagsTests(unittest.TestCase):
             flags = server.get_pipeline_flags()
         self.assertEqual(
             flags,
-            {"voice_commands": False, "macros": True, "editing_commands": False, "app_commands": False},
+            {
+                "voice_commands": False,
+                "macros": True,
+                "editing_commands": False,
+                "app_commands": False,
+                "current_preset": "True Janitor",
+            },
         )
+
+    def test_current_preset_is_read_from_profile(self):
+        with patch.object(server, "load_profile", return_value={"current_preset": "Formal"}):
+            flags = server.get_pipeline_flags()
+        self.assertEqual(flags["current_preset"], "Formal")
+
+    def test_current_preset_empty_string_falls_back_to_true_janitor(self):
+        # An empty stored value must not become "" — the dictation resolver expects
+        # a usable name, and "" would otherwise fall through its own guard.
+        with patch.object(server, "load_profile", return_value={"current_preset": ""}):
+            flags = server.get_pipeline_flags()
+        self.assertEqual(flags["current_preset"], "True Janitor")
 
     def test_falls_back_to_enabled_on_load_profile_error(self):
         with patch.object(server, "load_profile", side_effect=RuntimeError("boom")):
             flags = server.get_pipeline_flags()
         self.assertEqual(
             flags,
-            {"voice_commands": True, "macros": True, "editing_commands": True, "app_commands": True},
+            {
+                "voice_commands": True,
+                "macros": True,
+                "editing_commands": True,
+                "app_commands": True,
+                "current_preset": "True Janitor",
+            },
         )
 
     def test_voice_commands_enabled_delegates(self):

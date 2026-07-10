@@ -174,9 +174,16 @@ worse than returning raw). Now an empty/whitespace completion for non-empty inpu
 to the raw text at the source, protecting all four callers at once. Covered by
 `tests/test_llm_empty_output_guard.py`.
 
+**Active preset now drives dictation (wired 2026-07-10, was M5).** The 'current preset'
+settings dropdown lets the user pick a dictation persona and persists it (`current_preset`),
+but the dictation pipeline hardcoded **True Janitor** and ignored the choice — a dead control.
+`llm_engine.resolve_dictation_preset()` now maps the profile's `current_preset` to the preset
+used for cleanup, honoring internal presets and existing personas, and falling back to True
+Janitor when the value is empty or names a persona that was deleted/renamed after selection —
+so a stale choice never breaks the core loop. Resolved off the single hot-path profile read
+(`get_pipeline_flags`), no extra disk I/O. Covered by `tests/test_dictation_preset_resolution.py`.
+
 **Known intentional behaviors (not bugs):**
-- Initial dictation cleanup uses the **True Janitor** preset regardless of the profile's
-  `current_preset` (wiring the active preset into dictation is M5 work — behavior change).
 - Persona `model_hint` is stored metadata only; no model routing yet (M5).
 - `load_personas*()` return live cache objects (hot path); callers treat as read-only.
 
@@ -523,9 +530,10 @@ fixture versions.
 - [ ] **Persona editor polish (U7):** live prompt preview; full voice base/blend/speed +
       few-shot raw→out list UI inside the persona editor (Voice Studio schema is proven);
       `dictionary_scope` control.
-- [ ] **Wire the active preset into dictation** (today: True Janitor hardcoded by design)
-      and **model routing from `model_hint`** (gated so it never triggers surprise
-      downloads).
+- [x] **Wire the active preset into dictation** — *done* (`resolve_dictation_preset`,
+      honors `current_preset` with a True-Janitor fallback for empty/stale selections).
+      Remaining in this item: **model routing from `model_hint`** (gated so it never
+      triggers surprise downloads).
 - [ ] **Model catalog remainder (U8):** verified GGUF URLs for FunctionGemma-270M /
       Qwen3.5-2B; real non-Whisper STT integration (Moonshine / Parakeet-ONNX) behind the
       transcriber interface. Golden-audio WER gate (§13) must accept each model before it

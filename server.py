@@ -16,7 +16,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, W
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
-from llm_engine import get_engine, get_engine_if_initialized
+from llm_engine import get_engine, get_engine_if_initialized, resolve_dictation_preset
 from transcriber import Transcriber
 from hotkey_manager import HotkeyManager
 from audio_gate import should_block_for_no_audio
@@ -322,6 +322,7 @@ def get_pipeline_flags():
         "macros": bool(config.get("macros_enabled", True)),
         "editing_commands": bool(config.get("editing_commands_enabled", True)),
         "app_commands": bool(config.get("app_commands_enabled", True)),
+        "current_preset": str(config.get("current_preset", "True Janitor") or "True Janitor"),
     }
 
 
@@ -1254,6 +1255,10 @@ def process_recording_result(recording_result):
             raw_text = dictionary.correct_text(raw_text, dict_terms)
         # Single profile read backs both toggles below (each load_profile() call is disk I/O).
         pipeline_flags = get_pipeline_flags()
+        # Honour the user's selected persona for cleanup. resolve_dictation_preset
+        # falls back to True Janitor when the selection is empty or names a persona
+        # that no longer exists, so a stale choice never breaks the core loop.
+        preset = resolve_dictation_preset(pipeline_flags["current_preset"])
         # Phrase-history "scratch that": undo the previous utterance instead of
         # treating this one as new dictation. Checked before any other pass so
         # the command phrase itself never reaches the LLM.
