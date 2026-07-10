@@ -712,7 +712,7 @@ def lint_persona(persona):
 
 # ---------------------------------------------------------------------------
 # Persona Foundry: guided interview -> compile -> stress-test.
-# See docs/PERSONA_FOUNDRY_PLAN.md. Interview navigation, vagueness checks,
+# See DESIGN.md §11 (persona paradigm; full Foundry spec in git history). Interview navigation, vagueness checks,
 # and contradiction detection are deterministic/rule-based (fast, testable,
 # no model required); the LLM is only invoked later, at compile and
 # stress-test time, where generation is actually the point.

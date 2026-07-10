@@ -25,7 +25,7 @@ from model_manager import AVAILABLE_MODELS, DEFAULT_MODEL, get_models_dir
 _RUNTIME_OVERHEAD_MB = 750
 _RUNTIME_WEIGHT_FACTOR = 1.15
 
-# Stated minimum tier from docs/HARDWARE_GUIDE.md.
+# Stated minimum tier from DESIGN.md §12 (hardware tiers).
 _MIN_LOGICAL_THREADS = 12
 _MIN_PHYSICAL_CORES = 6
 

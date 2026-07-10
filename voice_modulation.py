@@ -5,7 +5,7 @@ transforms applied to a fully-generated audio buffer: pitch shift, loudness
 ("energy") gain, and warmth/brightness tone shelving. These are intentionally
 simple "quick nudge" sliders, not professional-grade audio restoration —
 mirrors this repo's existing "DEFERRED (audio-DSP, heavier)" stance on
-streaming/crossfade/loudness-normalization (see docs/MASTER_PLAN.md, U5).
+streaming/crossfade/loudness-normalization (see DESIGN.md §10 M5).
 
 `stability` has no function here: Kokoro's ONNX style-vector lookup has no
 exposed sampling temperature to modulate. It's a stored-only persona field

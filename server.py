@@ -3469,7 +3469,7 @@ async def tts_clone(file: UploadFile = File(...), name: str = Form("My Voice"), 
     """Save an uploaded sample as a clone source, gated on explicit consent
     and basic quality checks (voice_clone_qa). This does NOT perform actual
     voice-cloning synthesis — no cloning engine is installed (see
-    docs/MASTER_PLAN.md U6 / the plan doc's kokoclone note); it only gates
+    DESIGN.md §10 M5 cloning / its kokoclone note); it only gates
     and tags what gets saved, so a real engine can be wired in later without
     revisiting this validation/consent layer.
     """

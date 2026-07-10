@@ -8,7 +8,7 @@ checks are fully unit-testable; `check_file` is a thin wrapper for the
 dependency — `/tts/clone` only ever saves `.wav` uploads).
 
 This does not perform actual voice cloning — no cloning engine (NeuTTS Air /
-Chatterbox) is installed. See docs/MASTER_PLAN.md U6: cloning synthesis is
+Chatterbox) is installed. See DESIGN.md §10 M5: cloning synthesis is
 deferred; this module only gates what gets *saved* as a clone source.
 """
 import wave

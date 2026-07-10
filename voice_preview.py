@@ -1,5 +1,5 @@
 """Combined "what would this utterance do" preview — the pure logic behind
-the Voice Control settings test panel (docs/VOICE_CONTROL_PLAN.md scope 4):
+the Voice Control settings test panel (DESIGN.md §8 (voice control)):
 run text through both the app-command and editing-command parsers and report
 back what would happen, without executing anything.
 """
