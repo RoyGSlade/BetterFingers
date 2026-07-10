@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from llm_engine import get_engine, get_engine_if_initialized, resolve_dictation_preset
+from log_redaction import redact_user_text
 from transcriber import Transcriber
 from hotkey_manager import HotkeyManager
 from audio_gate import should_block_for_no_audio
@@ -959,7 +960,7 @@ def speak_text_aloud(text: str):
     engine = ensure_tts_initialized()
     if engine is not None:
         setattr(engine, "_kokoro_quantization", quantization)
-        logging.info(f"Speaking text aloud: '{phrase[:30]}...' (voice={voice_id}, speed={speed}x, quant={quantization})")
+        logging.info(f"Speaking text aloud: {redact_user_text(phrase)} (voice={voice_id}, speed={speed}x, quant={quantization})")
         engine.speak(phrase, speed=speed, voice_hint=voice_id)
 
 
@@ -3268,7 +3269,7 @@ async def speak_draft(draft_id: int, request: DraftTtsRequest):
         config = {}
 
     voice_id, speed, blend, modulation = _resolve_voice_and_modulation(request, config)
-    logging.info(f"Draft TTS Request: draft={draft_id} '{text[:20]}...' | Voice: {voice_id} | Speed: {speed}x")
+    logging.info(f"Draft TTS Request: draft={draft_id} {redact_user_text(text)} | Voice: {voice_id} | Speed: {speed}x")
 
     engine = ensure_tts_initialized()
     if engine is None:
@@ -3554,7 +3555,7 @@ async def tts_speak(request: TTSRequest):
         config = {}
 
     voice_id, speed, blend, modulation = _resolve_voice_and_modulation(request, config)
-    logging.info(f"TTS Request: '{text[:20]}...' | Voice: {voice_id} | Speed: {speed}x")
+    logging.info(f"TTS Request: {redact_user_text(text)} | Voice: {voice_id} | Speed: {speed}x")
 
     engine = ensure_tts_initialized()
     if engine is None:

@@ -2,6 +2,8 @@ import difflib
 import logging
 from enum import Enum
 
+from log_redaction import redact_user_text
+
 class IntentState(Enum):
     IDLE = "idle"
     LISTENING = "listening"
@@ -25,7 +27,7 @@ class IntentEngine:
         """
         Main logic for routing input based on State.
         """
-        logging.info(f"IntentEngine: Processing input in state {self.state.value}: '{text}'")
+        logging.info(f"IntentEngine: Processing input in state {self.state.value}: {redact_user_text(text)}")
         
         if self.state == IntentState.PLANNING:
             return self._handle_planning(text)

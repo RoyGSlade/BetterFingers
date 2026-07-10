@@ -492,6 +492,16 @@ diagnostic exports. Audit all of them; redact user content by default; emit inje
 *audit events* without storing the injected text; make diagnostics exports list exactly
 what they contain before the user sends them anywhere.
 
+- [x] **Redaction primitive + known dictation/TTS leaks** — *done*. `log_redaction.py`
+      (`redact_user_text`): user content logs as `<redacted N chars>` by default (length
+      kept for debugging, content never written); opt into raw with
+      `BETTERFINGERS_LOG_RAW_TEXT=1`. Wired into the sites that leaked dictated/TTS text by
+      default: `intent_engine.process_input` (logged the **full** utterance at INFO) and the
+      three `server.py` TTS log lines (leaked a 20–30 char preview). Covered by
+      `tests/test_log_redaction.py`.
+- [ ] **Remaining audit** — Electron console, sidecar/llama-server logs, tracebacks (wrap
+      user-text-bearing exceptions), MCP argument logging, diagnostics-export manifest.
+
 ### 9.4 Model & binary provenance (supply-chain boundary)
 
 Every managed model/runtime gets a manifest: stable ID, source repo, revision/commit,
