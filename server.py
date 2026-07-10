@@ -624,6 +624,54 @@ def count_draft_tokens(text):
     return len(str(text or "").split())
 
 
+def evaluate_confidence_send_policy(confidence, long_text, gate_reasons, config):
+    """Decide whether a draft may auto-send or must be reviewed first (Phase 12).
+
+    Pure — no I/O. Returns ``{"auto_send_ok": bool, "force_review": bool,
+    "reason": str}``. Only active when ``confidence_force_review_enabled``:
+
+    - a no-audio gate fired                    -> force review ("audio_gate")
+    - the draft is long                        -> force review ("long_draft")
+    - the ASR confidence score is missing       -> force review ("confidence_missing")
+    - score < confidence_force_review_below      -> force review ("low_confidence")
+    - score >= confidence_auto_send_above         -> auto-send eligible
+    - anything in between                        -> neither ("confidence_moderate")
+
+    ``auto_send_ok`` gates the auto-send-on-accept path in the review overlay, so
+    a mumbled or long utterance never silently injects even in ``auto_send`` mode.
+    """
+    cfg = config if isinstance(config, dict) else {}
+    enabled = bool(cfg.get("confidence_force_review_enabled", True))
+    try:
+        below = float(cfg.get("confidence_force_review_below", 0.55))
+    except (TypeError, ValueError):
+        below = 0.55
+    try:
+        above = float(cfg.get("confidence_auto_send_above", 0.85))
+    except (TypeError, ValueError):
+        above = 0.85
+
+    score = confidence.get("score") if isinstance(confidence, dict) else None
+
+    if not enabled:
+        return {"auto_send_ok": True, "force_review": False, "reason": ""}
+    if gate_reasons:
+        return {"auto_send_ok": False, "force_review": True, "reason": "audio_gate"}
+    if long_text:
+        return {"auto_send_ok": False, "force_review": True, "reason": "long_draft"}
+    if score is None:
+        return {"auto_send_ok": False, "force_review": True, "reason": "confidence_missing"}
+    try:
+        score = float(score)
+    except (TypeError, ValueError):
+        return {"auto_send_ok": False, "force_review": True, "reason": "confidence_missing"}
+    if score < below:
+        return {"auto_send_ok": False, "force_review": True, "reason": "low_confidence"}
+    if score >= above:
+        return {"auto_send_ok": True, "force_review": False, "reason": ""}
+    return {"auto_send_ok": False, "force_review": False, "reason": "confidence_moderate"}
+
+
 def update_draft_review_fields(draft):
     warning_words = get_active_long_draft_warning_words()
     token_count = count_draft_tokens(draft.get("final_text") or draft.get("raw_text") or "")
@@ -631,6 +679,16 @@ def update_draft_review_fields(draft):
     draft["token_limit"] = warning_words
     draft["long_text"] = token_count > warning_words
     draft["review_state"] = draft.get("review_state") or "ready"
+    try:
+        policy_config = load_profile(get_last_active_profile())
+    except Exception:
+        policy_config = {}
+    policy = evaluate_confidence_send_policy(
+        draft.get("confidence"), draft["long_text"], draft.get("gate_reasons"), policy_config
+    )
+    draft["auto_send_ok"] = policy["auto_send_ok"]
+    draft["force_review"] = policy["force_review"]
+    draft["force_review_reason"] = policy["reason"]
     return draft
 
 
@@ -1290,6 +1348,9 @@ def process_recording_result(recording_result):
                 "token_limit": draft["token_limit"],
                 "long_text": draft["long_text"],
                 "confidence": draft["confidence"],
+                "auto_send_ok": draft["auto_send_ok"],
+                "force_review": draft["force_review"],
+                "force_review_reason": draft["force_review_reason"],
             },
         )
         return draft

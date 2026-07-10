@@ -250,6 +250,22 @@ def _sanitize_profile_values(config, defaults):
     ).strip()
     cfg["recording_mode"] = _coerce_choice(cfg.get("recording_mode", d["recording_mode"]), d["recording_mode"], {"toggle", "ptt"})
     cfg["send_mode"] = _coerce_choice(cfg.get("send_mode", d["send_mode"]), d["send_mode"], {"review_first", "auto_send"})
+    cfg["confidence_force_review_enabled"] = _coerce_bool(
+        cfg.get("confidence_force_review_enabled", d["confidence_force_review_enabled"]),
+        d["confidence_force_review_enabled"],
+    )
+    cfg["confidence_force_review_below"] = _coerce_float(
+        cfg.get("confidence_force_review_below", d["confidence_force_review_below"]),
+        d["confidence_force_review_below"],
+        minimum=0.0,
+        maximum=1.0,
+    )
+    cfg["confidence_auto_send_above"] = _coerce_float(
+        cfg.get("confidence_auto_send_above", d["confidence_auto_send_above"]),
+        d["confidence_auto_send_above"],
+        minimum=0.0,
+        maximum=1.0,
+    )
     cfg["chat_close_action"] = _coerce_choice(
         cfg.get("chat_close_action", d["chat_close_action"]),
         d["chat_close_action"],
@@ -647,6 +663,13 @@ def _profile_defaults():
         "auto_submit": False,
         "sign_off_text": "",
         "send_mode": "review_first",
+        # Confidence-gated send policy (Phase 12): when enabled, a draft must be
+        # reviewed before it can auto-send unless the ASR confidence is high, the
+        # draft is short, and no no-audio gate fired. Keeps a mumbled utterance
+        # from silently injecting even in auto_send mode.
+        "confidence_force_review_enabled": True,
+        "confidence_force_review_below": 0.55,
+        "confidence_auto_send_above": 0.85,
         "output_token_limit": 1100,  # legacy alias for max_completion_tokens
         "max_completion_tokens": 1600,
         "long_draft_warning_words": 1200,
@@ -820,6 +843,19 @@ def validate_profile_settings(data: dict):
             raise ValueError("TTS Speed must be a float.")
         if not (0.5 <= val <= 3.0):
             raise ValueError("TTS Speed must be between 0.5 and 3.0.")
+
+    for _conf_field, _conf_label in (
+        ("confidence_force_review_below", "Force-Review Confidence"),
+        ("confidence_auto_send_above", "Auto-Send Confidence"),
+    ):
+        _conf_val = data.get(_conf_field)
+        if _conf_val is not None:
+            try:
+                val = float(_conf_val)
+            except (TypeError, ValueError):
+                raise ValueError(f"{_conf_label} must be a number.")
+            if not (0.0 <= val <= 1.0):
+                raise ValueError(f"{_conf_label} must be between 0.0 and 1.0.")
 
     no_audio_duration = data.get("no_audio_min_duration_sec")
     if no_audio_duration is not None:

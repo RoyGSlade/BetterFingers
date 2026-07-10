@@ -496,6 +496,39 @@
 
                 <div class="setting-row">
                   <div class="setting-info">
+                    <label class="status-label" for="settingConfidenceForceReview">Confidence-gated review</label>
+                    <span class="setting-desc">In Auto Send mode, still review drafts with low or missing transcription confidence (or long drafts) instead of injecting them silently.</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="custom-switch-label">
+                      <input id="settingConfidenceForceReview" type="checkbox" />
+                      <span class="custom-switch-slider"></span>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingConfidenceForceReviewBelow">Force review below</label>
+                    <span class="setting-desc">Confidence score (0–1) under which a draft always opens for review.</span>
+                  </div>
+                  <div class="setting-control">
+                    <input id="settingConfidenceForceReviewBelow" class="settings-input w-120" type="number" min="0" max="1" step="0.05" />
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingConfidenceAutoSendAbove">Auto-send above</label>
+                    <span class="setting-desc">Confidence score (0–1) at or above which a short draft may auto-send (Auto Send mode only).</span>
+                  </div>
+                  <div class="setting-control">
+                    <input id="settingConfidenceAutoSendAbove" class="settings-input w-120" type="number" min="0" max="1" step="0.05" />
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
                     <label class="status-label" for="settingAutoSubmit">Auto-submit</label>
                     <span class="setting-desc">Automatically hit Enter in the target application after sending.</span>
                   </div>

@@ -530,6 +530,19 @@
         }
       }
 
+      // Confidence-gated send policy (Phase 12): friendly text for why an
+      // auto-send was withheld and the draft must be sent manually.
+      function reviewReasonText(reason) {
+        switch (reason) {
+          case 'low_confidence': return 'low confidence';
+          case 'confidence_missing': return 'confidence unknown';
+          case 'confidence_moderate': return 'confidence not high enough';
+          case 'long_draft': return 'long draft';
+          case 'audio_gate': return 'audio check';
+          default: return '';
+        }
+      }
+
       async function acceptDraft() {
         if (!currentDraft?.id) return;
         stopTtsIfSpeaking();
@@ -538,8 +551,11 @@
         try {
           await refreshOutputSettings();
           await saveEdit();
+          const withheldForReview = currentDraft?.auto_send_ok === false;
           currentDraft = await postJson(`${BACKEND_ORIGIN}/drafts/${currentDraft.id}/accept`, {}, 10000);
-          if (outputSettings?.send_mode === 'auto_send') {
+          // Only auto-send when the profile is in auto_send mode AND the policy
+          // did not withhold this draft (low/missing confidence, long, or gated).
+          if (outputSettings?.send_mode === 'auto_send' && currentDraft?.auto_send_ok !== false) {
             const action = defaultSendAction();
             const sentDraft = await postJson(
               `${BACKEND_ORIGIN}/drafts/${currentDraft.id}/send`,
@@ -557,7 +573,15 @@
             }
           } else {
             renderDraft(currentDraft);
-            setOverlayState('accepted', 'Accepted. Press the primary action hotkey to send.');
+            if (withheldForReview && outputSettings?.send_mode === 'auto_send') {
+              const reason = reviewReasonText(currentDraft?.force_review_reason);
+              setOverlayState(
+                'accepted',
+                `Review required${reason ? ` (${reason})` : ''}. Press the primary action hotkey to send.`,
+              );
+            } else {
+              setOverlayState('accepted', 'Accepted. Press the primary action hotkey to send.');
+            }
           }
         } catch (error) {
           setOverlayState('error', `Accept failed: ${error.message}`);

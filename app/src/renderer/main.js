@@ -226,6 +226,9 @@ const settingEls = {
   chat_open_key: document.getElementById('settingChatOpenKey'),
   voice_mute_key: document.getElementById('settingVoiceMuteKey'),
   send_mode: document.getElementById('settingSendMode'),
+  confidence_force_review_enabled: document.getElementById('settingConfidenceForceReview'),
+  confidence_force_review_below: document.getElementById('settingConfidenceForceReviewBelow'),
+  confidence_auto_send_above: document.getElementById('settingConfidenceAutoSendAbove'),
   current_preset: document.getElementById('settingCurrentPreset'),
   max_completion_tokens: document.getElementById('settingMaxCompletionTokens'),
   long_draft_warning_words: document.getElementById('settingLongDraftWarningWords'),
@@ -1471,7 +1474,7 @@ function renderProfileSettings(settings) {
     }
     if (el.type === 'checkbox') {
       // Some toggles default ON when the profile hasn't stored them yet.
-      const defaultOnKeys = new Set(['voice_commands_enabled', 'macros_enabled']);
+      const defaultOnKeys = new Set(['voice_commands_enabled', 'macros_enabled', 'confidence_force_review_enabled']);
       const stored = activeProfileSettings[key];
       const value = stored === undefined && defaultOnKeys.has(key) ? true : Boolean(stored);
       el.checked = el.disabled ? false : value;
@@ -3642,6 +3645,19 @@ function runValidation() {
     }
   }
 
+  // 7b. Confidence-gated send thresholds (0.0 - 1.0)
+  for (const key of ['confidence_force_review_below', 'confidence_auto_send_above']) {
+    const el = settingEls[key];
+    if (el) {
+      const val = parseFloat(el.value);
+      if (isNaN(val) || val < 0.0 || val > 1.0) {
+        setValidationError(key, 'Confidence thresholds must be between 0.0 and 1.0.');
+      } else {
+        clearValidationError(key);
+      }
+    }
+  }
+
   // 8. Hotkeys Collision Detection
   const hotkeyFields = [
     'hotkey',
@@ -4031,6 +4047,9 @@ function updateVoiceStatus(message) {
       token_limit: message.token_limit,
       long_text: message.long_text,
       confidence: message.confidence,
+      auto_send_ok: message.auto_send_ok,
+      force_review: message.force_review,
+      force_review_reason: message.force_review_reason,
     };
     renderDraft(draft);
     if (message.status === 'preview_ready') {

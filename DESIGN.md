@@ -250,12 +250,19 @@ repeatedly, not once.
       false), `auto_stop_silence_ms` (900, 250–5000), `auto_stop_min_recording_ms` (700),
       RMS/peak thresholds defaulting to the no-audio gate values. Short pauses must not
       stop recording; stop reason persisted in recording metadata.
-- [ ] **Confidence-gated send policy** (not started). Profile fields
+- [x] **Confidence-gated send policy** — *done*. Profile fields
       `confidence_force_review_enabled` (default true), `confidence_force_review_below`
-      (0.55), `confidence_auto_send_above` (0.85). Policy: missing confidence → review;
-      low → review; long draft → review; no-audio gates fired → review; auto-send only
-      when high-confidence + short + profile explicitly allows. Forced-review reason
-      visible in draft metadata. This also completes C4's deferred silent-inject threshold.
+      (0.55), `confidence_auto_send_above` (0.85) in `utils.py` (sanitized + validated).
+      Pure `server.evaluate_confidence_send_policy()` returns
+      `{auto_send_ok, force_review, reason}`: missing/low confidence → review; long draft →
+      review; no-audio gate fired → review; auto-send only when high-confidence + short.
+      Stamped onto every draft by `update_draft_review_fields` and included in the
+      `preview_ready` payload; the review overlay only auto-sends on accept when
+      `auto_send_ok` (else shows the withhold reason). Settings UI added (enable toggle +
+      two thresholds with client + server validation). Covered by
+      `tests/test_confidence_send_policy.py`. Completes C4's deferred silent-inject
+      threshold. Not browser-preview-verifiable end-to-end (needs a real ASR-confidence
+      draft + native send), so verified by unit tests + `node --check`.
 - [ ] **Review overlay draft summary** (Phase 8 remnant): token/word count summary on the
       final draft in `review-overlay.html`; optional heartbeat so a long non-chunked LLM
       call keeps status fresh past ~8s.
