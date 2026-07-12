@@ -127,8 +127,15 @@ draft_lock = threading.RLock()
 MAX_DRAFT_HISTORY = 100
 is_processing_draft = False
 cancellation_event = threading.Event()
+# Single-flight gate for the dictation pipeline. is_processing_draft remains as
+# a read-only mirror for status displays/hotkey guards; the coordinator owns
+# admission (atomic try_begin) so competing invocations are rejected instead of
+# interleaving (a boolean is not a mutex).
+from dictation_coordinator import DictationCoordinator
+
+dictation_coordinator = DictationCoordinator(cancellation_event=cancellation_event)
 # The dictation pipeline is the first consumer of the central job registry
-# (§6.3). Only one dictation runs at a time (guarded by is_processing_draft), so
+# (§6.3). Only one dictation runs at a time (guarded by the coordinator), so
 # a single active-id pointer lets the /jobs cancel route target it.
 _active_dictation_job_id = None
 runtime_error_history = []
@@ -808,8 +815,11 @@ def perform_output_action(text, action="copy_only", open_chat=False):
         "message": "",
     }
 
-    final_text = str(text or "").strip()
-    if not final_text:
+    # Strip only to test emptiness — the user's whitespace (indentation,
+    # trailing newlines, deliberate blank lines) is content and must survive
+    # copy/type/paste unchanged.
+    final_text = str(text or "")
+    if not final_text.strip():
         payload.update({"message": "No text available to send.", "error": "empty_text"})
         return payload
 
@@ -906,16 +916,40 @@ def mark_draft_pending_send(draft):
         pending_manual_send_ids.append(draft["id"])
 
 
-def send_draft_by_id(draft_id, action=None, open_chat=False):
+def send_draft_by_id(draft_id, action=None, open_chat=False, allow_resend=False):
+    # Atomic state transition (compare-and-set to "sending" under the lock)
+    # so two simultaneous requests cannot both inject the same text. A request
+    # that loses the race gets the existing outcome instead of re-injecting.
     with draft_lock:
         draft = get_draft_by_id(draft_id)
         if draft is None:
             raise HTTPException(status_code=404, detail="Draft not found")
+        status = draft.get("status")
+        if status == "sending":
+            response = dict(draft)
+            response.update({"ok": False, "error": "send_in_progress",
+                             "message": "This draft is already being sent."})
+            return response
+        if status == "sent" and not allow_resend:
+            response = dict(draft)
+            response.update({"ok": False, "error": "already_sent",
+                             "message": "This draft was already sent; pass allow_resend to send again."})
+            return response
+        prior_status = status
+        draft["status"] = "sending"
         final_text = draft.get("final_text", "")
 
     settings = get_profile_output_settings()
     requested_action = action or ("open_chat_then_send" if settings["send_mode"] == "auto_send" else "copy_only")
-    result = perform_output_action(final_text, requested_action, open_chat=open_chat)
+    try:
+        result = perform_output_action(final_text, requested_action, open_chat=open_chat)
+    except BaseException:
+        # Never leave a draft wedged in "sending" — restore so a retry works.
+        with draft_lock:
+            wedged = get_draft_by_id(draft_id)
+            if wedged is not None and wedged.get("status") == "sending":
+                wedged["status"] = prior_status
+        raise
 
     with draft_lock:
         draft = get_draft_by_id(draft_id)
@@ -1201,13 +1235,35 @@ class _StatusHeartbeat:
 
 def process_recording_result(recording_result):
     global is_processing_draft, _active_dictation_job_id
+    # Atomic admission: exactly one pipeline may run. A rejected competitor
+    # must not clear the running job's cancellation event, overwrite its
+    # active id, or share the STT/LLM instances — so it persists its audio to
+    # the recovery bin and bows out (callers surface 409 / a busy status).
+    if not dictation_coordinator.try_begin():
+        logging.warning("Dictation pipeline busy; rejecting competing invocation.")
+        try:
+            recordings.save_recording(
+                recording_result,
+                rec_id=str(int(time.time() * 1000)),
+                metadata={
+                    "stop_reason": getattr(recording_result, "stop_reason", "manual"),
+                    "rejected_reason": "pipeline_busy",
+                },
+            )
+        except Exception as exc:
+            logging.debug(f"Could not persist rejected recording: {exc}")
+        broadcast_status_threadsafe(
+            "dictation_busy",
+            {"message": "A dictation is already processing; recording saved to recovery."},
+        )
+        return None
     with draft_lock:
         is_processing_draft = True
-    cancellation_event.clear()
 
     # Register this dictation as a job so the UI can observe/cancel it (§6.3).
     job = JOBS.create("dictation", label="Dictation")
     _active_dictation_job_id = job.id
+    dictation_coordinator.set_active_job(job.id)
     JOBS.transition(job.id, JobState.TRANSCRIBING)
 
     def check_cancelled():
@@ -1490,6 +1546,7 @@ def process_recording_result(recording_result):
         if active is not None and not active.is_terminal:
             JOBS.fail(job.id, "processing ended without a terminal state")
         _active_dictation_job_id = None
+        dictation_coordinator.finish()
         broadcast_status_threadsafe("idle")
 
 
@@ -2770,6 +2827,8 @@ async def retranscribe_recording(rec_id: str):
         stop_reason="recovery",
     )
     draft = await run_in_threadpool(process_recording_result, rr)
+    if draft is None:
+        raise HTTPException(status_code=409, detail="A dictation is already processing; try again shortly.")
     return {"ok": True, "draft": draft}
 
 
@@ -2999,7 +3058,12 @@ async def retry_draft(draft_id: int):
     if recording_result is None:
         raise HTTPException(status_code=409, detail="No recording data is available for this draft")
 
-    return process_recording_result(recording_result)
+    # Blocking model pipeline must not run on the event loop (it would starve
+    # /health and trip Electron's restart watchdog).
+    draft = await run_in_threadpool(process_recording_result, recording_result)
+    if draft is None:
+        raise HTTPException(status_code=409, detail="A dictation is already processing; try again shortly.")
+    return draft
 
 
 class DraftEditRequest(BaseModel):
@@ -3299,11 +3363,17 @@ async def speak_draft(draft_id: int, request: DraftTtsRequest):
 class DraftSendRequest(BaseModel):
     action: str = "copy_only"
     open_chat: bool = False
+    allow_resend: bool = False
 
 
 @app.post("/drafts/{draft_id}/send")
 async def send_draft(draft_id: int, request: DraftSendRequest = DraftSendRequest()):
-    return send_draft_by_id(draft_id, action=request.action, open_chat=request.open_chat)
+    return send_draft_by_id(
+        draft_id,
+        action=request.action,
+        open_chat=request.open_chat,
+        allow_resend=request.allow_resend,
+    )
 
 
 class VoiceCommandExecuteRequest(BaseModel):

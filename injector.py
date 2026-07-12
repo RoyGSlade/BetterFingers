@@ -99,12 +99,14 @@ class InputInjector:
         self.stop_signal = True
 
     def _compose_output_text(self, text: str) -> str:
-        base = (text or "").strip()
-        if not base:
+        # Whitespace is user content (indentation, trailing newlines, blank
+        # lines) — strip only to decide emptiness, never the sent text.
+        base = text or ""
+        if not base.strip():
             return ""
         sign_off = (self.config.get("sign_off_text", "") or "").strip()
         if sign_off:
-            base = f"{base} {sign_off}".strip()
+            base = f"{base} {sign_off}"
         return base
 
     def _type_via_external_tool(self, text: str) -> bool:
