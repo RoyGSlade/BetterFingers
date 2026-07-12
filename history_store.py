@@ -146,8 +146,47 @@ def upsert_draft(draft):
 
 
 def upsert_many(drafts):
+    """Batch upsert in ONE connection and ONE transaction. The previous
+    per-draft connection/commit turned every full-queue mirror into ~100
+    transactions — visible on slow disks and antivirus-heavy systems."""
+    global _write_count
+    rows = []
     for draft in drafts or []:
-        upsert_draft(draft)
+        if not isinstance(draft, dict) or draft.get("id") is None:
+            continue
+        try:
+            rows.append(_row_from_draft(draft))
+        except (TypeError, ValueError):
+            continue
+    if not rows:
+        return
+    init()
+    with _lock:
+        try:
+            conn = _connect()
+            try:
+                conn.executemany(
+                    """
+                    INSERT INTO drafts (id, created_at, status, profile, raw_text, final_text)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        created_at=excluded.created_at,
+                        status=excluded.status,
+                        profile=excluded.profile,
+                        raw_text=excluded.raw_text,
+                        final_text=excluded.final_text
+                    """,
+                    rows,
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as exc:
+            logging.debug(f"history_store batch upsert failed: {exc}")
+
+    _write_count += len(rows)
+    if _write_count >= _PRUNE_EVERY_N_WRITES and _write_count % _PRUNE_EVERY_N_WRITES < len(rows):
+        prune_history()
 
 
 def _row_to_dict(row):

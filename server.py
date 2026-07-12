@@ -193,16 +193,30 @@ runtime_error_history = []
 runtime_error_lock = threading.Lock()
 MAX_RUNTIME_ERROR_HISTORY = 50
 
-def save_draft_history():
+def save_draft_history(changed_draft_id=None):
+    """Persist the draft queue. Snapshot under the lock, IO outside it.
+
+    changed_draft_id narrows the searchable-archive mirror to the one draft
+    that actually changed (one small transaction) instead of re-upserting the
+    whole queue; the JSON queue snapshot is still written in full (bounded at
+    MAX_DRAFT_HISTORY) but atomically via temp-file + os.replace so a crash
+    mid-write cannot corrupt it.
+    """
     import json
     history_file = os.path.join(get_user_data_path(), "draft_history.json")
     try:
         with draft_lock:
             serializable_drafts = [dict(draft) for draft in draft_queue]
-        with open(history_file, "w", encoding="utf-8") as f:
+        tmp_file = history_file + ".tmp"
+        with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(serializable_drafts, f, indent=2)
+        os.replace(tmp_file, history_file)
         # Mirror into the searchable, uncapped archive (C8). Defensive: never fatal.
-        history_store.upsert_many(serializable_drafts)
+        if changed_draft_id is not None:
+            changed = [d for d in serializable_drafts if d.get("id") == changed_draft_id]
+            history_store.upsert_many(changed)
+        else:
+            history_store.upsert_many(serializable_drafts)
     except Exception as exc:
         logging.exception(f"Failed to save draft history to {history_file}: {exc}")
 
@@ -787,8 +801,13 @@ def create_draft(raw_text, final_text, preset="True Janitor", status="pending", 
             for removed_draft in removed:
                 draft_recordings.pop(removed_draft["id"], None)
 
-        save_draft_history()
-        return dict(draft)
+        response = dict(draft)
+        new_id = draft["id"]
+
+    # Persist outside the lock (§9): serializing + JSON + SQLite while holding
+    # the reentrant draft lock made every create stall concurrent draft reads.
+    save_draft_history(changed_draft_id=new_id)
+    return response
 
 
 def get_draft_by_id(draft_id):
@@ -1015,10 +1034,12 @@ def send_draft_by_id(draft_id, action=None, open_chat=False, allow_resend=False)
                 draft["status"] = "send_error"
                 draft["error"] = result.get("message", "Send failed.")
             response = dict(draft)
-            save_draft_history()
         else:
             response = {"id": draft_id, "send_result": result}
 
+    # Persist outside the lock: disk + SQLite IO must not serialize every
+    # other draft operation behind this send (§9).
+    save_draft_history(changed_draft_id=draft_id)
     broadcast_status_threadsafe("draft_sent" if result.get("ok") else "draft_send_error", {"draft_id": draft_id, "send_result": result})
     return response
 
@@ -3190,10 +3211,12 @@ async def accept_draft(draft_id: int):
                 draft["status"] = "accepted"
                 mark_draft_pending_send(draft)
                 response = dict(draft)
-                save_draft_history()
-                broadcast_status_threadsafe("draft_accepted", {"draft_id": draft_id, "pending_send": True})
-                return response
-    raise HTTPException(status_code=404, detail="Draft not found")
+                break
+        else:
+            raise HTTPException(status_code=404, detail="Draft not found")
+    save_draft_history(changed_draft_id=draft_id)
+    broadcast_status_threadsafe("draft_accepted", {"draft_id": draft_id, "pending_send": True})
+    return response
 
 
 @app.post("/drafts/{draft_id}/decline")
@@ -3206,10 +3229,12 @@ async def decline_draft(draft_id: int):
                 while draft_id in pending_manual_send_ids:
                     pending_manual_send_ids.remove(draft_id)
                 response = dict(draft)
-                save_draft_history()
-                broadcast_status_threadsafe("draft_declined", {"draft_id": draft_id})
-                return response
-    raise HTTPException(status_code=404, detail="Draft not found")
+                break
+        else:
+            raise HTTPException(status_code=404, detail="Draft not found")
+    save_draft_history(changed_draft_id=draft_id)
+    broadcast_status_threadsafe("draft_declined", {"draft_id": draft_id})
+    return response
 
 
 @app.post("/drafts/{draft_id}/retry")
@@ -3411,8 +3436,8 @@ async def edit_draft(draft_id: int, request: DraftEditRequest):
         draft["updated_at"] = datetime.now(timezone.utc).isoformat()
         update_draft_review_fields(draft)
         response = dict(draft)
-        save_draft_history()
 
+    save_draft_history(changed_draft_id=draft_id)
     broadcast_status_threadsafe(
         "draft_updated",
         {
@@ -3449,7 +3474,7 @@ async def rewrite_draft(draft_id: int, request: DraftRewriteRequest):
             draft["updated_at"] = datetime.now(timezone.utc).isoformat()
             update_draft_review_fields(draft)
             response = dict(draft)
-            save_draft_history()
+        save_draft_history(changed_draft_id=draft_id)
         broadcast_status_threadsafe(
             "draft_rewritten",
             {

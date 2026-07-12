@@ -805,12 +805,16 @@ class ServerDraftTests(unittest.TestCase):
     def test_draft_persistence_save_and_load(self):
         server.create_draft("raw persist", "final persist")
         
-        # Stop the global mock so we can test the real save function
+        # Stop the global mock so we can test the real save function. The save
+        # is atomic now: it writes a temp file and os.replace()s it into place.
         self._save_draft_patcher.stop()
         try:
-            with patch("server.get_user_data_path", return_value="/tmp"), patch("builtins.open", new_callable=unittest.mock.mock_open) as mock_file:
+            with patch("server.get_user_data_path", return_value="/tmp"), \
+                 patch("builtins.open", new_callable=unittest.mock.mock_open) as mock_file, \
+                 patch("server.os.replace") as mock_replace:
                 server.save_draft_history()
-                mock_file.assert_called_with("/tmp/draft_history.json", "w", encoding="utf-8")
+                mock_file.assert_called_with("/tmp/draft_history.json.tmp", "w", encoding="utf-8")
+                mock_replace.assert_called_with("/tmp/draft_history.json.tmp", "/tmp/draft_history.json")
         finally:
             self._save_draft_patcher.start()
 
