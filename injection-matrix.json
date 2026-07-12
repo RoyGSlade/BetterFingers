@@ -2,24 +2,6 @@
   "version": 1,
   "results": [
     {
-      "app": "Chrome text input",
-      "platform": "linux-x11",
-      "injection_method": "",
-      "app_version": "",
-      "latency_ms": null,
-      "notes": "",
-      "dimensions": {
-        "plain_text": "untested",
-        "multiline": "untested",
-        "unicode": "untested",
-        "punctuation": "untested",
-        "selection_replace": "untested",
-        "clipboard_restore": "untested",
-        "focus_loss": "untested",
-        "elevated": "untested"
-      }
-    },
-    {
       "app": "Google Docs",
       "platform": "linux-x11",
       "injection_method": "",
@@ -57,24 +39,6 @@
     },
     {
       "app": "Word",
-      "platform": "linux-x11",
-      "injection_method": "",
-      "app_version": "",
-      "latency_ms": null,
-      "notes": "",
-      "dimensions": {
-        "plain_text": "untested",
-        "multiline": "untested",
-        "unicode": "untested",
-        "punctuation": "untested",
-        "selection_replace": "untested",
-        "clipboard_restore": "untested",
-        "focus_loss": "untested",
-        "elevated": "untested"
-      }
-    },
-    {
-      "app": "VS Code",
       "platform": "linux-x11",
       "injection_method": "",
       "app_version": "",
@@ -146,25 +110,7 @@
       }
     },
     {
-      "app": "Terminal",
-      "platform": "linux-x11",
-      "injection_method": "xdotool",
-      "app_version": "gnome-terminal",
-      "latency_ms": null,
-      "notes": "Verified live: real InputInjector -> xdotool XTEST, exact readback (plain + punctuation + Unicode).",
-      "dimensions": {
-        "plain_text": "pass",
-        "multiline": "untested",
-        "unicode": "pass",
-        "punctuation": "pass",
-        "selection_replace": "untested",
-        "clipboard_restore": "pass",
-        "focus_loss": "untested",
-        "elevated": "untested"
-      }
-    },
-    {
-      "app": "EHR-like web form",
+      "app": "Remote desktop",
       "platform": "linux-x11",
       "injection_method": "",
       "app_version": "",
@@ -182,18 +128,90 @@
       }
     },
     {
-      "app": "Remote desktop",
+      "app": "Terminal",
       "platform": "linux-x11",
-      "injection_method": "",
-      "app_version": "",
-      "latency_ms": null,
-      "notes": "",
+      "injection_method": "xdotool",
+      "app_version": "# GNOME Terminal 3.52.0 using VTE 0.76.0 +BIDI +GNUTLS +ICU +SYSTEMD",
+      "latency_ms": 323.5,
+      "notes": "automated exact-match probe: gnome-terminal + cat readback; xdotool XTEST",
       "dimensions": {
-        "plain_text": "untested",
-        "multiline": "untested",
-        "unicode": "untested",
-        "punctuation": "untested",
+        "plain_text": "pass",
+        "multiline": "pass",
+        "unicode": "pass",
+        "punctuation": "pass",
         "selection_replace": "untested",
+        "clipboard_restore": "untested",
+        "focus_loss": "untested",
+        "elevated": "untested"
+      }
+    },
+    {
+      "app": "VS Code",
+      "platform": "linux-x11",
+      "injection_method": "xdotool",
+      "app_version": "1.128.0",
+      "latency_ms": 331.3,
+      "notes": "automated: per-dimension ctrl+a replace + ctrl+s file readback; no Enter (autocomplete interferes); xdotool XTEST",
+      "dimensions": {
+        "plain_text": "pass",
+        "multiline": "pass",
+        "unicode": "pass",
+        "punctuation": "pass",
+        "selection_replace": "pass",
+        "clipboard_restore": "pass",
+        "focus_loss": "untested",
+        "elevated": "untested"
+      }
+    },
+    {
+      "app": "Chrome text input",
+      "platform": "linux-x11",
+      "injection_method": "xdotool",
+      "app_version": "Google Chrome 150.0.7871.114",
+      "latency_ms": 327.4,
+      "notes": "automated exact-match probe; xdotool XTEST; plain textarea, chrome --app window; ctrl+a/c clipboard readback",
+      "dimensions": {
+        "plain_text": "pass",
+        "multiline": "pass",
+        "unicode": "pass",
+        "punctuation": "pass",
+        "selection_replace": "untested",
+        "clipboard_restore": "pass",
+        "focus_loss": "untested",
+        "elevated": "untested"
+      }
+    },
+    {
+      "app": "EHR-like web form",
+      "platform": "linux-x11",
+      "injection_method": "xdotool",
+      "app_version": "",
+      "latency_ms": 323.1,
+      "notes": "automated: local form (input/textarea/contenteditable); clipboard readback; xdotool XTEST",
+      "dimensions": {
+        "plain_text": "pass",
+        "multiline": "pass",
+        "unicode": "pass",
+        "punctuation": "pass",
+        "selection_replace": "pass",
+        "clipboard_restore": "pass",
+        "focus_loss": "untested",
+        "elevated": "untested"
+      }
+    },
+    {
+      "app": "LibreOffice Writer",
+      "platform": "linux-x11",
+      "injection_method": "xdotool",
+      "app_version": "LibreOffice 24.2.7.2 420(Build:2)",
+      "latency_ms": 758.4,
+      "notes": "automated: ctrl+a replace + clipboard readback; stock autocorrect ON; xdotool XTEST",
+      "dimensions": {
+        "plain_text": "partial",
+        "multiline": "partial",
+        "unicode": "partial",
+        "punctuation": "partial",
+        "selection_replace": "pass",
         "clipboard_restore": "untested",
         "focus_loss": "untested",
         "elevated": "untested"
