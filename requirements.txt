@@ -1,5 +1,6 @@
 # ---- Core ----
 Pillow                      # Image processing (tray icon, overlays)
+psutil                      # Hardware metrics (RAM / cores for hardware_report)
 numpy                       # Numeric arrays for audio processing
 scipy                       # Signal processing (audio gate)
 

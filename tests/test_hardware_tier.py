@@ -25,6 +25,24 @@ class ClassifyTierTests(unittest.TestCase):
         result = classify_tier(ram_mb=16000, vram_mb=None, gpu_kind="discrete", cores=8)
         self.assertTrue(result["tier"].startswith("dgpu"))
 
+    def test_cuda_kind_is_dedicated_not_cpu_only(self):
+        # Regression: _detect_gpu() reports kind="cuda" for nvidia-smi devices;
+        # this used to fall through to cpu-only (seen live on an RTX 4060 Ti).
+        result = classify_tier(ram_mb=32000, vram_mb=16380, gpu_kind="cuda", cores=8)
+        self.assertEqual(result["tier"], "dgpu-12g+")
+
+    def test_cuda_8gb(self):
+        result = classify_tier(ram_mb=16000, vram_mb=8192, gpu_kind="cuda", cores=8)
+        self.assertEqual(result["tier"], "dgpu-8g")
+
+    def test_cuda_unknown_vram_still_dedicated(self):
+        result = classify_tier(ram_mb=16000, vram_mb=None, gpu_kind="cuda", cores=8)
+        self.assertTrue(result["tier"].startswith("dgpu"))
+
+    def test_gpu_kind_is_case_insensitive(self):
+        result = classify_tier(ram_mb=32000, vram_mb=16380, gpu_kind="CUDA", cores=8)
+        self.assertEqual(result["tier"], "dgpu-12g+")
+
     def test_low_ram_warns(self):
         result = classify_tier(ram_mb=4000, vram_mb=None, gpu_kind="none", cores=2)
         self.assertEqual(result["tier"], "cpu-only")
