@@ -2764,46 +2764,108 @@ class PrivacyWipeRequest(BaseModel):
     wipe_voices: bool = False
 
 
+def _perform_privacy_wipe(wipe_voices: bool):
+    """Quiesce, delete, verify — and only claim success when verification
+    passes. Reaching the final line is not proof of an empty landfill."""
+    cleared = {}
+    postconditions = {}
+
+    # 1. Quiesce: stop any active recording so it cannot complete (and
+    #    re-persist audio) after the wipe...
+    if hotkey_manager is not None and bool(getattr(hotkey_manager, "is_recording", False)):
+        try:
+            hotkey_manager.request_stop(reason="privacy_wipe")
+            cleared["recording_stopped"] = True
+        except Exception as exc:
+            logging.warning(f"Privacy wipe: could not stop active recording: {exc}")
+            cleared["recording_stopped"] = False
+
+    # ...cancel the active dictation, and hold the pipeline gate for the
+    # duration of the deletion so no worker recreates stores mid-wipe.
+    dictation_coordinator.cancel_active()
+    gate_deadline = time.monotonic() + 10.0
+    gate_held = False
+    while time.monotonic() < gate_deadline:
+        if dictation_coordinator.try_begin():
+            gate_held = True
+            break
+        time.sleep(0.1)
+    cleared["pipeline_quiesced"] = gate_held
+    if not gate_held:
+        logging.warning("Privacy wipe: pipeline did not quiesce within 10s; proceeding anyway.")
+
+    try:
+        # 2. Delete in-memory queues.
+        with draft_lock:
+            cleared["drafts"] = len(draft_queue)
+            cleared["recordings"] = len(draft_recordings)
+            draft_queue.clear()
+            draft_recordings.clear()
+            pending_manual_send_ids.clear()
+        save_draft_history()
+
+        # 3. Delete on-disk stores.
+        history_file = os.path.join(get_user_data_path(), "draft_history.json")
+        try:
+            if os.path.exists(history_file):
+                os.remove(history_file)
+            cleared["history_file_removed"] = not os.path.exists(history_file)
+        except OSError as exc:
+            logging.warning(f"Could not remove draft history file: {exc}")
+            cleared["history_file_removed"] = False
+
+        db_result = history_store.wipe_database()
+        cleared["history_db_wiped"] = db_result
+
+        cleared["recordings_files_removed"] = recordings.clear_recordings()
+
+        if wipe_voices:
+            voices_dir = get_app_data_dir() / "voices"
+            try:
+                if voices_dir.exists():
+                    # No ignore_errors: a suppressed failure must not report
+                    # success. Verified below regardless.
+                    shutil.rmtree(voices_dir)
+            except OSError as exc:
+                logging.warning(f"Could not remove voices dir: {exc}")
+            cleared["voices_removed"] = not voices_dir.exists()
+
+        # 4. Verify every target and report per-path postconditions.
+        leftover_recordings = recordings.list_leftover_files()
+        postconditions = {
+            "draft_queue_empty": len(draft_queue) == 0,
+            "history_file_absent": not os.path.exists(history_file),
+            "history_db_wiped": bool(db_result.get("ok")),
+            "recordings_dir_empty": not leftover_recordings,
+            "leftover_recordings": leftover_recordings[:20],
+        }
+        if wipe_voices:
+            postconditions["voices_absent"] = not (get_app_data_dir() / "voices").exists()
+    finally:
+        if gate_held:
+            dictation_coordinator.finish()
+
+    ok = all(v for k, v in postconditions.items() if k != "leftover_recordings")
+    broadcast_status_threadsafe("draft_history_cleared")
+    return {
+        "ok": ok,
+        "cleared": cleared,
+        "postconditions": postconditions,
+        "message": "Your data was wiped." if ok else
+                   "Wipe finished with leftovers — see postconditions. Data may remain.",
+    }
+
+
 @app.post("/privacy/wipe")
 async def privacy_wipe(request: PrivacyWipeRequest = PrivacyWipeRequest()):
     """Delete app-generated conversational data: drafts, the draft-history
     file, the searchable history database (C8), and persisted raw-audio
     recordings (C6), plus in-memory queues. Models and profiles are
     intentionally NOT touched; cloned voices are removed only when
-    explicitly requested."""
-    cleared = {}
-    with draft_lock:
-        cleared["drafts"] = len(draft_queue)
-        cleared["recordings"] = len(draft_recordings)
-        draft_queue.clear()
-        draft_recordings.clear()
-        pending_manual_send_ids.clear()
-    save_draft_history()
-
-    history_file = os.path.join(get_user_data_path(), "draft_history.json")
-    try:
-        if os.path.exists(history_file):
-            os.remove(history_file)
-            cleared["history_file_removed"] = True
-    except OSError as exc:
-        logging.warning(f"Could not remove draft history file: {exc}")
-        cleared["history_file_removed"] = False
-
-    cleared["history_db_cleared"] = history_store.clear()
-    cleared["recordings_files_removed"] = recordings.clear_recordings()
-
-    if request.wipe_voices:
-        voices_dir = get_app_data_dir() / "voices"
-        try:
-            if voices_dir.exists():
-                shutil.rmtree(voices_dir, ignore_errors=True)
-                cleared["voices_removed"] = True
-        except OSError as exc:
-            logging.warning(f"Could not remove voices dir: {exc}")
-            cleared["voices_removed"] = False
-
-    broadcast_status_threadsafe("draft_history_cleared")
-    return {"ok": True, "cleared": cleared, "message": "Your data was wiped."}
+    explicitly requested. Note: without at-rest encryption this is logical
+    deletion — nothing readable remains through the app or its files, but
+    SSD-level forensic erasure is not promised."""
+    return await run_in_threadpool(_perform_privacy_wipe, request.wipe_voices)
 
 
 @app.get("/mcp/status")
@@ -2835,6 +2897,9 @@ async def list_recordings_endpoint():
 
 @app.post("/recordings/{rec_id}/retranscribe")
 async def retranscribe_recording(rec_id: str):
+    # A recording id becomes a filename; reject anything path-shaped (§10).
+    if not recordings.is_valid_rec_id(rec_id):
+        raise HTTPException(status_code=400, detail="Invalid recording id.")
     import numpy as np
     from recorder import RecordingResult
 
@@ -2861,6 +2926,8 @@ async def retranscribe_recording(rec_id: str):
 
 @app.delete("/recordings/{rec_id}")
 async def delete_recording_endpoint(rec_id: str):
+    if not recordings.is_valid_rec_id(rec_id):
+        raise HTTPException(status_code=400, detail="Invalid recording id.")
     removed = recordings.delete_recording(rec_id)
     return {"ok": True, "removed": removed}
 

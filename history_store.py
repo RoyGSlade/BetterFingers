@@ -270,6 +270,36 @@ def clear():
             return False
 
 
+def wipe_database():
+    """Physically remove the database plus its -wal/-shm companions, then
+    recreate an empty store. A logical DELETE leaves content recoverable in
+    SQLite free pages and the WAL; a privacy wipe must remove the files.
+    (Without at-rest encryption this is still logical deletion at the
+    filesystem level — SSD forensics are out of scope — but nothing readable
+    remains through SQLite or the files themselves.)
+
+    Returns {"ok": bool, "removed": [...], "failed": [...], "leftover": [...]}.
+    """
+    base = _db_path()
+    targets = [base, base + "-wal", base + "-shm"]
+    removed, failed = [], []
+    with _lock:
+        for path in targets:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+                    removed.append(os.path.basename(path))
+            except OSError as exc:
+                logging.warning(f"history_store wipe: could not remove {path}: {exc}")
+                failed.append(os.path.basename(path))
+    leftover = [os.path.basename(p) for p in targets if os.path.exists(p)]
+    try:
+        init()  # recreate an empty schema so the app keeps working
+    except Exception as exc:
+        logging.warning(f"history_store wipe: reinit failed: {exc}")
+    return {"ok": not failed and not leftover, "removed": removed, "failed": failed, "leftover": leftover}
+
+
 def migrate_from_json(json_path):
     """One-time backfill from draft_history.json when the archive is empty."""
     init()

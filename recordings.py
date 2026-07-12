@@ -7,6 +7,7 @@ re-transcription from the recovery UI.
 import json
 import logging
 import os
+import re
 import time
 
 import numpy as np
@@ -17,6 +18,22 @@ from utils import get_user_data_path
 # Keep at most this many recordings on disk (oldest pruned first).
 MAX_RECORDINGS = 50
 
+# Recording ids become filenames. Internally generated ids are millisecond
+# timestamps, but the HTTP API accepts the id as a path parameter — so it must
+# never be allowed to carry path components ("../", separators, drive letters).
+_VALID_REC_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def is_valid_rec_id(rec_id):
+    return bool(_VALID_REC_ID.match(str(rec_id or "")))
+
+
+def _safe_rec_id(rec_id):
+    rec_id = str(rec_id or "")
+    if not _VALID_REC_ID.match(rec_id):
+        raise ValueError(f"Invalid recording id: {rec_id!r}")
+    return rec_id
+
 
 def get_recordings_dir():
     path = os.path.join(get_user_data_path(), "recordings")
@@ -24,12 +41,21 @@ def get_recordings_dir():
     return path
 
 
+def _resolve_inside_recordings_dir(filename):
+    """Join + resolve, refusing anything that escapes the recordings dir."""
+    directory = os.path.realpath(get_recordings_dir())
+    path = os.path.realpath(os.path.join(directory, filename))
+    if os.path.commonpath([directory, path]) != directory:
+        raise ValueError(f"Recording path escapes recordings dir: {filename!r}")
+    return path
+
+
 def _wav_path(rec_id):
-    return os.path.join(get_recordings_dir(), f"{rec_id}.wav")
+    return _resolve_inside_recordings_dir(f"{_safe_rec_id(rec_id)}.wav")
 
 
 def _meta_path(rec_id):
-    return os.path.join(get_recordings_dir(), f"{rec_id}.json")
+    return _resolve_inside_recordings_dir(f"{_safe_rec_id(rec_id)}.json")
 
 
 def save_recording(recording_result, rec_id, metadata=None):
@@ -42,13 +68,13 @@ def save_recording(recording_result, rec_id, metadata=None):
     sample_rate = int(getattr(recording_result, "sample_rate", 16000) or 16000)
     rec_id = str(rec_id)
 
-    try:
-        # scipy writes float32 as IEEE-float WAV, which re-reads losslessly.
-        data = np.asarray(audio, dtype=np.float32)
-        wavfile.write(_wav_path(rec_id), sample_rate, data)
-    except Exception as exc:
-        logging.warning(f"Failed to persist recording {rec_id}: {exc}")
-        return None
+    # Write both files under temporary names and promote them together, so a
+    # failure between the two writes cannot strand an orphaned WAV that a
+    # metadata-driven cleanup would never find.
+    wav_path = _wav_path(rec_id)
+    meta_path = _meta_path(rec_id)
+    wav_tmp = wav_path + ".tmp"
+    meta_tmp = meta_path + ".tmp"
 
     record = {
         "id": rec_id,
@@ -59,10 +85,22 @@ def save_recording(recording_result, rec_id, metadata=None):
         "metadata": metadata or {},
     }
     try:
-        with open(_meta_path(rec_id), "w", encoding="utf-8") as handle:
+        # scipy writes float32 as IEEE-float WAV, which re-reads losslessly.
+        data = np.asarray(audio, dtype=np.float32)
+        wavfile.write(wav_tmp, sample_rate, data)
+        with open(meta_tmp, "w", encoding="utf-8") as handle:
             json.dump(record, handle)
-    except OSError as exc:
-        logging.warning(f"Failed to write recording metadata {rec_id}: {exc}")
+        os.replace(wav_tmp, wav_path)
+        os.replace(meta_tmp, meta_path)
+    except Exception as exc:
+        logging.warning(f"Failed to persist recording {rec_id}: {exc}")
+        for leftover in (wav_tmp, meta_tmp):
+            try:
+                if os.path.exists(leftover):
+                    os.remove(leftover)
+            except OSError:
+                pass
+        return None
 
     prune_recordings()
     return record
@@ -88,7 +126,11 @@ def list_recordings():
 
 def load_recording_audio(rec_id):
     """Read a persisted WAV back into a float32 numpy array + sample rate."""
-    path = _wav_path(str(rec_id))
+    try:
+        path = _wav_path(rec_id)
+    except ValueError as exc:
+        logging.warning(str(exc))
+        return None, None
     if not os.path.exists(path):
         return None, None
     sample_rate, data = wavfile.read(path)
@@ -100,9 +142,13 @@ def load_recording_audio(rec_id):
 
 
 def delete_recording(rec_id):
-    rec_id = str(rec_id)
+    try:
+        paths = (_wav_path(rec_id), _meta_path(rec_id))
+    except ValueError as exc:
+        logging.warning(str(exc))
+        return False
     removed = False
-    for path in (_wav_path(rec_id), _meta_path(rec_id)):
+    for path in paths:
         try:
             if os.path.exists(path):
                 os.remove(path)
@@ -113,11 +159,30 @@ def delete_recording(rec_id):
 
 
 def clear_recordings():
+    """Delete every recognized recording file by enumerating the directory —
+    not just entries with valid JSON metadata — so orphaned WAVs, corrupt
+    sidecars, and interrupted temp files are all swept (privacy wipe must not
+    leave audio behind). Returns the number of files removed."""
+    directory = get_recordings_dir()
     count = 0
-    for record in list_recordings():
-        if delete_recording(record.get("id")):
+    for name in os.listdir(directory):
+        if not name.endswith((".wav", ".json", ".tmp")):
+            continue
+        try:
+            os.remove(os.path.join(directory, name))
             count += 1
+        except OSError as exc:
+            logging.warning(f"Failed to delete recording file {name}: {exc}")
     return count
+
+
+def list_leftover_files():
+    """Recording-shaped files still on disk — the wipe postcondition check."""
+    directory = get_recordings_dir()
+    return sorted(
+        name for name in os.listdir(directory)
+        if name.endswith((".wav", ".json", ".tmp"))
+    )
 
 
 def prune_recordings(max_keep=MAX_RECORDINGS):
