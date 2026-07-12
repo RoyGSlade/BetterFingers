@@ -1,5 +1,7 @@
+import hmac
 import os
 import re
+import secrets
 import shutil
 import tempfile
 import logging
@@ -84,17 +86,63 @@ app = FastAPI(title="BetterFingers Sidecar")
 _llm_download_jobs = {}
 _llm_download_jobs_lock = threading.Lock()
 
-# CORS - Allow Electron to communicate
+# CORS — only the app's own renderer surfaces, not the wildcard. The Electron
+# renderer loads from file:// (Chromium sends `Origin: null` for cross-origin
+# fetches from file pages) and from the electron-vite dev server in
+# development. Additional origins can be granted explicitly via env.
+def _allowed_cors_origins():
+    origins = ["null", "file://", "http://localhost:5173", "http://127.0.0.1:5173"]
+    extra = os.getenv("BETTERFINGERS_CORS_ORIGINS", "")
+    origins.extend(o.strip() for o in extra.split(",") if o.strip())
+    return origins
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_cors_origins(),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 from fastapi import Request
 from starlette.responses import JSONResponse, FileResponse
+
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def validate_startup_security(host, token, env=None, allow_remote=False):
+    """Fail-closed startup policy (pure; unit-tested).
+
+    Returns {"ok", "token", "generated", "error"}:
+    - Non-loopback bind requires BOTH an explicit opt-in and a token — an
+      accidental 0.0.0.0 must never expose an unauthenticated API.
+    - Packaged/production mode requires a token (the Electron shell always
+      supplies one; a production launch without one is a misconfiguration).
+    - Standalone dev launch without a token gets a generated one, printed
+      once by the caller — the API never runs open by accident.
+    """
+    env = (env or os.getenv("BETTERFINGERS_ENV", "development")).lower()
+    host_normalized = str(host or "").strip().lower()
+    loopback = host_normalized in _LOOPBACK_HOSTS
+
+    if not loopback:
+        if not allow_remote:
+            return {"ok": False, "token": token, "generated": False,
+                    "error": f"Refusing to bind to non-loopback host {host!r} without "
+                             f"BETTERFINGERS_ALLOW_REMOTE=1."}
+        if not token:
+            return {"ok": False, "token": token, "generated": False,
+                    "error": "Refusing a non-loopback bind without BETTERFINGERS_AUTH_TOKEN set."}
+
+    if not token:
+        if env == "production":
+            return {"ok": False, "token": token, "generated": False,
+                    "error": "BETTERFINGERS_AUTH_TOKEN is required in production mode."}
+        return {"ok": True, "token": secrets.token_hex(32), "generated": True, "error": ""}
+
+    return {"ok": True, "token": token, "generated": False, "error": ""}
+
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
@@ -103,7 +151,10 @@ async def auth_middleware(request: Request, call_next):
         if request.method != "OPTIONS":
             auth_header = request.headers.get("Authorization", "")
             parts = auth_header.split(" ", 1)
-            if len(parts) != 2 or parts[0] != "Bearer" or parts[1] != expected_token:
+            # Constant-time comparison — a plain != leaks match length/prefix
+            # timing to anything that can reach the port.
+            presented = parts[1] if len(parts) == 2 and parts[0] == "Bearer" else ""
+            if not hmac.compare_digest(presented, expected_token):
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
     return await call_next(request)
 
@@ -1634,11 +1685,28 @@ from fastapi import Query, status
 
 @app.websocket("/ws/voice_status")
 async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
+    # First-message auth: the bearer token must arrive as the first frame
+    # ("auth:<token>"), not in the query string — query strings leak into
+    # proxy logs, diagnostics, and crash reports. The legacy ?token= form is
+    # still accepted for one release (logged as deprecated).
     expected_token = os.getenv("BETTERFINGERS_AUTH_TOKEN")
-    if expected_token and token != expected_token:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
     await websocket.accept()
+    if expected_token:
+        authed = False
+        if token is not None and hmac.compare_digest(str(token), expected_token):
+            logging.warning("WS auth via query string is deprecated; send an 'auth:<token>' first message.")
+            authed = True
+        else:
+            try:
+                first = await asyncio.wait_for(websocket.receive_text(), timeout=3.0)
+                presented = first[5:] if first.startswith("auth:") else ""
+                authed = hmac.compare_digest(presented, expected_token)
+            except Exception:
+                authed = False
+        if not authed:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+        await websocket.send_text("auth_ok")
     active_websockets.append(websocket)
     try:
         while True:
@@ -4104,4 +4172,20 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     setup_logging(level=args.log_level)
+
+    # Fail-closed auth (§5): never serve an open API by accident.
+    _security = validate_startup_security(
+        args.host,
+        os.getenv("BETTERFINGERS_AUTH_TOKEN"),
+        allow_remote=os.getenv("BETTERFINGERS_ALLOW_REMOTE") == "1",
+    )
+    if not _security["ok"]:
+        logging.error(_security["error"])
+        raise SystemExit(_security["error"])
+    if _security["generated"]:
+        os.environ["BETTERFINGERS_AUTH_TOKEN"] = _security["token"]
+        # Printed once so a standalone developer can authenticate; the token
+        # is ephemeral to this process.
+        print(f"[betterfingers] No auth token supplied; generated one for this run:\n"
+              f"[betterfingers]   BETTERFINGERS_AUTH_TOKEN={_security['token']}")
     uvicorn.run(app, host=args.host, port=args.port)

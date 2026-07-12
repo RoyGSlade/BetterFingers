@@ -620,19 +620,25 @@ function connectVoiceStatus({
     attempt += 1;
     notifyConnectionChange('connecting', `Attempt ${attempt}`);
 
-    const wsUrl = AUTH_TOKEN 
-      ? `${VOICE_STATUS_WS_URL}?token=${encodeURIComponent(AUTH_TOKEN)}`
-      : VOICE_STATUS_WS_URL;
-    socket = new WebSocket(wsUrl);
+    // The token goes in the first frame, never the query string — query
+    // strings surface in proxy logs, diagnostics, and crash reports.
+    socket = new WebSocket(VOICE_STATUS_WS_URL);
 
     socket.addEventListener('open', () => {
       attempt = 0;
+      if (AUTH_TOKEN) {
+        socket.send(`auth:${AUTH_TOKEN}`);
+      }
       // 'live' rather than the raw ws:// URL — the URL is developer detail that
       // doesn't belong in the user-facing connection pill.
       notifyConnectionChange('connected', 'live');
     });
 
     socket.addEventListener('message', (event) => {
+      // Control frames from the auth/keepalive handshake are not payloads.
+      if (event.data === 'auth_ok' || event.data === 'pong') {
+        return;
+      }
       try {
         const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
         if (typeof onMessage === 'function') {
