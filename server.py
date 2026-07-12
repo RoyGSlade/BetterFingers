@@ -1817,7 +1817,7 @@ async def run_doctor(refresh_audio: bool = False):
     }
 
     # TTS details
-    tts_engine_inst = ensure_tts_initialized()
+    tts_engine_inst = await run_in_threadpool(ensure_tts_initialized)
     tts_info = {
         "initialized": tts_engine_inst is not None,
         "loaded": tts_engine_inst.is_loaded() if tts_engine_inst else False,
@@ -1910,11 +1910,29 @@ async def health_check():
         engine_ready = bool(getattr(engine, "_ready", False)) if engine else False
     except Exception:
         pass
-        
+
+    # Active-job visibility for the supervisor: a busy backend is not a dead
+    # backend. Everything here is in-memory — /health must stay free of model
+    # loads, device scans, and filesystem walks.
+    active_jobs = []
+    last_progress_at = None
+    try:
+        active_jobs = JOBS.list(active_only=True)
+        if active_jobs:
+            last_progress_at = max(j.get("updated_at") or 0 for j in active_jobs)
+    except Exception:
+        pass
+
     return {
-        "status": "active", 
+        "status": "active",
         "transcriber": transcriber is not None,
-        "llm_engine": engine_ready
+        "llm_engine": engine_ready,
+        "active_job_count": len(active_jobs),
+        "active_jobs": [
+            {"id": j.get("id"), "kind": j.get("kind"), "state": j.get("state"), "updated_at": j.get("updated_at")}
+            for j in active_jobs[:5]
+        ],
+        "last_progress_at": last_progress_at,
     }
 
 
@@ -2190,7 +2208,9 @@ async def compile_foundry_persona_route(request: FoundrySessionRequest):
         raise HTTPException(status_code=400, detail="Interview is not complete yet.")
     engine = get_selected_llm_engine()
     try:
-        result = engine.compile_foundry_persona(session)
+        # LLM work must not run on the event loop: it starves /health and
+        # invites Electron's restart watchdog (review finding #2).
+        result = await run_in_threadpool(engine.compile_foundry_persona, session)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Persona compile failed: {exc}")
     return result
@@ -2207,13 +2227,15 @@ async def run_foundry_stress_suite_route(request: FoundryStressTestRequest):
         if not session.get("done"):
             raise HTTPException(status_code=400, detail="Interview is not complete yet.")
         try:
-            persona = engine.compile_foundry_persona(session)["persona"]
+            compiled = await run_in_threadpool(engine.compile_foundry_persona, session)
+            persona = compiled["persona"]
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Persona compile failed: {exc}")
     else:
         raise HTTPException(status_code=400, detail="Provide either session_id or persona.")
     try:
-        cases = engine.run_foundry_stress_suite(persona)
+        # Seven LLM cases in one request — the single worst event-loop hog.
+        cases = await run_in_threadpool(engine.run_foundry_stress_suite, persona)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Stress test failed: {exc}")
     return {"cases": cases}
@@ -2319,7 +2341,12 @@ async def test_persona_route(request: PersonaTestRequest):
     persona = {k: v for k, v in request.model_dump().items() if k != "sample" and v is not None}
     engine = get_selected_llm_engine()
     try:
-        result = engine.run_persona_preview(persona, sample, max_output_tokens=get_active_completion_tokens())
+        result = await run_in_threadpool(
+            engine.run_persona_preview,
+            persona,
+            sample,
+            max_output_tokens=get_active_completion_tokens(),
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Persona test failed: {exc}")
     return {"result": result}
@@ -3335,7 +3362,7 @@ async def speak_draft(draft_id: int, request: DraftTtsRequest):
     voice_id, speed, blend, modulation = _resolve_voice_and_modulation(request, config)
     logging.info(f"Draft TTS Request: draft={draft_id} {redact_user_text(text)} | Voice: {voice_id} | Speed: {speed}x")
 
-    engine = ensure_tts_initialized()
+    engine = await run_in_threadpool(ensure_tts_initialized)
     if engine is None:
         result = {
             "ok": False,
@@ -3348,7 +3375,9 @@ async def speak_draft(draft_id: int, request: DraftTtsRequest):
         record_runtime_error("tts", result["message"], {"action": "draft_tts", "draft_id": draft_id})
         return result
 
-    result = engine.speak(text, speed=speed, voice_hint=voice_id, blend=blend, modulation=modulation)
+    result = await run_in_threadpool(
+        engine.speak, text, speed=speed, voice_hint=voice_id, blend=blend, modulation=modulation
+    )
     result.update(
         {
             "status": "success" if result.get("ok") else "error",
@@ -3495,11 +3524,11 @@ async def runtime_warmup(request: RuntimeWarmupRequest):
 
     if request.stt:
         try:
-            trans = ensure_transcriber_initialized(preload=False)
+            trans = await run_in_threadpool(ensure_transcriber_initialized, preload=False)
             result["stt"] = {
                 "ok": True,
                 "initialized": trans is not None,
-                "loaded": bool(trans and trans.ensure_loaded()),
+                "loaded": bool(trans and await run_in_threadpool(trans.ensure_loaded)),
             }
         except Exception as e:
             logging.exception("Transcriber warmup failure")
@@ -3567,7 +3596,8 @@ class LLMRequest(BaseModel):
 async def process_llm(request: LLMRequest):
     try:
         engine = get_selected_llm_engine()
-        result = engine.process_fast_lane(
+        result = await run_in_threadpool(
+            engine.process_fast_lane,
             request.text,
             request.preset,
             true_gen=request.true_gen,
@@ -3588,7 +3618,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
     try:
         with tmp:
             shutil.copyfileobj(file.file, tmp)
-        text = transcriber.transcribe(temp_filename)
+        text = await run_in_threadpool(transcriber.transcribe, temp_filename)
         return {"text": text}
     except Exception as e:
         logging.error(f"Transcription Error: {e}")
@@ -3627,13 +3657,15 @@ async def tts_speak(request: TTSRequest):
     voice_id, speed, blend, modulation = _resolve_voice_and_modulation(request, config)
     logging.info(f"TTS Request: {redact_user_text(text)} | Voice: {voice_id} | Speed: {speed}x")
 
-    engine = ensure_tts_initialized()
+    engine = await run_in_threadpool(ensure_tts_initialized)
     if engine is None:
         message = "TTS engine is not available."
         record_runtime_error("tts", message, {"action": "tts_speak"})
         return {"ok": False, "status": "error", "message": message, "error": "tts_unavailable"}
 
-    result = engine.speak(text, speed=speed, voice_hint=voice_id, blend=blend, modulation=modulation)
+    result = await run_in_threadpool(
+        engine.speak, text, speed=speed, voice_hint=voice_id, blend=blend, modulation=modulation
+    )
     result["status"] = "success" if result.get("ok") else "error"
     return result
 
@@ -3652,7 +3684,7 @@ async def stop_tts_route():
 @app.get("/runtime/tts-status")
 async def get_tts_status():
     global tts_engine
-    engine = ensure_tts_initialized()
+    engine = await run_in_threadpool(ensure_tts_initialized)
     
     import platform
     is_linux = (platform.system().lower() == "linux")
@@ -3679,7 +3711,7 @@ async def get_tts_status():
             "libsndfile_error": libsndfile_error
         }
 
-    status = engine.ensure_loaded()
+    status = await run_in_threadpool(engine.ensure_loaded)
     backend_val = engine.backend()
     
     backend_name = "unavailable"
@@ -3870,9 +3902,11 @@ class PlanRequest(BaseModel):
 async def generate_plan(request: PlanRequest):
     engine = get_selected_llm_engine()
     prompt = f"Goal: {request.goal}"
-    
+
     # Generate text
-    json_text = engine.process_fast_lane(prompt, preset_name="Plan Generator", true_gen=False, context_rules=False)
+    json_text = await run_in_threadpool(
+        engine.process_fast_lane, prompt, preset_name="Plan Generator", true_gen=False, context_rules=False
+    )
     
     # Attempt to clean potential markdown code blocks if the LLM ignores instructions
     clean_text = json_text.strip()
@@ -3888,7 +3922,9 @@ async def generate_plan(request: PlanRequest):
         plan = json.loads(clean_text.strip())
         return plan
     except json.JSONDecodeError:
-        logging.error(f"LLM produced invalid JSON: {clean_text}")
+        # Do not log model output verbatim — it can contain the user's prompt
+        # content. Length + error class is enough to diagnose.
+        logging.error(f"LLM produced invalid JSON ({len(clean_text)} chars).")
         return {"title": "Generation Failed", "phases": [{"name": "Error", "tasks": ["The LLM did not return valid JSON.", "Please try again."]}]}
     except Exception as e:
         logging.error(f"Plan Gen Error: {e}")
@@ -3986,7 +4022,7 @@ async def generate_project(data: dict):
     if not plan or not path:
         raise HTTPException(status_code=400, detail="Missing plan or path")
     
-    success, msg = project_generator.generate_project(plan, path)
+    success, msg = await run_in_threadpool(project_generator.generate_project, plan, path)
     return {"status": "success" if success else "error", "message": msg}
 
 
