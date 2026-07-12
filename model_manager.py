@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import os
 import re
@@ -23,6 +24,9 @@ AVAILABLE_MODELS = {
         "name": "Gemma 4 E2B (Q4_K_M)",
         "filename": "gemma-4-E2B-it-Q4_K_M.gguf",
         "url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf",
+        # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
+        "sha256": "9378bc471710229ef165709b62e34bfb62231420ddaf6d729e727305b5b8672d",
+        "size_bytes": 3106736256,
         "size_mb": 2963,
         "family": "gemma-4",
         "group": "studio",
@@ -35,6 +39,9 @@ AVAILABLE_MODELS = {
         "name": "Gemma 4 E2B (Q8_0)",
         "filename": "gemma-4-E2B-it-Q8_0.gguf",
         "url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q8_0.gguf",
+        # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
+        "sha256": "0a8488b149e1f700712c35d5bf0a3795f9dcc2563b4944d5ef2fb89375f9483e",
+        "size_bytes": 5048350848,
         "size_mb": 4814,
         "family": "gemma-4",
         "group": "studio",
@@ -47,6 +54,9 @@ AVAILABLE_MODELS = {
         "name": "Gemma 4 E4B (Q4_K_M)",
         "filename": "gemma-4-E4B-it-Q4_K_M.gguf",
         "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
+        # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
+        "sha256": "519b9793ed6ce0ff530f1b7c96e848e08e49e7af4d57bb97f76215963a54146d",
+        "size_bytes": 4977169568,
         "size_mb": 4747,
         "family": "gemma-4",
         "group": "studio",
@@ -59,6 +69,9 @@ AVAILABLE_MODELS = {
         "name": "Gemma 4 E4B (Q8_0)",
         "filename": "gemma-4-E4B-it-Q8_0.gguf",
         "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q8_0.gguf",
+        # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
+        "sha256": "a2232a649523c36bf530f1dc3614eb8c800645c4227390381c8b05d4d6eee05a",
+        "size_bytes": 8192951456,
         "size_mb": 7813,
         "family": "gemma-4",
         "group": "studio",
@@ -71,6 +84,9 @@ AVAILABLE_MODELS = {
         "name": "Gemma 4 12B (Q4_K_M)",
         "filename": "gemma-4-12b-it-Q4_K_M.gguf",
         "url": "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-Q4_K_M.gguf",
+        # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
+        "sha256": "43fec98c5102b1c446b4ddd0a9439f1db3a2e1f2e0b8cd143ce1ea619a9403d6",
+        "size_bytes": 7121860000,
         "size_mb": 6792,
         "family": "gemma-4",
         "group": "studio",
@@ -83,6 +99,9 @@ AVAILABLE_MODELS = {
         "name": "Gemma 4 26B-A4B MoE (UD-Q4_K_M)",
         "filename": "gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
         "url": "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/main/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+        # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
+        "sha256": "34c746b1d50ab813e29cd46c4796e3f43c741901a582f93a67b55b9fc9687b35",
+        "size_bytes": 16947539744,
         "size_mb": 16162,
         "family": "gemma-4",
         "group": "studio",
@@ -95,6 +114,9 @@ AVAILABLE_MODELS = {
         "name": "Gemma 4 31B (Q4_K_M)",
         "filename": "gemma-4-31B-it-Q4_K_M.gguf",
         "url": "https://huggingface.co/unsloth/gemma-4-31B-it-GGUF/resolve/main/gemma-4-31B-it-Q4_K_M.gguf",
+        # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
+        "sha256": "9fdf3dc8b0384830b4402d151388c140bd8eb2abf8d60588d8224231198254a1",
+        "size_bytes": 18323731456,
         "size_mb": 17475,
         "family": "gemma-4",
         "group": "studio",
@@ -107,6 +129,9 @@ AVAILABLE_MODELS = {
         "name": "Gemma 3 4B (Q4_K_M)",
         "filename": "gemma-3-4b-it-Q4_K_M.gguf",
         "url": "https://huggingface.co/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf",
+        # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
+        "sha256": "04a43a22e8d2003deda5acc262f68ec1005fa76c735a9962a8c77042a74a7d19",
+        "size_bytes": 2489894016,
         "size_mb": 2600,
         "group": "betterfingers",
         "roles": ["rewrite"],
@@ -117,6 +142,9 @@ AVAILABLE_MODELS = {
         "name": "Gemma 3 4B (Q6_K)",
         "filename": "gemma-3-4b-it-Q6_K.gguf",
         "url": "https://huggingface.co/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q6_K.gguf",
+        # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
+        "sha256": "df3fb9a1449296d26258c0771d5280ceb71559ad98e2db658799a05218ed9fa1",
+        "size_bytes": 3190740096,
         "size_mb": 3500,
         "group": "betterfingers",
         "roles": ["rewrite"],
@@ -127,6 +155,9 @@ AVAILABLE_MODELS = {
         "name": "Gemma 3 4B (Q8_0)",
         "filename": "gemma-3-4b-it-Q8_0.gguf",
         "url": "https://huggingface.co/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q8_0.gguf",
+        # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
+        "sha256": "81bf0583ab5bad155a5a3b15d155a880a1a1e4f7de2de5c06f10f64ac49f8336",
+        "size_bytes": 4130402176,
         "size_mb": 4600,
         "group": "betterfingers",
         "roles": ["rewrite"],
@@ -137,6 +168,9 @@ AVAILABLE_MODELS = {
         "name": "Gemma 3 12B (Q4_K_M)",
         "filename": "gemma-3-12b-it-Q4_K_M.gguf",
         "url": "https://huggingface.co/unsloth/gemma-3-12b-it-GGUF/resolve/main/gemma-3-12b-it-Q4_K_M.gguf",
+        # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
+        "sha256": "15b8fd9d8672cd4240c178c217ca781409291f34e353d2e913b29c7602ceb3ff",
+        "size_bytes": 7300778336,
         "size_mb": 7500,
         "group": "betterfingers",
         "roles": ["rewrite", "writer"],
@@ -147,6 +181,9 @@ AVAILABLE_MODELS = {
         "name": "Gemma 3 12B (Q6_K)",
         "filename": "gemma-3-12b-it-Q6_K.gguf",
         "url": "https://huggingface.co/unsloth/gemma-3-12b-it-GGUF/resolve/main/gemma-3-12b-it-Q6_K.gguf",
+        # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
+        "sha256": "5a99903816f50b6b7d63fe96e1ed51d6e03c795051e99146719f3e066a863069",
+        "size_bytes": 9660811616,
         "size_mb": 10000,
         "group": "betterfingers",
         "roles": ["rewrite", "writer"],
@@ -157,6 +194,9 @@ AVAILABLE_MODELS = {
         "name": "Gemma 3 12B (Q8_0)",
         "filename": "gemma-3-12b-it-Q8_0.gguf",
         "url": "https://huggingface.co/unsloth/gemma-3-12b-it-GGUF/resolve/main/gemma-3-12b-it-Q8_0.gguf",
+        # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
+        "sha256": "a774cd9c6f289a6159f4a3f92a7ebca887e15073f92016d53c3593cb440a5982",
+        "size_bytes": 12510212576,
         "size_mb": 13000,
         "group": "betterfingers",
         "roles": ["rewrite", "writer"],
@@ -166,6 +206,24 @@ AVAILABLE_MODELS = {
 }
 
 DEFAULT_MODEL = "gemma-3-4b-q4"
+
+# SHA-256 for every downloaded executable runtime (supply-chain gate, §11).
+# The app downloads, extracts, chmods, and *launches* these — the most
+# sensitive path in the application. Hashes computed from the pinned b9548
+# release assets; a release bump must update these alongside the URLs.
+RUNTIME_ARTIFACT_SHA256 = {
+    "llama-b9548-bin-win-cuda-12.4-x64.zip":
+        "c954d7a206b40ad57023fe09bc50c26f2c1af6ddd767e524c91a9a5674e0f1fe",
+    "cudart-llama-bin-win-cuda-12.4-x64.zip":
+        "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
+    "llama-b9548-bin-ubuntu-vulkan-x64.tar.gz":
+        "5ea8c3b051312e12c649d2214b1a7fdfd773b82f9724141771d22cdfe544f0aa",
+}
+
+
+def runtime_artifact_sha256(url):
+    return RUNTIME_ARTIFACT_SHA256.get(str(url or "").rsplit("/", 1)[-1])
+
 
 if sys.platform == "win32":
     SERVER_FILENAME = "llama-server.exe"
@@ -354,6 +412,11 @@ def is_model_file_complete(model_id):
     # downloads are gigabytes, so only enforce catalog-size sanity for model-sized files.
     if actual < 16 * 1024 * 1024:
         return True
+    # Exact byte size from the artifact manifest (§11) when available —
+    # a size mismatch means truncation or the wrong file.
+    exact = AVAILABLE_MODELS.get(model_id, {}).get("size_bytes")
+    if exact:
+        return actual == int(exact)
     expected = _expected_model_bytes(model_id)
     if not expected:
         return True
@@ -600,12 +663,28 @@ def _parse_content_range_total(value):
         return 0
 
 
-def download_file(url, dest_path, desc="File", progress_callback=None, progress_key="", resume=True):
+def sha256_file(path, chunk_size=1024 * 1024):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(chunk_size), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def hmac_compare(a, b):
+    import hmac as _hmac
+    return _hmac.compare_digest(str(a or "").lower(), str(b or "").lower())
+
+
+def download_file(url, dest_path, desc="File", progress_callback=None, progress_key="", resume=True,
+                  expected_sha256=None):
     """Download a file safely.
 
     The transfer writes to ``dest_path + ".part"`` and atomically replaces the final
     path only after the response completes. If a previous partial exists and the
     server supports byte ranges, the download resumes instead of restarting.
+    When ``expected_sha256`` is given, the completed file must match it exactly
+    or it is deleted and the download fails (§11).
     """
     key = str(progress_key or desc or "file").strip()
     if os.path.exists(dest_path):
@@ -697,6 +776,39 @@ def download_file(url, dest_path, desc="File", progress_callback=None, progress_
             raise IOError(
                 f"incomplete download: got {_file_size(part_path)} bytes, expected {total_size}"
             )
+        # Cryptographic verification before promotion (§11): size says the
+        # transfer finished; only the digest says it's the artifact we pinned.
+        if expected_sha256:
+            _emit_progress(
+                progress_callback,
+                {
+                    "key": key,
+                    "status": "verifying",
+                    "desc": desc,
+                    "percent": 100.0,
+                    "downloaded_bytes": int(_file_size(part_path)),
+                    "total_bytes": int(total_size),
+                    "message": f"Verifying {desc} checksum...",
+                },
+            )
+            actual_sha256 = sha256_file(part_path)
+            if not hmac_compare(actual_sha256, expected_sha256):
+                try:
+                    os.remove(part_path)
+                except OSError:
+                    pass
+                raise IOError(
+                    f"checksum mismatch for {desc}: expected {expected_sha256}, got {actual_sha256}. "
+                    "The download was discarded."
+                )
+            # Sidecar digest for diagnostics: what was verified, when.
+            try:
+                with open(dest_path + ".sha256", "w", encoding="utf-8") as digest_file:
+                    digest_file.write(f"{actual_sha256}  {os.path.basename(dest_path)}\n")
+            except OSError:
+                pass
+        else:
+            logging.warning("No pinned checksum for %s — installing UNVERIFIED artifact from %s", desc, url)
         os.replace(part_path, dest_path)
         logging.info("Download complete: %s", dest_path)
         _emit_progress(
@@ -793,6 +905,7 @@ def check_and_download_resources(model_id=None, progress_callback=None):
                 model_info["name"],
                 progress_callback=report,
                 progress_key=target_model_id,
+                expected_sha256=model_info.get("sha256"),
             )
         except Exception:
             logging.warning("Failed to download model %s. Check internet connection.", target_model_id)
@@ -881,6 +994,7 @@ def check_and_download_resources(model_id=None, progress_callback=None):
                 "llama-server",
                 progress_callback=report,
                 progress_key=f"{target_model_id}:server",
+                expected_sha256=runtime_artifact_sha256(SERVER_BIN_URL),
             )
             if SERVER_ARCHIVE_NAME.endswith(".zip"):
                 with zipfile.ZipFile(bin_archive, "r") as archive:
@@ -903,6 +1017,7 @@ def check_and_download_resources(model_id=None, progress_callback=None):
                     "CUDA Runtime",
                     progress_callback=report,
                     progress_key=f"{target_model_id}:cuda",
+                    expected_sha256=runtime_artifact_sha256(CUDA_LIB_URL),
                 )
                 with zipfile.ZipFile(cuda_archive, "r") as archive:
                     archive.extractall(models_dir)

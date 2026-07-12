@@ -1,5 +1,7 @@
+import hmac
 import os
 import re
+import secrets
 import shutil
 import tempfile
 import logging
@@ -84,17 +86,63 @@ app = FastAPI(title="BetterFingers Sidecar")
 _llm_download_jobs = {}
 _llm_download_jobs_lock = threading.Lock()
 
-# CORS - Allow Electron to communicate
+# CORS — only the app's own renderer surfaces, not the wildcard. The Electron
+# renderer loads from file:// (Chromium sends `Origin: null` for cross-origin
+# fetches from file pages) and from the electron-vite dev server in
+# development. Additional origins can be granted explicitly via env.
+def _allowed_cors_origins():
+    origins = ["null", "file://", "http://localhost:5173", "http://127.0.0.1:5173"]
+    extra = os.getenv("BETTERFINGERS_CORS_ORIGINS", "")
+    origins.extend(o.strip() for o in extra.split(",") if o.strip())
+    return origins
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_cors_origins(),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 from fastapi import Request
 from starlette.responses import JSONResponse, FileResponse
+
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def validate_startup_security(host, token, env=None, allow_remote=False):
+    """Fail-closed startup policy (pure; unit-tested).
+
+    Returns {"ok", "token", "generated", "error"}:
+    - Non-loopback bind requires BOTH an explicit opt-in and a token — an
+      accidental 0.0.0.0 must never expose an unauthenticated API.
+    - Packaged/production mode requires a token (the Electron shell always
+      supplies one; a production launch without one is a misconfiguration).
+    - Standalone dev launch without a token gets a generated one, printed
+      once by the caller — the API never runs open by accident.
+    """
+    env = (env or os.getenv("BETTERFINGERS_ENV", "development")).lower()
+    host_normalized = str(host or "").strip().lower()
+    loopback = host_normalized in _LOOPBACK_HOSTS
+
+    if not loopback:
+        if not allow_remote:
+            return {"ok": False, "token": token, "generated": False,
+                    "error": f"Refusing to bind to non-loopback host {host!r} without "
+                             f"BETTERFINGERS_ALLOW_REMOTE=1."}
+        if not token:
+            return {"ok": False, "token": token, "generated": False,
+                    "error": "Refusing a non-loopback bind without BETTERFINGERS_AUTH_TOKEN set."}
+
+    if not token:
+        if env == "production":
+            return {"ok": False, "token": token, "generated": False,
+                    "error": "BETTERFINGERS_AUTH_TOKEN is required in production mode."}
+        return {"ok": True, "token": secrets.token_hex(32), "generated": True, "error": ""}
+
+    return {"ok": True, "token": token, "generated": False, "error": ""}
+
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
@@ -103,7 +151,10 @@ async def auth_middleware(request: Request, call_next):
         if request.method != "OPTIONS":
             auth_header = request.headers.get("Authorization", "")
             parts = auth_header.split(" ", 1)
-            if len(parts) != 2 or parts[0] != "Bearer" or parts[1] != expected_token:
+            # Constant-time comparison — a plain != leaks match length/prefix
+            # timing to anything that can reach the port.
+            presented = parts[1] if len(parts) == 2 and parts[0] == "Bearer" else ""
+            if not hmac.compare_digest(presented, expected_token):
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
     return await call_next(request)
 
@@ -142,16 +193,30 @@ runtime_error_history = []
 runtime_error_lock = threading.Lock()
 MAX_RUNTIME_ERROR_HISTORY = 50
 
-def save_draft_history():
+def save_draft_history(changed_draft_id=None):
+    """Persist the draft queue. Snapshot under the lock, IO outside it.
+
+    changed_draft_id narrows the searchable-archive mirror to the one draft
+    that actually changed (one small transaction) instead of re-upserting the
+    whole queue; the JSON queue snapshot is still written in full (bounded at
+    MAX_DRAFT_HISTORY) but atomically via temp-file + os.replace so a crash
+    mid-write cannot corrupt it.
+    """
     import json
     history_file = os.path.join(get_user_data_path(), "draft_history.json")
     try:
         with draft_lock:
             serializable_drafts = [dict(draft) for draft in draft_queue]
-        with open(history_file, "w", encoding="utf-8") as f:
+        tmp_file = history_file + ".tmp"
+        with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(serializable_drafts, f, indent=2)
+        os.replace(tmp_file, history_file)
         # Mirror into the searchable, uncapped archive (C8). Defensive: never fatal.
-        history_store.upsert_many(serializable_drafts)
+        if changed_draft_id is not None:
+            changed = [d for d in serializable_drafts if d.get("id") == changed_draft_id]
+            history_store.upsert_many(changed)
+        else:
+            history_store.upsert_many(serializable_drafts)
     except Exception as exc:
         logging.exception(f"Failed to save draft history to {history_file}: {exc}")
 
@@ -736,8 +801,13 @@ def create_draft(raw_text, final_text, preset="True Janitor", status="pending", 
             for removed_draft in removed:
                 draft_recordings.pop(removed_draft["id"], None)
 
-        save_draft_history()
-        return dict(draft)
+        response = dict(draft)
+        new_id = draft["id"]
+
+    # Persist outside the lock (§9): serializing + JSON + SQLite while holding
+    # the reentrant draft lock made every create stall concurrent draft reads.
+    save_draft_history(changed_draft_id=new_id)
+    return response
 
 
 def get_draft_by_id(draft_id):
@@ -964,10 +1034,12 @@ def send_draft_by_id(draft_id, action=None, open_chat=False, allow_resend=False)
                 draft["status"] = "send_error"
                 draft["error"] = result.get("message", "Send failed.")
             response = dict(draft)
-            save_draft_history()
         else:
             response = {"id": draft_id, "send_result": result}
 
+    # Persist outside the lock: disk + SQLite IO must not serialize every
+    # other draft operation behind this send (§9).
+    save_draft_history(changed_draft_id=draft_id)
     broadcast_status_threadsafe("draft_sent" if result.get("ok") else "draft_send_error", {"draft_id": draft_id, "send_result": result})
     return response
 
@@ -1634,11 +1706,28 @@ from fastapi import Query, status
 
 @app.websocket("/ws/voice_status")
 async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
+    # First-message auth: the bearer token must arrive as the first frame
+    # ("auth:<token>"), not in the query string — query strings leak into
+    # proxy logs, diagnostics, and crash reports. The legacy ?token= form is
+    # still accepted for one release (logged as deprecated).
     expected_token = os.getenv("BETTERFINGERS_AUTH_TOKEN")
-    if expected_token and token != expected_token:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
     await websocket.accept()
+    if expected_token:
+        authed = False
+        if token is not None and hmac.compare_digest(str(token), expected_token):
+            logging.warning("WS auth via query string is deprecated; send an 'auth:<token>' first message.")
+            authed = True
+        else:
+            try:
+                first = await asyncio.wait_for(websocket.receive_text(), timeout=3.0)
+                presented = first[5:] if first.startswith("auth:") else ""
+                authed = hmac.compare_digest(presented, expected_token)
+            except Exception:
+                authed = False
+        if not authed:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+        await websocket.send_text("auth_ok")
     active_websockets.append(websocket)
     try:
         while True:
@@ -1817,7 +1906,7 @@ async def run_doctor(refresh_audio: bool = False):
     }
 
     # TTS details
-    tts_engine_inst = ensure_tts_initialized()
+    tts_engine_inst = await run_in_threadpool(ensure_tts_initialized)
     tts_info = {
         "initialized": tts_engine_inst is not None,
         "loaded": tts_engine_inst.is_loaded() if tts_engine_inst else False,
@@ -1910,11 +1999,29 @@ async def health_check():
         engine_ready = bool(getattr(engine, "_ready", False)) if engine else False
     except Exception:
         pass
-        
+
+    # Active-job visibility for the supervisor: a busy backend is not a dead
+    # backend. Everything here is in-memory — /health must stay free of model
+    # loads, device scans, and filesystem walks.
+    active_jobs = []
+    last_progress_at = None
+    try:
+        active_jobs = JOBS.list(active_only=True)
+        if active_jobs:
+            last_progress_at = max(j.get("updated_at") or 0 for j in active_jobs)
+    except Exception:
+        pass
+
     return {
-        "status": "active", 
+        "status": "active",
         "transcriber": transcriber is not None,
-        "llm_engine": engine_ready
+        "llm_engine": engine_ready,
+        "active_job_count": len(active_jobs),
+        "active_jobs": [
+            {"id": j.get("id"), "kind": j.get("kind"), "state": j.get("state"), "updated_at": j.get("updated_at")}
+            for j in active_jobs[:5]
+        ],
+        "last_progress_at": last_progress_at,
     }
 
 
@@ -2190,7 +2297,9 @@ async def compile_foundry_persona_route(request: FoundrySessionRequest):
         raise HTTPException(status_code=400, detail="Interview is not complete yet.")
     engine = get_selected_llm_engine()
     try:
-        result = engine.compile_foundry_persona(session)
+        # LLM work must not run on the event loop: it starves /health and
+        # invites Electron's restart watchdog (review finding #2).
+        result = await run_in_threadpool(engine.compile_foundry_persona, session)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Persona compile failed: {exc}")
     return result
@@ -2207,13 +2316,15 @@ async def run_foundry_stress_suite_route(request: FoundryStressTestRequest):
         if not session.get("done"):
             raise HTTPException(status_code=400, detail="Interview is not complete yet.")
         try:
-            persona = engine.compile_foundry_persona(session)["persona"]
+            compiled = await run_in_threadpool(engine.compile_foundry_persona, session)
+            persona = compiled["persona"]
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Persona compile failed: {exc}")
     else:
         raise HTTPException(status_code=400, detail="Provide either session_id or persona.")
     try:
-        cases = engine.run_foundry_stress_suite(persona)
+        # Seven LLM cases in one request — the single worst event-loop hog.
+        cases = await run_in_threadpool(engine.run_foundry_stress_suite, persona)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Stress test failed: {exc}")
     return {"cases": cases}
@@ -2319,7 +2430,12 @@ async def test_persona_route(request: PersonaTestRequest):
     persona = {k: v for k, v in request.model_dump().items() if k != "sample" and v is not None}
     engine = get_selected_llm_engine()
     try:
-        result = engine.run_persona_preview(persona, sample, max_output_tokens=get_active_completion_tokens())
+        result = await run_in_threadpool(
+            engine.run_persona_preview,
+            persona,
+            sample,
+            max_output_tokens=get_active_completion_tokens(),
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Persona test failed: {exc}")
     return {"result": result}
@@ -2737,46 +2853,108 @@ class PrivacyWipeRequest(BaseModel):
     wipe_voices: bool = False
 
 
+def _perform_privacy_wipe(wipe_voices: bool):
+    """Quiesce, delete, verify — and only claim success when verification
+    passes. Reaching the final line is not proof of an empty landfill."""
+    cleared = {}
+    postconditions = {}
+
+    # 1. Quiesce: stop any active recording so it cannot complete (and
+    #    re-persist audio) after the wipe...
+    if hotkey_manager is not None and bool(getattr(hotkey_manager, "is_recording", False)):
+        try:
+            hotkey_manager.request_stop(reason="privacy_wipe")
+            cleared["recording_stopped"] = True
+        except Exception as exc:
+            logging.warning(f"Privacy wipe: could not stop active recording: {exc}")
+            cleared["recording_stopped"] = False
+
+    # ...cancel the active dictation, and hold the pipeline gate for the
+    # duration of the deletion so no worker recreates stores mid-wipe.
+    dictation_coordinator.cancel_active()
+    gate_deadline = time.monotonic() + 10.0
+    gate_held = False
+    while time.monotonic() < gate_deadline:
+        if dictation_coordinator.try_begin():
+            gate_held = True
+            break
+        time.sleep(0.1)
+    cleared["pipeline_quiesced"] = gate_held
+    if not gate_held:
+        logging.warning("Privacy wipe: pipeline did not quiesce within 10s; proceeding anyway.")
+
+    try:
+        # 2. Delete in-memory queues.
+        with draft_lock:
+            cleared["drafts"] = len(draft_queue)
+            cleared["recordings"] = len(draft_recordings)
+            draft_queue.clear()
+            draft_recordings.clear()
+            pending_manual_send_ids.clear()
+        save_draft_history()
+
+        # 3. Delete on-disk stores.
+        history_file = os.path.join(get_user_data_path(), "draft_history.json")
+        try:
+            if os.path.exists(history_file):
+                os.remove(history_file)
+            cleared["history_file_removed"] = not os.path.exists(history_file)
+        except OSError as exc:
+            logging.warning(f"Could not remove draft history file: {exc}")
+            cleared["history_file_removed"] = False
+
+        db_result = history_store.wipe_database()
+        cleared["history_db_wiped"] = db_result
+
+        cleared["recordings_files_removed"] = recordings.clear_recordings()
+
+        if wipe_voices:
+            voices_dir = get_app_data_dir() / "voices"
+            try:
+                if voices_dir.exists():
+                    # No ignore_errors: a suppressed failure must not report
+                    # success. Verified below regardless.
+                    shutil.rmtree(voices_dir)
+            except OSError as exc:
+                logging.warning(f"Could not remove voices dir: {exc}")
+            cleared["voices_removed"] = not voices_dir.exists()
+
+        # 4. Verify every target and report per-path postconditions.
+        leftover_recordings = recordings.list_leftover_files()
+        postconditions = {
+            "draft_queue_empty": len(draft_queue) == 0,
+            "history_file_absent": not os.path.exists(history_file),
+            "history_db_wiped": bool(db_result.get("ok")),
+            "recordings_dir_empty": not leftover_recordings,
+            "leftover_recordings": leftover_recordings[:20],
+        }
+        if wipe_voices:
+            postconditions["voices_absent"] = not (get_app_data_dir() / "voices").exists()
+    finally:
+        if gate_held:
+            dictation_coordinator.finish()
+
+    ok = all(v for k, v in postconditions.items() if k != "leftover_recordings")
+    broadcast_status_threadsafe("draft_history_cleared")
+    return {
+        "ok": ok,
+        "cleared": cleared,
+        "postconditions": postconditions,
+        "message": "Your data was wiped." if ok else
+                   "Wipe finished with leftovers — see postconditions. Data may remain.",
+    }
+
+
 @app.post("/privacy/wipe")
 async def privacy_wipe(request: PrivacyWipeRequest = PrivacyWipeRequest()):
     """Delete app-generated conversational data: drafts, the draft-history
     file, the searchable history database (C8), and persisted raw-audio
     recordings (C6), plus in-memory queues. Models and profiles are
     intentionally NOT touched; cloned voices are removed only when
-    explicitly requested."""
-    cleared = {}
-    with draft_lock:
-        cleared["drafts"] = len(draft_queue)
-        cleared["recordings"] = len(draft_recordings)
-        draft_queue.clear()
-        draft_recordings.clear()
-        pending_manual_send_ids.clear()
-    save_draft_history()
-
-    history_file = os.path.join(get_user_data_path(), "draft_history.json")
-    try:
-        if os.path.exists(history_file):
-            os.remove(history_file)
-            cleared["history_file_removed"] = True
-    except OSError as exc:
-        logging.warning(f"Could not remove draft history file: {exc}")
-        cleared["history_file_removed"] = False
-
-    cleared["history_db_cleared"] = history_store.clear()
-    cleared["recordings_files_removed"] = recordings.clear_recordings()
-
-    if request.wipe_voices:
-        voices_dir = get_app_data_dir() / "voices"
-        try:
-            if voices_dir.exists():
-                shutil.rmtree(voices_dir, ignore_errors=True)
-                cleared["voices_removed"] = True
-        except OSError as exc:
-            logging.warning(f"Could not remove voices dir: {exc}")
-            cleared["voices_removed"] = False
-
-    broadcast_status_threadsafe("draft_history_cleared")
-    return {"ok": True, "cleared": cleared, "message": "Your data was wiped."}
+    explicitly requested. Note: without at-rest encryption this is logical
+    deletion — nothing readable remains through the app or its files, but
+    SSD-level forensic erasure is not promised."""
+    return await run_in_threadpool(_perform_privacy_wipe, request.wipe_voices)
 
 
 @app.get("/mcp/status")
@@ -2808,6 +2986,9 @@ async def list_recordings_endpoint():
 
 @app.post("/recordings/{rec_id}/retranscribe")
 async def retranscribe_recording(rec_id: str):
+    # A recording id becomes a filename; reject anything path-shaped (§10).
+    if not recordings.is_valid_rec_id(rec_id):
+        raise HTTPException(status_code=400, detail="Invalid recording id.")
     import numpy as np
     from recorder import RecordingResult
 
@@ -2834,6 +3015,8 @@ async def retranscribe_recording(rec_id: str):
 
 @app.delete("/recordings/{rec_id}")
 async def delete_recording_endpoint(rec_id: str):
+    if not recordings.is_valid_rec_id(rec_id):
+        raise HTTPException(status_code=400, detail="Invalid recording id.")
     removed = recordings.delete_recording(rec_id)
     return {"ok": True, "removed": removed}
 
@@ -3028,10 +3211,12 @@ async def accept_draft(draft_id: int):
                 draft["status"] = "accepted"
                 mark_draft_pending_send(draft)
                 response = dict(draft)
-                save_draft_history()
-                broadcast_status_threadsafe("draft_accepted", {"draft_id": draft_id, "pending_send": True})
-                return response
-    raise HTTPException(status_code=404, detail="Draft not found")
+                break
+        else:
+            raise HTTPException(status_code=404, detail="Draft not found")
+    save_draft_history(changed_draft_id=draft_id)
+    broadcast_status_threadsafe("draft_accepted", {"draft_id": draft_id, "pending_send": True})
+    return response
 
 
 @app.post("/drafts/{draft_id}/decline")
@@ -3044,10 +3229,12 @@ async def decline_draft(draft_id: int):
                 while draft_id in pending_manual_send_ids:
                     pending_manual_send_ids.remove(draft_id)
                 response = dict(draft)
-                save_draft_history()
-                broadcast_status_threadsafe("draft_declined", {"draft_id": draft_id})
-                return response
-    raise HTTPException(status_code=404, detail="Draft not found")
+                break
+        else:
+            raise HTTPException(status_code=404, detail="Draft not found")
+    save_draft_history(changed_draft_id=draft_id)
+    broadcast_status_threadsafe("draft_declined", {"draft_id": draft_id})
+    return response
 
 
 @app.post("/drafts/{draft_id}/retry")
@@ -3249,8 +3436,8 @@ async def edit_draft(draft_id: int, request: DraftEditRequest):
         draft["updated_at"] = datetime.now(timezone.utc).isoformat()
         update_draft_review_fields(draft)
         response = dict(draft)
-        save_draft_history()
 
+    save_draft_history(changed_draft_id=draft_id)
     broadcast_status_threadsafe(
         "draft_updated",
         {
@@ -3287,7 +3474,7 @@ async def rewrite_draft(draft_id: int, request: DraftRewriteRequest):
             draft["updated_at"] = datetime.now(timezone.utc).isoformat()
             update_draft_review_fields(draft)
             response = dict(draft)
-            save_draft_history()
+        save_draft_history(changed_draft_id=draft_id)
         broadcast_status_threadsafe(
             "draft_rewritten",
             {
@@ -3335,7 +3522,7 @@ async def speak_draft(draft_id: int, request: DraftTtsRequest):
     voice_id, speed, blend, modulation = _resolve_voice_and_modulation(request, config)
     logging.info(f"Draft TTS Request: draft={draft_id} {redact_user_text(text)} | Voice: {voice_id} | Speed: {speed}x")
 
-    engine = ensure_tts_initialized()
+    engine = await run_in_threadpool(ensure_tts_initialized)
     if engine is None:
         result = {
             "ok": False,
@@ -3348,7 +3535,9 @@ async def speak_draft(draft_id: int, request: DraftTtsRequest):
         record_runtime_error("tts", result["message"], {"action": "draft_tts", "draft_id": draft_id})
         return result
 
-    result = engine.speak(text, speed=speed, voice_hint=voice_id, blend=blend, modulation=modulation)
+    result = await run_in_threadpool(
+        engine.speak, text, speed=speed, voice_hint=voice_id, blend=blend, modulation=modulation
+    )
     result.update(
         {
             "status": "success" if result.get("ok") else "error",
@@ -3495,11 +3684,11 @@ async def runtime_warmup(request: RuntimeWarmupRequest):
 
     if request.stt:
         try:
-            trans = ensure_transcriber_initialized(preload=False)
+            trans = await run_in_threadpool(ensure_transcriber_initialized, preload=False)
             result["stt"] = {
                 "ok": True,
                 "initialized": trans is not None,
-                "loaded": bool(trans and trans.ensure_loaded()),
+                "loaded": bool(trans and await run_in_threadpool(trans.ensure_loaded)),
             }
         except Exception as e:
             logging.exception("Transcriber warmup failure")
@@ -3567,7 +3756,8 @@ class LLMRequest(BaseModel):
 async def process_llm(request: LLMRequest):
     try:
         engine = get_selected_llm_engine()
-        result = engine.process_fast_lane(
+        result = await run_in_threadpool(
+            engine.process_fast_lane,
             request.text,
             request.preset,
             true_gen=request.true_gen,
@@ -3588,7 +3778,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
     try:
         with tmp:
             shutil.copyfileobj(file.file, tmp)
-        text = transcriber.transcribe(temp_filename)
+        text = await run_in_threadpool(transcriber.transcribe, temp_filename)
         return {"text": text}
     except Exception as e:
         logging.error(f"Transcription Error: {e}")
@@ -3627,13 +3817,15 @@ async def tts_speak(request: TTSRequest):
     voice_id, speed, blend, modulation = _resolve_voice_and_modulation(request, config)
     logging.info(f"TTS Request: {redact_user_text(text)} | Voice: {voice_id} | Speed: {speed}x")
 
-    engine = ensure_tts_initialized()
+    engine = await run_in_threadpool(ensure_tts_initialized)
     if engine is None:
         message = "TTS engine is not available."
         record_runtime_error("tts", message, {"action": "tts_speak"})
         return {"ok": False, "status": "error", "message": message, "error": "tts_unavailable"}
 
-    result = engine.speak(text, speed=speed, voice_hint=voice_id, blend=blend, modulation=modulation)
+    result = await run_in_threadpool(
+        engine.speak, text, speed=speed, voice_hint=voice_id, blend=blend, modulation=modulation
+    )
     result["status"] = "success" if result.get("ok") else "error"
     return result
 
@@ -3652,7 +3844,7 @@ async def stop_tts_route():
 @app.get("/runtime/tts-status")
 async def get_tts_status():
     global tts_engine
-    engine = ensure_tts_initialized()
+    engine = await run_in_threadpool(ensure_tts_initialized)
     
     import platform
     is_linux = (platform.system().lower() == "linux")
@@ -3679,7 +3871,7 @@ async def get_tts_status():
             "libsndfile_error": libsndfile_error
         }
 
-    status = engine.ensure_loaded()
+    status = await run_in_threadpool(engine.ensure_loaded)
     backend_val = engine.backend()
     
     backend_name = "unavailable"
@@ -3870,9 +4062,11 @@ class PlanRequest(BaseModel):
 async def generate_plan(request: PlanRequest):
     engine = get_selected_llm_engine()
     prompt = f"Goal: {request.goal}"
-    
+
     # Generate text
-    json_text = engine.process_fast_lane(prompt, preset_name="Plan Generator", true_gen=False, context_rules=False)
+    json_text = await run_in_threadpool(
+        engine.process_fast_lane, prompt, preset_name="Plan Generator", true_gen=False, context_rules=False
+    )
     
     # Attempt to clean potential markdown code blocks if the LLM ignores instructions
     clean_text = json_text.strip()
@@ -3888,7 +4082,9 @@ async def generate_plan(request: PlanRequest):
         plan = json.loads(clean_text.strip())
         return plan
     except json.JSONDecodeError:
-        logging.error(f"LLM produced invalid JSON: {clean_text}")
+        # Do not log model output verbatim — it can contain the user's prompt
+        # content. Length + error class is enough to diagnose.
+        logging.error(f"LLM produced invalid JSON ({len(clean_text)} chars).")
         return {"title": "Generation Failed", "phases": [{"name": "Error", "tasks": ["The LLM did not return valid JSON.", "Please try again."]}]}
     except Exception as e:
         logging.error(f"Plan Gen Error: {e}")
@@ -3986,7 +4182,7 @@ async def generate_project(data: dict):
     if not plan or not path:
         raise HTTPException(status_code=400, detail="Missing plan or path")
     
-    success, msg = project_generator.generate_project(plan, path)
+    success, msg = await run_in_threadpool(project_generator.generate_project, plan, path)
     return {"status": "success" if success else "error", "message": msg}
 
 
@@ -4001,4 +4197,20 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     setup_logging(level=args.log_level)
+
+    # Fail-closed auth (§5): never serve an open API by accident.
+    _security = validate_startup_security(
+        args.host,
+        os.getenv("BETTERFINGERS_AUTH_TOKEN"),
+        allow_remote=os.getenv("BETTERFINGERS_ALLOW_REMOTE") == "1",
+    )
+    if not _security["ok"]:
+        logging.error(_security["error"])
+        raise SystemExit(_security["error"])
+    if _security["generated"]:
+        os.environ["BETTERFINGERS_AUTH_TOKEN"] = _security["token"]
+        # Printed once so a standalone developer can authenticate; the token
+        # is ephemeral to this process.
+        print(f"[betterfingers] No auth token supplied; generated one for this run:\n"
+              f"[betterfingers]   BETTERFINGERS_AUTH_TOKEN={_security['token']}")
     uvicorn.run(app, host=args.host, port=args.port)

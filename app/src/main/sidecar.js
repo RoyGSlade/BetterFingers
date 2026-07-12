@@ -6,10 +6,19 @@ const { app } = require('electron');
 const { EXPECTED_API_SCHEMA_VERSION } = require('./config');
 
 // How the post-startup health monitor behaves once the backend is ready.
+// A busy backend is not a dead backend: restarting on missed pings alone
+// kills in-flight model work (review finding #2). The monitor distinguishes
+// process death (restart promptly) from event-loop saturation (tolerate).
 const HEALTH_POLL_INTERVAL_MS = 5000;
-const HEALTH_FAILURES_BEFORE_UNHEALTHY = 3; // ~15s of missed pings
+const HEALTH_FAILURES_BEFORE_UNHEALTHY = 3; // ~15s: surface "unhealthy" status
+const HEALTH_FAILURES_BEFORE_RESTART_ALIVE = 24; // ~2min: process alive but silent
+const HEALTH_FAILURES_BEFORE_RESTART_BUSY = 120; // ~10min: last health showed active jobs
 const MAX_AUTO_RESTARTS = 3; // give up (and tell the user) after this many
 const RESTART_COUNTER_RESET_MS = 5 * 60 * 1000; // a clean 5min resets the count
+
+function isChildAlive(child) {
+  return Boolean(child) && !child.killed && child.exitCode === null && child.signalCode === null;
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -473,6 +482,8 @@ function createSidecar({
     consecutiveHealthFailures = 0;
   }
 
+  let lastHealthyPayload = null;
+
   function startHealthMonitor() {
     stopHealthMonitor();
     healthTimer = setInterval(async () => {
@@ -484,6 +495,7 @@ function createSidecar({
       const health = await tryReadHealth(healthUrl, backendHeaders);
       if (health) {
         consecutiveHealthFailures = 0;
+        lastHealthyPayload = health;
         if (status.state === 'unhealthy') {
           setStatus({
             state: 'ready',
@@ -496,18 +508,50 @@ function createSidecar({
       }
 
       consecutiveHealthFailures += 1;
+
+      // Process death is unambiguous — restart promptly.
+      if (!isChildAlive(childProcess)) {
+        appendLog('electron', 'Backend process has exited; restarting.');
+        setStatus({
+          state: 'unhealthy',
+          message: 'Backend process exited. Attempting to recover…',
+          error: 'unhealthy',
+        });
+        restartBackend('backend process exited');
+        return;
+      }
+
+      // The process is alive but not answering: most likely saturated by
+      // model work, not dead. Restarting now would destroy that work.
+      const hadActiveJobs = Boolean(lastHealthyPayload && lastHealthyPayload.active_job_count > 0);
+      const restartThreshold = hadActiveJobs
+        ? HEALTH_FAILURES_BEFORE_RESTART_BUSY
+        : HEALTH_FAILURES_BEFORE_RESTART_ALIVE;
+
       appendLog(
         'electron',
-        `Backend health check missed (${consecutiveHealthFailures}/${HEALTH_FAILURES_BEFORE_UNHEALTHY}).`,
+        `Backend health check missed (${consecutiveHealthFailures}/${restartThreshold}; process alive${hadActiveJobs ? ', jobs active' : ''}).`,
       );
 
       if (consecutiveHealthFailures === HEALTH_FAILURES_BEFORE_UNHEALTHY) {
         setStatus({
           state: 'unhealthy',
+          message: 'Backend is not responding to health checks (process still running). Waiting for it to recover…',
+          error: 'unhealthy',
+        });
+      }
+
+      if (consecutiveHealthFailures >= restartThreshold) {
+        setStatus({
+          state: 'unhealthy',
           message: 'Backend stopped responding to health checks. Attempting to recover…',
           error: 'unhealthy',
         });
-        restartBackend('health checks stopped responding');
+        restartBackend(
+          hadActiveJobs
+            ? 'health checks silent for 10min with jobs active'
+            : 'health checks silent for 2min with no active jobs',
+        );
       }
     }, HEALTH_POLL_INTERVAL_MS);
 

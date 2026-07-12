@@ -146,8 +146,47 @@ def upsert_draft(draft):
 
 
 def upsert_many(drafts):
+    """Batch upsert in ONE connection and ONE transaction. The previous
+    per-draft connection/commit turned every full-queue mirror into ~100
+    transactions — visible on slow disks and antivirus-heavy systems."""
+    global _write_count
+    rows = []
     for draft in drafts or []:
-        upsert_draft(draft)
+        if not isinstance(draft, dict) or draft.get("id") is None:
+            continue
+        try:
+            rows.append(_row_from_draft(draft))
+        except (TypeError, ValueError):
+            continue
+    if not rows:
+        return
+    init()
+    with _lock:
+        try:
+            conn = _connect()
+            try:
+                conn.executemany(
+                    """
+                    INSERT INTO drafts (id, created_at, status, profile, raw_text, final_text)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        created_at=excluded.created_at,
+                        status=excluded.status,
+                        profile=excluded.profile,
+                        raw_text=excluded.raw_text,
+                        final_text=excluded.final_text
+                    """,
+                    rows,
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as exc:
+            logging.debug(f"history_store batch upsert failed: {exc}")
+
+    _write_count += len(rows)
+    if _write_count >= _PRUNE_EVERY_N_WRITES and _write_count % _PRUNE_EVERY_N_WRITES < len(rows):
+        prune_history()
 
 
 def _row_to_dict(row):
@@ -268,6 +307,36 @@ def clear():
         except Exception as exc:
             logging.warning(f"history_store clear failed: {exc}")
             return False
+
+
+def wipe_database():
+    """Physically remove the database plus its -wal/-shm companions, then
+    recreate an empty store. A logical DELETE leaves content recoverable in
+    SQLite free pages and the WAL; a privacy wipe must remove the files.
+    (Without at-rest encryption this is still logical deletion at the
+    filesystem level — SSD forensics are out of scope — but nothing readable
+    remains through SQLite or the files themselves.)
+
+    Returns {"ok": bool, "removed": [...], "failed": [...], "leftover": [...]}.
+    """
+    base = _db_path()
+    targets = [base, base + "-wal", base + "-shm"]
+    removed, failed = [], []
+    with _lock:
+        for path in targets:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+                    removed.append(os.path.basename(path))
+            except OSError as exc:
+                logging.warning(f"history_store wipe: could not remove {path}: {exc}")
+                failed.append(os.path.basename(path))
+    leftover = [os.path.basename(p) for p in targets if os.path.exists(p)]
+    try:
+        init()  # recreate an empty schema so the app keeps working
+    except Exception as exc:
+        logging.warning(f"history_store wipe: reinit failed: {exc}")
+    return {"ok": not failed and not leftover, "removed": removed, "failed": failed, "leftover": leftover}
 
 
 def migrate_from_json(json_path):

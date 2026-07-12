@@ -76,9 +76,12 @@ class PrivacyWipeTests(unittest.TestCase):
                 resp = client.post("/privacy/wipe", json={})
 
             self.assertEqual(resp.status_code, 200, resp.text)
-            cleared = resp.json()["cleared"]
-            self.assertTrue(cleared["history_db_cleared"])
+            payload = resp.json()
+            self.assertTrue(payload["ok"], payload)
+            cleared = payload["cleared"]
+            self.assertTrue(cleared["history_db_wiped"]["ok"])
             self.assertGreaterEqual(cleared["recordings_files_removed"], 1)
+            self.assertTrue(payload["postconditions"]["recordings_dir_empty"])
 
             self.assertEqual(history_store.search("hello"), [])
             self.assertEqual(recordings.list_recordings(), [])
@@ -91,8 +94,10 @@ class PrivacyWipeTests(unittest.TestCase):
                 resp = client.post("/privacy/wipe", json={})
 
             self.assertEqual(resp.status_code, 200, resp.text)
-            cleared = resp.json()["cleared"]
-            self.assertTrue(cleared["history_db_cleared"])
+            payload = resp.json()
+            self.assertTrue(payload["ok"], payload)
+            cleared = payload["cleared"]
+            self.assertTrue(cleared["history_db_wiped"]["ok"])
             self.assertEqual(cleared["recordings_files_removed"], 0)
 
     def test_privacy_report_lists_history_db_and_recordings(self):

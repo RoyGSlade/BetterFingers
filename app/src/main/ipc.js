@@ -1,45 +1,148 @@
-const { clipboard, ipcMain, shell } = require('electron');
+const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
+const { app, clipboard, ipcMain, shell } = require('electron');
 
 let overlayHideTimer = null;
 
+// --- Renderer privilege boundary -------------------------------------------
+// Every IPC handler validates the sender frame before doing privileged work.
+// The preload bridge hands the renderer real powers (quit, clipboard, hotkeys,
+// overlay control, shell open); a compromised or navigated-away frame must not
+// keep them. Trusted senders are exactly our own pages: the packaged file://
+// HTML under the app, or the electron-vite dev-server origin in development.
+
+const RENDERER_PAGES = new Set(['index.html', 'overlay.html', 'review-overlay.html']);
+
+function isTrustedSender(event) {
+  const url = event?.senderFrame?.url || '';
+  if (!url) return false;
+  if (url.startsWith('file://')) {
+    let pathname;
+    try {
+      pathname = decodeURIComponent(new URL(url).pathname);
+    } catch {
+      return false;
+    }
+    const base = path.basename(pathname);
+    // Must be one of our pages, served from inside the app's own directory
+    // (dev: <repo>/app/..., packaged: .../resources/app.asar/...).
+    const appRoot = path.resolve(__dirname, '..', '..');
+    const normalized = path.resolve(pathname);
+    return RENDERER_PAGES.has(base) && normalized.startsWith(appRoot);
+  }
+  const devOrigin = process.env.ELECTRON_RENDERER_URL;
+  if (devOrigin && url.startsWith(devOrigin)) {
+    return true;
+  }
+  return false;
+}
+
+function rejectUntrusted(event, channel) {
+  const url = event?.senderFrame?.url || '(no frame)';
+  console.warn(`[ipc] Rejected '${channel}' from untrusted sender: ${url}`);
+  return { ok: false, error: 'untrusted_sender' };
+}
+
+// ipcMain.handle with a mandatory sender check.
+function handleTrusted(channel, handler) {
+  ipcMain.handle(channel, (event, ...args) => {
+    if (!isTrustedSender(event)) {
+      return rejectUntrusted(event, channel);
+    }
+    return handler(event, ...args);
+  });
+}
+
+// ipcMain.on (fire-and-forget) with a mandatory sender check.
+function onTrusted(channel, handler) {
+  ipcMain.on(channel, (event, ...args) => {
+    if (!isTrustedSender(event)) {
+      rejectUntrusted(event, channel);
+      return;
+    }
+    handler(event, ...args);
+  });
+}
+
+// shell:open-path may only open locations the app itself exports to.
+function allowedOpenRoots() {
+  const roots = [path.join(os.homedir(), 'Downloads')];
+  try {
+    roots.push(app.getPath('downloads'));
+  } catch {}
+  try {
+    roots.push(app.getPath('userData'));
+  } catch {}
+  return roots.map((r) => path.resolve(r));
+}
+
+function isAllowedOpenTarget(targetPath) {
+  let resolved;
+  try {
+    resolved = fs.realpathSync(path.resolve(String(targetPath)));
+  } catch {
+    return false; // must exist
+  }
+  return allowedOpenRoots().some(
+    (root) => resolved === root || resolved.startsWith(root + path.sep),
+  );
+}
+
 function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthToken, getBackendOrigin, onQuit, onShow } = {}) {
   ipcMain.on('app:get-auth-token-sync', (event) => {
+    if (!isTrustedSender(event)) {
+      rejectUntrusted(event, 'app:get-auth-token-sync');
+      event.returnValue = '';
+      return;
+    }
     event.returnValue = typeof getAuthToken === 'function' ? getAuthToken() : '';
   });
 
   ipcMain.on('app:get-backend-origin-sync', (event) => {
+    if (!isTrustedSender(event)) {
+      rejectUntrusted(event, 'app:get-backend-origin-sync');
+      event.returnValue = '';
+      return;
+    }
     event.returnValue = typeof getBackendOrigin === 'function' ? getBackendOrigin() : '';
   });
 
-  ipcMain.handle('app:quit', async () => {
+  handleTrusted('app:quit', async () => {
     if (onQuit) {
       await onQuit();
     }
     return true;
   });
 
-  ipcMain.on('update-hotkeys', (_event, config) => {
+  onTrusted('update-hotkeys', (_event, config) => {
     const { registerHotkeys } = require('./hotkeys');
     const token = typeof getAuthToken === 'function' ? getAuthToken() : null;
     registerHotkeys(config, token);
   });
 
-  ipcMain.handle('hotkeys:get-capabilities', () => {
+  handleTrusted('hotkeys:get-capabilities', () => {
     const { getHotkeyCapabilities } = require('./hotkeys');
     return getHotkeyCapabilities();
   });
 
 
-  ipcMain.handle('shell:open-path', async (_event, targetPath) => {
-    // Open an exported file/folder (e.g. the reel.html preview) in the OS default app.
-    if (typeof targetPath !== 'string' || !targetPath) {
+  handleTrusted('shell:open-path', async (_event, targetPath) => {
+    // Open an exported file/folder (e.g. the reel.html preview) in the OS
+    // default app. Only locations the app itself exports to are allowed —
+    // Downloads and the app's own data dir — and the target must exist.
+    if (typeof targetPath !== 'string' || !targetPath || targetPath.length > 4096) {
       return { ok: false, error: 'No path provided' };
+    }
+    if (!isAllowedOpenTarget(targetPath)) {
+      console.warn(`[ipc] Refused shell:open-path outside allowed roots: ${targetPath}`);
+      return { ok: false, error: 'Path is outside the allowed export locations.' };
     }
     const error = await shell.openPath(targetPath);
     return { ok: !error, error: error || null };
   });
 
-  ipcMain.handle('app:show', () => {
+  handleTrusted('app:show', () => {
     // Call onShow unconditionally: it recreates the dashboard window when it
     // has been closed (getMainWindow() returns null in that case).
     if (onShow) {
@@ -48,7 +151,7 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthT
     return true;
   });
 
-  ipcMain.handle('app:get-state', () => {
+  handleTrusted('app:get-state', () => {
     const window = getMainWindow?.();
     return {
       isVisible: Boolean(window && !window.isDestroyed() && window.isVisible()),
@@ -56,7 +159,7 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthT
     };
   });
 
-  ipcMain.handle('sidecar:get-status', () => {
+  handleTrusted('sidecar:get-status', () => {
     if (typeof getSidecarStatus === 'function') {
       return getSidecarStatus();
     }
@@ -66,19 +169,19 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthT
     };
   });
 
-  ipcMain.handle('sidecar:get-logs', () => {
+  handleTrusted('sidecar:get-logs', () => {
     if (typeof getSidecarLogs === 'function') {
       return getSidecarLogs();
     }
     return [];
   });
 
-  ipcMain.handle('clipboard:write-text', (_event, text) => {
+  handleTrusted('clipboard:write-text', (_event, text) => {
     clipboard.writeText(String(text ?? ''));
     return true;
   });
 
-  ipcMain.handle('overlay:update-status', (_event, update) => {
+  handleTrusted('overlay:update-status', (_event, update) => {
     const { getOverlayWindow, getReviewWindow, getOverlayAppearance } = require('./windows');
     const overlay = getOverlayWindow();
     const review = getReviewWindow();
@@ -175,24 +278,24 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthT
     return true;
   });
 
-  ipcMain.handle('review:show', (_event, draft) => {
+  handleTrusted('review:show', (_event, draft) => {
     const { showReviewWindow } = require('./windows');
     showReviewWindow(draft ?? null);
     return true;
   });
 
-  ipcMain.handle('review:hide', () => {
+  handleTrusted('review:hide', () => {
     const { hideReviewWindow } = require('./windows');
     hideReviewWindow();
     return true;
   });
 
-  ipcMain.handle('overlay:get-appearance', () => {
+  handleTrusted('overlay:get-appearance', () => {
     const { getOverlayAppearance } = require('./windows');
     return getOverlayAppearance();
   });
 
-  ipcMain.handle('overlay:set-appearance', (_event, partial) => {
+  handleTrusted('overlay:set-appearance', (_event, partial) => {
     const { setOverlayAppearance, getOverlayWindow } = require('./windows');
     const applied = setOverlayAppearance(partial || {});
     // Show the overlay so the user sees the change they just made. If it's pinned
