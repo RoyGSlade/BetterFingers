@@ -285,6 +285,10 @@ def _suggest_lighter_model(current_id, budget_mb):
 
 TIER_ORDER = ["cpu-only", "igpu", "dgpu-8g", "dgpu-12g+"]
 
+# GPU kinds that count as a dedicated card. _detect_gpu() reports "cuda" for
+# NVIDIA devices; "discrete"/"rocm" cover other probes and callers.
+_DEDICATED_GPU_KINDS = {"cuda", "discrete", "rocm"}
+
 
 def classify_tier(ram_mb=0, vram_mb=None, gpu_kind=None, cores=None):
     """Map hardware into a coarse capability tier with plain-language guidance.
@@ -294,16 +298,17 @@ def classify_tier(ram_mb=0, vram_mb=None, gpu_kind=None, cores=None):
     ram_mb = int(ram_mb or 0)
     vram = int(vram_mb) if vram_mb else 0
     kind = (gpu_kind or "none").lower()
+    dedicated = kind in _DEDICATED_GPU_KINDS
 
-    if kind == "discrete" and vram >= 12000:
+    if dedicated and vram >= 12000:
         tier = "dgpu-12g+"
         label = "Dedicated GPU (12 GB+)"
         guidance = "You can run large local models (12B–31B) with GPU acceleration."
-    elif kind == "discrete" and vram >= 8000:
+    elif dedicated and vram >= 8000:
         tier = "dgpu-8g"
         label = "Dedicated GPU (8 GB)"
         guidance = "Run up to ~12B models comfortably; larger ones with CPU offload."
-    elif kind == "discrete":
+    elif dedicated:
         tier = "dgpu-8g"
         label = "Dedicated GPU"
         guidance = "A dedicated GPU is present; 4B–12B models should run well."
