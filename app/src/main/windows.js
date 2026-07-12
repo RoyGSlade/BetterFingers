@@ -163,6 +163,23 @@ function resolvePreloadPath() {
   return path.join(__dirname, '../preload/preload.js');
 }
 
+// Lock a window to the app's own pages: deny all popups, and block any
+// navigation away from our file:// pages (or the dev-server origin). The
+// preload bridge grants real powers — a frame that navigated to foreign
+// content must never inherit them.
+function hardenWindowNavigation(window) {
+  const devOrigin = process.env.ELECTRON_RENDERER_URL;
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.webContents.on('will-navigate', (event, url) => {
+    const allowed =
+      url.startsWith('file://') || (devOrigin && url.startsWith(devOrigin));
+    if (!allowed) {
+      console.warn(`[windows] Blocked navigation to ${url}`);
+      event.preventDefault();
+    }
+  });
+}
+
 // The window/taskbar icon (glitch-ring app icon). electron-builder sets the
 // packaged executable icon from build.icon; this covers the runtime BrowserWindow
 // icon (notably on Linux). Returns a path if found, else undefined (Electron
@@ -209,6 +226,8 @@ function createMainWindow() {
       preload: resolvePreloadPath(),
     },
   });
+
+  hardenWindowNavigation(mainWindow);
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
@@ -279,6 +298,8 @@ function createOverlayWindow() {
     }, 400);
   });
 
+  hardenWindowNavigation(overlayWindow);
+
   if (process.env.ELECTRON_RENDERER_URL) {
     overlayWindow.loadURL(`${process.env.ELECTRON_RENDERER_URL}/overlay.html`);
   } else {
@@ -340,6 +361,8 @@ function createReviewWindow() {
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width, height } = primaryDisplay.workAreaSize;
   reviewWindow.setPosition(Math.max(20, width - 590), Math.max(20, height - 560));
+
+  hardenWindowNavigation(reviewWindow);
 
   reviewWindow.on('closed', () => {
     reviewWindow = null;
