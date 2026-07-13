@@ -320,6 +320,12 @@ def _sanitize_profile_values(config, defaults):
     cfg["audio_ducking"] = _coerce_bool(cfg.get("audio_ducking", d["audio_ducking"]), d["audio_ducking"])
     cfg["auto_submit"] = _coerce_bool(cfg.get("auto_submit", d["auto_submit"]), d["auto_submit"])
     cfg["instant_typing"] = _coerce_bool(cfg.get("instant_typing", d["instant_typing"]), d["instant_typing"])
+    cfg["per_app_pacing_enabled"] = _coerce_bool(
+        cfg.get("per_app_pacing_enabled", d["per_app_pacing_enabled"]),
+        d["per_app_pacing_enabled"],
+    )
+    overrides = cfg.get("injection_pacing_overrides", d["injection_pacing_overrides"])
+    cfg["injection_pacing_overrides"] = overrides if isinstance(overrides, dict) else dict(d["injection_pacing_overrides"])
     cfg["restore_clipboard_after_paste"] = _coerce_bool(
         cfg.get("restore_clipboard_after_paste", d["restore_clipboard_after_paste"]),
         d["restore_clipboard_after_paste"],
@@ -678,6 +684,12 @@ def _profile_defaults():
         "min_key_hold": 0.015,
         "max_key_hold": 0.035,
         "instant_typing": False,
+        # Per-app injection pacing: slow the keystroke rate (or paste) for slow
+        # targets so text isn't mangled (e.g. LibreOffice). Off → type at the
+        # tool default everywhere. Overrides map app_key -> {strategy,
+        # key_delay_ms} for user tuning.
+        "per_app_pacing_enabled": True,
+        "injection_pacing_overrides": {},
         # After a paste-injection, restore the user's prior clipboard so a draft
         # doesn't clobber whatever they had copied (§7 clipboard restoration).
         "restore_clipboard_after_paste": True,
