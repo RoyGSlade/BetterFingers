@@ -245,6 +245,24 @@ is_processing_draft = False
 # by a crash of a previous process — its injection outcome is unknown, so
 # recovery moves it to "send_interrupted" rather than silently reverting it.
 SEND_PROCESS_TOKEN = uuid.uuid4().hex
+
+# Draft-history persistence writer state. Every mutation calls save_draft_history
+# (outside draft_lock). Two problems the naive "snapshot + os.replace" had:
+#   1. Lost updates: two concurrent savers each os.replace their own snapshot; if
+#      the older snapshot lands last, the JSON on disk regresses to a stale state
+#      (memory + SQLite mirror stay correct, so it only bites after a restart).
+#   2. Redundant IO: a burst of mutations each does a full disk+SQLite write.
+# Fix: a monotonic request revision tags each save; a single-writer lock
+# serializes the actual write; a saver whose revision is already covered by a
+# newer flush skips entirely (coalescing). _draft_written_rev is only ever set to
+# a revision the on-disk state is guaranteed to be at least as new as, so skips
+# never drop an update — at worst an extra (correct) write happens.
+_draft_persist_lock = threading.Lock()   # guards the counters + pending mirror set
+_draft_write_lock = threading.Lock()     # serializes the write-to-disk step
+_draft_request_rev = 0                    # bumped once per save_draft_history call
+_draft_written_rev = 0                    # highest revision flushed to disk
+_draft_pending_full_mirror = False        # a full-queue mirror was requested
+_draft_pending_changed_ids = set()        # narrowed mirror ids awaiting a flush
 cancellation_event = threading.Event()
 # Single-flight gate for the dictation pipeline. is_processing_draft remains as
 # a read-only mirror for status displays/hotkey guards; the coordinator owns
@@ -284,31 +302,71 @@ runtime_error_lock = threading.Lock()
 MAX_RUNTIME_ERROR_HISTORY = 50
 
 def save_draft_history(changed_draft_id=None):
-    """Persist the draft queue. Snapshot under the lock, IO outside it.
+    """Persist the draft queue durably, ordered, and coalesced.
 
-    changed_draft_id narrows the searchable-archive mirror to the one draft
-    that actually changed (one small transaction) instead of re-upserting the
-    whole queue; the JSON queue snapshot is still written in full (bounded at
-    MAX_DRAFT_HISTORY) but atomically via temp-file + os.replace so a crash
-    mid-write cannot corrupt it.
+    Every mutation calls this (outside draft_lock). A monotonic revision tags the
+    request; a single-writer lock serializes the actual write; whoever writes
+    always snapshots the *latest* queue and stamps _draft_written_rev, so a
+    concurrent saver whose revision is already covered skips (coalescing) and a
+    stale snapshot can never regress the file (ordering). changed_draft_id
+    narrows the searchable-archive mirror to the drafts that actually changed;
+    coalesced requests accumulate their ids so a single flush mirrors them all.
+    The JSON snapshot is still written in full (bounded at MAX_DRAFT_HISTORY) and
+    atomically (temp + os.replace) so a crash mid-write cannot corrupt it.
     """
-    import json
-    history_file = os.path.join(get_user_data_path(), "draft_history.json")
-    try:
-        with draft_lock:
-            serializable_drafts = [dict(draft) for draft in draft_queue]
-        tmp_file = history_file + ".tmp"
-        with open(tmp_file, "w", encoding="utf-8") as f:
-            json.dump(serializable_drafts, f, indent=2)
-        os.replace(tmp_file, history_file)
-        # Mirror into the searchable, uncapped archive (C8). Defensive: never fatal.
-        if changed_draft_id is not None:
-            changed = [d for d in serializable_drafts if d.get("id") == changed_draft_id]
-            history_store.upsert_many(changed)
+    global _draft_request_rev, _draft_written_rev, _draft_pending_full_mirror
+
+    # 1) Register intent: claim a revision and record what the mirror owes.
+    with _draft_persist_lock:
+        _draft_request_rev += 1
+        my_rev = _draft_request_rev
+        if changed_draft_id is None:
+            _draft_pending_full_mirror = True
         else:
-            history_store.upsert_many(serializable_drafts)
-    except Exception as exc:
-        logging.exception(f"Failed to save draft history to {history_file}: {exc}")
+            _draft_pending_changed_ids.add(changed_draft_id)
+
+    # 2) Serialize writers. If a newer-or-equal flush already ran while we waited
+    #    for the lock, our state is already on disk — coalesce away.
+    with _draft_write_lock:
+        with _draft_persist_lock:
+            if _draft_written_rev >= my_rev:
+                return
+            # Claim everything pending up to now; the snapshot below covers it.
+            claimed_rev = _draft_request_rev
+            mirror_full = _draft_pending_full_mirror
+            mirror_ids = None if mirror_full else set(_draft_pending_changed_ids)
+            _draft_pending_full_mirror = False
+            _draft_pending_changed_ids.clear()
+
+        history_file = os.path.join(get_user_data_path(), "draft_history.json")
+        try:
+            import json
+            with draft_lock:
+                serializable_drafts = [dict(draft) for draft in draft_queue]
+            tmp_file = history_file + ".tmp"
+            with open(tmp_file, "w", encoding="utf-8") as f:
+                json.dump(serializable_drafts, f, indent=2)
+            os.replace(tmp_file, history_file)
+            # Mark persisted only after the file is in place. claimed_rev is a
+            # lower bound on how new the snapshot is, so skips stay safe.
+            with _draft_persist_lock:
+                if claimed_rev > _draft_written_rev:
+                    _draft_written_rev = claimed_rev
+            # Mirror into the searchable, uncapped archive (C8). Defensive: never
+            # fatal. On failure the ids are re-queued so the next flush retries.
+            if mirror_full:
+                history_store.upsert_many(serializable_drafts)
+            elif mirror_ids:
+                changed = [d for d in serializable_drafts if d.get("id") in mirror_ids]
+                history_store.upsert_many(changed)
+        except Exception as exc:
+            logging.exception(f"Failed to save draft history to {history_file}: {exc}")
+            # Re-arm the mirror debt so a subsequent save reattempts it.
+            with _draft_persist_lock:
+                if mirror_full:
+                    _draft_pending_full_mirror = True
+                elif mirror_ids:
+                    _draft_pending_changed_ids.update(mirror_ids)
 
 def load_draft_history():
     global next_draft_id

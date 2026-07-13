@@ -25,6 +25,13 @@ class TempDataDirMixin(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         self.addCleanup(self._tmp.cleanup)
+        # Reset the persistence writer state so revisions / mirror-debt from
+        # other tests don't bleed into these assertions.
+        server._draft_request_rev = 0
+        server._draft_written_rev = 0
+        server._draft_pending_full_mirror = False
+        server._draft_pending_changed_ids.clear()
+        self.addCleanup(server._draft_pending_changed_ids.clear)
         server.draft_queue.clear()
         self.addCleanup(server.draft_queue.clear)
 
