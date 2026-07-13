@@ -233,7 +233,7 @@ class ModelManagerStatusTests(unittest.TestCase):
                     info.size = len(data)
                     archive.addfile(info, BytesIO(data))
 
-            with patch.dict(os.environ, {}, clear=True), patch(
+            with patch.dict(os.environ, {"BETTERFINGERS_ALLOW_TINY_MODELS": "1"}, clear=True), patch(
                 "model_manager.sys.platform", "linux"
             ), patch("model_manager.get_models_dir", return_value=tmp), patch(
                 "model_manager.get_repo_root", return_value=tmp
@@ -330,7 +330,7 @@ class ModelManagerStatusTests(unittest.TestCase):
                     info.size = len(data)
                     archive.addfile(info, BytesIO(data))
 
-            with patch.dict(os.environ, {"BETTERFINGERS_MODEL_PATH": model_path}, clear=True), patch(
+            with patch.dict(os.environ, {"BETTERFINGERS_MODEL_PATH": model_path, "BETTERFINGERS_ALLOW_TINY_MODELS": "1"}, clear=True), patch(
                 "model_manager.sys.platform", "linux"
             ), patch("model_manager.get_models_dir", return_value=tmp), patch(
                 "model_manager.get_repo_root", return_value=tmp
@@ -357,7 +357,7 @@ class ModelManagerStatusTests(unittest.TestCase):
                 handle.write("#!/bin/sh\nexit 0\n")
             os.chmod(server_path, 0o755)
 
-            with patch.dict(os.environ, {"BETTERFINGERS_MODEL_PATH": model_path}, clear=True), patch(
+            with patch.dict(os.environ, {"BETTERFINGERS_MODEL_PATH": model_path, "BETTERFINGERS_ALLOW_TINY_MODELS": "1"}, clear=True), patch(
                 "model_manager.sys.platform", "linux"
             ), patch("model_manager.get_repo_root", return_value=tmp), patch(
                 "model_manager.get_models_dir", return_value=os.path.join(tmp, "models")
