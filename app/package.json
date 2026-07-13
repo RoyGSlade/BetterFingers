@@ -20,7 +20,7 @@
     "@playwright/test": "^1.60.0",
     "electron": "^42.3.1",
     "electron-builder": "^26.0.12",
-    "electron-vite": "^4.0.0"
+    "electron-vite": "^5.0.0"
   },
   "build": {
     "appId": "com.betterfingers.desktop",
