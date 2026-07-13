@@ -13,7 +13,7 @@
 # ---- Core ----
 Pillow>=11,<13                # Image processing (tray icon, overlays)
 psutil>=6,<8                  # Hardware metrics (RAM / cores for hardware_report)
-numpy>=2,<3                   # Numeric arrays for audio processing
+numpy>=2.2.6,<3                   # Numeric arrays for audio processing
 scipy>=1.13,<2               # Signal processing (audio gate)
 
 # ---- Audio & Speech ----
