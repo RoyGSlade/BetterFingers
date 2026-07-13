@@ -1,0 +1,13 @@
+# requirements-dev.in — human-edited dev/test constraints (source of truth).
+#
+# Test + tooling dependencies, kept separate from the runtime deps in
+# requirements.in so production installs stay lean. Generate the lock with:
+#
+#   pip-compile --generate-hashes --output-file=requirements-dev.lock requirements-dev.in
+#
+# The Electron/Playwright e2e stack (electron-smoke, e2e-screenshots) is a Node
+# toolchain pinned via app/package-lock.json (`npm ci`), not a Python
+# dependency, so it is intentionally NOT listed here.
+
+pytest>=8,<9        # Test runner (see pytest.ini markers: smoke)
+pip-tools>=7,<8     # pip-compile / pip-sync — regenerates the lock files

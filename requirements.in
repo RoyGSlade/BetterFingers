@@ -1,0 +1,48 @@
+# requirements.in — human-edited runtime constraints (source of truth).
+#
+# This is the file you edit. Pinned, hashed lock files are GENERATED from it
+# with pip-tools and MUST NOT be hand-edited:
+#
+#   requirements-linux.lock   generated on Linux   (CI + Linux packaging)
+#   requirements-win.lock     generated on Windows (packaged .exe builds)
+#
+# To regenerate after changing this file (see the header of each lock for the
+# exact command). Version ranges below use a floor at the currently-shipping
+# release with a conservative upper bound; the lock pins the exact version.
+
+# ---- Core ----
+Pillow>=11,<13                # Image processing (tray icon, overlays)
+psutil>=6,<8                  # Hardware metrics (RAM / cores for hardware_report)
+numpy>=2,<3                   # Numeric arrays for audio processing
+scipy>=1.13,<2               # Signal processing (audio gate)
+
+# ---- Audio & Speech ----
+sounddevice>=0.5,<0.6         # Microphone capture
+faster-whisper>=1.1,<2        # Whisper speech-to-text (CTranslate2)
+kokoro>=0.9,<1; python_version < "3.13"   # TTS backend (primary)
+kokoro-onnx>=0.4,<1           # TTS backend (ONNX variant)
+
+# ---- Input & Clipboard ----
+keyboard>=0.13,<0.14          # Global hotkey listener
+pygame>=2.6,<3                # Controller / gamepad support
+pydirectinput>=1.0,<2; sys_platform == "win32"   # Simulated keystrokes (Windows-only; ctypes.windll)
+pyperclip>=1.8,<2             # Cross-platform clipboard
+
+# ---- LLM Server ----
+requests>=2.31,<3             # HTTP client (model downloads)
+huggingface_hub>=0.24         # Model cache management (Whisper)
+pyyaml>=6,<7                  # Profile / config files
+
+# ---- Sidecar API ----
+mcp>=1.0,<2                   # MCP client SDK (C12 — persona tool integration)
+fastapi>=0.115,<1             # REST + WebSocket server
+uvicorn>=0.30,<1              # ASGI server
+websockets>=12                # WebSocket protocol support
+python-multipart>=0.0.9       # FastAPI file/form uploads
+
+# ---- Windows Audio Control ----
+# Windows-only (COM / Core Audio). On Linux, audio ducking uses `pactl`
+# (PulseAudio / PipeWire) at runtime instead. These resolve only on Windows,
+# so they appear in requirements-win.lock but not requirements-linux.lock.
+comtypes>=1.2; sys_platform == "win32"      # COM automation (Windows)
+pycaw>=20230407; sys_platform == "win32"    # Windows audio session control

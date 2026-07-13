@@ -1,0 +1,53 @@
+# Dependabot — weekly dependency updates across every ecosystem this repo uses.
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates
+#
+# NOTE: enabling Dependabot *security* alerts / updates and branch protection so
+# these PRs must pass CI before merge are repo Settings, not file config — see
+# the PR description's manual follow-ups.
+version: 2
+updates:
+  # Python runtime + dev/test deps. Dependabot bumps the version pins in the
+  # requirements.in / requirements.txt manifests; regenerate the hashed *.lock
+  # files with pip-compile when a bump lands (locks are generated, not tracked
+  # by Dependabot directly).
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "python"
+    groups:
+      python-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Electron / renderer npm toolchain.
+  - package-ecosystem: "npm"
+    directory: "/app"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "javascript"
+    groups:
+      npm-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Pin/refresh the GitHub Actions used across all workflows.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "github-actions"
