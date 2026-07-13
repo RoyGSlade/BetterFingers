@@ -31,6 +31,7 @@ from platform_capabilities import get_capabilities
 from hardware_report import get_hardware_report, assess_model_fit, get_hardware_tier
 from platform_paths import ensure_app_dirs, get_app_data_dir, get_config_dir
 import recordings
+import upload_safety
 import dictionary
 import dictation_commands
 import macros
@@ -4003,19 +4004,29 @@ async def process_llm(request: LLMRequest):
 @app.post("/transcribe")
 async def transcribe_audio(file: UploadFile = File(...)):
     global transcriber
-    if not transcriber:
-        raise HTTPException(status_code=503, detail="Transcriber not initialized")
-    
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
     temp_filename = tmp.name
+    tmp.close()
     try:
-        with tmp:
-            shutil.copyfileobj(file.file, tmp)
+        # Validate the upload before anything else — a malformed or oversized
+        # file is rejected regardless of whether STT is loaded.
+        try:
+            upload_safety.stream_to_file(file.file, temp_filename, upload_safety.MAX_AUDIO_BYTES)
+            upload_safety.validate_signature(temp_filename, "audio")
+            upload_safety.validate_wav_duration(temp_filename)
+        except upload_safety.UploadTooLarge as exc:
+            raise HTTPException(status_code=413, detail=f"Audio too large (max {exc.limit} bytes).")
+        except upload_safety.UploadRejected as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid audio: {exc}")
+        if not transcriber:
+            raise HTTPException(status_code=503, detail="Transcriber not initialized")
         # Read lease: a concurrent STT unload/reload waits or 409s instead of
         # freeing the Whisper model out from under this transcription.
         with model_runtime.read_lease("stt"):
             text = await run_in_threadpool(transcriber.transcribe, temp_filename)
         return {"text": text}
+    except HTTPException:
+        raise
     except RuntimeBusyError:
         raise HTTPException(status_code=409, detail="STT runtime is being reconfigured; retry shortly.")
     except Exception as e:
@@ -4170,8 +4181,16 @@ async def tts_clone(file: UploadFile = File(...), name: str = Form("My Voice"), 
     try:
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
         tmp_path = tmp.name
-        with tmp:
-            shutil.copyfileobj(file.file, tmp)
+        tmp.close()
+        # Bounded, signature-checked, duration-limited upload.
+        try:
+            upload_safety.stream_to_file(file.file, tmp_path, upload_safety.MAX_AUDIO_BYTES)
+            upload_safety.validate_signature(tmp_path, "audio")
+            upload_safety.validate_wav_duration(tmp_path)
+        except upload_safety.UploadTooLarge as exc:
+            raise HTTPException(status_code=413, detail=f"Voice sample too large (max {exc.limit} bytes).")
+        except upload_safety.UploadRejected as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid voice sample: {exc}")
 
         ok, warnings = voice_clone_qa.check_file(tmp_path)
         if not ok:
@@ -4245,31 +4264,43 @@ async def list_voices():
 
 @app.post("/ocr/extract")
 async def ocr_extract(file: UploadFile = File(...)):
+    # Validate the upload before touching optional OCR dependencies — a
+    # malformed/oversized image is rejected even if Tesseract isn't installed.
+    # The temp file is always cleaned up in the outer finally.
+    tmp_ocr = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+    temp_filename = tmp_ocr.name
+    tmp_ocr.close()
     try:
-        import pytesseract
-        from PIL import Image
-        
-        tmp_ocr = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-        temp_filename = tmp_ocr.name
         try:
-            with tmp_ocr:
-                shutil.copyfileobj(file.file, tmp_ocr)
+            upload_safety.stream_to_file(file.file, temp_filename, upload_safety.MAX_IMAGE_BYTES)
+            upload_safety.validate_signature(temp_filename, "image")
+            upload_safety.validate_image(temp_filename)
+        except upload_safety.UploadTooLarge as exc:
+            raise HTTPException(status_code=413, detail=f"Image too large (max {exc.limit} bytes).")
+        except upload_safety.UploadRejected as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid image: {exc}")
+
+        try:
+            import pytesseract
+            from PIL import Image
+        except ImportError:
+            return {"text": "[Error: pytesseract library not installed on backend.]"}
+        try:
             text = pytesseract.image_to_string(Image.open(temp_filename))
             return {"text": text.strip()}
         except Exception as e:
             logging.error(f"Tesseract Error: {e}")
             return {"text": "[Error: Tesseract not found or failed. Please ensure Tesseract-OCR is installed.]"}
-        finally:
-            try:
-                os.remove(temp_filename)
-            except OSError:
-                pass
-                
-    except ImportError:
-         return {"text": "[Error: pytesseract library not installed on backend.]"}
+    except HTTPException:
+        raise
     except Exception as e:
         logging.error(f"OCR Endpoint Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            os.remove(temp_filename)
+        except OSError:
+            pass
 
 class GraphRequest(BaseModel):
     nodes: list
