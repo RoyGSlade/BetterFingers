@@ -7,14 +7,31 @@ instances concurrently. A boolean is not a mutex.
 
 The coordinator owns the gate. ``try_begin`` atomically claims the pipeline
 (non-blocking) and only then clears the shared cancellation event — a loser
-never clears a cancel meant for the running job. ``finish`` releases the gate
-and is safe to call exactly once per successful ``try_begin``.
+never clears a cancel meant for the running job. ``finish`` releases the gate.
+
+Prefer the ``session()`` context manager over raw try_begin/finish: it puts the
+release in a finally that runs even if job creation or a state transition
+raises immediately after admission, so the gate can never leak.
 
 Pure threading, no server imports — unit-tested in
-``tests/test_dictation_coordinator.py``.
+``tests/test_dictation_coordinator.py`` and ``tests/test_pipeline_single_flight.py``.
 """
 
+import contextlib
+import logging
 import threading
+
+
+class Lease:
+    """Handle yielded by ``session()``. ``admitted`` says whether this caller
+    won the gate; the token identifies the holder so a stale finish can't
+    release someone else's lease."""
+
+    __slots__ = ("admitted", "token")
+
+    def __init__(self, admitted, token=None):
+        self.admitted = admitted
+        self.token = token
 
 
 class DictationCoordinator:
@@ -24,6 +41,8 @@ class DictationCoordinator:
         self._gate = threading.Lock()
         self._state_lock = threading.Lock()
         self._active_job_id = None
+        self._holder_token = None  # identifies the current gate owner
+        self._token_seq = 0
         self.cancellation_event = cancellation_event or threading.Event()
 
     @property
@@ -33,7 +52,7 @@ class DictationCoordinator:
 
     def is_busy(self):
         # Peek without acquiring: locked() is advisory, callers that need a
-        # guarantee must use try_begin().
+        # guarantee must use try_begin()/session().
         return self._gate.locked()
 
     def try_begin(self):
@@ -44,6 +63,9 @@ class DictationCoordinator:
         """
         if not self._gate.acquire(blocking=False):
             return False
+        with self._state_lock:
+            self._token_seq += 1
+            self._holder_token = self._token_seq
         self.cancellation_event.clear()
         return True
 
@@ -58,13 +80,43 @@ class DictationCoordinator:
         self.cancellation_event.set()
         return job_id
 
-    def finish(self):
-        """Release the gate. Call exactly once after a successful try_begin."""
+    def finish(self, token=None):
+        """Release the gate. Call exactly once after a successful try_begin.
+
+        If ``token`` is given it must match the current holder — a mismatched or
+        double release is logged and ignored rather than silently corrupting a
+        newer holder's ownership.
+        """
         with self._state_lock:
+            if not self._gate.locked():
+                logging.warning("DictationCoordinator.finish() called on an unheld gate; ignoring.")
+                return
+            if token is not None and token != self._holder_token:
+                logging.warning("DictationCoordinator.finish() with a stale token; ignoring.")
+                return
             self._active_job_id = None
+            self._holder_token = None
         try:
             self._gate.release()
         except RuntimeError:
-            # Defensive: releasing an unheld gate is a caller bug, but the
-            # pipeline must never die on teardown.
-            pass
+            # Defensive: the pipeline must never die on teardown.
+            logging.warning("DictationCoordinator gate release raced; ignoring.")
+
+    @contextlib.contextmanager
+    def session(self):
+        """Context manager wrapping admission + guaranteed release.
+
+        Yields a :class:`Lease`. When ``lease.admitted`` is False the caller
+        lost the gate and must not touch shared pipeline state. When True, the
+        gate is released on exit even if the body raises before finishing — so
+        a failure in job creation or a state transition can't leak the gate.
+        """
+        if not self.try_begin():
+            yield Lease(admitted=False)
+            return
+        with self._state_lock:
+            token = self._holder_token
+        try:
+            yield Lease(admitted=True, token=token)
+        finally:
+            self.finish(token=token)

@@ -309,16 +309,68 @@ def clear():
             return False
 
 
+def verify_schema():
+    """Prove the store is usable: both tables exist and a row round-trips.
+
+    Distinguishes an *empty* database (healthy, count 0) from a *broken or
+    missing-schema* one — the latter previously masqueraded as empty because
+    count() swallowed the "no such table" error as 0. Returns
+    {"ok", "drafts_table", "fts_table", "roundtrip", "error"}.
+    """
+    result = {"ok": False, "drafts_table": False, "fts_table": False, "roundtrip": False, "error": ""}
+    with _lock:
+        try:
+            conn = _connect()
+            try:
+                tables = {
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type IN ('table')"
+                    ).fetchall()
+                }
+                result["drafts_table"] = "drafts" in tables
+                result["fts_table"] = "drafts_fts" in tables
+                if not (result["drafts_table"] and result["fts_table"]):
+                    result["error"] = "missing table(s)"
+                    return result
+                # Round-trip a sentinel row through insert + FTS retrieval, then
+                # remove it, so we prove the triggers and FTS index actually work.
+                probe_id = -999_999
+                conn.execute("DELETE FROM drafts WHERE id = ?", (probe_id,))
+                conn.execute(
+                    "INSERT INTO drafts (id, created_at, status, profile, raw_text, final_text) "
+                    "VALUES (?, '', 'probe', '', 'schemaprobe', 'schemaprobe')",
+                    (probe_id,),
+                )
+                got = conn.execute(
+                    "SELECT d.id FROM drafts d JOIN drafts_fts f ON d.id = f.rowid "
+                    "WHERE drafts_fts MATCH 'schemaprobe' AND d.id = ?",
+                    (probe_id,),
+                ).fetchone()
+                conn.execute("DELETE FROM drafts WHERE id = ?", (probe_id,))
+                conn.commit()
+                result["roundtrip"] = got is not None
+                result["ok"] = result["roundtrip"]
+                if not result["roundtrip"]:
+                    result["error"] = "insert/retrieve round-trip failed"
+            finally:
+                conn.close()
+        except Exception as exc:
+            result["error"] = str(exc)
+    return result
+
+
 def wipe_database():
     """Physically remove the database plus its -wal/-shm companions, then
-    recreate an empty store. A logical DELETE leaves content recoverable in
-    SQLite free pages and the WAL; a privacy wipe must remove the files.
-    (Without at-rest encryption this is still logical deletion at the
-    filesystem level — SSD forensics are out of scope — but nothing readable
-    remains through SQLite or the files themselves.)
+    recreate and *verify* an empty store. A logical DELETE leaves content
+    recoverable in SQLite free pages and the WAL; a privacy wipe must remove
+    the files. (Without at-rest encryption this is still logical deletion at
+    the filesystem level — SSD forensics are out of scope — but nothing
+    readable remains through SQLite or the files themselves.)
 
-    Returns {"ok": bool, "removed": [...], "failed": [...], "leftover": [...]}.
+    Returns {"ok", "removed", "failed", "leftover", "recreated", "schema"}.
     """
+    global _initialized_path, _write_count
     base = _db_path()
     targets = [base, base + "-wal", base + "-shm"]
     removed, failed = [], []
@@ -331,12 +383,25 @@ def wipe_database():
             except OSError as exc:
                 logging.warning(f"history_store wipe: could not remove {path}: {exc}")
                 failed.append(os.path.basename(path))
-    leftover = [os.path.basename(p) for p in targets if os.path.exists(p)]
+        leftover = [os.path.basename(p) for p in targets if os.path.exists(p)]
+        # Critical: the schema cache still points at the just-deleted db, so a
+        # plain init() would early-return and leave a schemaless file behind.
+        # Reset the cached path and write counter so the store is rebuilt.
+        _initialized_path = None
+        _write_count = 0
     try:
         init()  # recreate an empty schema so the app keeps working
     except Exception as exc:
         logging.warning(f"history_store wipe: reinit failed: {exc}")
-    return {"ok": not failed and not leftover, "removed": removed, "failed": failed, "leftover": leftover}
+    schema = verify_schema()
+    return {
+        "ok": (not failed and not leftover and schema["ok"]),
+        "removed": removed,
+        "failed": failed,
+        "leftover": leftover,
+        "recreated": schema["ok"],
+        "schema": schema,
+    }
 
 
 def migrate_from_json(json_path):

@@ -2,6 +2,7 @@ import hmac
 import os
 import re
 import secrets
+import sys
 import shutil
 import tempfile
 import logging
@@ -144,6 +145,59 @@ def validate_startup_security(host, token, env=None, allow_remote=False):
     return {"ok": True, "token": token, "generated": False, "error": ""}
 
 
+def _is_test_env():
+    # Under pytest we must not auto-generate a token or hard-fail startup —
+    # the suite runs the app open on loopback by design.
+    return "PYTEST_CURRENT_TEST" in os.environ or "pytest" in sys.modules
+
+
+def enforce_startup_security():
+    """Application-startup auth gate (runs from the FastAPI startup event, so
+    `uvicorn server:app` is covered — not only `python server.py`).
+
+    In production without a token: raise, aborting startup. In dev without a
+    token (real launch, not tests): generate one, publish it to the
+    environment and app.state so every worker sees it. The active token lives
+    in app.state.auth_token, not only os.environ.
+    """
+    host = os.getenv("BETTERFINGERS_HOST", "127.0.0.1")
+    token = os.getenv("BETTERFINGERS_AUTH_TOKEN")
+    result = validate_startup_security(
+        host, token, allow_remote=os.getenv("BETTERFINGERS_ALLOW_REMOTE") == "1"
+    )
+    if not result["ok"]:
+        if _is_test_env():
+            # Never abort the test suite; just record and continue open.
+            app.state.auth_token = token or None
+            return result
+        logging.error("Startup security check failed: %s", result["error"])
+        raise RuntimeError(result["error"])
+    if result["generated"]:
+        if _is_test_env():
+            app.state.auth_token = token or None
+            return result
+        os.environ["BETTERFINGERS_AUTH_TOKEN"] = result["token"]
+        logging.warning("No auth token supplied; generated an ephemeral one for this run.")
+        print(f"[betterfingers] Generated auth token for this run:\n"
+              f"[betterfingers]   BETTERFINGERS_AUTH_TOKEN={result['token']}")
+    app.state.auth_token = os.getenv("BETTERFINGERS_AUTH_TOKEN")
+    return result
+
+
+# Naive per-process throttle on repeated auth failures. Loopback single-user,
+# so this is a tripwire against a local runaway/loop, not a hardened limiter.
+_auth_failures = deque(maxlen=64)
+_AUTH_FAIL_WINDOW_S = 10.0
+_AUTH_FAIL_LIMIT = 20
+
+
+def _record_auth_failure():
+    now = time.monotonic()
+    _auth_failures.append(now)
+    recent = [t for t in _auth_failures if now - t <= _AUTH_FAIL_WINDOW_S]
+    return len(recent)
+
+
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     expected_token = os.getenv("BETTERFINGERS_AUTH_TOKEN")
@@ -155,6 +209,8 @@ async def auth_middleware(request: Request, call_next):
             # timing to anything that can reach the port.
             presented = parts[1] if len(parts) == 2 and parts[0] == "Bearer" else ""
             if not hmac.compare_digest(presented, expected_token):
+                if _record_auth_failure() > _AUTH_FAIL_LIMIT:
+                    return JSONResponse(status_code=429, content={"detail": "Too many auth failures; slow down."})
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
     return await call_next(request)
 
@@ -185,6 +241,22 @@ cancellation_event = threading.Event()
 from dictation_coordinator import DictationCoordinator
 
 dictation_coordinator = DictationCoordinator(cancellation_event=cancellation_event)
+# Set for the duration of a privacy wipe. While it is set, every path that
+# could create or re-persist user data (new recordings, dictation processing,
+# recovery saves, sends, TTS, retranscription) refuses, so the wipe operates on
+# a quiescent system and nothing regrows behind it.
+privacy_wipe_in_progress = threading.Event()
+
+
+def _reject_if_wiping(what):
+    """Return a rejection dict if a privacy wipe is running, else None."""
+    if privacy_wipe_in_progress.is_set():
+        logging.info("Rejected %s: a privacy wipe is in progress.", what)
+        return {"ok": False, "error": "privacy_wipe_in_progress",
+                "message": "A privacy wipe is in progress; try again in a moment."}
+    return None
+
+
 # The dictation pipeline is the first consumer of the central job registry
 # (§6.3). Only one dictation runs at a time (guarded by the coordinator), so
 # a single active-id pointer lets the /jobs cancel route target it.
@@ -987,6 +1059,11 @@ def mark_draft_pending_send(draft):
 
 
 def send_draft_by_id(draft_id, action=None, open_chat=False, allow_resend=False):
+    # A wipe is draining/deleting user data — do not inject (which could reopen
+    # or re-clipboard content the user is trying to erase).
+    wiping = _reject_if_wiping("draft send")
+    if wiping:
+        return {"id": draft_id, **wiping}
     # Atomic state transition (compare-and-set to "sending" under the lock)
     # so two simultaneous requests cannot both inject the same text. A request
     # that loses the race gets the existing outcome instead of re-injecting.
@@ -1307,36 +1384,61 @@ class _StatusHeartbeat:
 
 def process_recording_result(recording_result):
     global is_processing_draft, _active_dictation_job_id
+    # A privacy wipe must operate on a quiescent system: never start (or
+    # recover-save) a recording while one is running, or it would regrow data
+    # the wipe is trying to erase.
+    if privacy_wipe_in_progress.is_set():
+        logging.info("Dropping recording: a privacy wipe is in progress.")
+        broadcast_status_threadsafe(
+            "dictation_busy",
+            {"message": "A privacy wipe is in progress; this recording was discarded."},
+        )
+        return None
     # Atomic admission: exactly one pipeline may run. A rejected competitor
     # must not clear the running job's cancellation event, overwrite its
     # active id, or share the STT/LLM instances — so it persists its audio to
     # the recovery bin and bows out (callers surface 409 / a busy status).
     if not dictation_coordinator.try_begin():
         logging.warning("Dictation pipeline busy; rejecting competing invocation.")
-        try:
-            recordings.save_recording(
-                recording_result,
-                rec_id=str(int(time.time() * 1000)),
-                metadata={
-                    "stop_reason": getattr(recording_result, "stop_reason", "manual"),
-                    "rejected_reason": "pipeline_busy",
-                },
-            )
-        except Exception as exc:
-            logging.debug(f"Could not persist rejected recording: {exc}")
+        # Re-check the wipe flag: it may have been set after the top guard.
+        # A rejected recording must not seed the recovery bin during a wipe.
+        if not privacy_wipe_in_progress.is_set():
+            try:
+                recordings.save_recording(
+                    recording_result,
+                    rec_id=recordings.new_rec_id(),
+                    metadata={
+                        "stop_reason": getattr(recording_result, "stop_reason", "manual"),
+                        "rejected_reason": "pipeline_busy",
+                    },
+                )
+            except Exception as exc:
+                logging.debug(f"Could not persist rejected recording: {exc}")
         broadcast_status_threadsafe(
             "dictation_busy",
             {"message": "A dictation is already processing; recording saved to recovery."},
         )
         return None
-    with draft_lock:
-        is_processing_draft = True
-
-    # Register this dictation as a job so the UI can observe/cancel it (§6.3).
-    job = JOBS.create("dictation", label="Dictation")
-    _active_dictation_job_id = job.id
-    dictation_coordinator.set_active_job(job.id)
-    JOBS.transition(job.id, JobState.TRANSCRIBING)
+    # Admission is won. From here the gate MUST be released on every exit.
+    # Registering the job (and its first transition) runs in its own guard so a
+    # failure there cannot leak the gate or leave is_processing_draft stuck —
+    # the main try/finally below only starts after the job exists.
+    try:
+        with draft_lock:
+            is_processing_draft = True
+        # Register this dictation as a job so the UI can observe/cancel it (§6.3).
+        job = JOBS.create("dictation", label="Dictation")
+        _active_dictation_job_id = job.id
+        dictation_coordinator.set_active_job(job.id)
+        JOBS.transition(job.id, JobState.TRANSCRIBING)
+    except Exception as exc:
+        logging.error(f"Failed to start dictation job: {exc}")
+        with draft_lock:
+            is_processing_draft = False
+        _active_dictation_job_id = None
+        dictation_coordinator.finish()
+        broadcast_status_threadsafe("idle")
+        return None
 
     def check_cancelled():
         if cancellation_event.is_set() or JOBS.is_cancel_requested(job.id):
@@ -1344,12 +1446,16 @@ def process_recording_result(recording_result):
 
     preset = "True Janitor"
     raw_text = ""
-    metadata = get_recording_metadata(recording_result)
+    try:
+        metadata = get_recording_metadata(recording_result)
+    except Exception as exc:
+        logging.debug(f"metadata extraction failed: {exc}")
+        metadata = {}
     # Persist the raw audio up front so it survives even a processing crash (C6).
     try:
         recordings.save_recording(
             recording_result,
-            rec_id=str(int(time.time() * 1000)),
+            rec_id=recordings.new_rec_id(),
             metadata={"stop_reason": getattr(recording_result, "stop_reason", "manual")},
         )
     except Exception as exc:
@@ -1648,6 +1754,9 @@ def on_recording_complete(recording_result):
 @app.on_event("startup")
 async def startup_event():
     global loop, _warmup_thread
+    # Auth gate first: covers `uvicorn server:app` as well as `python
+    # server.py`, and fails startup in production if no token is configured.
+    enforce_startup_security()
     loop = asyncio.get_event_loop()
     load_draft_history()
     # One-time backfill of the searchable archive from the legacy JSON (C8).
@@ -2853,38 +2962,92 @@ class PrivacyWipeRequest(BaseModel):
     wipe_voices: bool = False
 
 
+def _drain_recorder(timeout=10.0):
+    """Stop an active recording and wait for the recorder to actually stop.
+
+    request_stop only *requests* a stop; this confirms is_recording has
+    cleared so no in-flight callback can still produce audio after the wipe.
+    """
+    if hotkey_manager is None or not bool(getattr(hotkey_manager, "is_recording", False)):
+        return True
+    try:
+        hotkey_manager.request_stop(reason="privacy_wipe")
+    except Exception as exc:
+        logging.warning(f"Privacy wipe: could not request recorder stop: {exc}")
+        return False
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not bool(getattr(hotkey_manager, "is_recording", False)):
+            return True
+        time.sleep(0.05)
+    return not bool(getattr(hotkey_manager, "is_recording", False))
+
+
+def _drain_output_injector(timeout=5.0):
+    """Signal any in-progress injection to stop and wait for it to settle."""
+    injector = output_injector
+    if injector is None:
+        return True
+    try:
+        injector.stop_typing()
+    except Exception as exc:
+        logging.debug(f"Privacy wipe: injector stop_typing failed: {exc}")
+    # There is no injection worker thread to join (type_text runs inline on the
+    # caller); stop_signal makes any active loop bail. A short settle covers the
+    # external-tool path.
+    time.sleep(min(0.2, timeout))
+    return True
+
+
 def _perform_privacy_wipe(wipe_voices: bool):
-    """Quiesce, delete, verify — and only claim success when verification
-    passes. Reaching the final line is not proof of an empty landfill."""
+    """Quiesce fully, then delete, then verify — and only claim success when
+    every postcondition holds. Reaching the final line is not proof of an
+    empty landfill.
+
+    Sets privacy_wipe_in_progress for the whole operation so recordings,
+    dictation processing, recovery saves, sends, TTS, and retranscription all
+    refuse while it runs. Aborts (without deleting) if the pipeline cannot be
+    quiesced, so we never delete out from under a running job.
+    """
+    if privacy_wipe_in_progress.is_set():
+        return {"ok": False, "error": "wipe_already_running",
+                "message": "A privacy wipe is already in progress."}
+    privacy_wipe_in_progress.set()
     cleared = {}
     postconditions = {}
-
-    # 1. Quiesce: stop any active recording so it cannot complete (and
-    #    re-persist audio) after the wipe...
-    if hotkey_manager is not None and bool(getattr(hotkey_manager, "is_recording", False)):
-        try:
-            hotkey_manager.request_stop(reason="privacy_wipe")
-            cleared["recording_stopped"] = True
-        except Exception as exc:
-            logging.warning(f"Privacy wipe: could not stop active recording: {exc}")
-            cleared["recording_stopped"] = False
-
-    # ...cancel the active dictation, and hold the pipeline gate for the
-    # duration of the deletion so no worker recreates stores mid-wipe.
-    dictation_coordinator.cancel_active()
-    gate_deadline = time.monotonic() + 10.0
     gate_held = False
-    while time.monotonic() < gate_deadline:
-        if dictation_coordinator.try_begin():
-            gate_held = True
-            break
-        time.sleep(0.1)
-    cleared["pipeline_quiesced"] = gate_held
-    if not gate_held:
-        logging.warning("Privacy wipe: pipeline did not quiesce within 10s; proceeding anyway.")
-
     try:
-        # 2. Delete in-memory queues.
+        # 1. Drain the recorder: stop it and confirm it actually stopped.
+        cleared["recorder_stopped"] = _drain_recorder()
+
+        # 2. Cancel the active dictation and acquire the pipeline gate. If the
+        #    pipeline will not quiesce, ABORT rather than delete under a live
+        #    job — releasing the flag so the system keeps working.
+        dictation_coordinator.cancel_active()
+        gate_deadline = time.monotonic() + 10.0
+        while time.monotonic() < gate_deadline:
+            if dictation_coordinator.try_begin():
+                gate_held = True
+                break
+            time.sleep(0.1)
+        cleared["pipeline_quiesced"] = gate_held
+        # With the gate held, the recording/processing worker has drained (it
+        # takes the same gate) — so the completion callback has finished too.
+        cleared["recording_callback_drained"] = gate_held
+        if not gate_held:
+            logging.error("Privacy wipe aborted: pipeline did not quiesce within 10s.")
+            return {
+                "ok": False,
+                "error": "pipeline_did_not_quiesce",
+                "cleared": cleared,
+                "postconditions": {},
+                "message": "Wipe aborted: a dictation would not stop. Nothing was deleted; try again.",
+            }
+
+        # 3. Stop text injection and wait for it to settle.
+        cleared["output_injector_idle"] = _drain_output_injector()
+
+        # 4. Delete in-memory queues.
         with draft_lock:
             cleared["drafts"] = len(draft_queue)
             cleared["recordings"] = len(draft_recordings)
@@ -2893,7 +3056,7 @@ def _perform_privacy_wipe(wipe_voices: bool):
             pending_manual_send_ids.clear()
         save_draft_history()
 
-        # 3. Delete on-disk stores.
+        # 5. Delete on-disk stores (final sweep — callbacks/workers are drained).
         history_file = os.path.join(get_user_data_path(), "draft_history.json")
         try:
             if os.path.exists(history_file):
@@ -2919,11 +3082,16 @@ def _perform_privacy_wipe(wipe_voices: bool):
                 logging.warning(f"Could not remove voices dir: {exc}")
             cleared["voices_removed"] = not voices_dir.exists()
 
-        # 4. Verify every target and report per-path postconditions.
+        # 6. Verify every target and report per-path postconditions.
         leftover_recordings = recordings.list_leftover_files()
         postconditions = {
+            "recorder_stopped": cleared["recorder_stopped"],
+            "recording_callback_drained": cleared["recording_callback_drained"],
+            "pipeline_quiesced": gate_held,
+            "output_injector_idle": cleared["output_injector_idle"],
             "draft_queue_empty": len(draft_queue) == 0,
             "history_file_absent": not os.path.exists(history_file),
+            "history_db_recreated": bool(db_result.get("recreated")),
             "history_db_wiped": bool(db_result.get("ok")),
             "recordings_dir_empty": not leftover_recordings,
             "leftover_recordings": leftover_recordings[:20],
@@ -2933,6 +3101,7 @@ def _perform_privacy_wipe(wipe_voices: bool):
     finally:
         if gate_held:
             dictation_coordinator.finish()
+        privacy_wipe_in_progress.clear()
 
     ok = all(v for k, v in postconditions.items() if k != "leftover_recordings")
     broadcast_status_threadsafe("draft_history_cleared")
@@ -3504,6 +3673,9 @@ async def rewrite_draft(draft_id: int, request: DraftRewriteRequest):
 
 @app.post("/drafts/{draft_id}/tts")
 async def speak_draft(draft_id: int, request: DraftTtsRequest):
+    wiping = _reject_if_wiping("draft TTS")
+    if wiping:
+        return {"draft_id": draft_id, **wiping}
     with draft_lock:
         draft = get_draft_by_id(draft_id)
         if draft is None:
@@ -3804,6 +3976,9 @@ class TTSRequest(BaseModel):
 
 @app.post("/tts/speak")
 async def tts_speak(request: TTSRequest):
+    wiping = _reject_if_wiping("TTS")
+    if wiping:
+        return {"status": "error", **wiping}
     text = (request.text or "").strip()
     if not text:
         return {"ok": False, "status": "error", "message": "No text to speak.", "error": "empty_text"}
