@@ -88,5 +88,65 @@ class PruneHistoryTests(_TempAppdataMixin, unittest.TestCase):
             mock_prune.assert_not_called()
 
 
+class FullRecordTests(_TempAppdataMixin, unittest.TestCase):
+    def _rich_draft(self, draft_id=1):
+        return {
+            "id": draft_id,
+            "created_at": f"2026-01-01T00:{draft_id:02d}:00",
+            "status": "sent",
+            "raw_text": f"raw {draft_id}",
+            "final_text": f"final {draft_id}",
+            "metadata": {"profile": "Default", "sample_rate": 16000},
+            "confidence": {"score": 0.91, "avg_logprob": -0.2, "no_speech_prob": 0.01},
+            "gate_reasons": ["clip_too_short"],
+            "send_outcome": "sent",
+            "send_result": {"ok": True, "action": "paste"},
+            "token_count": 2,
+            "long_text": False,
+        }
+
+    def test_upsert_stores_full_record_and_load_roundtrips(self):
+        draft = self._rich_draft(1)
+        history_store.upsert_draft(draft)
+        loaded = history_store.load_recent_full(100)
+        self.assertEqual(len(loaded), 1)
+        # Every field the queue carried survives the round-trip — not just the
+        # searchable subset.
+        self.assertEqual(loaded[0], draft)
+
+    def test_load_recent_full_is_oldest_first(self):
+        for i in (1, 2, 3):
+            history_store.upsert_draft(self._rich_draft(i))
+        loaded = history_store.load_recent_full(100)
+        self.assertEqual([d["id"] for d in loaded], [1, 2, 3])
+
+    def test_load_recent_full_respects_limit_and_returns_newest(self):
+        for i in range(1, 6):
+            history_store.upsert_draft(self._rich_draft(i))
+        loaded = history_store.load_recent_full(2)
+        # Newest two, still oldest-first within the window.
+        self.assertEqual([d["id"] for d in loaded], [4, 5])
+
+    def test_backcompat_row_without_data_falls_back_to_columns(self):
+        history_store.init()
+        # Simulate a row written before the full-record column existed.
+        with history_store._lock:
+            conn = history_store._connect()
+            try:
+                conn.execute(
+                    "INSERT INTO drafts (id, created_at, status, profile, raw_text, final_text) "
+                    "VALUES (7, '2026-01-01T00:07:00', 'pending', 'Default', 'legacy raw', 'legacy final')"
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        loaded = history_store.load_recent_full(100)
+        self.assertEqual(len(loaded), 1)
+        self.assertEqual(loaded[0]["id"], 7)
+        self.assertEqual(loaded[0]["raw_text"], "legacy raw")
+        self.assertEqual(loaded[0]["final_text"], "legacy final")
+        self.assertEqual(loaded[0]["status"], "pending")
+
+
 if __name__ == "__main__":
     unittest.main()
