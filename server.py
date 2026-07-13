@@ -3228,94 +3228,8 @@ async def clear_recordings_endpoint():
     return {"ok": True, "cleared": count}
 
 
-class DictionaryTermRequest(BaseModel):
-    term: str
-
-
-@app.get("/dictionary")
-async def get_dictionary():
-    return {"ok": True, "terms": dictionary.get_terms()}
-
-
-@app.post("/dictionary")
-async def add_dictionary_term(request: DictionaryTermRequest):
-    if not str(request.term or "").strip():
-        raise HTTPException(status_code=400, detail="Term must not be empty.")
-    return {"ok": True, "terms": dictionary.add_term(request.term)}
-
-
-@app.delete("/dictionary/{term}")
-async def delete_dictionary_term(term: str):
-    return {"ok": True, "terms": dictionary.remove_term(term)}
-
-
-class DictionarySuggestRequest(BaseModel):
-    raw_text: str = ""
-    edited_text: str = ""
-
-
-@app.post("/dictionary/suggest")
-async def suggest_dictionary_terms(request: DictionarySuggestRequest):
-    suggestions = dictionary.suggest_from_edit(request.raw_text, request.edited_text)
-    return {"ok": True, "suggestions": suggestions}
-
-
-class MacroRequest(BaseModel):
-    trigger: str
-    expansion: str
-
-
-@app.get("/macros")
-async def get_macros_endpoint():
-    return {"ok": True, "macros": macros.get_macros()}
-
-
-@app.post("/macros")
-async def add_macro_endpoint(request: MacroRequest):
-    if not str(request.trigger or "").strip() or not str(request.expansion or "").strip():
-        raise HTTPException(status_code=400, detail="Both a trigger and an expansion are required.")
-    return {"ok": True, "macros": macros.add_macro(request.trigger, request.expansion)}
-
-
-@app.delete("/macros/{trigger}")
-async def delete_macro_endpoint(trigger: str):
-    return {"ok": True, "macros": macros.remove_macro(trigger)}
-
-
-class VoicePresetRequest(BaseModel):
-    name: str
-    base: Optional[str] = None
-    blend: Optional[dict] = None
-    speed: Optional[float] = None
-    pitch: Optional[float] = None
-    energy: Optional[float] = None
-    warmth: Optional[float] = None
-    brightness: Optional[float] = None
-    pause_style: Optional[str] = None
-    stability: Optional[float] = None
-    source: Optional[str] = None
-
-
-@app.get("/voice-presets")
-async def get_voice_presets_endpoint():
-    return {"ok": True, "presets": voice_presets.get_presets()}
-
-
-@app.post("/voice-presets")
-async def save_voice_preset_endpoint(request: VoicePresetRequest):
-    if not str(request.name or "").strip():
-        raise HTTPException(status_code=400, detail="A preset name is required.")
-    fields = {
-        key: value
-        for key, value in request.model_dump(exclude={"name"}).items()
-        if value is not None
-    }
-    return {"ok": True, "presets": voice_presets.save_preset(request.name, **fields)}
-
-
-@app.delete("/voice-presets/{name}")
-async def delete_voice_preset_endpoint(name: str):
-    return {"ok": True, "presets": voice_presets.delete_preset(name)}
+# Dictionary / macros / voice-preset routes are their own slice in
+# routes_user_config.py (M6); registered via app.include_router at the end.
 
 
 @app.get("/history/search")
@@ -4447,8 +4361,10 @@ async def generate_project(data: dict):
 # defined, so the routers' `import server` resolves fully. _foundry_sessions is
 # re-bound so server._foundry_sessions stays the shared store existing tests use.
 import routes_foundry  # noqa: E402
+import routes_user_config  # noqa: E402
 
 app.include_router(routes_foundry.router)
+app.include_router(routes_user_config.router)
 _foundry_sessions = routes_foundry._foundry_sessions
 
 
