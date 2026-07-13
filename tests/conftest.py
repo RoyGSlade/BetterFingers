@@ -19,6 +19,11 @@ import pytest
 
 os.environ.setdefault("BETTERFINGERS_LAZY_STARTUP", "1")
 
+# Model verification (supply-chain gate, §11) rejects any GGUF that isn't the
+# exact pinned size + digest. Tests use tiny fixture files, so opt them into the
+# tiny-model allowance here; production never sets this flag and always verifies.
+os.environ.setdefault("BETTERFINGERS_ALLOW_TINY_MODELS", "1")
+
 # Isolate the app data/config dirs from the developer's real profile.
 # server.startup_event() warm-loads any model the profile marks
 # model_keep_*_loaded EVEN under lazy startup, so tests that spin up a

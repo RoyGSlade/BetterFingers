@@ -1,10 +1,14 @@
 import hashlib
+import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
+import time
 import zipfile
 
 try:
@@ -401,27 +405,43 @@ def get_model_file_status(model_id):
 
 
 def is_model_file_complete(model_id):
-    """Best-effort guard against power-loss partial files being treated as installed."""
+    """Guard against partial/corrupt/wrong files being treated as installed.
+
+    Completeness is never inferred from size alone (§11): a size-matching file is
+    only "complete" once its SHA-256 matches the catalog digest. The digest check
+    is cache-aware (see :func:`_cached_digest_ok`) so multi-GB models are not
+    rehashed on every call.
+    """
     path = get_model_path(model_id)
     if not os.path.exists(path):
         return False
     if not os.access(path, os.R_OK):
         return False
     actual = _file_size(path)
-    # Unit tests and developer overrides often use tiny fixture files. Real GGUF
-    # downloads are gigabytes, so only enforce catalog-size sanity for model-sized files.
-    if actual < 16 * 1024 * 1024:
+    info = AVAILABLE_MODELS.get(model_id, {})
+    # Tiny fixture allowance for unit tests / dev overrides, gated behind an
+    # explicit flag. Production leaves it off, so a sub-16MiB file falls through
+    # to the exact-size and digest checks below and is rejected like any other
+    # truncated or wrong file — size is never enough on its own.
+    if actual < 16 * 1024 * 1024 and _tiny_models_allowed():
         return True
     # Exact byte size from the artifact manifest (§11) when available —
     # a size mismatch means truncation or the wrong file.
-    exact = AVAILABLE_MODELS.get(model_id, {}).get("size_bytes")
+    exact = info.get("size_bytes")
     if exact:
-        return actual == int(exact)
-    expected = _expected_model_bytes(model_id)
-    if not expected:
-        return True
-    # Catalog sizes are rounded, so allow a little slack while still catching truncation.
-    return actual >= int(expected * 0.90)
+        if actual != int(exact):
+            return False
+    else:
+        expected = _expected_model_bytes(model_id)
+        # Catalog sizes are rounded, so allow a little slack while still catching truncation.
+        if expected and actual < int(expected * 0.90):
+            return False
+    # Size looked right; only the digest proves it is the artifact we pinned.
+    expected_sha = info.get("sha256")
+    if expected_sha:
+        ok, _from_cache = _cached_digest_ok(path, expected_sha)
+        return ok
+    return True
 
 
 def get_model_server_args(model_id=None):
@@ -453,6 +473,15 @@ def delete_model(model_id):
             removed = True
         except Exception as exc:
             return False, f"Failed to delete partial download for {model_id}: {exc}"
+    # Drop the verification sidecar + cached verdict so a later file that happens
+    # to land at the same path can't be trusted on a stale digest (§11).
+    sidecar = f"{path}.sha256"
+    if os.path.exists(sidecar):
+        try:
+            os.remove(sidecar)
+        except OSError:
+            pass
+    _drop_verify_cache_entry(path)
     return (True, f"Deleted {model_id}") if removed else (False, "Model not found")
 
 
@@ -625,6 +654,17 @@ def validate_llama_server_runtime(server_path=None):
     if not os.path.exists(server_path):
         return {"ok": False, "message": f"llama-server runtime is missing: {server_path}"}
 
+    # Verify the binary's digest BEFORE we execute it with --version (§11).
+    # A managed binary swapped underneath us (same filename) is caught here and
+    # quarantined, so a tampered executable is never launched.
+    integrity = verify_installed_runtime(server_path, quarantine=True)
+    if not integrity.get("ok", False):
+        return {
+            "ok": False,
+            "message": f"llama-server binary failed integrity check ({integrity.get('reason')}): {server_path}",
+            "integrity": integrity,
+        }
+
     repair_result = None
     if not sys.platform.startswith("win"):
         repair_result = repair_linux_runtime_links(os.path.dirname(os.path.abspath(server_path)))
@@ -674,6 +714,385 @@ def sha256_file(path, chunk_size=1024 * 1024):
 def hmac_compare(a, b):
     import hmac as _hmac
     return _hmac.compare_digest(str(a or "").lower(), str(b or "").lower())
+
+
+# --- Existing-artifact verification (supply-chain gate, §11) -------------------
+# download_file() proves NEW transfers; the helpers below prove artifacts that
+# are already on disk. A byte size can be forged or coincidentally matched, so
+# nothing here trusts size alone — the digest is the only proof an installed
+# GGUF or the managed llama-server binary is still the file we pinned/installed.
+
+_VERIFY_CACHE_NAME = ".verify_cache.json"
+
+
+def _tiny_models_allowed():
+    """Tiny fixture files (unit tests, dev overrides) are only trusted when this
+    flag is set. Production leaves it unset so a sub-16MiB "model" is never
+    accepted by size — it falls through to the exact-size and digest checks and
+    is rejected like any other truncated/wrong file."""
+    return str(os.getenv("BETTERFINGERS_ALLOW_TINY_MODELS", "")).strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def _verify_cache_path():
+    return os.path.join(get_models_dir(), _VERIFY_CACHE_NAME)
+
+
+def _load_verify_cache():
+    try:
+        with open(_verify_cache_path(), "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_verify_cache(cache):
+    path = _verify_cache_path()
+    try:
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(cache, handle)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def _file_signature(path):
+    """(size, mtime_ns) identity used to decide whether a rehash is needed."""
+    st = os.stat(path)
+    return int(st.st_size), int(st.st_mtime_ns)
+
+
+def _drop_verify_cache_entry(path):
+    cache = _load_verify_cache()
+    if cache.pop(os.path.abspath(path), None) is not None:
+        _save_verify_cache(cache)
+
+
+def _cached_digest_ok(path, expected_sha256):
+    """Verify ``path`` against ``expected_sha256`` without rehashing multi-GB
+    files on every call.
+
+    The verified verdict is cached keyed by (path, size, mtime, expected digest);
+    the expensive SHA-256 pass only runs when any of those change. Returns
+    ``(matched, from_cache)``.
+    """
+    if not expected_sha256:
+        return True, False
+    try:
+        size, mtime = _file_signature(path)
+    except OSError:
+        return False, False
+    key = os.path.abspath(path)
+    cache = _load_verify_cache()
+    entry = cache.get(key)
+    if (
+        isinstance(entry, dict)
+        and entry.get("size") == size
+        and entry.get("mtime") == mtime
+        and hmac_compare(entry.get("expected_digest"), expected_sha256)
+    ):
+        return bool(entry.get("verified_ok")), True
+
+    actual = sha256_file(path)
+    ok = hmac_compare(actual, expected_sha256)
+    cache[key] = {
+        "size": size,
+        "mtime": mtime,
+        "digest": actual,
+        "expected_digest": str(expected_sha256).lower(),
+        "verified_ok": ok,
+        "ts": time.time(),
+    }
+    _save_verify_cache(cache)
+    return ok, False
+
+
+def _quarantine_artifact(path):
+    """Move a digest-mismatched artifact aside to ``<file>.corrupt`` so it can
+    never be loaded/executed again, and drop its cache entry + sidecar."""
+    corrupt = f"{path}.corrupt"
+    try:
+        if os.path.exists(corrupt):
+            os.remove(corrupt)
+        os.replace(path, corrupt)
+    except OSError as exc:
+        logging.error("Failed to quarantine %s: %s", path, exc)
+        return ""
+    _drop_verify_cache_entry(path)
+    sidecar = f"{path}.sha256"
+    if os.path.exists(sidecar):
+        try:
+            os.remove(sidecar)
+        except OSError:
+            pass
+    return corrupt
+
+
+def verify_installed_model(model_id, quarantine=True):
+    """Rehash an already-installed GGUF and compare it to the catalog digest.
+
+    Cache-aware (see :func:`_cached_digest_ok`) so it is cheap to call on every
+    launch. On a mismatch the file is quarantined to ``<file>.corrupt`` (unless
+    ``quarantine`` is False) rather than silently trusted (§11).
+    """
+    path = get_model_path(model_id)
+    info = AVAILABLE_MODELS.get(model_id, {})
+    result = {"model_id": model_id, "path": path, "ok": False, "reason": "", "from_cache": False}
+    if not os.path.exists(path):
+        result["reason"] = "missing"
+        return result
+    if not os.access(path, os.R_OK):
+        result["reason"] = "not_readable"
+        return result
+    expected = info.get("sha256")
+    if not expected:
+        # Nothing pinned to compare against (e.g. a dev-injected model id).
+        result["ok"] = True
+        result["reason"] = "no_pinned_digest"
+        return result
+    ok, from_cache = _cached_digest_ok(path, expected)
+    result["from_cache"] = from_cache
+    if ok:
+        result["ok"] = True
+        result["reason"] = "verified"
+        return result
+    result["reason"] = "digest_mismatch"
+    if quarantine:
+        result["quarantined"] = _quarantine_artifact(path)
+        logging.error(
+            "Model %s failed SHA-256 verification and was quarantined to %s",
+            model_id,
+            result.get("quarantined") or "<failed>",
+        )
+    return result
+
+
+def get_server_digest_sidecar(server_path=None):
+    return f"{server_path or get_server_path()}.sha256"
+
+
+def record_runtime_digest(server_path=None):
+    """Pin a freshly-installed llama-server binary's digest (trust-on-first-use).
+
+    The release manifest only pins the *archive*; the extracted executable has
+    no upstream digest. Recording it here lets :func:`verify_installed_runtime`
+    later detect a binary that was swapped underneath us with the same filename.
+    """
+    server_path = server_path or get_server_path()
+    try:
+        digest = sha256_file(server_path)
+    except OSError:
+        return ""
+    try:
+        with open(get_server_digest_sidecar(server_path), "w", encoding="utf-8") as handle:
+            handle.write(f"{digest}  {os.path.basename(server_path)}\n")
+    except OSError:
+        pass
+    # Seed the verified-state cache so the first verify is already a cheap hit.
+    _cached_digest_ok(server_path, digest)
+    return digest
+
+
+def _read_recorded_digest(sidecar_path):
+    try:
+        with open(sidecar_path, "r", encoding="utf-8") as handle:
+            fields = handle.read().strip().split()
+    except OSError:
+        return ""
+    return fields[0].lower() if fields else ""
+
+
+def verify_installed_runtime(server_path=None, quarantine=True):
+    """Rehash the managed llama-server binary and compare it to the digest we
+    recorded at install time. On mismatch the binary is quarantined so it is
+    never executed (§11). Binaries with no recorded digest (dev/repo-local or an
+    ``BETTERFINGERS_LLAMA_SERVER`` override) are left alone — nothing to compare.
+    """
+    server_path = server_path or get_server_path()
+    result = {"path": server_path, "ok": False, "reason": "", "from_cache": False}
+    if not os.path.exists(server_path):
+        result["reason"] = "missing"
+        return result
+    expected = _read_recorded_digest(get_server_digest_sidecar(server_path))
+    if not expected:
+        result["ok"] = True
+        result["reason"] = "no_recorded_digest"
+        return result
+    ok, from_cache = _cached_digest_ok(server_path, expected)
+    result["from_cache"] = from_cache
+    if ok:
+        result["ok"] = True
+        result["reason"] = "verified"
+        return result
+    result["reason"] = "digest_mismatch"
+    if quarantine:
+        result["quarantined"] = _quarantine_artifact(server_path)
+        logging.error(
+            "llama-server binary at %s failed integrity check and was quarantined to %s",
+            server_path,
+            result.get("quarantined") or "<failed>",
+        )
+    return result
+
+
+# --- Safe archive extraction (supply-chain gate, §11) -------------------------
+# The runtime archives are fetched over the network and their contents are then
+# *executed*. Extraction is therefore a trust boundary: a malicious/corrupt
+# archive must not be able to write outside the target dir (absolute paths,
+# ``..`` traversal, escaping symlinks) or leave a half-written runtime in place.
+
+class ArchiveValidationError(RuntimeError):
+    """Raised when an archive member fails a safety check during extraction."""
+
+
+def _safe_member_basename(name):
+    """Validate an archive member path and return the flat basename to use.
+
+    Rejects absolute paths and ``..`` traversal; the runtime archives are always
+    extracted flat, so any directory component that tries to escape is refused
+    rather than silently stripped.
+    """
+    raw = str(name or "")
+    if not raw:
+        return ""
+    if raw.startswith(("/", "\\")) or os.path.isabs(raw) or (len(raw) > 1 and raw[1] == ":"):
+        raise ArchiveValidationError(f"absolute member path rejected: {raw}")
+    norm = os.path.normpath(raw.replace("\\", "/"))
+    parts = norm.split("/")
+    if os.path.isabs(norm) or ".." in parts:
+        raise ArchiveValidationError(f"path traversal rejected: {raw}")
+    return os.path.basename(norm)
+
+
+def _safe_symlink_basename(link_name, link_target, staging_root):
+    """Validate a symlink member and return the flat target basename.
+
+    A soname symlink (e.g. ``libllama.so.0 -> libllama.so.0.0.7870``) is fine as
+    long as its resolved target stays inside the staging dir. Absolute targets or
+    ``..`` targets that escape the extraction root are rejected.
+    """
+    target = str(link_target or "")
+    if not target:
+        raise ArchiveValidationError(f"empty symlink target for {link_name}")
+    if target.startswith(("/", "\\")) or os.path.isabs(target):
+        raise ArchiveValidationError(f"absolute symlink target rejected: {link_name} -> {target}")
+    resolved = os.path.normpath(os.path.join(staging_root, target.replace("\\", "/")))
+    root = os.path.normpath(staging_root)
+    if resolved != root and not resolved.startswith(root + os.sep):
+        raise ArchiveValidationError(f"escaping symlink target rejected: {link_name} -> {target}")
+    return os.path.basename(target)
+
+
+def _stage_zip(archive_path, staging_dir):
+    with zipfile.ZipFile(archive_path, "r") as archive:
+        for member in archive.infolist():
+            mode = (member.external_attr >> 16) & 0o170000
+            base = _safe_member_basename(member.filename)
+            if not base:
+                continue
+            if mode == 0o120000:  # symlink stored in a zip (unix)
+                link_target = archive.read(member).decode("utf-8", "replace")
+                target_base = _safe_symlink_basename(base, link_target, staging_dir)
+                _safe_symlink(staging_dir, base, target_base, replace=True, require_target=False)
+                continue
+            if member.filename.endswith("/"):
+                continue
+            with archive.open(member) as src, open(os.path.join(staging_dir, base), "wb") as dst:
+                shutil.copyfileobj(src, dst)
+
+
+def _stage_tar(archive_path, staging_dir):
+    import tarfile
+
+    with tarfile.open(archive_path, "r:gz") as archive:
+        for member in archive.getmembers():
+            base = _safe_member_basename(member.name)
+            if not base:
+                continue
+            if member.issym() or member.islnk():
+                target_base = _safe_symlink_basename(base, member.linkname, staging_dir)
+                _safe_symlink(staging_dir, base, target_base, replace=True, require_target=False)
+                continue
+            if not member.isfile():
+                continue
+            src = archive.extractfile(member)
+            if src is None:
+                continue
+            with src, open(os.path.join(staging_dir, base), "wb") as dst:
+                shutil.copyfileobj(src, dst)
+
+
+def safe_extract_runtime_archive(archive_path, dest_dir, archive_name, required_members=()):
+    """Extract a runtime archive safely and promote it only once validated.
+
+    The archive is expanded into a private staging dir first; every member is
+    checked for absolute paths, ``..`` traversal and escaping symlinks. After
+    extraction the expected-member allowlist must be satisfied (e.g. the
+    ``llama-server`` executable is present) before anything is promoted. Only
+    then are the files moved into ``dest_dir`` (backing up any file they
+    replace) and the executable chmod'd. Any failure raises and rolls back,
+    leaving the previously-installed runtime untouched.
+    """
+    name = str(archive_name or "")
+    os.makedirs(dest_dir, exist_ok=True)
+    staging_dir = tempfile.mkdtemp(prefix=".staging-runtime-", dir=dest_dir)
+    promoted = []
+    backups = {}
+    try:
+        if name.endswith(".zip"):
+            _stage_zip(archive_path, staging_dir)
+        elif name.endswith(".tar.gz") or name.endswith(".tgz"):
+            _stage_tar(archive_path, staging_dir)
+        else:
+            raise ArchiveValidationError(f"unsupported runtime archive: {name}")
+
+        staged = set(os.listdir(staging_dir))
+        missing = [m for m in required_members if m not in staged]
+        if missing:
+            raise ArchiveValidationError(
+                f"runtime archive {name} missing expected member(s): {', '.join(sorted(missing))}"
+            )
+
+        # Promote only after validation. Back up replaced files so a mid-promote
+        # failure can be rolled back to the previously-installed runtime.
+        backup_dir = tempfile.mkdtemp(prefix=".backup-runtime-", dir=dest_dir)
+        for entry in sorted(staged):
+            final_path = os.path.join(dest_dir, entry)
+            staged_path = os.path.join(staging_dir, entry)
+            if os.path.lexists(final_path):
+                backup_path = os.path.join(backup_dir, entry)
+                os.replace(final_path, backup_path)
+                backups[final_path] = backup_path
+            os.replace(staged_path, final_path)
+            promoted.append(final_path)
+
+        # chmod +x only after the executable has landed and validated.
+        for member in required_members:
+            candidate = os.path.join(dest_dir, member)
+            if os.path.isfile(candidate) and not member.lower().endswith((".dll", ".so", ".txt")):
+                try:
+                    os.chmod(candidate, 0o755)
+                except OSError:
+                    pass
+
+        shutil.rmtree(backup_dir, ignore_errors=True)
+        return {"ok": True, "dest_dir": dest_dir, "members": sorted(staged)}
+    except Exception:
+        # Roll back any files we already promoted before the failure.
+        for final_path in promoted:
+            try:
+                if final_path in backups:
+                    os.replace(backups[final_path], final_path)
+                elif os.path.lexists(final_path):
+                    os.remove(final_path)
+            except OSError:
+                pass
+        raise
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
 
 
 def download_file(url, dest_path, desc="File", progress_callback=None, progress_key="", resume=True,
@@ -996,14 +1415,19 @@ def check_and_download_resources(model_id=None, progress_callback=None):
                 progress_key=f"{target_model_id}:server",
                 expected_sha256=runtime_artifact_sha256(SERVER_BIN_URL),
             )
-            if SERVER_ARCHIVE_NAME.endswith(".zip"):
-                with zipfile.ZipFile(bin_archive, "r") as archive:
-                    archive.extractall(models_dir)
-            elif SERVER_ARCHIVE_NAME.endswith(".tar.gz"):
-                _extract_tar_flat(bin_archive, models_dir)
-                if os.path.exists(server_path):
-                    os.chmod(server_path, 0o755)
+            # Validated staging + atomic promote: a malicious/corrupt archive
+            # can't escape models_dir or leave a half-written runtime, and the
+            # executable is only chmod'd after the expected member is present.
+            safe_extract_runtime_archive(
+                bin_archive,
+                models_dir,
+                SERVER_ARCHIVE_NAME,
+                required_members=[SERVER_FILENAME],
+            )
+            if not SERVER_ARCHIVE_NAME.endswith(".zip"):
                 repair_linux_runtime_links(os.path.dirname(os.path.abspath(server_path)))
+            # Pin the extracted binary's digest so a later swap is detected (§11).
+            record_runtime_digest(server_path)
         finally:
             if os.path.exists(bin_archive):
                 os.remove(bin_archive)
@@ -1019,8 +1443,7 @@ def check_and_download_resources(model_id=None, progress_callback=None):
                     progress_key=f"{target_model_id}:cuda",
                     expected_sha256=runtime_artifact_sha256(CUDA_LIB_URL),
                 )
-                with zipfile.ZipFile(cuda_archive, "r") as archive:
-                    archive.extractall(models_dir)
+                safe_extract_runtime_archive(cuda_archive, models_dir, CUDA_ARCHIVE_NAME)
                 os.remove(cuda_archive)
             except Exception as exc:
                 logging.warning("Failed to download CUDA libs: %s. Server will run on CPU.", exc)
