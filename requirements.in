@@ -44,5 +44,5 @@ python-multipart>=0.0.9       # FastAPI file/form uploads
 # Windows-only (COM / Core Audio). On Linux, audio ducking uses `pactl`
 # (PulseAudio / PipeWire) at runtime instead. These resolve only on Windows,
 # so they appear in requirements-win.lock but not requirements-linux.lock.
-comtypes>=1.2; sys_platform == "win32"      # COM automation (Windows)
+comtypes>=1.4.16; sys_platform == "win32"      # COM automation (Windows)
 pycaw>=20230407; sys_platform == "win32"    # Windows audio session control
