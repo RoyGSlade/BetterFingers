@@ -39,6 +39,19 @@ function getDefaultDevPythonCommand() {
   return 'python3';
 }
 
+// The dev backend (server.py) needs the project's dependencies (pyperclip,
+// fastapi, …). Those live in the repo virtualenv, not the system interpreter, so
+// prefer .venv when it exists — otherwise a bare `python3` fails at `import
+// pyperclip`. Repo root is three levels up from app/out/main (or app/src/main).
+function resolveVenvPython() {
+  const repoRoot = path.resolve(__dirname, '../../../');
+  const relative = process.platform === 'win32'
+    ? path.join('.venv', 'Scripts', 'python.exe')
+    : path.join('.venv', 'bin', 'python');
+  const candidate = path.join(repoRoot, relative);
+  return fs.existsSync(candidate) ? candidate : null;
+}
+
 function resolveDevPythonCommand() {
   const fallbackCommand = getDefaultDevPythonCommand();
 
@@ -60,6 +73,12 @@ function resolveDevPythonCommand() {
       return resolvedPath;
     }
     return pythonPath;
+  }
+
+  // No explicit override: prefer the repo virtualenv, then the system Python.
+  const venvPython = resolveVenvPython();
+  if (venvPython) {
+    return venvPython;
   }
 
   return fallbackCommand;
