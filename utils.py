@@ -317,6 +317,9 @@ def _sanitize_profile_values(config, defaults):
         _coerce_str(cfg.get("llm_model_id", d["llm_model_id"]), d["llm_model_id"]).strip() or d["llm_model_id"]
     )
 
+    cfg["input_device_index"] = _coerce_int(
+        cfg.get("input_device_index", d["input_device_index"]), d["input_device_index"], minimum=-1
+    )
     cfg["audio_ducking"] = _coerce_bool(cfg.get("audio_ducking", d["audio_ducking"]), d["audio_ducking"])
     cfg["auto_submit"] = _coerce_bool(cfg.get("auto_submit", d["auto_submit"]), d["auto_submit"])
     cfg["instant_typing"] = _coerce_bool(cfg.get("instant_typing", d["instant_typing"]), d["instant_typing"])
@@ -695,6 +698,9 @@ def _profile_defaults():
         "restore_clipboard_after_paste": True,
         "chat_open_key": "",
         "voice_mute_key": "",
+        # Input (microphone) device index into sounddevice's device list. -1 means
+        # "use the system default input device" (the prior always-on behavior).
+        "input_device_index": -1,
         "audio_ducking": False,
         "audio_ducking_level_percent": 18.0,
         "audio_ducking_fallback_return_percent": 100.0,
