@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import time
+import uuid
 
 import numpy as np
 from scipy.io import wavfile
@@ -18,10 +19,18 @@ from utils import get_user_data_path
 # Keep at most this many recordings on disk (oldest pruned first).
 MAX_RECORDINGS = 50
 
-# Recording ids become filenames. Internally generated ids are millisecond
-# timestamps, but the HTTP API accepts the id as a path parameter — so it must
-# never be allowed to carry path components ("../", separators, drive letters).
+# Recording ids become filenames. Ids are now UUID-based (collision-free even
+# when several recordings are saved in the same millisecond); the HTTP API
+# still accepts the id as a path parameter, so it must never carry path
+# components ("../", separators, drive letters). Legacy millisecond-timestamp
+# ids on disk remain valid under this pattern.
 _VALID_REC_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def new_rec_id():
+    """A fresh, collision-free recording id. Time-ordered prefix (so listings
+    and pruning stay chronological) + a uuid4 suffix for uniqueness."""
+    return f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:12]}"
 
 
 def is_valid_rec_id(rec_id):
@@ -68,13 +77,19 @@ def save_recording(recording_result, rec_id, metadata=None):
     sample_rate = int(getattr(recording_result, "sample_rate", 16000) or 16000)
     rec_id = str(rec_id)
 
-    # Write both files under temporary names and promote them together, so a
-    # failure between the two writes cannot strand an orphaned WAV that a
-    # metadata-driven cleanup would never find.
     wav_path = _wav_path(rec_id)
     meta_path = _meta_path(rec_id)
-    wav_tmp = wav_path + ".tmp"
-    meta_tmp = meta_path + ".tmp"
+    # Unique temp names (pid + uuid) so two concurrent saves — even of the same
+    # rec_id — never write over each other's staging files.
+    stamp = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    wav_tmp = f"{wav_path}.{stamp}.tmp"
+    meta_tmp = f"{meta_path}.{stamp}.tmp"
+
+    # Collision guard: a completed recording already owns this id. With UUID
+    # ids this never fires in practice; refuse rather than silently clobber.
+    if os.path.exists(wav_path) or os.path.exists(meta_path):
+        logging.warning("Refusing to overwrite existing recording %s", rec_id)
+        return None
 
     record = {
         "id": rec_id,
@@ -84,22 +99,40 @@ def save_recording(recording_result, rec_id, metadata=None):
         "stop_reason": getattr(recording_result, "stop_reason", "manual"),
         "metadata": metadata or {},
     }
+
+    def _cleanup(paths):
+        for p in paths:
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except OSError:
+                pass
+
+    # Phase 1: write both staging files. On any failure nothing is promoted.
     try:
         # scipy writes float32 as IEEE-float WAV, which re-reads losslessly.
         data = np.asarray(audio, dtype=np.float32)
         wavfile.write(wav_tmp, sample_rate, data)
         with open(meta_tmp, "w", encoding="utf-8") as handle:
             json.dump(record, handle)
+    except Exception as exc:
+        logging.warning(f"Failed to stage recording {rec_id}: {exc}")
+        _cleanup([wav_tmp, meta_tmp])
+        return None
+
+    # Phase 2: promote the pair. If the second promotion fails, roll the first
+    # one back so we never leave a half-recording (orphan WAV or orphan meta).
+    try:
         os.replace(wav_tmp, wav_path)
+    except Exception as exc:
+        logging.warning(f"Failed to promote recording WAV {rec_id}: {exc}")
+        _cleanup([wav_tmp, meta_tmp])
+        return None
+    try:
         os.replace(meta_tmp, meta_path)
     except Exception as exc:
-        logging.warning(f"Failed to persist recording {rec_id}: {exc}")
-        for leftover in (wav_tmp, meta_tmp):
-            try:
-                if os.path.exists(leftover):
-                    os.remove(leftover)
-            except OSError:
-                pass
+        logging.warning(f"Failed to promote recording metadata {rec_id}; rolling back WAV: {exc}")
+        _cleanup([wav_path, meta_tmp])  # undo the promoted WAV
         return None
 
     prune_recordings()
