@@ -2022,6 +2022,11 @@ async def runtime_version():
     }
 
 
+@app.get("/runtime/audio-devices")
+async def list_audio_devices():
+    return get_audio_devices()
+
+
 @app.post("/runtime/audio-devices/refresh")
 async def refresh_audio_devices():
     return get_audio_devices(refresh=True)

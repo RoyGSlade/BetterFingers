@@ -83,9 +83,16 @@ class AudioRecorder:
             self._auto_stop_detector = None
             logging.info("Recording started.")
 
+            # Input device: the system default (None) unless the active profile
+            # selects a specific microphone (input_device_index >= 0).
+            device = self.device_index
+
             try:
                 config = load_profile(profile_name)
                 self._auto_stop_detector = self._build_auto_stop_detector(config)
+                configured_device = config.get("input_device_index", -1)
+                if isinstance(configured_device, int) and configured_device >= 0:
+                    device = configured_device
                 if config.get("audio_ducking", False):
                     duck_level_percent = float(config.get("audio_ducking_level_percent", 18.0))
                     restore_fallback_percent = float(
@@ -106,20 +113,38 @@ class AudioRecorder:
 
             self._start_chunk_worker()
 
-            try:
-                self.stream = sd.InputStream(
+            def _open_stream(dev):
+                stream = sd.InputStream(
                     samplerate=self.sample_rate,
-                    device=self.device_index,
+                    device=dev,
                     channels=self.channels,
                     dtype="float32",
                     callback=self._audio_callback,
                 )
-                self.stream.start()
+                stream.start()
+                return stream
+
+            try:
+                self.stream = _open_stream(device)
             except Exception as exc:
-                logging.error(f"Error starting audio stream: {exc}")
-                self.recording = False
-                self._stop_chunk_worker()
-                self.ducker.unduck()
+                # A selected microphone may be unplugged, busy, or invalid — fall
+                # back to the system default rather than dropping the recording.
+                if device is not None:
+                    logging.warning(
+                        f"Input device {device} failed ({exc}); falling back to the system default microphone."
+                    )
+                    try:
+                        self.stream = _open_stream(None)
+                    except Exception as exc2:
+                        logging.error(f"Error starting audio stream: {exc2}")
+                        self.recording = False
+                        self._stop_chunk_worker()
+                        self.ducker.unduck()
+                else:
+                    logging.error(f"Error starting audio stream: {exc}")
+                    self.recording = False
+                    self._stop_chunk_worker()
+                    self.ducker.unduck()
 
     def stop_recording(self, stop_reason="manual") -> RecordingResult:
         with self.lock:

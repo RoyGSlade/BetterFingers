@@ -887,7 +887,22 @@
             <div class="settings-section hidden" data-section="audio-devices">
               <h2>Audio Devices</h2>
               <p class="section-desc">Diagnose active recording equipment and sound levels.</p>
-              
+
+              <div class="setting-group">
+                <h3>Input Device</h3>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingInputDevice">Microphone</label>
+                    <span class="setting-desc">Which microphone to record from. "System default" follows your OS setting.</span>
+                  </div>
+                  <div class="setting-control">
+                    <select id="settingInputDevice" class="settings-input min-w-200">
+                      <option value="-1">System default</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
               <div class="setting-group">
                 <h3>Mic Diagnoses</h3>
                 <div class="setting-row">

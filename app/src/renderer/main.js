@@ -250,6 +250,7 @@ const settingEls = {
   restore_clipboard_after_paste: document.getElementById('settingRestoreClipboard'),
   voice_commands_enabled: document.getElementById('settingVoiceCommands'),
   macros_enabled: document.getElementById('settingMacrosEnabled'),
+  input_device_index: document.getElementById('settingInputDevice'),
   audio_ducking: document.getElementById('settingAudioDucking'),
   status_indicator_enabled: document.getElementById('settingStatusIndicator'),
   notification_overlay_enabled: document.getElementById('settingNotificationOverlay'),
@@ -1529,6 +1530,38 @@ function collectProfileSettings() {
   return next;
 }
 
+async function refreshAudioInputDevices() {
+  const select = settingEls.input_device_index;
+  if (!select) return;
+  let info;
+  try {
+    info = await fetchJson('/runtime/audio-devices');
+  } catch (error) {
+    console.error('Failed to load audio input devices:', error);
+    return;
+  }
+  const devices = info && Array.isArray(info.devices) ? info.devices : [];
+  select.innerHTML = '';
+  const defaultOption = document.createElement('option');
+  defaultOption.value = '-1';
+  defaultOption.textContent = 'System default';
+  select.appendChild(defaultOption);
+  for (const dev of devices) {
+    if (!dev || Number(dev.max_input_channels) <= 0) continue; // input-capable only
+    const option = document.createElement('option');
+    option.value = String(dev.index);
+    option.textContent = dev.name || `Device ${dev.index}`;
+    select.appendChild(option);
+  }
+  // Reflect the stored selection; fall back to System default if that device is
+  // no longer present. Setting .value programmatically does not fire change, so
+  // this never marks the profile dirty.
+  const stored = activeProfileSettings && activeProfileSettings.input_device_index != null
+    ? String(activeProfileSettings.input_device_index)
+    : '-1';
+  select.value = select.querySelector(`option[value="${CSS.escape(stored)}"]`) ? stored : '-1';
+}
+
 async function refreshPersonasAndVoices() {
   try {
     const personas = await fetchPersonas();
@@ -1943,6 +1976,7 @@ async function refreshProfiles() {
   const payload = await fetchProfiles();
   fillSelect(profileSelectEl, payload.profiles ?? [], payload.active_profile);
   renderProfileSettings(payload.settings ?? {});
+  await refreshAudioInputDevices().catch(() => {});
   setMessage(profileMessageEl, `Active profile: ${payload.active_profile}`, 'success');
   if (payload.settings && typeof window !== 'undefined' && window.betterFingers?.updateHotkeys) {
     window.betterFingers.updateHotkeys(payload.settings);
@@ -4823,6 +4857,7 @@ profileSelectEl?.addEventListener('change', async () => {
   try {
     const payload = await fetchProfile(profileSelectEl.value);
     renderProfileSettings(payload.settings ?? {});
+    await refreshAudioInputDevices().catch(() => {});
     setMessage(profileMessageEl, `${payload.profile} loaded for editing.`, payload.active ? 'success' : 'warning');
   } catch (error) {
     setMessage(profileMessageEl, `Profile load failed: ${error.message}`, 'danger');
