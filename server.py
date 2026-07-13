@@ -239,6 +239,12 @@ next_draft_id = 1
 draft_lock = threading.RLock()
 MAX_DRAFT_HISTORY = 100
 is_processing_draft = False
+# Unique to this process run. A send stamps the draft it is injecting with this
+# token and persists "sending" to disk *before* the (non-idempotent) injection.
+# A draft found in "sending" whose token differs from this one was interrupted
+# by a crash of a previous process — its injection outcome is unknown, so
+# recovery moves it to "send_interrupted" rather than silently reverting it.
+SEND_PROCESS_TOKEN = uuid.uuid4().hex
 cancellation_event = threading.Event()
 # Single-flight gate for the dictation pipeline. is_processing_draft remains as
 # a read-only mirror for status displays/hotkey guards; the coordinator owns
@@ -326,6 +332,40 @@ def load_draft_history():
         except Exception as exc:
             logging.exception(f"Failed to load draft history from {history_file}: {exc}")
 
+
+def recover_interrupted_sends():
+    """Reconcile drafts a previous process left mid-send.
+
+    A draft persisted as "sending" whose ``send_process_token`` is not this
+    process's token was interrupted by a crash while injecting. Injection is not
+    idempotent (re-sending re-types the text), and the text may or may not have
+    already landed, so such a draft must NOT be auto-resent and must NOT be
+    quietly reverted to a resendable state as if the send never happened —
+    either could double-paste or hide that content may already be out. It is
+    moved to the honest terminal state "send_interrupted" (outcome unknown); the
+    user explicitly decides whether to resend.
+
+    Idempotent and safe to call at startup after load_draft_history(). Returns
+    the list of recovered draft ids.
+    """
+    recovered = []
+    with draft_lock:
+        for draft in draft_queue:
+            if draft.get("status") == "sending" \
+                    and draft.get("send_process_token") != SEND_PROCESS_TOKEN:
+                draft["status"] = "send_interrupted"
+                draft["send_outcome"] = "interrupted"
+                draft["pending_send"] = False
+                draft.pop("send_process_token", None)
+                recovered.append(draft["id"])
+    if recovered:
+        logging.warning(
+            "Recovered %d draft(s) interrupted mid-send (injection outcome "
+            "unknown, marked send_interrupted): %s", len(recovered), recovered)
+        # One full save (bounded at MAX_DRAFT_HISTORY) mirrors every reclassified
+        # row rather than N narrowed writes.
+        save_draft_history()
+    return recovered
 
 
 def get_voices_dir():
@@ -1083,6 +1123,8 @@ def send_draft_by_id(draft_id, action=None, open_chat=False, allow_resend=False)
     # Atomic state transition (compare-and-set to "sending" under the lock)
     # so two simultaneous requests cannot both inject the same text. A request
     # that loses the race gets the existing outcome instead of re-injecting.
+    # "send_interrupted" (a crash-recovered draft, outcome unknown) is
+    # deliberately resendable without allow_resend: it was never confirmed sent.
     with draft_lock:
         draft = get_draft_by_id(draft_id)
         if draft is None:
@@ -1099,32 +1141,59 @@ def send_draft_by_id(draft_id, action=None, open_chat=False, allow_resend=False)
                              "message": "This draft was already sent; pass allow_resend to send again."})
             return response
         prior_status = status
+        # Stamp this send with an operation id + this process's token, and record
+        # that a send is in flight. Persisted below *before* injection so a crash
+        # mid-send is recoverable (see recover_interrupted_sends).
+        operation_id = uuid.uuid4().hex
         draft["status"] = "sending"
+        draft["send_operation_id"] = operation_id
+        draft["send_process_token"] = SEND_PROCESS_TOKEN
+        draft["send_started_at"] = datetime.now(timezone.utc).isoformat()
+        draft["send_outcome"] = None
         final_text = draft.get("final_text", "")
+
+    # Persist the "sending" marker to disk BEFORE the (non-idempotent) injection.
+    # If the process dies during perform_output_action, the draft reloads as
+    # "sending" and recovery reclassifies it to "send_interrupted" instead of a
+    # resendable state that would risk a silent double paste. Outside the lock
+    # (§9): disk + SQLite IO must not serialize other draft operations.
+    save_draft_history(changed_draft_id=draft_id)
 
     settings = get_profile_output_settings()
     requested_action = action or ("open_chat_then_send" if settings["send_mode"] == "auto_send" else "copy_only")
     try:
         result = perform_output_action(final_text, requested_action, open_chat=open_chat)
     except BaseException:
-        # Never leave a draft wedged in "sending" — restore so a retry works.
+        # Abnormal interruption mid-injection (KeyboardInterrupt/SystemExit):
+        # the text may or may not have landed, so the honest state is
+        # "interrupted" (outcome unknown, still resendable), not the prior
+        # state as if nothing was attempted.
         with draft_lock:
             wedged = get_draft_by_id(draft_id)
-            if wedged is not None and wedged.get("status") == "sending":
-                wedged["status"] = prior_status
+            if wedged is not None and wedged.get("status") == "sending" \
+                    and wedged.get("send_operation_id") == operation_id:
+                wedged["status"] = "send_interrupted"
+                wedged["send_outcome"] = "interrupted"
+                wedged.pop("send_process_token", None)
+        save_draft_history(changed_draft_id=draft_id)
         raise
 
     with draft_lock:
         draft = get_draft_by_id(draft_id)
         if draft is not None:
             draft["send_result"] = result
+            # The send has completed (one way or another): it is no longer in
+            # flight, so drop the in-flight process token.
+            draft.pop("send_process_token", None)
             if result.get("ok"):
                 draft["status"] = "sent"
+                draft["send_outcome"] = "sent"
                 draft["pending_send"] = False
                 while draft_id in pending_manual_send_ids:
                     pending_manual_send_ids.remove(draft_id)
             else:
                 draft["status"] = "send_error"
+                draft["send_outcome"] = "failed"
                 draft["error"] = result.get("message", "Send failed.")
             response = dict(draft)
         else:
@@ -1792,6 +1861,9 @@ async def startup_event():
             logging.warning(f"Legacy data migration skipped: {exc}")
     loop = asyncio.get_event_loop()
     load_draft_history()
+    # Reconcile any draft a crashed process left mid-send (→ send_interrupted,
+    # outcome unknown) so it is never silently double-sent or silently dropped.
+    recover_interrupted_sends()
     # One-time backfill of the searchable archive from the legacy JSON (C8).
     try:
         history_store.migrate_from_json(os.path.join(get_user_data_path(), "draft_history.json"))

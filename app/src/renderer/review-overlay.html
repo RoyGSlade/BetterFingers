@@ -236,6 +236,7 @@
       .state-copied { background: rgba(246, 193, 95, 0.2); color: var(--warning); }
       .state-declined { background: rgba(255, 124, 135, 0.15); color: var(--danger); }
       .state-error { background: rgba(255, 124, 135, 0.25); color: var(--danger); }
+      .state-interrupted { background: rgba(246, 193, 95, 0.22); color: var(--warning); }
       .state-stopped { background: rgba(255, 124, 135, 0.2); color: var(--danger); }
       .state-confirm { background: rgba(246, 193, 95, 0.22); color: var(--warning); animation: pulse 1.5s infinite; }
 
@@ -400,6 +401,7 @@
           'copied': 'Copied Fallback',
           'declined': 'Declined',
           'error': 'Error',
+          'interrupted': 'Send Interrupted',
           'stopped': 'Stopped',
           'confirm': 'Confirm?'
         };
@@ -422,7 +424,7 @@
           if (!messageTone) {
             if (state === 'error' || state === 'stopped') {
               messageTone = 'danger';
-            } else if (state === 'rewriting') {
+            } else if (state === 'rewriting' || state === 'interrupted') {
               messageTone = 'warning';
             } else if (state === 'sent' || state === 'rewritten' || state === 'accepted' || state === 'copied') {
               messageTone = 'success';
@@ -542,9 +544,10 @@
           'declined': 'declined',
           'sent': 'sent',
           'send_error': 'error',
+          'send_interrupted': 'interrupted',
           'error': 'error'
         };
-        
+
         let targetState = stateMap[status] || 'pending';
         if (targetState === 'sent' && draft?.send_result?.fallback) {
           targetState = 'copied';
