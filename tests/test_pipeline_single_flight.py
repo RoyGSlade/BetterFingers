@@ -198,13 +198,19 @@ class IdempotentSendTests(unittest.TestCase):
             response = server.send_draft_by_id(1, action="paste")
         self.assertEqual(response.get("status"), "sent")
 
-    def test_exception_during_send_restores_status(self):
+    def test_exception_during_send_marks_interrupted(self):
+        # An exception escaping injection means the text may or may not have
+        # landed, so the draft is marked "send_interrupted" (outcome unknown)
+        # rather than silently reverted to "pending" as if nothing was tried.
+        # It stays resendable (the user decides).
         self._make_draft()
         with patch.object(server, "perform_output_action", side_effect=RuntimeError("boom")):
             with self.assertRaises(RuntimeError):
                 server.send_draft_by_id(1, action="paste")
         with server.draft_lock:
-            self.assertEqual(server.get_draft_by_id(1).get("status"), "pending")
+            draft = server.get_draft_by_id(1)
+        self.assertEqual(draft.get("status"), "send_interrupted")
+        self.assertEqual(draft.get("send_outcome"), "interrupted")
 
 
 class WhitespacePreservationTests(unittest.TestCase):
