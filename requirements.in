@@ -13,14 +13,14 @@
 # ---- Core ----
 Pillow>=11,<13                # Image processing (tray icon, overlays)
 psutil>=6,<8                  # Hardware metrics (RAM / cores for hardware_report)
-numpy>=2,<3                   # Numeric arrays for audio processing
+numpy>=2.2.6,<3               # Numeric arrays for audio processing
 scipy>=1.13,<2               # Signal processing (audio gate)
 
 # ---- Audio & Speech ----
 sounddevice>=0.5,<0.6         # Microphone capture
 faster-whisper>=1.1,<2        # Whisper speech-to-text (CTranslate2)
 kokoro>=0.9,<1; python_version < "3.13"   # TTS backend (primary)
-kokoro-onnx>=0.4,<1           # TTS backend (ONNX variant)
+kokoro-onnx>=0.5.0,<1         # TTS backend (ONNX variant)
 
 # ---- Input & Clipboard ----
 keyboard>=0.13,<0.14          # Global hotkey listener
@@ -30,13 +30,13 @@ pyperclip>=1.8,<2             # Cross-platform clipboard
 
 # ---- LLM Server ----
 requests>=2.31,<3             # HTTP client (model downloads)
-huggingface_hub>=0.24         # Model cache management (Whisper)
+huggingface_hub>=1.23.0,<2    # Model cache management (Whisper)
 pyyaml>=6,<7                  # Profile / config files
 
 # ---- Sidecar API ----
 mcp>=1.0,<2                   # MCP client SDK (C12 — persona tool integration)
 fastapi>=0.115,<1             # REST + WebSocket server
-uvicorn>=0.30,<1              # ASGI server
+uvicorn>=0.51.0,<1           # ASGI server
 websockets>=12                # WebSocket protocol support
 python-multipart>=0.0.9       # FastAPI file/form uploads
 
