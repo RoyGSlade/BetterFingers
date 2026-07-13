@@ -241,6 +241,12 @@ cancellation_event = threading.Event()
 from dictation_coordinator import DictationCoordinator
 
 dictation_coordinator = DictationCoordinator(cancellation_event=cancellation_event)
+# Read/write leases guarding the model runtimes (STT/LLM/TTS): inference takes
+# a read lease, destructive ops (unload/reload/select/delete) take an exclusive
+# write lease that fails fast (→ 409) while inference is active.
+from model_runtime_coordinator import ModelRuntimeCoordinator, RuntimeBusyError
+
+model_runtime = ModelRuntimeCoordinator()
 # Set for the duration of a privacy wipe. While it is set, every path that
 # could create or re-persist user data (new recordings, dictation processing,
 # recovery saves, sends, TTS, retranscription) refuses, so the wipe operates on
@@ -1478,10 +1484,14 @@ def process_recording_result(recording_result):
             raw_text = ""
         elif audio_data is None:
             raw_text = ""
-        elif hasattr(trans, "transcribe_with_confidence"):
-            raw_text, confidence = trans.transcribe_with_confidence(audio_data, hotwords=hotwords)
         else:
-            raw_text = trans.transcribe(audio_data)
+            # STT read lease: a Whisper reload/unload cannot free the model
+            # mid-transcription (it will 409 or wait for this to finish).
+            with model_runtime.read_lease("stt"):
+                if hasattr(trans, "transcribe_with_confidence"):
+                    raw_text, confidence = trans.transcribe_with_confidence(audio_data, hotwords=hotwords)
+                else:
+                    raw_text = trans.transcribe(audio_data)
         stt_ms = (time.perf_counter() - _stt_start) * 1000.0
 
         _post_start = time.perf_counter()
@@ -1604,14 +1614,17 @@ def process_recording_result(recording_result):
         # look frozen. Chunked work already reports per-chunk progress.
         heartbeat = None if will_chunk else _StatusHeartbeat("rewriting").start()
         try:
-            final_text = engine.process_fast_lane(
-                raw_text,
-                preset,
-                max_output_tokens=completion_tokens,
-                chunk_size=llm_chunk_size,
-                progress_callback=_chunk_progress if will_chunk else None,
-                stitch_pass=stitch_enabled,
-            )
+            # LLM read lease: an unload/reload/select can't drop the runtime
+            # while this cleanup awaits llama-server.
+            with model_runtime.read_lease("llm"):
+                final_text = engine.process_fast_lane(
+                    raw_text,
+                    preset,
+                    max_output_tokens=completion_tokens,
+                    chunk_size=llm_chunk_size,
+                    progress_callback=_chunk_progress if will_chunk else None,
+                    stitch_pass=stitch_enabled,
+                )
         finally:
             if heartbeat is not None:
                 heartbeat.stop()
@@ -2131,6 +2144,9 @@ async def health_check():
             for j in active_jobs[:5]
         ],
         "last_progress_at": last_progress_at,
+        # Which model runtimes currently hold a read (inference) or write
+        # (reconfigure) lease — lets the supervisor and diagnostics see live work.
+        "runtime_leases": model_runtime.active_leases(),
     }
 
 
@@ -2626,16 +2642,22 @@ async def list_llm_models():
 
 
 @app.post("/models/llm/select")
-async def select_llm_model(request: LlmModelSelectRequest):
+async def select_llm_model(request: LlmModelSelectRequest, force: int = 0):
     if request.model_id not in AVAILABLE_MODELS:
         raise HTTPException(status_code=400, detail="Unsupported LLM model")
-    profile_name = get_last_active_profile()
-    cfg = load_profile(profile_name)
-    cfg["llm_model_id"] = request.model_id
-    save_runtime_profile(profile_name, cfg)
-    engine = get_engine_if_initialized()
-    if engine is not None:
-        engine.set_model_id(request.model_id)
+    # Switching the model reconfigures the LLM runtime — take the exclusive
+    # lease so it can't race an in-flight completion (409 if busy).
+    try:
+        with model_runtime.write_lease("llm", wait=bool(force), timeout=15.0):
+            profile_name = get_last_active_profile()
+            cfg = load_profile(profile_name)
+            cfg["llm_model_id"] = request.model_id
+            save_runtime_profile(profile_name, cfg)
+            engine = get_engine_if_initialized()
+            if engine is not None:
+                engine.set_model_id(request.model_id)
+    except RuntimeBusyError:
+        raise HTTPException(status_code=409, detail="LLM is busy with active inference. Retry, or pass force=1.")
     return await list_llm_models()
 
 
@@ -2681,14 +2703,19 @@ def download_llm_model(model_id: str):
 
 
 @app.delete("/models/llm/{model_id}")
-async def delete_llm_model(model_id: str):
+async def delete_llm_model(model_id: str, force: int = 0):
     if model_id not in AVAILABLE_MODELS:
         raise HTTPException(status_code=400, detail="Unsupported LLM model")
     with _llm_download_jobs_lock:
         job = _llm_download_jobs.get(model_id)
         if job and job.is_alive():
             raise HTTPException(status_code=409, detail="That model is downloading. Wait for it to finish or restart the app before deleting it.")
-    ok, message = delete_model(model_id)
+    # Deleting model files must not race an active LLM inference reading them.
+    try:
+        with model_runtime.write_lease("llm", wait=bool(force), timeout=15.0):
+            ok, message = delete_model(model_id)
+    except RuntimeBusyError:
+        raise HTTPException(status_code=409, detail="LLM is busy with active inference. Retry, or pass force=1.")
     return {"ok": ok, "model_id": model_id, "message": message}
 
 
@@ -2762,9 +2789,8 @@ async def select_whisper_model(request: WhisperModelRequest):
     return await list_whisper_models()
 
 
-@app.post("/models/unload/{component}")
-async def unload_model_component(component: str):
-    """Genuinely release a model component's memory.
+def _unload_model_component_locked(component: str):
+    """The actual unload, run while holding the runtime's exclusive write lease.
 
     Beyond calling any .unload()/.shutdown()/.close() the engine exposes, this
     drops the module-level global reference so the object can be garbage
@@ -2847,6 +2873,27 @@ async def unload_model_component(component: str):
     raise HTTPException(status_code=400, detail="Unsupported component")
 
 
+@app.post("/models/unload/{component}")
+async def unload_model_component(component: str, force: int = 0):
+    """Release a model component's memory under an exclusive runtime lease.
+
+    Returns 409 if inference is active on that runtime (a destructive drop must
+    not race an in-flight request); pass ?force=1 to cancel-and-wait for active
+    inference to drain first.
+    """
+    normalized = component.strip().lower()
+    if normalized not in ("stt", "llm", "tts"):
+        raise HTTPException(status_code=400, detail="Unsupported component")
+    try:
+        with model_runtime.write_lease(normalized, wait=bool(force), timeout=15.0):
+            return await run_in_threadpool(_unload_model_component_locked, normalized)
+    except RuntimeBusyError:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{normalized.upper()} is in use by active inference. Retry, or pass force=1 to wait.",
+        )
+
+
 @app.get("/metrics")
 async def pipeline_metrics_endpoint():
     return get_pipeline_metrics_summary()
@@ -2855,7 +2902,11 @@ async def pipeline_metrics_endpoint():
 @app.get("/jobs")
 async def list_jobs_endpoint(active: int = 0):
     """Central job registry (§6.3): what work is running or recently finished."""
-    return {"ok": True, "jobs": JOBS.list(active_only=bool(active))}
+    return {
+        "ok": True,
+        "jobs": JOBS.list(active_only=bool(active)),
+        "runtime_leases": model_runtime.active_leases(),
+    }
 
 
 @app.get("/jobs/{job_id}")
@@ -3707,9 +3758,14 @@ async def speak_draft(draft_id: int, request: DraftTtsRequest):
         record_runtime_error("tts", result["message"], {"action": "draft_tts", "draft_id": draft_id})
         return result
 
-    result = await run_in_threadpool(
-        engine.speak, text, speed=speed, voice_hint=voice_id, blend=blend, modulation=modulation
-    )
+    try:
+        with model_runtime.read_lease("tts"):
+            result = await run_in_threadpool(
+                engine.speak, text, speed=speed, voice_hint=voice_id, blend=blend, modulation=modulation
+            )
+    except RuntimeBusyError:
+        return {"ok": False, "status": "error", "draft_id": draft_id,
+                "error": "tts_reconfiguring", "message": "TTS runtime is being reconfigured; retry shortly."}
     result.update(
         {
             "status": "success" if result.get("ok") else "error",
@@ -3927,14 +3983,19 @@ class LLMRequest(BaseModel):
 @app.post("/llm/process")
 async def process_llm(request: LLMRequest):
     try:
-        engine = get_selected_llm_engine()
-        result = await run_in_threadpool(
-            engine.process_fast_lane,
-            request.text,
-            request.preset,
-            true_gen=request.true_gen,
-        )
+        # Read lease: a concurrent LLM unload/reload/select waits or 409s
+        # rather than dropping the runtime mid-completion.
+        with model_runtime.read_lease("llm"):
+            engine = get_selected_llm_engine()
+            result = await run_in_threadpool(
+                engine.process_fast_lane,
+                request.text,
+                request.preset,
+                true_gen=request.true_gen,
+            )
         return {"text": result}
+    except RuntimeBusyError:
+        raise HTTPException(status_code=409, detail="LLM runtime is being reconfigured; retry shortly.")
     except Exception as e:
         logging.error(f"LLM Process Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -3950,8 +4011,13 @@ async def transcribe_audio(file: UploadFile = File(...)):
     try:
         with tmp:
             shutil.copyfileobj(file.file, tmp)
-        text = await run_in_threadpool(transcriber.transcribe, temp_filename)
+        # Read lease: a concurrent STT unload/reload waits or 409s instead of
+        # freeing the Whisper model out from under this transcription.
+        with model_runtime.read_lease("stt"):
+            text = await run_in_threadpool(transcriber.transcribe, temp_filename)
         return {"text": text}
+    except RuntimeBusyError:
+        raise HTTPException(status_code=409, detail="STT runtime is being reconfigured; retry shortly.")
     except Exception as e:
         logging.error(f"Transcription Error: {e}")
         raise HTTPException(status_code=500, detail="Transcription failed")
@@ -3998,9 +4064,14 @@ async def tts_speak(request: TTSRequest):
         record_runtime_error("tts", message, {"action": "tts_speak"})
         return {"ok": False, "status": "error", "message": message, "error": "tts_unavailable"}
 
-    result = await run_in_threadpool(
-        engine.speak, text, speed=speed, voice_hint=voice_id, blend=blend, modulation=modulation
-    )
+    try:
+        with model_runtime.read_lease("tts"):
+            result = await run_in_threadpool(
+                engine.speak, text, speed=speed, voice_hint=voice_id, blend=blend, modulation=modulation
+            )
+    except RuntimeBusyError:
+        return {"ok": False, "status": "error", "error": "tts_reconfiguring",
+                "message": "TTS runtime is being reconfigured; retry shortly."}
     result["status"] = "success" if result.get("ok") else "error"
     return result
 
