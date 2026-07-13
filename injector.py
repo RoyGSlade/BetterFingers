@@ -10,6 +10,7 @@ import keyboard
 import pyperclip
 
 import clipboard_capture
+import injection_pacing
 import platform_capabilities
 
 IS_WINDOWS = platform_capabilities.IS_WINDOWS
@@ -109,16 +110,44 @@ class InputInjector:
             base = f"{base} {sign_off}"
         return base
 
-    def _type_via_external_tool(self, text: str) -> bool:
-        """Type via the selected Linux backend. Returns True on success."""
+    def _type_via_external_tool(self, text: str, key_delay_ms=None) -> bool:
+        """Type via the selected Linux backend. Returns True on success.
+
+        key_delay_ms, when set, slows xdotool's inter-keystroke rate (its
+        ``--delay``) so a slow target doesn't drop characters. wtype/ydotool
+        have no portable per-key delay, so they ignore it — a mangling target
+        under those backends is handled by the paste strategy in type_text.
+        """
         method = self.injection_method
         if method == "xdotool":
-            return _run_type_tool(["xdotool", "type", "--clearmodifiers", "--"], text)
+            argv = ["xdotool", "type", "--clearmodifiers"]
+            if key_delay_ms is not None:
+                argv += ["--delay", str(max(0, int(key_delay_ms)))]
+            argv += ["--"]
+            return _run_type_tool(argv, text)
         if method == "wtype":
             return _run_type_tool(["wtype", "--"], text)
         if method == "ydotool":
             return _run_type_tool(["ydotool", "type"], text)
         return False
+
+    def _active_injection_pacing(self):
+        """Resolve the pacing strategy for the currently-focused app. Never
+        raises — falls back to the tool default if detection/config fail."""
+        default = {"strategy": injection_pacing.TYPE,
+                   "key_delay_ms": injection_pacing.XDOTOOL_DEFAULT_DELAY_MS}
+        try:
+            if not self.config.get("per_app_pacing_enabled", True):
+                return default
+            app_key = injection_pacing.detect_active_app_key()
+            pacing = injection_pacing.resolve_pacing(app_key, self.config)
+            if app_key:
+                logging.debug("injection pacing: app=%s strategy=%s delay=%sms",
+                              app_key, pacing["strategy"], pacing["key_delay_ms"])
+            return pacing
+        except Exception as exc:
+            logging.debug("injection pacing resolution failed; using default: %s", exc)
+            return default
 
     def type_text(self, text: str):
         text = self._compose_output_text(text)
@@ -130,10 +159,16 @@ class InputInjector:
         # Non-Windows: route through the runtime injection matrix. External typing
         # tools (xdotool/wtype/ydotool) inject the whole string at once; if the
         # selected tool is missing or fails, fall back to clipboard paste, which
-        # is the guaranteed universal fallback.
+        # is the guaranteed universal fallback. Per-app pacing (below) slows the
+        # keystroke rate for slow targets or, for known-mangling apps like
+        # LibreOffice, uses an atomic paste that can't drop characters.
         if not IS_WINDOWS:
             if self.injection_method in ("xdotool", "wtype", "ydotool"):
-                if self._type_via_external_tool(text):
+                pacing = self._active_injection_pacing()
+                if pacing["strategy"] == injection_pacing.PASTE:
+                    self._paste_raw(text)
+                    return
+                if self._type_via_external_tool(text, key_delay_ms=pacing.get("key_delay_ms")):
                     return
                 logging.warning(
                     f"Injection tool '{self.injection_method}' failed; falling back to paste."
