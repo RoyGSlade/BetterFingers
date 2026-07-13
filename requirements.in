@@ -30,7 +30,7 @@ pyperclip>=1.8,<2             # Cross-platform clipboard
 
 # ---- LLM Server ----
 requests>=2.31,<3             # HTTP client (model downloads)
-huggingface_hub>=0.24         # Model cache management (Whisper)
+huggingface_hub>=1.23.0         # Model cache management (Whisper)
 pyyaml>=6,<7                  # Profile / config files
 
 # ---- Sidecar API ----
