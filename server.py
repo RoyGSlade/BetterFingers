@@ -329,15 +329,14 @@ def load_draft_history():
 
 
 def get_voices_dir():
-    ensure_app_dirs()
-    voices_dir = get_app_data_dir() / "voices"
+    # Unified under the single data root (was the split XDG location).
+    voices_dir = Path(get_user_data_path()) / "voices"
     voices_dir.mkdir(parents=True, exist_ok=True)
     return voices_dir
 
 
 def get_graph_path():
-    ensure_app_dirs()
-    return get_config_dir() / "graph.json"
+    return Path(get_user_data_path()) / "graph.json"
 
 
 def get_debug_log_path():
@@ -1781,6 +1780,16 @@ async def startup_event():
     # Auth gate first: covers `uvicorn server:app` as well as `python
     # server.py`, and fails startup in production if no token is configured.
     enforce_startup_security()
+    # Consolidate any legacy/split data root into the unified base (idempotent).
+    # Guarded from the test suite so running tests never moves real user data.
+    if not _is_test_env():
+        try:
+            import app_paths
+            report = app_paths.migrate_legacy_data()
+            if report.get("moved"):
+                logging.info("Migrated legacy data into %s: %s", report["target"], report["moved"])
+        except Exception as exc:
+            logging.warning(f"Legacy data migration skipped: {exc}")
     loop = asyncio.get_event_loop()
     load_draft_history()
     # One-time backfill of the searchable archive from the legacy JSON (C8).
@@ -2962,7 +2971,7 @@ def _path_size_bytes(path):
 def get_privacy_report():
     """Everything that touches the network + where local data lives (C7)."""
     history_file = os.path.join(get_user_data_path(), "draft_history.json")
-    voices_dir = str(get_app_data_dir() / "voices")
+    voices_dir = str(get_voices_dir())
     with draft_lock:
         recordings_in_memory = len(draft_recordings)
         drafts_in_memory = len(draft_queue)
@@ -3002,10 +3011,15 @@ def get_privacy_report():
         {"name": "Models", "path": str(get_models_dir()), "bytes": _path_size_bytes(str(get_models_dir()))},
     ]
 
+    import app_paths
+
     return {
         "offline_by_default": True,
         "network_touchpoints": network_touchpoints,
         "data_locations": data_locations,
+        # Every root the app writes (or historically wrote) to, so the user can
+        # see exactly where their data lives — current and any legacy location.
+        "data_directories": app_paths.describe_locations(),
         "retention": {
             "recordings_persisted_to_disk": True,
             "recordings_in_memory": recordings_in_memory,
@@ -3134,7 +3148,7 @@ def _perform_privacy_wipe(wipe_voices: bool):
         cleared["recordings_files_removed"] = recordings.clear_recordings()
 
         if wipe_voices:
-            voices_dir = get_app_data_dir() / "voices"
+            voices_dir = get_voices_dir()
             try:
                 if voices_dir.exists():
                     # No ignore_errors: a suppressed failure must not report
@@ -3159,7 +3173,7 @@ def _perform_privacy_wipe(wipe_voices: bool):
             "leftover_recordings": leftover_recordings[:20],
         }
         if wipe_voices:
-            postconditions["voices_absent"] = not (get_app_data_dir() / "voices").exists()
+            postconditions["voices_absent"] = not get_voices_dir().exists()
     finally:
         if gate_held:
             dictation_coordinator.finish()
