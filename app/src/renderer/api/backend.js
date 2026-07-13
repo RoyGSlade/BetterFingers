@@ -1,4 +1,7 @@
-const BACKEND_ORIGIN = window.betterFingers?.backendOrigin || 'http://127.0.0.1:8000';
+// Only used to build the URL constants below and to derive the request path;
+// the renderer no longer knows the real backend origin — the main-process proxy
+// holds it. A different backend port still works because only the path is sent.
+const BACKEND_ORIGIN = 'http://127.0.0.1:8000';
 const HEALTH_URL = `${BACKEND_ORIGIN}/health`;
 const RUNTIME_STATUS_URL = `${BACKEND_ORIGIN}/runtime/status`;
 const RUNTIME_WARMUP_URL = `${BACKEND_ORIGIN}/runtime/warmup`;
@@ -22,22 +25,49 @@ const RUNTIME_VERSION_URL = `${BACKEND_ORIGIN}/runtime/version`;
 const PERSONAS_URL = `${BACKEND_ORIGIN}/personas`;
 const TTS_VOICES_URL = `${BACKEND_ORIGIN}/tts/voices`;
 const VOICE_PRESETS_URL = `${BACKEND_ORIGIN}/voice-presets`;
-const AUTH_TOKEN = window.betterFingers?.authToken || '';
+// Phase 3c: no token in the renderer. Every backend call goes through the
+// main-process proxy, which attaches the credential and enforces the route
+// allowlist. These helpers translate a full URL into the proxy's (method,
+// path, body) shape and reproduce the previous throw-on-error contract.
 
-function getHeaders() {
-  const headers = { 'Content-Type': 'application/json' };
-  if (AUTH_TOKEN) {
-    headers['Authorization'] = `Bearer ${AUTH_TOKEN}`;
-  }
-  return headers;
+function pathOf(url) {
+  return String(url).startsWith(BACKEND_ORIGIN) ? String(url).slice(BACKEND_ORIGIN.length) : String(url);
 }
 
-function getAuthHeaders() {
-  const headers = {};
-  if (AUTH_TOKEN) {
-    headers['Authorization'] = `Bearer ${AUTH_TOKEN}`;
+function errorMessageFromBody(body, url, status) {
+  const detail = body && (body.detail || body.message || body.error);
+  if (Array.isArray(detail)) {
+    return detail.map((item) => (item && item.msg) || JSON.stringify(item)).join('; ');
   }
-  return headers;
+  if (detail) {
+    return String(detail);
+  }
+  return `${url} failed with status ${status}`;
+}
+
+async function proxyRequest(method, url, body, timeoutMs = 2500) {
+  const bridge = window.betterFingers && window.betterFingers.backendRequest;
+  if (typeof bridge !== 'function') {
+    throw new Error('Backend bridge is unavailable.');
+  }
+  const res = await bridge(method, pathOf(url), body, timeoutMs);
+  if (!res) {
+    throw new Error('Backend request returned no result.');
+  }
+  // Transport/validation faults surface as status 0 with an error string.
+  if (res.status === 0 && res.ok === false) {
+    if (res.error === 'timeout') {
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds. The local model may still be loading or generating.`);
+    }
+    throw new Error(res.error || 'Backend request failed.');
+  }
+  if (!res.ok) {
+    const error = new Error(errorMessageFromBody(res.body, url, res.status));
+    error.status = res.status;
+    error.detail = res.body && res.body.detail;
+    throw error;
+  }
+  return res.body;
 }
 
 async function fetchDoctor(refreshAudio = false, timeoutMs = 5000) {
@@ -53,47 +83,11 @@ async function fetchVersion(timeoutMs = 2500) {
 }
 
 async function fetchHealth(timeoutMs = 2500) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(HEALTH_URL, {
-      cache: 'no-store',
-      headers: getHeaders(),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(`Health check failed with status ${response.status}`);
-    }
-
-    return await response.json();
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  return proxyRequest('GET', HEALTH_URL, undefined, timeoutMs);
 }
 
 async function fetchJson(url, timeoutMs = 2500) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(url, {
-      cache: 'no-store',
-      headers: getHeaders(),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(await getResponseErrorMessage(response, url));
-    }
-
-    return await response.json();
-  } catch (error) {
-    throw normalizeFetchError(error, timeoutMs);
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  return proxyRequest('GET', url, undefined, timeoutMs);
 }
 
 async function fetchRuntimeStatus(timeoutMs = 2500) {
@@ -299,74 +293,11 @@ async function fetchLatestDraft(timeoutMs = 2500) {
 }
 
 async function postJson(url, payload = {}, timeoutMs = 2500) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(await getResponseErrorMessage(response, url));
-    }
-
-    return await response.json();
-  } catch (error) {
-    throw normalizeFetchError(error, timeoutMs);
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  return proxyRequest('POST', url, payload, timeoutMs);
 }
 
 async function deleteJson(url, timeoutMs = 2500) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(url, {
-      method: 'DELETE',
-      headers: getHeaders(),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(await getResponseErrorMessage(response, url));
-    }
-
-    return await response.json();
-  } catch (error) {
-    throw normalizeFetchError(error, timeoutMs);
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-function normalizeFetchError(error, timeoutMs) {
-  const message = String(error?.message || error || '');
-  if (error?.name === 'AbortError' || message.toLowerCase().includes('aborted')) {
-    return new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds. The local model may still be loading or generating.`);
-  }
-  return error;
-}
-
-async function getResponseErrorMessage(response, url) {
-  try {
-    const payload = await response.json();
-    const detail = payload?.detail || payload?.message || payload?.error;
-    if (Array.isArray(detail)) {
-      return detail.map((item) => item?.msg || JSON.stringify(item)).join('; ');
-    }
-    if (detail) {
-      return String(detail);
-    }
-  } catch (_error) {
-    // Fall through to the generic status message.
-  }
-  return `${url} failed with status ${response.status}`;
+  return proxyRequest('DELETE', url, undefined, timeoutMs);
 }
 
 async function acceptDraft(id, timeoutMs = 2500) {
@@ -462,38 +393,39 @@ async function deleteVoicePreset(name, timeoutMs = 5000) {
 }
 
 async function cloneVoice(file, name, consent, timeoutMs = 30000) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  const form = new FormData();
-  form.append('file', file);
-  form.append('name', name);
-  form.append('consent', consent ? 'true' : 'false');
-
-  try {
-    const response = await fetch(`${BACKEND_ORIGIN}/tts/clone`, {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: form,
-      signal: controller.signal,
-    });
-    const payload = await response.json().catch(() => null);
-    if (!response.ok) {
-      // /tts/clone's QA-rejection detail is a structured {message, warnings}
-      // object (not a string), so build the error message manually here
-      // instead of the generic getResponseErrorMessage() flattener, and
-      // attach the raw detail so callers can show individual warnings.
-      const detail = payload?.detail;
-      const message = (detail && typeof detail === 'object' ? detail.message : detail) || `Clone upload failed with status ${response.status}`;
-      const error = new Error(message);
-      error.detail = detail;
-      throw error;
-    }
-    return payload;
-  } catch (error) {
-    throw normalizeFetchError(error, timeoutMs);
-  } finally {
-    clearTimeout(timeoutId);
+  const bridge = window.betterFingers && window.betterFingers.uploadVoiceSample;
+  if (typeof bridge !== 'function') {
+    throw new Error('Backend bridge is unavailable.');
   }
+  // Read the file in the renderer and hand the bytes to main, which builds the
+  // multipart body with the token attached (Phase 3c).
+  const arrayBuffer = await file.arrayBuffer();
+  const res = await bridge({
+    bytes: new Uint8Array(arrayBuffer),
+    filename: file.name,
+    name,
+    consent: Boolean(consent),
+    timeoutMs,
+  });
+  if (!res) {
+    throw new Error('Clone upload returned no result.');
+  }
+  if (res.status === 0 && res.ok === false) {
+    if (res.error === 'timeout') {
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds. The local model may still be loading or generating.`);
+    }
+    throw new Error(res.error || 'Clone upload failed.');
+  }
+  if (!res.ok) {
+    // /tts/clone's QA-rejection detail is a structured {message, warnings}
+    // object; surface it so callers can show individual warnings.
+    const detail = res.body && res.body.detail;
+    const message = (detail && typeof detail === 'object' ? detail.message : detail) || `Clone upload failed with status ${res.status}`;
+    const error = new Error(message);
+    error.detail = detail;
+    throw error;
+  }
+  return res.body;
 }
 
 async function lintPersona(fields = {}, timeoutMs = 5000) {
@@ -514,25 +446,7 @@ async function savePersona(name, prompt, extra = null, timeoutMs = 5000) {
 }
 
 async function deletePersona(name, timeoutMs = 5000) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(`${PERSONAS_URL}/${encodeURIComponent(name)}`, {
-      method: 'DELETE',
-      headers: getHeaders(),
-      cache: 'no-store',
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(`DELETE ${PERSONAS_URL}/${name} failed with status ${response.status}`);
-    }
-
-    return await response.json();
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  return proxyRequest('DELETE', `${PERSONAS_URL}/${encodeURIComponent(name)}`, undefined, timeoutMs);
 }
 
 // --- Persona Foundry: guided interview -> compile -> stress-test. ---
@@ -554,25 +468,7 @@ async function runFoundryStressTest(payload, timeoutMs = 120000) {
 }
 
 async function warmupRuntime({ stt = false, llm = false, hotkeys = false } = {}, timeoutMs = 120000) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(RUNTIME_WARMUP_URL, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ stt, llm, hotkeys }),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(`Runtime warmup failed with status ${response.status}`);
-    }
-
-    return await response.json();
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  return proxyRequest('POST', RUNTIME_WARMUP_URL, { stt, llm, hotkeys }, timeoutMs);
 }
 
 function normalizeBooleanStatus(value) {
@@ -593,85 +489,48 @@ function connectVoiceStatus({
   onMessage,
   onError,
 } = {}) {
-  let socket = null;
-  let reconnectTimer = null;
-  let closedByUser = false;
-  let attempt = 0;
+  // Phase 3c: the voice-status WebSocket runs in the main process (it needs the
+  // token). The renderer subscribes to forwarded messages + state and never
+  // touches a socket or the credential. Reconnect is handled in main.
+  const voiceStatus = window.betterFingers && window.betterFingers.voiceStatus;
+  if (!voiceStatus) {
+    if (typeof onError === 'function') {
+      onError(new Error('Voice status bridge is unavailable.'));
+    }
+    return { close() {} };
+  }
 
-  function notifyConnectionChange(state, detail) {
+  const offMessage = voiceStatus.onMessage((data) => {
+    try {
+      if (typeof onMessage === 'function') {
+        onMessage(data);
+      }
+    } catch (error) {
+      if (typeof onError === 'function') {
+        onError(error);
+      }
+    }
+  });
+
+  const offState = voiceStatus.onState(({ state, detail } = {}) => {
+    if (state === 'error') {
+      if (typeof onError === 'function') {
+        onError(new Error(detail || 'Voice status error'));
+      }
+      return;
+    }
     if (typeof onConnectionChange === 'function') {
       onConnectionChange(state, detail);
     }
-  }
+  });
 
-  function scheduleReconnect() {
-    if (closedByUser) {
-      return;
-    }
-
-    const delay = Math.min(1000 * (attempt + 1), 5000);
-    reconnectTimer = setTimeout(() => {
-      connect();
-    }, delay);
-  }
-
-  function connect() {
-    clearTimeout(reconnectTimer);
-    attempt += 1;
-    notifyConnectionChange('connecting', `Attempt ${attempt}`);
-
-    // The token goes in the first frame, never the query string — query
-    // strings surface in proxy logs, diagnostics, and crash reports.
-    socket = new WebSocket(VOICE_STATUS_WS_URL);
-
-    socket.addEventListener('open', () => {
-      attempt = 0;
-      if (AUTH_TOKEN) {
-        socket.send(`auth:${AUTH_TOKEN}`);
-      }
-      // 'live' rather than the raw ws:// URL — the URL is developer detail that
-      // doesn't belong in the user-facing connection pill.
-      notifyConnectionChange('connected', 'live');
-    });
-
-    socket.addEventListener('message', (event) => {
-      // Control frames from the auth/keepalive handshake are not payloads.
-      if (event.data === 'auth_ok' || event.data === 'pong') {
-        return;
-      }
-      try {
-        const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
-        if (typeof onMessage === 'function') {
-          onMessage(data);
-        }
-      } catch (error) {
-        if (typeof onError === 'function') {
-          onError(error);
-        }
-      }
-    });
-
-    socket.addEventListener('close', () => {
-      notifyConnectionChange('reconnecting', 'Socket closed');
-      scheduleReconnect();
-    });
-
-    socket.addEventListener('error', () => {
-      if (typeof onError === 'function') {
-        onError(new Error('Voice status WebSocket error'));
-      }
-    });
-  }
-
-  connect();
+  voiceStatus.start();
 
   return {
     close() {
-      closedByUser = true;
-      clearTimeout(reconnectTimer);
-      if (socket) {
-        socket.close();
-      }
+      if (typeof offMessage === 'function') offMessage();
+      if (typeof offState === 'function') offState();
+      voiceStatus.stop();
     },
   };
 }

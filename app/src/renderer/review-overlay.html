@@ -331,10 +331,12 @@
          forbids inline script execution. Runs after the module above in
          document order, so window.__formatDraftSummary is already set. -->
     <script type="module">
-      const BACKEND_ORIGIN = window.betterFingers?.backendOrigin || 'http://127.0.0.1:8000';
-      const AUTH_TOKEN = window.betterFingers?.authToken || '';
-      function authHeaders() {
-        return AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {};
+      // Phase 3c: no token/origin in the renderer — backend calls go through
+      // the main-process proxy. BACKEND_ORIGIN is only used to build/strip the
+      // request path; the real origin lives in main.
+      const BACKEND_ORIGIN = 'http://127.0.0.1:8000';
+      function pathOf(url) {
+        return String(url).startsWith(BACKEND_ORIGIN) ? String(url).slice(BACKEND_ORIGIN.length) : String(url);
       }
       const statusEl = document.getElementById('status');
       const rawTextEl = document.getElementById('rawText');
@@ -483,32 +485,35 @@
         }
       }
 
-      async function fetchJson(url, options = {}, timeoutMs = 120000) {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), timeoutMs);
-        try {
-          const headers = { ...authHeaders(), ...(options.headers || {}) };
-          const response = await fetch(url, {
-            cache: 'no-store',
-            ...options,
-            headers,
-            signal: controller.signal,
-          });
-          if (!response.ok) {
-            throw new Error(`${url} failed with status ${response.status}`);
-          }
-          return await response.json();
-        } finally {
-          clearTimeout(timeout);
+      async function proxyReq(method, url, body, timeoutMs = 120000) {
+        const bridge = window.betterFingers && window.betterFingers.backendRequest;
+        if (typeof bridge !== 'function') {
+          throw new Error('Backend bridge is unavailable.');
         }
+        const res = await bridge(method, pathOf(url), body, timeoutMs);
+        if (!res) {
+          throw new Error('Backend request returned no result.');
+        }
+        if (res.status === 0 && res.ok === false) {
+          if (res.error === 'timeout') {
+            throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
+          }
+          throw new Error(res.error || 'Backend request failed.');
+        }
+        if (!res.ok) {
+          const detail = res.body && (res.body.detail || res.body.message || res.body.error);
+          throw new Error(detail ? String(detail) : `${url} failed with status ${res.status}`);
+        }
+        return res.body;
+      }
+
+      async function fetchJson(url, options = {}, timeoutMs = 120000) {
+        // The review overlay only ever GETs through this helper.
+        return proxyReq('GET', url, undefined, timeoutMs);
       }
 
       function postJson(url, payload = {}, timeoutMs = 120000) {
-        return fetchJson(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        }, timeoutMs);
+        return proxyReq('POST', url, payload, timeoutMs);
       }
 
       function defaultSendAction() {

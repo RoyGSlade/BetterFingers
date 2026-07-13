@@ -1,11 +1,28 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-const authToken = ipcRenderer.sendSync('app:get-auth-token-sync');
-const backendOrigin = ipcRenderer.sendSync('app:get-backend-origin-sync');
-
+// Phase 3c: the renderer never receives the bearer token or the backend origin.
+// All backend access goes through the main-process proxy below.
 const api = {
-  authToken,
-  backendOrigin,
+  // Validated backend proxy: main attaches the token and enforces the
+  // method/path/size allowlist. Returns { ok, status, body } or { ok:false, error }.
+  backendRequest: (method, path, body, timeoutMs) =>
+    ipcRenderer.invoke('backend:request', { method, path, body, timeoutMs }),
+  uploadVoiceSample: (payload) =>
+    ipcRenderer.invoke('backend:upload-voice-sample', payload),
+  voiceStatus: {
+    start: () => ipcRenderer.invoke('backend:voice-status:start'),
+    stop: () => ipcRenderer.invoke('backend:voice-status:stop'),
+    onMessage: (callback) => {
+      const handler = (_event, data) => callback(data);
+      ipcRenderer.on('backend:voice-status:message', handler);
+      return () => ipcRenderer.removeListener('backend:voice-status:message', handler);
+    },
+    onState: (callback) => {
+      const handler = (_event, state) => callback(state);
+      ipcRenderer.on('backend:voice-status:state', handler);
+      return () => ipcRenderer.removeListener('backend:voice-status:state', handler);
+    },
+  },
   quitApp: () => ipcRenderer.invoke('app:quit'),
   showApp: () => ipcRenderer.invoke('app:show'),
   getAppState: () => ipcRenderer.invoke('app:get-state'),
