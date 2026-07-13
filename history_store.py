@@ -5,6 +5,7 @@ this module is a parallel SQLite FTS5 archive that accumulates every draft so th
 user can search their whole history. Kept fully defensive: any failure here must
 never disrupt the dictation pipeline.
 """
+import json
 import logging
 import os
 import sqlite3
@@ -46,7 +47,8 @@ def _ensure_schema(conn):
             status TEXT,
             profile TEXT,
             raw_text TEXT,
-            final_text TEXT
+            final_text TEXT,
+            data TEXT
         );
         CREATE VIRTUAL TABLE IF NOT EXISTS drafts_fts USING fts5(
             raw_text, final_text, content='drafts', content_rowid='id'
@@ -67,6 +69,11 @@ def _ensure_schema(conn):
         END;
         """
     )
+    # Back-compat: DBs created before the full-record column gets it added here,
+    # so an existing archive keeps working and starts storing complete drafts.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(drafts)").fetchall()}
+    if "data" not in columns:
+        conn.execute("ALTER TABLE drafts ADD COLUMN data TEXT")
 
 
 def init():
@@ -98,13 +105,19 @@ def init():
 
 
 def _row_from_draft(draft):
+    metadata = draft.get("metadata") or {}
+    profile = str((metadata.get("profile") if isinstance(metadata, dict) else "") or draft.get("profile", ""))
     return (
         int(draft.get("id")),
         str(draft.get("created_at", "")),
         str(draft.get("status", "")),
-        str(draft.get("metadata", {}).get("profile", "") or draft.get("profile", "")),
+        profile,
         str(draft.get("raw_text", "") or ""),
         str(draft.get("final_text", "") or ""),
+        # The complete draft record, so the store holds everything the queue does
+        # (confidence, gate_reasons, send state, review fields, …), not just the
+        # searchable subset — the basis for SQLite becoming the canonical store.
+        json.dumps(draft, default=str),
     )
 
 
@@ -123,14 +136,15 @@ def upsert_draft(draft):
             try:
                 conn.execute(
                     """
-                    INSERT INTO drafts (id, created_at, status, profile, raw_text, final_text)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO drafts (id, created_at, status, profile, raw_text, final_text, data)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         created_at=excluded.created_at,
                         status=excluded.status,
                         profile=excluded.profile,
                         raw_text=excluded.raw_text,
-                        final_text=excluded.final_text
+                        final_text=excluded.final_text,
+                        data=excluded.data
                     """,
                     row,
                 )
@@ -167,14 +181,15 @@ def upsert_many(drafts):
             try:
                 conn.executemany(
                     """
-                    INSERT INTO drafts (id, created_at, status, profile, raw_text, final_text)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO drafts (id, created_at, status, profile, raw_text, final_text, data)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         created_at=excluded.created_at,
                         status=excluded.status,
                         profile=excluded.profile,
                         raw_text=excluded.raw_text,
-                        final_text=excluded.final_text
+                        final_text=excluded.final_text,
+                        data=excluded.data
                     """,
                     rows,
                 )
@@ -248,6 +263,44 @@ def recent(limit=50):
         except Exception as exc:
             logging.debug(f"history_store recent failed: {exc}")
             return []
+
+
+def _full_from_row(row):
+    """Reconstruct a complete draft dict from a row: the stored full-record JSON
+    if present, else the typed columns (rows written before the data column)."""
+    try:
+        raw = row["data"]
+    except (IndexError, KeyError):
+        raw = None
+    if raw:
+        try:
+            obj = json.loads(raw)
+            if isinstance(obj, dict):
+                return obj
+        except (ValueError, TypeError):
+            pass
+    return _row_to_dict(row)
+
+
+def load_recent_full(limit=100):
+    """The most recent ``limit`` drafts as COMPLETE records, oldest-first so they
+    map straight onto the in-memory draft_queue order. Full fields come from the
+    stored JSON; rows predating the data column degrade to the typed subset."""
+    init()
+    with _lock:
+        try:
+            conn = _connect()
+            try:
+                rows = conn.execute(
+                    "SELECT * FROM drafts ORDER BY created_at DESC, id DESC LIMIT ?",
+                    (int(limit),),
+                ).fetchall()
+            finally:
+                conn.close()
+        except Exception as exc:
+            logging.debug(f"history_store load_recent_full failed: {exc}")
+            return []
+    return [_full_from_row(r) for r in reversed(rows)]
 
 
 def count():
