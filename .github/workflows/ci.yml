@@ -178,7 +178,7 @@ jobs:
       # it through log_redaction.py first (server-side concern, not this file).
       - name: Upload failure artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: electron-smoke-failures
           path: |
@@ -242,7 +242,7 @@ jobs:
       # through log_redaction.py (server-side) before upload.
       - name: Upload failure artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: electron-smoke-crossplatform-${{ matrix.os }}
           path: |
