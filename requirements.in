@@ -11,14 +11,14 @@
 # release with a conservative upper bound; the lock pins the exact version.
 
 # ---- Core ----
-Pillow>=11,<13                # Image processing (tray icon, overlays)
+Pillow>=12.3.0,<13                # Image processing (tray icon, overlays)
 psutil>=6,<8                  # Hardware metrics (RAM / cores for hardware_report)
 numpy>=2.2.6,<3               # Numeric arrays for audio processing
-scipy>=1.13,<2               # Signal processing (audio gate)
+scipy>=1.15.3,<2               # Signal processing (audio gate)
 
 # ---- Audio & Speech ----
 sounddevice>=0.5,<0.6         # Microphone capture
-faster-whisper>=1.1,<2        # Whisper speech-to-text (CTranslate2)
+faster-whisper>=1.2.1,<2        # Whisper speech-to-text (CTranslate2)
 kokoro>=0.9,<1; python_version < "3.13"   # TTS backend (primary)
 kokoro-onnx>=0.5.0,<1         # TTS backend (ONNX variant)
 
@@ -37,12 +37,12 @@ pyyaml>=6,<7                  # Profile / config files
 mcp>=1.0,<2                   # MCP client SDK (C12 — persona tool integration)
 fastapi>=0.115,<1             # REST + WebSocket server
 uvicorn>=0.51.0,<1           # ASGI server
-websockets>=12                # WebSocket protocol support
+websockets>=16.1                # WebSocket protocol support
 python-multipart>=0.0.9       # FastAPI file/form uploads
 
 # ---- Windows Audio Control ----
 # Windows-only (COM / Core Audio). On Linux, audio ducking uses `pactl`
 # (PulseAudio / PipeWire) at runtime instead. These resolve only on Windows,
 # so they appear in requirements-win.lock but not requirements-linux.lock.
-comtypes>=1.2; sys_platform == "win32"      # COM automation (Windows)
+comtypes>=1.4.16; sys_platform == "win32"      # COM automation (Windows)
 pycaw>=20230407; sys_platform == "win32"    # Windows audio session control
