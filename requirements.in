@@ -37,7 +37,7 @@ pyyaml>=6,<7                  # Profile / config files
 mcp>=1.0,<2                   # MCP client SDK (C12 — persona tool integration)
 fastapi>=0.115,<1             # REST + WebSocket server
 uvicorn>=0.51.0,<1           # ASGI server
-websockets>=12                # WebSocket protocol support
+websockets>=16.1                # WebSocket protocol support
 python-multipart>=0.0.9       # FastAPI file/form uploads
 
 # ---- Windows Audio Control ----
