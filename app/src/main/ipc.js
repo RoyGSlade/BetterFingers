@@ -2,6 +2,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 const { app, clipboard, ipcMain, shell } = require('electron');
+const { isTrustedRendererUrl } = require('./senderValidation');
 
 let overlayHideTimer = null;
 
@@ -9,33 +10,24 @@ let overlayHideTimer = null;
 // Every IPC handler validates the sender frame before doing privileged work.
 // The preload bridge hands the renderer real powers (quit, clipboard, hotkeys,
 // overlay control, shell open); a compromised or navigated-away frame must not
-// keep them. Trusted senders are exactly our own pages: the packaged file://
-// HTML under the app, or the electron-vite dev-server origin in development.
+// keep them. Trusted senders are exactly our own pages: one of the packaged
+// renderer HTML files in the app's renderer directory, or the electron-vite
+// dev-server origin (exact origin) in development.
 
-const RENDERER_PAGES = new Set(['index.html', 'overlay.html', 'review-overlay.html']);
+// The packaged renderer pages live beside the compiled main scripts
+// (out/main/ipc.js -> out/renderer/index.html), matching how windows.js loads
+// them via loadFile('../renderer/*.html').
+function rendererDir() {
+  return path.resolve(__dirname, '..', 'renderer');
+}
 
 function isTrustedSender(event) {
   const url = event?.senderFrame?.url || '';
   if (!url) return false;
-  if (url.startsWith('file://')) {
-    let pathname;
-    try {
-      pathname = decodeURIComponent(new URL(url).pathname);
-    } catch {
-      return false;
-    }
-    const base = path.basename(pathname);
-    // Must be one of our pages, served from inside the app's own directory
-    // (dev: <repo>/app/..., packaged: .../resources/app.asar/...).
-    const appRoot = path.resolve(__dirname, '..', '..');
-    const normalized = path.resolve(pathname);
-    return RENDERER_PAGES.has(base) && normalized.startsWith(appRoot);
-  }
-  const devOrigin = process.env.ELECTRON_RENDERER_URL;
-  if (devOrigin && url.startsWith(devOrigin)) {
-    return true;
-  }
-  return false;
+  return isTrustedRendererUrl(url, {
+    rendererDir: rendererDir(),
+    devOrigin: process.env.ELECTRON_RENDERER_URL,
+  });
 }
 
 function rejectUntrusted(event, channel) {
