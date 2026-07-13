@@ -1,0 +1,51 @@
+# CodeQL static analysis for Python + JavaScript (review finding: P1 security).
+#
+# SECRET SCANNING is NOT configured here — it is a repository Setting, not a
+# workflow file. The repo owner must enable it manually under:
+#   Settings -> Code security and analysis -> Secret scanning (and Push
+#   protection). GitHub Advanced Security / secret scanning is free on public
+#   repos and a paid add-on on private ones. This comment is the pointer; there
+#   is no in-repo file that can turn it on.
+name: codeql
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly full scan, independent of PR activity.
+    - cron: "27 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write # required to upload CodeQL results
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: python
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

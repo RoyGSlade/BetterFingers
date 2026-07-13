@@ -1,3 +1,18 @@
+# requirements.txt — unpinned, cross-platform runtime manifest.
+#
+# This mirrors requirements.in and stays intentionally unpinned so a single
+# file installs on Linux, Windows, and macOS (the Windows-only deps carry
+# environment markers). It remains the install target for the packaging and
+# e2e workflows (build-installer.yml, e2e-screenshots.yml).
+#
+# For reproducible, hash-verified installs, prefer the generated lock for your
+# platform instead:
+#     Linux    pip install --require-hashes -r requirements-linux.lock
+#     Windows  pip install --require-hashes -r requirements-win.lock   (see file)
+# Edit requirements.in (the source of truth) and regenerate the locks with
+# pip-compile; keep this file in sync with it. Dev/test deps live in
+# requirements-dev.in / requirements-dev.lock.
+
 # ---- Core ----
 Pillow                      # Image processing (tray icon, overlays)
 psutil                      # Hardware metrics (RAM / cores for hardware_report)

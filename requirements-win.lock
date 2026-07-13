@@ -1,0 +1,20 @@
+# requirements-win.lock — PLACEHOLDER, MUST BE GENERATED ON WINDOWS.
+#
+# This lock is intentionally NOT generated. It cannot be produced correctly on
+# Linux: pip-compile resolves against the *current* platform, so a Linux run
+# would (a) omit the Windows-only deps (pydirectinput, comtypes, pycaw), whose
+# environment markers evaluate to false on Linux, and (b) pin Linux wheels /
+# platform-specific transitive deps instead of Windows ones. Hand-faking hashes
+# is not acceptable — hashes must come from the real Windows wheels.
+#
+# HOW TO GENERATE (run on a Windows machine or windows-latest runner, using the
+# same Python the packaged build ships — 3.13, see build-installer.yml):
+#
+#     py -3.13 -m venv .venv-win
+#     .venv-win\Scripts\python -m pip install --upgrade pip pip-tools
+#     .venv-win\Scripts\pip-compile --generate-hashes --allow-unsafe ^
+#         --output-file=requirements-win.lock requirements.in
+#
+# Commit the resulting file over this placeholder. Until then, the Windows
+# installer workflow (build-installer.yml) continues to install from
+# requirements.txt, which stays valid.

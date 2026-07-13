@@ -107,3 +107,30 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.installer.outputs.path }}
+
+  sbom:
+    # Software Bill of Materials (CycloneDX) for release/tag builds. Syft scans
+    # the checked-out source, capturing both the Python (requirements*) and npm
+    # (app/package-lock.json) dependency trees. Runs on Linux for speed; the
+    # SBOM is source/dependency based, not OS-specific. Uploaded as a build
+    # artifact and, on tag pushes, attached to the GitHub Release.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # attach SBOM asset to the release on tag builds
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: betterfingers-sbom.cdx.json
+          artifact-name: betterfingers-sbom.cdx.json
+
+      - name: Attach SBOM to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: betterfingers-sbom.cdx.json
