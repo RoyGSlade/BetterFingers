@@ -35,25 +35,28 @@ def get_app_path():
 
 def get_user_data_path():
     """
-    Returns the base path for READ/WRITE files (user config, logs, profiles).
-    Always returns: %APPDATA%/BetterFingers/
+    Returns the one base path for READ/WRITE files (config, logs, profiles,
+    drafts, history DB, recordings, models, voices).
+
+    The location is resolved by app_paths (env override > an existing
+    ~/BetterFingers install > the platform-correct default such as XDG on
+    Linux), so every module writes under a single unified root instead of the
+    old split between ~/BetterFingers and the XDG voices/graph location.
     Ensures the directory exists before returning.
     """
-    app_data = os.environ.get('APPDATA')
-    if not app_data:
-        app_data = os.path.expanduser("~")
-        
-    path = os.path.join(app_data, "BetterFingers")
-    
+    import app_paths
+
+    path = str(app_paths.resolve_base())
+
     # CRITICAL: This is the ONLY place we should ever write files.
     if not os.path.exists(path):
         try:
             os.makedirs(path)
             # Logging implies this function works, so use safe print if logging fails later
-            print(f"Verified User Data path: {path}") 
+            print(f"Verified User Data path: {path}")
         except OSError as e:
             print(f"FATAL: Failed to create User Data path {path}: {e}")
-            
+
     return path
 
 def get_profiles_dir():
