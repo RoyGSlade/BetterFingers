@@ -1,6 +1,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const { BrowserWindow, app } = require('electron');
+const { isTrustedRendererUrl } = require('./senderValidation');
 
 let mainWindow = null;
 
@@ -163,17 +164,23 @@ function resolvePreloadPath() {
   return path.join(__dirname, '../preload/preload.js');
 }
 
+// The packaged renderer pages sit beside the compiled main scripts
+// (out/main/windows.js -> out/renderer/*.html).
+function rendererDir() {
+  return path.resolve(__dirname, '..', 'renderer');
+}
+
 // Lock a window to the app's own pages: deny all popups, and block any
-// navigation away from our file:// pages (or the dev-server origin). The
-// preload bridge grants real powers — a frame that navigated to foreign
-// content must never inherit them.
+// navigation that does not land on one of our exact renderer pages (in the
+// packaged renderer directory) or the exact dev-server origin. The preload
+// bridge grants real powers — a frame that navigated to foreign content, or
+// even to a different file under the app, must never inherit them.
 function hardenWindowNavigation(window) {
   const devOrigin = process.env.ELECTRON_RENDERER_URL;
+  const rendererRoot = rendererDir();
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event, url) => {
-    const allowed =
-      url.startsWith('file://') || (devOrigin && url.startsWith(devOrigin));
-    if (!allowed) {
+    if (!isTrustedRendererUrl(url, { rendererDir: rendererRoot, devOrigin })) {
       console.warn(`[windows] Blocked navigation to ${url}`);
       event.preventDefault();
     }

@@ -14,6 +14,7 @@ module.exports = defineConfig({
           tray: resolve(__dirname, 'src/main/tray.js'),
           ipc: resolve(__dirname, 'src/main/ipc.js'),
           hotkeys: resolve(__dirname, 'src/main/hotkeys.js'),
+          senderValidation: resolve(__dirname, 'src/main/senderValidation.js'),
         },
       },
     },
