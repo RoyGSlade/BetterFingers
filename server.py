@@ -1,7 +1,6 @@
 import hmac
 import os
 import re
-import secrets
 import sys
 import shutil
 import tempfile
@@ -92,12 +91,13 @@ _llm_download_jobs_lock = threading.Lock()
 # renderer loads from file:// (Chromium sends `Origin: null` for cross-origin
 # fetches from file pages) and from the electron-vite dev server in
 # development. Additional origins can be granted explicitly via env.
-def _allowed_cors_origins():
-    origins = ["null", "file://", "http://localhost:5173", "http://127.0.0.1:5173"]
-    extra = os.getenv("BETTERFINGERS_CORS_ORIGINS", "")
-    origins.extend(o.strip() for o in extra.split(",") if o.strip())
-    return origins
-
+# Pure startup-security policy lives in server_security.py (M6); re-imported here
+# so server.validate_startup_security / server._allowed_cors_origins still exist.
+from server_security import (  # noqa: E402
+    _LOOPBACK_HOSTS,
+    _allowed_cors_origins,
+    validate_startup_security,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -109,41 +109,6 @@ app.add_middleware(
 
 from fastapi import Request
 from starlette.responses import JSONResponse, FileResponse
-
-_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
-
-
-def validate_startup_security(host, token, env=None, allow_remote=False):
-    """Fail-closed startup policy (pure; unit-tested).
-
-    Returns {"ok", "token", "generated", "error"}:
-    - Non-loopback bind requires BOTH an explicit opt-in and a token — an
-      accidental 0.0.0.0 must never expose an unauthenticated API.
-    - Packaged/production mode requires a token (the Electron shell always
-      supplies one; a production launch without one is a misconfiguration).
-    - Standalone dev launch without a token gets a generated one, printed
-      once by the caller — the API never runs open by accident.
-    """
-    env = (env or os.getenv("BETTERFINGERS_ENV", "development")).lower()
-    host_normalized = str(host or "").strip().lower()
-    loopback = host_normalized in _LOOPBACK_HOSTS
-
-    if not loopback:
-        if not allow_remote:
-            return {"ok": False, "token": token, "generated": False,
-                    "error": f"Refusing to bind to non-loopback host {host!r} without "
-                             f"BETTERFINGERS_ALLOW_REMOTE=1."}
-        if not token:
-            return {"ok": False, "token": token, "generated": False,
-                    "error": "Refusing a non-loopback bind without BETTERFINGERS_AUTH_TOKEN set."}
-
-    if not token:
-        if env == "production":
-            return {"ok": False, "token": token, "generated": False,
-                    "error": "BETTERFINGERS_AUTH_TOKEN is required in production mode."}
-        return {"ok": True, "token": secrets.token_hex(32), "generated": True, "error": ""}
-
-    return {"ok": True, "token": token, "generated": False, "error": ""}
 
 
 def _is_test_env():
@@ -881,56 +846,10 @@ def get_active_long_draft_warning_words():
         return 1200
 
 
-def count_draft_tokens(text):
-    return len(str(text or "").split())
-
-
-def evaluate_confidence_send_policy(confidence, long_text, gate_reasons, config):
-    """Decide whether a draft may auto-send or must be reviewed first (Phase 12).
-
-    Pure — no I/O. Returns ``{"auto_send_ok": bool, "force_review": bool,
-    "reason": str}``. Only active when ``confidence_force_review_enabled``:
-
-    - a no-audio gate fired                    -> force review ("audio_gate")
-    - the draft is long                        -> force review ("long_draft")
-    - the ASR confidence score is missing       -> force review ("confidence_missing")
-    - score < confidence_force_review_below      -> force review ("low_confidence")
-    - score >= confidence_auto_send_above         -> auto-send eligible
-    - anything in between                        -> neither ("confidence_moderate")
-
-    ``auto_send_ok`` gates the auto-send-on-accept path in the review overlay, so
-    a mumbled or long utterance never silently injects even in ``auto_send`` mode.
-    """
-    cfg = config if isinstance(config, dict) else {}
-    enabled = bool(cfg.get("confidence_force_review_enabled", True))
-    try:
-        below = float(cfg.get("confidence_force_review_below", 0.55))
-    except (TypeError, ValueError):
-        below = 0.55
-    try:
-        above = float(cfg.get("confidence_auto_send_above", 0.85))
-    except (TypeError, ValueError):
-        above = 0.85
-
-    score = confidence.get("score") if isinstance(confidence, dict) else None
-
-    if not enabled:
-        return {"auto_send_ok": True, "force_review": False, "reason": ""}
-    if gate_reasons:
-        return {"auto_send_ok": False, "force_review": True, "reason": "audio_gate"}
-    if long_text:
-        return {"auto_send_ok": False, "force_review": True, "reason": "long_draft"}
-    if score is None:
-        return {"auto_send_ok": False, "force_review": True, "reason": "confidence_missing"}
-    try:
-        score = float(score)
-    except (TypeError, ValueError):
-        return {"auto_send_ok": False, "force_review": True, "reason": "confidence_missing"}
-    if score < below:
-        return {"auto_send_ok": False, "force_review": True, "reason": "low_confidence"}
-    if score >= above:
-        return {"auto_send_ok": True, "force_review": False, "reason": ""}
-    return {"auto_send_ok": False, "force_review": False, "reason": "confidence_moderate"}
+# Pure send/review-gating policy lives in send_policy.py (M6); re-imported so
+# server.evaluate_confidence_send_policy / server.count_draft_tokens still exist.
+# The config readers below stay here (tests patch server.load_profile).
+from send_policy import count_draft_tokens, evaluate_confidence_send_policy  # noqa: E402
 
 
 def update_draft_review_fields(draft):
@@ -2507,102 +2426,9 @@ async def settings_export_profile(profile_name: str):
     }
 
 
-# --- Persona Foundry: guided interview -> compile -> stress-test. ---
-# In-memory only (like draft_queue) — losing an in-progress session on
-# restart is acceptable. Capped at 20 concurrent sessions; oldest evicted.
-_foundry_sessions = {}
-_FOUNDRY_SESSION_CAP = 20
-
-
-def _foundry_evict_if_full():
-    if len(_foundry_sessions) < _FOUNDRY_SESSION_CAP:
-        return
-    oldest_id = min(_foundry_sessions, key=lambda sid: _foundry_sessions[sid].get("created", 0))
-    _foundry_sessions.pop(oldest_id, None)
-
-
-def _foundry_get_session(session_id):
-    session = _foundry_sessions.get(str(session_id or ""))
-    if session is None:
-        raise HTTPException(status_code=404, detail=f"Foundry session '{session_id}' not found.")
-    return session
-
-
-class FoundryAnswerRequest(BaseModel):
-    session_id: str
-    answer: typing.Any = None
-
-
-class FoundrySessionRequest(BaseModel):
-    session_id: str
-
-
-class FoundryStressTestRequest(BaseModel):
-    session_id: Optional[str] = None
-    persona: Optional[dict] = None
-
-
-@app.post("/personas/interview/start")
-async def start_foundry_interview():
-    from llm_engine import foundry_new_session, foundry_next_prompt
-    _foundry_evict_if_full()
-    session = foundry_new_session()
-    session["created"] = time.monotonic()
-    session_id = str(uuid.uuid4())
-    _foundry_sessions[session_id] = session
-    return {"session_id": session_id, "question": foundry_next_prompt(session), "done": False}
-
-
-@app.post("/personas/interview/answer")
-async def answer_foundry_interview(request: FoundryAnswerRequest):
-    from llm_engine import foundry_next_prompt, foundry_submit_answer
-    session = _foundry_get_session(request.session_id)
-    result = foundry_submit_answer(session, request.answer)
-    return {
-        "question": foundry_next_prompt(session),
-        "pushback": result.get("pushback"),
-        "done": bool(result.get("done")),
-    }
-
-
-@app.post("/personas/compile")
-async def compile_foundry_persona_route(request: FoundrySessionRequest):
-    session = _foundry_get_session(request.session_id)
-    if not session.get("done"):
-        raise HTTPException(status_code=400, detail="Interview is not complete yet.")
-    engine = get_selected_llm_engine()
-    try:
-        # LLM work must not run on the event loop: it starves /health and
-        # invites Electron's restart watchdog (review finding #2).
-        result = await run_in_threadpool(engine.compile_foundry_persona, session)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Persona compile failed: {exc}")
-    return result
-
-
-@app.post("/personas/test-suite/run")
-async def run_foundry_stress_suite_route(request: FoundryStressTestRequest):
-    from llm_engine import normalize_persona
-    engine = get_selected_llm_engine()
-    if request.persona is not None:
-        persona = normalize_persona(request.persona)
-    elif request.session_id is not None:
-        session = _foundry_get_session(request.session_id)
-        if not session.get("done"):
-            raise HTTPException(status_code=400, detail="Interview is not complete yet.")
-        try:
-            compiled = await run_in_threadpool(engine.compile_foundry_persona, session)
-            persona = compiled["persona"]
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Persona compile failed: {exc}")
-    else:
-        raise HTTPException(status_code=400, detail="Provide either session_id or persona.")
-    try:
-        # Seven LLM cases in one request — the single worst event-loop hog.
-        cases = await run_in_threadpool(engine.run_foundry_stress_suite, persona)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Stress test failed: {exc}")
-    return {"cases": cases}
+# Persona Foundry (guided interview -> compile -> stress-test) is its own vertical
+# slice in routes_foundry.py (M6); its router is registered at the end of this
+# file and server._foundry_sessions is re-bound there for existing callers/tests.
 
 
 class PersonaRequest(BaseModel):
@@ -4615,6 +4441,15 @@ async def generate_project(data: dict):
     
     success, msg = await run_in_threadpool(project_generator.generate_project, plan, path)
     return {"status": "success" if success else "error", "message": msg}
+
+
+# --- Extracted route modules (M6). Registered after every server-level name is
+# defined, so the routers' `import server` resolves fully. _foundry_sessions is
+# re-bound so server._foundry_sessions stays the shared store existing tests use.
+import routes_foundry  # noqa: E402
+
+app.include_router(routes_foundry.router)
+_foundry_sessions = routes_foundry._foundry_sessions
 
 
 if __name__ == "__main__":
