@@ -82,22 +82,29 @@ function isAllowedOpenTarget(targetPath) {
 }
 
 function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthToken, getBackendOrigin, onQuit, onShow } = {}) {
-  ipcMain.on('app:get-auth-token-sync', (event) => {
-    if (!isTrustedSender(event)) {
-      rejectUntrusted(event, 'app:get-auth-token-sync');
-      event.returnValue = '';
-      return;
-    }
-    event.returnValue = typeof getAuthToken === 'function' ? getAuthToken() : '';
+  const backendProxy = require('./backendProxy');
+
+  // Phase 3c: the token is never exposed to the renderer. All backend HTTP
+  // goes through this validated proxy (origin-locked, method/path allowlisted,
+  // body-size capped); the credential stays in the main process.
+  handleTrusted('backend:request', (_event, req) => {
+    const { method, path, body, timeoutMs } = req || {};
+    return backendProxy.request({ method, path, body, timeoutMs });
   });
 
-  ipcMain.on('app:get-backend-origin-sync', (event) => {
-    if (!isTrustedSender(event)) {
-      rejectUntrusted(event, 'app:get-backend-origin-sync');
-      event.returnValue = '';
-      return;
-    }
-    event.returnValue = typeof getBackendOrigin === 'function' ? getBackendOrigin() : '';
+  handleTrusted('backend:upload-voice-sample', (_event, req) => {
+    const { bytes, filename, name, consent, timeoutMs } = req || {};
+    return backendProxy.uploadVoiceSample({ bytes, filename, name, consent, timeoutMs });
+  });
+
+  handleTrusted('backend:voice-status:start', (event) => {
+    backendProxy.startVoiceStatus(event.sender);
+    return { ok: true };
+  });
+
+  handleTrusted('backend:voice-status:stop', () => {
+    backendProxy.stopVoiceStatus();
+    return { ok: true };
   });
 
   handleTrusted('app:quit', async () => {

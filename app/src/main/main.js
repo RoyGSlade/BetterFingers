@@ -6,10 +6,14 @@ const { createMainWindow, getMainWindow, focusMainWindow, createOverlayWindow } 
 const { createSidecar } = require('./sidecar');
 const { createTray } = require('./tray');
 const { registerIpc } = require('./ipc');
+const backendProxy = require('./backendProxy');
 const { unregisterAllHotkeys, triggerBackendAction } = require('./hotkeys');
 const { BACKEND_HOST, BACKEND_PORT, BACKEND_ORIGIN } = require('./config');
 
 const authToken = randomUUID();
+// The token lives only in the main process (Phase 3c). The renderer reaches the
+// backend exclusively through the validated proxy, which holds these.
+backendProxy.init({ origin: BACKEND_ORIGIN, token: authToken });
 
 let tray = null;
 let sidecar = null;

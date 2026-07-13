@@ -56,13 +56,13 @@ test.describe('BetterFingers Review Overlay Tests', () => {
   });
 
   test('Review overlay opens and displays correct elements when mock draft is triggered', async () => {
-    // Trigger a mock draft via FastAPI endpoint
-    const token = await mainWindow.evaluate(() => window.betterFingers.authToken);
-    const response = await fetch('http://127.0.0.1:8000/drafts/test-mock', { 
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-    expect(response.ok).toBe(true);
+    // Trigger a mock draft through the main-process backend proxy — the
+    // renderer no longer holds the token (Phase 3c), so it drives the backend
+    // exactly the way the real app does.
+    const result = await mainWindow.evaluate(() =>
+      window.betterFingers.backendRequest('POST', '/drafts/test-mock', {}, 5000)
+    );
+    expect(result.ok).toBe(true);
 
     // Wait for review window to open
     reviewWindow = await app.waitForEvent('window', {

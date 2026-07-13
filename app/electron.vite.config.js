@@ -15,6 +15,7 @@ module.exports = defineConfig({
           ipc: resolve(__dirname, 'src/main/ipc.js'),
           hotkeys: resolve(__dirname, 'src/main/hotkeys.js'),
           senderValidation: resolve(__dirname, 'src/main/senderValidation.js'),
+          backendProxy: resolve(__dirname, 'src/main/backendProxy.js'),
         },
       },
     },
