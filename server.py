@@ -225,6 +225,11 @@ _warmup_thread = None  # background model-warmup thread started by startup_event
 pipeline_metrics = deque(maxlen=50)
 pipeline_metrics_lock = threading.Lock()
 output_injector = None
+# Serializes creation, config reload, and use of the shared output injector.
+# Two concurrent sends (different drafts) would otherwise race the singleton
+# and could reload its config mid-injection. Reentrant so the drain path can
+# take it too.
+_output_injector_lock = threading.RLock()
 tts_engine = None
 active_websockets = []
 draft_queue = []
@@ -440,11 +445,12 @@ def apply_active_profile_runtime(profile_name):
         except Exception as exc:
             logging.warning(f"Failed applying profile to hotkeys: {exc}")
 
-    if output_injector is not None:
-        try:
-            output_injector.reload_config(safe_name)
-        except Exception as exc:
-            logging.warning(f"Failed applying profile to output injector: {exc}")
+    with _output_injector_lock:
+        if output_injector is not None:
+            try:
+                output_injector.reload_config(safe_name)
+            except Exception as exc:
+                logging.warning(f"Failed applying profile to output injector: {exc}")
 
     try:
         cfg = load_profile(safe_name)
@@ -1001,31 +1007,35 @@ def perform_output_action(text, action="copy_only", open_chat=False):
 
     try:
         settings = get_profile_output_settings()
-        if output_injector is None:
-            from injector import InputInjector
+        # Hold the injector lock across create + reload + the actual injection
+        # so a concurrent send can't swap the config out mid-type or race the
+        # singleton's construction.
+        with _output_injector_lock:
+            if output_injector is None:
+                from injector import InputInjector
 
-            output_injector = InputInjector(profile_name=get_last_active_profile())
-        else:
-            try:
-                output_injector.reload_config(get_last_active_profile())
-            except Exception as exc:
-                logging.debug(f"Failed reloading output injector config: {exc}")
-        injector = output_injector
-        should_open_chat = open_chat or requested_action == "open_chat_then_send"
-        payload["injection_attempted"] = True
-        if should_open_chat:
-            injector.open_chat()
+                output_injector = InputInjector(profile_name=get_last_active_profile())
+            else:
+                try:
+                    output_injector.reload_config(get_last_active_profile())
+                except Exception as exc:
+                    logging.debug(f"Failed reloading output injector config: {exc}")
+            injector = output_injector
+            should_open_chat = open_chat or requested_action == "open_chat_then_send"
+            payload["injection_attempted"] = True
+            if should_open_chat:
+                injector.open_chat()
 
-        if requested_action == "type":
-            injector.type_text(final_text)
-            actual_action = "type"
-        else:
-            injector.send_output(
-                text=final_text,
-                auto_submit=settings["auto_submit"],
-                close_action=settings["chat_close_action"],
-            )
-            actual_action = "open_chat_then_send" if should_open_chat else "paste"
+            if requested_action == "type":
+                injector.type_text(final_text)
+                actual_action = "type"
+            else:
+                injector.send_output(
+                    text=final_text,
+                    auto_submit=settings["auto_submit"],
+                    close_action=settings["chat_close_action"],
+                )
+                actual_action = "open_chat_then_send" if should_open_chat else "paste"
 
         payload.update(
             {
