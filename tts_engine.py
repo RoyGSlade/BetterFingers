@@ -11,6 +11,7 @@ from typing import Dict, Optional, Tuple, Union
 import numpy as np
 import sounddevice as sd
 from utils import get_user_data_path
+import voice_clone_engine
 from tts_text import apply_pause_style, normalize_for_speech
 import voice_blend
 import voice_modulation
@@ -149,6 +150,11 @@ class ReviewTTSEngine:
             self._backend = "none"
             self._fallback = False
             self._status_message = message
+        # The clone models ride along with the TTS backend's lifecycle.
+        try:
+            voice_clone_engine.unload()
+        except Exception as exc:
+            logging.debug(f"voice_clone unload skipped: {exc}")
 
     def ensure_loaded(self, voice_hint: str = "english") -> Dict[str, object]:
         with self._lock:
@@ -219,6 +225,24 @@ class ReviewTTSEngine:
                 "fallback": False,
                 "message": "No text to speak.",
             }
+
+        # Cloned voices are gated up front: never silently substitute a base
+        # voice for a voice the user believes is theirs. Missing sample or
+        # missing clone engine -> an honest, actionable failure.
+        if voice_clone_engine.is_cloned_voice_id(voice_hint):
+            if voice_clone_engine.find_reference_sample(voice_hint) is None:
+                return {
+                    "ok": False, "backend": "none", "fallback": False,
+                    "error": "cloned_sample_missing",
+                    "message": f"No stored sample found for '{voice_hint}'. Re-clone the voice.",
+                }
+            clone_status = voice_clone_engine.availability()
+            if not clone_status["available"]:
+                return {
+                    "ok": False, "backend": "none", "fallback": False,
+                    "error": "cloning_unavailable",
+                    "message": f"{clone_status['reason']}. {clone_status['setup_hint']}",
+                }
 
         with self._lock:
             status = self.ensure_loaded(voice_hint=voice_hint)
@@ -1057,7 +1081,23 @@ class ReviewTTSEngine:
         generated audio before it's returned (see voice_modulation.apply_modulation).
         Both default to None so existing callers (e.g. `render_prepared_chunks`)
         see identical behavior to before this parameter was added.
+
+        Cloned voices (voice_hint "cloned_*"): Kokoro synthesizes with a base
+        voice, then voice_clone_engine re-voices the audio to the stored
+        reference sample (before modulation, so user tone controls shape the
+        final cloned voice). speak() gates availability up front; a failure
+        here raises rather than silently playing the base voice.
         """
+        clone_reference = None
+        if voice_clone_engine.is_cloned_voice_id(voice_hint):
+            clone_reference = voice_clone_engine.find_reference_sample(voice_hint)
+            if clone_reference is None:
+                raise RuntimeError(f"Cloned voice sample for '{voice_hint}' was not found.")
+            # Synthesize with a base voice; the conversion supplies the identity.
+            if not isinstance(voice_spec, np.ndarray):
+                voice_spec = None
+            voice_hint = "af_heart"
+
         if self._kokoro_runtime == "native":
             if self._kokoro_pipeline is None:
                 raise RuntimeError("Kokoro pipeline is not initialized.")
@@ -1090,8 +1130,11 @@ class ReviewTTSEngine:
                 return None
 
             merged = np.concatenate(audio_chunks, axis=0)
-            merged = voice_modulation.apply_modulation(merged, 24000, modulation)
-            return (merged, 24000)
+            sample_rate = 24000
+            if clone_reference is not None:
+                merged, sample_rate = voice_clone_engine.convert(merged, sample_rate, clone_reference)
+            merged = voice_modulation.apply_modulation(merged, sample_rate, modulation)
+            return (merged, sample_rate)
 
         if self._kokoro_runtime == "onnx":
             if self._kokoro_onnx is None:
@@ -1111,7 +1154,10 @@ class ReviewTTSEngine:
             merged = np.asarray(audio, dtype=np.float32).flatten()
             if merged.size == 0:
                 return None
-            merged = voice_modulation.apply_modulation(merged, int(sample_rate), modulation)
-            return (merged, int(sample_rate))
+            sample_rate = int(sample_rate)
+            if clone_reference is not None:
+                merged, sample_rate = voice_clone_engine.convert(merged, sample_rate, clone_reference)
+            merged = voice_modulation.apply_modulation(merged, sample_rate, modulation)
+            return (merged, sample_rate)
 
         raise RuntimeError("Kokoro backend is not initialized.")
