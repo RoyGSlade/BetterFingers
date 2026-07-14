@@ -19,6 +19,14 @@ name: regen-locks
 
 on:
   workflow_dispatch:
+  # Also run automatically when the requirements sources (or this workflow)
+  # change, so a PR touching requirements*.in gets fresh lock artifacts
+  # without a manual dispatch. (workflow_dispatch only becomes available once
+  # this file lands on the default branch.)
+  push:
+    paths:
+      - "requirements*.in"
+      - ".github/workflows/regen-locks.yml"
 
 permissions:
   contents: read
