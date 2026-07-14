@@ -529,14 +529,20 @@ fixture versions.
 
 - [ ] **TTS audio DSP remainder (U5):** streaming playback, BS.1770/RMS loudness
       normalization, chunk crossfade (utterance LRU cache exists). Needs tuning by ear.
-- [ ] **Cloning (U6):** pick and integrate an actual synthesis engine — candidate:
-      kokoclone (Apache-2.0, builds on Kokoro-ONNX; pulls torch+torchaudio — a deliberate
-      dependency-weight decision, not a silent one). `DELETE`/export routes for cloned
-      voices. Native (non-ONNX) backend blending (currently falls back to base voice,
-      logged). **Consent + abuse controls carried forward:** explicit consent
-      acknowledgement (shipped), cloned-voice labels + provenance metadata (shipped),
-      immediate deletion (route missing — required), never upload samples, warn against
-      cloning third parties, consider an optional audible disclosure marker for exports.
+- [~] **Cloning (U6):** *engine integration SHIPPED (2026-07-14)* — the kokoclone
+      pipeline (Apache-2.0): Kokoro synthesizes, then Kanade voice conversion
+      (`frothywater/kanade-tokenizer`, MIT, pinned commit + pinned HF model revision)
+      re-voices to the stored reference sample (`voice_clone_engine.py`; RoPE-safe ~9s
+      chunking). Deps are optional/on-demand (`tools/setup_voice_cloning.py` — git-only
+      package can't live in the hashed locks; torch was already a dep, torchaudio added
+      by the setup tool). Cloned voices fail HONESTLY when the engine/sample is missing
+      (never a silent base-voice substitute). `DELETE /tts/voices/{id}` shipped
+      (immediate deletion requirement met). *Remaining:* export routes, native
+      (non-ONNX) backend blending (still falls back to base voice, logged), optional
+      audible disclosure marker for exports. **Consent + abuse controls carried
+      forward:** explicit consent acknowledgement (shipped), cloned-voice labels +
+      provenance metadata (shipped), never upload samples, warn against cloning third
+      parties.
 - [ ] **Persona editor polish (U7):** live prompt preview; full voice base/blend/speed +
       few-shot raw→out list UI inside the persona editor (Voice Studio schema is proven);
       `dictionary_scope` control.

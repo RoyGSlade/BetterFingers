@@ -4159,7 +4159,37 @@ async def list_voices():
         {"id": "standard_male", "name": "Standard Male (Kokoro Puck)"},
     ]
     
-    return {"defaults": defaults, "cloned": cloned}
+    import voice_clone_engine
+    return {"defaults": defaults, "cloned": cloned,
+            "cloning": voice_clone_engine.availability()}
+
+
+@app.delete("/tts/voices/{voice_id}")
+async def delete_cloned_voice(voice_id: str):
+    """Immediately delete a cloned voice (sample + provenance metadata).
+
+    Required by the cloning consent/abuse controls (DESIGN §10 M5 U6): a user
+    must be able to remove a cloned voice without a full privacy wipe. Only the
+    cloned_* namespace is deletable — built-in voices are not files on disk.
+    """
+    safe = os.path.basename(str(voice_id or "").strip())
+    if not safe.startswith("cloned_") or safe != voice_id.strip():
+        raise HTTPException(status_code=400, detail="Only cloned voices (cloned_*) can be deleted.")
+    voices_dir = get_voices_dir()
+    removed = []
+    for suffix in (".wav", ".npy", ".meta.json"):
+        path = os.path.join(str(voices_dir), f"{safe}{suffix}")
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+                removed.append(os.path.basename(path))
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Could not delete {os.path.basename(path)}: {exc}")
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"Cloned voice '{safe}' not found.")
+    logging.info(f"Deleted cloned voice {safe}: {removed}")
+    return {"ok": True, "voice_id": safe, "removed": removed}
+
 
 @app.post("/ocr/extract")
 async def ocr_extract(file: UploadFile = File(...)):

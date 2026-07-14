@@ -4607,7 +4607,13 @@ function initSettingsPanel() {
         brightness: settings.brightness,
         pause_style: settings.pause_style,
       });
-      setMessage(profileMessageEl, `TTS Audition: ${res.message}`, 'success');
+      // A cloned voice can fail honestly (sample missing / clone engine not
+      // installed) — surface that as an error, not a green "success".
+      if (res && res.ok === false) {
+        setMessage(profileMessageEl, `TTS Audition failed: ${res.message || res.error || 'Unknown error'}`, 'danger');
+      } else {
+        setMessage(profileMessageEl, `TTS Audition: ${res.message}`, 'success');
+      }
     } catch (error) {
       setMessage(profileMessageEl, `TTS Audition failed: ${error.message}`, 'danger');
     } finally {
