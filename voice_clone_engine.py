@@ -59,7 +59,9 @@ def is_cloned_voice_id(voice_id) -> bool:
     return isinstance(voice_id, str) and voice_id.strip().lower().startswith(CLONED_PREFIX)
 
 
-def get_voices_dir():
+def get_voices_path():
+    # Pure lookup — never creates the directory (see server.ensure_voices_dir
+    # for the sole creation point).
     return app_paths.get_app_paths().voices
 
 
@@ -70,7 +72,7 @@ def find_reference_sample(voice_id):
     if not is_cloned_voice_id(voice_id):
         return None
     safe = os.path.basename(str(voice_id).strip())
-    path = os.path.join(str(get_voices_dir()), f"{safe}.wav")
+    path = os.path.join(str(get_voices_path()), f"{safe}.wav")
     return path if os.path.exists(path) else None
 
 

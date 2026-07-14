@@ -391,11 +391,18 @@ def recover_interrupted_sends():
     return recovered
 
 
-def get_voices_dir():
+def get_voices_path() -> Path:
     # Unified under the single data root (was the split XDG location).
-    voices_dir = Path(get_user_data_path()) / "voices"
-    voices_dir.mkdir(parents=True, exist_ok=True)
-    return voices_dir
+    # Pure lookup — never creates the directory, so the privacy report,
+    # wipe, and postcondition checks don't resurrect it (P0).
+    return Path(get_user_data_path()) / "voices"
+
+
+def ensure_voices_dir() -> Path:
+    """Only call when about to save a voice — this is the sole creation point."""
+    path = get_voices_path()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def get_graph_path():
@@ -2932,7 +2939,7 @@ def _path_size_bytes(path):
 def get_privacy_report():
     """Everything that touches the network + where local data lives (C7)."""
     history_file = os.path.join(get_user_data_path(), "draft_history.json")
-    voices_dir = str(get_voices_dir())
+    voices_dir = str(get_voices_path())
     with draft_lock:
         recordings_in_memory = len(draft_recordings)
         drafts_in_memory = len(draft_queue)
@@ -3109,7 +3116,7 @@ def _perform_privacy_wipe(wipe_voices: bool):
         cleared["recordings_files_removed"] = recordings.clear_recordings()
 
         if wipe_voices:
-            voices_dir = get_voices_dir()
+            voices_dir = get_voices_path()
             try:
                 if voices_dir.exists():
                     # No ignore_errors: a suppressed failure must not report
@@ -3134,7 +3141,7 @@ def _perform_privacy_wipe(wipe_voices: bool):
             "leftover_recordings": leftover_recordings[:20],
         }
         if wipe_voices:
-            postconditions["voices_absent"] = not get_voices_dir().exists()
+            postconditions["voices_absent"] = not get_voices_path().exists()
     finally:
         if gate_held:
             dictation_coordinator.finish()
@@ -4074,7 +4081,7 @@ async def tts_clone(file: UploadFile = File(...), name: str = Form("My Voice"), 
     if not safe_name:
         raise HTTPException(status_code=400, detail="A voice name is required.")
 
-    voices_dir = get_voices_dir()
+    voices_dir = ensure_voices_dir()
     target_path = voices_dir / f"cloned_{safe_name}.wav"
     tmp_path = None
     try:
@@ -4129,7 +4136,7 @@ async def tts_clone(file: UploadFile = File(...), name: str = Form("My Voice"), 
 async def list_voices():
     import json
 
-    voices_dir = get_voices_dir()
+    voices_dir = get_voices_path()
 
     cloned = []
     if os.path.exists(voices_dir):
@@ -4175,7 +4182,7 @@ async def delete_cloned_voice(voice_id: str):
     safe = os.path.basename(str(voice_id or "").strip())
     if not safe.startswith("cloned_") or safe != voice_id.strip():
         raise HTTPException(status_code=400, detail="Only cloned voices (cloned_*) can be deleted.")
-    voices_dir = get_voices_dir()
+    voices_dir = get_voices_path()
     removed = []
     for suffix in (".wav", ".npy", ".meta.json"):
         path = os.path.join(str(voices_dir), f"{safe}{suffix}")

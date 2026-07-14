@@ -32,7 +32,7 @@ class ClonedIdTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             sample = os.path.join(d, "cloned_Me.wav")
             open(sample, "w").close()
-            with patch.object(voice_clone_engine, "get_voices_dir", return_value=d):
+            with patch.object(voice_clone_engine, "get_voices_path", return_value=d):
                 self.assertEqual(voice_clone_engine.find_reference_sample("cloned_Me"), sample)
                 self.assertIsNone(voice_clone_engine.find_reference_sample("cloned_Missing"))
                 self.assertIsNone(voice_clone_engine.find_reference_sample("af_heart"))
@@ -137,7 +137,7 @@ class DeleteClonedVoiceRouteTests(unittest.TestCase):
             self.addCleanup(lambda: os.environ.__setitem__("APPDATA", self._orig))
 
     def _seed_voice(self, name="cloned_Me"):
-        voices_dir = str(server.get_voices_dir())
+        voices_dir = str(server.ensure_voices_dir())
         for suffix in (".wav", ".meta.json"):
             open(os.path.join(voices_dir, f"{name}{suffix}"), "w").close()
         return voices_dir
