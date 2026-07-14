@@ -1,9 +1,15 @@
 # requirements-dev.in — human-edited dev/test constraints (source of truth).
 #
 # Test + tooling dependencies, kept separate from the runtime deps in
-# requirements.in so production installs stay lean. Generate the lock with:
+# requirements.in so production installs stay lean. Two locks are generated
+# from this file because PyInstaller's transitive deps differ per platform
+# (pywin32-ctypes / pefile carry Windows-only markers):
 #
-#   pip-compile --generate-hashes --output-file=requirements-dev.lock requirements-dev.in
+#   requirements-dev.lock       generated on Linux   (CI test jobs)
+#   requirements-dev-win.lock   generated on Windows (packaged .exe builds)
+#
+# Regenerate via the regen-locks workflow (or pip-compile locally; see the
+# header of each lock for the exact command).
 #
 # The Electron/Playwright e2e stack (electron-smoke, e2e-screenshots) is a Node
 # toolchain pinned via app/package-lock.json (`npm ci`), not a Python
@@ -11,3 +17,4 @@
 
 pytest>=8,<9        # Test runner (see pytest.ini markers: smoke)
 pip-tools>=7.5.3,<8 # pip-compile / pip-sync — regenerates the lock files
+pyinstaller>=6.11,<7 # Backend sidecar bundling (app/scripts/build-backend.js); was previously unpinned and, in CI, not installed at all

@@ -39,7 +39,7 @@ jobs:
         include:
           - os: windows-latest
             python-version: "3.13" # matches packaged build (build-installer.yml)
-            locks: "requirements-win.lock"
+            locks: "requirements-win.lock requirements-dev-win.lock"
           - os: ubuntu-latest
             python-version: "3.12" # matches the header of the committed linux lock
             locks: "requirements-linux.lock requirements-dev.lock"
@@ -62,14 +62,18 @@ jobs:
           set -euo pipefail
           for lock in ${{ matrix.locks }}; do
             case "$lock" in
-              requirements-dev.lock) src=requirements-dev.in ;;
-              *)                     src=requirements.in ;;
+              requirements-dev*.lock) src=requirements-dev.in ;;
+              *)                      src=requirements.in ;;
             esac
             # A placeholder/stale output file is fine: pip-compile reuses
             # compatible existing pins and re-resolves the rest.
             pip-compile --allow-unsafe --generate-hashes \
               --output-file="$lock" "$src"
           done
+          # Stage only the locks this leg regenerated, so the artifact never
+          # contains a stale committed lock from the other platform.
+          mkdir -p locks-out
+          cp ${{ matrix.locks }} locks-out/
 
       - name: Show resulting diff
         shell: bash
@@ -79,8 +83,5 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: requirements-locks-${{ matrix.os }}
-          path: |
-            requirements-win.lock
-            requirements-linux.lock
-            requirements-dev.lock
+          path: locks-out/
           if-no-files-found: error
