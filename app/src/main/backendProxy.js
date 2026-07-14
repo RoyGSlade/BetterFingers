@@ -12,17 +12,65 @@
 let _origin = 'http://127.0.0.1:8000';
 let _token = '';
 
-// Backend API surface the renderer is allowed to reach. A request whose path
-// does not start with one of these is refused — the renderer can never be
-// tricked into driving an arbitrary URL.
-const ALLOWED_PREFIXES = [
-  '/health', '/runtime/', '/capabilities', '/diagnostics/', '/doctor',
-  '/drafts', '/settings/', '/models/', '/personas', '/recordings',
-  '/dictionary', '/macros', '/voice-presets', '/voice-commands', '/tts/',
-  '/privacy', '/jobs', '/metrics', '/ocr/', '/graph/', '/mcp/', '/intent/',
-  '/llm/', '/hardware/', '/project/', '/transcribe', '/wake/',
-];
-const ALLOWED_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE']);
+// Backend API surface the renderer is allowed to reach through the generic
+// 'backend:request' channel: an EXACT (method, route) table, not prefixes.
+// ':param' matches exactly one URL-encoded path segment. Anything not listed
+// here is refused — including every destructive operation (privacy wipe,
+// model/voice deletion, job cancel, draft send), which are only reachable
+// through the dedicated typed IPC channels below with validated payloads.
+const ROUTE_ALLOWLIST = {
+  GET: [
+    '/runtime/status', '/runtime/output-settings', '/runtime/version',
+    '/runtime/errors', '/runtime/tts-status',
+    '/capabilities', '/doctor', '/metrics', '/privacy',
+    '/diagnostics/logs', '/diagnostics/paths',
+    '/recordings', '/jobs', '/dictionary', '/macros',
+    '/history', '/history/search',
+    '/models/recommend', '/models/llm', '/models/llm/:id/download-state',
+    '/models/whisper',
+    '/settings/profiles', '/settings/profiles/:name',
+    '/settings/profiles/:name/export',
+    '/personas', '/personas-builtins', '/personas/:name',
+    '/tts/voices', '/voice-presets',
+    '/drafts', '/drafts/latest',
+    '/wake/status', '/wake/models', '/wake/models/:id/download-state',
+    '/wake/train/status',
+  ],
+  POST: [
+    '/runtime/audio-devices/refresh', '/runtime/warmup',
+    '/runtime/primary-action', '/runtime/emergency-stop',
+    '/runtime/recording/toggle',
+    '/settings/profiles', '/settings/profiles/import',
+    '/settings/profiles/:name', '/settings/profiles/:name/activate',
+    '/settings/profiles/:name/rename', '/settings/profiles/:name/duplicate',
+    '/recordings/:id/retranscribe',
+    '/dictionary', '/dictionary/suggest', '/macros',
+    '/models/llm/select', '/models/llm/:id/download',
+    '/models/whisper/download', '/models/whisper/select',
+    '/models/unload/:component',
+    '/drafts/test-mock',
+    '/drafts/:id/accept', '/drafts/:id/decline', '/drafts/:id/retry',
+    '/drafts/:id/edit', '/drafts/:id/rewrite', '/drafts/:id/tts',
+    '/tts/speak', '/tts/stop',
+    '/personas', '/personas/lint', '/personas/test',
+    '/personas/interview/start', '/personas/interview/answer',
+    '/personas/compile', '/personas/test-suite/run',
+    '/voice-presets',
+    '/wake/enable', '/wake/disable', '/wake/test', '/wake/train',
+    '/wake/models/:id/download',
+  ],
+  DELETE: [
+    '/settings/profiles/:name',
+    '/recordings/:id', '/recordings',
+    '/history', '/drafts',
+    '/dictionary/:term', '/macros/:trigger',
+    '/voice-presets/:name', '/personas/:name',
+    '/wake/models/:id',
+  ],
+};
+const ALLOWED_METHODS = new Set(Object.keys(ROUTE_ALLOWLIST));
+// One URL-encoded path segment: the characters encodeURIComponent can emit.
+const PARAM_SEGMENT = /^[A-Za-z0-9._~%!'()*-]{1,256}$/;
 const MAX_BODY_BYTES = 8 * 1024 * 1024; // 8 MB (covers voice-sample uploads)
 const MAX_PATH_LEN = 1024;
 
@@ -39,7 +87,21 @@ function _authHeaders(extra = {}) {
   return headers;
 }
 
-function _validatePath(path) {
+function _matchesRoute(pattern, routePart) {
+  const patternSegments = pattern.split('/');
+  const routeSegments = routePart.split('/');
+  if (patternSegments.length !== routeSegments.length) {
+    return false;
+  }
+  return patternSegments.every((seg, i) =>
+    seg.startsWith(':') ? PARAM_SEGMENT.test(routeSegments[i]) : seg === routeSegments[i],
+  );
+}
+
+function _validateRequest(method, path) {
+  if (!ALLOWED_METHODS.has(method)) {
+    return `method ${method} not allowed`;
+  }
   if (typeof path !== 'string' || path.length === 0 || path.length > MAX_PATH_LEN) {
     return 'invalid path';
   }
@@ -50,25 +112,29 @@ function _validatePath(path) {
     return 'path must not contain a scheme, traversal, or backslash';
   }
   const routePart = path.split('?', 1)[0];
-  if (!ALLOWED_PREFIXES.some((p) => routePart === p || routePart.startsWith(p))) {
-    return `path ${routePart} is not an allowed backend route`;
+  if (!ROUTE_ALLOWLIST[method].some((pattern) => _matchesRoute(pattern, routePart))) {
+    return `${method} ${routePart} is not an allowed backend route`;
   }
   return null;
 }
 
-// JSON request. Returns { ok, status, body } where body is parsed JSON (or the
-// raw text if not JSON). Never throws for HTTP errors — the renderer inspects
-// ok/status — but returns { ok:false, error } for validation/transport faults.
+// JSON request from the generic renderer channel. Returns { ok, status, body }
+// where body is parsed JSON (or the raw text if not JSON). Never throws for
+// HTTP errors — the renderer inspects ok/status — but returns
+// { ok:false, error } for validation/transport faults.
 async function request({ method, path, body, timeoutMs } = {}) {
   const upperMethod = String(method || 'GET').toUpperCase();
-  if (!ALLOWED_METHODS.has(upperMethod)) {
-    return { ok: false, status: 0, error: `method ${upperMethod} not allowed` };
+  const requestError = _validateRequest(upperMethod, path);
+  if (requestError) {
+    return { ok: false, status: 0, error: requestError };
   }
-  const pathError = _validatePath(path);
-  if (pathError) {
-    return { ok: false, status: 0, error: pathError };
-  }
+  return _send(upperMethod, path, body, timeoutMs);
+}
 
+// Transport shared by the generic channel (validated above) and the typed
+// methods below (which build their own exact method + path from validated
+// parameters and never accept a renderer-supplied route).
+async function _send(method, path, body, timeoutMs) {
   let serialized;
   if (body !== undefined && body !== null) {
     try {
@@ -85,7 +151,7 @@ async function request({ method, path, body, timeoutMs } = {}) {
   const timer = setTimeout(() => controller.abort(), Math.max(1, Number(timeoutMs) || 2500));
   try {
     const init = {
-      method: upperMethod,
+      method,
       cache: 'no-store',
       headers: _authHeaders(serialized !== undefined ? { 'Content-Type': 'application/json' } : {}),
       signal: controller.signal,
@@ -108,6 +174,83 @@ async function request({ method, path, body, timeoutMs } = {}) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+// --- Typed backend operations ----------------------------------------------
+// Destructive or sensitive operations are NOT reachable through the generic
+// channel: each has its own IPC method with an exact route, exact HTTP method,
+// and a validated payload, so a compromised renderer cannot smuggle one
+// through a broad proxy. Destructive ones additionally require an explicit
+// `confirm: true`, set only after the UI's own confirmation step.
+
+const SEND_ACTIONS = new Set(['copy_only', 'paste', 'type', 'open_chat_then_send']);
+// Single path segment as the renderer would send it (model ids, job ids,
+// voice ids) — never a slash, never empty.
+const ID_SEGMENT = /^[A-Za-z0-9._~-]{1,128}$/;
+
+function _fault(error) {
+  return { ok: false, status: 0, error };
+}
+
+function _requireConfirm(payload) {
+  return payload && payload.confirm === true
+    ? null
+    : _fault('destructive operation requires confirm: true');
+}
+
+function fetchHealth({ timeoutMs } = {}) {
+  return _send('GET', '/health', undefined, timeoutMs);
+}
+
+function sendDraft({ id, action, openChat, allowResend, timeoutMs } = {}) {
+  if (!Number.isInteger(id) || id <= 0) {
+    return _fault('sendDraft: id must be a positive integer');
+  }
+  const sendAction = action === undefined ? 'copy_only' : action;
+  if (!SEND_ACTIONS.has(sendAction)) {
+    return _fault(`sendDraft: unknown action ${String(action)}`);
+  }
+  return _send('POST', `/drafts/${id}/send`, {
+    action: sendAction,
+    open_chat: Boolean(openChat),
+    allow_resend: Boolean(allowResend),
+  }, timeoutMs);
+}
+
+function wipePrivacyData({ wipeVoices, confirm, timeoutMs } = {}) {
+  return _requireConfirm({ confirm })
+    || _send('POST', '/privacy/wipe', { wipe_voices: Boolean(wipeVoices) }, timeoutMs);
+}
+
+function deleteLlmModel({ modelId, confirm, timeoutMs } = {}) {
+  if (typeof modelId !== 'string' || !ID_SEGMENT.test(modelId)) {
+    return _fault('deleteLlmModel: invalid model id');
+  }
+  return _requireConfirm({ confirm })
+    || _send('DELETE', `/models/llm/${encodeURIComponent(modelId)}`, undefined, timeoutMs);
+}
+
+function deleteWhisperModel({ modelSize, confirm, timeoutMs } = {}) {
+  if (typeof modelSize !== 'string' || !ID_SEGMENT.test(modelSize)) {
+    return _fault('deleteWhisperModel: invalid model size');
+  }
+  return _requireConfirm({ confirm })
+    || _send('DELETE', `/models/whisper/${encodeURIComponent(modelSize)}`, undefined, timeoutMs);
+}
+
+function deleteVoice({ voiceId, confirm, timeoutMs } = {}) {
+  if (typeof voiceId !== 'string' || !ID_SEGMENT.test(voiceId)) {
+    return _fault('deleteVoice: invalid voice id');
+  }
+  return _requireConfirm({ confirm })
+    || _send('DELETE', `/tts/voices/${encodeURIComponent(voiceId)}`, undefined, timeoutMs);
+}
+
+function cancelJob({ jobId, timeoutMs } = {}) {
+  if (typeof jobId !== 'string' || !ID_SEGMENT.test(jobId)) {
+    return _fault('cancelJob: invalid job id');
+  }
+  return _send('POST', `/jobs/${encodeURIComponent(jobId)}/cancel`, {}, timeoutMs);
 }
 
 // Upload a voice sample as multipart/form-data. The renderer passes the file
@@ -273,8 +416,16 @@ module.exports = {
   uploadWakeModel,
   startVoiceStatus,
   stopVoiceStatus,
+  // typed operations (each bound to one exact method + route)
+  fetchHealth,
+  sendDraft,
+  wipePrivacyData,
+  deleteLlmModel,
+  deleteWhisperModel,
+  deleteVoice,
+  cancelJob,
   // exported for unit tests
-  _validatePath,
-  ALLOWED_PREFIXES,
+  _validateRequest,
+  ROUTE_ALLOWLIST,
   ALLOWED_METHODS,
 };

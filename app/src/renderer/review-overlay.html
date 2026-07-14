@@ -518,6 +518,30 @@
         return proxyReq('POST', url, payload, timeoutMs);
       }
 
+      async function sendDraftTyped(id, action, timeoutMs = 120000) {
+        // Draft send is a typed IPC method (exact route + validated payload);
+        // the generic proxy refuses /drafts/:id/send.
+        const bridge = window.betterFingers && window.betterFingers.sendDraft;
+        if (typeof bridge !== 'function') {
+          throw new Error('Backend bridge is unavailable.');
+        }
+        const res = await bridge(Number(id), { action, openChat: action === 'open_chat_then_send' }, timeoutMs);
+        if (!res) {
+          throw new Error('Backend request returned no result.');
+        }
+        if (res.status === 0 && res.ok === false) {
+          if (res.error === 'timeout') {
+            throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
+          }
+          throw new Error(res.error || 'Backend request failed.');
+        }
+        if (!res.ok) {
+          const detail = res.body && (res.body.detail || res.body.message || res.body.error);
+          throw new Error(detail ? String(detail) : `Draft send failed with status ${res.status}`);
+        }
+        return res.body;
+      }
+
       function defaultSendAction() {
         if (!outputSettings?.capabilities?.supports_input_injection) {
           return 'copy_only';
@@ -604,11 +628,7 @@
           // did not withhold this draft (low/missing confidence, long, or gated).
           if (outputSettings?.send_mode === 'auto_send' && currentDraft?.auto_send_ok !== false) {
             const action = defaultSendAction();
-            const sentDraft = await postJson(
-              `${BACKEND_ORIGIN}/drafts/${currentDraft.id}/send`,
-              { action: action, open_chat: action === 'open_chat_then_send' },
-              120000,
-            );
+            const sentDraft = await sendDraftTyped(currentDraft.id, action, 120000);
             renderDraft(sentDraft);
             
             const isFallback = Boolean(sentDraft.send_result?.fallback);
