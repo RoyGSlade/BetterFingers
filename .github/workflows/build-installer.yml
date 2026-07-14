@@ -29,8 +29,8 @@ jobs:
         shell: powershell
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest
+          pip install --require-hashes -r requirements-win.lock
+          pip install --require-hashes -r requirements-dev-win.lock
 
       - name: Setup Node
         uses: actions/setup-node@v6

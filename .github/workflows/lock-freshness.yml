@@ -1,0 +1,79 @@
+# Fails the PR when requirements*.in and their generated lock files disagree
+# — the enforcement half of the regen-locks workflow. Re-runs pip-compile
+# in --dry-run mode (no network installs, no file writes) and diffs its
+# projected output against the committed lock, so a requirements.in edit
+# without a regenerated lock is caught before merge instead of silently
+# shipping stale/unhashed pins.
+#
+# Linux legs check requirements-linux.lock and requirements-dev.lock
+# (regenerable locally). The Windows-only locks (requirements-win.lock,
+# requirements-dev-win.lock) can only be regenerated on windows-latest —
+# see regen-locks.yml — so this job's Windows leg checks freshness there
+# instead of trying to reproduce them on Linux.
+
+name: lock-freshness
+
+on:
+  pull_request:
+    paths:
+      - "requirements*.in"
+      - "requirements*.lock"
+      - ".github/workflows/lock-freshness.yml"
+  push:
+    branches: [main]
+    paths:
+      - "requirements*.in"
+      - "requirements*.lock"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: "3.12"
+            checks: "requirements-linux.lock:requirements.in requirements-dev.lock:requirements-dev.in"
+          - os: windows-latest
+            python-version: "3.13"
+            checks: "requirements-win.lock:requirements.in requirements-dev-win.lock:requirements-dev.in"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install pip-tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          version="$(grep -E '^pip-tools' requirements-dev.in | head -1 | sed -E 's/^pip-tools//; s/#.*//' | tr -d ' \t\r')"
+          pip install "pip-tools${version}"
+
+      - name: Verify locks are up to date with their .in sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          status=0
+          for pair in ${{ matrix.checks }}; do
+            lock="${pair%%:*}"
+            src="${pair##*:}"
+            tmp="$(mktemp)"
+            cp "$lock" "$tmp"
+            pip-compile --allow-unsafe --generate-hashes --output-file="$tmp" "$src" >/dev/null
+            if ! diff -q "$tmp" "$lock" >/dev/null; then
+              echo "::error file=$lock::$lock is stale relative to $src. Regenerate via the regen-locks workflow (gh workflow run regen-locks.yml --ref <branch>) and commit the result."
+              diff -u "$lock" "$tmp" || true
+              status=1
+            else
+              echo "$lock is up to date with $src."
+            fi
+            rm -f "$tmp"
+          done
+          exit $status
