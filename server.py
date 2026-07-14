@@ -358,27 +358,58 @@ def save_draft_history(changed_draft_id=None):
                 elif mirror_ids:
                     _draft_pending_changed_ids.update(mirror_ids)
 
-def load_draft_history():
-    global next_draft_id
+def _load_draft_history_json(history_file):
+    """Read draft_history.json into a list of draft dicts. Never raises."""
     import json
+    try:
+        with open(history_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return [d for d in data if isinstance(d, dict) and "id" in d]
+    except Exception as exc:
+        logging.exception(f"Failed to load draft history from {history_file}: {exc}")
+    return []
+
+
+def load_draft_history():
+    """Populate the working draft queue at startup, SQLite-first.
+
+    history_store (SQLite) holds complete draft records and is the canonical
+    store; draft_history.json is consulted only as a fallback when the
+    database is empty or unrecoverable. When that fallback is used, the JSON
+    is imported into SQLite once and renamed to a migration backup so it is
+    never read as an authority again — no parallel canonical store.
+    """
+    global next_draft_id
     history_file = os.path.join(get_user_data_path(), "draft_history.json")
-    if os.path.exists(history_file):
+
+    records = []
+    try:
+        history_store.init()
+        if history_store.verify_schema().get("ok"):
+            records = history_store.load_recent_full(limit=MAX_DRAFT_HISTORY)
+    except Exception as exc:
+        logging.warning(f"history_store unavailable at startup, falling back to JSON: {exc}")
+        records = []
+
+    if not records and os.path.exists(history_file):
+        records = _load_draft_history_json(history_file)
         try:
-            with open(history_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, list):
-                with draft_lock:
-                    draft_queue.clear()
-                    max_id = 0
-                    for d in data:
-                        if isinstance(d, dict) and "id" in d:
-                            draft_queue.append(d)
-                            if d["id"] > max_id:
-                                max_id = d["id"]
-                    next_draft_id = max_id + 1
-            logging.info(f"Loaded {len(draft_queue)} drafts from history, next draft ID is {next_draft_id}")
+            history_store.migrate_from_json(history_file)
+            os.replace(history_file, history_file + ".migrated")
         except Exception as exc:
-            logging.exception(f"Failed to load draft history from {history_file}: {exc}")
+            logging.warning(f"JSON->SQLite migration/backup failed: {exc}")
+
+    with draft_lock:
+        draft_queue.clear()
+        max_id = 0
+        for d in records:
+            if isinstance(d, dict) and "id" in d:
+                draft_queue.append(d)
+                if d["id"] > max_id:
+                    max_id = d["id"]
+        next_draft_id = max_id + 1
+    logging.info(f"Loaded {len(draft_queue)} drafts from history, next draft ID is {next_draft_id}")
 
 
 def recover_interrupted_sends():
@@ -1935,15 +1966,13 @@ async def startup_event():
         except Exception as exc:
             logging.warning(f"Legacy data migration skipped: {exc}")
     loop = asyncio.get_event_loop()
+    # SQLite-first (history_store is canonical); load_draft_history() falls
+    # back to draft_history.json only if the DB is empty/unrecoverable, and
+    # imports+retires the JSON as a migration backup when it does (C8/P1).
     load_draft_history()
     # Reconcile any draft a crashed process left mid-send (→ send_interrupted,
     # outcome unknown) so it is never silently double-sent or silently dropped.
     recover_interrupted_sends()
-    # One-time backfill of the searchable archive from the legacy JSON (C8).
-    try:
-        history_store.migrate_from_json(os.path.join(get_user_data_path(), "draft_history.json"))
-    except Exception as exc:
-        logging.debug(f"history archive migration skipped: {exc}")
     lazy_startup = is_lazy_startup_enabled()
     residency_settings = get_model_residency_settings()
     for component, pinned in residency_settings.items():
