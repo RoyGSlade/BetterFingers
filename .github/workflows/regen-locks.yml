@@ -62,15 +62,8 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          spec="$(python -c "
-import re
-for line in open('requirements-dev.in'):
-    m = re.match(r'pip-tools\s*([<>=,!].*?)(?:\s*#.*)?$', line.strip())
-    if m:
-        print('pip-tools' + m.group(1).replace(' ', ''))
-        break
-")"
-          pip install "$spec"
+          version="$(grep -E '^pip-tools' requirements-dev.in | head -1 | sed -E 's/^pip-tools//; s/#.*//' | tr -d ' \t\r')"
+          pip install "pip-tools${version}"
 
       - name: Regenerate locks
         shell: bash
