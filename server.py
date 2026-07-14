@@ -1273,6 +1273,9 @@ def speak_text_aloud(text: str):
     if not phrase:
         return
 
+    if _reject_if_wiping("review TTS"):
+        return
+
     profile_name = get_last_active_profile()
     try:
         config = load_profile(profile_name)
@@ -1291,7 +1294,14 @@ def speak_text_aloud(text: str):
     if engine is not None:
         setattr(engine, "_kokoro_quantization", quantization)
         logging.info(f"Speaking text aloud: {redact_user_text(phrase)} (voice={voice_id}, speed={speed}x, quant={quantization})")
-        engine.speak(phrase, speed=speed, voice_hint=voice_id)
+        # Same guard as /tts/speak and /drafts/{id}/tts: a concurrent
+        # destructive TTS reconfiguration (write lease) fails this fast
+        # rather than letting the keyboard path bypass runtime coordination.
+        try:
+            with model_runtime.read_lease("tts"):
+                engine.speak(phrase, speed=speed, voice_hint=voice_id)
+        except RuntimeBusyError:
+            logging.info("Review TTS skipped: TTS runtime is being reconfigured.")
 
 
 def handle_review_tts_shortcut():
@@ -3173,6 +3183,70 @@ def _drain_output_injector(timeout=OUTPUT_DRAIN_TIMEOUT_SECONDS):
                                      timeout=timeout)
 
 
+TTS_DRAIN_TIMEOUT_SECONDS = 10.0
+
+
+def _drain_tts_and_clone(timeout=TTS_DRAIN_TIMEOUT_SECONDS):
+    """Quiesce speech synthesis for a privacy wipe: stop playback, drop any
+    queued speech, join the TTS worker, then wait out any in-flight
+    voice-clone conversion (the chunked-playback generation thread can
+    outlive the worker join and keep converting audio). Only once both are
+    verified idle does it clear the synthesized-audio cache and unload the
+    clone model — mirroring the on-failure-don't-touch-state discipline of
+    the recorder/pipeline/output drains above.
+
+    Returns (ok, results): ok=False means the wipe must ABORT without
+    deleting — a live synthesis or conversion could still hold user
+    text/audio.
+    """
+    import voice_clone_engine
+
+    results = {
+        "tts_playback_stopped": True,
+        "tts_worker_idle": True,
+        "tts_queue_empty": True,
+        "voice_clone_conversion_idle": True,
+        "voice_cache_cleared": True,
+    }
+    engine = tts_engine  # module global; draining must not itself initialize one
+    if engine is not None:
+        try:
+            engine.stop_current()
+        except Exception as exc:
+            logging.warning(f"Privacy wipe: TTS stop_current failed: {exc}")
+            results["tts_playback_stopped"] = False
+        try:
+            drained = engine.drain(timeout=timeout)
+            results["tts_worker_idle"] = bool(drained.get("worker_idle"))
+            results["tts_queue_empty"] = bool(drained.get("queue_empty"))
+        except Exception as exc:
+            logging.error(f"Privacy wipe: TTS drain failed: {exc}")
+            results["tts_worker_idle"] = False
+            results["tts_queue_empty"] = False
+
+    # Backstop beyond the worker join: a chunked-playback generation thread
+    # can still be mid-conversion even after the worker thread itself exits.
+    results["voice_clone_conversion_idle"] = voice_clone_engine.wait_for_conversion_idle(timeout=timeout)
+
+    ok = (results["tts_playback_stopped"] and results["tts_worker_idle"]
+          and results["tts_queue_empty"] and results["voice_clone_conversion_idle"])
+    if not ok:
+        return False, results
+
+    if engine is not None:
+        try:
+            results["voice_cache_cleared"] = bool(engine.clear_audio_cache())
+        except Exception as exc:
+            logging.error(f"Privacy wipe: TTS cache clear failed: {exc}")
+            results["voice_cache_cleared"] = False
+    try:
+        voice_clone_engine.unload()
+    except Exception as exc:
+        logging.debug(f"Privacy wipe: clone unload skipped: {exc}")
+
+    return results["voice_cache_cleared"], results
+
+
 def _perform_privacy_wipe(wipe_voices: bool):
     """Quiesce fully, then delete, then verify — and only claim success when
     every postcondition holds. Reaching the final line is not proof of an
@@ -3180,8 +3254,9 @@ def _perform_privacy_wipe(wipe_voices: bool):
 
     Sets privacy_wipe_in_progress for the whole operation so recordings,
     dictation processing, recovery saves, sends, TTS, and retranscription all
-    refuse while it runs. Aborts (without deleting) if the pipeline cannot be
-    quiesced, so we never delete out from under a running job.
+    refuse while it runs. Aborts (without deleting) if the pipeline, output,
+    or TTS/voice-clone path cannot be quiesced, so we never delete out from
+    under a running job, send, or speech synthesis.
     """
     if privacy_wipe_in_progress.is_set():
         return {"ok": False, "error": "wipe_already_running",
@@ -3246,6 +3321,23 @@ def _perform_privacy_wipe(wipe_voices: bool):
                 "message": "Wipe aborted: a draft send would not finish. Nothing was deleted; try again.",
             }
 
+        # 3b. Drain speech synthesis: new TTS is already rejected via
+        #     privacy_wipe_in_progress (both /tts routes and the keyboard
+        #     review-TTS path check it); now stop playback, drop the queue,
+        #     join the worker, and wait out any in-flight clone conversion.
+        #     Same abort-without-deleting shape as steps 2 and 3.
+        tts_ok, tts_results = _drain_tts_and_clone()
+        cleared.update(tts_results)
+        if not tts_ok:
+            logging.error(f"Privacy wipe aborted: TTS/clone did not quiesce: {tts_results}")
+            return {
+                "ok": False,
+                "error": "tts_did_not_quiesce",
+                "cleared": cleared,
+                "postconditions": {},
+                "message": "Wipe aborted: speech synthesis would not stop. Nothing was deleted; try again.",
+            }
+
         # 4. Delete in-memory queues.
         with draft_lock:
             cleared["drafts"] = len(draft_queue)
@@ -3294,6 +3386,11 @@ def _perform_privacy_wipe(wipe_voices: bool):
             "history_db_wiped": bool(db_result.get("ok")),
             "recordings_dir_empty": not leftover_recordings,
             "leftover_recordings": leftover_recordings[:20],
+            "tts_worker_idle": cleared["tts_worker_idle"],
+            "tts_queue_empty": cleared["tts_queue_empty"],
+            "tts_playback_stopped": cleared["tts_playback_stopped"],
+            "voice_clone_conversion_idle": cleared["voice_clone_conversion_idle"],
+            "voice_cache_cleared": cleared["voice_cache_cleared"],
         }
         if wipe_voices:
             postconditions["voices_absent"] = not get_voices_path().exists()
@@ -3319,11 +3416,14 @@ def _perform_privacy_wipe(wipe_voices: bool):
 async def privacy_wipe(request: PrivacyWipeRequest = PrivacyWipeRequest()):
     """Delete app-generated conversational data: drafts, the draft-history
     file, the searchable history database (C8), and persisted raw-audio
-    recordings (C6), plus in-memory queues. Models and profiles are
-    intentionally NOT touched; cloned voices are removed only when
-    explicitly requested. Note: without at-rest encryption this is logical
-    deletion — nothing readable remains through the app or its files, but
-    SSD-level forensic erasure is not promised."""
+    recordings (C6), plus in-memory queues. Also drains any active TTS
+    playback and voice-clone conversion and clears the synthesized-audio
+    cache unconditionally (it holds spoken user text regardless of the
+    wipe_voices toggle). Models and profiles are intentionally NOT touched;
+    cloned voice samples are removed only when explicitly requested. Note:
+    without at-rest encryption this is logical deletion — nothing readable
+    remains through the app or its files, but SSD-level forensic erasure is
+    not promised."""
     return await run_in_threadpool(_perform_privacy_wipe, request.wipe_voices)
 
 
