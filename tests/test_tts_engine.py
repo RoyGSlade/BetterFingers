@@ -474,5 +474,72 @@ class CacheSignatureTests(unittest.TestCase):
         )
 
 
+class PrivacyWipeDrainTests(unittest.TestCase):
+    """Coverage for the drain()/is_worker_idle()/clear_audio_cache() surface
+    a privacy wipe relies on to verify TTS has actually quiesced before
+    deleting user data."""
+
+    def test_clear_audio_cache_empties_and_reports_true(self):
+        engine = ReviewTTSEngine()
+        engine._audio_cache["k"] = (np.zeros(4, dtype=np.float32), 16000)
+        self.assertTrue(engine.clear_audio_cache())
+        self.assertEqual(len(engine._audio_cache), 0)
+
+    def test_is_worker_idle_true_with_no_worker_started(self):
+        engine = ReviewTTSEngine()
+        self.assertTrue(engine.is_worker_idle())
+
+    def test_drain_stops_playback_and_joins_worker(self):
+        engine = ReviewTTSEngine()
+        engine._loaded = True
+        engine._backend = "sapi"
+        with patch.object(engine, "_speak_sapi", return_value=None):
+            engine._start_worker_if_needed()
+            engine._queue.put_nowait({"text": "hello", "speed": 1.0, "voice_hint": "english"})
+
+            result = engine.drain(timeout=5.0)
+
+        self.assertTrue(result["worker_idle"])
+        self.assertTrue(result["queue_empty"])
+        self.assertTrue(engine.is_worker_idle())
+        self.assertIsNone(engine._worker)
+
+    def test_drain_with_no_worker_reports_idle(self):
+        engine = ReviewTTSEngine()
+        result = engine.drain(timeout=1.0)
+        self.assertTrue(result["worker_idle"])
+        self.assertTrue(result["queue_empty"])
+
+    def test_drain_reports_stuck_worker_honestly(self):
+        # A worker that ignores the stop signal must NOT be reported idle —
+        # a privacy wipe must abort rather than delete under it.
+        engine = ReviewTTSEngine()
+        release = threading.Event()
+
+        def stuck_loop():
+            release.wait(5)
+
+        engine._worker_running = True
+        engine._worker = threading.Thread(target=stuck_loop, daemon=True)
+        engine._worker.start()
+        try:
+            result = engine.drain(timeout=0.2)
+            self.assertFalse(result["worker_idle"])
+            self.assertIsNotNone(engine._worker)
+        finally:
+            release.set()
+            engine._worker.join(timeout=2)
+
+    def test_drain_clears_queued_items_and_cancels_their_jobs(self):
+        engine = ReviewTTSEngine()
+        job = JOBS.create("tts", label="queued")
+        engine._queue.put_nowait({"text": "queued", "speed": 1.0, "voice_hint": "english", "job_id": job.id})
+
+        engine.drain(timeout=1.0)
+
+        self.assertTrue(engine._queue.empty())
+        self.assertEqual(JOBS.get(job.id).state, JobState.CANCELLED)
+
+
 if __name__ == "__main__":
     unittest.main()

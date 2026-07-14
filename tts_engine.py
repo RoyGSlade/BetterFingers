@@ -343,6 +343,41 @@ class ReviewTTSEngine:
     def shutdown(self):
         self.unload()
 
+    def clear_audio_cache(self) -> bool:
+        """Drop all cached synthesized audio (privacy wipe). Coarse clear-all
+        by design: the cache holds spoken user text, so nothing survives a
+        wipe regardless of cache-key shape."""
+        with self._lock:
+            self._audio_cache.clear()
+            return len(self._audio_cache) == 0
+
+    def is_worker_idle(self) -> bool:
+        """True once the worker thread is gone/dead and has nothing queued.
+        Does not itself stop anything — see drain()."""
+        worker = self._worker
+        return (worker is None or not worker.is_alive()) and self._queue.empty()
+
+    def drain(self, timeout: float = 10.0) -> Dict[str, object]:
+        """Privacy-wipe quiesce: stop playback, drop any queued speech, and
+        join the worker thread so no synthesis/clone-conversion/playback can
+        still be running when the caller proceeds to delete data.
+
+        Returns verified postconditions; the caller must treat either False
+        as "do not delete yet" rather than trusting that this method returned.
+        """
+        self.stop_current()
+        self._clear_queue()
+        self._stop_worker(timeout=timeout)
+        # _stop_worker enqueues a None stop-sentinel; if no worker was alive
+        # to consume it, it would otherwise sit in the queue and make
+        # queue_empty a false negative.
+        self._clear_queue()
+        worker = self._worker
+        return {
+            "worker_idle": (worker is None or not worker.is_alive()),
+            "queue_empty": self._queue.empty(),
+        }
+
     def _start_worker_if_needed(self):
         with self._lock:
             if self._worker and self._worker.is_alive():
@@ -351,7 +386,7 @@ class ReviewTTSEngine:
             self._worker = threading.Thread(target=self._worker_loop, daemon=True)
             self._worker.start()
 
-    def _stop_worker(self):
+    def _stop_worker(self, timeout: float = 1.5):
         with self._lock:
             self._worker_running = False
         try:
@@ -360,8 +395,9 @@ class ReviewTTSEngine:
             pass
         worker = self._worker
         if worker and worker.is_alive():
-            worker.join(timeout=1.5)
-        self._worker = None
+            worker.join(timeout=timeout)
+        if worker is None or not worker.is_alive():
+            self._worker = None
 
     def _clear_queue(self):
         while True:
