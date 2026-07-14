@@ -12,6 +12,10 @@ permissions:
 jobs:
   windows-installer:
     runs-on: windows-latest
+    permissions:
+      contents: write
+      id-token: write # actions/attest-build-provenance (OIDC)
+      attestations: write # actions/attest-build-provenance
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -52,12 +56,44 @@ jobs:
         run: |
           python -m pytest -q tests -m smoke
 
+      # Windows code signing (optional). electron-builder auto-signs when
+      # CSC_LINK / CSC_KEY_PASSWORD are set (see its Code Signing docs) — no
+      # config needed beyond exporting them. Decode the base64 PFX from a repo
+      # secret to a temp file so the cert never touches disk unencoded outside
+      # the runner's own temp dir, and never appears in logs. Unsigned builds
+      # still produce a working installer (electron-builder just skips
+      # signtool), so this stays best-effort until the repo owner adds the
+      # secrets: WIN_CERTIFICATE_BASE64 (base64-encoded .pfx) and
+      # WIN_CERTIFICATE_PASSWORD.
+      - name: Set up code-signing certificate
+        id: signing
+        shell: powershell
+        env:
+          CERT_B64: ${{ secrets.WIN_CERTIFICATE_BASE64 }}
+        run: |
+          if ([string]::IsNullOrEmpty($env:CERT_B64)) {
+            Write-Host "WIN_CERTIFICATE_BASE64 not set; building an unsigned installer."
+            "configured=false" >> $env:GITHUB_OUTPUT
+          } else {
+            $certPath = Join-Path $env:RUNNER_TEMP "betterfingers-signing.pfx"
+            [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($env:CERT_B64))
+            "CSC_LINK=$certPath" >> $env:GITHUB_ENV
+            "configured=true" >> $env:GITHUB_OUTPUT
+          }
+
       # Runs electron-vite build + the PyInstaller backend bundle + electron-builder's
       # NSIS packaging in one step. Output lands in app/release/ (see
       # directories.output in app/package.json).
       - name: Build installer (electron-builder)
         working-directory: app
+        env:
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CERTIFICATE_PASSWORD }}
         run: npm run dist:win
+
+      - name: Clean up code-signing certificate
+        if: always() && steps.signing.outputs.configured == 'true'
+        shell: powershell
+        run: Remove-Item -Path "$env:CSC_LINK" -ErrorAction SilentlyContinue
 
       - name: Enforce payload size budget
         shell: powershell
@@ -90,23 +126,170 @@ jobs:
           Write-Host "Found installer: $($installer.FullName)"
           "path=$($installer.FullName)" >> $env:GITHUB_OUTPUT
 
-      - name: Smoke check installer install/uninstall
+      - name: Download previous release installer (upgrade smoke)
+        id: previous
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Best-effort: on the very first release there is nothing to upgrade
+          # from, so a miss here only skips the upgrade leg, not the job.
+          $prevTag = gh release list --limit 1 --exclude-drafts --exclude-pre-releases 2>$null |
+            ForEach-Object { ($_ -split "\t")[2] } | Select-Object -First 1
+          if (-not $prevTag) {
+            Write-Host "No previous release found; skipping upgrade smoke leg."
+            "path=" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          Write-Host "Previous release: $prevTag"
+          New-Item -ItemType Directory -Force -Path prev-release | Out-Null
+          gh release download $prevTag --pattern "*.exe" --dir prev-release --clobber
+          $prevExe = Get-ChildItem "prev-release" -Filter "*.exe" | Select-Object -First 1
+          if ($prevExe) {
+            "path=$($prevExe.FullName)" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Host "Previous release had no .exe asset; skipping upgrade smoke leg."
+            "path=" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Smoke check installer install/upgrade/uninstall
         shell: powershell
         run: |
-          powershell -ExecutionPolicy Bypass -File tools/smoke_installer.ps1 -InstallerPath "${{ steps.installer.outputs.path }}"
+          $args = @("-InstallerPath", "${{ steps.installer.outputs.path }}")
+          if ("${{ steps.previous.outputs.path }}" -ne "") {
+            $args += @("-PreviousInstallerPath", "${{ steps.previous.outputs.path }}")
+          }
+          powershell -ExecutionPolicy Bypass -File tools/smoke_installer.ps1 @args
+
+      - name: Generate checksum
+        shell: powershell
+        run: |
+          $installer = "${{ steps.installer.outputs.path }}"
+          $hash = (Get-FileHash -Path $installer -Algorithm SHA256).Hash.ToLower()
+          "$hash  $(Split-Path -Leaf $installer)" | Out-File -Encoding ascii "$installer.sha256"
+
+      - name: Attest build provenance
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: ${{ steps.installer.outputs.path }}
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v7
         with:
           name: BetterFingers-Installer
-          path: ${{ steps.installer.outputs.path }}
+          path: |
+            ${{ steps.installer.outputs.path }}
+            ${{ steps.installer.outputs.path }}.sha256
           if-no-files-found: error
 
       - name: Publish GitHub Release Asset
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
         with:
-          files: ${{ steps.installer.outputs.path }}
+          files: |
+            ${{ steps.installer.outputs.path }}
+            ${{ steps.installer.outputs.path }}.sha256
+
+  linux-appimage:
+    runs-on: ubuntu-24.04 # needs the AppArmor userns sysctl for Electron's sandbox
+    permissions:
+      contents: write
+      id-token: write # actions/attest-build-provenance (OIDC)
+      attestations: write # actions/attest-build-provenance
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13" # matches packaged build (Windows leg above)
+          cache: pip
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install --require-hashes -r requirements-linux.lock
+          pip install --require-hashes -r requirements-dev.lock
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install app dependencies
+        working-directory: app
+        run: npm ci
+
+      - name: Run test suite
+        run: python -m pytest -q tests
+
+      # Runs electron-vite build + the PyInstaller backend bundle + electron-builder's
+      # AppImage packaging in one step. Output lands in app/release/.
+      - name: Build AppImage (electron-builder)
+        working-directory: app
+        run: npm run dist:linux
+
+      - name: Locate AppImage artifact
+        id: appimage
+        run: |
+          set -euo pipefail
+          appimage="$(find app/release -maxdepth 1 -name '*.AppImage' | head -n1)"
+          if [ -z "$appimage" ]; then
+            echo "::error::No .AppImage found in app/release"
+            exit 1
+          fi
+          chmod +x "$appimage"
+          echo "Found AppImage: $appimage"
+          echo "path=$appimage" >> "$GITHUB_OUTPUT"
+
+      - name: Launch AppImage smoke check
+        # AppImages run under FUSE by default; --appimage-extract-and-run avoids
+        # needing FUSE on the runner. Xvfb supplies a display for Electron.
+        run: |
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y xvfb
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" \
+            "${{ steps.appimage.outputs.path }}" --appimage-extract-and-run --no-sandbox &
+          pid=$!
+          sleep 8
+          if ! kill -0 "$pid" 2>/dev/null; then
+            echo "::error::AppImage exited within 8s of launch"
+            exit 1
+          fi
+          kill "$pid"
+          wait "$pid" 2>/dev/null || true
+          echo "AppImage launched and stayed up; smoke check passed."
+
+      - name: Generate checksum
+        run: sha256sum "${{ steps.appimage.outputs.path }}" | sed 's#app/release/##' > "${{ steps.appimage.outputs.path }}.sha256"
+
+      - name: Attest build provenance
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: ${{ steps.appimage.outputs.path }}
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: BetterFingers-AppImage
+          path: |
+            ${{ steps.appimage.outputs.path }}
+            ${{ steps.appimage.outputs.path }}.sha256
+          if-no-files-found: error
+
+      - name: Publish GitHub Release Asset
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            ${{ steps.appimage.outputs.path }}
+            ${{ steps.appimage.outputs.path }}.sha256
 
   sbom:
     # Software Bill of Materials (CycloneDX) for release/tag builds. Syft scans
