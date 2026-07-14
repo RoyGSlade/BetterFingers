@@ -51,10 +51,26 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install pip-tools (hashed)
+      # Bootstrap pip-tools unhashed, pinned only to the version in
+      # requirements-dev.in. This job's whole purpose is producing the
+      # per-platform dev lock, so requirements-dev.lock can't be trusted yet
+      # here: on windows-latest it's the *Linux*-generated lock, which is
+      # missing Windows-only transitive deps (e.g. colorama) and fails
+      # --require-hashes outright.
+      - name: Install pip-tools
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
-          pip install --require-hashes -r requirements-dev.lock
+          spec="$(python -c "
+import re
+for line in open('requirements-dev.in'):
+    m = re.match(r'pip-tools\s*([<>=,!].*?)(?:\s*#.*)?$', line.strip())
+    if m:
+        print('pip-tools' + m.group(1).replace(' ', ''))
+        break
+")"
+          pip install "$spec"
 
       - name: Regenerate locks
         shell: bash
