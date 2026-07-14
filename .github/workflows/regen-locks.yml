@@ -1,0 +1,78 @@
+# Regenerates the pinned, hashed dependency locks on the platform each lock
+# targets, and uploads them as artifacts for a maintainer to commit.
+#
+# Why a workflow: requirements-win.lock CANNOT be produced on Linux —
+# pip-compile resolves environment markers against the running platform, so a
+# Linux run would omit the Windows-only deps (pydirectinput, comtypes, pycaw)
+# and pin Linux-flavored transitive deps. This job runs pip-compile on a real
+# windows-latest runner with the same Python the packaged build ships (3.13,
+# see build-installer.yml).
+#
+# Usage after editing requirements.in or requirements-dev.in:
+#   1. gh workflow run regen-locks.yml --ref <your-branch>
+#   2. gh run download <run-id>   (artifacts: requirements-locks-*)
+#   3. commit the regenerated lock(s) on your branch
+# The lock-freshness job in ci.yml fails the PR until the locks match the .in
+# files, so this can't be forgotten.
+
+name: regen-locks
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regen:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            python-version: "3.13" # matches packaged build (build-installer.yml)
+            locks: "requirements-win.lock"
+          - os: ubuntu-latest
+            python-version: "3.12" # matches the header of the committed linux lock
+            locks: "requirements-linux.lock requirements-dev.lock"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install pip-tools (hashed)
+        run: |
+          python -m pip install --upgrade pip
+          pip install --require-hashes -r requirements-dev.lock
+
+      - name: Regenerate locks
+        shell: bash
+        run: |
+          set -euo pipefail
+          for lock in ${{ matrix.locks }}; do
+            case "$lock" in
+              requirements-dev.lock) src=requirements-dev.in ;;
+              *)                     src=requirements.in ;;
+            esac
+            # A placeholder/stale output file is fine: pip-compile reuses
+            # compatible existing pins and re-resolves the rest.
+            pip-compile --allow-unsafe --generate-hashes \
+              --output-file="$lock" "$src"
+          done
+
+      - name: Show resulting diff
+        shell: bash
+        run: git --no-pager diff --stat || true
+
+      - name: Upload regenerated locks
+        uses: actions/upload-artifact@v7
+        with:
+          name: requirements-locks-${{ matrix.os }}
+          path: |
+            requirements-win.lock
+            requirements-linux.lock
+            requirements-dev.lock
+          if-no-files-found: error
