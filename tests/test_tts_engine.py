@@ -1,8 +1,11 @@
+import threading
 import unittest
 import time
 import numpy as np
 from unittest.mock import Mock, patch
 
+from job_manager import JOBS, JobState
+from model_runtime_coordinator import ModelRuntimeCoordinator, RuntimeBusyError
 from tts_engine import ReviewTTSEngine
 
 
@@ -159,6 +162,163 @@ class TTSEngineTests(unittest.TestCase):
         resolve_mock.assert_called_once_with("af_heart", {"am_adam": 0.3})
         for call in generate_mock.call_args_list:
             self.assertEqual(call.kwargs.get("voice_spec"), "blended_spec_marker")
+
+
+class RuntimeLeaseCoverageTests(unittest.TestCase):
+    """P0 regression: the runtime read lease must be held by the WORKER across
+    generation + playback + callbacks — not just while speak() enqueues — so
+    /models/unload/tts cannot free models under an in-flight utterance."""
+
+    def setUp(self):
+        self.coordinator = ModelRuntimeCoordinator()
+        self.engine = ReviewTTSEngine()
+        self.engine.set_runtime_lease_factory(
+            lambda: self.coordinator.read_lease("tts", timeout=0.5)
+        )
+        self.engine._loaded = True
+        self.engine._backend = "sapi"
+
+    def tearDown(self):
+        self.engine._stop_worker()
+
+    def _speak_and_wait(self, playback_started, release_playback):
+        def fake_sapi(text, speed, voice_hint):
+            playback_started.set()
+            release_playback.wait(timeout=5.0)
+
+        patcher = patch.object(self.engine, "_speak_sapi", side_effect=fake_sapi)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        result = self.engine.speak("hello there")
+        self.assertTrue(result["ok"])
+        self.assertTrue(playback_started.wait(timeout=5.0))
+        return result
+
+    def test_unload_write_lease_blocked_while_worker_is_playing(self):
+        playback_started = threading.Event()
+        release_playback = threading.Event()
+        result = self._speak_and_wait(playback_started, release_playback)
+
+        # Playback is in flight on the worker: a non-forced exclusive op must
+        # fail fast instead of freeing the models mid-utterance.
+        with self.assertRaises(RuntimeBusyError):
+            with self.coordinator.write_lease("tts", wait=False):
+                pass
+
+        release_playback.set()
+        deadline = time.time() + 5.0
+        while time.time() < deadline and self.coordinator.is_busy("tts"):
+            time.sleep(0.02)
+
+        # Once the utterance drains, the exclusive op proceeds.
+        with self.coordinator.write_lease("tts", wait=False):
+            pass
+        job = JOBS.get(result["job_id"])
+        self.assertEqual(job.state, JobState.COMPLETED)
+
+    def test_speak_returns_queued_job_id_not_success_claim(self):
+        playback_started = threading.Event()
+        release_playback = threading.Event()
+        result = self._speak_and_wait(playback_started, release_playback)
+
+        self.assertTrue(result.get("queued"))
+        self.assertIn("job_id", result)
+        # While audio is still playing the job must not claim completion.
+        self.assertNotEqual(JOBS.get(result["job_id"]).state, JobState.COMPLETED)
+        release_playback.set()
+
+        deadline = time.time() + 5.0
+        while time.time() < deadline and JOBS.get(result["job_id"]).state != JobState.COMPLETED:
+            time.sleep(0.02)
+        self.assertEqual(JOBS.get(result["job_id"]).state, JobState.COMPLETED)
+
+    def test_forced_unload_cancel_interrupts_chunked_playback(self):
+        self.engine._backend = "kokoro_onnx"
+        text = " ".join(["rotate"] * 240)  # forces many chunks
+        fake_audio = np.zeros(24000, dtype=np.float32)  # 1s per chunk
+
+        fake_sounddevice = Mock()
+        fake_sounddevice.get_stream.side_effect = Exception("no stream introspection")
+
+        generated = []
+
+        def fake_generate(chunk_text, *args, **kwargs):
+            generated.append(chunk_text)
+            return (fake_audio, 24000)
+
+        with patch.dict("sys.modules", {"sounddevice": fake_sounddevice}), patch.object(
+            self.engine, "_generate_kokoro_audio", side_effect=fake_generate
+        ), patch.object(self.engine, "_resolve_voice_spec", return_value="af_heart"):
+            result = self.engine.speak(text)
+            self.assertTrue(result["ok"])
+            deadline = time.time() + 5.0
+            while time.time() < deadline and not generated:
+                time.sleep(0.01)
+            self.assertTrue(generated)
+
+            # Forced unload: cancel-and-wait must drain the reader promptly.
+            start = time.time()
+            with self.coordinator.write_lease("tts", wait=True, timeout=10.0):
+                pass
+            elapsed = time.time() - start
+
+        # Far less than full playback (~10+ chunks x 1s each).
+        self.assertLess(elapsed, 5.0)
+        total_chunks = len(self.engine._split_text_for_tts(text))
+        self.assertLess(len(generated), total_chunks)
+        job = JOBS.get(result["job_id"])
+        self.assertEqual(job.state, JobState.CANCELLED)
+
+    def test_worker_drops_item_and_fails_job_when_runtime_reconfiguring(self):
+        playback = Mock()
+        with patch.object(self.engine, "_speak_sapi", playback), patch.object(
+            self.engine, "_runtime_guard", side_effect=RuntimeBusyError("tts busy")
+        ):
+            result = self.engine.speak("hello")
+            self.assertTrue(result["ok"])
+            deadline = time.time() + 5.0
+            while time.time() < deadline and not JOBS.get(result["job_id"]).is_terminal:
+                time.sleep(0.02)
+
+        job = JOBS.get(result["job_id"])
+        self.assertEqual(job.state, JobState.FAILED)
+        playback.assert_not_called()
+
+    def test_cached_playback_runs_on_worker_under_lease(self):
+        self.engine._backend = "kokoro_onnx"
+        audio = np.zeros(2400, dtype=np.float32)
+        cache_key = ("hello", 1.5, "english", (), ())
+        self.engine._audio_cache[cache_key] = (audio, 24000)
+
+        fake_sounddevice = Mock()
+        fake_sounddevice.get_stream.return_value = Mock(active=False)
+        stops = []
+        self.engine.on_stop = lambda: stops.append(True)
+
+        with patch.dict("sys.modules", {"sounddevice": fake_sounddevice}), patch.object(
+            self.engine, "_generate_kokoro_audio"
+        ) as generate_mock:
+            result = self.engine.speak("hello")
+            deadline = time.time() + 5.0
+            while time.time() < deadline and not JOBS.get(result["job_id"]).is_terminal:
+                time.sleep(0.02)
+
+        self.assertEqual(JOBS.get(result["job_id"]).state, JobState.COMPLETED)
+        generate_mock.assert_not_called()
+        self.assertTrue(fake_sounddevice.play.called)
+        self.assertTrue(stops)  # on_stop ran after real (worker-side) playback
+
+    def test_superseded_queue_item_job_is_cancelled(self):
+        engine = ReviewTTSEngine()
+        with patch.object(
+            engine, "ensure_loaded",
+            return_value={"ok": True, "backend": "sapi", "fallback": False, "message": "ready"},
+        ), patch.object(engine, "_start_worker_if_needed"), patch.object(engine, "stop_current"):
+            first = engine.speak("first")
+            second = engine.speak("second")
+
+        self.assertEqual(JOBS.get(first["job_id"]).state, JobState.CANCELLED)
+        self.assertFalse(JOBS.get(second["job_id"]).is_terminal)
 
 
 class ResolveVoiceSpecTests(unittest.TestCase):
