@@ -1,0 +1,96 @@
+# Regenerates the pinned, hashed dependency locks on the platform each lock
+# targets, and uploads them as artifacts for a maintainer to commit.
+#
+# Why a workflow: requirements-win.lock CANNOT be produced on Linux —
+# pip-compile resolves environment markers against the running platform, so a
+# Linux run would omit the Windows-only deps (pydirectinput, comtypes, pycaw)
+# and pin Linux-flavored transitive deps. This job runs pip-compile on a real
+# windows-latest runner with the same Python the packaged build ships (3.13,
+# see build-installer.yml).
+#
+# Usage after editing requirements.in or requirements-dev.in:
+#   1. gh workflow run regen-locks.yml --ref <your-branch>
+#   2. gh run download <run-id>   (artifacts: requirements-locks-*)
+#   3. commit the regenerated lock(s) on your branch
+# The lock-freshness job in ci.yml fails the PR until the locks match the .in
+# files, so this can't be forgotten.
+
+name: regen-locks
+
+on:
+  workflow_dispatch:
+  # Also run automatically when the requirements sources (or this workflow)
+  # change, so a PR touching requirements*.in gets fresh lock artifacts
+  # without a manual dispatch. (workflow_dispatch only becomes available once
+  # this file lands on the default branch.)
+  push:
+    paths:
+      - "requirements*.in"
+      - ".github/workflows/regen-locks.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  regen:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            python-version: "3.13" # matches packaged build (build-installer.yml)
+            locks: "requirements-win.lock requirements-dev-win.lock"
+          - os: ubuntu-latest
+            python-version: "3.12" # matches the header of the committed linux lock
+            locks: "requirements-linux.lock requirements-dev.lock"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # Bootstrap pip-tools unhashed, pinned only to the version in
+      # requirements-dev.in. This job's whole purpose is producing the
+      # per-platform dev lock, so requirements-dev.lock can't be trusted yet
+      # here: on windows-latest it's the *Linux*-generated lock, which is
+      # missing Windows-only transitive deps (e.g. colorama) and fails
+      # --require-hashes outright.
+      - name: Install pip-tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          version="$(grep -E '^pip-tools' requirements-dev.in | head -1 | sed -E 's/^pip-tools//; s/#.*//' | tr -d ' \t\r')"
+          pip install "pip-tools${version}"
+
+      - name: Regenerate locks
+        shell: bash
+        run: |
+          set -euo pipefail
+          for lock in ${{ matrix.locks }}; do
+            case "$lock" in
+              requirements-dev*.lock) src=requirements-dev.in ;;
+              *)                      src=requirements.in ;;
+            esac
+            # A placeholder/stale output file is fine: pip-compile reuses
+            # compatible existing pins and re-resolves the rest.
+            pip-compile --allow-unsafe --generate-hashes \
+              --output-file="$lock" "$src"
+          done
+          # Stage only the locks this leg regenerated, so the artifact never
+          # contains a stale committed lock from the other platform.
+          mkdir -p locks-out
+          cp ${{ matrix.locks }} locks-out/
+
+      - name: Show resulting diff
+        shell: bash
+        run: git --no-pager diff --stat || true
+
+      - name: Upload regenerated locks
+        uses: actions/upload-artifact@v7
+        with:
+          name: requirements-locks-${{ matrix.os }}
+          path: locks-out/
+          if-no-files-found: error

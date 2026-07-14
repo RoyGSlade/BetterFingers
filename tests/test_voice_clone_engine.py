@@ -9,6 +9,7 @@ in _generate_kokoro_audio, and the DELETE /tts/voices route.
 import builtins
 import os
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -32,7 +33,7 @@ class ClonedIdTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             sample = os.path.join(d, "cloned_Me.wav")
             open(sample, "w").close()
-            with patch.object(voice_clone_engine, "get_voices_dir", return_value=d):
+            with patch.object(voice_clone_engine, "get_voices_path", return_value=d):
                 self.assertEqual(voice_clone_engine.find_reference_sample("cloned_Me"), sample)
                 self.assertIsNone(voice_clone_engine.find_reference_sample("cloned_Missing"))
                 self.assertIsNone(voice_clone_engine.find_reference_sample("af_heart"))
@@ -137,7 +138,7 @@ class DeleteClonedVoiceRouteTests(unittest.TestCase):
             self.addCleanup(lambda: os.environ.__setitem__("APPDATA", self._orig))
 
     def _seed_voice(self, name="cloned_Me"):
-        voices_dir = str(server.get_voices_dir())
+        voices_dir = str(server.ensure_voices_dir())
         for suffix in (".wav", ".meta.json"):
             open(os.path.join(voices_dir, f"{name}{suffix}"), "w").close()
         return voices_dir
@@ -169,6 +170,57 @@ class DeleteClonedVoiceRouteTests(unittest.TestCase):
             payload = client.get("/tts/voices").json()
         self.assertIn("cloning", payload)
         self.assertIn("available", payload["cloning"])
+
+
+class ConversionActivityTests(unittest.TestCase):
+    """Privacy wipe must be able to verify no conversion is mid-flight before
+    deleting voice samples/caches (the TTS chunked-playback generation thread
+    can outlive the worker join and keep converting)."""
+
+    def setUp(self):
+        # Never leak activity state between tests.
+        with voice_clone_engine._conversion_cv:
+            voice_clone_engine._active_conversions = 0
+
+    tearDown = setUp
+
+    def test_idle_by_default(self):
+        self.assertFalse(voice_clone_engine.conversion_active())
+        self.assertTrue(voice_clone_engine.wait_for_conversion_idle(timeout=0.5))
+
+    def test_wait_times_out_while_conversion_in_flight(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        def fake_ensure_loaded():
+            started.set()
+            release.wait(5)
+            raise RuntimeError("stop before doing real work")
+
+        def run():
+            try:
+                voice_clone_engine.convert(np.zeros(10, dtype=np.float32), 16000, "ref.wav")
+            except RuntimeError:
+                pass
+
+        with patch.object(voice_clone_engine, "_ensure_loaded", side_effect=fake_ensure_loaded):
+            t = threading.Thread(target=run, daemon=True)
+            t.start()
+            self.assertTrue(started.wait(2))
+            self.assertTrue(voice_clone_engine.conversion_active())
+            self.assertFalse(voice_clone_engine.wait_for_conversion_idle(timeout=0.2))
+
+            release.set()
+            t.join(timeout=2)
+            self.assertFalse(voice_clone_engine.conversion_active())
+            self.assertTrue(voice_clone_engine.wait_for_conversion_idle(timeout=0.5))
+
+    def test_counter_decrements_even_when_conversion_raises(self):
+        with patch.object(voice_clone_engine, "_ensure_loaded", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                voice_clone_engine.convert(np.zeros(10, dtype=np.float32), 16000, "ref.wav")
+        self.assertFalse(voice_clone_engine.conversion_active())
+        self.assertTrue(voice_clone_engine.wait_for_conversion_idle(timeout=0.5))
 
 
 if __name__ == "__main__":

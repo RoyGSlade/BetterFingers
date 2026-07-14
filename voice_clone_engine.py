@@ -25,6 +25,7 @@ reference measures 142Hz) at RTF ~0.16 on an RTX 4060 Ti.
 import logging
 import os
 import threading
+import time
 
 import numpy as np
 
@@ -54,12 +55,37 @@ _model = None
 _vocoder = None
 _device = None
 
+# Tracks in-flight conversions so a privacy wipe can verify none is mid-flight
+# before deleting samples and caches: the TTS chunked-playback generation
+# thread can outlive the worker join and keep converting user audio.
+_conversion_cv = threading.Condition()
+_active_conversions = 0
+
+
+def conversion_active() -> bool:
+    with _conversion_cv:
+        return _active_conversions > 0
+
+
+def wait_for_conversion_idle(timeout: float = 10.0) -> bool:
+    """Block until no conversion is running; True if idle within timeout."""
+    deadline = time.monotonic() + timeout
+    with _conversion_cv:
+        while _active_conversions > 0:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            _conversion_cv.wait(remaining)
+        return True
+
 
 def is_cloned_voice_id(voice_id) -> bool:
     return isinstance(voice_id, str) and voice_id.strip().lower().startswith(CLONED_PREFIX)
 
 
-def get_voices_dir():
+def get_voices_path():
+    # Pure lookup — never creates the directory (see server.ensure_voices_dir
+    # for the sole creation point).
     return app_paths.get_app_paths().voices
 
 
@@ -70,7 +96,7 @@ def find_reference_sample(voice_id):
     if not is_cloned_voice_id(voice_id):
         return None
     safe = os.path.basename(str(voice_id).strip())
-    path = os.path.join(str(get_voices_dir()), f"{safe}.wav")
+    path = os.path.join(str(get_voices_path()), f"{safe}.wav")
     return path if os.path.exists(path) else None
 
 
@@ -142,6 +168,18 @@ def convert(audio: np.ndarray, sample_rate: int, reference_wav_path: str):
     context trimmed from the mel on each side, kokoclone-style) and vocodes the
     concatenated mel in one pass. Returns (float32 numpy audio, sample_rate).
     """
+    global _active_conversions
+    with _conversion_cv:
+        _active_conversions += 1
+    try:
+        return _convert(audio, sample_rate, reference_wav_path)
+    finally:
+        with _conversion_cv:
+            _active_conversions -= 1
+            _conversion_cv.notify_all()
+
+
+def _convert(audio: np.ndarray, sample_rate: int, reference_wav_path: str):
     model, vocoder, device = _ensure_loaded()
     import torch
     import torchaudio

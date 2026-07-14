@@ -39,6 +39,7 @@ import voice_clone_qa
 import history_store
 import mcp_client
 from job_manager import JOBS, JobState
+from output_coordinator import OutputCoordinator
 import voice_commands
 import voice_edit_commands
 from utterance_history import Utterance, utterance_history
@@ -247,6 +248,12 @@ model_runtime = ModelRuntimeCoordinator()
 # recovery saves, sends, TTS, retranscription) refuses, so the wipe operates on
 # a quiescent system and nothing regrows behind it.
 privacy_wipe_in_progress = threading.Event()
+# Coordinates draft sends against the privacy wipe's output-drain step: a send
+# registers begin_send/end_send around its injection+persist, and the wipe
+# drains (cancel + wait for zero active sends + exclusive lease) before it is
+# allowed to delete anything. See output_coordinator.py.
+output_coordinator = OutputCoordinator()
+OUTPUT_DRAIN_TIMEOUT_SECONDS = 5.0
 
 
 def _reject_if_wiping(what):
@@ -391,11 +398,18 @@ def recover_interrupted_sends():
     return recovered
 
 
-def get_voices_dir():
+def get_voices_path() -> Path:
     # Unified under the single data root (was the split XDG location).
-    voices_dir = Path(get_user_data_path()) / "voices"
-    voices_dir.mkdir(parents=True, exist_ok=True)
-    return voices_dir
+    # Pure lookup — never creates the directory, so the privacy report,
+    # wipe, and postcondition checks don't resurrect it (P0).
+    return Path(get_user_data_path()) / "voices"
+
+
+def ensure_voices_dir() -> Path:
+    """Only call when about to save a voice — this is the sole creation point."""
+    path = get_voices_path()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def get_graph_path():
@@ -1097,6 +1111,25 @@ def send_draft_by_id(draft_id, action=None, open_chat=False, allow_resend=False)
     wiping = _reject_if_wiping("draft send")
     if wiping:
         return {"id": draft_id, **wiping}
+    # Register with the output coordinator BEFORE any state mutation so the
+    # wipe's drain (which cancels + waits for the active-send count to hit
+    # zero) cannot miss this send in a gap between the flag check above and
+    # this point. Refused while draining or leased — same rejection as the
+    # flag check, just closing the race window the flag alone can't close.
+    send_op_id = output_coordinator.begin_send()
+    if send_op_id is None:
+        wiping = _reject_if_wiping("draft send") or {
+            "ok": False, "error": "privacy_wipe_in_progress",
+            "message": "A privacy wipe is in progress; try again in a moment.",
+        }
+        return {"id": draft_id, **wiping}
+    try:
+        return _send_draft_by_id_locked(draft_id, action, open_chat, allow_resend)
+    finally:
+        output_coordinator.end_send(send_op_id)
+
+
+def _send_draft_by_id_locked(draft_id, action, open_chat, allow_resend):
     # Atomic state transition (compare-and-set to "sending" under the lock)
     # so two simultaneous requests cannot both inject the same text. A request
     # that loses the race gets the existing outcome instead of re-injecting.
@@ -1152,7 +1185,11 @@ def send_draft_by_id(draft_id, action=None, open_chat=False, allow_resend=False)
                 wedged["status"] = "send_interrupted"
                 wedged["send_outcome"] = "interrupted"
                 wedged.pop("send_process_token", None)
-        save_draft_history(changed_draft_id=draft_id)
+        # A wipe that is draining right now will delete this draft the moment
+        # it acquires the lease; writing it back here would just recreate
+        # what the wipe is about to erase (or just erased).
+        if not output_coordinator.cancel_requested():
+            save_draft_history(changed_draft_id=draft_id)
         raise
 
     with draft_lock:
@@ -1177,8 +1214,11 @@ def send_draft_by_id(draft_id, action=None, open_chat=False, allow_resend=False)
             response = {"id": draft_id, "send_result": result}
 
     # Persist outside the lock: disk + SQLite IO must not serialize every
-    # other draft operation behind this send (§9).
-    save_draft_history(changed_draft_id=draft_id)
+    # other draft operation behind this send (§9). Recheck cancellation
+    # first: if a wipe started draining after the "sending" persist above,
+    # this write must not resurrect the data the wipe is deleting/deleted.
+    if not output_coordinator.cancel_requested():
+        save_draft_history(changed_draft_id=draft_id)
     broadcast_status_threadsafe("draft_sent" if result.get("ok") else "draft_send_error", {"draft_id": draft_id, "send_result": result})
     return response
 
@@ -2932,7 +2972,7 @@ def _path_size_bytes(path):
 def get_privacy_report():
     """Everything that touches the network + where local data lives (C7)."""
     history_file = os.path.join(get_user_data_path(), "draft_history.json")
-    voices_dir = str(get_voices_dir())
+    voices_dir = str(get_voices_path())
     with draft_lock:
         recordings_in_memory = len(draft_recordings)
         drafts_in_memory = len(draft_queue)
@@ -3020,20 +3060,28 @@ def _drain_recorder(timeout=10.0):
     return not bool(getattr(hotkey_manager, "is_recording", False))
 
 
-def _drain_output_injector(timeout=5.0):
-    """Signal any in-progress injection to stop and wait for it to settle."""
+def _cancel_active_injection():
+    """Signal any in-progress injection to stop. Best-effort: the actual
+    quiescence guarantee comes from output_coordinator.drain() waiting for
+    the active-send count to reach zero, not from this callback succeeding."""
     injector = output_injector
     if injector is None:
-        return True
+        return
     try:
         injector.stop_typing()
     except Exception as exc:
         logging.debug(f"Privacy wipe: injector stop_typing failed: {exc}")
-    # There is no injection worker thread to join (type_text runs inline on the
-    # caller); stop_signal makes any active loop bail. A short settle covers the
-    # external-tool path.
-    time.sleep(min(0.2, timeout))
-    return True
+
+
+def _drain_output_injector(timeout=OUTPUT_DRAIN_TIMEOUT_SECONDS):
+    """Cancel in-flight sends and wait until none are active, then take the
+    exclusive output lease so no new send can start until release() is
+    called. Returns (ok, stuck_sends): on timeout the lease is NOT held (the
+    coordinator rolls back on failure) and stuck_sends maps each unfinished
+    send's operation id to how long it has been running.
+    """
+    return output_coordinator.drain(cancel_active=_cancel_active_injection,
+                                     timeout=timeout)
 
 
 def _perform_privacy_wipe(wipe_voices: bool):
@@ -3053,6 +3101,7 @@ def _perform_privacy_wipe(wipe_voices: bool):
     cleared = {}
     postconditions = {}
     gate_held = False
+    output_lease_held = False
     try:
         # 1. Drain the recorder: stop it and confirm it actually stopped.
         cleared["recorder_stopped"] = _drain_recorder()
@@ -3081,8 +3130,25 @@ def _perform_privacy_wipe(wipe_voices: bool):
                 "message": "Wipe aborted: a dictation would not stop. Nothing was deleted; try again.",
             }
 
-        # 3. Stop text injection and wait for it to settle.
-        cleared["output_injector_idle"] = _drain_output_injector()
+        # 3. Cancel active injections and wait for every in-flight send to
+        #    finish, then hold the exclusive output lease so no new send can
+        #    start until the wipe releases it in the finally block below. If
+        #    a send will not finish in time, ABORT without deleting — same
+        #    principle as the pipeline-quiesce check above: never delete out
+        #    from under a live send.
+        output_lease_held, stuck_sends = _drain_output_injector()
+        cleared["output_injector_idle"] = output_lease_held
+        if not output_lease_held:
+            logging.error(f"Privacy wipe aborted: output did not quiesce within "
+                           f"{OUTPUT_DRAIN_TIMEOUT_SECONDS}s. Stuck sends: {stuck_sends}")
+            return {
+                "ok": False,
+                "error": "output_did_not_quiesce",
+                "cleared": cleared,
+                "postconditions": {},
+                "stuck_sends": stuck_sends,
+                "message": "Wipe aborted: a draft send would not finish. Nothing was deleted; try again.",
+            }
 
         # 4. Delete in-memory queues.
         with draft_lock:
@@ -3109,7 +3175,7 @@ def _perform_privacy_wipe(wipe_voices: bool):
         cleared["recordings_files_removed"] = recordings.clear_recordings()
 
         if wipe_voices:
-            voices_dir = get_voices_dir()
+            voices_dir = get_voices_path()
             try:
                 if voices_dir.exists():
                     # No ignore_errors: a suppressed failure must not report
@@ -3134,8 +3200,10 @@ def _perform_privacy_wipe(wipe_voices: bool):
             "leftover_recordings": leftover_recordings[:20],
         }
         if wipe_voices:
-            postconditions["voices_absent"] = not get_voices_dir().exists()
+            postconditions["voices_absent"] = not get_voices_path().exists()
     finally:
+        if output_lease_held:
+            output_coordinator.release()
         if gate_held:
             dictation_coordinator.finish()
         privacy_wipe_in_progress.clear()
@@ -4074,7 +4142,7 @@ async def tts_clone(file: UploadFile = File(...), name: str = Form("My Voice"), 
     if not safe_name:
         raise HTTPException(status_code=400, detail="A voice name is required.")
 
-    voices_dir = get_voices_dir()
+    voices_dir = ensure_voices_dir()
     target_path = voices_dir / f"cloned_{safe_name}.wav"
     tmp_path = None
     try:
@@ -4129,7 +4197,7 @@ async def tts_clone(file: UploadFile = File(...), name: str = Form("My Voice"), 
 async def list_voices():
     import json
 
-    voices_dir = get_voices_dir()
+    voices_dir = get_voices_path()
 
     cloned = []
     if os.path.exists(voices_dir):
@@ -4175,7 +4243,7 @@ async def delete_cloned_voice(voice_id: str):
     safe = os.path.basename(str(voice_id or "").strip())
     if not safe.startswith("cloned_") or safe != voice_id.strip():
         raise HTTPException(status_code=400, detail="Only cloned voices (cloned_*) can be deleted.")
-    voices_dir = get_voices_dir()
+    voices_dir = get_voices_path()
     removed = []
     for suffix in (".wav", ".npy", ".meta.json"):
         path = os.path.join(str(voices_dir), f"{safe}{suffix}")

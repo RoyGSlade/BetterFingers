@@ -27,6 +27,17 @@ class PrivacyWipeTests(unittest.TestCase):
         os.environ["APPDATA"] = self._tmp.name
         server.transcriber = None
         history_store._initialized_path = None
+        # Keep the startup warmup thread from loading (and on a fresh data
+        # dir, DOWNLOADING) real models: an in-flight .gguf.part download
+        # holds an open handle that breaks TemporaryDirectory cleanup on
+        # Windows (WinError 32) and wastes CI bandwidth.
+        residency_patcher = patch.object(
+            server,
+            "get_model_residency_settings",
+            return_value={"llm": False, "stt": False, "tts": False},
+        )
+        residency_patcher.start()
+        self.addCleanup(residency_patcher.stop)
 
     def tearDown(self):
         if self._orig is None:

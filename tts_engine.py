@@ -1,4 +1,5 @@
 import collections
+import contextlib
 import importlib
 import logging
 import os
@@ -6,10 +7,13 @@ import queue
 import re
 import sys
 import threading
+import time
 from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 import sounddevice as sd
+from job_manager import JOBS, JobState
+from model_runtime_coordinator import RuntimeBusyError
 from utils import get_user_data_path
 import voice_clone_engine
 from tts_text import apply_pause_style, normalize_for_speech
@@ -104,6 +108,17 @@ class ReviewTTSEngine:
         self._audio_cache = collections.OrderedDict()
         self._cache_max_size = 24
         self._current_playback = ""
+        # Injected by the server: a zero-arg callable returning a context
+        # manager that holds the TTS runtime read lease (raising
+        # RuntimeBusyError when a destructive op holds the write lease). The
+        # WORKER holds it across generation + clone conversion + playback +
+        # callbacks, so /models/unload/tts cannot free the models under an
+        # in-flight utterance. None (e.g. in unit tests) means "no guard".
+        self._lease_factory = None
+
+    def set_runtime_lease_factory(self, factory):
+        """Install the runtime-lease context-manager factory (see __init__)."""
+        self._lease_factory = factory
 
     def is_loaded(self) -> bool:
         with self._lock:
@@ -259,44 +274,23 @@ class ReviewTTSEngine:
             if modulation:
                 text = apply_pause_style(text, modulation.get("pause_style"))
 
-            # 2. Check Cache
-            cache_key = (text, speed, voice_hint, _blend_signature(blend), _modulation_signature(modulation))
-            if cache_key in self._audio_cache:
-                logging.info("TTS Cache Hit")
-                audio, rate = self._audio_cache[cache_key]
-                # Move to end (LRU)
-                self._audio_cache.move_to_end(cache_key)
-                self.stop_current() # Stop any current playback before playing from cache
-                if self.on_start:
-                    try:
-                        self.on_start(text)
-                    except Exception as e:
-                        logging.warning(f"Failed to run TTS on_start callback: {e}")
-                sd.play(audio, rate)
-                if self.on_stop:
-                    try:
-                        duration = len(audio) / rate
-                        threading.Timer(duration, lambda: self.on_stop() if (hasattr(self, "on_stop") and self.on_stop) else None).start()
-                    except Exception as e:
-                        logging.warning(f"Failed to schedule TTS on_stop callback: {e}")
-                self._current_playback = text
-                return {
-                    "ok": True,
-                    "backend": status.get("backend", "none"),
-                    "fallback": bool(status.get("fallback", False)),
-                    "message": "Playback from cache.",
-                }
-
-            # 3. Generate & Play (via worker queue)
+            # 2. Queue for the worker. ALL audio work — cache lookup included —
+            # happens on the worker thread under the runtime read lease, so a
+            # concurrent /models/unload/tts either fails fast (409) or, when
+            # forced, drains this utterance before the models are freed.
+            # Returning here does not mean the text was spoken: the caller gets
+            # a job id it can watch in /jobs.
             self._clear_queue()
             self._start_worker_if_needed()
 
+            job = JOBS.create("tts", label=f"Speak {len(text)} chars")
             payload = {
-                "text": phrase,
+                "text": text,
                 "speed": float(speed),
                 "voice_hint": (voice_hint or "english").strip() or "english",
                 "blend": blend or None,
                 "modulation": modulation or None,
+                "job_id": job.id,
             }
             try:
                 self._queue.put_nowait(payload)
@@ -306,9 +300,11 @@ class ReviewTTSEngine:
 
         return {
             "ok": True,
+            "queued": True,
+            "job_id": job.id,
             "backend": status.get("backend", "none"),
             "fallback": bool(status.get("fallback", False)),
-            "message": str(status.get("message", "")).strip(),
+            "message": "Speech queued.",
         }
 
     def stop_current(self):
@@ -347,6 +343,41 @@ class ReviewTTSEngine:
     def shutdown(self):
         self.unload()
 
+    def clear_audio_cache(self) -> bool:
+        """Drop all cached synthesized audio (privacy wipe). Coarse clear-all
+        by design: the cache holds spoken user text, so nothing survives a
+        wipe regardless of cache-key shape."""
+        with self._lock:
+            self._audio_cache.clear()
+            return len(self._audio_cache) == 0
+
+    def is_worker_idle(self) -> bool:
+        """True once the worker thread is gone/dead and has nothing queued.
+        Does not itself stop anything — see drain()."""
+        worker = self._worker
+        return (worker is None or not worker.is_alive()) and self._queue.empty()
+
+    def drain(self, timeout: float = 10.0) -> Dict[str, object]:
+        """Privacy-wipe quiesce: stop playback, drop any queued speech, and
+        join the worker thread so no synthesis/clone-conversion/playback can
+        still be running when the caller proceeds to delete data.
+
+        Returns verified postconditions; the caller must treat either False
+        as "do not delete yet" rather than trusting that this method returned.
+        """
+        self.stop_current()
+        self._clear_queue()
+        self._stop_worker(timeout=timeout)
+        # _stop_worker enqueues a None stop-sentinel; if no worker was alive
+        # to consume it, it would otherwise sit in the queue and make
+        # queue_empty a false negative.
+        self._clear_queue()
+        worker = self._worker
+        return {
+            "worker_idle": (worker is None or not worker.is_alive()),
+            "queue_empty": self._queue.empty(),
+        }
+
     def _start_worker_if_needed(self):
         with self._lock:
             if self._worker and self._worker.is_alive():
@@ -355,7 +386,7 @@ class ReviewTTSEngine:
             self._worker = threading.Thread(target=self._worker_loop, daemon=True)
             self._worker.start()
 
-    def _stop_worker(self):
+    def _stop_worker(self, timeout: float = 1.5):
         with self._lock:
             self._worker_running = False
         try:
@@ -364,17 +395,45 @@ class ReviewTTSEngine:
             pass
         worker = self._worker
         if worker and worker.is_alive():
-            worker.join(timeout=1.5)
-        self._worker = None
+            worker.join(timeout=timeout)
+        if worker is None or not worker.is_alive():
+            self._worker = None
 
     def _clear_queue(self):
         while True:
             try:
-                self._queue.get_nowait()
+                item = self._queue.get_nowait()
             except queue.Empty:
                 break
             except Exception:
                 break
+            # A superseded utterance never runs; close out its job honestly.
+            if isinstance(item, dict) and item.get("job_id"):
+                JOBS.cancel(item["job_id"])
+
+    @contextlib.contextmanager
+    def _runtime_guard(self):
+        """Hold the injected runtime read lease for the duration of the block.
+
+        Retries briefly when a writer (unload/reload) holds the lease, but
+        gives up — re-raising RuntimeBusyError — once the worker is being
+        stopped or after ~10s, so a queued utterance is dropped rather than
+        replayed against a runtime the user asked to tear down.
+        """
+        factory = self._lease_factory
+        if factory is None:
+            yield None
+            return
+        deadline = time.monotonic() + 10.0
+        while True:
+            try:
+                with factory() as runtime:
+                    yield runtime
+                return
+            except RuntimeBusyError:
+                if not self._worker_running or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.1)
 
     def _worker_loop(self):
         while self._worker_running:
@@ -389,63 +448,157 @@ class ReviewTTSEngine:
             if not text:
                 continue
 
-            speed = float(item.get("speed", 1.5))
-            voice_hint = (item.get("voice_hint", "english") or "english").strip() or "english"
-            blend = item.get("blend") or None
-            modulation = item.get("modulation") or None
-
+            job_id = item.get("job_id")
             try:
-                backend = self.backend()
-                if backend == "none":
-                    recovered = self.ensure_loaded(voice_hint=voice_hint)
-                    if not recovered.get("ok", False):
-                        logging.error(
-                            "TTS backend unavailable at playback time: %s",
-                            recovered.get("message", "unknown backend error"),
-                        )
-                        continue
-                    backend = self.backend()
-                if backend in {"kokoro", "kokoro_onnx"}:
-                    if self.on_start:
-                        try:
-                            self.on_start(text)
-                        except Exception as e:
-                            logging.warning(f"TTS on_start callback error: {e}")
-                    try:
-                        self._speak_kokoro_chunked(
-                            text=text, speed=speed, voice_hint=voice_hint,
-                            blend=blend, modulation=modulation,
-                        )
-                    finally:
-                        if self.on_stop:
-                            try:
-                                self.on_stop()
-                            except Exception as e:
-                                logging.warning(f"TTS on_stop callback error: {e}")
-                elif backend == "sapi":
-                    if self.on_start:
-                        try:
-                            self.on_start(text)
-                        except Exception as e:
-                            logging.warning(f"TTS on_start callback error: {e}")
-                    try:
-                        self._speak_sapi(text=text, speed=speed, voice_hint=voice_hint)
-                    finally:
-                        if self.on_stop:
-                            try:
-                                self.on_stop()
-                            except Exception as e:
-                                logging.warning(f"TTS on_stop callback error: {e}")
-                else:
-                    logging.error("TTS backend unavailable at playback time.")
+                # The read lease brackets EVERYTHING that touches the models or
+                # the audio device — generation, clone conversion, playback, and
+                # the start/stop callbacks — so an exclusive unload cannot free
+                # them under this utterance (see model_runtime_coordinator).
+                with self._runtime_guard() as runtime:
+                    self._process_speech_item(item, job_id, runtime)
+            except RuntimeBusyError:
+                message = "TTS runtime was reconfigured before playback; speech dropped."
+                logging.warning(message)
+                if job_id:
+                    JOBS.fail(job_id, message)
             except Exception as exc:
                 logging.error(f"TTS playback failed: {exc}")
+                if job_id:
+                    JOBS.fail(job_id, str(exc))
             finally:
                 should_release = False
                 with self._lock:
                     should_release = self._auto_unload_when_idle and self._queue.empty()
                 if should_release:
                     self._release_backend_resources()
+
+    def _process_speech_item(self, item, job_id, runtime):
+        """Generate and play one queued utterance. Runs on the worker thread,
+        with the runtime read lease already held (``runtime`` is the lease
+        handle, or None when no lease factory is installed)."""
+        text = (item.get("text", "") or "").strip()
+        speed = float(item.get("speed", 1.5))
+        voice_hint = (item.get("voice_hint", "english") or "english").strip() or "english"
+        blend = item.get("blend") or None
+        modulation = item.get("modulation") or None
+
+        def cancel_requested():
+            # A forced unload (write_lease(wait=True)) signals readers to bail;
+            # honoring it here is what lets the unload drain in ~a chunk instead
+            # of timing out behind a long utterance.
+            if runtime is not None and getattr(runtime, "cancel_requested", False):
+                return True
+            if job_id and JOBS.is_cancel_requested(job_id):
+                return True
+            return not self._worker_running
+
+        if cancel_requested():
+            if job_id:
+                JOBS.mark_cancelled(job_id)
+            return
+
+        if job_id:
+            JOBS.transition(job_id, JobState.LOADING)
+
+        backend = self.backend()
+        if backend == "none":
+            recovered = self.ensure_loaded(voice_hint=voice_hint)
+            if not recovered.get("ok", False):
+                message = recovered.get("message", "unknown backend error")
+                logging.error("TTS backend unavailable at playback time: %s", message)
+                if job_id:
+                    JOBS.fail(job_id, str(message))
+                return
+            backend = self.backend()
+
+        # Cache lookup lives here (not in speak()) so cached playback is
+        # covered by the lease and by cooperative cancellation like any
+        # generated audio.
+        cache_key = (text, speed, voice_hint, _blend_signature(blend), _modulation_signature(modulation))
+        cached = None
+        with self._lock:
+            if cache_key in self._audio_cache:
+                cached = self._audio_cache[cache_key]
+                self._audio_cache.move_to_end(cache_key)
+
+        spoke = False
+        if cached is not None and backend in {"kokoro", "kokoro_onnx"}:
+            logging.info("TTS Cache Hit")
+            audio, rate = cached
+            self._current_playback = text
+            self._run_playback_with_callbacks(
+                text, lambda: self._play_audio(audio, rate, cancel_check=cancel_requested)
+            )
+            spoke = True
+        elif backend in {"kokoro", "kokoro_onnx"}:
+            self._run_playback_with_callbacks(
+                text,
+                lambda: self._speak_kokoro_chunked(
+                    text=text, speed=speed, voice_hint=voice_hint,
+                    blend=blend, modulation=modulation, cancel_check=cancel_requested,
+                ),
+            )
+            spoke = True
+        elif backend == "sapi":
+            self._run_playback_with_callbacks(
+                text, lambda: self._speak_sapi(text=text, speed=speed, voice_hint=voice_hint)
+            )
+            spoke = True
+        else:
+            logging.error("TTS backend unavailable at playback time.")
+            if job_id:
+                JOBS.fail(job_id, "TTS backend unavailable at playback time.")
+            return
+
+        if job_id and spoke:
+            if cancel_requested():
+                JOBS.mark_cancelled(job_id)
+            else:
+                JOBS.complete(job_id)
+
+    def _run_playback_with_callbacks(self, text, playback):
+        if self.on_start:
+            try:
+                self.on_start(text)
+            except Exception as e:
+                logging.warning(f"TTS on_start callback error: {e}")
+        try:
+            playback()
+        finally:
+            if self.on_stop:
+                try:
+                    self.on_stop()
+                except Exception as e:
+                    logging.warning(f"TTS on_stop callback error: {e}")
+
+    @staticmethod
+    def _play_audio(audio, sample_rate, cancel_check=None):
+        """Play one audio buffer. Without a cancel_check this is a plain
+        blocking play; with one, playback is polled so a cancellation (forced
+        unload, job cancel, worker stop) interrupts within ~50ms."""
+        import sounddevice as sd
+
+        if cancel_check is None:
+            sd.play(audio, samplerate=sample_rate, blocking=True)
+            return
+        sd.play(audio, samplerate=sample_rate)
+        # Duration-bounded poll: never trusts stream introspection alone, so a
+        # backend whose stream object misbehaves cannot wedge the worker.
+        deadline = time.monotonic() + (len(audio) / float(sample_rate)) + 0.5
+        while time.monotonic() < deadline:
+            if cancel_check():
+                try:
+                    sd.stop()
+                except Exception:
+                    pass
+                return
+            try:
+                stream = sd.get_stream()
+                if stream is None or not stream.active:
+                    return
+            except Exception:
+                pass
+            time.sleep(0.05)
 
     def _load_kokoro_backend(
         self,
@@ -734,6 +887,7 @@ class ReviewTTSEngine:
         voice_hint: str,
         voice_spec: Optional[Union[str, np.ndarray]] = None,
         modulation: Optional[dict] = None,
+        cancel_check=None,
     ):
         try:
             import sounddevice as sd
@@ -747,7 +901,7 @@ class ReviewTTSEngine:
             raise RuntimeError("Kokoro generated no audio frames.")
         merged, sample_rate = audio_tuple
         sd.stop()
-        sd.play(merged, samplerate=sample_rate, blocking=True)
+        self._play_audio(merged, sample_rate, cancel_check=cancel_check)
 
     def _onnx_voice_exists(self, voice: str) -> bool:
         voices = getattr(self._kokoro_onnx, "voices", None)
@@ -959,12 +1113,21 @@ class ReviewTTSEngine:
         voice_hint: str,
         blend: Optional[dict] = None,
         modulation: Optional[dict] = None,
+        cancel_check=None,
     ):
-        """Speak text with concurrent generation and playback to avoid pauses between chunks."""
+        """Speak text with concurrent generation and playback to avoid pauses between chunks.
+
+        ``cancel_check``, when given, is polled between chunks (and inside each
+        chunk's playback) so a forced runtime unload or job cancel interrupts a
+        long utterance promptly instead of playing it to the end.
+        """
         chunks = self._split_text_for_tts(text=text, max_chars=self.MAX_KOKORO_TEXT_CHARS)
 
         if not chunks:
             return
+
+        def cancelled():
+            return bool(cancel_check and cancel_check())
 
         # Resolve once (base + blend don't vary per chunk) and reuse for every chunk.
         voice_spec = self._resolve_voice_spec(voice_hint, blend)
@@ -973,7 +1136,7 @@ class ReviewTTSEngine:
             # Single chunk - no need for concurrent processing
             self._speak_kokoro(
                 text=chunks[0], speed=speed, voice_hint=voice_hint,
-                voice_spec=voice_spec, modulation=modulation,
+                voice_spec=voice_spec, modulation=modulation, cancel_check=cancel_check,
             )
             return
 
@@ -999,6 +1162,8 @@ class ReviewTTSEngine:
                     # Allow direct/manual invocations of _speak_kokoro_chunked outside worker loop.
                     if self._worker is not None and not self._worker_running:
                         break
+                    if cancelled():
+                        break
                     audio_data = self._generate_kokoro_audio(
                         chunk_text, speed, voice_hint, voice_spec=voice_spec, modulation=modulation,
                     )
@@ -1009,61 +1174,80 @@ class ReviewTTSEngine:
                 logging.error(f"TTS generation error: {e}")
             finally:
                 generation_done.set()
-        
+
         # Start generation thread
         gen_thread = threading.Thread(target=generate_audio_chunks, daemon=True)
         gen_thread.start()
-        
+
         # Play audio as it becomes available
         first_chunk = True
+        was_cancelled = False
         while True:
+            if cancelled():
+                was_cancelled = True
+                break
             try:
                 # Wait for audio with timeout
                 audio_data, sample_rate = audio_queue.get(timeout=0.1)
-                
+
                 if len(text) < 100:
                     full_audio_buffer.append(audio_data)
-                
+
                 if first_chunk:
                     sd.stop()
                     first_chunk = False
-                
-                # Play this chunk (blocking)
-                sd.play(audio_data, samplerate=sample_rate, blocking=True)
-                
+
+                # Play this chunk (blocking, but interruptible via cancel_check)
+                self._play_audio(audio_data, sample_rate, cancel_check=cancel_check)
+
             except queue.Empty:
                 # Check if generation is done
                 if generation_done.is_set():
                     # Drain any remaining items
-                    while True:
+                    while not cancelled():
                         try:
                             audio_data, sample_rate = audio_queue.get_nowait()
                             if len(text) < 100:
                                 full_audio_buffer.append(audio_data)
-                            sd.play(audio_data, samplerate=sample_rate, blocking=True)
+                            self._play_audio(audio_data, sample_rate, cancel_check=cancel_check)
                         except queue.Empty:
                             break
                     break
                 # Otherwise, wait a bit more for generation
                 continue
-        
+
+        if was_cancelled:
+            try:
+                sd.stop()
+            except Exception:
+                pass
+            # Unblock the generator if it's parked on a full audio_queue.
+            self._drain_local_queue(audio_queue)
         gen_thread.join(timeout=1.0)
-        
+
         # Cache the result if we captured everything and it was short enough
-        if full_audio_buffer and len(text) < 100 and not generation_error[0]:
+        if full_audio_buffer and len(text) < 100 and not generation_error[0] and not was_cancelled:
             try:
                 final_audio = np.concatenate(full_audio_buffer)
                 if len(self._audio_cache) >= self._cache_max_size:
                     self._audio_cache.popitem(last=False)
-                # Store with the same key used in speak()
+                # Store with the same key used by the worker's cache lookup
                 cache_key = (text, speed, voice_hint, _blend_signature(blend), _modulation_signature(modulation))
                 self._audio_cache[cache_key] = (final_audio, sample_rate)
                 logging.debug("Cached audio for: %r", text)
             except Exception as e:
                 logging.warning(f"Failed to cache audio: {e}")
-        
+
         if generation_error[0]:
             raise generation_error[0]
+
+    @staticmethod
+    def _drain_local_queue(audio_queue):
+        while True:
+            try:
+                audio_queue.get_nowait()
+            except queue.Empty:
+                return
 
     def _generate_kokoro_audio(
         self,

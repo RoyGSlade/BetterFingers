@@ -166,6 +166,35 @@ class VerifiedWipeTests(TempDataDirMixin):
             server.dictation_coordinator.finish()
         self.assertFalse(report["cleared"]["pipeline_quiesced"])
 
+    def test_wipe_voices_removes_dir_and_postcondition_holds(self):
+        # P0 regression: the postcondition check itself used to recreate the
+        # voices dir (get_voices_dir mkdir'd on every call), so wipe_voices
+        # defeated its own verification.
+        history_store.init()
+        voices_dir = server.ensure_voices_dir()
+        with open(os.path.join(str(voices_dir), "cloned_Me.wav"), "w") as fh:
+            fh.write("x")
+
+        with patch.object(server, "save_draft_history"), \
+             patch.object(server, "broadcast_status_threadsafe"):
+            report = server._perform_privacy_wipe(wipe_voices=True)
+
+        self.assertTrue(report["ok"], report)
+        self.assertTrue(report["postconditions"]["voices_absent"])
+        self.assertTrue(report["cleared"]["voices_removed"])
+        self.assertFalse(voices_dir.exists())
+
+    def test_privacy_report_does_not_create_voices_dir(self):
+        history_store.init()
+        voices_dir = server.get_voices_path()
+        self.assertFalse(voices_dir.exists())
+        report = server.get_privacy_report()
+        self.assertFalse(voices_dir.exists())
+        # The report still names the location it would use.
+        cloned = next(loc for loc in report["data_locations"]
+                      if loc["name"] == "Cloned voices")
+        self.assertEqual(cloned["path"], str(voices_dir))
+
     def test_wipe_cancels_active_dictation(self):
         history_store.init()
         server.cancellation_event.clear()

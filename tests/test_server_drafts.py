@@ -921,7 +921,7 @@ class ServerDraftTests(unittest.TestCase):
         data = response.json()
         self.assertEqual(data["voice_id"], "cloned_My_Voice")
 
-        meta_path = os.path.join(str(server.get_voices_dir()), "cloned_My_Voice.meta.json")
+        meta_path = os.path.join(str(server.get_voices_path()), "cloned_My_Voice.meta.json")
         self.assertTrue(os.path.exists(meta_path))
         with open(meta_path, encoding="utf-8") as handle:
             meta = json.load(handle)
