@@ -102,20 +102,28 @@ async def run_foundry_stress_suite_route(request: FoundryStressTestRequest):
     import server
 
     from llm_engine import normalize_persona
-    engine = server.get_selected_llm_engine()
+    # Validate the request BEFORE resolving the engine: get_selected_llm_engine()
+    # lazily boots the real LLM sidecar (llama-server spawn + model load), so
+    # touching it first meant even a malformed request paid a multi-second model
+    # spin-up (and unit tests of the 400 path spawned a real server).
+    persona = None
+    session = None
     if request.persona is not None:
         persona = normalize_persona(request.persona)
     elif request.session_id is not None:
         session = _foundry_get_session(request.session_id)
         if not session.get("done"):
             raise HTTPException(status_code=400, detail="Interview is not complete yet.")
+    else:
+        raise HTTPException(status_code=400, detail="Provide either session_id or persona.")
+
+    engine = server.get_selected_llm_engine()
+    if persona is None:
         try:
             compiled = await run_in_threadpool(engine.compile_foundry_persona, session)
             persona = compiled["persona"]
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Persona compile failed: {exc}")
-    else:
-        raise HTTPException(status_code=400, detail="Provide either session_id or persona.")
     try:
         # Seven LLM cases in one request — the single worst event-loop hog.
         cases = await run_in_threadpool(engine.run_foundry_stress_suite, persona)

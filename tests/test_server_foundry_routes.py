@@ -33,6 +33,18 @@ class DummyFoundryEngine:
 class FoundryRoutesTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
+        # Seed a residency-off profile (mirrors tests/conftest.py). On Windows
+        # APPDATA is the profile root, so a pristine dir gets keep-loaded
+        # defaults and TestClient startup begins a real model download whose
+        # open .part handle breaks TemporaryDirectory cleanup (WinError 32).
+        profiles = os.path.join(self._tmp.name, "BetterFingers", "profiles")
+        os.makedirs(profiles, exist_ok=True)
+        with open(os.path.join(profiles, "Default.yaml"), "w") as fh:
+            fh.write(
+                "model_keep_llm_loaded: false\n"
+                "model_keep_stt_loaded: false\n"
+                "model_keep_tts_loaded: false\n"
+            )
         self._orig = os.environ.get("APPDATA")
         os.environ["APPDATA"] = self._tmp.name
         llm_engine._personas_cache = None
