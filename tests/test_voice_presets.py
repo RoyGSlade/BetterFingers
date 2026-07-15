@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -134,6 +135,27 @@ class VoicePresetsTests(unittest.TestCase):
         with open(path, "w", encoding="utf-8") as handle:
             json.dump({"presets": [{"base": "af_heart"}]}, handle)
         self.assertEqual(voice_presets.get_presets(), [])
+
+    def test_save_stamps_schema_version(self):
+        voice_presets.save_preset("Warm", base="af_heart")
+        with open(self._path(), "r", encoding="utf-8") as handle:
+            on_disk = json.load(handle)
+        self.assertEqual(on_disk.get("schema_version"), voice_presets._SCHEMA_VERSION)
+
+    def test_legacy_file_with_no_schema_version_loads_as_v1(self):
+        path = self._path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"presets": [{"name": "Legacy", "base": "af_heart"}]}, handle)
+        presets = voice_presets.get_presets()
+        self.assertEqual(len(presets), 1)
+        self.assertEqual(presets[0]["name"], "Legacy")
+
+    def test_save_leaves_no_temp_file_behind(self):
+        voice_presets.save_preset("Warm", base="af_heart")
+        directory = os.path.dirname(self._path())
+        leftovers = [f for f in os.listdir(directory) if f != os.path.basename(self._path())]
+        self.assertEqual(leftovers, [])
 
 
 if __name__ == "__main__":

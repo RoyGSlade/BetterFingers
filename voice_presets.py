@@ -3,8 +3,11 @@
 A preset bundles a base Kokoro voice, an optional blend recipe, and
 modulation settings into one named, saved unit ("Warm Assistant", "Crisp
 editor") so a user picks a voice once instead of re-tuning sliders every
-time. Mirrors macros.py's JSON-store pattern exactly (quarantine-on-corrupt,
-upsert-by-name, no cross-call atomicity — same accepted tradeoff as macros).
+time. Persistence discipline (quarantine-on-corrupt, atomic writes, schema
+versioning) comes from store_migration.py (DESIGN §9.5, Tier-3 M4 B2) — same
+guarantees as personas/profiles instead of a hand-rolled copy. Existing
+on-disk files with no schema_version key are treated as v1 (implicit,
+zero-disruption for current users); no migrations are registered yet.
 """
 import json
 import logging
@@ -12,9 +15,13 @@ import os
 import threading
 import time
 
+from store_migration import load_versioned_store, write_atomic
 from utils import get_user_data_path
 
 _lock = threading.RLock()
+
+_SCHEMA_VERSION = 1
+_MIGRATIONS = {}  # {from_version: fn(data) -> data}, empty until v2 exists
 
 # Field -> default value. Every preset dict always has exactly these keys
 # (plus name/created_at/updated_at), fully defaulted and type-coerced.
@@ -36,17 +43,8 @@ def _presets_path():
     return os.path.join(get_user_data_path(), "voice_presets.json")
 
 
-def _quarantine_corrupt_file(path):
-    """Move an unparseable JSON file aside instead of silently losing it, so
-    the pipeline recovers cleanly and the original data isn't overwritten by
-    the next save. Best-effort; failures here are non-fatal."""
-    try:
-        corrupt_path = f"{path}.corrupt"
-        if os.path.exists(corrupt_path):
-            corrupt_path = f"{path}.{int(time.time())}.corrupt"
-        os.replace(path, corrupt_path)
-    except OSError:
-        pass
+def _default_store():
+    return {"presets": []}
 
 
 def _coerce_blend(value):
@@ -98,18 +96,9 @@ def get_presets():
     """List of fully-defaulted preset dicts, in save order."""
     path = _presets_path()
     with _lock:
-        try:
-            with open(path, "r", encoding="utf-8") as handle:
-                data = json.load(handle)
-        except FileNotFoundError:
-            return []
-        except OSError as exc:
-            logging.warning(f"Could not read voice_presets.json: {exc}")
-            return []
-        except ValueError as exc:
-            logging.warning(f"voice_presets.json is corrupted ({exc}); quarantining it and starting fresh.")
-            _quarantine_corrupt_file(path)
-            return []
+        data, _report = load_versioned_store(
+            path, _SCHEMA_VERSION, _MIGRATIONS, default_factory=_default_store, parse=json.loads,
+        )
 
     presets_field = data.get("presets", []) if isinstance(data, dict) else []
     result = []
@@ -129,8 +118,10 @@ def get_presets():
 def _save(presets):
     with _lock:
         try:
-            with open(_presets_path(), "w", encoding="utf-8") as handle:
-                json.dump({"presets": presets}, handle, indent=2)
+            write_atomic(
+                _presets_path(),
+                json.dumps({"presets": presets, "schema_version": _SCHEMA_VERSION}, indent=2),
+            )
         except OSError as exc:
             logging.warning(f"Failed to save voice presets: {exc}")
 
