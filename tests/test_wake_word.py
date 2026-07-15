@@ -7,6 +7,7 @@ import numpy as np
 from wake_word import (
     FakeWakeDetector,
     OpenWakeWordDetector,
+    WakeListener,
     WakeWordService,
     build_openwakeword_detector,
 )
@@ -239,6 +240,115 @@ class BuildOpenWakeWordDetectorTests(unittest.TestCase):
         self.assertIsNone(detector)
         self.assertFalse(available)
         self.assertIn("digest_mismatch", reason)
+
+
+class _StubInputStream:
+    """sounddevice.InputStream-shaped stub so tests never touch real audio
+    hardware. Records the callback so a test can synthesize chunks."""
+
+    instances = []
+
+    def __init__(self, samplerate, device, channels, dtype, blocksize, callback):
+        self.samplerate = samplerate
+        self.device = device
+        self.channels = channels
+        self.dtype = dtype
+        self.blocksize = blocksize
+        self.callback = callback
+        self.started = False
+        self.closed = False
+        _StubInputStream.instances.append(self)
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.started = False
+
+    def close(self):
+        self.closed = True
+
+
+class WakeListenerTests(unittest.TestCase):
+    def setUp(self):
+        _StubInputStream.instances = []
+        self.detector = FakeWakeDetector(scores=[0.9])
+        calls = []
+        self.service = WakeWordService(self.detector, on_detect=lambda: calls.append(1))
+        self.trigger_calls = calls
+
+    def _listener(self, **kwargs):
+        return WakeListener(self.service, **kwargs)
+
+    def test_not_listening_before_start(self):
+        listener = self._listener()
+        self.assertFalse(listener.is_listening())
+
+    def test_start_opens_and_starts_stream(self):
+        listener = self._listener()
+        with patch("sounddevice.InputStream", _StubInputStream):
+            ok = listener.start()
+        self.assertTrue(ok)
+        self.assertTrue(listener.is_listening())
+        self.assertEqual(len(_StubInputStream.instances), 1)
+        self.assertTrue(_StubInputStream.instances[0].started)
+
+    def test_start_is_idempotent(self):
+        listener = self._listener()
+        with patch("sounddevice.InputStream", _StubInputStream):
+            listener.start()
+            listener.start()
+        self.assertEqual(len(_StubInputStream.instances), 1)
+
+    def test_stop_fully_closes_stream(self):
+        listener = self._listener()
+        with patch("sounddevice.InputStream", _StubInputStream):
+            listener.start()
+            listener.stop()
+        self.assertFalse(listener.is_listening())
+        self.assertTrue(_StubInputStream.instances[0].closed)
+
+    def test_stop_before_start_is_a_safe_noop(self):
+        listener = self._listener()
+        listener.stop()  # must not raise
+        self.assertFalse(listener.is_listening())
+
+    def test_start_failure_reports_false_and_not_listening(self):
+        listener = self._listener()
+
+        class _BoomStream(_StubInputStream):
+            def __init__(self, *a, **kw):
+                raise RuntimeError("device busy")
+
+        with patch("sounddevice.InputStream", _BoomStream):
+            ok = listener.start()
+        self.assertFalse(ok)
+        self.assertFalse(listener.is_listening())
+
+    def test_audio_callback_feeds_service_and_can_trigger(self):
+        listener = self._listener()
+        with patch("sounddevice.InputStream", _StubInputStream):
+            listener.start()
+        stream = _StubInputStream.instances[0]
+        loud_chunk = np.ones((1280, 1), dtype=np.float32) * 0.5
+        stream.callback(loud_chunk, 1280, None, None)
+        self.assertEqual(self.trigger_calls, [1])
+
+    def test_silent_chunk_is_gated_by_vad_even_above_threshold_score(self):
+        listener = self._listener()
+        with patch("sounddevice.InputStream", _StubInputStream):
+            listener.start()
+        stream = _StubInputStream.instances[0]
+        silent_chunk = np.zeros((1280, 1), dtype=np.float32)
+        stream.callback(silent_chunk, 1280, None, None)
+        self.assertEqual(self.trigger_calls, [])  # scored 0.9 but VAD-gated
+
+    def test_status_includes_listening_flag(self):
+        listener = self._listener()
+        self.assertFalse(listener.status()["listening"])
+        with patch("sounddevice.InputStream", _StubInputStream):
+            listener.start()
+        self.assertTrue(listener.status()["listening"])
 
 
 if __name__ == "__main__":
