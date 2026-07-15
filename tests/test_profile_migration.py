@@ -127,5 +127,110 @@ class ProfileMigrationTests(unittest.TestCase):
                     os.environ["APPDATA"] = original_appdata
 
 
+class _TempAppdataMixin:
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._orig = os.environ.get("APPDATA")
+        os.environ["APPDATA"] = self._tmp.name
+
+    def tearDown(self):
+        if self._orig is None:
+            os.environ.pop("APPDATA", None)
+        else:
+            os.environ["APPDATA"] = self._orig
+        self._tmp.cleanup()
+
+
+class ProfileQuarantineTests(_TempAppdataMixin, unittest.TestCase):
+    def test_corrupt_profile_is_quarantined_and_recreated_with_defaults(self):
+        profiles_dir = utils.get_profiles_dir()
+        path = os.path.join(profiles_dir, "Broken.yaml")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(":::not valid yaml:::[[[")
+
+        with self.assertLogs(level="WARNING") as log_ctx:
+            loaded = utils.load_profile("Broken")
+
+        self.assertEqual(loaded.get("send_mode"), utils._profile_defaults()["send_mode"])
+        self.assertTrue(os.path.exists(f"{path}.corrupt"))
+        self.assertTrue(any("Broken.yaml" in msg for msg in log_ctx.output))
+        # Recreated on disk with defaults, same as a never-existed profile —
+        # not left running on in-memory-only settings.
+        self.assertTrue(os.path.exists(path))
+        with open(path, "r", encoding="utf-8") as f:
+            on_disk = yaml.safe_load(f)
+        self.assertEqual(on_disk.get("schema_version"), utils._PROFILE_SCHEMA_VERSION)
+
+    def test_quarantine_happens_before_the_recreate_save_can_clobber_evidence(self):
+        profiles_dir = utils.get_profiles_dir()
+        path = os.path.join(profiles_dir, "Broken2.yaml")
+        original_content = ":::not valid yaml:::[[["
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(original_content)
+
+        utils.load_profile("Broken2")  # quarantines, then recreates the file
+
+        with open(f"{path}.corrupt", "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), original_content)
+
+
+class ProfileDowngradeRefusalTests(_TempAppdataMixin, unittest.TestCase):
+    def test_future_schema_version_is_never_touched(self):
+        profiles_dir = utils.get_profiles_dir()
+        path = os.path.join(profiles_dir, "Future.yaml")
+        future_payload = {
+            "schema_version": utils._PROFILE_SCHEMA_VERSION + 1,
+            "send_mode": "some_future_mode",
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(future_payload, f)
+
+        with self.assertLogs(level="WARNING"):
+            loaded = utils.load_profile("Future")
+
+        # In-memory: bare defaults, not a mangled interpretation of unknown
+        # future fields.
+        self.assertEqual(loaded.get("send_mode"), utils._profile_defaults()["send_mode"])
+
+        # On disk: byte-for-byte untouched.
+        with open(path, "r", encoding="utf-8") as f:
+            on_disk = yaml.safe_load(f)
+        self.assertEqual(on_disk, future_payload)
+        self.assertFalse(os.path.exists(f"{path}.corrupt"))
+
+
+class AppStateQuarantineTests(_TempAppdataMixin, unittest.TestCase):
+    def test_corrupt_app_state_is_quarantined_not_silently_dropped(self):
+        path = utils._app_state_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(":::not valid:::[[[")
+
+        state = utils.load_app_state()
+
+        self.assertEqual(state, utils._app_state_defaults())
+        self.assertTrue(os.path.exists(f"{path}.corrupt"))
+        self.assertFalse(os.path.exists(path))
+
+    def test_save_then_load_round_trips_with_schema_version_stamped(self):
+        utils.save_app_state({"launch_count": 3, "donation_prompt_shown": True, "last_active_profile": "Work"})
+        with open(utils._app_state_path(), "r", encoding="utf-8") as f:
+            on_disk = yaml.safe_load(f)
+        self.assertEqual(on_disk["schema_version"], utils._APP_STATE_SCHEMA_VERSION)
+
+        state = utils.load_app_state()
+        self.assertEqual(state["launch_count"], 3)
+        self.assertTrue(state["donation_prompt_shown"])
+        self.assertEqual(state["last_active_profile"], "Work")
+        # schema_version is a persistence-layer concern, not exposed to callers.
+        self.assertNotIn("schema_version", state)
+
+    def test_save_leaves_no_temp_file_behind(self):
+        utils.save_app_state({"launch_count": 1})
+        directory = os.path.dirname(utils._app_state_path())
+        leftovers = [f for f in os.listdir(directory) if f != os.path.basename(utils._app_state_path())]
+        self.assertEqual(leftovers, [])
+
+
 if __name__ == "__main__":
     unittest.main()
