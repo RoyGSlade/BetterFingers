@@ -3222,6 +3222,16 @@ async function refreshPrivacy() {
           `<span class="detail-value">${formatBytes(d.bytes)} · ${d.path}</span></div>`)
         .join('');
     }
+    const wakeEl = document.getElementById('privacyWakeListenerStatus');
+    if (wakeEl) {
+      const wake = report.wake_listener;
+      if (wake) {
+        const state = wake.active ? 'Active — listening for the wake phrase.' : 'Not active.';
+        wakeEl.textContent = `${state} ${wake.note || ''}`.trim();
+      } else {
+        wakeEl.textContent = 'Not reported by the backend.';
+      }
+    }
   } catch (error) {
     if (netEl) netEl.innerHTML = `<span class="empty-state">Privacy report unavailable: ${escapeHtml(error.message)}</span>`;
   }
