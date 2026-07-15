@@ -93,11 +93,18 @@ recordings. See [DESIGN.md §9](DESIGN.md) for the full data-lifecycle model (a 
 ## Run from source (Linux)
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install --upgrade pip && pip install -r requirements.txt
+# Hardware-aware bootstrap: creates ./.venv and installs the torch build that
+# matches your machine. On a GPU-less box it installs CPU-only torch, skipping
+# the ~3.9 GB of CUDA/nvidia wheels the default install would pull in.
+python3 tools/setup_venv.py
 cd app && npm install && npm run fix:electron
 BETTERFINGERS_PYTHON=../.venv/bin/python npm run dev
 ```
+
+The bootstrap auto-detects an NVIDIA GPU via `nvidia-smi`. Override with
+`--torch cpu` or `--torch cuda` if you want to force a build. The old manual
+path still works (`python3 -m venv .venv && source .venv/bin/activate &&
+pip install -r requirements.txt`) but on Linux it always pulls the CUDA stack.
 
 The Electron shell starts the FastAPI backend automatically on port 8000
 (`BETTERFINGERS_HOST` / `BETTERFINGERS_PORT` are honored end-to-end).

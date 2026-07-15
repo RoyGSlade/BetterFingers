@@ -1,0 +1,27 @@
+# requirements-linux-cpu.in — CPU-only variant of the Linux runtime lock source.
+#
+# Same runtime deps as requirements.in, but forces the CPU-only torch build so
+# the generated lock never pins the ~3.9 GB CUDA / nvidia-* stack. torch arrives
+# transitively via kokoro (TTS); the default PyPI wheel on Linux is the CUDA
+# build. This is the reproducible, hash-verified counterpart to the hardware
+# detection in tools/setup_venv.py — consumed by CI paths that must stay pinned
+# (e2e-screenshots.yml) on GPU-less runners.
+#
+# Regenerate exactly like the other locks (see regen-locks.yml):
+#   pip-compile --allow-unsafe --generate-hashes \
+#     --output-file=requirements-linux-cpu.lock requirements-linux-cpu.in
+
+# PyTorch's CPU wheel index. The generated lock records this so
+# `pip install --require-hashes -r requirements-linux-cpu.lock` can fetch the
+# +cpu torch wheel and its hashes.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# Inherit every runtime constraint from the canonical source of truth.
+-r requirements.in
+
+# Pin the CPU build explicitly. A local version (2.13.0+cpu) only outranks the
+# plain CUDA wheel (2.13.0) within the same base version, so without this pin a
+# newer CUDA torch on PyPI could win the resolve and drag the nvidia stack back
+# into this "cpu" lock. Bump this in lockstep with the torch version in
+# requirements-linux.lock.
+torch==2.13.0+cpu
