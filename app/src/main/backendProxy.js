@@ -20,7 +20,7 @@ const ALLOWED_PREFIXES = [
   '/drafts', '/settings/', '/models/', '/personas', '/recordings',
   '/dictionary', '/macros', '/voice-presets', '/voice-commands', '/tts/',
   '/privacy', '/jobs', '/metrics', '/ocr/', '/graph/', '/mcp/', '/intent/',
-  '/llm/', '/hardware/', '/project/', '/transcribe',
+  '/llm/', '/hardware/', '/project/', '/transcribe', '/wake/',
 ];
 const ALLOWED_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE']);
 const MAX_BODY_BYTES = 8 * 1024 * 1024; // 8 MB (covers voice-sample uploads)
@@ -146,6 +146,41 @@ async function uploadVoiceSample({ bytes, filename, name, consent, timeoutMs } =
   }
 }
 
+// Upload a user-supplied wake-word classifier .onnx as multipart/form-data.
+// Mirrors uploadVoiceSample's shape (renderer passes bytes, main builds the
+// FormData so the token is never exposed). Restricted to /wake/models/import.
+async function uploadWakeModel({ bytes, filename, name, timeoutMs } = {}) {
+  if (!bytes) {
+    return { ok: false, status: 0, error: 'no file bytes' };
+  }
+  const buf = Buffer.from(bytes);
+  if (buf.byteLength > MAX_BODY_BYTES) {
+    return { ok: false, status: 0, error: 'file too large' };
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(1, Number(timeoutMs) || 30000));
+  try {
+    const form = new FormData();
+    form.append('file', new Blob([buf]), String(filename || 'classifier.onnx'));
+    form.append('name', String(name || 'Imported model'));
+    const response = await fetch(`${_origin}/wake/models/import`, {
+      method: 'POST',
+      headers: _authHeaders(), // fetch sets multipart boundary itself
+      body: form,
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    let parsed = text;
+    try { parsed = text ? JSON.parse(text) : null; } catch (_e) { /* raw text */ }
+    return { ok: response.ok, status: response.status, body: parsed };
+  } catch (err) {
+    const aborted = err && (err.name === 'AbortError' || String(err.message || '').includes('aborted'));
+    return { ok: false, status: 0, error: aborted ? 'timeout' : String(err && err.message || err) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // --- Voice-status WebSocket (main-owned) ----------------------------------
 // The WS also authenticated with the token; running it in main keeps the token
 // out of the renderer entirely. Messages + connection-state are forwarded to
@@ -235,6 +270,7 @@ module.exports = {
   init,
   request,
   uploadVoiceSample,
+  uploadWakeModel,
   startVoiceStatus,
   stopVoiceStatus,
   // exported for unit tests

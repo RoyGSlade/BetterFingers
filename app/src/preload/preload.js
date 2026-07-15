@@ -9,6 +9,8 @@ const api = {
     ipcRenderer.invoke('backend:request', { method, path, body, timeoutMs }),
   uploadVoiceSample: (payload) =>
     ipcRenderer.invoke('backend:upload-voice-sample', payload),
+  uploadWakeModel: (payload) =>
+    ipcRenderer.invoke('backend:upload-wake-model', payload),
   voiceStatus: {
     start: () => ipcRenderer.invoke('backend:voice-status:start'),
     stop: () => ipcRenderer.invoke('backend:voice-status:stop'),

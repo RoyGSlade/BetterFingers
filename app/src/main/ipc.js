@@ -97,6 +97,11 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthT
     return backendProxy.uploadVoiceSample({ bytes, filename, name, consent, timeoutMs });
   });
 
+  handleTrusted('backend:upload-wake-model', (_event, req) => {
+    const { bytes, filename, name, timeoutMs } = req || {};
+    return backendProxy.uploadWakeModel({ bytes, filename, name, timeoutMs });
+  });
+
   handleTrusted('backend:voice-status:start', (event) => {
     backendProxy.startVoiceStatus(event.sender);
     return { ok: true };

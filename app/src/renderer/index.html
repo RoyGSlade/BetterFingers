@@ -260,6 +260,7 @@
               <button class="settings-nav-button" type="button" data-section="ai-cleanup">AI Cleanup</button>
               <button class="settings-nav-button" type="button" data-section="send-injection">Send & Injection</button>
               <button class="settings-nav-button" type="button" data-section="audio-devices">Audio Devices</button>
+              <button class="settings-nav-button" type="button" data-section="voice-control">Voice Control</button>
               <button class="settings-nav-button" type="button" data-section="tts-readaloud">TTS / Read-Aloud</button>
               <button class="settings-nav-button" type="button" data-section="notifications-status">Notifications & Status</button>
               <button class="settings-nav-button" type="button" data-section="appearance">Appearance</button>
@@ -915,6 +916,120 @@
                     <div id="micMeterBar" class="mic-meter-bar hidden">
                       <div id="micMeterFill" class="mic-meter-fill" style="width: 0%;"></div>
                     </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Section: Voice Control (Wake Word) -->
+            <div class="settings-section hidden" data-section="voice-control">
+              <h2>Voice Control</h2>
+              <p class="section-desc">Hands-free activation — say a wake phrase to start dictating without touching a hotkey.</p>
+
+              <div class="setting-group">
+                <h3>Wake Word</h3>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingWakeWordEnabled">Enable wake word</label>
+                    <span class="setting-desc">Continuously listens for the selected wake phrase and starts recording when heard. Off by default.</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="custom-switch-label">
+                      <input id="settingWakeWordEnabled" type="checkbox" />
+                      <span class="custom-switch-slider"></span>
+                    </label>
+                  </div>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <span class="status-label">Status</span>
+                    <span class="setting-desc" id="wakeStatusDetail">Disabled.</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="setting-group">
+                <h3>Wake Phrase Model</h3>
+                <p class="setting-desc">
+                  No wake-phrase model ships with the app: openWakeWord's own pre-trained phrases
+                  (hey jarvis, alexa, etc.) are licensed CC-BY-NC-SA (personal/non-commercial use
+                  only), so we don't bundle or redistribute them. Import your own ONNX classifier
+                  below — its licensing is your responsibility, not ours.
+                </p>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingWakeWordModel">Wake phrase</label>
+                    <span class="setting-desc">Select an imported classifier.</span>
+                  </div>
+                  <div class="setting-control">
+                    <select id="settingWakeWordModel" class="settings-input min-w-200">
+                      <option value="">None imported</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <span class="status-label">Import a model</span>
+                    <span class="setting-desc">Add your own wake-phrase classifier (.onnx).</span>
+                  </div>
+                  <div class="setting-control flex-column-gap10">
+                    <button id="importWakeModelButton" class="secondary-button settings-btn" type="button">Import model file...</button>
+                    <input id="importWakeModelFile" type="file" accept=".onnx" class="hidden" />
+                    <span id="importWakeModelStatus" class="setting-desc"></span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="setting-group">
+                <h3>Wake Engine Components</h3>
+                <p class="setting-desc">Shared feature-extraction models (melspectrogram + embedding), Apache-2.0. Downloaded once, on demand.</p>
+                <div id="wakeBackboneList" class="flex-column-gap10"></div>
+              </div>
+
+              <div class="setting-group">
+                <h3>Detection Tuning</h3>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingWakeWordSensitivity">Sensitivity</label>
+                    <span class="setting-desc">Score threshold to trigger (0.0-1.0). Lower = more sensitive, more false triggers.</span>
+                  </div>
+                  <div class="setting-control">
+                    <input id="settingWakeWordSensitivity" class="settings-input w-120" type="number" min="0" max="1" step="0.05" />
+                  </div>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingWakeWordCooldown">Cooldown (seconds)</label>
+                    <span class="setting-desc">Minimum time between wake triggers.</span>
+                  </div>
+                  <div class="setting-control">
+                    <input id="settingWakeWordCooldown" class="settings-input w-120" type="number" min="0" max="30" step="0.5" />
+                  </div>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="settingWakeWordMaxRecording">Max recording (seconds)</label>
+                    <span class="setting-desc">Hard cap on a wake-triggered recording, in case auto-stop never fires.</span>
+                  </div>
+                  <div class="setting-control">
+                    <input id="settingWakeWordMaxRecording" class="settings-input w-120" type="number" min="5" max="1800" step="5" />
+                  </div>
+                </div>
+              </div>
+
+              <div class="setting-group">
+                <h3>Live Test</h3>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <span class="status-label">Wake Score Tester</span>
+                    <span class="setting-desc">Listens for 10s and reports the peak detection score.</span>
+                  </div>
+                  <div class="setting-control flex-column-gap10">
+                    <button id="testWakeButton" class="secondary-button settings-btn" type="button">Test Wake Detection (10s)</button>
+                    <div id="wakeScoreBar" class="mic-meter-bar hidden">
+                      <div id="wakeScoreFill" class="mic-meter-fill" style="width: 0%;"></div>
+                    </div>
+                    <span id="wakeTestResult" class="setting-desc"></span>
                   </div>
                 </div>
               </div>

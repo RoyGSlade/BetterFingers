@@ -80,6 +80,15 @@ import {
   fetchMacros,
   addMacro,
   deleteMacro,
+  fetchWakeStatus,
+  fetchWakeModels,
+  enableWake,
+  disableWake,
+  downloadWakeModel,
+  fetchWakeModelDownloadState,
+  deleteWakeModel,
+  testWake,
+  importWakeModel,
 } from './api/backend.js';
 
 const backendStatusEl = document.getElementById('backendStatus');
@@ -258,6 +267,10 @@ const settingEls = {
   model_keep_llm_loaded: document.getElementById('settingKeepLlm'),
   model_keep_stt_loaded: document.getElementById('settingKeepStt'),
   model_keep_tts_loaded: document.getElementById('settingKeepTts'),
+  wake_word_model: document.getElementById('settingWakeWordModel'),
+  wake_word_sensitivity: document.getElementById('settingWakeWordSensitivity'),
+  wake_word_cooldown_s: document.getElementById('settingWakeWordCooldown'),
+  wake_word_max_recording_s: document.getElementById('settingWakeWordMaxRecording'),
 };
 
 function setupHotkeyRecording(inputEl) {
@@ -4476,6 +4489,197 @@ async function bootstrap() {
   initOnboarding();
 }
 
+function renderWakeStatus(status) {
+  const enabledEl = document.getElementById('settingWakeWordEnabled');
+  const detailEl = document.getElementById('wakeStatusDetail');
+  const listening = Boolean(status && status.listening);
+  if (enabledEl && document.activeElement !== enabledEl) {
+    enabledEl.checked = listening;
+  }
+  if (detailEl) {
+    if (listening) {
+      detailEl.textContent = `Listening (threshold ${status.threshold ?? '?'}, cooldown ${status.cooldown_ms ?? '?'}ms).`;
+    } else if (status && status.enabled) {
+      detailEl.textContent = `Enabled but not listening: ${status.reason || 'unknown'}`;
+    } else {
+      detailEl.textContent = status && status.reason ? `Disabled (${status.reason}).` : 'Disabled.';
+    }
+  }
+}
+
+async function refreshWakeStatus() {
+  try {
+    const status = await fetchWakeStatus();
+    renderWakeStatus(status);
+  } catch (error) {
+    const detailEl = document.getElementById('wakeStatusDetail');
+    if (detailEl) detailEl.textContent = `Status unavailable: ${error.message}`;
+  }
+}
+
+function renderWakeBackboneList(models) {
+  const el = document.getElementById('wakeBackboneList');
+  if (!el) return;
+  const backbones = (models || []).filter((m) => m.kind === 'backbone');
+  if (!backbones.length) {
+    el.innerHTML = '<span class="empty-state">No wake engine components listed.</span>';
+    return;
+  }
+  el.innerHTML = backbones
+    .map(
+      (m) => `
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="status-label">${escapeHtml(m.name)}</span>
+          <span class="setting-desc">${escapeHtml(m.license)} — ${m.downloaded ? 'downloaded' : 'not downloaded'}</span>
+        </div>
+        <div class="setting-control">
+          <button class="secondary-button settings-btn" type="button" data-wake-download="${escapeHtml(m.id)}" ${m.downloaded ? 'disabled' : ''}>
+            ${m.downloaded ? 'Downloaded' : 'Download'}
+          </button>
+        </div>
+      </div>`
+    )
+    .join('');
+  el.querySelectorAll('[data-wake-download]').forEach((btn) => {
+    btn.addEventListener('click', () => handleWakeDownload(btn.dataset.wakeDownload, btn));
+  });
+}
+
+function renderWakeModelSelect(models) {
+  const select = settingEls.wake_word_model;
+  if (!select) return;
+  const classifiers = (models || []).filter((m) => m.kind === 'classifier');
+  const current = select.value;
+  select.innerHTML = '<option value="">None imported</option>';
+  classifiers.forEach((m) => {
+    const opt = document.createElement('option');
+    opt.value = m.id;
+    opt.textContent = `${m.name} (${m.license})`;
+    select.appendChild(opt);
+  });
+  if (classifiers.some((m) => m.id === current)) {
+    select.value = current;
+  }
+}
+
+async function refreshWakeModels() {
+  try {
+    const payload = await fetchWakeModels();
+    const models = payload?.models || [];
+    renderWakeBackboneList(models);
+    renderWakeModelSelect(models);
+  } catch (error) {
+    const el = document.getElementById('wakeBackboneList');
+    if (el) el.innerHTML = `<span class="empty-state">Wake models unavailable: ${escapeHtml(error.message)}</span>`;
+  }
+}
+
+async function handleWakeDownload(modelId, buttonEl) {
+  if (!modelId) return;
+  if (buttonEl) {
+    buttonEl.disabled = true;
+    buttonEl.textContent = 'Downloading…';
+  }
+  try {
+    await downloadWakeModel(modelId);
+    const poll = async () => {
+      const state = await fetchWakeModelDownloadState(modelId);
+      if (state.active) {
+        setTimeout(poll, 1000);
+        return;
+      }
+      await refreshWakeModels();
+    };
+    setTimeout(poll, 1000);
+  } catch (error) {
+    showToast(`Wake model download failed: ${error.message}`, 'danger');
+    if (buttonEl) {
+      buttonEl.disabled = false;
+      buttonEl.textContent = 'Download';
+    }
+  }
+}
+
+async function handleWakeImport(file) {
+  const statusEl = document.getElementById('importWakeModelStatus');
+  if (!file) return;
+  const name = file.name.replace(/\.onnx$/i, '') || 'Imported model';
+  if (statusEl) statusEl.textContent = `Importing ${file.name}…`;
+  try {
+    await importWakeModel(file, name);
+    if (statusEl) statusEl.textContent = `Imported ${file.name}. Its licensing is your responsibility.`;
+    await refreshWakeModels();
+  } catch (error) {
+    if (statusEl) statusEl.textContent = `Import failed: ${error.message}`;
+    showToast(`Wake model import failed: ${error.message}`, 'danger');
+  }
+}
+
+async function handleWakeToggle(checked) {
+  const enabledEl = document.getElementById('settingWakeWordEnabled');
+  if (enabledEl) enabledEl.disabled = true;
+  try {
+    if (checked) {
+      const sensitivityEl = settingEls.wake_word_sensitivity;
+      const cooldownEl = settingEls.wake_word_cooldown_s;
+      const modelEl = settingEls.wake_word_model;
+      const result = await enableWake({
+        classifier_id: modelEl?.value || null,
+        classifier_origin: 'user-imported',
+        threshold: sensitivityEl?.value ? parseFloat(sensitivityEl.value) : undefined,
+        cooldown_ms: cooldownEl?.value ? Math.round(parseFloat(cooldownEl.value) * 1000) : undefined,
+      });
+      if (!result || result.ok === false) {
+        showToast(result?.reason || 'Wake word is unavailable.', 'warning');
+        if (enabledEl) enabledEl.checked = false;
+      }
+      renderWakeStatus(result);
+    } else {
+      const result = await disableWake();
+      renderWakeStatus(result);
+    }
+  } catch (error) {
+    showToast(`Wake word toggle failed: ${error.message}`, 'danger');
+    if (enabledEl) enabledEl.checked = !checked;
+  } finally {
+    if (enabledEl) enabledEl.disabled = false;
+  }
+}
+
+async function handleWakeTest() {
+  const button = document.getElementById('testWakeButton');
+  const bar = document.getElementById('wakeScoreBar');
+  const fill = document.getElementById('wakeScoreFill');
+  const resultEl = document.getElementById('wakeTestResult');
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Listening… (10s)';
+  }
+  bar?.classList.remove('hidden');
+  if (fill) fill.style.width = '0%';
+  if (resultEl) resultEl.textContent = '';
+  try {
+    const result = await testWake(10.0);
+    if (!result || result.ok === false) {
+      if (resultEl) resultEl.textContent = result?.reason || 'Wake test unavailable.';
+    } else {
+      const peakPercent = Math.max(0, Math.min(100, Math.round((result.peak_score || 0) * 100)));
+      if (fill) fill.style.width = `${peakPercent}%`;
+      if (resultEl) {
+        resultEl.textContent = `Peak score: ${(result.peak_score || 0).toFixed(2)} over ${result.sample_count || 0} samples.`;
+      }
+    }
+  } catch (error) {
+    if (resultEl) resultEl.textContent = `Test failed: ${error.message}`;
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = 'Test Wake Detection (10s)';
+    }
+  }
+}
+
 function initSettingsPanel() {
   for (const el of Object.values(settingEls)) {
     if (!el) continue;
@@ -4522,6 +4726,9 @@ function initSettingsPanel() {
         refreshDictionary().catch(() => {});
       } else if (sectionName === 'macros') {
         refreshMacros().catch(() => {});
+      } else if (sectionName === 'voice-control') {
+        refreshWakeStatus().catch(() => {});
+        refreshWakeModels().catch(() => {});
       }
 
       settingsSections.forEach((section) => {
@@ -4545,6 +4752,23 @@ function initSettingsPanel() {
 
   settingsSearchInput?.addEventListener('input', (e) => {
     filterSettings(e.target.value);
+  });
+
+  document.getElementById('settingWakeWordEnabled')?.addEventListener('change', (event) => {
+    handleWakeToggle(event.target.checked);
+  });
+
+  const importWakeModelButton = document.getElementById('importWakeModelButton');
+  const importWakeModelFile = document.getElementById('importWakeModelFile');
+  importWakeModelButton?.addEventListener('click', () => importWakeModelFile?.click());
+  importWakeModelFile?.addEventListener('change', (event) => {
+    const file = event.target.files && event.target.files[0];
+    handleWakeImport(file);
+    event.target.value = '';
+  });
+
+  document.getElementById('testWakeButton')?.addEventListener('click', () => {
+    handleWakeTest();
   });
 
   const testMicButton = document.getElementById('testMicButton');
