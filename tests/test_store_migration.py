@@ -239,6 +239,19 @@ class LoadVersionedStoreTests(unittest.TestCase):
             self.assertFalse(os.path.exists(f"{path}.bak-v99"))
             self.assertFalse(os.path.exists(f"{path}.corrupt"))
 
+    def test_empty_file_parsed_as_none_is_treated_as_empty_store_not_corrupt(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "store.yaml")
+            with open(path, "w") as fh:
+                fh.write("")  # e.g. yaml.safe_load("") -> None
+            data, report = sm.load_versioned_store(
+                path, 1, {}, default_factory=_default_factory, parse=lambda text: None if not text.strip() else json.loads(text)
+            )
+            self.assertEqual(report["action"], "loaded")
+            self.assertNotEqual(report["action"], "quarantined")
+            self.assertEqual(data.get("schema_version", 1), 1)
+            self.assertFalse(os.path.exists(f"{path}.corrupt"))
+
     def test_custom_parse_function(self):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "store.yaml")

@@ -138,6 +138,12 @@ def load_versioned_store(path, current_version, migrations, *, default_factory, 
         with open(path, "r", encoding="utf-8") as fh:
             raw_text = fh.read()
         data = parse(raw_text)
+        if data is None:
+            # An empty/whitespace-only file is a legitimate "nothing stored
+            # yet" state (yaml.safe_load("") -> None, json.loads fails
+            # instead but callers of an empty JSON file get the same
+            # courtesy) — not corruption.
+            data = {}
         if not isinstance(data, dict):
             raise ValueError(f"expected a mapping at the top level, got {type(data).__name__}")
     except Exception as exc:
