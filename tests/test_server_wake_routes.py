@@ -49,6 +49,9 @@ class WakeRoutesTests(unittest.TestCase):
         routes_wake.stop_wake_listener()
         _StubInputStream.instances = []
         server.transcriber = None
+        routes_wake._training_state.update(
+            {"status": "idle", "percent": 0, "message": "", "result": None}
+        )
 
     def tearDown(self):
         routes_wake.stop_wake_listener()
@@ -237,6 +240,54 @@ class WakeRoutesTests(unittest.TestCase):
                 # Reused the already-running listener -- only one stream, still open.
                 self.assertEqual(len(_StubInputStream.instances), 1)
                 self.assertFalse(_StubInputStream.instances[0].closed)
+
+    def _await_training_done(self, client, timeout=5.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            body = client.get("/wake/train/status").json()
+            if body["status"] == "done":
+                return body
+            time.sleep(0.02)
+        self.fail("training did not complete in time")
+
+    def test_train_route_runs_and_registers(self):
+        fake = {"ok": True, "verdict": "reliable", "threshold": 0.5,
+                "model_id": "trained_123", "n_pos": 40, "n_neg": 80}
+        with patch.object(server, "ensure_tts_initialized", return_value=object()), patch(
+            "wake_training_service.train_phrase_model", return_value=fake
+        ) as train:
+            with self._client() as client:
+                start = client.post("/wake/train", json={"phrase": "hey fingers"})
+                self.assertTrue(start.json()["started"])
+                body = self._await_training_done(client)
+        self.assertTrue(body["result"]["ok"])
+        self.assertEqual(body["result"]["model_id"], "trained_123")
+        # The phrase reached the trainer (via the background thread).
+        self.assertEqual(train.call_args.args[0], "hey fingers")
+
+    def test_train_empty_phrase_400(self):
+        with self._client() as client:
+            r = client.post("/wake/train", json={"phrase": "   "})
+        self.assertEqual(r.status_code, 400)
+
+    def test_train_already_running_is_guarded(self):
+        routes_wake._training_state.update({"status": "running", "percent": 20})
+        with self._client() as client:
+            r = client.post("/wake/train", json={"phrase": "hey fingers"})
+        body = r.json()
+        self.assertFalse(body["ok"])
+        self.assertTrue(body["already_running"])
+
+    def test_train_failure_surfaces_in_status(self):
+        fail = {"ok": False, "message": "Wake backbone not ready."}
+        with patch.object(server, "ensure_tts_initialized", return_value=object()), patch(
+            "wake_training_service.train_phrase_model", return_value=fail
+        ):
+            with self._client() as client:
+                client.post("/wake/train", json={"phrase": "hey fingers"})
+                body = self._await_training_done(client)
+        self.assertFalse(body["result"]["ok"])
+        self.assertIn("backbone", body["result"]["message"].lower())
 
     def test_wake_test_unavailable_when_no_classifier(self):
         with patch(

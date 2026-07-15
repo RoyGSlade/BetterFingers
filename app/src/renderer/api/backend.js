@@ -467,6 +467,14 @@ async function testWake(durationS = 10.0, timeoutMs = 15000) {
   return postJson(`${WAKE_URL}/test`, { duration_s: durationS }, Math.max(timeoutMs, durationS * 1000 + 5000));
 }
 
+async function trainWakePhrase(phrase, timeoutMs = 5000) {
+  return postJson(`${WAKE_URL}/train`, { phrase }, timeoutMs);
+}
+
+async function fetchWakeTrainStatus(timeoutMs = 2500) {
+  return fetchJson(`${WAKE_URL}/train/status`, timeoutMs);
+}
+
 async function importWakeModel(file, name, timeoutMs = 30000) {
   const bridge = window.betterFingers && window.betterFingers.uploadWakeModel;
   if (typeof bridge !== 'function') {
@@ -670,6 +678,8 @@ export {
   fetchWakeModelDownloadState,
   deleteWakeModel,
   testWake,
+  trainWakePhrase,
+  fetchWakeTrainStatus,
   importWakeModel,
   lintPersona,
   testPersona,

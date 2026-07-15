@@ -444,11 +444,22 @@ The backend logic layer is shipped (§3). What remains is the service/UI/depende
       `Command: <action>` / `Needs confirmation — say "confirm" or "cancel"` riding the
       existing `broadcast_status_threadsafe` channel (`command_detected`,
       `command_needs_confirmation`).
-- [ ] **Training/calibration (Phase 2, after real-world use):** command-phrase recording +
-      `observed_transcripts` alias learning; wake-phrase calibration (5–20 samples +
-      negatives → personalized threshold + reliable/noisy verdict); optional local
-      embedding verifier; Voice Training panel (train, sensitivity test, false-trigger
-      log, delete training data, export/import profile).
+- [~] **Training/calibration (Phase 2)** — *builder SHIPPED 2026-07-15*. On-device
+      wake/command-phrase trainer with no torch and no GPL/NC dependencies:
+      `wake_trainer.py` trains a NumPy classifier head on the shipped Apache-2.0 backbone
+      (plugs into `WakeScorer` via a duck-typed `NumpyClassifierSession`, saved as `.npz`);
+      `wake_training_data.py` generates positives from the app's own **Kokoro** voices
+      (Apache/MIT — the GPL-free replacement for openWakeWord's Piper) plus the user's
+      recordings, and negatives from decoy phrases; `wake_training_service.py` orchestrates,
+      calibrates a personalised threshold, and emits a **reliable / noisy / unusable**
+      verdict. `POST /wake/train` (background) + `GET /wake/train/status`; a "Build a Wake
+      Phrase" panel in Voice Control. Trained models register in the wake manifest
+      (`origin="trained"`) and are selectable like any classifier. *Remaining:* FA/FR
+      validation against **real recorded** `tests/wake_fixtures/` audio (the pipeline is
+      tested against the real backbone + stubs, but genuine field recordings don't exist
+      yet — the milestone's "not done without fixture-based FA/FR testing" bar); plus the
+      sensitivity-test/false-trigger-log/export-import polish and `observed_transcripts`
+      alias learning. The trainer is the shared foundation for command-phrase models.
 
 **Safety invariants (hardcoded, not configurable down):** `send`, `delete_history`, and
 anything destructive always require confirmation; training improves recognition but never

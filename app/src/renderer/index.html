@@ -986,6 +986,35 @@
                 <div id="wakeBackboneList" class="flex-column-gap10"></div>
               </div>
 
+              <div class="setting-group" id="wakeTrainingGroup">
+                <h3>Build a Wake Phrase</h3>
+                <p class="setting-desc">
+                  Train your own wake phrase on-device. Your phrase is synthesized across the app's
+                  voices (plus decoy phrases as negatives) to train a small classifier — no cloud, no
+                  extra downloads. Needs the Wake Engine Components above installed first.
+                </p>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="wakeTrainPhrase">Wake phrase</label>
+                    <span class="setting-desc">e.g. "hey fingers" — two or three distinct syllables work best.</span>
+                  </div>
+                  <input id="wakeTrainPhrase" class="settings-input min-w-200" type="text" placeholder="hey fingers" maxlength="60" />
+                </div>
+                <div class="setting-row">
+                  <button id="wakeTrainButton" class="secondary-button primary-button settings-btn" type="button">Train wake phrase</button>
+                </div>
+                <div id="wakeTrainProgress" class="model-download-progress" hidden>
+                  <div class="model-progress-head">
+                    <span id="wakeTrainProgressLabel">Starting…</span>
+                    <strong id="wakeTrainProgressPercent">0%</strong>
+                  </div>
+                  <div class="model-progress-track">
+                    <div id="wakeTrainProgressFill" class="model-progress-fill"></div>
+                  </div>
+                </div>
+                <div id="wakeTrainResult" class="setting-desc" role="status" aria-live="polite"></div>
+              </div>
+
               <div class="setting-group">
                 <h3>Detection Tuning</h3>
                 <div class="setting-row">

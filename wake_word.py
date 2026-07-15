@@ -128,7 +128,10 @@ def build_openwakeword_detector(classifier_id=None, classifier_origin="bundled")
     label = "wake_word"
     if classifier_id:
         try:
-            if classifier_origin == "user-imported":
+            # user-imported .onnx and self-trained .npz classifiers share one
+            # manifest (verify/path helpers), so both resolve the same way; only
+            # the SESSION construction differs by file type below.
+            if classifier_origin in ("user-imported", "trained"):
                 verification = wake_models.verify_imported_model(classifier_id)
                 path = wake_models.get_imported_model_path(classifier_id) if verification["ok"] else None
             else:
@@ -136,7 +139,13 @@ def build_openwakeword_detector(classifier_id=None, classifier_origin="bundled")
                 path = wake_models.get_wake_model_path(classifier_id) if verification["ok"] else None
             if not verification["ok"]:
                 return None, False, f"unavailable: classifier failed verification ({verification['reason']})"
-            classifier_session = wake_models.build_onnx_session(path)
+            if path and path.lower().endswith(".npz"):
+                # Locally-trained NumPy head — no ONNX, plugs in via the
+                # duck-typed session wake_trainer provides.
+                import wake_trainer
+                classifier_session = wake_trainer.NumpyClassifierSession(wake_trainer.load_model(path))
+            else:
+                classifier_session = wake_models.build_onnx_session(path)
             label = classifier_id
         except (KeyError, wake_models.WakeEngineUnavailable) as exc:
             logging.error("Wake classifier %s failed to load: %s", classifier_id, exc)

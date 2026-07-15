@@ -272,6 +272,41 @@ def get_imported_model_path(model_id):
     return os.path.join(get_wake_models_dir(), entry["filename"])
 
 
+def register_trained_model(display_name, weights, metadata=None):
+    """Save a locally-trained NumPy classifier head (.npz, produced by
+    wake_trainer) into the wake models dir and record it in the SAME manifest as
+    user-imported classifiers — so verify/remove/list/path helpers all apply.
+    Distinguished by origin="trained", license="self-trained" (no third-party
+    weights, so nothing to redistribute), and a .npz filename that wake_word
+    loads via wake_trainer.NumpyClassifierSession instead of onnxruntime."""
+    import wake_trainer
+
+    os.makedirs(get_wake_models_dir(), exist_ok=True)
+    manifest = load_imported_models()
+    model_id = f"trained_{int(time.time() * 1000)}"
+    filename = f"{model_id}.npz"
+    dest = os.path.join(get_wake_models_dir(), filename)
+    wake_trainer.save_model(dest, weights, metadata)
+    meta = dict(metadata or {})
+    entry = {
+        "id": model_id,
+        "name": str(display_name or meta.get("phrase") or "Trained phrase"),
+        "filename": filename,
+        "sha256": sha256_file(dest),
+        "size_bytes": os.path.getsize(dest),
+        "kind": "classifier",
+        "license": "self-trained",
+        "origin": "trained",
+        "phrase": meta.get("phrase", ""),
+        "verdict": meta.get("verdict", ""),
+        "threshold": meta.get("threshold"),
+        "trained_at": time.time(),
+    }
+    manifest[model_id] = entry
+    _save_imported_models(manifest)
+    return entry
+
+
 def list_wake_models():
     """Merge the backbone catalog with any user-imported classifiers into one
     listing for the /wake/models route, each annotated with install status."""
@@ -408,3 +443,17 @@ class WakeScorer:
         if self._feature_buffer.shape[0] < n_frames:
             return None
         return self._feature_buffer[-n_frames:][None, :, :].astype(self._np.float32)
+
+    def all_feature_windows(self, n_frames=EMBED_WINDOW_DEFAULT, stride=1):
+        """Every ``n_frames``-frame sliding window over the accumulated feature
+        buffer, shape ``(M, n_frames, 96)``. Used by the phrase-model trainer
+        (wake_trainer.py) to turn one recorded/synthesized clip into all its
+        candidate classifier inputs. Returns an empty ``(0, n_frames, 96)``
+        array when the buffer is shorter than one window."""
+        np = self._np
+        total = self._feature_buffer.shape[0]
+        if total < n_frames:
+            return np.zeros((0, n_frames, 96), dtype=np.float32)
+        starts = range(0, total - n_frames + 1, max(1, int(stride)))
+        windows = [self._feature_buffer[s:s + n_frames] for s in starts]
+        return np.stack(windows, axis=0).astype(np.float32)

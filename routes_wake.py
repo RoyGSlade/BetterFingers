@@ -87,6 +87,18 @@ class WakeTestRequest(BaseModel):
     duration_s: float = 10.0
 
 
+class WakeTrainRequest(BaseModel):
+    phrase: str
+    voices: Optional[list] = None
+
+
+# Wake-phrase training runs in a background thread (synthetic-sample generation
+# via Kokoro is seconds-to-a-minute of TTS, too long to block the request).
+# One training run at a time; the UI polls GET /wake/train/status.
+_training_lock = threading.Lock()
+_training_state = {"status": "idle", "percent": 0, "message": "", "result": None}
+
+
 @router.get("/wake/status")
 async def wake_status():
     with _lock:
@@ -296,3 +308,55 @@ async def wake_test(request: WakeTestRequest = None):
         "peak_score": max(scores) if scores else 0.0,
         "scores": scores[-50:],
     }
+
+
+@router.post("/wake/train")
+async def wake_train(request: WakeTrainRequest):
+    """Kick off a background wake-phrase training run: synthesize the phrase with
+    the app's Kokoro voices (+ decoy negatives), train a NumPy classifier head on
+    the shared Apache-2.0 backbone, calibrate a threshold + reliability verdict,
+    and register the result as a selectable trained classifier. The phrase itself
+    is user content, so it is never written to the server log."""
+    phrase = (request.phrase or "").strip()
+    if not phrase:
+        raise HTTPException(status_code=400, detail="Enter a wake phrase to train.")
+
+    with _training_lock:
+        if _training_state["status"] == "running":
+            return {"ok": False, "already_running": True,
+                    "message": "A training run is already in progress."}
+        _training_state.update({"status": "running", "percent": 0,
+                                "message": "Starting…", "result": None})
+
+    voices = request.voices
+
+    def _run():
+        import server
+        import wake_training_service
+
+        def progress(payload):
+            with _training_lock:
+                _training_state["percent"] = int(payload.get("percent", 0))
+                _training_state["message"] = str(payload.get("message", ""))
+
+        try:
+            engine = server.ensure_tts_initialized()
+            result = wake_training_service.train_phrase_model(
+                phrase, engine=engine, voices=voices, progress=progress,
+            )
+        except Exception:
+            logging.exception("Wake-phrase training crashed")
+            result = {"ok": False, "message": "Training failed unexpectedly (see server log)."}
+        with _training_lock:
+            _training_state.update({"status": "done", "percent": 100, "result": result})
+
+    threading.Thread(target=_run, name="wake-train", daemon=True).start()
+    return {"ok": True, "started": True}
+
+
+@router.get("/wake/train/status")
+async def wake_train_status():
+    """Current/last training run state: {status: idle|running|done, percent,
+    message, result?} — result is train_phrase_model's payload once done."""
+    with _training_lock:
+        return dict(_training_state)
