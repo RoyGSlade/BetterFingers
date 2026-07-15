@@ -18,5 +18,6 @@
 // harness actually catches lies. See run.mjs.
 
 import { baselineScenarios } from './baseline.mjs';
+import { voiceControlScenarios } from './voice-control.mjs';
 
-export const scenarios = [...baselineScenarios];
+export const scenarios = [...baselineScenarios, ...voiceControlScenarios];

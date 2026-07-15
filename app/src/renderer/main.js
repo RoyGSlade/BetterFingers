@@ -4502,7 +4502,8 @@ function renderWakeStatus(status) {
     } else if (status && status.enabled) {
       detailEl.textContent = `Enabled but not listening: ${status.reason || 'unknown'}`;
     } else {
-      detailEl.textContent = status && status.reason ? `Disabled (${status.reason}).` : 'Disabled.';
+      const reason = status && status.reason && status.reason !== 'disabled' ? status.reason : '';
+      detailEl.textContent = reason ? `Disabled (${reason}).` : 'Disabled.';
     }
   }
 }
