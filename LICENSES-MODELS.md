@@ -60,3 +60,44 @@ on-disk model — that discipline is about integrity, not licensing.
 Training a permissively-licensed "hey fingers" classifier from scratch
 (Apache-2.0/CC0/MIT-clean, using the Apache-2.0 backbone above) is tracked as
 future work, out of scope for the M3 slice.
+
+## Voice cloning (voice_clone_engine.py, M5/M6 U6)
+
+### Shippable — MIT
+
+| Artifact | License | Source |
+|---|---|---|
+| kanade-tokenizer (code) | MIT | [github.com/frothywater/kanade-tokenizer](https://github.com/frothywater/kanade-tokenizer), README "License" section |
+| `frothywater/kanade-12.5hz` checkpoint (weights) | MIT | HF repo card, `license: mit` frontmatter tag, verified 2026-07-15 |
+
+### NOT vendored under our own release — pin-to-upstream instead
+
+| Artifact | License | Why |
+|---|---|---|
+| WavLM-base-plus pretrained weights (torchaudio's `WAVLM_BASE_PLUS` bundle, the SSL front end kanade's local/global encoders run on) | **CC BY-SA 3.0** | The `microsoft/wavlm-base-plus` HF model card explicitly points to [github.com/microsoft/UniSpeech/blob/main/LICENSE](https://github.com/microsoft/UniSpeech/blob/main/LICENSE) as the weights' license — verified directly, it is Creative Commons Attribution-ShareAlike 3.0 Unported, not MIT. (`microsoft/unilm`'s own repo-root LICENSE *is* MIT, but that covers the training/inference *code*, not this specific weights artifact — the HF card is explicit that the weights carry the UniSpeech CC BY-SA terms.) CC BY-SA fails the Apache-2.0/CC0/MIT-only gate for catalog default entries (§11) — same class of exclusion as the wake-word CC-BY-NC-SA classifiers above. |
+
+Because we cannot redistribute WavLM-base-plus's weights from our own
+`clone-runtime-v1` release under our license gate, the clone-runtime
+provisioning pins the ORIGINAL upstream-hosted URL (the same one
+torchaudio's `WAVLM_BASE_PLUS` bundle itself fetches from) plus our own
+computed sha256 — using/running a CC BY-SA model is fine; redistributing our
+own re-hosted copy of it is what the gate exists to prevent. Same discipline
+as `model_manager.py`'s llama-server binary, which is likewise pinned
+straight to its upstream GitHub release rather than re-hosted by us.
+
+**Pinned artifact** (`voice_clone_engine.CLONE_WAVLM_PIN`), verified against
+upstream directly (§11):
+
+| Field | Value |
+|---|---|
+| URL | `https://download.pytorch.org/torchaudio/models/wavlm_base_plus.pth` |
+| SHA-256 | `136a3e720c04f2c77bf7a4dc6a3868b14d5a2c145a988114b733cb1a8428be98` |
+| Size | 377,604,347 bytes |
+| License | CC BY-SA 3.0 Unported (attribution: Microsoft WavLM, [github.com/microsoft/UniSpeech](https://github.com/microsoft/UniSpeech), original paper [Chen et al., "WavLM: Large-Scale Self-Supervised Pre-Training for Full Stack Speech Processing"](https://arxiv.org/abs/2110.13900)) |
+
+Attribution notice (WavLM-base-plus, CC BY-SA 3.0): this weights file is
+downloaded at runtime from its original publisher and used for inference
+only — it is never redistributed by this project. Derivative model weights
+produced by fine-tuning it would need to carry forward the same
+Attribution-ShareAlike terms; BetterFingers does not fine-tune or
+redistribute WavLM, so this obligation does not extend to the app itself.
