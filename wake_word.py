@@ -118,7 +118,11 @@ def build_openwakeword_detector(classifier_id=None, classifier_origin="bundled")
         melspec_session = wake_models.build_onnx_session(wake_models.get_wake_model_path("melspectrogram"))
         embedding_session = wake_models.build_onnx_session(wake_models.get_wake_model_path("embedding_model"))
     except wake_models.WakeEngineUnavailable as exc:
-        return None, False, f"unavailable: {exc}"
+        # Log the detail server-side; the reason string travels to HTTP
+        # clients via /wake/* responses, so it must not echo internal error
+        # text (py/stack-trace-exposure).
+        logging.error("Wake backbone session failed to load: %s", exc)
+        return None, False, "unavailable: wake engine failed to load (see server log)"
 
     classifier_session = None
     label = "wake_word"
@@ -135,7 +139,8 @@ def build_openwakeword_detector(classifier_id=None, classifier_origin="bundled")
             classifier_session = wake_models.build_onnx_session(path)
             label = classifier_id
         except (KeyError, wake_models.WakeEngineUnavailable) as exc:
-            return None, False, f"unavailable: {exc}"
+            logging.error("Wake classifier %s failed to load: %s", classifier_id, exc)
+            return None, False, "unavailable: classifier failed to load (see server log)"
 
     detector = OpenWakeWordDetector(melspec_session, embedding_session, classifier_session, label=label)
     if classifier_session is None:

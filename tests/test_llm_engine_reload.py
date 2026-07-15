@@ -45,6 +45,15 @@ class LLMEngineAdmissionTests(unittest.TestCase):
         self._ready = LLMEngine._ready
         self._last_error = LLMEngine._last_error
         self._last_error_details = LLMEngine._last_error_details
+        # The hooks are CLASS-level and set process-wide the moment any test
+        # imports server.py (server injects the REAL admission fn at import).
+        # On a low-RAM CI runner (macOS ~7 GB) that leaked fn refuses the load,
+        # so _start_server never spawns and popen.call_args is None — which
+        # broke test_start_server_includes_gemma_4_server_args on PR #57.
+        # Null them so every test here starts from the documented no-op default;
+        # tests that need admission set it explicitly and it's restored below.
+        LLMEngine.set_admission_fn(None)
+        LLMEngine.set_load_reporter(None)
 
     def tearDown(self):
         LLMEngine._admission_fn = self._admission_fn

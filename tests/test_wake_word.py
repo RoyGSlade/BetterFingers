@@ -202,10 +202,15 @@ class BuildOpenWakeWordDetectorTests(unittest.TestCase):
             "wake_models.build_onnx_session",
             side_effect=wake_models.WakeEngineUnavailable("onnxruntime not available"),
         ):
-            detector, available, reason = build_openwakeword_detector()
+            with self.assertLogs(level="ERROR") as logs:
+                detector, available, reason = build_openwakeword_detector()
         self.assertIsNone(detector)
         self.assertFalse(available)
-        self.assertIn("onnxruntime not available", reason)
+        # The client-facing reason must NOT echo internal error text
+        # (py/stack-trace-exposure) — the detail goes to the server log instead.
+        self.assertNotIn("onnxruntime not available", reason)
+        self.assertIn("unavailable", reason)
+        self.assertTrue(any("onnxruntime not available" in m for m in logs.output))
 
     def test_backbone_ready_with_no_classifier_is_honestly_unavailable(self):
         with patch("wake_models.is_backbone_model_downloaded", return_value=True), patch(

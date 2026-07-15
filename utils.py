@@ -814,12 +814,26 @@ def _profile_defaults():
     }
 
 
+def _safe_profile_filename(profile_name):
+    """Coerce a profile name to a filesystem-safe basename (defense-in-depth).
+
+    server.sanitize_profile_name applies the same whitelist at the HTTP
+    boundary; this second barrier at the single path-construction choke point
+    guarantees no separator/traversal characters can reach the filesystem even
+    from an internal caller (py/path-injection hardening)."""
+    name = "".join(
+        ch for ch in str(profile_name or "") if ch.isalnum() or ch in (" ", "_", "-")
+    ).strip()
+    return name or "Default"
+
+
 def load_profile(profile_name="Default"):
     """
-    Loads a specific profile. 
+    Loads a specific profile.
     If it doesn't exist, returns default settings (and creates the file for 'Default').
     """
     profiles_dir = get_profiles_dir()
+    profile_name = _safe_profile_filename(profile_name)
     file_path = os.path.join(profiles_dir, f"{profile_name}.yaml")
     
     defaults = _profile_defaults()
@@ -1029,6 +1043,7 @@ def validate_profile_settings(data: dict):
 def save_profile(profile_name, data):
     """Saves data to a profile yaml file atomically with a backup."""
     profiles_dir = get_profiles_dir()
+    profile_name = _safe_profile_filename(profile_name)
     file_path = os.path.join(profiles_dir, f"{profile_name}.yaml")
     
     try:

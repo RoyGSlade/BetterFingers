@@ -67,6 +67,18 @@ def clear_degraded_events():
         _degraded_events.clear()
 
 
+def _reject_traversal(path):
+    """Refuse store paths containing a ``..`` segment (py/path-injection guard).
+
+    Every legitimate adopter builds its path from a sanitized basename joined
+    onto the app data dir, so a traversal segment reaching this layer is
+    always a bug or an attack — reject loudly rather than resolve it."""
+    p = os.fspath(path)
+    if ".." in p.replace("\\", "/").split("/"):
+        raise ValueError(f"store path contains a traversal segment: {p!r}")
+    return p
+
+
 def _quarantine_path(path):
     """``<path>.corrupt``, or ``<path>.<ts>.corrupt`` if that's already
     taken — same collision-timestamp convention as dictionary.py/macros.py."""
@@ -81,6 +93,7 @@ def quarantine_corrupt_file(path):
     crashing — best-effort, failures here are non-fatal (mirrors
     dictionary.py's ``_quarantine_corrupt_file``). Returns the quarantine
     path, or "" if the move failed or the source didn't exist."""
+    path = _reject_traversal(path)
     if not os.path.exists(path):
         return ""
     dest = _quarantine_path(path)
@@ -98,6 +111,7 @@ def write_atomic(path, text, encoding="utf-8"):
     finally on any failure), then ``os.replace()`` it into place. Factors out
     the pattern save_profile()/recordings.py already use by hand so every
     store gets it instead of another direct-open-and-write site."""
+    path = _reject_traversal(path)
     directory = os.path.dirname(os.path.abspath(path)) or "."
     os.makedirs(directory, exist_ok=True)
     tmp_path = os.path.join(
@@ -120,6 +134,7 @@ def backup_before_migration(path, from_version):
     that step's migration runs — so a bad migration can always be undone by
     hand. Best-effort; a backup failure logs and lets migration continue
     (matches save_profile's existing "log and continue" backup posture)."""
+    path = _reject_traversal(path)
     if not os.path.exists(path):
         return ""
     backup_path = f"{path}.bak-v{from_version}"
@@ -155,6 +170,7 @@ def load_versioned_store(path, current_version, migrations, *, default_factory, 
     "downgrade_refused"), ``from_version``, ``to_version``,
     ``quarantine_path``, ``backup_paths`` (list), ``warnings`` (list of str).
     """
+    path = _reject_traversal(path)
     parse = parse or json.loads
     report = {
         "ok": True, "action": "new", "from_version": None,
