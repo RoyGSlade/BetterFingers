@@ -20,9 +20,18 @@ class RecommenderTests(unittest.TestCase):
         self.assertGreater(dgpu_params, cpu_params)
 
     def test_low_ram_never_recommends_insufficient_model(self):
-        rec = r.recommend_llm("dgpu-12g+", 4000)
+        # Catalog floor is Gemma 4 E2B Q4 (~2963 MB → ~4.2 GB runtime), so
+        # 6 GB is the lowest RAM where a genuine fit still exists.
+        rec = r.recommend_llm("dgpu-12g+", 6000)
         chosen = next(m for m in rec["models"] if m["id"] == rec["recommended"])
         self.assertNotEqual(chosen["fit"], "insufficient")
+
+    def test_below_catalog_floor_falls_back_to_smallest_model(self):
+        # Under the floor nothing fits; the recommender must still return the
+        # least-bad option (the smallest model, which is also DEFAULT_MODEL)
+        # rather than nothing.
+        rec = r.recommend_llm("dgpu-12g+", 4000)
+        self.assertEqual(rec["recommended"], "gemma-4-e2b-q4")
 
     def test_recommended_is_marked_and_first(self):
         rec = r.recommend_llm("igpu", 16000)

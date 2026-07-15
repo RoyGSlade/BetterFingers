@@ -105,6 +105,14 @@ class ReviewTTSEngine:
         self._onnx_providers_used = []
         self._prefer_gpu = True
         self._auto_unload_when_idle = False
+        # Idle-unload grace timer: with keep_loaded off, the backend used to be
+        # freed the instant a playback finished, so back-to-back reviews paid a
+        # full Kokoro reload (~0.5-0.8 s) every time. Instead, an idle window is
+        # started after the last utterance; only when it expires with nothing
+        # new queued does the WORKER thread release the models (the timer only
+        # enqueues a sentinel — it never touches the models itself, so it can
+        # never free them under an in-flight utterance).
+        self._idle_unload_timer = None
         self._audio_cache = collections.OrderedDict()
         self._cache_max_size = 24
         self._current_playback = ""
@@ -154,8 +162,45 @@ class ReviewTTSEngine:
     def set_keep_loaded(self, keep_loaded: bool):
         with self._lock:
             self._auto_unload_when_idle = not bool(keep_loaded)
+        if keep_loaded:
+            # A pending idle-unload from before the setting flip must not fire.
+            self._cancel_idle_unload_timer()
+
+    _IDLE_UNLOAD_SENTINEL = {"__idle_unload__": True}
+
+    @staticmethod
+    def _idle_unload_delay_sec():
+        """Idle window before auto-unload. 0 restores the old immediate unload."""
+        try:
+            return max(0.0, float(os.getenv("BETTERFINGERS_TTS_IDLE_UNLOAD_SEC", "30") or 30.0))
+        except (TypeError, ValueError):
+            return 30.0
+
+    def _cancel_idle_unload_timer(self):
+        with self._lock:
+            timer, self._idle_unload_timer = self._idle_unload_timer, None
+        if timer is not None:
+            timer.cancel()
+
+    def _schedule_idle_unload(self):
+        delay = self._idle_unload_delay_sec()
+        if delay <= 0:
+            # Preserve the pre-timer behavior: free immediately (we are on the
+            # worker thread here, between utterances).
+            self._release_backend_resources()
+            return
+        with self._lock:
+            if self._idle_unload_timer is not None:
+                self._idle_unload_timer.cancel()
+            # The timer only enqueues a sentinel; the worker thread decides
+            # whether the engine is still idle and does the actual release.
+            timer = threading.Timer(delay, self._queue.put, args=(dict(self._IDLE_UNLOAD_SENTINEL),))
+            timer.daemon = True
+            self._idle_unload_timer = timer
+        timer.start()
 
     def _release_backend_resources(self, message="TTS auto-unloaded after playback."):
+        self._cancel_idle_unload_timer()
         with self._lock:
             self._kokoro_pipeline = None
             self._kokoro_onnx = None
@@ -444,10 +489,22 @@ class ReviewTTSEngine:
             if item is None:
                 continue
 
+            if item.get("__idle_unload__"):
+                # Idle window expired with nothing new queued: release on THIS
+                # (worker) thread, same as the old immediate-unload semantics.
+                should_release = False
+                with self._lock:
+                    should_release = self._auto_unload_when_idle and self._queue.empty()
+                if should_release:
+                    self._release_backend_resources()
+                continue
+
             text = (item.get("text", "") or "").strip()
             if not text:
                 continue
 
+            # Real work arrived inside the idle window — keep the models warm.
+            self._cancel_idle_unload_timer()
             job_id = item.get("job_id")
             try:
                 # The read lease brackets EVERYTHING that touches the models or
@@ -466,11 +523,13 @@ class ReviewTTSEngine:
                 if job_id:
                     JOBS.fail(job_id, str(exc))
             finally:
-                should_release = False
+                should_schedule = False
                 with self._lock:
-                    should_release = self._auto_unload_when_idle and self._queue.empty()
-                if should_release:
-                    self._release_backend_resources()
+                    should_schedule = self._auto_unload_when_idle and self._queue.empty()
+                if should_schedule:
+                    # Grace window instead of immediate release, so a follow-up
+                    # review does not pay a full backend reload.
+                    self._schedule_idle_unload()
 
     def _process_speech_item(self, item, job_id, runtime):
         """Generate and play one queued utterance. Runs on the worker thread,

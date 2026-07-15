@@ -1,3 +1,4 @@
+import os
 import threading
 import unittest
 import time
@@ -68,13 +69,17 @@ class TTSEngineTests(unittest.TestCase):
         providers, _msg = ReviewTTSEngine._resolve_onnx_providers(prefer_gpu=True)
         self.assertEqual(providers[0], "CUDAExecutionProvider")
 
-    def test_auto_unloads_after_playback_when_keep_loaded_disabled(self):
+    def test_auto_unloads_immediately_when_idle_window_is_zero(self):
+        # BETTERFINGERS_TTS_IDLE_UNLOAD_SEC=0 restores the pre-grace-window
+        # behavior: the backend is freed as soon as playback finishes.
         engine = ReviewTTSEngine()
         engine._loaded = True
         engine._backend = "sapi"
         engine.set_keep_loaded(False)
 
-        with patch.object(engine, "_speak_sapi", return_value=None):
+        with patch.dict(os.environ, {"BETTERFINGERS_TTS_IDLE_UNLOAD_SEC": "0"}), patch.object(
+            engine, "_speak_sapi", return_value=None
+        ):
             engine._start_worker_if_needed()
             engine._queue.put_nowait({"text": "hello", "speed": 1.0, "voice_hint": "english"})
 
@@ -89,6 +94,69 @@ class TTSEngineTests(unittest.TestCase):
             self.assertFalse(engine.is_loaded())
         finally:
             engine._stop_worker()
+
+    def test_stays_loaded_during_idle_grace_window(self):
+        # With keep_loaded off, playback no longer frees the backend instantly —
+        # a follow-up review inside the grace window skips the Kokoro reload.
+        engine = ReviewTTSEngine()
+        engine._loaded = True
+        engine._backend = "sapi"
+        engine.set_keep_loaded(False)
+
+        with patch.dict(os.environ, {"BETTERFINGERS_TTS_IDLE_UNLOAD_SEC": "30"}), patch.object(
+            engine, "_speak_sapi", return_value=None
+        ) as speak_mock:
+            engine._start_worker_if_needed()
+            engine._queue.put_nowait({"text": "hello", "speed": 1.0, "voice_hint": "english"})
+
+            deadline = time.time() + 1.0
+            while time.time() < deadline and not speak_mock.called:
+                time.sleep(0.02)
+            time.sleep(0.1)  # give the worker's finally block time to run
+
+        try:
+            self.assertTrue(speak_mock.called)
+            self.assertTrue(engine.is_loaded())  # still warm inside the window
+            self.assertIsNotNone(engine._idle_unload_timer)  # unload scheduled
+        finally:
+            engine._stop_worker()
+            engine._cancel_idle_unload_timer()
+
+    def test_unloads_after_idle_window_expires(self):
+        engine = ReviewTTSEngine()
+        engine._loaded = True
+        engine._backend = "sapi"
+        engine.set_keep_loaded(False)
+
+        with patch.dict(os.environ, {"BETTERFINGERS_TTS_IDLE_UNLOAD_SEC": "0.2"}), patch.object(
+            engine, "_speak_sapi", return_value=None
+        ):
+            engine._start_worker_if_needed()
+            engine._queue.put_nowait({"text": "hello", "speed": 1.0, "voice_hint": "english"})
+
+            deadline = time.time() + 3.0
+            while time.time() < deadline:
+                if engine.backend() == "none":
+                    break
+                time.sleep(0.05)
+
+        try:
+            self.assertEqual(engine.backend(), "none")
+            self.assertFalse(engine.is_loaded())
+        finally:
+            engine._stop_worker()
+
+    def test_enabling_keep_loaded_cancels_pending_idle_unload(self):
+        engine = ReviewTTSEngine()
+        engine._loaded = True
+        engine._backend = "sapi"
+        engine.set_keep_loaded(False)
+        engine._schedule_idle_unload()
+        self.assertIsNotNone(engine._idle_unload_timer)
+
+        engine.set_keep_loaded(True)
+        self.assertIsNone(engine._idle_unload_timer)
+        self.assertTrue(engine.is_loaded())
 
     def test_worker_recovers_backend_when_unloaded_between_enqueue_and_playback(self):
         engine = ReviewTTSEngine()

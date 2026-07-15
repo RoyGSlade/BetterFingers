@@ -737,7 +737,7 @@ def _profile_defaults():
         "model_keep_llm_loaded": True,
         "model_keep_stt_loaded": True,
         "model_keep_tts_loaded": False,
-        "llm_model_id": "gemma-3-4b-q4",
+        "llm_model_id": "gemma-4-e2b-q4",
         "overlay_position": "Bottom-Right",
         "status_indicator_enabled": True,
         "status_indicator_flash_enabled": True,

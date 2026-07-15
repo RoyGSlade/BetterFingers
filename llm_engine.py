@@ -1628,7 +1628,30 @@ class LLMEngine:
             "--threads", os.getenv("BETTERFINGERS_LLM_THREADS", str(max(1, min(os.cpu_count() or 4, 8)))),
             "--batch-size", os.getenv("BETTERFINGERS_LLM_BATCH_SIZE", "512"),
             "--parallel", "1",
+            # Quantize the K half of the KV cache to q8_0: at the 16k default
+            # context this roughly halves the K-cache footprint (~64 MB saved on
+            # a 4B model, more on bigger ones) with negligible quality impact.
+            # K-quantization works with or without flash attention; V-cache
+            # quantization requires flash attention so it stays opt-in below.
+            # Set BETTERFINGERS_LLM_CACHE_TYPE_K=f16 to restore the old default.
+            "--cache-type-k", os.getenv("BETTERFINGERS_LLM_CACHE_TYPE_K", "q8_0"),
         ]
+        # Opt-in memory tuning (no defaults changed):
+        #   BETTERFINGERS_LLM_CACHE_TYPE_V=q8_0  quantize V cache (needs flash attn on)
+        #   BETTERFINGERS_LLM_FLASH_ATTN=on|off|auto  override flash attention
+        #   BETTERFINGERS_LLM_MLOCK=1            pin model in RAM (avoids pageouts)
+        #   BETTERFINGERS_LLM_NO_MMAP=1          load instead of mmap (fewer pageouts
+        #                                        under memory pressure, slower start)
+        cache_type_v = os.getenv("BETTERFINGERS_LLM_CACHE_TYPE_V", "").strip()
+        if cache_type_v:
+            cmd.extend(["--cache-type-v", cache_type_v])
+        flash_attn = os.getenv("BETTERFINGERS_LLM_FLASH_ATTN", "").strip().lower()
+        if flash_attn in ("on", "off", "auto"):
+            cmd.extend(["--flash-attn", flash_attn])
+        if os.getenv("BETTERFINGERS_LLM_MLOCK") == "1":
+            cmd.append("--mlock")
+        if os.getenv("BETTERFINGERS_LLM_NO_MMAP") == "1":
+            cmd.append("--no-mmap")
         cmd.extend(get_model_server_args(model_id))
         
         logging.info(f"ðŸš€ Starting llama-server: {os.path.basename(server_exe)}")

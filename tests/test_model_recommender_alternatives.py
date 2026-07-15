@@ -60,7 +60,7 @@ class GemmaFourCatalogTests(unittest.TestCase):
 
     def test_gemma4_family_present(self):
         ids = set(AVAILABLE_MODELS.keys())
-        for expected in ("gemma-4-e2b-q4", "gemma-4-e4b-q4", "gemma-4-12b-q4", "gemma-4-26b-a4b-q4"):
+        for expected in ("gemma-4-e2b-q4", "gemma-4-e4b-q4", "gemma-4-12b-q4", "gemma-4-12b-q8"):
             self.assertIn(expected, ids)
 
     def test_gemma4_entries_have_real_urls(self):

@@ -140,7 +140,7 @@ class DeleteModelCleansSidecarTests(unittest.TestCase):
                 mm._cached_digest_ok(path, _sha(payload))
                 self.assertIn(os.path.abspath(path), mm._load_verify_cache())
 
-                ok, _msg = mm.delete_model("gemma-3-4b-q4")
+                ok, _msg = mm.delete_model("gemma-4-e2b-q4")
 
                 self.assertTrue(ok)
                 self.assertFalse(os.path.exists(path))
