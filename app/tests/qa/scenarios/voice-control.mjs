@@ -312,4 +312,60 @@ export const voiceControlScenarios = [
     },
     screenshots: [],
   },
+  {
+    area: 'voice-control',
+    name: 'wake-phrase-builder',
+    kind: 'standard',
+    description:
+      'The "Build a Wake Phrase" panel: an on-device trainer that synthesizes the phrase across the app\'s own ' +
+      'voices (GPL-free, no cloud) to train a small classifier. Shows the phrase input and Train button, ' +
+      'with the honest "needs the Wake Engine Components installed first" note.',
+    backendState: () => ({
+      ...coldBoot(),
+      'GET /wake/status': { enabled: false, available: false, listening: false, reason: 'disabled' },
+      'GET /wake/models': { models: BACKBONE_MODELS },
+    }),
+    async navigate(page) {
+      await openVoiceControl(page);
+    },
+    async expects(page) {
+      await expect(page.locator('#wakeTrainingGroup')).toBeVisible();
+      await expect(page.locator('#wakeTrainPhrase')).toBeVisible();
+      await expect(page.locator('#wakeTrainButton')).toHaveText(/train wake phrase/i);
+      // Progress is hidden until a run starts.
+      await expect(page.locator('#wakeTrainProgress')).toBeHidden();
+    },
+    screenshots: [{ name: 'wake-phrase-builder' }],
+  },
+  {
+    area: 'voice-control',
+    name: 'wake-phrase-trained-reliable',
+    kind: 'standard',
+    description:
+      'After training completes with a "reliable" verdict: the result line reports the outcome with the ' +
+      'false-accept / false-reject rates, in plain language — no jargon, no raw scores dumped at the user.',
+    backendState: () => ({
+      ...coldBoot(),
+      'GET /wake/status': { enabled: false, available: false, listening: false, reason: 'disabled' },
+      'GET /wake/models': { models: BACKBONE_MODELS },
+      'POST /wake/train': { ok: true, started: true },
+      'GET /wake/train/status': {
+        status: 'done', percent: 100, message: 'Done.',
+        result: { ok: true, verdict: 'reliable', threshold: 0.5, fa_rate: 0.02, fr_rate: 0.05,
+                  model_id: 'trained_1', n_pos: 60, n_neg: 120 },
+      },
+    }),
+    async navigate(page) {
+      await openVoiceControl(page);
+      await page.fill('#wakeTrainPhrase', 'hey fingers');
+      await page.click('#wakeTrainButton');
+    },
+    async expects(page) {
+      // The polling loop renders the verdict; wait for it.
+      await expect(page.locator('#wakeTrainResult')).toContainText(/reliable/i, { timeout: 8000 });
+      await expect(page.locator('#wakeTrainResult')).toContainText(/false-accept/i);
+      await expect(page.locator('#wakeTrainResult')).not.toContainText('kanade');
+    },
+    screenshots: [{ name: 'wake-phrase-trained-reliable' }],
+  },
 ];

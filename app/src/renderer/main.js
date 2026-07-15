@@ -89,6 +89,8 @@ import {
   fetchWakeModelDownloadState,
   deleteWakeModel,
   testWake,
+  trainWakePhrase,
+  fetchWakeTrainStatus,
   importWakeModel,
 } from './api/backend.js';
 
@@ -4737,6 +4739,83 @@ async function handleWakeTest() {
   }
 }
 
+const _WAKE_VERDICT_COPY = {
+  reliable: { text: 'Reliable — clean separation. Select it in the model picker above to use it.', tone: 'success' },
+  noisy: { text: 'Usable but noisy — try more/clearer samples or a more distinct phrase. Selectable above.', tone: 'warn' },
+  unusable: { text: 'Not separable — pick a more distinctive phrase (more syllables) and retrain.', tone: 'danger' },
+};
+
+async function handleWakeTrain() {
+  const button = document.getElementById('wakeTrainButton');
+  const phraseEl = document.getElementById('wakeTrainPhrase');
+  const progress = document.getElementById('wakeTrainProgress');
+  const label = document.getElementById('wakeTrainProgressLabel');
+  const percentEl = document.getElementById('wakeTrainProgressPercent');
+  const fill = document.getElementById('wakeTrainProgressFill');
+  const resultEl = document.getElementById('wakeTrainResult');
+
+  const phrase = (phraseEl?.value || '').trim();
+  if (!phrase) {
+    if (resultEl) resultEl.textContent = 'Enter a wake phrase to train.';
+    return;
+  }
+
+  const setProgress = (pct, msg) => {
+    if (fill) fill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+    if (percentEl) percentEl.textContent = `${Math.round(pct)}%`;
+    if (label) label.textContent = msg || '';
+  };
+
+  if (button) button.disabled = true;
+  if (resultEl) { resultEl.textContent = ''; resultEl.className = 'setting-desc'; }
+  progress?.removeAttribute('hidden');
+  setProgress(0, 'Starting…');
+
+  try {
+    const start = await trainWakePhrase(phrase);
+    if (start && start.ok === false && start.already_running) {
+      if (resultEl) resultEl.textContent = 'A training run is already in progress.';
+      if (button) button.disabled = false;
+      return;
+    }
+    // Poll until the background run finishes. Training is model-free but the
+    // Kokoro synthesis of the phrase + decoys can take up to ~a minute.
+    const deadline = Date.now() + 180000;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 700));
+      let status;
+      try {
+        status = await fetchWakeTrainStatus();
+      } catch {
+        continue;
+      }
+      setProgress(status.percent || 0, status.message || '');
+      if (status.status === 'done') {
+        const result = status.result || {};
+        if (!result.ok) {
+          if (resultEl) { resultEl.textContent = result.message || 'Training failed.'; resultEl.className = 'setting-desc danger'; }
+        } else {
+          const copy = _WAKE_VERDICT_COPY[result.verdict] || { text: `Trained (${result.verdict}).`, tone: '' };
+          if (resultEl) {
+            resultEl.textContent = `Trained "${phrase}" — ${copy.text} `
+              + `(false-accept ${Math.round((result.fa_rate || 0) * 100)}%, false-reject ${Math.round((result.fr_rate || 0) * 100)}%)`;
+            resultEl.className = `setting-desc ${copy.tone}`;
+          }
+          // The new trained classifier now appears in the model picker.
+          refreshWakeModels().catch(() => {});
+        }
+        return;
+      }
+    }
+    if (resultEl) resultEl.textContent = 'Training is taking longer than expected — check back shortly.';
+  } catch (error) {
+    if (resultEl) resultEl.textContent = `Training failed: ${error.message}`;
+  } finally {
+    if (button) button.disabled = false;
+    progress?.setAttribute('hidden', '');
+  }
+}
+
 function initSettingsPanel() {
   for (const el of Object.values(settingEls)) {
     if (!el) continue;
@@ -4826,6 +4905,10 @@ function initSettingsPanel() {
 
   document.getElementById('testWakeButton')?.addEventListener('click', () => {
     handleWakeTest();
+  });
+
+  document.getElementById('wakeTrainButton')?.addEventListener('click', () => {
+    handleWakeTrain();
   });
 
   const testMicButton = document.getElementById('testMicButton');
