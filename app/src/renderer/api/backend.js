@@ -12,6 +12,7 @@ const RUNTIME_RECORDING_TOGGLE_URL = `${BACKEND_ORIGIN}/runtime/recording/toggle
 const CAPABILITIES_URL = `${BACKEND_ORIGIN}/capabilities`;
 const DIAGNOSTICS_LOGS_URL = `${BACKEND_ORIGIN}/diagnostics/logs`;
 const DIAGNOSTICS_PATHS_URL = `${BACKEND_ORIGIN}/diagnostics/paths`;
+const SUPPORT_REPORT_URL = `${BACKEND_ORIGIN}/diagnostics/support-report`;
 const DRAFTS_URL = `${BACKEND_ORIGIN}/drafts`;
 const RUNTIME_ERRORS_URL = `${BACKEND_ORIGIN}/runtime/errors`;
 const SETTINGS_PROFILES_URL = `${BACKEND_ORIGIN}/settings/profiles`;
@@ -157,6 +158,11 @@ async function fetchDiagnosticsLogs(lines = 80, timeoutMs = 2500) {
 
 async function fetchDiagnosticsPaths(timeoutMs = 2500) {
   return fetchJson(DIAGNOSTICS_PATHS_URL, timeoutMs);
+}
+
+async function fetchSupportReport(timeoutMs = 15000) {
+  // Longer timeout: the report may shell out to `llama-server --version`.
+  return fetchJson(SUPPORT_REPORT_URL, timeoutMs);
 }
 
 async function fetchMetrics(timeoutMs = 2500) {
@@ -614,6 +620,7 @@ export {
   CAPABILITIES_URL,
   DIAGNOSTICS_LOGS_URL,
   DIAGNOSTICS_PATHS_URL,
+  SUPPORT_REPORT_URL,
   DRAFTS_URL,
   HEALTH_URL,
   RUNTIME_ERRORS_URL,
@@ -641,6 +648,7 @@ export {
   fetchCapabilities,
   fetchDiagnosticsLogs,
   fetchDiagnosticsPaths,
+  fetchSupportReport,
   fetchMetrics,
   fetchPrivacy,
   wipeData,

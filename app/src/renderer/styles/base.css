@@ -157,6 +157,13 @@ h1 {
   gap: 16px;
 }
 
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .connection-pill {
   border-radius: 999px;
   padding: 10px 14px;
