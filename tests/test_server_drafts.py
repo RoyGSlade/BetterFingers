@@ -1,3 +1,4 @@
+import os
 import unittest
 from unittest.mock import patch
 
@@ -485,6 +486,19 @@ class ServerDraftTests(unittest.TestCase):
         import tempfile
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
+        # Seed a residency-off profile, mirroring tests/conftest.py. On Windows
+        # APPDATA (set below) IS the profile root, so a pristine dir would get
+        # default keep-loaded settings and the TestClient startup would begin a
+        # real multi-GB model download mid-test — whose open .part handle then
+        # breaks TemporaryDirectory cleanup with WinError 32.
+        profiles = os.path.join(tmp.name, "BetterFingers", "profiles")
+        os.makedirs(profiles, exist_ok=True)
+        with open(os.path.join(profiles, "Default.yaml"), "w") as fh:
+            fh.write(
+                "model_keep_llm_loaded: false\n"
+                "model_keep_stt_loaded: false\n"
+                "model_keep_tts_loaded: false\n"
+            )
         original = os.environ.get("APPDATA")
         os.environ["APPDATA"] = tmp.name
         if original is None:
@@ -809,12 +823,17 @@ class ServerDraftTests(unittest.TestCase):
         # is atomic now: it writes a temp file and os.replace()s it into place.
         self._save_draft_patcher.stop()
         try:
-            with patch("server.get_user_data_path", return_value="/tmp"), \
+            # os.path.join is separator-aware, so build the expected paths the
+            # same way the implementation does (backslashes on Windows).
+            data_dir = "/tmp"
+            tmp_path = os.path.join(data_dir, "draft_history.json.tmp")
+            final_path = os.path.join(data_dir, "draft_history.json")
+            with patch("server.get_user_data_path", return_value=data_dir), \
                  patch("builtins.open", new_callable=unittest.mock.mock_open) as mock_file, \
                  patch("server.os.replace") as mock_replace:
                 server.save_draft_history()
-                mock_file.assert_called_with("/tmp/draft_history.json.tmp", "w", encoding="utf-8")
-                mock_replace.assert_called_with("/tmp/draft_history.json.tmp", "/tmp/draft_history.json")
+                mock_file.assert_called_with(tmp_path, "w", encoding="utf-8")
+                mock_replace.assert_called_with(tmp_path, final_path)
         finally:
             self._save_draft_patcher.start()
 

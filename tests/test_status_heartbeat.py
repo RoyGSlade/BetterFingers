@@ -15,11 +15,16 @@ class StatusHeartbeatTests(unittest.TestCase):
     def test_broadcasts_periodically_then_stops(self):
         calls = []
         with patch.object(server, "broadcast_status_threadsafe", self._collect(calls)):
-            heartbeat = server._StatusHeartbeat("rewriting", interval_s=0.5).start()
-            time.sleep(1.2)  # ~2 ticks at the 0.5s interval
+            heartbeat = server._StatusHeartbeat("rewriting", interval_s=0.2).start()
+            # Poll until 2 ticks arrive instead of sleeping a fixed window —
+            # loaded CI runners (macOS especially) tick late and made a fixed
+            # 1.2s window flaky.
+            deadline = time.time() + 10.0
+            while time.time() < deadline and len(calls) < 2:
+                time.sleep(0.05)
             heartbeat.stop()
             count_at_stop = len(calls)
-            time.sleep(0.7)  # nothing should fire after stop()
+            time.sleep(0.5)  # nothing should fire after stop()
 
         self.assertGreaterEqual(count_at_stop, 2)
         self.assertEqual(len(calls), count_at_stop)  # stopped cleanly

@@ -60,20 +60,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # pip-compile embeds its --output-file argument in the generated
+          # header, so compiling to a mktemp path can NEVER match the committed
+          # lock (whose header says --output-file=<lockname>) — that false
+          # "stale" tripped this gate on every run since it landed. Compile in
+          # a scratch workdir using the same relative filenames instead, so the
+          # header is identical and the diff only reflects real content drift.
+          workdir="$(mktemp -d)"
+          cp requirements*.in "$workdir/"
           status=0
           for pair in ${{ matrix.checks }}; do
             lock="${pair%%:*}"
             src="${pair##*:}"
-            tmp="$(mktemp)"
-            cp "$lock" "$tmp"
-            pip-compile --allow-unsafe --generate-hashes --output-file="$tmp" "$src" >/dev/null
-            if ! diff -q "$tmp" "$lock" >/dev/null; then
+            cp "$lock" "$workdir/$lock"
+            (cd "$workdir" && pip-compile --allow-unsafe --generate-hashes --output-file="$lock" "$src" >/dev/null)
+            if ! diff -q "$workdir/$lock" "$lock" >/dev/null; then
               echo "::error file=$lock::$lock is stale relative to $src. Regenerate via the regen-locks workflow (gh workflow run regen-locks.yml --ref <branch>) and commit the result."
-              diff -u "$lock" "$tmp" || true
+              diff -u "$lock" "$workdir/$lock" || true
               status=1
             else
               echo "$lock is up to date with $src."
             fi
-            rm -f "$tmp"
           done
+          rm -rf "$workdir"
           exit $status

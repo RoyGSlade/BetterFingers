@@ -1,4 +1,5 @@
 import os
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -167,6 +168,7 @@ class ModelManagerStatusTests(unittest.TestCase):
                 self.assertTrue(os.path.islink(link_path))
                 self.assertEqual(os.readlink(link_path), target_name)
 
+    @unittest.skipIf(sys.platform.startswith("win"), "POSIX runtime semantics (shell scripts, tar archives, exec bits)")
     def test_linux_runtime_extract_replaces_readonly_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             archive_path = os.path.join(tmp, "runtime.tar.gz")
@@ -212,6 +214,7 @@ class ModelManagerStatusTests(unittest.TestCase):
             self.assertEqual(os.readlink(link_path), "libllama-common.so.0.0.9548")
             self.assertTrue(os.path.exists(os.path.join(extract_dir, os.readlink(link_path))))
 
+    @unittest.skipIf(sys.platform.startswith("win"), "POSIX runtime semantics (shell scripts, tar archives, exec bits)")
     def test_validate_runtime_failure_returns_loader_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             server_path = os.path.join(tmp, "llama-server")
@@ -229,6 +232,7 @@ class ModelManagerStatusTests(unittest.TestCase):
             self.assertFalse(result["ok"])
             self.assertIn("libmtmd.so.0", result["message"])
 
+    @unittest.skipIf(sys.platform.startswith("win"), "POSIX runtime semantics (shell scripts, tar archives, exec bits)")
     def test_gemma4_updates_old_managed_runtime(self):
         with tempfile.TemporaryDirectory() as tmp:
             model_path = os.path.join(tmp, "gemma4.gguf")
@@ -261,6 +265,7 @@ class ModelManagerStatusTests(unittest.TestCase):
             validation = model_manager.validate_llama_server_runtime(server_path)
             self.assertEqual(validation["build"], 9548)
 
+    @unittest.skipIf(sys.platform.startswith("win"), "POSIX runtime semantics (shell scripts, tar archives, exec bits)")
     def test_gemma4_is_not_ready_with_old_runtime_build(self):
         with tempfile.TemporaryDirectory() as tmp:
             model_path = os.path.join(tmp, "gemma4.gguf")
@@ -335,6 +340,7 @@ class ModelManagerStatusTests(unittest.TestCase):
                 self.assertFalse(status["readable"])
                 self.assertFalse(complete)
 
+    @unittest.skipIf(sys.platform.startswith("win"), "POSIX runtime semantics (shell scripts, tar archives, exec bits)")
     def test_linux_uses_llama_server_without_exe_and_downloads_linux_archive(self):
         with tempfile.TemporaryDirectory() as tmp:
             model_path = os.path.join(tmp, "local.gguf")
@@ -367,6 +373,7 @@ class ModelManagerStatusTests(unittest.TestCase):
             self.assertTrue(bool(result.get("ok", False)))
             download_file.assert_called_once()
 
+    @unittest.skipIf(sys.platform.startswith("win"), "POSIX runtime semantics (shell scripts, tar archives, exec bits)")
     def test_repo_local_linux_llama_server_is_respected(self):
         with tempfile.TemporaryDirectory() as tmp:
             model_path = os.path.join(tmp, "local.gguf")
