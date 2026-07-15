@@ -54,7 +54,12 @@ jobs:
       - name: Run smoke suite
         shell: powershell
         run: |
-          python -m pytest -q tests -m smoke
+          python -m pytest -q tests -m smoke -W default 2>&1 | Tee-Object -FilePath build/pytest-smoke.log
+          if ($LASTEXITCODE -eq 5) {
+            Write-Error "Smoke suite collected zero tests -- the smoke marker wiring is broken (see SMOKE_FILES in tests/conftest.py)."
+            exit 1
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # Windows code signing (optional). electron-builder auto-signs when
       # CSC_LINK / CSC_KEY_PASSWORD are set (see its Code Signing docs) — no

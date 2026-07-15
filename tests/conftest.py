@@ -19,6 +19,44 @@ import pytest
 
 os.environ.setdefault("BETTERFINGERS_LAZY_STARTUP", "1")
 
+# --- Smoke suite definition (release-packaging gate) -------------------------
+# `build-installer.yml` runs `pytest -m smoke` as a fast, hardware-free
+# critical-path gate before packaging. Rather than scatter @pytest.mark.smoke
+# across dozens of files, the smoke set is curated HERE, in one auditable place:
+# every test in the files below is marked smoke at collection time. These cover
+# the release-critical invariants that must never silently break — privacy
+# (redaction, wipe), config/upgrade discipline (migrations), supply-chain
+# download safety, hardware tiering / accelerator fallback, and the wake-phrase
+# trainer. All run in a few seconds with no models or GPU. To add a file to the
+# gate, add its basename here; keep it fast and hardware-free.
+SMOKE_FILES = frozenset({
+    "test_log_redaction.py",
+    "test_privacy_wipe_verified.py",
+    "test_store_migration.py",
+    "test_profile_migration.py",
+    "test_supply_chain_existing_verify.py",
+    "test_download_verification.py",
+    "test_hardware_tier.py",
+    "test_gpu_detection.py",
+    "test_wake_trainer.py",
+    "test_model_manager_status.py",
+    "test_setup_venv.py",
+})
+
+
+def pytest_collection_modifyitems(config, items):
+    """Auto-apply the ``smoke`` marker to every test in :data:`SMOKE_FILES`.
+
+    Centralizes the smoke-suite definition so ``pytest -m smoke`` (the
+    release-packaging gate in build-installer.yml) always collects a real,
+    non-empty set — previously it collected zero tests and exited 5, failing
+    the Windows installer job on every run.
+    """
+    smoke = pytest.mark.smoke
+    for item in items:
+        if os.path.basename(str(item.fspath)) in SMOKE_FILES:
+            item.add_marker(smoke)
+
 # Model verification (supply-chain gate, §11) rejects any GGUF that isn't the
 # exact pinned size + digest. Tests use tiny fixture files, so opt them into the
 # tiny-model allowance here; production never sets this flag and always verifies.
