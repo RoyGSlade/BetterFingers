@@ -20,5 +20,13 @@
 import { baselineScenarios } from './baseline.mjs';
 import { voiceControlScenarios } from './voice-control.mjs';
 import { privacyScenarios } from './privacy.mjs';
+import { modelResourcesScenarios } from './model-resources.mjs';
+import { doctorWarningsScenarios } from './doctor-warnings.mjs';
 
-export const scenarios = [...baselineScenarios, ...voiceControlScenarios, ...privacyScenarios];
+export const scenarios = [
+  ...baselineScenarios,
+  ...voiceControlScenarios,
+  ...privacyScenarios,
+  ...modelResourcesScenarios,
+  ...doctorWarningsScenarios,
+];
