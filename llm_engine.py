@@ -26,6 +26,7 @@ from model_manager import (
     get_server_path,
 )
 from hardware_report import _estimate_runtime_mb
+from log_redaction import redact_stderr_lines
 
 
 def _estimate_llm_runtime_mb(model_id):
@@ -1758,7 +1759,15 @@ class LLMEngine:
             if process is not None:
                 return_code = process.poll()
                 if return_code is not None:
-                    stderr = self._read_server_stderr()
+                    # Line-level redaction (§9.3): loader/system diagnostic
+                    # lines like "libmtmd.so.0" must survive verbatim for
+                    # validate_llama_server_runtime's error surfacing, but
+                    # stderr at higher verbosity can echo prompt content —
+                    # never let the raw blob reach logging.error or the
+                    # /doctor export. Redact BEFORE truncating so a cut mid-
+                    # blob can't fragment (and defeat the allowlist match on)
+                    # a diagnostic line.
+                    stderr = redact_stderr_lines(self._read_server_stderr())
                     message = f"llama-server exited during startup with code {return_code}."
                     if stderr:
                         message = f"{message} Server stderr: {stderr[:1200]}"
@@ -1766,8 +1775,8 @@ class LLMEngine:
                     self.shutdown()
                     return
             time.sleep(1)
-        
-        stderr = self._read_server_stderr()
+
+        stderr = redact_stderr_lines(self._read_server_stderr())
         message = "llama-server timed out while starting."
         if stderr:
             message = f"{message} Server stderr: {stderr[:1200]}"

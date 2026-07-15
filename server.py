@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from llm_engine import LLMEngine, get_engine, get_engine_if_initialized, resolve_dictation_preset
-from log_redaction import redact_user_text
+from log_redaction import redact_exc, redact_user_text
 from transcriber import Transcriber
 from hotkey_manager import HotkeyManager
 from audio_gate import should_block_for_no_audio
@@ -1846,7 +1846,7 @@ def process_recording_result(recording_result):
         broadcast_status_threadsafe("error", {"message": str(exc), "draft_id": draft["id"]})
         return draft
     except Exception as exc:
-        logging.error(f"Recording processing failed: {exc}")
+        logging.error(f"Recording processing failed: {redact_exc(exc)}")
         JOBS.fail(job.id, str(exc))
         record_runtime_error("recording", str(exc))
         draft = create_draft(
@@ -1902,8 +1902,8 @@ def on_recording_complete(recording_result):
     def _worker():
         try:
             process_recording_result(recording_result)
-        except Exception:
-            logging.exception("Recording worker failed")
+        except Exception as exc:
+            logging.error(f"Recording worker failed: {redact_exc(exc)}")
 
     threading.Thread(target=_worker, daemon=True, name="betterfingers-recording-worker").start()
 
@@ -3766,7 +3766,7 @@ async def rewrite_draft(draft_id: int, request: DraftRewriteRequest):
     except HTTPException:
         raise
     except Exception as exc:
-        logging.exception("Draft rewrite failed")
+        logging.error(f"Draft rewrite failed: {redact_exc(exc)}")
         record_runtime_error("review", str(exc), {"action": "rewrite", "draft_id": draft_id})
         broadcast_status_threadsafe("draft_rewrite_error", {"draft_id": draft_id, "action": action_key, "error": str(exc)})
         return {
@@ -3927,7 +3927,7 @@ async def execute_voice_command(request: VoiceCommandExecuteRequest):
     except HTTPException:
         raise
     except Exception as exc:
-        logging.exception("Voice command execution failed")
+        logging.error(f"Voice command execution failed: {redact_exc(exc)}")
         return {"ok": False, "reason": "error", "action": intent.action, "error": str(exc)}
 
 
@@ -4085,7 +4085,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
     except RuntimeBusyError:
         raise HTTPException(status_code=409, detail="STT runtime is being reconfigured; retry shortly.")
     except Exception as e:
-        logging.error(f"Transcription Error: {e}")
+        logging.error(f"Transcription Error: {redact_exc(e)}")
         raise HTTPException(status_code=500, detail="Transcription failed")
     finally:
         try:

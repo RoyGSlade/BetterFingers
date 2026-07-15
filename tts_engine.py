@@ -13,6 +13,7 @@ from typing import Dict, Optional, Tuple, Union
 import numpy as np
 import sounddevice as sd
 from job_manager import JOBS, JobState
+from log_redaction import redact_user_text
 from model_runtime_coordinator import RuntimeBusyError
 from utils import get_user_data_path
 import voice_clone_engine
@@ -1329,7 +1330,7 @@ class ReviewTTSEngine:
                 # Store with the same key used by the worker's cache lookup
                 cache_key = (text, speed, voice_hint, _blend_signature(blend), _modulation_signature(modulation))
                 self._audio_cache[cache_key] = (final_audio, sample_rate)
-                logging.debug("Cached audio for: %r", text)
+                logging.debug("Cached audio for: %s", redact_user_text(text))
             except Exception as e:
                 logging.warning(f"Failed to cache audio: {e}")
 

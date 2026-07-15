@@ -10,6 +10,7 @@ from faster_whisper import WhisperModel
 from huggingface_hub import scan_cache_dir
 from huggingface_hub.constants import HF_HUB_CACHE
 
+from log_redaction import redact_exc
 from text_formatter import TextFormatter
 from utils import load_profile
 
@@ -589,5 +590,9 @@ class Transcriber:
                 return "", empty_conf
             return raw, self._compute_confidence(seg_list)
         except Exception as exc:
-            logging.error(f"Error during transcription: {exc}")
+            # Broad catch over segment formatting/hallucination-check, which
+            # operates directly on the decoded transcript — an exception here
+            # could echo it (found by the logging-leak regression gate, not
+            # in the original Phase 0 audit).
+            logging.error(f"Error during transcription: {redact_exc(exc)}")
             return "", empty_conf
