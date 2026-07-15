@@ -36,7 +36,7 @@ jobs:
         include:
           - os: ubuntu-latest
             python-version: "3.12"
-            checks: "requirements-linux.lock:requirements.in requirements-dev.lock:requirements-dev.in"
+            checks: "requirements-linux.lock:requirements.in requirements-linux-cpu.lock:requirements-linux-cpu.in requirements-dev.lock:requirements-dev.in"
           - os: windows-latest
             python-version: "3.13"
             checks: "requirements-win.lock:requirements.in requirements-dev-win.lock:requirements-dev.in"

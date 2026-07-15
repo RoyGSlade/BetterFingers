@@ -42,7 +42,7 @@ jobs:
             locks: "requirements-win.lock requirements-dev-win.lock"
           - os: ubuntu-latest
             python-version: "3.12" # matches the header of the committed linux lock
-            locks: "requirements-linux.lock requirements-dev.lock"
+            locks: "requirements-linux.lock requirements-linux-cpu.lock requirements-dev.lock"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -71,8 +71,9 @@ jobs:
           set -euo pipefail
           for lock in ${{ matrix.locks }}; do
             case "$lock" in
-              requirements-dev*.lock) src=requirements-dev.in ;;
-              *)                      src=requirements.in ;;
+              requirements-dev*.lock)      src=requirements-dev.in ;;
+              requirements-linux-cpu.lock) src=requirements-linux-cpu.in ;;
+              *)                           src=requirements.in ;;
             esac
             # A placeholder/stale output file is fine: pip-compile reuses
             # compatible existing pins and re-resolves the rest.

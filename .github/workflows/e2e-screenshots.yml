@@ -7,7 +7,7 @@ on:
       - "app/**"
       - "server.py"
       - "requirements.txt"
-      - "requirements-linux.lock"
+      - "requirements-linux-cpu.lock"
       - ".github/workflows/e2e-screenshots.yml"
 
 permissions:
@@ -26,9 +26,12 @@ jobs:
           python-version: "3.12"
 
       - name: Install Python dependencies
+        # CPU-only hashed lock: reproducible + no ~3.9 GB CUDA stack on this
+        # GPU-less runner. Regenerated alongside the other locks (regen-locks.yml)
+        # and gated by lock-freshness.yml.
         run: |
           python -m pip install --upgrade pip
-          pip install --require-hashes -r requirements-linux.lock
+          pip install --require-hashes -r requirements-linux-cpu.lock
 
       - name: Setup Node
         uses: actions/setup-node@v6
