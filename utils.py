@@ -820,11 +820,13 @@ def _safe_profile_filename(profile_name):
     server.sanitize_profile_name applies the same whitelist at the HTTP
     boundary; this second barrier at the single path-construction choke point
     guarantees no separator/traversal characters can reach the filesystem even
-    from an internal caller (py/path-injection hardening)."""
+    from an internal caller (py/path-injection hardening). os.path.basename is
+    applied last as the taint-breaking barrier CodeQL recognizes (in addition
+    to the character whitelist, which already strips separators)."""
     name = "".join(
         ch for ch in str(profile_name or "") if ch.isalnum() or ch in (" ", "_", "-")
     ).strip()
-    return name or "Default"
+    return os.path.basename(name) or "Default"
 
 
 def load_profile(profile_name="Default"):
