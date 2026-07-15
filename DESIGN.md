@@ -415,19 +415,26 @@ restoration, focus-loss behavior, elevated-window behavior, average latency.
 
 The backend logic layer is shipped (§3). What remains is the service/UI/dependency layer:
 
-- [ ] **Wake-word MVP server integration** (spec'd, not wired): `/runtime/wake-word/status`
-      + `/start` + `/stop` routes; profile fields `wake_word_enabled` (default **false**),
-      `wake_word_engine` ("openwakeword"), `wake_word_model_path`, `wake_word_threshold`
-      (0.55), `wake_word_cooldown_ms` (2500), `wake_word_requires_vad` (true). Detection
-      calls `HotkeyManager.request_start(reason="wake_word")`; disabling fully releases
-      the mic stream; listener errors surface in `/runtime/status` + dashboard.
-- [ ] **Real openWakeWord integration** (dependency not installed) behind the existing
-      adapter interface; self-trained "hey fingers" model (pre-trained models are
-      CC-BY-NC — train our own); Silero VAD gating.
-- [ ] **Wake-word test harness**: `tools/wakeword_probe.py` (scores/detections/cooldown,
-      JSONL logs), `tests/wake_fixtures/{positive,negative}/`, fixture-based
-      false-accept/false-reject tests with the fake detector in CI; real-model tests
-      opt-in. **A custom wake phrase is not "done" without fixture-based FA/FR testing.**
+- [x] **Wake-word MVP server integration** — *SHIPPED 2026-07-15*. Routes landed as
+      `/wake/status` + `/wake/enable` + `/wake/disable` (+ `/wake/models*`, `/wake/test`)
+      in `routes_wake.py`; profile fields `wake_word_enabled` (default **false**),
+      `wake_word_model`, `wake_word_sensitivity` (0.55-equiv), `wake_word_cooldown_ms`,
+      `wake_word_max_recording_s`. Detection calls the shared start path; disabling fully
+      releases the mic stream (idempotent, quiesced before privacy-wipe **before** the
+      recorder drain); `/privacy` carries a live-truthful `wake_listener` entry.
+- [~] **Real openWakeWord integration** — *engine SHIPPED 2026-07-15, zero new deps*.
+      Direct-ONNX pipeline in `wake_models.py` (melspec → embedding → classifier), verified
+      against real v0.5.1 assets, running on the already-shipped `onnxruntime`; VAD reuses
+      the existing energy gate. **Ships with NO bundled wake-phrase classifier**: all 6
+      official openWakeWord phrase models are CC-BY-NC-SA (§9.4 gate) — excluded. A
+      user-import path (`/wake/models/import`, sha256-pinned, 20 MB cap) makes it usable
+      today; the self-trained "hey fingers" model is still the path to a shippable default
+      classifier. See `LICENSES-MODELS.md`.
+- [~] **Wake-word test harness**: fixture-based FA/FR test is a **skipped skeleton**
+      (`@skipUnless(BETTERFINGERS_WAKE_FIXTURES)`) — the `tests/wake_fixtures/` audio does
+      not exist yet, so **a custom wake phrase is still not "done"** per this milestone's own
+      rule. `tools/wakeword_probe.py` not built; the `/wake/test` route (arm a window, report
+      score peaks) covers the interactive-probe need instead.
 - [ ] **Voice Control settings UI + review-overlay wiring** (scope 4 frontend — zero of it
       exists in `index.html` today): wake toggle/sensitivity/cooldown, auto-stop fields,
       `app_commands_enabled`, editing-commands toggle, confirmation policy, command prefix,
@@ -499,8 +506,15 @@ what they contain before the user sends them anywhere.
       default: `intent_engine.process_input` (logged the **full** utterance at INFO) and the
       three `server.py` TTS log lines (leaked a 20–30 char preview). Covered by
       `tests/test_log_redaction.py`.
-- [ ] **Remaining audit** — Electron console, sidecar/llama-server logs, tracebacks (wrap
-      user-text-bearing exceptions), MCP argument logging, diagnostics-export manifest.
+- [x] **Remaining audit** — *done 2026-07-15*. Full sweep in `docs/redaction-audit.md`:
+      8 REDACT sites wrapped (`redact_exc` for user-text-bearing exceptions; a **line-level**
+      `redact_stderr_lines` filter for llama-server stderr in both the log line and
+      `/doctor`'s `last_error_details.stderr` — preserving loader/system lines while
+      redacting content). A **standing lint gate** (`LoggingLeakGateTests`, content-keyed
+      allowlist) greps server-side sources on every run and already caught 2 leaks the
+      manual sweep missed (`transcriber.py`, the `/transcribe` route); an Electron twin
+      (`redact.js` + `app/tests/redact.test.mjs`) guards the renderer. MCP: no tool-*invocation*
+      path exists yet, so nothing carries user content there today (re-audit when C12 lands).
 
 ### 9.4 Model & binary provenance (supply-chain boundary)
 
@@ -521,6 +535,16 @@ writes, corruption recovery (the `.corrupt` quarantine pattern is already shippe
 dictionary/macros — extend everywhere), downgrade behavior, and tests from historical
 fixture versions.
 
+- [x] **Discipline extended everywhere** — *done 2026-07-15*. `store_migration.py`
+      (`load_versioned_store` / `write_atomic` / backup-per-version-step / `.corrupt`
+      quarantine) now backs **personas, voice presets, profiles, and app_state**. Downgrade
+      behavior is defined and proven **byte-for-byte non-destructive** (file newer than the
+      code's schema → read-only in-memory defaults, zero writes). Quarantine/downgrade
+      events surface at `GET /doctor`'s new `store_warnings` field + startup log. Persona
+      adoption fixed a real latent bug (genuine v1 flat-file personas were silently
+      discarded). The 3 pre-existing unconditional profile value-migrations are deliberately
+      kept outside the version ladder (mixed pre/post-merge timing; commented at each site).
+
 ---
 
 ## 10. M5–M7 — Completion, decomposition, platform
@@ -535,7 +559,17 @@ fixture versions.
       re-voices to the stored reference sample (`voice_clone_engine.py`; RoPE-safe ~9s
       chunking). Deps are optional/on-demand (`tools/setup_voice_cloning.py` — git-only
       package can't live in the hashed locks; torch was already a dep, torchaudio added
-      by the setup tool). Cloned voices fail HONESTLY when the engine/sample is missing
+      by the setup tool). **Frozen-build provisioning SHIPPED 2026-07-15:** the
+      pip-install-into-`sys.executable` approach (impossible in a PyInstaller build) is
+      replaced by a verified-artifact **side-runtime** — a pinned python-build-standalone
+      3.12 + torch/torchaudio/kanade wheels, download-verify-extract like llama-server
+      (directory-preserving PEP 706 extractor), cloning dispatched as a subprocess;
+      `availability()` now reports truthfully in dev *and* frozen contexts. WavLM-base-plus
+      weights (CC BY-SA 3.0, not MIT) are pinned to their upstream URL + our sha256 rather
+      than re-hosted. *Integration dependency:* the `clone-runtime-v1` artifacts still need
+      publishing (catalog/provisioning built + tested against the final URL shape). ONNX
+      export of the Kanade pipeline is a tracked follow-up (source notes in code). Cloned
+      voices fail HONESTLY when the engine/sample is missing
       (never a silent base-voice substitute). `DELETE /tts/voices/{id}` shipped
       (immediate deletion requirement met). *Remaining:* export routes, native
       (non-ONNX) backend blending (still falls back to base voice, logged), optional
@@ -584,9 +618,17 @@ fixture versions.
 - [ ] **Audio device ownership manager:** STT capture, TTS playback, wake monitoring, and
       preview must negotiate one owner per device; unplug/replug and default-device-change
       recovery live here.
-- [ ] **Model resource manager:** loaded models, RAM/VRAM estimates, last-used, pinned vs.
-      evictable, current pipeline needs, CPU fallbacks, load-requires-unload decisions.
-      Without it, "local-first" becomes "locally discover what an OOM crash looks like."
+- [~] **Model resource manager:** *backend SHIPPED 2026-07-15, UI pending*.
+      `ModelRuntimeCoordinator` now holds a per-component ledger (model_id / estimated_mb /
+      last_used / pinned), **admission control** with LRU eviction through the same unload
+      path manual unload uses (self-credit on same-component replacement, real RAM
+      re-sampling after eviction, RAM-floor refusals that surface cleanly via `_mark_error`
+      instead of OOM-crashing, CPU-fallback model *suggestion* in the refusal payload), and a
+      300 s idle sweep (llm/stt; tts keeps its own). Wired into all three load sites via DI;
+      `GET /models/resources` exposes the ledger. **Gap (flagged by QA):** no Diagnostics UI
+      consumes `/models/resources` or the admission-refusal payload yet — backend + contract
+      are done and scenario-tested, DOM wiring is the remaining piece. Audio-device ownership
+      manager (above) still separate.
 
 ### M7 — Automation & platform
 

@@ -8,6 +8,8 @@ import re
 import math
 import yaml
 
+from store_migration import load_versioned_store, write_atomic
+
 def get_app_path():
     """
     Returns the base path for READ-ONLY assets (images, default config).
@@ -117,26 +119,27 @@ def _sanitize_app_state(state):
     }
 
 
+_APP_STATE_SCHEMA_VERSION = 1
+
+
 def load_app_state():
     path = _app_state_path()
     defaults = _app_state_defaults()
-    if not os.path.exists(path):
-        return copy.deepcopy(defaults)
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            raw = yaml.safe_load(handle) or {}
-    except Exception as exc:
-        logging.error("Failed to load app_state.yaml: %s", exc)
-        return copy.deepcopy(defaults)
+    raw, report = load_versioned_store(
+        path, _APP_STATE_SCHEMA_VERSION, {}, default_factory=lambda: dict(defaults), parse=yaml.safe_load,
+    )
+    if report["action"] in ("quarantined", "downgrade_refused"):
+        for warning in report["warnings"]:
+            logging.warning(f"app_state.yaml: {warning}")
     return _sanitize_app_state(raw)
 
 
 def save_app_state(state):
     path = _app_state_path()
     payload = _sanitize_app_state(state)
+    payload["schema_version"] = _APP_STATE_SCHEMA_VERSION
     try:
-        with open(path, "w", encoding="utf-8") as handle:
-            yaml.safe_dump(payload, handle, sort_keys=True)
+        write_atomic(path, yaml.safe_dump(payload, sort_keys=True))
     except Exception as exc:
         logging.error("Failed to save app_state.yaml: %s", exc)
 
@@ -581,7 +584,13 @@ def _sanitize_profile_values(config, defaults):
     return cfg
 
 def _migrate_controller_binding(config):
-    """Backfill modern controller binding fields from legacy config keys."""
+    """Backfill modern controller binding fields from legacy config keys.
+
+    Deliberately NOT part of store_migration.py's version-gated ladder (see
+    load_profile) — runs unconditionally every load, not schema_version-
+    gated. Don't "helpfully" fold this into the ladder without re-reading
+    that reasoning.
+    """
     if not isinstance(config, dict):
         return config
 
@@ -635,7 +644,13 @@ def _migrate_controller_binding(config):
 
 
 def _migrate_output_delivery(config):
-    """Normalize output delivery settings and drop deprecated keys."""
+    """Normalize output delivery settings and drop deprecated keys.
+
+    Deliberately NOT part of store_migration.py's version-gated ladder (see
+    load_profile) — runs unconditionally every load, not schema_version-
+    gated. Don't "helpfully" fold this into the ladder without re-reading
+    that reasoning.
+    """
     if not isinstance(config, dict):
         return config
 
@@ -664,7 +679,14 @@ def _apply_completion_token_alias(data):
     """Map the legacy ``output_token_limit`` onto ``max_completion_tokens`` for
     profiles saved before the two token concepts were split. Operates on the raw
     loaded dict *before* it is merged with defaults, so we can tell whether the
-    new field was actually stored or is about to be filled in from defaults."""
+    new field was actually stored or is about to be filled in from defaults.
+
+    Deliberately NOT part of store_migration.py's version-gated ladder (see
+    load_profile) — this before-merge timing, versus the other two migrations'
+    after-merge timing, is exactly why folding all three into one ladder step
+    was judged riskier than it's worth. Don't "helpfully" fold this in without
+    re-reading that reasoning.
+    """
     if not isinstance(data, dict):
         return data
     if "max_completion_tokens" not in data and "output_token_limit" in data:
@@ -674,6 +696,13 @@ def _apply_completion_token_alias(data):
         except (TypeError, ValueError):
             pass
     return data
+
+
+# Existing on-disk profiles with no schema_version key are implicit v1 —
+# zero-disruption for current users. No ladder registered yet (see
+# load_profile's comment on why the existing migration functions stay
+# outside store_migration's generic ladder for now).
+_PROFILE_SCHEMA_VERSION = 1
 
 
 def _profile_defaults():
@@ -785,12 +814,28 @@ def _profile_defaults():
     }
 
 
+def _safe_profile_filename(profile_name):
+    """Coerce a profile name to a filesystem-safe basename (defense-in-depth).
+
+    server.sanitize_profile_name applies the same whitelist at the HTTP
+    boundary; this second barrier at the single path-construction choke point
+    guarantees no separator/traversal characters can reach the filesystem even
+    from an internal caller (py/path-injection hardening). os.path.basename is
+    applied last as the taint-breaking barrier CodeQL recognizes (in addition
+    to the character whitelist, which already strips separators)."""
+    name = "".join(
+        ch for ch in str(profile_name or "") if ch.isalnum() or ch in (" ", "_", "-")
+    ).strip()
+    return os.path.basename(name) or "Default"
+
+
 def load_profile(profile_name="Default"):
     """
-    Loads a specific profile. 
+    Loads a specific profile.
     If it doesn't exist, returns default settings (and creates the file for 'Default').
     """
     profiles_dir = get_profiles_dir()
+    profile_name = _safe_profile_filename(profile_name)
     file_path = os.path.join(profiles_dir, f"{profile_name}.yaml")
     
     defaults = _profile_defaults()
@@ -823,17 +868,39 @@ def load_profile(profile_name="Default"):
             return migrated
         return copy.deepcopy(defaults)
 
+    # File-level discipline (store_migration.py, DESIGN §9.5): a corrupt/
+    # unparseable profile is quarantined instead of crashing here (the gap
+    # this used to have — a broken YAML file threw, caught below, and just
+    # silently ran on defaults with the corrupt file left in place to bite
+    # the NEXT load too). A profile from a schema_version newer than this
+    # build understands is never touched. No migration ladder is registered
+    # yet — _apply_completion_token_alias/_migrate_controller_binding/
+    # _migrate_output_delivery below remain this app's own unconditional,
+    # idempotent-by-construction value-level migrations (not schema_version-
+    # gated); moving their exact merge-then-migrate-then-sanitize ordering
+    # into the generic ladder was judged higher regression risk than value
+    # to a utils.py function this deeply relied upon, so it stays as-is.
+    data, report = load_versioned_store(
+        file_path, _PROFILE_SCHEMA_VERSION, {}, default_factory=dict, parse=yaml.safe_load,
+    )
+    if report["action"] in ("quarantined", "downgrade_refused"):
+        for warning in report["warnings"]:
+            logging.warning(f"{profile_name}.yaml: {warning}")
+
     try:
-        with open(file_path, "r") as f:
-            data = yaml.safe_load(f) or {}
-            _apply_completion_token_alias(data)
-            # Merge with defaults to ensure missing keys don't break things
-            final_data = copy.deepcopy(defaults)
-            final_data.update(data)
-            _migrate_controller_binding(final_data)
-            _migrate_output_delivery(final_data)
-            _sanitize_profile_values(final_data, defaults)
-            return final_data
+        _apply_completion_token_alias(data)
+        # Merge with defaults to ensure missing keys don't break things
+        final_data = copy.deepcopy(defaults)
+        final_data.update(data)
+        _migrate_controller_binding(final_data)
+        _migrate_output_delivery(final_data)
+        _sanitize_profile_values(final_data, defaults)
+        if report["action"] == "quarantined":
+            # Recreate the file on disk, same as the "file didn't exist"
+            # path above — otherwise the app runs on in-memory-only settings
+            # that silently vanish on the next restart.
+            save_profile(profile_name, final_data)
+        return final_data
     except Exception as e:
         logging.error(f"Failed to load profile {profile_name}: {e}")
         return defaults
@@ -978,6 +1045,7 @@ def validate_profile_settings(data: dict):
 def save_profile(profile_name, data):
     """Saves data to a profile yaml file atomically with a backup."""
     profiles_dir = get_profiles_dir()
+    profile_name = _safe_profile_filename(profile_name)
     file_path = os.path.join(profiles_dir, f"{profile_name}.yaml")
     
     try:
@@ -986,7 +1054,8 @@ def save_profile(profile_name, data):
         _migrate_controller_binding(payload)
         _migrate_output_delivery(payload)
         _sanitize_profile_values(payload, defaults)
-        
+        payload["schema_version"] = _PROFILE_SCHEMA_VERSION
+
         # Validate values strictly
         validate_profile_settings(payload)
         

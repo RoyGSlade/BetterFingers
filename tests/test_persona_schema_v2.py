@@ -340,5 +340,102 @@ class DeleteV2Tests(_TempAppdataMixin, unittest.TestCase):
         self.assertIn("prompt", remaining["True Janitor"])
 
 
+class TrueV1FlatFileMigrationTests(_TempAppdataMixin, unittest.TestCase):
+    """A TRUE v1 file has no "personas"/"schema_version" wrapper at all — the
+    whole top-level mapping IS {name: prompt-string}, per the module's own
+    "v1 == flat {name: promptstring}" comment. Before store_migration.py
+    adoption, _read_personas_v2 always did data.get("personas", {})
+    unconditionally, which silently discarded a real v1 file's contents
+    (found while wiring up migration discipline, not previously covered by
+    any test — LoadLegacyFormatTests above tests a v2-wrapper-shape file
+    with v1-style string VALUES, a different thing)."""
+
+    def test_true_v1_flat_file_migrates_and_keeps_its_personas(self):
+        os.makedirs(os.path.dirname(self._path()), exist_ok=True)
+        with open(self._path(), "w", encoding="utf-8") as f:
+            yaml.safe_dump({"Assistant": "Be helpful.", "Coder": "Write clean code."}, f)
+
+        v2 = llm_engine.load_personas_v2(force_reload=True)
+        self.assertEqual(v2["Assistant"]["prompt"], "Be helpful.")
+        self.assertEqual(v2["Coder"]["prompt"], "Write clean code.")
+
+    def test_migrated_file_is_saved_as_v2_on_next_write(self):
+        os.makedirs(os.path.dirname(self._path()), exist_ok=True)
+        with open(self._path(), "w", encoding="utf-8") as f:
+            yaml.safe_dump({"Assistant": "Be helpful."}, f)
+
+        llm_engine.load_personas_v2(force_reload=True)
+        llm_engine.upsert_persona("New", "Another one.")
+
+        with open(self._path(), "r", encoding="utf-8") as f:
+            on_disk = yaml.safe_load(f)
+        self.assertEqual(on_disk["schema_version"], llm_engine.PERSONA_SCHEMA_VERSION)
+        self.assertIn("Assistant", on_disk["personas"])
+        self.assertIn("New", on_disk["personas"])
+
+
+class CorruptPersonasQuarantineTests(_TempAppdataMixin, unittest.TestCase):
+    def test_corrupt_yaml_is_quarantined_not_silently_discarded(self):
+        os.makedirs(os.path.dirname(self._path()), exist_ok=True)
+        with open(self._path(), "w", encoding="utf-8") as f:
+            f.write("personas: [unterminated\n  - broken: yaml: :::")
+
+        with self.assertLogs(level="WARNING") as log_ctx:
+            v2 = llm_engine.load_personas_v2(force_reload=True)
+
+        # Falls back to built-in defaults rather than crashing.
+        self.assertIn("True Janitor", v2)
+        # The corrupt file is preserved (quarantined), not deleted outright.
+        self.assertFalse(os.path.exists(self._path()))
+        self.assertTrue(os.path.exists(f"{self._path()}.corrupt"))
+        self.assertTrue(any("personas.yaml" in msg for msg in log_ctx.output))
+
+    def test_quarantine_happens_before_any_save_can_overwrite_evidence(self):
+        # The ordering this test pins: load (quarantines) THEN save (writes
+        # a fresh file) must never happen in the other order, or the
+        # original corrupt content would be silently clobbered with no trace
+        # it ever existed — the exact risk the plan flagged.
+        os.makedirs(os.path.dirname(self._path()), exist_ok=True)
+        with open(self._path(), "w", encoding="utf-8") as f:
+            f.write(":::not valid yaml:::[[[")
+
+        llm_engine.load_personas_v2(force_reload=True)  # quarantines
+        self.assertTrue(os.path.exists(f"{self._path()}.corrupt"))
+        with open(f"{self._path()}.corrupt", "r", encoding="utf-8") as f:
+            preserved = f.read()
+        self.assertEqual(preserved, ":::not valid yaml:::[[[")
+
+        llm_engine.upsert_persona("Fresh", "Start clean.")  # writes a NEW file
+        # The quarantined original is untouched by the subsequent save.
+        with open(f"{self._path()}.corrupt", "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), preserved)
+
+
+class PersonaDowngradeRefusalTests(_TempAppdataMixin, unittest.TestCase):
+    def test_future_schema_version_is_never_touched(self):
+        os.makedirs(os.path.dirname(self._path()), exist_ok=True)
+        future_payload = {
+            "schema_version": llm_engine.PERSONA_SCHEMA_VERSION + 1,
+            "personas": {"FromTheFuture": {"prompt": "unknown fields ahead"}},
+        }
+        with open(self._path(), "w", encoding="utf-8") as f:
+            yaml.safe_dump(future_payload, f)
+
+        with self.assertLogs(level="WARNING"):
+            v2 = llm_engine.load_personas_v2(force_reload=True)
+
+        # In-memory: falls back to defaults rather than misinterpreting
+        # future fields it doesn't understand.
+        self.assertNotIn("FromTheFuture", v2)
+        self.assertIn("True Janitor", v2)
+
+        # On disk: byte-for-byte untouched.
+        with open(self._path(), "r", encoding="utf-8") as f:
+            on_disk = yaml.safe_load(f)
+        self.assertEqual(on_disk, future_payload)
+        self.assertFalse(os.path.exists(f"{self._path()}.corrupt"))
+        self.assertFalse(os.path.exists(f"{self._path()}.bak-v{llm_engine.PERSONA_SCHEMA_VERSION + 1}"))
+
+
 if __name__ == "__main__":
     unittest.main()

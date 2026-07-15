@@ -2,6 +2,9 @@ import os
 import json
 import logging
 
+from log_redaction import redact_user_text
+
+
 class ProjectGenerator:
     def __init__(self):
         # We can store templates here if needed
@@ -11,7 +14,7 @@ class ProjectGenerator:
         """
         Generates the folder structure and basic files for the project based on the plan.
         """
-        logging.info(f"Generating project '{plan.get('title')}' in {target_dir}")
+        logging.info(f"Generating project '{redact_user_text(plan.get('title'))}' in {target_dir}")
         
         try:
             # 1. Create Root Directory

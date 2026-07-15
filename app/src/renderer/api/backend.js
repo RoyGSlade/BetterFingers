@@ -25,6 +25,7 @@ const RUNTIME_VERSION_URL = `${BACKEND_ORIGIN}/runtime/version`;
 const PERSONAS_URL = `${BACKEND_ORIGIN}/personas`;
 const TTS_VOICES_URL = `${BACKEND_ORIGIN}/tts/voices`;
 const VOICE_PRESETS_URL = `${BACKEND_ORIGIN}/voice-presets`;
+const WAKE_URL = `${BACKEND_ORIGIN}/wake`;
 // Phase 3c: no token in the renderer. Every backend call goes through the
 // main-process proxy, which attaches the credential and enforces the route
 // allowlist. These helpers translate a full URL into the proxy's (method,
@@ -428,6 +429,65 @@ async function cloneVoice(file, name, consent, timeoutMs = 30000) {
   return res.body;
 }
 
+async function fetchWakeStatus(timeoutMs = 2500) {
+  return fetchJson(`${WAKE_URL}/status`, timeoutMs);
+}
+
+async function fetchWakeModels(timeoutMs = 2500) {
+  return fetchJson(`${WAKE_URL}/models`, timeoutMs);
+}
+
+async function enableWake(fields = {}, timeoutMs = 5000) {
+  return postJson(`${WAKE_URL}/enable`, fields, timeoutMs);
+}
+
+async function disableWake(timeoutMs = 5000) {
+  return postJson(`${WAKE_URL}/disable`, {}, timeoutMs);
+}
+
+async function downloadWakeModel(modelId, timeoutMs = 5000) {
+  return postJson(`${WAKE_URL}/models/${encodeURIComponent(modelId)}/download`, {}, timeoutMs);
+}
+
+async function fetchWakeModelDownloadState(modelId, timeoutMs = 2500) {
+  return fetchJson(`${WAKE_URL}/models/${encodeURIComponent(modelId)}/download-state`, timeoutMs);
+}
+
+async function deleteWakeModel(modelId, timeoutMs = 5000) {
+  return deleteJson(`${WAKE_URL}/models/${encodeURIComponent(modelId)}`, timeoutMs);
+}
+
+async function testWake(durationS = 10.0, timeoutMs = 15000) {
+  return postJson(`${WAKE_URL}/test`, { duration_s: durationS }, Math.max(timeoutMs, durationS * 1000 + 5000));
+}
+
+async function importWakeModel(file, name, timeoutMs = 30000) {
+  const bridge = window.betterFingers && window.betterFingers.uploadWakeModel;
+  if (typeof bridge !== 'function') {
+    throw new Error('Backend bridge is unavailable.');
+  }
+  const arrayBuffer = await file.arrayBuffer();
+  const res = await bridge({
+    bytes: new Uint8Array(arrayBuffer),
+    filename: file.name,
+    name,
+    timeoutMs,
+  });
+  if (!res) {
+    throw new Error('Wake model import returned no result.');
+  }
+  if (res.status === 0 && res.ok === false) {
+    if (res.error === 'timeout') {
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
+    }
+    throw new Error(res.error || 'Wake model import failed.');
+  }
+  if (!res.ok) {
+    throw new Error(errorMessageFromBody(res.body, `${WAKE_URL}/models/import`, res.status));
+  }
+  return res.body;
+}
+
 async function lintPersona(fields = {}, timeoutMs = 5000) {
   return postJson(`${PERSONAS_URL}/lint`, fields, timeoutMs);
 }
@@ -595,6 +655,15 @@ export {
   saveVoicePreset,
   deleteVoicePreset,
   cloneVoice,
+  fetchWakeStatus,
+  fetchWakeModels,
+  enableWake,
+  disableWake,
+  downloadWakeModel,
+  fetchWakeModelDownloadState,
+  deleteWakeModel,
+  testWake,
+  importWakeModel,
   lintPersona,
   testPersona,
   savePersona,

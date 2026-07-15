@@ -18,8 +18,9 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, W
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
-from llm_engine import get_engine, get_engine_if_initialized, resolve_dictation_preset
-from log_redaction import redact_user_text
+from llm_engine import LLMEngine, get_engine, get_engine_if_initialized, resolve_dictation_preset
+from log_redaction import redact_exc, redact_user_text
+from store_migration import get_degraded_events
 from transcriber import Transcriber
 from hotkey_manager import HotkeyManager
 from audio_gate import should_block_for_no_audio
@@ -243,6 +244,23 @@ dictation_coordinator = DictationCoordinator(cancellation_event=cancellation_eve
 from model_runtime_coordinator import ModelRuntimeCoordinator, RuntimeBusyError
 
 model_runtime = ModelRuntimeCoordinator()
+# Resource ledger + admission control (DESIGN.md M6): each evictor is the
+# SAME unload path /models/unload/{component} already uses, so a coordinator-
+# driven eviction (admission or idle sweep) and a user-driven manual unload
+# converge on one release path — no double-free risk. Registered once here
+# with a lambda (not a direct reference) because _unload_model_component_locked
+# is defined later in this file; the lambda body only resolves it at call
+# time, well after the whole module has finished loading.
+model_runtime.register_evictor("llm", lambda: _unload_model_component_locked("llm"))
+model_runtime.register_evictor("stt", lambda: _unload_model_component_locked("stt"))
+model_runtime.register_evictor("tts", lambda: _unload_model_component_locked("tts"))
+# LLMEngine is a process-level singleton (class attributes, not instance
+# state) — injecting its admission hooks once here covers every get_engine()
+# call for the life of the process. Transcriber/ReviewTTSEngine are per-
+# instance instead, so their hooks are injected at construction time in
+# ensure_transcriber_initialized()/ensure_tts_initialized() below.
+LLMEngine.set_admission_fn(lambda est, mid=None: model_runtime.request_admission("llm", est, mid))
+LLMEngine.set_load_reporter(lambda mid, est: model_runtime.note_loaded("llm", mid, est))
 # Set for the duration of a privacy wipe. While it is set, every path that
 # could create or re-persist user data (new recordings, dictation processing,
 # recovery saves, sends, TTS, retranscription) refuses, so the wipe operates on
@@ -537,6 +555,15 @@ def apply_active_profile_runtime(profile_name):
     except Exception as exc:
         logging.warning(f"Failed applying profile to LLM engine: {exc}")
 
+    # apply_active_profile_runtime is the single choke point both profile
+    # activation AND a settings-save-of-the-active-profile flow through, so
+    # re-syncing pinned state here (same as startup_event's initial sync)
+    # means a keep-loaded toggle takes effect immediately — no restart needed
+    # for A3's idle sweep / admission eviction to keep skipping pinned components.
+    residency = get_model_residency_settings()
+    for component, pinned in residency.items():
+        model_runtime.set_pinned(component, pinned)
+
     return get_active_profile_payload()
 
 
@@ -605,7 +632,22 @@ def get_model_residency_settings():
 def ensure_transcriber_initialized(preload=False):
     global transcriber
     if transcriber is None:
-        transcriber = Transcriber(profile_name=get_last_active_profile(), preload=preload)
+        # preload=False here even when the caller wants preloading: the DI
+        # hooks below must be wired BEFORE the first ensure_loaded() call, and
+        # Transcriber.__init__(preload=True) would call it internally before
+        # we get a chance to inject admission control. Preload explicitly
+        # afterward instead — same end state, correct ordering.
+        transcriber = Transcriber(profile_name=get_last_active_profile(), preload=False)
+        # hasattr-guarded: test doubles that stand in for Transcriber (several
+        # DummyTranscriber fakes across the suite) predate this DI surface and
+        # needn't implement it — same defensive style as the getattr(engine,
+        # method, None) checks in _unload_model_component_locked.
+        if hasattr(transcriber, "set_admission_fn"):
+            transcriber.set_admission_fn(lambda est, size=None: model_runtime.request_admission("stt", est, size))
+        if hasattr(transcriber, "set_load_reporter"):
+            transcriber.set_load_reporter(lambda size, est: model_runtime.note_loaded("stt", size, est))
+        if preload:
+            transcriber.ensure_loaded()
     elif preload:
         transcriber.ensure_loaded()
     return transcriber
@@ -1805,7 +1847,7 @@ def process_recording_result(recording_result):
         broadcast_status_threadsafe("error", {"message": str(exc), "draft_id": draft["id"]})
         return draft
     except Exception as exc:
-        logging.error(f"Recording processing failed: {exc}")
+        logging.error(f"Recording processing failed: {redact_exc(exc)}")
         JOBS.fail(job.id, str(exc))
         record_runtime_error("recording", str(exc))
         draft = create_draft(
@@ -1861,8 +1903,8 @@ def on_recording_complete(recording_result):
     def _worker():
         try:
             process_recording_result(recording_result)
-        except Exception:
-            logging.exception("Recording worker failed")
+        except Exception as exc:
+            logging.error(f"Recording worker failed: {redact_exc(exc)}")
 
     threading.Thread(target=_worker, daemon=True, name="betterfingers-recording-worker").start()
 
@@ -1894,6 +1936,8 @@ async def startup_event():
         logging.debug(f"history archive migration skipped: {exc}")
     lazy_startup = is_lazy_startup_enabled()
     residency_settings = get_model_residency_settings()
+    for component, pinned in residency_settings.items():
+        model_runtime.set_pinned(component, pinned)
 
     def background_warmup():
         try:
@@ -1933,6 +1977,10 @@ async def startup_event():
 @app.on_event("shutdown")
 def shutdown_event():
     stop_hotkey_manager()
+    # Safety net in case /wake/disable was never called before shutdown --
+    # idempotent, safe even if wake word was never enabled this run.
+    import routes_wake
+    routes_wake.stop_wake_listener()
     # Join the background warmup thread so it can't outlive this app instance and
     # mutate global model state afterwards (also keeps tests deterministic).
     thread = _warmup_thread
@@ -1987,7 +2035,11 @@ def ensure_tts_initialized():
         try:
             from tts_engine import ReviewTTSEngine
             tts_engine = ReviewTTSEngine()
-            
+            if hasattr(tts_engine, "set_admission_fn"):
+                tts_engine.set_admission_fn(lambda est, mid=None: model_runtime.request_admission("tts", est, mid))
+            if hasattr(tts_engine, "set_load_reporter"):
+                tts_engine.set_load_reporter(lambda mid, est: model_runtime.note_loaded("tts", mid, est))
+
             def tts_start_callback(text):
                 broadcast_status_threadsafe("draft_tts_started", {"text": text})
                 
@@ -2211,6 +2263,13 @@ async def run_doctor(refresh_audio: bool = False):
         "hardware_tier": hardware_tier_info,
         "model_fit": model_fit_info,
         "recovery": recovery_guidelines,
+        # Config-store quarantine/downgrade-refusal events (DESIGN §9.5, M4
+        # B1/B2): a corrupt or too-new personas/voice_presets/profile/
+        # app_state file is never silently dropped or destructively
+        # overwritten -- this is the "visible warning" the downgrade policy
+        # requires, queryable here in addition to the startup log line each
+        # event already gets.
+        "store_warnings": get_degraded_events(),
     }
 
 
@@ -2848,6 +2907,7 @@ def _unload_model_component_locked(component: str):
             transcriber = None
             unloaded = True
         gc.collect()
+        model_runtime.note_unloaded("stt")
         return {
             "ok": True,
             "component": "stt",
@@ -2877,6 +2937,7 @@ def _unload_model_component_locked(component: str):
             except Exception as exc:
                 logging.debug(f"Could not clear llm_engine singleton: {exc}")
         gc.collect()
+        model_runtime.note_unloaded("llm")
         return {
             "ok": True,
             "component": "llm",
@@ -2897,6 +2958,7 @@ def _unload_model_component_locked(component: str):
                         logging.debug(f"TTS {method}() failed: {exc}")
             tts_engine = None
         gc.collect()
+        model_runtime.note_unloaded("tts")
         return {
             "ok": True,
             "component": "tts",
@@ -3026,11 +3088,25 @@ def get_privacy_report():
     ]
 
     import app_paths
+    import routes_wake
 
     return {
         "offline_by_default": True,
         "network_touchpoints": network_touchpoints,
         "data_locations": data_locations,
+        # Live-truthful, not static copy: reflects the actual running service
+        # state so this never claims a listener exists while wake word is
+        # disabled (or vice versa).
+        "wake_listener": {
+            "active": routes_wake.is_wake_listening(),
+            "persists_audio": False,
+            "note": (
+                "When enabled, processes microphone audio locally for wake-phrase "
+                "detection. Audio is never written to disk or sent anywhere -- only "
+                "a redacted detection score (a number, never audio or transcripts) "
+                "is kept in memory."
+            ),
+        },
         # Every root the app writes (or historically wrote) to, so the user can
         # see exactly where their data lives — current and any legacy location.
         "data_directories": app_paths.describe_locations(),
@@ -3116,6 +3192,13 @@ def _perform_privacy_wipe(wipe_voices: bool):
     gate_held = False
     output_lease_held = False
     try:
+        # 0. Stop the wake-word mic stream first (a second, independent mic
+        #    consumer) -- before draining the recorder, so no audio consumer
+        #    is left running while we quiesce the rest of the pipeline.
+        #    Idempotent/no-op-safe: True even if wake word was never enabled.
+        import routes_wake
+        cleared["wake_listener_stopped"] = bool(routes_wake.stop_wake_listener())
+
         # 1. Drain the recorder: stop it and confirm it actually stopped.
         cleared["recorder_stopped"] = _drain_recorder()
 
@@ -3691,7 +3774,7 @@ async def rewrite_draft(draft_id: int, request: DraftRewriteRequest):
     except HTTPException:
         raise
     except Exception as exc:
-        logging.exception("Draft rewrite failed")
+        logging.error(f"Draft rewrite failed: {redact_exc(exc)}")
         record_runtime_error("review", str(exc), {"action": "rewrite", "draft_id": draft_id})
         broadcast_status_threadsafe("draft_rewrite_error", {"draft_id": draft_id, "action": action_key, "error": str(exc)})
         return {
@@ -3852,7 +3935,7 @@ async def execute_voice_command(request: VoiceCommandExecuteRequest):
     except HTTPException:
         raise
     except Exception as exc:
-        logging.exception("Voice command execution failed")
+        logging.error(f"Voice command execution failed: {redact_exc(exc)}")
         return {"ok": False, "reason": "error", "action": intent.action, "error": str(exc)}
 
 
@@ -4010,7 +4093,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
     except RuntimeBusyError:
         raise HTTPException(status_code=409, detail="STT runtime is being reconfigured; retry shortly.")
     except Exception as e:
-        logging.error(f"Transcription Error: {e}")
+        logging.error(f"Transcription Error: {redact_exc(e)}")
         raise HTTPException(status_code=500, detail="Transcription failed")
     finally:
         try:
@@ -4478,9 +4561,13 @@ async def generate_project(data: dict):
 # re-bound so server._foundry_sessions stays the shared store existing tests use.
 import routes_foundry  # noqa: E402
 import routes_user_config  # noqa: E402
+import routes_models_resources  # noqa: E402
+import routes_wake  # noqa: E402
 
 app.include_router(routes_foundry.router)
 app.include_router(routes_user_config.router)
+app.include_router(routes_models_resources.router)
+app.include_router(routes_wake.router)
 _foundry_sessions = routes_foundry._foundry_sessions
 
 

@@ -10,6 +10,50 @@ from model_runtime_coordinator import ModelRuntimeCoordinator, RuntimeBusyError
 from tts_engine import ReviewTTSEngine
 
 
+class TTSEngineAdmissionTests(unittest.TestCase):
+    """Load-site seam for model_runtime_coordinator (DESIGN.md M6): ensure_loaded
+    consults the injected admission_fn before _load_kokoro_backend."""
+
+    def test_refused_admission_falls_back_to_sapi(self):
+        engine = ReviewTTSEngine()
+        engine.set_admission_fn(lambda est, mid: {
+            "allowed": False,
+            "refusal": {"message": "Not enough RAM to load the TTS model.",
+                        "resident": [], "suggested_model_id": None},
+        })
+        with patch.object(engine, "_load_kokoro_backend") as kokoro_load, patch.object(
+            engine, "_load_sapi_backend", return_value=(True, "sapi loaded")
+        ):
+            status = engine.ensure_loaded(voice_hint="english")
+
+        kokoro_load.assert_not_called()  # refused before ever touching Kokoro
+        self.assertTrue(status["ok"])
+        self.assertEqual(status["backend"], "sapi")
+        self.assertTrue(status["fallback"])
+        self.assertIn("Not enough RAM", status["message"])
+
+    def test_allowed_admission_loads_kokoro_and_reports(self):
+        engine = ReviewTTSEngine()
+        engine.set_admission_fn(lambda est, mid: {"allowed": True, "refusal": None})
+        reported = []
+        engine.set_load_reporter(lambda mid, est: reported.append((mid, est)))
+        with patch.object(engine, "_load_kokoro_backend", return_value=(True, "kokoro loaded")):
+            status = engine.ensure_loaded(voice_hint="english")
+
+        self.assertTrue(status["ok"])
+        self.assertEqual(len(reported), 1)
+        model_id, estimated_mb = reported[0]
+        self.assertTrue(model_id.startswith("kokoro:"))
+        self.assertGreater(estimated_mb, 0)
+
+    def test_no_admission_fn_is_a_noop(self):
+        engine = ReviewTTSEngine()
+        with patch.object(engine, "_load_kokoro_backend", return_value=(True, "kokoro loaded")) as kokoro_load:
+            status = engine.ensure_loaded(voice_hint="english")
+        kokoro_load.assert_called_once()
+        self.assertTrue(status["ok"])
+
+
 class TTSEngineTests(unittest.TestCase):
     def test_falls_back_to_sapi_when_kokoro_unavailable(self):
         engine = ReviewTTSEngine()

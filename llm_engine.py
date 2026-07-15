@@ -18,12 +18,25 @@ import re
 import tempfile
 import yaml
 from model_manager import (
+    AVAILABLE_MODELS,
     check_and_download_resources,
     get_llama_runtime_env,
     get_model_path,
     get_model_server_args,
     get_server_path,
 )
+from hardware_report import _estimate_runtime_mb
+from log_redaction import redact_stderr_lines
+from store_migration import load_versioned_store
+
+
+def _estimate_llm_runtime_mb(model_id):
+    """Best-effort resident-MB estimate for admission control. Falls back to
+    0 (never blocks a load) when the model isn't in the catalog — e.g. a
+    stale/removed model_id shouldn't make admission control the failure mode
+    when download/existence checks upstream already own that error."""
+    size_mb = int((AVAILABLE_MODELS.get(model_id) or {}).get("size_mb", 0) or 0)
+    return _estimate_runtime_mb(size_mb) if size_mb else 0
 
 # --- Configuration ---
 SIDECAR_PORT = 8080
@@ -468,13 +481,47 @@ def validate_persona(entry):
     return True, ""
 
 
+def _migrate_personas_v1_to_v2(data):
+    """v1 was a flat ``{name: prompt-string}`` mapping at the TOP level — no
+    "personas"/"schema_version" wrapper at all. Wrap it into the v2 shape;
+    per-entry string->dict promotion still happens via normalize_persona()
+    at read time, same treatment as any already-v2 entry.
+
+    NOTE: this migration function didn't exist before this change — the old
+    _read_personas_v2 always did ``data.get("personas", {})`` unconditionally,
+    which means a genuine v1 flat file (no "personas" key) would silently
+    resolve to an EMPTY dict and fall through to defaults, discarding
+    whatever personas it held. Adopting store_migration.py's ladder is what
+    surfaced this; fixed here rather than left as a latent gap.
+    """
+    raw = data.get("personas") if isinstance(data.get("personas"), dict) else data
+    return {
+        "personas": {
+            str(name).strip(): entry
+            for name, entry in (raw or {}).items()
+            if str(name).strip() and name != "schema_version"
+        }
+    }
+
+
 def _read_personas_v2(path):
-    """Read personas.yaml from disk and normalize every entry to schema v2."""
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            data = yaml.safe_load(handle) or {}
-    except FileNotFoundError:
-        data = {}
+    """Read personas.yaml from disk with quarantine/downgrade discipline
+    (store_migration.py, DESIGN §9.5), normalizing every entry to schema v2.
+
+    A corrupt/unparseable file is quarantined immediately here — on load,
+    BEFORE any save path gets a chance to silently overwrite it with fresh
+    defaults (upsert_persona/_write_personas_v2 always write the full store,
+    so a save happening before quarantine would have clobbered the original
+    file with no trace it ever existed).
+    """
+    data, report = load_versioned_store(
+        path, PERSONA_SCHEMA_VERSION, {1: _migrate_personas_v1_to_v2},
+        default_factory=lambda: {"personas": {}}, parse=yaml.safe_load,
+    )
+    if report["action"] in ("quarantined", "downgrade_refused"):
+        for warning in report["warnings"]:
+            logging.warning(f"personas.yaml: {warning}")
+
     raw = data.get("personas", {})
     if not isinstance(raw, dict):
         raw = {}
@@ -1512,7 +1559,22 @@ class LLMEngine:
     _loaded_model_id = None
     _last_error = ""
     _last_error_details = {}
-    
+    # Admission-control DI (model_runtime_coordinator), mirrors tts_engine's
+    # set_runtime_lease_factory pattern: server.py injects these once at
+    # startup so this module never imports the coordinator or server.py
+    # directly. Both None-safe — unset means "no admission control" (existing
+    # tests / standalone use are unaffected).
+    _admission_fn = None       # (estimated_mb, model_id) -> AdmissionResult dict
+    _load_reporter = None      # (model_id, estimated_mb) -> None
+
+    @classmethod
+    def set_admission_fn(cls, fn):
+        cls._admission_fn = staticmethod(fn) if fn is not None else None
+
+    @classmethod
+    def set_load_reporter(cls, fn):
+        cls._load_reporter = staticmethod(fn) if fn is not None else None
+
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
             with _init_lock:
@@ -1555,6 +1617,17 @@ class LLMEngine:
         LLMEngine._last_error_details = dict(details or {})
         logging.error(text)
 
+    def _report_loaded(self):
+        """Tell the coordinator's ledger this model is now resident, for
+        admission-control accounting. No-op when no reporter is injected."""
+        if LLMEngine._load_reporter is None:
+            return
+        model_id = getattr(self, "model_id", None)
+        try:
+            LLMEngine._load_reporter(model_id, _estimate_llm_runtime_mb(model_id))
+        except Exception as exc:
+            logging.debug(f"LLM load reporter failed: {exc}")
+
     def _read_server_stderr(self, limit=4000):
         if not LLMEngine._stderr_log:
             return ""
@@ -1582,8 +1655,9 @@ class LLMEngine:
             LLMEngine._ready = True
             LLMEngine._loaded_model_id = getattr(self, "model_id", None)
             self._clear_last_error()
+            self._report_loaded()
             return
-        
+
         # STEP 2: Ensure resources exist
         try:
             model_id = getattr(self, "model_id", None)
@@ -1614,7 +1688,18 @@ class LLMEngine:
         if not os.path.exists(model_path):
             self._mark_error(f"Model not found: {model_path}")
             return
-        
+
+        if LLMEngine._admission_fn is not None:
+            estimated_mb = _estimate_llm_runtime_mb(model_id)
+            admission = LLMEngine._admission_fn(estimated_mb, model_id)
+            if not admission.get("allowed", True):
+                refusal = admission.get("refusal") or {}
+                self._mark_error(
+                    refusal.get("message", "Not enough RAM to load this model."),
+                    refusal,
+                )
+                return
+
         cmd = [
             server_exe,
             "--model", model_path,
@@ -1701,6 +1786,7 @@ class LLMEngine:
                     LLMEngine._ready = True
                     LLMEngine._loaded_model_id = getattr(self, "model_id", None)
                     self._clear_last_error()
+                    self._report_loaded()
                     return
             except Exception:
                 pass
@@ -1708,7 +1794,15 @@ class LLMEngine:
             if process is not None:
                 return_code = process.poll()
                 if return_code is not None:
-                    stderr = self._read_server_stderr()
+                    # Line-level redaction (§9.3): loader/system diagnostic
+                    # lines like "libmtmd.so.0" must survive verbatim for
+                    # validate_llama_server_runtime's error surfacing, but
+                    # stderr at higher verbosity can echo prompt content —
+                    # never let the raw blob reach logging.error or the
+                    # /doctor export. Redact BEFORE truncating so a cut mid-
+                    # blob can't fragment (and defeat the allowlist match on)
+                    # a diagnostic line.
+                    stderr = redact_stderr_lines(self._read_server_stderr())
                     message = f"llama-server exited during startup with code {return_code}."
                     if stderr:
                         message = f"{message} Server stderr: {stderr[:1200]}"
@@ -1716,8 +1810,8 @@ class LLMEngine:
                     self.shutdown()
                     return
             time.sleep(1)
-        
-        stderr = self._read_server_stderr()
+
+        stderr = redact_stderr_lines(self._read_server_stderr())
         message = "llama-server timed out while starting."
         if stderr:
             message = f"{message} Server stderr: {stderr[:1200]}"

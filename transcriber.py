@@ -10,6 +10,7 @@ from faster_whisper import WhisperModel
 from huggingface_hub import scan_cache_dir
 from huggingface_hub.constants import HF_HUB_CACHE
 
+from log_redaction import redact_exc
 from text_formatter import TextFormatter
 from utils import load_profile
 
@@ -23,6 +24,25 @@ _HALLUCINATION_PHRASES = {
 }
 
 _SENTENCE_SPLIT_RE = re.compile(r'[.!?]+')
+
+# Static, conservative resident-MB estimates for admission control (faster-
+# whisper/CTranslate2 footprint, int8 CPU or float16 GPU, overhead included).
+# A custom/local model_size (a filesystem path, not a catalog name) falls
+# back to _DEFAULT_WHISPER_RUNTIME_MB rather than under-estimating to 0.
+_WHISPER_RUNTIME_MB_ESTIMATES = {
+    "tiny.en": 150,
+    "base.en": 300,
+    "small.en": 700,
+    "medium.en": 1800,
+    "large-v3": 3500,
+    "distil-medium.en": 900,
+    "distil-large-v3": 1700,
+}
+_DEFAULT_WHISPER_RUNTIME_MB = 500
+
+
+def _estimate_whisper_runtime_mb(model_size):
+    return _WHISPER_RUNTIME_MB_ESTIMATES.get((model_size or "").strip(), _DEFAULT_WHISPER_RUNTIME_MB)
 
 
 def _is_hallucination(text: str) -> bool:
@@ -294,8 +314,20 @@ class Transcriber:
         os.makedirs(self.download_root, exist_ok=True)
 
         self._model_lock = threading.RLock()
+        # Admission-control DI (model_runtime_coordinator), same pattern as
+        # llm_engine.set_admission_fn / tts_engine.set_runtime_lease_factory.
+        # None-safe: unset means "no admission control".
+        self._admission_fn = None      # (estimated_mb, model_size) -> AdmissionResult dict
+        self._load_reporter = None     # (model_size, estimated_mb) -> None
+        self._last_error = ""
 
         self.reload_profile(profile_name=profile_name, preload=preload)
+
+    def set_admission_fn(self, fn):
+        self._admission_fn = fn
+
+    def set_load_reporter(self, fn):
+        self._load_reporter = fn
 
     def _load_runtime_config(self, profile_name):
         try:
@@ -448,13 +480,34 @@ class Transcriber:
         with self._model_lock:
             if self.model is not None:
                 return True
+
+            if self._admission_fn is not None:
+                estimated_mb = _estimate_whisper_runtime_mb(self.model_size)
+                admission = self._admission_fn(estimated_mb, self.model_size)
+                if not admission.get("allowed", True):
+                    refusal = admission.get("refusal") or {}
+                    self._last_error = refusal.get(
+                        "message", "Not enough RAM to load the speech model."
+                    )
+                    logging.error(self._last_error)
+                    return False
+
             try:
                 self.model = self._load_model()
-                return self.model is not None
             except Exception as exc:
                 logging.error(f"Failed to load Whisper model: {exc}")
                 self.model = None
+                self._last_error = str(exc)
                 return False
+
+            if self.model is not None:
+                self._last_error = ""
+                if self._load_reporter is not None:
+                    try:
+                        self._load_reporter(self.model_size, _estimate_whisper_runtime_mb(self.model_size))
+                    except Exception as exc:
+                        logging.debug(f"Whisper load reporter failed: {exc}")
+            return self.model is not None
 
     def unload(self):
         with self._model_lock:
@@ -537,5 +590,9 @@ class Transcriber:
                 return "", empty_conf
             return raw, self._compute_confidence(seg_list)
         except Exception as exc:
-            logging.error(f"Error during transcription: {exc}")
+            # Broad catch over segment formatting/hallucination-check, which
+            # operates directly on the decoded transcript — an exception here
+            # could echo it (found by the logging-leak regression gate, not
+            # in the original Phase 0 audit).
+            logging.error(f"Error during transcription: {redact_exc(exc)}")
             return "", empty_conf
