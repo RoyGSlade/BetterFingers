@@ -157,6 +157,26 @@ class VoicePresetsTests(unittest.TestCase):
         leftovers = [f for f in os.listdir(directory) if f != os.path.basename(self._path())]
         self.assertEqual(leftovers, [])
 
+    def test_future_schema_version_is_never_touched(self):
+        path = self._path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        future_payload = {
+            "schema_version": voice_presets._SCHEMA_VERSION + 1,
+            "presets": [{"name": "FromTheFuture", "base": "af_heart"}],
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(future_payload, f)
+
+        presets = voice_presets.get_presets()
+
+        # In-memory: bare defaults, not a misread of unknown future fields.
+        self.assertEqual(presets, [])
+        # On disk: byte-for-byte untouched.
+        with open(path, "r", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        self.assertEqual(on_disk, future_payload)
+        self.assertFalse(os.path.exists(f"{path}.corrupt"))
+
 
 if __name__ == "__main__":
     unittest.main()
