@@ -27,6 +27,7 @@ from model_manager import (
 )
 from hardware_report import _estimate_runtime_mb
 from log_redaction import redact_stderr_lines
+from store_migration import load_versioned_store
 
 
 def _estimate_llm_runtime_mb(model_id):
@@ -480,13 +481,47 @@ def validate_persona(entry):
     return True, ""
 
 
+def _migrate_personas_v1_to_v2(data):
+    """v1 was a flat ``{name: prompt-string}`` mapping at the TOP level — no
+    "personas"/"schema_version" wrapper at all. Wrap it into the v2 shape;
+    per-entry string->dict promotion still happens via normalize_persona()
+    at read time, same treatment as any already-v2 entry.
+
+    NOTE: this migration function didn't exist before this change — the old
+    _read_personas_v2 always did ``data.get("personas", {})`` unconditionally,
+    which means a genuine v1 flat file (no "personas" key) would silently
+    resolve to an EMPTY dict and fall through to defaults, discarding
+    whatever personas it held. Adopting store_migration.py's ladder is what
+    surfaced this; fixed here rather than left as a latent gap.
+    """
+    raw = data.get("personas") if isinstance(data.get("personas"), dict) else data
+    return {
+        "personas": {
+            str(name).strip(): entry
+            for name, entry in (raw or {}).items()
+            if str(name).strip() and name != "schema_version"
+        }
+    }
+
+
 def _read_personas_v2(path):
-    """Read personas.yaml from disk and normalize every entry to schema v2."""
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            data = yaml.safe_load(handle) or {}
-    except FileNotFoundError:
-        data = {}
+    """Read personas.yaml from disk with quarantine/downgrade discipline
+    (store_migration.py, DESIGN §9.5), normalizing every entry to schema v2.
+
+    A corrupt/unparseable file is quarantined immediately here — on load,
+    BEFORE any save path gets a chance to silently overwrite it with fresh
+    defaults (upsert_persona/_write_personas_v2 always write the full store,
+    so a save happening before quarantine would have clobbered the original
+    file with no trace it ever existed).
+    """
+    data, report = load_versioned_store(
+        path, PERSONA_SCHEMA_VERSION, {1: _migrate_personas_v1_to_v2},
+        default_factory=lambda: {"personas": {}}, parse=yaml.safe_load,
+    )
+    if report["action"] in ("quarantined", "downgrade_refused"):
+        for warning in report["warnings"]:
+            logging.warning(f"personas.yaml: {warning}")
+
     raw = data.get("personas", {})
     if not isinstance(raw, dict):
         raw = {}
