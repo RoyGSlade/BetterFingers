@@ -204,7 +204,15 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13" # matches packaged build (Windows leg above)
+          # 3.12, NOT 3.13 like the Windows leg: the Linux build ships FULL
+          # kokoro (requirements-linux.lock pins misaki==0.9.4, kokoro's G2P
+          # engine, which requires Python <3.13). Windows ships kokoro-onnx and
+          # runs 3.13. requirements-linux.lock + requirements-dev.lock are both
+          # generated on 3.12, so the AppImage's bundled interpreter matches.
+          # Verified locally: the AppImage builds and its bundled backend starts
+          # on 3.12; 3.13 fails at `pip install` with "No matching distribution
+          # for misaki==0.9.4".
+          python-version: "3.12"
           cache: pip
 
       - name: Install Python dependencies
