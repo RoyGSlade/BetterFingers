@@ -1,10 +1,14 @@
+import glob
+import os
 import unittest
+import wave
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
 
 from wake_word import (
+    DEFAULT_THRESHOLD,
     FakeWakeDetector,
     OpenWakeWordDetector,
     WakeListener,
@@ -349,6 +353,109 @@ class WakeListenerTests(unittest.TestCase):
         with patch("sounddevice.InputStream", _StubInputStream):
             listener.start()
         self.assertTrue(listener.status()["listening"])
+
+
+def _read_wav_mono_float32(path, target_sample_rate=16000):
+    """Read a 16-bit PCM WAV clip as float32 in [-1, 1], stdlib-only (no new
+    pip deps). Multi-channel clips are averaged down to mono; the fixture
+    format is documented on WakeFixtureAccuracyTests below."""
+    with wave.open(path, "rb") as handle:
+        sample_rate = handle.getframerate()
+        channels = handle.getnchannels()
+        sample_width = handle.getsampwidth()
+        raw = handle.readframes(handle.getnframes())
+    if sample_width != 2:
+        raise ValueError(f"{path}: expected 16-bit PCM, got sample_width={sample_width}")
+    audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    if channels > 1:
+        audio = audio.reshape(-1, channels).mean(axis=1)
+    if sample_rate != target_sample_rate:
+        raise ValueError(f"{path}: expected {target_sample_rate} Hz, got {sample_rate} Hz")
+    return audio
+
+
+def _run_clip_through_service(service, audio, sample_rate=16000, chunk_samples=1280):
+    """Feed a clip through in realistic mic-callback-sized chunks. Returns
+    True iff any chunk triggered on_detect (has_speech=True throughout --
+    fixtures are expected to be pre-trimmed to voiced audio)."""
+    triggered = False
+    for start in range(0, len(audio), chunk_samples):
+        chunk = audio[start:start + chunk_samples]
+        if service.process_chunk(chunk, sample_rate, has_speech=True):
+            triggered = True
+    return triggered
+
+
+@unittest.skipUnless(
+    os.getenv("BETTERFINGERS_WAKE_FIXTURES"),
+    "requires BETTERFINGERS_WAKE_FIXTURES=<dir> with labeled positive/negative wake-phrase audio fixtures",
+)
+class WakeFixtureAccuracyTests(unittest.TestCase):
+    """False-accept / false-reject rate check against real labeled audio
+    fixtures -- structured now so fixtures can be dropped in later with no
+    code changes (D1's real detector + D5's unit tests don't depend on them).
+
+    Expected layout under $BETTERFINGERS_WAKE_FIXTURES:
+      positive/*.wav  -- clips that DO contain the wake phrase (16kHz mono
+                          16-bit PCM, pre-trimmed to voiced audio)
+      negative/*.wav  -- clips that do NOT (other speech, silence, noise)
+    Optional $BETTERFINGERS_WAKE_CLASSIFIER_ID selects a specific installed
+    classifier (bundled catalog id or a user-imported model id); otherwise
+    whatever the profile currently has configured is used.
+    """
+
+    FALSE_REJECT_MAX = 0.10  # at most 10% of positives may be missed
+    FALSE_ACCEPT_MAX = 0.02  # at most 2% of negatives may false-trigger
+
+    @classmethod
+    def setUpClass(cls):
+        classifier_id = os.getenv("BETTERFINGERS_WAKE_CLASSIFIER_ID")
+        origin = os.getenv("BETTERFINGERS_WAKE_CLASSIFIER_ORIGIN", "bundled")
+        detector, available, reason = build_openwakeword_detector(
+            classifier_id=classifier_id, classifier_origin=origin
+        )
+        if not available:
+            raise unittest.SkipTest(f"wake detector unavailable: {reason}")
+        cls._detector = detector
+
+    def _clips(self, label):
+        fixtures_dir = os.environ["BETTERFINGERS_WAKE_FIXTURES"]
+        paths = sorted(glob.glob(os.path.join(fixtures_dir, label, "*.wav")))
+        if not paths:
+            self.skipTest(f"no {label} fixtures found under {fixtures_dir}/{label}")
+        return paths
+
+    def _fresh_service(self):
+        # A dedicated service per clip -- cooldown/score-log state must not
+        # leak between fixtures.
+        return WakeWordService(self._detector, on_detect=lambda: None, threshold=DEFAULT_THRESHOLD)
+
+    def test_false_reject_rate_within_budget(self):
+        positives = self._clips("positive")
+        missed = 0
+        for path in positives:
+            audio = _read_wav_mono_float32(path)
+            triggered = _run_clip_through_service(self._fresh_service(), audio)
+            if not triggered:
+                missed += 1
+        rate = missed / len(positives)
+        self.assertLessEqual(
+            rate, self.FALSE_REJECT_MAX,
+            f"false-reject rate {rate:.1%} ({missed}/{len(positives)}) exceeds {self.FALSE_REJECT_MAX:.0%} budget",
+        )
+
+    def test_false_accept_rate_within_budget(self):
+        negatives = self._clips("negative")
+        triggered_count = 0
+        for path in negatives:
+            audio = _read_wav_mono_float32(path)
+            if _run_clip_through_service(self._fresh_service(), audio):
+                triggered_count += 1
+        rate = triggered_count / len(negatives)
+        self.assertLessEqual(
+            rate, self.FALSE_ACCEPT_MAX,
+            f"false-accept rate {rate:.1%} ({triggered_count}/{len(negatives)}) exceeds {self.FALSE_ACCEPT_MAX:.0%} budget",
+        )
 
 
 if __name__ == "__main__":
