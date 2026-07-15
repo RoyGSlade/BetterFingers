@@ -32,6 +32,97 @@ class LLMEngineReloadTests(unittest.TestCase):
         engine.api_url = "http://127.0.0.1:8080"
         return engine
 
+
+class LLMEngineAdmissionTests(unittest.TestCase):
+    """Load-site seam for model_runtime_coordinator (DESIGN.md M6): _start_server
+    consults the injected admission_fn before spawning llama-server, and reports
+    a successful load through load_reporter. Both DI hooks default to None
+    (no-op) so every other test in this module is unaffected."""
+
+    def setUp(self):
+        self._admission_fn = LLMEngine._admission_fn
+        self._load_reporter = LLMEngine._load_reporter
+        self._ready = LLMEngine._ready
+        self._last_error = LLMEngine._last_error
+        self._last_error_details = LLMEngine._last_error_details
+
+    def tearDown(self):
+        LLMEngine._admission_fn = self._admission_fn
+        LLMEngine._load_reporter = self._load_reporter
+        LLMEngine._ready = self._ready
+        LLMEngine._last_error = self._last_error
+        LLMEngine._last_error_details = self._last_error_details
+
+    def _new_engine(self):
+        engine = LLMEngine.__new__(LLMEngine)
+        engine.port = 8080
+        engine.api_url = "http://127.0.0.1:8080"
+        engine.model_id = "gemma-4-e2b-q4"
+        return engine
+
+    def test_refused_admission_blocks_start_without_crashing(self):
+        engine = self._new_engine()
+        LLMEngine.set_admission_fn(lambda est, mid: {
+            "allowed": False,
+            "refusal": {"message": "Not enough RAM to load this model. Resident: stt=base.en.",
+                        "resident": [], "suggested_model_id": "gemma-4-e2b-q4"},
+        })
+
+        with patch("llm_engine.os.path.exists", return_value=True), patch(
+            "llm_engine.get_server_path", return_value="/tmp/llama-server"
+        ), patch("llm_engine.get_model_path", return_value="/tmp/gemma-4.gguf"), patch(
+            "llm_engine.subprocess.Popen"
+        ) as popen:
+            engine._start_server()
+
+        popen.assert_not_called()
+        self.assertIn("Not enough RAM", LLMEngine._last_error)
+        self.assertEqual(LLMEngine._last_error_details["suggested_model_id"], "gemma-4-e2b-q4")
+
+    def test_allowed_admission_still_starts_server(self):
+        engine = self._new_engine()
+        LLMEngine.set_admission_fn(lambda est, mid: {"allowed": True, "refusal": None})
+        process = Mock()
+        process.pid = 123
+
+        with patch("llm_engine.os.path.exists", return_value=True), patch(
+            "llm_engine.get_server_path", return_value="/tmp/llama-server"
+        ), patch("llm_engine.get_model_path", return_value="/tmp/gemma-4.gguf"), patch(
+            "llm_engine.subprocess.Popen", return_value=process
+        ) as popen, patch.object(engine, "_wait_for_server"):
+            engine._start_server()
+
+        popen.assert_called_once()
+
+    def test_successful_wait_reports_load(self):
+        engine = self._new_engine()
+        reported = []
+        LLMEngine.set_load_reporter(lambda mid, est: reported.append((mid, est)))
+        LLMEngine._process = Mock(poll=Mock(return_value=None))
+        LLMEngine._ready = False
+
+        response = Mock(status_code=200)
+        with patch("llm_engine.requests.get", return_value=response):
+            engine._wait_for_server()
+
+        self.assertEqual(reported, [("gemma-4-e2b-q4", 4157)])
+
+    def test_no_admission_fn_is_a_noop(self):
+        # Default state (unset by any other test): must not raise or block.
+        engine = self._new_engine()
+        LLMEngine.set_admission_fn(None)
+        process = Mock()
+        process.pid = 123
+
+        with patch("llm_engine.os.path.exists", return_value=True), patch(
+            "llm_engine.get_server_path", return_value="/tmp/llama-server"
+        ), patch("llm_engine.get_model_path", return_value="/tmp/gemma-4.gguf"), patch(
+            "llm_engine.subprocess.Popen", return_value=process
+        ) as popen, patch.object(engine, "_wait_for_server"):
+            engine._start_server()
+
+        popen.assert_called_once()
+
     def test_ensure_ready_restarts_when_not_ready(self):
         engine = self._new_engine()
         LLMEngine._ready = False

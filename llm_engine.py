@@ -18,12 +18,23 @@ import re
 import tempfile
 import yaml
 from model_manager import (
+    AVAILABLE_MODELS,
     check_and_download_resources,
     get_llama_runtime_env,
     get_model_path,
     get_model_server_args,
     get_server_path,
 )
+from hardware_report import _estimate_runtime_mb
+
+
+def _estimate_llm_runtime_mb(model_id):
+    """Best-effort resident-MB estimate for admission control. Falls back to
+    0 (never blocks a load) when the model isn't in the catalog — e.g. a
+    stale/removed model_id shouldn't make admission control the failure mode
+    when download/existence checks upstream already own that error."""
+    size_mb = int((AVAILABLE_MODELS.get(model_id) or {}).get("size_mb", 0) or 0)
+    return _estimate_runtime_mb(size_mb) if size_mb else 0
 
 # --- Configuration ---
 SIDECAR_PORT = 8080
@@ -1512,7 +1523,22 @@ class LLMEngine:
     _loaded_model_id = None
     _last_error = ""
     _last_error_details = {}
-    
+    # Admission-control DI (model_runtime_coordinator), mirrors tts_engine's
+    # set_runtime_lease_factory pattern: server.py injects these once at
+    # startup so this module never imports the coordinator or server.py
+    # directly. Both None-safe — unset means "no admission control" (existing
+    # tests / standalone use are unaffected).
+    _admission_fn = None       # (estimated_mb, model_id) -> AdmissionResult dict
+    _load_reporter = None      # (model_id, estimated_mb) -> None
+
+    @classmethod
+    def set_admission_fn(cls, fn):
+        cls._admission_fn = staticmethod(fn) if fn is not None else None
+
+    @classmethod
+    def set_load_reporter(cls, fn):
+        cls._load_reporter = staticmethod(fn) if fn is not None else None
+
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
             with _init_lock:
@@ -1555,6 +1581,17 @@ class LLMEngine:
         LLMEngine._last_error_details = dict(details or {})
         logging.error(text)
 
+    def _report_loaded(self):
+        """Tell the coordinator's ledger this model is now resident, for
+        admission-control accounting. No-op when no reporter is injected."""
+        if LLMEngine._load_reporter is None:
+            return
+        model_id = getattr(self, "model_id", None)
+        try:
+            LLMEngine._load_reporter(model_id, _estimate_llm_runtime_mb(model_id))
+        except Exception as exc:
+            logging.debug(f"LLM load reporter failed: {exc}")
+
     def _read_server_stderr(self, limit=4000):
         if not LLMEngine._stderr_log:
             return ""
@@ -1582,8 +1619,9 @@ class LLMEngine:
             LLMEngine._ready = True
             LLMEngine._loaded_model_id = getattr(self, "model_id", None)
             self._clear_last_error()
+            self._report_loaded()
             return
-        
+
         # STEP 2: Ensure resources exist
         try:
             model_id = getattr(self, "model_id", None)
@@ -1614,7 +1652,18 @@ class LLMEngine:
         if not os.path.exists(model_path):
             self._mark_error(f"Model not found: {model_path}")
             return
-        
+
+        if LLMEngine._admission_fn is not None:
+            estimated_mb = _estimate_llm_runtime_mb(model_id)
+            admission = LLMEngine._admission_fn(estimated_mb, model_id)
+            if not admission.get("allowed", True):
+                refusal = admission.get("refusal") or {}
+                self._mark_error(
+                    refusal.get("message", "Not enough RAM to load this model."),
+                    refusal,
+                )
+                return
+
         cmd = [
             server_exe,
             "--model", model_path,
@@ -1701,6 +1750,7 @@ class LLMEngine:
                     LLMEngine._ready = True
                     LLMEngine._loaded_model_id = getattr(self, "model_id", None)
                     self._clear_last_error()
+                    self._report_loaded()
                     return
             except Exception:
                 pass

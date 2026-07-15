@@ -130,7 +130,7 @@ class ServerLazyStartupTests(unittest.TestCase):
             self._run_startup()
 
         self.assertEqual(len(DummyTranscriber.instances), 1)
-        self.assertTrue(DummyTranscriber.instances[0].preload)
+        self.assertTrue(DummyTranscriber.instances[0].loaded)
         self.assertTrue(engine_mock.called)
         self.assertTrue(hotkey_mock.called)
         self.assertTrue(server.hotkey_manager_started)
@@ -184,7 +184,7 @@ class ServerLazyStartupTests(unittest.TestCase):
             self._run_startup()
 
         self.assertEqual(len(DummyTranscriber.instances), 1)
-        self.assertTrue(DummyTranscriber.instances[0].preload)
+        self.assertTrue(DummyTranscriber.instances[0].loaded)
         self.assertTrue(DummyTranscriber.instances[0].loaded)
         self.assertTrue(engine_mock.called)
         self.assertFalse(server.hotkey_manager_started)

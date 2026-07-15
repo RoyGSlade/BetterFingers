@@ -43,6 +43,16 @@ def _blend_signature(blend: Optional[dict]) -> tuple:
     return tuple(sorted(parts))
 
 
+# Static, conservative resident-MB estimate for admission control. Kokoro's
+# ONNX weights are small (~80-330 MB depending on quantization) but the
+# runtime (onnxruntime session, audio buffers) adds overhead; kept deliberately
+# generous rather than precise per-quantization, matching the SAPI fallback's
+# near-zero footprint being irrelevant to this estimate (SAPI never reaches
+# admission control — see _load_sapi_backend, which has no memory cost worth
+# gating).
+_KOKORO_RUNTIME_MB_ESTIMATE = 450
+
+
 def _modulation_signature(modulation: Optional[dict]) -> tuple:
     """Deterministic, hashable summary of a modulation dict for cache keys."""
     if not modulation:
@@ -123,10 +133,20 @@ class ReviewTTSEngine:
         # callbacks, so /models/unload/tts cannot free the models under an
         # in-flight utterance. None (e.g. in unit tests) means "no guard".
         self._lease_factory = None
+        # Admission-control DI (model_runtime_coordinator), same shape as the
+        # lease factory above. None-safe: unset means "no admission control".
+        self._admission_fn = None      # (estimated_mb, model_id) -> AdmissionResult dict
+        self._load_reporter = None     # (model_id, estimated_mb) -> None
 
     def set_runtime_lease_factory(self, factory):
         """Install the runtime-lease context-manager factory (see __init__)."""
         self._lease_factory = factory
+
+    def set_admission_fn(self, fn):
+        self._admission_fn = fn
+
+    def set_load_reporter(self, fn):
+        self._load_reporter = fn
 
     def is_loaded(self) -> bool:
         with self._lock:
@@ -226,16 +246,32 @@ class ReviewTTSEngine:
                     "message": self._status_message,
                 }
 
-            kokoro_ok, kokoro_msg = self._load_kokoro_backend(
-                voice_hint=voice_hint,
-                prefer_gpu=self._prefer_gpu,
-                quantization=getattr(self, "_kokoro_quantization", "fp32"),
-            )
+            quantization = getattr(self, "_kokoro_quantization", "fp32")
+            kokoro_ok, kokoro_msg = True, ""
+            if self._admission_fn is not None:
+                admission = self._admission_fn(_KOKORO_RUNTIME_MB_ESTIMATE, f"kokoro:{quantization}")
+                if not admission.get("allowed", True):
+                    refusal = admission.get("refusal") or {}
+                    kokoro_ok, kokoro_msg = False, refusal.get(
+                        "message", "Not enough RAM to load the TTS model."
+                    )
+
+            if kokoro_ok:
+                kokoro_ok, kokoro_msg = self._load_kokoro_backend(
+                    voice_hint=voice_hint,
+                    prefer_gpu=self._prefer_gpu,
+                    quantization=quantization,
+                )
             if kokoro_ok:
                 self._loaded = True
                 self._backend = "kokoro_onnx" if self._kokoro_runtime == "onnx" else "kokoro"
                 self._fallback = False
                 self._status_message = kokoro_msg
+                if self._load_reporter is not None:
+                    try:
+                        self._load_reporter(f"kokoro:{quantization}", _KOKORO_RUNTIME_MB_ESTIMATE)
+                    except Exception as exc:
+                        logging.debug(f"TTS load reporter failed: {exc}")
                 return {
                     "ok": True,
                     "backend": self._backend,

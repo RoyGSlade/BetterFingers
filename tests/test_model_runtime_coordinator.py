@@ -120,5 +120,39 @@ class UnloadEndpoint409Tests(unittest.TestCase):
         self.assertIn("runtime_leases", payload)
 
 
+class ModelResourcesEndpointTests(unittest.TestCase):
+    def test_resources_endpoint_reports_ledger_and_headroom(self):
+        client = TestClient(server.app)
+        resp = client.get("/models/resources")
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertTrue(payload["ok"])
+        self.assertIn("ledger", payload)
+        self.assertIn("pinned", payload)
+        self.assertIn("available_mb", payload)
+        self.assertIn("ram_floor_mb", payload)
+        for component in ("stt", "llm", "tts"):
+            self.assertIn(component, payload["ledger"])
+            self.assertIn(component, payload["pinned"])
+
+    def test_evictors_are_registered_for_all_components(self):
+        for component in ("stt", "llm", "tts"):
+            self.assertIn(component, server.model_runtime._evictors)
+
+    def test_unload_endpoint_clears_ledger_entry(self):
+        # A direct manual unload (not eviction-driven) must ALSO clear the
+        # ledger — otherwise admission control would keep treating an
+        # already-freed component as resident.
+        client = TestClient(server.app)
+        server.model_runtime.note_loaded("stt", "base.en", 300)
+        self.assertIsNotNone(server.model_runtime.resources_snapshot()["ledger"]["stt"])
+        try:
+            resp = client.post("/models/unload/stt")
+            self.assertEqual(resp.status_code, 200)
+            self.assertIsNone(server.model_runtime.resources_snapshot()["ledger"]["stt"])
+        finally:
+            server.model_runtime.note_unloaded("stt")  # cleanup regardless of outcome
+
+
 if __name__ == "__main__":
     unittest.main()

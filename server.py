@@ -18,7 +18,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, W
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
-from llm_engine import get_engine, get_engine_if_initialized, resolve_dictation_preset
+from llm_engine import LLMEngine, get_engine, get_engine_if_initialized, resolve_dictation_preset
 from log_redaction import redact_user_text
 from transcriber import Transcriber
 from hotkey_manager import HotkeyManager
@@ -243,6 +243,23 @@ dictation_coordinator = DictationCoordinator(cancellation_event=cancellation_eve
 from model_runtime_coordinator import ModelRuntimeCoordinator, RuntimeBusyError
 
 model_runtime = ModelRuntimeCoordinator()
+# Resource ledger + admission control (DESIGN.md M6): each evictor is the
+# SAME unload path /models/unload/{component} already uses, so a coordinator-
+# driven eviction (admission or idle sweep) and a user-driven manual unload
+# converge on one release path — no double-free risk. Registered once here
+# with a lambda (not a direct reference) because _unload_model_component_locked
+# is defined later in this file; the lambda body only resolves it at call
+# time, well after the whole module has finished loading.
+model_runtime.register_evictor("llm", lambda: _unload_model_component_locked("llm"))
+model_runtime.register_evictor("stt", lambda: _unload_model_component_locked("stt"))
+model_runtime.register_evictor("tts", lambda: _unload_model_component_locked("tts"))
+# LLMEngine is a process-level singleton (class attributes, not instance
+# state) — injecting its admission hooks once here covers every get_engine()
+# call for the life of the process. Transcriber/ReviewTTSEngine are per-
+# instance instead, so their hooks are injected at construction time in
+# ensure_transcriber_initialized()/ensure_tts_initialized() below.
+LLMEngine.set_admission_fn(lambda est, mid=None: model_runtime.request_admission("llm", est, mid))
+LLMEngine.set_load_reporter(lambda mid, est: model_runtime.note_loaded("llm", mid, est))
 # Set for the duration of a privacy wipe. While it is set, every path that
 # could create or re-persist user data (new recordings, dictation processing,
 # recovery saves, sends, TTS, retranscription) refuses, so the wipe operates on
@@ -537,6 +554,15 @@ def apply_active_profile_runtime(profile_name):
     except Exception as exc:
         logging.warning(f"Failed applying profile to LLM engine: {exc}")
 
+    # apply_active_profile_runtime is the single choke point both profile
+    # activation AND a settings-save-of-the-active-profile flow through, so
+    # re-syncing pinned state here (same as startup_event's initial sync)
+    # means a keep-loaded toggle takes effect immediately — no restart needed
+    # for A3's idle sweep / admission eviction to keep skipping pinned components.
+    residency = get_model_residency_settings()
+    for component, pinned in residency.items():
+        model_runtime.set_pinned(component, pinned)
+
     return get_active_profile_payload()
 
 
@@ -605,7 +631,22 @@ def get_model_residency_settings():
 def ensure_transcriber_initialized(preload=False):
     global transcriber
     if transcriber is None:
-        transcriber = Transcriber(profile_name=get_last_active_profile(), preload=preload)
+        # preload=False here even when the caller wants preloading: the DI
+        # hooks below must be wired BEFORE the first ensure_loaded() call, and
+        # Transcriber.__init__(preload=True) would call it internally before
+        # we get a chance to inject admission control. Preload explicitly
+        # afterward instead — same end state, correct ordering.
+        transcriber = Transcriber(profile_name=get_last_active_profile(), preload=False)
+        # hasattr-guarded: test doubles that stand in for Transcriber (several
+        # DummyTranscriber fakes across the suite) predate this DI surface and
+        # needn't implement it — same defensive style as the getattr(engine,
+        # method, None) checks in _unload_model_component_locked.
+        if hasattr(transcriber, "set_admission_fn"):
+            transcriber.set_admission_fn(lambda est, size=None: model_runtime.request_admission("stt", est, size))
+        if hasattr(transcriber, "set_load_reporter"):
+            transcriber.set_load_reporter(lambda size, est: model_runtime.note_loaded("stt", size, est))
+        if preload:
+            transcriber.ensure_loaded()
     elif preload:
         transcriber.ensure_loaded()
     return transcriber
@@ -1894,6 +1935,8 @@ async def startup_event():
         logging.debug(f"history archive migration skipped: {exc}")
     lazy_startup = is_lazy_startup_enabled()
     residency_settings = get_model_residency_settings()
+    for component, pinned in residency_settings.items():
+        model_runtime.set_pinned(component, pinned)
 
     def background_warmup():
         try:
@@ -1987,7 +2030,11 @@ def ensure_tts_initialized():
         try:
             from tts_engine import ReviewTTSEngine
             tts_engine = ReviewTTSEngine()
-            
+            if hasattr(tts_engine, "set_admission_fn"):
+                tts_engine.set_admission_fn(lambda est, mid=None: model_runtime.request_admission("tts", est, mid))
+            if hasattr(tts_engine, "set_load_reporter"):
+                tts_engine.set_load_reporter(lambda mid, est: model_runtime.note_loaded("tts", mid, est))
+
             def tts_start_callback(text):
                 broadcast_status_threadsafe("draft_tts_started", {"text": text})
                 
@@ -2848,6 +2895,7 @@ def _unload_model_component_locked(component: str):
             transcriber = None
             unloaded = True
         gc.collect()
+        model_runtime.note_unloaded("stt")
         return {
             "ok": True,
             "component": "stt",
@@ -2877,6 +2925,7 @@ def _unload_model_component_locked(component: str):
             except Exception as exc:
                 logging.debug(f"Could not clear llm_engine singleton: {exc}")
         gc.collect()
+        model_runtime.note_unloaded("llm")
         return {
             "ok": True,
             "component": "llm",
@@ -2897,6 +2946,7 @@ def _unload_model_component_locked(component: str):
                         logging.debug(f"TTS {method}() failed: {exc}")
             tts_engine = None
         gc.collect()
+        model_runtime.note_unloaded("tts")
         return {
             "ok": True,
             "component": "tts",
@@ -4478,9 +4528,11 @@ async def generate_project(data: dict):
 # re-bound so server._foundry_sessions stays the shared store existing tests use.
 import routes_foundry  # noqa: E402
 import routes_user_config  # noqa: E402
+import routes_models_resources  # noqa: E402
 
 app.include_router(routes_foundry.router)
 app.include_router(routes_user_config.router)
+app.include_router(routes_models_resources.router)
 _foundry_sessions = routes_foundry._foundry_sessions
 
 
