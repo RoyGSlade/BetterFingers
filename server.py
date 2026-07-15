@@ -3436,6 +3436,132 @@ async def runtime_errors():
     return {"errors": get_runtime_error_history()}
 
 
+def gather_support_report():
+    """Collect a privacy-safe diagnostic snapshot and render it to Markdown
+    (backlog item 6). NON-INVASIVE: reads current runtime state only — never
+    initializes or loads a model — so copying a support report can't change
+    what's resident. Contains NO transcription content (see support_report).
+
+    Returns ``{"markdown", "report", "generated_at"}``.
+    """
+    import platform as _platform
+
+    import support_report
+
+    generated_at = datetime.now(timezone.utc).isoformat()
+
+    # --- version (source of truth: /runtime/version) ---
+    version = {"backend_version": "0.1.0", "profile_schema_version": 1, "config_version": 1}
+
+    # --- platform ---
+    platform_info = {
+        "system": _platform.system(),
+        "release": _platform.release(),
+        "python": _platform.python_version(),
+    }
+
+    # --- hardware + tier (compute the report once, reuse for tier) ---
+    hardware = get_hardware_report()
+    try:
+        tier = get_hardware_tier(report=hardware)
+        if isinstance(tier, dict):
+            label = tier.get("label") or tier.get("tier") or "unknown"
+            code = tier.get("tier")
+            hardware_tier = f"{label} ({code})" if code and code != label else str(label)
+        else:
+            hardware_tier = str(tier)
+    except Exception:
+        hardware_tier = "unknown"
+
+    # --- runtime validation (read current state; do not initialize) ---
+    engine = get_engine_if_initialized()
+    selected_model_id = get_selected_llm_model_id()
+    llama_server_path = str(get_server_path())
+    llama_server_exists = os.path.exists(llama_server_path)
+    model_exists = check_model_exists(selected_model_id)
+
+    runtime_validation = {"ok": False}
+    if llama_server_exists:
+        try:
+            runtime_validation = validate_llama_server_runtime(llama_server_path)
+        except Exception as exc:  # never let diagnostics crash the report
+            runtime_validation = {"ok": False, "message": f"{type(exc).__name__}"}
+    runtime_build = runtime_validation.get("build")
+    required_runtime_build = required_llama_server_build(selected_model_id)
+    engine_ready = bool(getattr(engine, "_ready", False)) if engine is not None else False
+    llm_last_error = str(getattr(engine, "_last_error", "") or "") if engine is not None else ""
+
+    if not llama_server_exists:
+        llm_status = "missing_llama_server"
+    elif not model_exists:
+        llm_status = "missing_model"
+    elif not runtime_validation.get("ok", False):
+        llm_status = "runtime_invalid"
+    elif engine_ready:
+        llm_status = "ready"
+    elif llm_last_error:
+        llm_status = "startup_failure"
+    else:
+        llm_status = "not_loaded"
+
+    stt = transcriber
+    stt_info = {
+        "initialized": stt is not None,
+        "loaded": bool(getattr(stt, "model", None)) if stt is not None else False,
+        "model_size": getattr(stt, "model_size", None) if stt is not None else None,
+        "device": getattr(stt, "device", None) if stt is not None else None,
+    }
+
+    tts = tts_engine
+    tts_info = {
+        "initialized": tts is not None,
+        "loaded": bool(tts.is_loaded()) if (tts is not None and hasattr(tts, "is_loaded")) else False,
+        "backend": tts.backend() if (tts is not None and hasattr(tts, "backend")) else "none",
+    }
+
+    runtime = {
+        "llm": {
+            "runtime_status": llm_status,
+            "runtime_build": runtime_build,
+            "required_runtime_build": required_runtime_build,
+            "last_error": llm_last_error,
+        },
+        "stt": stt_info,
+        "tts": tts_info,
+    }
+
+    # --- resident model ledger ---
+    try:
+        resources = model_runtime.resources_snapshot()
+    except Exception:
+        resources = {}
+
+    data = {
+        "generated_at": generated_at,
+        "version": version,
+        "platform": platform_info,
+        "hardware": hardware,
+        "hardware_tier": hardware_tier,
+        "runtime": runtime,
+        "resources": resources,
+        "recent_errors": get_runtime_error_history(),
+        "paths": get_runtime_paths_snapshot(),
+    }
+    return {
+        "markdown": support_report.render_support_report(data),
+        "report": data,
+        "generated_at": generated_at,
+    }
+
+
+@app.get("/diagnostics/support-report")
+async def diagnostics_support_report():
+    """One-click support report (Markdown) for alpha testers — no telemetry
+    means this is how a tester hands us diagnostics. Runs off the event loop
+    since it touches the filesystem and may shell out to llama-server --version."""
+    return await run_in_threadpool(gather_support_report)
+
+
 @app.get("/drafts")
 async def list_drafts():
     with draft_lock:

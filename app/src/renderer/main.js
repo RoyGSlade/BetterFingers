@@ -15,6 +15,7 @@ import {
   fetchCapabilities,
   fetchDiagnosticsLogs,
   fetchDiagnosticsPaths,
+  fetchSupportReport,
   fetchMetrics,
   fetchPrivacy,
   wipeData,
@@ -138,6 +139,7 @@ const draftMetadataEl = document.getElementById('draftMetadata');
 const draftHistoryListEl = document.getElementById('draftHistoryList');
 const clearDraftHistoryButton = document.getElementById('clearDraftHistoryButton');
 const refreshDiagnosticsButton = document.getElementById('refreshDiagnosticsButton');
+const copySupportReportButton = document.getElementById('copySupportReportButton');
 const sidecarStatusEl = document.getElementById('sidecarStatus');
 const diagnosticsPathsListEl = document.getElementById('diagnosticsPathsList');
 const runtimeErrorsListEl = document.getElementById('runtimeErrorsList');
@@ -5155,6 +5157,33 @@ emergencyStopButton?.addEventListener('click', async () => {
 refreshDiagnosticsButton?.addEventListener('click', () => {
   refreshDiagnostics();
 });
+
+async function handleCopySupportReport() {
+  const button = copySupportReportButton;
+  const original = button ? button.textContent : '';
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Building report…';
+  }
+  try {
+    const payload = await fetchSupportReport();
+    const markdown = payload?.markdown;
+    if (!markdown) {
+      throw new Error('empty report');
+    }
+    await window.betterFingers?.writeClipboardText?.(markdown);
+    showToast('Support report copied to clipboard.', 'success', 2500);
+  } catch (error) {
+    showToast(`Could not build support report: ${error.message}`, 'danger');
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = original || 'Copy Support Report';
+    }
+  }
+}
+
+copySupportReportButton?.addEventListener('click', handleCopySupportReport);
 
 document.getElementById('privacyWipeButton')?.addEventListener('click', handleWipeData);
 
