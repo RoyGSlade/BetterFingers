@@ -544,13 +544,16 @@ def is_lazy_startup_enabled():
     return os.getenv("BETTERFINGERS_LAZY_STARTUP") == "1"
 
 
-def get_pipeline_flags():
+def get_pipeline_flags(config=None):
     """Per-profile toggles used on the hot dictation path, read with a single
-    load_profile() call rather than one per flag (each call is disk I/O)."""
-    try:
-        config = load_profile(get_last_active_profile())
-    except Exception:
-        config = {}
+    load_profile() call rather than one per flag (each call is disk I/O).
+    Pass a pre-loaded profile dict via ``config`` to skip even that read —
+    process_recording_result() loads the profile once and shares it."""
+    if config is None:
+        try:
+            config = load_profile(get_last_active_profile())
+        except Exception:
+            config = {}
     return {
         "voice_commands": bool(config.get("voice_commands_enabled", True)),
         "macros": bool(config.get("macros_enabled", True)),
@@ -1594,8 +1597,12 @@ def process_recording_result(recording_result):
         # Post-ASR correction snaps near-miss tokens back to dictionary terms.
         if raw_text and dict_terms:
             raw_text = dictionary.correct_text(raw_text, dict_terms)
-        # Single profile read backs both toggles below (each load_profile() call is disk I/O).
-        pipeline_flags = get_pipeline_flags()
+        # ONE profile read backs the entire dictation pipeline — the toggles
+        # below, the no-audio gate, and the LLM chunking settings further down.
+        # Each load_profile() call is disk I/O + YAML parse, so the hot path
+        # loads once and shares the dict.
+        profile_config = get_active_recording_config()
+        pipeline_flags = get_pipeline_flags(profile_config)
         # Honour the user's selected persona for cleanup. resolve_dictation_preset
         # falls back to True Janitor when the selection is empty or names a persona
         # that no longer exists, so a stale choice never breaks the core loop.
@@ -1637,7 +1644,7 @@ def process_recording_result(recording_result):
         blocked, reasons = should_block_for_no_audio(
             recording_result,
             raw_text,
-            get_active_recording_config(),
+            profile_config,
         )
         if blocked:
             draft = create_draft(
@@ -1670,13 +1677,12 @@ def process_recording_result(recording_result):
         broadcast_status_threadsafe("rewriting")
         JOBS.transition(job.id, JobState.REFINING)
         engine = get_selected_llm_engine()
-        # Retrieve llm_chunk_size + completion cap from active profile so initial
-        # dictation cleanup uses the same per-call token ceiling as rewrites.
+        # llm_chunk_size + completion cap come from the profile dict already
+        # loaded at the top of this request (no second disk read).
         try:
-            config = load_profile(get_last_active_profile())
-            llm_chunk_size = config.get("llm_chunk_size", 750)
-            completion_tokens = int(config.get("max_completion_tokens") or config.get("output_token_limit", 1600) or 1600)
-            stitch_enabled = bool(config.get("long_recording_stitch_pass_enabled", True))
+            llm_chunk_size = profile_config.get("llm_chunk_size", 750)
+            completion_tokens = int(profile_config.get("max_completion_tokens") or profile_config.get("output_token_limit", 1600) or 1600)
+            stitch_enabled = bool(profile_config.get("long_recording_stitch_pass_enabled", True))
         except Exception:
             llm_chunk_size = 750
             completion_tokens = 1600
@@ -2383,6 +2389,13 @@ async def settings_activate_profile(profile_name: str):
     safe_name = sanitize_profile_name(profile_name)
     if safe_name not in list_profiles():
         raise HTTPException(status_code=404, detail="Profile not found")
+    # Re-selecting the already-active profile is a no-op: skip the runtime
+    # cascade (transcriber reload, hotkey rebind, injector + LLM reconfigure),
+    # which costs 100-500 ms. Content edits to the active profile arrive via
+    # settings_save_profile, which always re-applies — so this guard can only
+    # suppress genuinely redundant switches, never a real settings change.
+    if safe_name == get_last_active_profile():
+        return get_active_profile_payload()
     return apply_active_profile_runtime(safe_name)
 
 
