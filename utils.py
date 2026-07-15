@@ -584,7 +584,13 @@ def _sanitize_profile_values(config, defaults):
     return cfg
 
 def _migrate_controller_binding(config):
-    """Backfill modern controller binding fields from legacy config keys."""
+    """Backfill modern controller binding fields from legacy config keys.
+
+    Deliberately NOT part of store_migration.py's version-gated ladder (see
+    load_profile) — runs unconditionally every load, not schema_version-
+    gated. Don't "helpfully" fold this into the ladder without re-reading
+    that reasoning.
+    """
     if not isinstance(config, dict):
         return config
 
@@ -638,7 +644,13 @@ def _migrate_controller_binding(config):
 
 
 def _migrate_output_delivery(config):
-    """Normalize output delivery settings and drop deprecated keys."""
+    """Normalize output delivery settings and drop deprecated keys.
+
+    Deliberately NOT part of store_migration.py's version-gated ladder (see
+    load_profile) — runs unconditionally every load, not schema_version-
+    gated. Don't "helpfully" fold this into the ladder without re-reading
+    that reasoning.
+    """
     if not isinstance(config, dict):
         return config
 
@@ -667,7 +679,14 @@ def _apply_completion_token_alias(data):
     """Map the legacy ``output_token_limit`` onto ``max_completion_tokens`` for
     profiles saved before the two token concepts were split. Operates on the raw
     loaded dict *before* it is merged with defaults, so we can tell whether the
-    new field was actually stored or is about to be filled in from defaults."""
+    new field was actually stored or is about to be filled in from defaults.
+
+    Deliberately NOT part of store_migration.py's version-gated ladder (see
+    load_profile) — this before-merge timing, versus the other two migrations'
+    after-merge timing, is exactly why folding all three into one ladder step
+    was judged riskier than it's worth. Don't "helpfully" fold this in without
+    re-reading that reasoning.
+    """
     if not isinstance(data, dict):
         return data
     if "max_completion_tokens" not in data and "output_token_limit" in data:

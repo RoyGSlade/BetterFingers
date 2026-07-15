@@ -92,6 +92,55 @@ class BackupBeforeMigrationTests(unittest.TestCase):
         self.assertEqual(sm.backup_before_migration("/nonexistent/x.json", 1), "")
 
 
+class DegradedEventsTests(unittest.TestCase):
+    def setUp(self):
+        sm.clear_degraded_events()
+
+    tearDown = setUp
+
+    def test_quarantine_records_a_degraded_event(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "store.json")
+            with open(path, "w") as fh:
+                fh.write("{not valid")
+            sm.load_versioned_store(path, 1, {}, default_factory=_default_factory)
+
+        events = sm.get_degraded_events()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["action"], "quarantined")
+        self.assertIn(path, events[0]["path"])
+
+    def test_downgrade_refusal_records_a_degraded_event(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "store.json")
+            with open(path, "w") as fh:
+                json.dump({"schema_version": 99, "items": []}, fh)
+            sm.load_versioned_store(path, 1, {}, default_factory=_default_factory)
+
+        events = sm.get_degraded_events()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["action"], "downgrade_refused")
+
+    def test_successful_load_records_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "store.json")
+            with open(path, "w") as fh:
+                json.dump({"schema_version": 1, "items": []}, fh)
+            sm.load_versioned_store(path, 1, {}, default_factory=_default_factory)
+
+        self.assertEqual(sm.get_degraded_events(), [])
+
+    def test_ring_buffer_bounded(self):
+        with tempfile.TemporaryDirectory() as d:
+            for i in range(sm._MAX_DEGRADED_EVENTS + 10):
+                path = os.path.join(d, f"store{i}.json")
+                with open(path, "w") as fh:
+                    fh.write("{not valid")
+                sm.load_versioned_store(path, 1, {}, default_factory=_default_factory)
+
+        self.assertEqual(len(sm.get_degraded_events()), sm._MAX_DEGRADED_EVENTS)
+
+
 class LoadVersionedStoreTests(unittest.TestCase):
     def _write(self, d, payload):
         path = os.path.join(d, "store.json")

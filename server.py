@@ -20,6 +20,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from llm_engine import LLMEngine, get_engine, get_engine_if_initialized, resolve_dictation_preset
 from log_redaction import redact_exc, redact_user_text
+from store_migration import get_degraded_events
 from transcriber import Transcriber
 from hotkey_manager import HotkeyManager
 from audio_gate import should_block_for_no_audio
@@ -2262,6 +2263,13 @@ async def run_doctor(refresh_audio: bool = False):
         "hardware_tier": hardware_tier_info,
         "model_fit": model_fit_info,
         "recovery": recovery_guidelines,
+        # Config-store quarantine/downgrade-refusal events (DESIGN §9.5, M4
+        # B1/B2): a corrupt or too-new personas/voice_presets/profile/
+        # app_state file is never silently dropped or destructively
+        # overwritten -- this is the "visible warning" the downgrade policy
+        # requires, queryable here in addition to the startup log line each
+        # event already gets.
+        "store_warnings": get_degraded_events(),
     }
 
 

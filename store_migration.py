@@ -28,10 +28,43 @@ Pure stdlib; unit-tested in tests/test_store_migration.py.
 import json
 import logging
 import os
+import threading
 import time
 import uuid
 
 _CORRUPT_SUFFIX = ".corrupt"
+
+# Degraded-load events (quarantine / downgrade-refusal) across every adopting
+# store, centralized here since they all funnel through load_versioned_store.
+# A queryable "visible warning" surface for /doctor, in addition to the
+# startup log line each event already gets — the downgrade/quarantine policy
+# is only meaningful if a degraded state is actually discoverable later, not
+# just logged and forgotten. Bounded ring buffer, thread-safe.
+_MAX_DEGRADED_EVENTS = 200
+_degraded_events = []
+_degraded_lock = threading.Lock()
+
+
+def _record_degraded_event(path, action, warnings):
+    with _degraded_lock:
+        _degraded_events.append({
+            "path": str(path), "action": action, "warnings": list(warnings), "at": time.time(),
+        })
+        if len(_degraded_events) > _MAX_DEGRADED_EVENTS:
+            del _degraded_events[: len(_degraded_events) - _MAX_DEGRADED_EVENTS]
+
+
+def get_degraded_events():
+    """Every quarantine/downgrade-refusal event recorded this process
+    lifetime, oldest first. For /doctor and similar diagnostics surfaces."""
+    with _degraded_lock:
+        return [dict(e) for e in _degraded_events]
+
+
+def clear_degraded_events():
+    """Test-only reset — production code never needs to clear this."""
+    with _degraded_lock:
+        _degraded_events.clear()
 
 
 def _quarantine_path(path):
@@ -153,6 +186,7 @@ def load_versioned_store(path, current_version, migrations, *, default_factory, 
         report["warnings"].append(f"quarantined: {exc}")
         data = default_factory()
         data["schema_version"] = current_version
+        _record_degraded_event(path, report["action"], report["warnings"])
         return data, report
 
     file_version = int(data.get("schema_version", 1) or 1)
@@ -170,6 +204,7 @@ def load_versioned_store(path, current_version, migrations, *, default_factory, 
             f"{current_version}; using in-memory defaults and NOT touching the file."
         )
         logging.warning(report["warnings"][-1])
+        _record_degraded_event(path, report["action"], report["warnings"])
         return default_factory(), report
 
     if file_version == current_version:

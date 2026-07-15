@@ -178,6 +178,25 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
         self.assertIn("tts", data)
         self.assertIn("audio", data)
         self.assertIn("recovery", data)
+        self.assertIn("store_warnings", data)
+
+    def test_doctor_surfaces_store_degraded_events(self):
+        import store_migration
+
+        store_migration.clear_degraded_events()
+        self.addCleanup(store_migration.clear_degraded_events)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "some_store.json")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("{not valid json")
+            store_migration.load_versioned_store(path, 1, {}, default_factory=dict)
+
+        with TestClient(server.app) as client:
+            response = client.get("/doctor")
+
+        warnings = response.json()["store_warnings"]
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(warnings[0]["action"], "quarantined")
 
     def test_doctor_reports_llm_runtime_link_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
