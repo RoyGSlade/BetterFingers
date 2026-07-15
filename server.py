@@ -1976,6 +1976,10 @@ async def startup_event():
 @app.on_event("shutdown")
 def shutdown_event():
     stop_hotkey_manager()
+    # Safety net in case /wake/disable was never called before shutdown --
+    # idempotent, safe even if wake word was never enabled this run.
+    import routes_wake
+    routes_wake.stop_wake_listener()
     # Join the background warmup thread so it can't outlive this app instance and
     # mutate global model state afterwards (also keeps tests deterministic).
     thread = _warmup_thread
@@ -3076,11 +3080,25 @@ def get_privacy_report():
     ]
 
     import app_paths
+    import routes_wake
 
     return {
         "offline_by_default": True,
         "network_touchpoints": network_touchpoints,
         "data_locations": data_locations,
+        # Live-truthful, not static copy: reflects the actual running service
+        # state so this never claims a listener exists while wake word is
+        # disabled (or vice versa).
+        "wake_listener": {
+            "active": routes_wake.is_wake_listening(),
+            "persists_audio": False,
+            "note": (
+                "When enabled, processes microphone audio locally for wake-phrase "
+                "detection. Audio is never written to disk or sent anywhere -- only "
+                "a redacted detection score (a number, never audio or transcripts) "
+                "is kept in memory."
+            ),
+        },
         # Every root the app writes (or historically wrote) to, so the user can
         # see exactly where their data lives — current and any legacy location.
         "data_directories": app_paths.describe_locations(),
@@ -3166,6 +3184,13 @@ def _perform_privacy_wipe(wipe_voices: bool):
     gate_held = False
     output_lease_held = False
     try:
+        # 0. Stop the wake-word mic stream first (a second, independent mic
+        #    consumer) -- before draining the recorder, so no audio consumer
+        #    is left running while we quiesce the rest of the pipeline.
+        #    Idempotent/no-op-safe: True even if wake word was never enabled.
+        import routes_wake
+        cleared["wake_listener_stopped"] = bool(routes_wake.stop_wake_listener())
+
         # 1. Drain the recorder: stop it and confirm it actually stopped.
         cleared["recorder_stopped"] = _drain_recorder()
 
@@ -4529,10 +4554,12 @@ async def generate_project(data: dict):
 import routes_foundry  # noqa: E402
 import routes_user_config  # noqa: E402
 import routes_models_resources  # noqa: E402
+import routes_wake  # noqa: E402
 
 app.include_router(routes_foundry.router)
 app.include_router(routes_user_config.router)
 app.include_router(routes_models_resources.router)
+app.include_router(routes_wake.router)
 _foundry_sessions = routes_foundry._foundry_sessions
 
 

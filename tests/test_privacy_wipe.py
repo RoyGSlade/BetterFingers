@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 import history_store
 import recordings
+import routes_wake
 import server
 
 
@@ -124,6 +125,56 @@ class PrivacyWipeTests(unittest.TestCase):
             self.assertIn("Searchable history (database)", names)
             self.assertIn("Raw audio recordings", names)
             self.assertTrue(data["retention"]["recordings_persisted_to_disk"])
+
+    def test_privacy_report_wake_listener_is_live_truthful(self):
+        with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ):
+            with self._client() as client:
+                # Disabled by default -- the report must say so, not claim a
+                # listener exists.
+                resp = client.get("/privacy")
+                self.assertFalse(resp.json()["wake_listener"]["active"])
+                self.assertFalse(resp.json()["wake_listener"]["persists_audio"])
+
+                with patch.object(routes_wake, "is_wake_listening", return_value=True):
+                    resp2 = client.get("/privacy")
+                self.assertTrue(resp2.json()["wake_listener"]["active"])
+
+    def test_wipe_stops_wake_listener_before_draining_recorder(self):
+        """The wake mic stream is a second, independent audio consumer --
+        it must be stopped before (not after/instead of) the recorder drain,
+        and the wipe must succeed even though wake word was never enabled
+        (idempotent/no-op-safe, not a new failure mode)."""
+        call_order = []
+        real_stop = routes_wake.stop_wake_listener
+        real_drain = server._drain_recorder
+
+        def _tracked_stop():
+            call_order.append("wake_listener_stopped")
+            return real_stop()
+
+        def _tracked_drain(*args, **kwargs):
+            call_order.append("recorder_drained")
+            return real_drain(*args, **kwargs)
+
+        with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ), patch.object(routes_wake, "stop_wake_listener", side_effect=_tracked_stop), patch.object(
+            server, "_drain_recorder", side_effect=_tracked_drain
+        ):
+            with self._client() as client:
+                resp = client.post("/privacy/wipe", json={})
+
+            self.assertEqual(resp.status_code, 200, resp.text)
+            payload = resp.json()
+            self.assertTrue(payload["ok"], payload)
+            self.assertTrue(payload["cleared"]["wake_listener_stopped"])
+            # Only the first two calls are from the wipe itself -- shutdown_event
+            # (fired when the TestClient context below exits) also calls
+            # stop_wake_listener() as its own safety net and would otherwise
+            # append a third entry here.
+            self.assertEqual(call_order[:2], ["wake_listener_stopped", "recorder_drained"])
 
 
 if __name__ == "__main__":

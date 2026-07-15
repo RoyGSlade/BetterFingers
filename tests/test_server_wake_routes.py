@@ -92,7 +92,10 @@ class WakeRoutesTests(unittest.TestCase):
 
                 r2 = client.get("/wake/status")
                 self.assertTrue(r2.json()["listening"])
-        self.assertTrue(_StubInputStream.instances[0].started)
+                # Check while the app is still "running" -- shutdown_event
+                # (which now also stops the wake listener) fires when the
+                # TestClient context exits.
+                self.assertTrue(_StubInputStream.instances[0].started)
 
     def test_double_enable_is_idempotent_one_stream(self):
         detector = _StubDetector()
@@ -141,9 +144,9 @@ class WakeRoutesTests(unittest.TestCase):
         ):
             with self._client() as client:
                 client.post("/wake/enable", json={})
-            self.assertTrue(routes_wake.is_wake_listening())
-            routes_wake.stop_wake_listener()
-        self.assertFalse(routes_wake.is_wake_listening())
+                self.assertTrue(routes_wake.is_wake_listening())
+                routes_wake.stop_wake_listener()
+                self.assertFalse(routes_wake.is_wake_listening())
         self.assertTrue(_StubInputStream.instances[0].closed)
 
     def test_models_list_reflects_catalog(self):
@@ -230,10 +233,10 @@ class WakeRoutesTests(unittest.TestCase):
             with self._client() as client:
                 client.post("/wake/enable", json={})
                 r = client.post("/wake/test", json={"duration_s": 0.02})
-        self.assertTrue(r.json()["ok"])
-        # Reused the already-running listener -- only one stream, still open.
-        self.assertEqual(len(_StubInputStream.instances), 1)
-        self.assertFalse(_StubInputStream.instances[0].closed)
+                self.assertTrue(r.json()["ok"])
+                # Reused the already-running listener -- only one stream, still open.
+                self.assertEqual(len(_StubInputStream.instances), 1)
+                self.assertFalse(_StubInputStream.instances[0].closed)
 
     def test_wake_test_unavailable_when_no_classifier(self):
         with patch(
