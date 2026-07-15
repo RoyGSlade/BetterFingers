@@ -6,7 +6,9 @@ whether the currently selected LLM is a realistic fit for this hardware, so the
 Diagnostics UI can warn the user *before* they sit through a slow or swapping run.
 """
 
+import os
 import platform as platform_module
+import re
 import shutil
 import subprocess
 import logging
@@ -16,7 +18,13 @@ try:
 except Exception:  # pragma: no cover - psutil is a hard dependency in practice
     psutil = None
 
-from model_manager import AVAILABLE_MODELS, DEFAULT_MODEL, get_models_dir
+from model_manager import (
+    AVAILABLE_MODELS,
+    DEFAULT_MODEL,
+    get_models_dir,
+    get_server_path,
+    get_llama_runtime_env,
+)
 
 
 # Heuristics for estimating llama.cpp CPU runtime memory from the GGUF size.
@@ -43,9 +51,88 @@ def _cpu_model_name():
     return platform_module.processor() or platform_module.machine() or "Unknown CPU"
 
 
+# Vulkan device names that indicate an integrated GPU (shared system memory)
+# rather than a dedicated card. Used to pick the right capability tier — an
+# unknown Vulkan device defaults to "integrated" so we never over-promise.
+_INTEGRATED_GPU_MARKERS = (
+    "iris", "uhd graphics", "hd graphics", "intel(r)", "radeon graphics",
+    "vega", "apple m", "adreno", "mali",
+)
+_DISCRETE_GPU_MARKERS = ("geforce", "rtx", "gtx", "radeon rx", "arc a", "arc b", "quadro")
+
+
+def _parse_vulkan_devices(text):
+    """Parse `llama-server --list-devices` output into a list of GPU dicts.
+
+    Lines look like:
+      Vulkan0: Intel(R) Iris(R) Xe Graphics (TGL GT2) (11726 MiB, 9746 MiB free)
+    Pure/text-only so it is unit-testable without any GPU present. CPU software
+    rasterizers (llvmpipe) are excluded — they are not real acceleration.
+    """
+    devices = []
+    pattern = re.compile(
+        r"^\s*Vulkan\d+:\s*(.*?)\s*\((\d+)\s*MiB,\s*(\d+)\s*MiB\s+free\)\s*$"
+    )
+    for line in (text or "").splitlines():
+        match = pattern.match(line)
+        if not match:
+            continue
+        name = match.group(1).strip()
+        low = name.lower()
+        if "llvmpipe" in low or "software" in low or low == "cpu":
+            continue
+        kind = "integrated"
+        if any(m in low for m in _DISCRETE_GPU_MARKERS):
+            kind = "discrete"
+        elif not any(m in low for m in _INTEGRATED_GPU_MARKERS):
+            # Unknown vendor string: stay conservative (integrated tier).
+            kind = "integrated"
+        devices.append(
+            {"name": name, "vram_mb": int(match.group(2)), "kind": kind}
+        )
+    return devices
+
+
+def _detect_vulkan_device():
+    """Ask the shipped llama-server binary which compute devices it can use.
+
+    This is the ground truth for "will inference actually offload": the same
+    Vulkan binary that runs the LLM enumerates its devices. Returns the first
+    real GPU dict, or None (binary missing / no Vulkan device / probe failed).
+    """
+    try:
+        server_path = get_server_path()
+    except Exception:
+        return None
+    if not server_path or not os.path.exists(server_path):
+        return None
+    try:
+        result = subprocess.run(
+            [server_path, "--list-devices"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            cwd=os.path.dirname(os.path.abspath(server_path)),
+            env=get_llama_runtime_env(server_path),
+        )
+    except Exception as exc:  # pragma: no cover - environment dependent
+        logging.debug("llama-server --list-devices probe failed: %s", exc)
+        return None
+    devices = _parse_vulkan_devices((result.stdout or "") + "\n" + (result.stderr or ""))
+    return devices[0] if devices else None
+
+
 def _detect_gpu():
-    """Best-effort GPU detection. Reports CUDA VRAM when nvidia-smi is present."""
-    info = {"kind": "none", "name": None, "vram_mb": None, "accelerated": False}
+    """Best-effort GPU detection for the Diagnostics panel.
+
+    Reports the acceleration backend that will actually be used: CUDA when
+    nvidia-smi is present, otherwise Vulkan when the shipped llama-server binary
+    enumerates a usable GPU (covers Intel/AMD iGPUs and non-NVIDIA cards). Only
+    when neither is available does it fall back to CPU-only.
+    """
+    info = {"kind": "none", "name": None, "vram_mb": None,
+            "accelerated": False, "backend": None}
 
     smi = shutil.which("nvidia-smi")
     if smi:
@@ -65,13 +152,27 @@ def _detect_gpu():
                     name=name.strip() or "NVIDIA GPU",
                     vram_mb=int(float(vram.strip())) if vram.strip() else None,
                     accelerated=True,
+                    backend="cuda",
                 )
                 return info
         except Exception as exc:  # pragma: no cover - environment dependent
             logging.debug("nvidia-smi probe failed: %s", exc)
 
-    # No CUDA device. Note integrated graphics on Linux for context, but it does
-    # not provide usable acceleration for the llama.cpp CPU build we ship.
+    # No CUDA device. The Linux build ships a Vulkan llama.cpp binary, so an
+    # Intel/AMD iGPU (or any Vulkan GPU) really does accelerate inference —
+    # ask the binary itself rather than assuming CPU-only.
+    vk = _detect_vulkan_device()
+    if vk:
+        info.update(
+            kind=vk["kind"],
+            name=vk["name"],
+            vram_mb=vk["vram_mb"],
+            accelerated=True,
+            backend="vulkan",
+        )
+        return info
+
+    # No usable Vulkan device. Note integrated graphics on Linux for context.
     try:
         if platform_module.system().lower() == "linux" and shutil.which("lspci"):
             result = subprocess.run(
@@ -228,7 +329,7 @@ def assess_model_fit(model_id=None, report=None):
     # --- GPU acceleration availability. ---
     if not gpu.get("accelerated"):
         reasons.append(
-            "No CUDA GPU detected; inference runs CPU-only (the --n-gpu-layers setting has no effect)."
+            "No GPU acceleration available; inference runs CPU-only."
         )
 
     # --- Disk headroom for the model download. ---
