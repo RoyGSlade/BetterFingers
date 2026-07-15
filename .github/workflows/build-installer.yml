@@ -232,6 +232,20 @@ jobs:
         working-directory: app
         run: npm ci
 
+      - name: Install Linux native build deps
+        # libportaudio2: sounddevice's runtime lib — without it
+        # test_audio_gate/test_auto_stop_silence/test_recorder_device fail at
+        # COLLECTION and abort the run (same fix as ci.yml).
+        # libx11-dev & co: @electron/rebuild recompiles uiohook-napi against
+        # Electron's ABI during `electron-builder`, and its X11 backend needs
+        # these headers (X11/keysym.h etc.) — verified locally that this exact
+        # set is what the AppImage build's native rebuild requires.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libportaudio2 \
+            libx11-dev libxtst-dev libxt-dev libxinerama-dev \
+            libxkbcommon-dev libxkbfile-dev
+
       - name: Run test suite
         run: python -m pytest -q tests
 
