@@ -381,6 +381,12 @@ async function fetchTtsVoices(timeoutMs = 2500) {
   return fetchJson(TTS_VOICES_URL, timeoutMs);
 }
 
+async function provisionVoiceCloning(timeoutMs = 600000) {
+  // Provisioning downloads a ~1.5 GB runtime when published — allow a long
+  // timeout. Returns { ok, message?, already_provisioned?, cloning }.
+  return postJson(`${BACKEND_ORIGIN}/tts/clone/provision`, {}, timeoutMs);
+}
+
 async function fetchVoicePresets(timeoutMs = 2500) {
   return fetchJson(VOICE_PRESETS_URL, timeoutMs);
 }
@@ -651,6 +657,7 @@ export {
   fetchBuiltinPersonaNames,
   getPersonaV2,
   fetchTtsVoices,
+  provisionVoiceCloning,
   fetchVoicePresets,
   saveVoicePreset,
   deleteVoicePreset,

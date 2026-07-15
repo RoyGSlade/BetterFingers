@@ -4328,6 +4328,21 @@ async def list_voices():
             "cloning": voice_clone_engine.availability()}
 
 
+@app.post("/tts/clone/provision")
+async def provision_voice_cloning():
+    """Provision the optional voice-cloning runtime on demand (models-page
+    "Install voice cloning" card). Replaces the old "run tools/setup_voice_
+    cloning.py" CLI hint — that path can't work inside a packaged app. Runs the
+    download-verify-extract in a threadpool (it's I/O + subprocess-bound) and
+    always returns the fresh availability() so the card re-renders truthfully.
+    provision_clone_runtime() refuses cleanly (ok=False + message) when the
+    platform has no catalog entry or the artifact isn't published yet, so this
+    route never raises for the not-ready case."""
+    import voice_clone_engine
+    result = await run_in_threadpool(voice_clone_engine.provision_clone_runtime)
+    return {**result, "cloning": voice_clone_engine.availability()}
+
+
 @app.delete("/tts/voices/{voice_id}")
 async def delete_cloned_voice(voice_id: str):
     """Immediately delete a cloned voice (sample + provenance metadata).
