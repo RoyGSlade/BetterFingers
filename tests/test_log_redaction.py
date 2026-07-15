@@ -124,24 +124,37 @@ _SUSPICIOUS_TERMS = ("final_text", "raw_text", "dictated", "transcript", "prompt
 _REDACT_WRAPPERS = ("redact_user_text(", "redact_exc(", "redact_stderr_lines(")
 _SKIP_DIR_NAMES = {".venv", "node_modules", "tests", ".git", "app", "__pycache__"}
 
-# file:line -> reason, for verified-SAFE sites that happen to match a
-# suspicious term without being user content (mirrors docs/redaction-audit.md's
-# SAFE classifications). Add here with a one-line reason if a future audit
+# file -> {exact stripped line content} for verified-SAFE sites that happen
+# to match a suspicious term without being user content (mirrors
+# docs/redaction-audit.md's SAFE classifications). Keyed by CONTENT, not line
+# number: an unrelated edit shifting line numbers elsewhere in the file must
+# never turn an already-audited-safe site red again (this bit us once — a
+# server.py edit elsewhere shifted "Clipboard copy failed" from line 1013 to
+# 1014 and broke a line-number-keyed allowlist for a site that hadn't
+# actually changed). Add here with a one-line reason if a future audit
 # clears a new match rather than wrapping it — never to silence a real one.
 _ALLOWLIST = {
-    # pyperclip/Win32 clipboard API exceptions: the message is a library/OS
-    # failure (access denied, format unavailable, buffer too large) — these
-    # APIs never embed the clipboard's own text content in their exceptions.
-    "clipboard_capture.py:50": "pyperclip read failure, not clipboard content",
-    "clipboard_capture.py:65": "pyperclip write failure, not clipboard content",
-    "clipboard_capture.py:91": "pyperclip restore failure, not clipboard content",
-    "clipboard_capture.py:149": "logs format id + byte size only, no content",
-    "clipboard_capture.py:160": "Win32 GlobalSize/GlobalLock failure, not clipboard content",
-    "clipboard_capture.py:211": "Win32 SetClipboardData failure, not clipboard content",
-    "clipboard_capture.py:247": "delayed-restore worker's own exception, not clipboard content",
-    "clipboard_capture.py:305": "no interpolation at all — static message string",
-    "server.py:1013": "no interpolation at all — logging.exception('Clipboard copy failed')",
-    "injector.py:262": "get_clipboard_text() ACCESS failure, not the text it would have returned",
+    "clipboard_capture.py": {
+        # pyperclip/Win32 clipboard API exceptions: the message is a
+        # library/OS failure (access denied, format unavailable, buffer too
+        # large) — these APIs never embed the clipboard's own text content.
+        'logging.debug(f"Clipboard read failed: {exc}")',
+        'logging.debug(f"Clipboard write failed: {exc}")',
+        'logging.debug(f"Clipboard text restore skipped: {exc}")',
+        'logging.warning(f"Skipping clipboard format {fmt} (size={size}) - too large.")',
+        'logging.debug("Failed to snapshot Windows clipboard: %s", exc)',
+        'logging.debug("Failed to restore Windows clipboard snapshot: %s", exc)',
+        'logging.debug("Delayed clipboard restore skipped: %s", exc)',
+        'logging.debug("Failed to restore original clipboard text after selection capture.")',
+    },
+    "server.py": {
+        # No interpolation at all — a static message string.
+        'logging.exception("Clipboard copy failed")',
+    },
+    "injector.py": {
+        # get_clipboard_text() ACCESS failure, not the text it would have returned.
+        'logging.debug(f"Could not snapshot clipboard before paste: {exc}")',
+    },
 }
 
 
@@ -190,10 +203,10 @@ class LoggingLeakGateTests(unittest.TestCase):
                     continue
                 if any(wrapper in line for wrapper in _REDACT_WRAPPERS):
                     continue
-                key = f"{relpath}:{lineno}"
-                if key in _ALLOWLIST:
+                stripped = line.strip()
+                if stripped in _ALLOWLIST.get(relpath, ()):
                     continue
-                offenders.append(f"{key}: {line.strip()}")
+                offenders.append(f"{relpath}:{lineno}: {stripped}")
         self.assertEqual(
             offenders, [],
             "Unwrapped user-content-shaped logging call(s) — wrap with redact_user_text/"
