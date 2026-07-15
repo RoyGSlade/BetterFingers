@@ -22,6 +22,7 @@ import { voiceControlScenarios } from './voice-control.mjs';
 import { privacyScenarios } from './privacy.mjs';
 import { modelResourcesScenarios } from './model-resources.mjs';
 import { doctorWarningsScenarios } from './doctor-warnings.mjs';
+import { voiceCloningScenarios } from './voice-cloning.mjs';
 
 export const scenarios = [
   ...baselineScenarios,
@@ -29,4 +30,5 @@ export const scenarios = [
   ...privacyScenarios,
   ...modelResourcesScenarios,
   ...doctorWarningsScenarios,
+  ...voiceCloningScenarios,
 ];

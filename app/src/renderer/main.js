@@ -64,6 +64,7 @@ import {
   saveVoicePreset,
   deleteVoicePreset,
   cloneVoice,
+  provisionVoiceCloning,
   lintPersona,
   testPersona,
   savePersona,
@@ -170,6 +171,10 @@ const deleteWhisperButton = document.getElementById('deleteWhisperButton');
 const unloadSttButton = document.getElementById('unloadSttButton');
 const unloadLlmButton = document.getElementById('unloadLlmButton');
 const unloadTtsButton = document.getElementById('unloadTtsButton');
+const voiceCloningBadgeEl = document.getElementById('voiceCloningBadge');
+const voiceCloningStatusEl = document.getElementById('voiceCloningStatus');
+const voiceCloningHintEl = document.getElementById('voiceCloningHint');
+const provisionVoiceCloningButton = document.getElementById('provisionVoiceCloningButton');
 
 const wizardStepProgress = document.getElementById('wizardStepProgress');
 const wizardPrevButton = document.getElementById('wizardPrevButton');
@@ -593,6 +598,46 @@ function renderModelOverview(llmPayload, whisperPayload, selectedLlm, installedW
 
     card.append(label, value, detail);
     modelStatusSummaryEl.append(card);
+  }
+}
+
+// Renders the models-page "Voice Cloning" card from the /tts/voices `cloning`
+// availability payload ({ available, reason, setup_hint, mechanism }). This
+// replaces surfacing the raw "run tools/setup_voice_cloning.py" hint to end
+// users — that CLI can't work in a packaged app. When unavailable, the Install
+// button triggers in-app provisioning (POST /tts/clone/provision), which
+// reports honestly (incl. "not published yet") rather than failing silently.
+function renderVoiceCloningPanel(cloning) {
+  if (!voiceCloningBadgeEl || !provisionVoiceCloningButton) return;
+  const info = cloning && typeof cloning === 'object' ? cloning : {};
+  if (info.available) {
+    voiceCloningBadgeEl.textContent = 'Installed';
+    voiceCloningBadgeEl.className = 'model-badge model-badge-ready';
+    if (voiceCloningStatusEl) {
+      voiceCloningStatusEl.textContent =
+        'Voice cloning is ready. Upload a short sample in TTS / Read-Aloud to clone a voice.';
+    }
+    provisionVoiceCloningButton.hidden = true;
+    if (voiceCloningHintEl) voiceCloningHintEl.hidden = true;
+  } else {
+    voiceCloningBadgeEl.textContent = 'Not installed';
+    voiceCloningBadgeEl.className = 'model-badge';
+    if (voiceCloningStatusEl) {
+      voiceCloningStatusEl.textContent =
+        'Optional add-on. Clone your own voice from a short sample (~1.5 GB download).';
+    }
+    provisionVoiceCloningButton.hidden = false;
+    // Show the backend's actionable reason as a small hint, but never the raw
+    // "run <script>" CLI instruction — the Install button is the user path.
+    if (voiceCloningHintEl) {
+      // Only surface an UNUSUAL reason. The normal not-installed states
+      // ("dependencies not installed…", the "run <script>" CLI hint) are jargon
+      // already covered by the friendly status text above — hide them.
+      const reason = String(info.reason || '').trim();
+      const isRoutine = !reason || /setup_voice_cloning|dependencies not installed/i.test(reason);
+      voiceCloningHintEl.textContent = isRoutine ? '' : reason;
+      voiceCloningHintEl.hidden = isRoutine;
+    }
   }
 }
 
@@ -1599,6 +1644,7 @@ async function refreshPersonasAndVoices() {
 
   try {
     const voicesData = await fetchTtsVoices();
+    renderVoiceCloningPanel(voicesData.cloning);
     const voiceSelect = settingEls.review_tts_voice_hint;
     voiceOptionsCache = [
       ...(Array.isArray(voicesData.defaults) ? voicesData.defaults : []),
@@ -5370,6 +5416,17 @@ unloadLlmButton?.addEventListener('click', () => {
 
 unloadTtsButton?.addEventListener('click', () => {
   runModelAction(unloadTtsButton, 'Unload TTS', () => unloadModel('tts'));
+});
+
+provisionVoiceCloningButton?.addEventListener('click', () => {
+  // runModelAction sets modelMessage from result.message (ok=false → danger),
+  // so the honest "not published yet" / platform-unsupported message surfaces
+  // cleanly. The response carries fresh `cloning` availability → re-render.
+  runModelAction(provisionVoiceCloningButton, 'Install voice cloning', async () => {
+    const result = await provisionVoiceCloning();
+    renderVoiceCloningPanel(result?.cloning);
+    return result;
+  });
 });
 
 saveDraftEditButton?.addEventListener('click', async () => {
