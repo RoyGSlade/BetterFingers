@@ -204,13 +204,28 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13" # matches packaged build (Windows leg above)
+          # 3.12, NOT 3.13 like the Windows leg: the Linux build ships FULL
+          # kokoro (requirements-linux.lock pins misaki==0.9.4, kokoro's G2P
+          # engine, which requires Python <3.13). Windows ships kokoro-onnx and
+          # runs 3.13. requirements-linux.lock + requirements-dev.lock are both
+          # generated on 3.12, so the AppImage's bundled interpreter matches.
+          # Verified locally: the AppImage builds and its bundled backend starts
+          # on 3.12; 3.13 fails at `pip install` with "No matching distribution
+          # for misaki==0.9.4".
+          python-version: "3.12"
           cache: pip
 
       - name: Install Python dependencies
+        # CPU lock, NOT requirements-linux.lock: the CUDA lock bundles ~3.9 GB
+        # of nvidia/CUDA torch libs into the PyInstaller backend, which (a) the
+        # shipped AppImage never uses — Linux inference is CPU/Vulkan, friends
+        # have no NVIDIA GPU — and (b) overflowed the runner's disk (ENOSPC) as
+        # electron-builder copies the bundle through multiple staging dirs. The
+        # CPU lock pins torch==2.13.0+cpu; verified locally that the AppImage
+        # builds (~546 MB, not ~4 GB) and its backend runs identically.
         run: |
           python -m pip install --upgrade pip
-          pip install --require-hashes -r requirements-linux.lock
+          pip install --require-hashes -r requirements-linux-cpu.lock
           pip install --require-hashes -r requirements-dev.lock
 
       - name: Setup Node
@@ -223,6 +238,21 @@ jobs:
       - name: Install app dependencies
         working-directory: app
         run: npm ci
+
+      - name: Install Linux native build deps
+        # libportaudio2: sounddevice's runtime lib — without it
+        # test_audio_gate/test_auto_stop_silence/test_recorder_device fail at
+        # COLLECTION and abort the run (same fix as ci.yml).
+        # libx11-dev & co: @electron/rebuild recompiles uiohook-napi against
+        # Electron's ABI during `electron-builder`, and its X11 backend needs
+        # these headers (X11/keysym.h etc.) — verified locally that this exact
+        # set is what the AppImage build's native rebuild requires.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libportaudio2 \
+            libx11-dev libxtst-dev libxt-dev libxinerama-dev \
+            libx11-xcb-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libxkbfile-dev libxrandr-dev
 
       - name: Run test suite
         run: python -m pytest -q tests
