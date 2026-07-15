@@ -42,6 +42,103 @@ class FakeWakeDetector(WakeDetector):
         return {"detected": score >= 1.0, "score": score, "label": self._label}
 
 
+class OpenWakeWordDetector(WakeDetector):
+    """Real detector: streams audio through the ONNX melspec->embedding
+    pipeline (wake_models.WakeScorer) and, once enough embedding history has
+    accumulated, scores it with a wake-phrase classifier model.
+
+    ``classifier_session`` is optional -- the catalog ships zero bundled
+    classifiers (license gate, see wake_models.py), so a freshly-built
+    detector with no classifier is a legitimate "pipeline works, nothing to
+    score yet" state: predict() reports label="unavailable" rather than
+    raising, matching the graceful-degradation requirement (D1).
+    """
+
+    def __init__(
+        self,
+        melspec_session,
+        embedding_session,
+        classifier_session=None,
+        label="wake_word",
+        embed_window=None,
+    ):
+        from wake_models import EMBED_WINDOW_DEFAULT, WakeScorer
+
+        self.scorer = WakeScorer(melspec_session, embedding_session)
+        self.classifier_session = classifier_session
+        self.label = label
+        self.embed_window = int(embed_window or EMBED_WINDOW_DEFAULT)
+
+    def set_classifier(self, classifier_session, label="wake_word"):
+        self.classifier_session = classifier_session
+        self.label = label
+
+    def predict(self, audio_chunk, sample_rate):
+        if audio_chunk is not None:
+            self.scorer.push_audio(audio_chunk)
+
+        if self.classifier_session is None:
+            return {"detected": False, "score": 0.0, "label": "unavailable"}
+
+        features = self.scorer.get_features(self.embed_window)
+        if features is None:
+            # Pipeline is warming up (needs ~0.8s of audio before the first
+            # embedding window exists) -- not an error, just not scoreable yet.
+            return {"detected": False, "score": 0.0, "label": self.label}
+
+        import numpy as np
+
+        input_name = self.classifier_session.get_inputs()[0].name
+        output = self.classifier_session.run(None, {input_name: features})
+        score = float(np.asarray(output[0]).reshape(-1)[0])
+        return {"detected": False, "score": score, "label": self.label}
+
+
+def build_openwakeword_detector(classifier_id=None, classifier_origin="bundled"):
+    """Assemble a real OpenWakeWordDetector from on-disk models, verifying
+    everything (§11) before it's trusted. Returns
+    ``(detector_or_none, available, reason)`` instead of raising, so a
+    missing/corrupt/undownloaded model degrades to a truthful "unavailable"
+    status (D1) rather than crashing the caller.
+    """
+    import wake_models
+
+    for backbone_id in ("melspectrogram", "embedding_model"):
+        if not wake_models.is_backbone_model_downloaded(backbone_id):
+            return None, False, f"unavailable: model not downloaded ({backbone_id})"
+        verification = wake_models.verify_wake_model_file(backbone_id)
+        if not verification["ok"]:
+            return None, False, f"unavailable: {backbone_id} failed verification ({verification['reason']})"
+
+    try:
+        melspec_session = wake_models.build_onnx_session(wake_models.get_wake_model_path("melspectrogram"))
+        embedding_session = wake_models.build_onnx_session(wake_models.get_wake_model_path("embedding_model"))
+    except wake_models.WakeEngineUnavailable as exc:
+        return None, False, f"unavailable: {exc}"
+
+    classifier_session = None
+    label = "wake_word"
+    if classifier_id:
+        try:
+            if classifier_origin == "user-imported":
+                verification = wake_models.verify_imported_model(classifier_id)
+                path = wake_models.get_imported_model_path(classifier_id) if verification["ok"] else None
+            else:
+                verification = wake_models.verify_wake_model_file(classifier_id)
+                path = wake_models.get_wake_model_path(classifier_id) if verification["ok"] else None
+            if not verification["ok"]:
+                return None, False, f"unavailable: classifier failed verification ({verification['reason']})"
+            classifier_session = wake_models.build_onnx_session(path)
+            label = classifier_id
+        except (KeyError, wake_models.WakeEngineUnavailable) as exc:
+            return None, False, f"unavailable: {exc}"
+
+    detector = OpenWakeWordDetector(melspec_session, embedding_session, classifier_session, label=label)
+    if classifier_session is None:
+        return detector, False, "unavailable: no wake-phrase classifier selected"
+    return detector, True, "ready"
+
+
 class WakeWordService:
     """Cooldown/threshold/VAD gating around a WakeDetector. `on_detect` is
     called with no arguments on an accepted trigger — the caller wires that

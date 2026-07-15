@@ -1,6 +1,15 @@
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
-from wake_word import FakeWakeDetector, WakeWordService
+import numpy as np
+
+from wake_word import (
+    FakeWakeDetector,
+    OpenWakeWordDetector,
+    WakeWordService,
+    build_openwakeword_detector,
+)
 
 
 class WakeWordServiceTests(unittest.TestCase):
@@ -68,6 +77,168 @@ class WakeWordServiceTests(unittest.TestCase):
         triggered = service.process_chunk(None, 16000, now=0.0)
         self.assertFalse(triggered)
         self.assertEqual(calls, [])
+
+
+class _StubMelspecSession:
+    """ONNX-session-shaped stub: input (1, N) samples -> one 32-bin frame per
+    call, independent of content (matches the real model's per-call frame
+    count, which depends only on N, not on the audio itself)."""
+
+    def get_inputs(self):
+        return [SimpleNamespace(name="input")]
+
+    def run(self, output_names, input_feed):
+        del output_names
+        return [np.full((1, 1, 1, 32), 0.3, dtype=np.float32)]
+
+
+class _StubEmbeddingSession:
+    def get_inputs(self):
+        return [SimpleNamespace(name="input_1")]
+
+    def run(self, output_names, input_feed):
+        del output_names
+        batch = input_feed["input_1"]
+        return [np.full((batch.shape[0], 1, 1, 96), 0.5, dtype=np.float32)]
+
+
+class _StubClassifierSession:
+    def __init__(self, score=0.8):
+        self.score = score
+        self.calls = []
+
+    def get_inputs(self):
+        return [SimpleNamespace(name="input")]
+
+    def run(self, output_names, input_feed):
+        del output_names
+        self.calls.append(input_feed["input"].shape)
+        return [np.array([[self.score]], dtype=np.float32)]
+
+
+# Sample counts derived from the real melspec/embedding framing (512-sample
+# window, 160-sample hop, 76-frame window re-embedded every 8 frames -- see
+# wake_models.py): SMALL stays well under the ~80-frame first-embedding
+# threshold; PLENTY comfortably clears the 16-embedding classifier window.
+_SMALL_AUDIO_SAMPLES = 12000
+_PLENTY_AUDIO_SAMPLES = 40000
+
+
+class OpenWakeWordDetectorTests(unittest.TestCase):
+    def _detector(self, classifier_session=None):
+        return OpenWakeWordDetector(
+            _StubMelspecSession(), _StubEmbeddingSession(), classifier_session, label="hey_fingers"
+        )
+
+    def test_no_classifier_reports_unavailable_regardless_of_audio(self):
+        detector = self._detector(classifier_session=None)
+        chunk = np.zeros(_PLENTY_AUDIO_SAMPLES, dtype=np.float32)
+        result = detector.predict(chunk, 16000)
+        self.assertEqual(result["label"], "unavailable")
+        self.assertEqual(result["score"], 0.0)
+
+    def test_warming_up_with_insufficient_audio_yields_zero_score(self):
+        classifier = _StubClassifierSession(score=0.9)
+        detector = self._detector(classifier_session=classifier)
+        chunk = np.zeros(_SMALL_AUDIO_SAMPLES, dtype=np.float32)
+        result = detector.predict(chunk, 16000)
+        self.assertEqual(result["score"], 0.0)
+        self.assertEqual(result["label"], "hey_fingers")
+        self.assertEqual(classifier.calls, [])  # never invoked -- no full window yet
+
+    def test_sufficient_audio_scores_via_classifier(self):
+        classifier = _StubClassifierSession(score=0.87)
+        detector = self._detector(classifier_session=classifier)
+        chunk = np.zeros(_PLENTY_AUDIO_SAMPLES, dtype=np.float32)
+        result = detector.predict(chunk, 16000)
+        self.assertAlmostEqual(result["score"], 0.87)
+        self.assertEqual(result["label"], "hey_fingers")
+        self.assertEqual(classifier.calls[-1], (1, 16, 96))
+
+    def test_audio_accumulates_across_multiple_predict_calls(self):
+        classifier = _StubClassifierSession(score=0.7)
+        detector = self._detector(classifier_session=classifier)
+        chunk = np.zeros(_PLENTY_AUDIO_SAMPLES // 4, dtype=np.float32)
+        results = [detector.predict(chunk, 16000) for _ in range(4)]
+        self.assertTrue(any(r["score"] > 0.0 for r in results))
+
+    def test_set_classifier_swaps_in_a_scoreable_model(self):
+        detector = self._detector(classifier_session=None)
+        chunk = np.zeros(_PLENTY_AUDIO_SAMPLES, dtype=np.float32)
+        self.assertEqual(detector.predict(chunk, 16000)["label"], "unavailable")
+        detector.set_classifier(_StubClassifierSession(score=0.6), label="hey_fingers")
+        result = detector.predict(np.zeros(100, dtype=np.float32), 16000)
+        self.assertEqual(result["label"], "hey_fingers")
+
+
+class BuildOpenWakeWordDetectorTests(unittest.TestCase):
+    def test_missing_backbone_model_reports_not_downloaded(self):
+        with patch("wake_models.is_backbone_model_downloaded", return_value=False):
+            detector, available, reason = build_openwakeword_detector()
+        self.assertIsNone(detector)
+        self.assertFalse(available)
+        self.assertIn("not downloaded", reason)
+
+    def test_corrupt_backbone_model_reports_verification_failure(self):
+        with patch("wake_models.is_backbone_model_downloaded", return_value=True), patch(
+            "wake_models.verify_wake_model_file", return_value={"ok": False, "reason": "digest_mismatch"}
+        ):
+            detector, available, reason = build_openwakeword_detector()
+        self.assertIsNone(detector)
+        self.assertFalse(available)
+        self.assertIn("digest_mismatch", reason)
+
+    def test_onnxruntime_failure_reports_unavailable(self):
+        import wake_models
+
+        with patch("wake_models.is_backbone_model_downloaded", return_value=True), patch(
+            "wake_models.verify_wake_model_file", return_value={"ok": True, "reason": "verified"}
+        ), patch(
+            "wake_models.build_onnx_session",
+            side_effect=wake_models.WakeEngineUnavailable("onnxruntime not available"),
+        ):
+            detector, available, reason = build_openwakeword_detector()
+        self.assertIsNone(detector)
+        self.assertFalse(available)
+        self.assertIn("onnxruntime not available", reason)
+
+    def test_backbone_ready_with_no_classifier_is_honestly_unavailable(self):
+        with patch("wake_models.is_backbone_model_downloaded", return_value=True), patch(
+            "wake_models.verify_wake_model_file", return_value={"ok": True, "reason": "verified"}
+        ), patch("wake_models.get_wake_model_path", return_value="/fake/path.onnx"), patch(
+            "wake_models.build_onnx_session", return_value=_StubMelspecSession()
+        ):
+            detector, available, reason = build_openwakeword_detector()
+        self.assertIsInstance(detector, OpenWakeWordDetector)
+        self.assertFalse(available)
+        self.assertIn("no wake-phrase classifier selected", reason)
+
+    def test_backbone_and_classifier_ready_is_available(self):
+        sessions = iter([_StubMelspecSession(), _StubEmbeddingSession(), _StubClassifierSession()])
+        with patch("wake_models.is_backbone_model_downloaded", return_value=True), patch(
+            "wake_models.verify_wake_model_file", return_value={"ok": True, "reason": "verified"}
+        ), patch("wake_models.get_wake_model_path", return_value="/fake/path.onnx"), patch(
+            "wake_models.build_onnx_session", side_effect=lambda path: next(sessions)
+        ):
+            detector, available, reason = build_openwakeword_detector(classifier_id="hey_fingers")
+        self.assertIsInstance(detector, OpenWakeWordDetector)
+        self.assertTrue(available)
+        self.assertEqual(reason, "ready")
+
+    def test_user_imported_classifier_verification_failure_is_unavailable(self):
+        with patch("wake_models.is_backbone_model_downloaded", return_value=True), patch(
+            "wake_models.verify_wake_model_file", return_value={"ok": True, "reason": "verified"}
+        ), patch("wake_models.get_wake_model_path", return_value="/fake/path.onnx"), patch(
+            "wake_models.build_onnx_session", return_value=_StubMelspecSession()
+        ), patch(
+            "wake_models.verify_imported_model", return_value={"ok": False, "reason": "digest_mismatch"}
+        ):
+            detector, available, reason = build_openwakeword_detector(
+                classifier_id="user_123", classifier_origin="user-imported"
+            )
+        self.assertIsNone(detector)
+        self.assertFalse(available)
+        self.assertIn("digest_mismatch", reason)
 
 
 if __name__ == "__main__":
