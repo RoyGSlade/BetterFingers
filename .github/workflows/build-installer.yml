@@ -216,9 +216,16 @@ jobs:
           cache: pip
 
       - name: Install Python dependencies
+        # CPU lock, NOT requirements-linux.lock: the CUDA lock bundles ~3.9 GB
+        # of nvidia/CUDA torch libs into the PyInstaller backend, which (a) the
+        # shipped AppImage never uses — Linux inference is CPU/Vulkan, friends
+        # have no NVIDIA GPU — and (b) overflowed the runner's disk (ENOSPC) as
+        # electron-builder copies the bundle through multiple staging dirs. The
+        # CPU lock pins torch==2.13.0+cpu; verified locally that the AppImage
+        # builds (~546 MB, not ~4 GB) and its backend runs identically.
         run: |
           python -m pip install --upgrade pip
-          pip install --require-hashes -r requirements-linux.lock
+          pip install --require-hashes -r requirements-linux-cpu.lock
           pip install --require-hashes -r requirements-dev.lock
 
       - name: Setup Node
