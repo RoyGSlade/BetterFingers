@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -867,11 +868,16 @@ def _safe_member_basename(name):
         return ""
     if raw.startswith(("/", "\\")) or os.path.isabs(raw) or (len(raw) > 1 and raw[1] == ":"):
         raise ArchiveValidationError(f"absolute member path rejected: {raw}")
-    norm = os.path.normpath(raw.replace("\\", "/"))
+    # posixpath, NOT os.path: archive member names always use "/" once the
+    # backslash replace above runs, but on Windows os.path.normpath converts
+    # them back to "\", so splitting on "/" produced one chunk and the ".."
+    # check silently never matched (traversal members were flattened instead
+    # of rejected). posixpath keeps "/" semantics on every platform.
+    norm = posixpath.normpath(raw.replace("\\", "/"))
     parts = norm.split("/")
-    if os.path.isabs(norm) or ".." in parts:
+    if posixpath.isabs(norm) or ".." in parts:
         raise ArchiveValidationError(f"path traversal rejected: {raw}")
-    return os.path.basename(norm)
+    return posixpath.basename(norm)
 
 
 def _safe_symlink_basename(link_name, link_target, staging_root):

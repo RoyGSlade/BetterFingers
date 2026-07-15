@@ -52,6 +52,13 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
+      - name: Install PortAudio (Linux)
+        # sounddevice needs the native PortAudio library; without it three
+        # test files fail at *collection*, which aborts the whole pytest run.
+        # The Windows/macOS sounddevice wheels bundle PortAudio.
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2
+
       - name: Install dependencies
         # Hardware-aware install: CPU-only torch on the GPU-less runners here,
         # so CI stops fetching the ~3.9 GB CUDA stack on every run.

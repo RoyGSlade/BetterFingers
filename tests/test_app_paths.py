@@ -6,6 +6,7 @@ platform default; migration consolidates a legacy/split root idempotently.
 """
 
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -34,10 +35,17 @@ class ResolveBaseTests(unittest.TestCase):
                    if k not in ("BETTERFINGERS_DATA_DIR", "APPDATA", "XDG_DATA_HOME")}
             with patch.dict(os.environ, env, clear=True), \
                  patch.object(app_paths.Path, "home", staticmethod(lambda: Path(home))):
-                # No APPDATA, no legacy data → platform (XDG) default.
+                # No APPDATA, no legacy data → platform default. The expected
+                # segment differs per OS (XDG on Linux, Application Support on
+                # macOS, AppData on Windows) — this test runs on all three in CI.
                 base = app_paths.resolve_base()
                 self.assertIn("BetterFingers", str(base))
-                self.assertIn(".local/share", str(base))
+                if sys.platform.startswith("win"):
+                    self.assertIn("AppData", str(base))
+                elif sys.platform == "darwin":
+                    self.assertIn(os.path.join("Library", "Application Support"), str(base))
+                else:
+                    self.assertIn(".local/share", str(base))
 
     def test_existing_legacy_dir_with_data_is_kept(self):
         with tempfile.TemporaryDirectory() as home:

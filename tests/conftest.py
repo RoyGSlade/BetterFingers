@@ -77,3 +77,33 @@ def _reset_server_model_singletons():
     _reset()
     yield
     _reset()
+
+
+@pytest.fixture(autouse=True)
+def _no_warm_start_model_loads(request, monkeypatch):
+    """Neutralize startup model warm-loading for every test except the suite
+    that tests it.
+
+    TestClient startup warm-loads any model the active profile marks
+    keep-loaded. Many test files re-point APPDATA at their own pristine temp
+    dirs (bypassing the residency-off profile this conftest seeds), whose
+    default profile keeps LLM/STT loaded — so app startup inside those tests
+    began REAL multi-GB model downloads. On Windows the download thread's open
+    .part handle then broke TemporaryDirectory cleanup with WinError 32
+    (POSIX allows deleting open files, which is why only Windows CI failed:
+    test_server_drafts, then test_server_foundry_routes, then
+    test_server_persona_routes — one per run, whack-a-mole). No-opping
+    warm-start at the source fixes every current and future fixture at once.
+
+    test_server_lazy_startup exercises warm-start on purpose (with its own
+    mocks of the inner loaders), so it is excluded.
+    """
+    if request.module.__name__ == "test_server_lazy_startup":
+        yield
+        return
+    server_mod = sys.modules.get("server")
+    if server_mod is not None and hasattr(server_mod, "warm_start_resident_models"):
+        monkeypatch.setattr(
+            server_mod, "warm_start_resident_models", lambda settings=None: {}
+        )
+    yield
