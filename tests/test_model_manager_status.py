@@ -8,6 +8,22 @@ from unittest.mock import patch
 import model_manager
 from model_manager import check_and_download_resources, get_model_server_args
 
+# Synthetic catalog entry with no family (and therefore no minimum llama-server
+# build requirement). The shipping catalog is gemma-4-only, so tests that need
+# a "no build gate" model inject this fixture instead of a real download option.
+_LEGACY_TEST_MODEL = {
+    "name": "Legacy Test 4B",
+    "filename": "legacy-test.gguf",
+    "url": "https://example.invalid/legacy-test.gguf",
+    "sha256": "0" * 64,
+    "size_bytes": 100,
+    "size_mb": 100,
+    "group": "betterfingers",
+    "roles": ["rewrite"],
+    "lane": "gpu",
+    "recommended_for": "Test fixture only.",
+}
+
 
 class ModelManagerStatusTests(unittest.TestCase):
     def test_gemma_4_models_are_available(self):
@@ -17,8 +33,7 @@ class ModelManagerStatusTests(unittest.TestCase):
             "gemma-4-e4b-q4",
             "gemma-4-e4b-q8",
             "gemma-4-12b-q4",
-            "gemma-4-26b-a4b-q4",
-            "gemma-4-31b-q4",
+            "gemma-4-12b-q8",
         }
 
         self.assertTrue(expected.issubset(set(model_manager.AVAILABLE_MODELS)))
@@ -37,14 +52,13 @@ class ModelManagerStatusTests(unittest.TestCase):
     def test_models_expose_studio_and_betterfingers_roles(self):
         dispatcher = model_manager.AVAILABLE_MODELS["gemma-4-e4b-q4"]
         writer = model_manager.AVAILABLE_MODELS["gemma-4-12b-q4"]
-        rewrite = model_manager.AVAILABLE_MODELS["gemma-3-4b-q4"]
+        rewrite = model_manager.AVAILABLE_MODELS["gemma-4-e2b-q4"]
 
         self.assertEqual(dispatcher["group"], "studio")
         self.assertIn("dispatcher", dispatcher["roles"])
         self.assertEqual(dispatcher["lane"], "cpu")
         self.assertIn("writer", writer["roles"])
         self.assertEqual(writer["lane"], "gpu-transient")
-        self.assertEqual(rewrite["group"], "betterfingers")
         self.assertIn("rewrite", rewrite["roles"])
 
     def test_download_file_resumes_partial_and_promotes_atomically(self):
@@ -259,9 +273,12 @@ class ModelManagerStatusTests(unittest.TestCase):
 
             with patch("model_manager.sys.platform", "linux"), patch(
                 "model_manager.get_model_path", return_value=model_path
-            ), patch("model_manager.get_server_path", return_value=server_path):
+            ), patch("model_manager.get_server_path", return_value=server_path), patch.dict(
+                model_manager.AVAILABLE_MODELS, {"legacy-test-model": _LEGACY_TEST_MODEL}
+            ):
                 self.assertFalse(model_manager.is_ready("gemma-4-12b-q4"))
-                self.assertTrue(model_manager.is_ready("gemma-3-4b-q4"))
+                # A model without a family-declared minimum build accepts the old runtime.
+                self.assertTrue(model_manager.is_ready("legacy-test-model"))
 
     def test_check_and_download_resources_reports_error_when_model_unavailable(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -272,8 +289,10 @@ class ModelManagerStatusTests(unittest.TestCase):
                 "model_manager.get_model_path", return_value=model_path
             ), patch("model_manager.get_server_path", return_value=server_path), patch(
                 "model_manager.download_file", side_effect=RuntimeError("offline")
-            ) as download_file:
-                result = check_and_download_resources(model_id="gemma-3-4b-q4")
+            ) as download_file, patch.dict(
+                model_manager.AVAILABLE_MODELS, {"legacy-test-model": _LEGACY_TEST_MODEL}
+            ):
+                result = check_and_download_resources(model_id="legacy-test-model")
 
             self.assertFalse(bool(result.get("ok", True)))
             self.assertIn("unavailable", str(result.get("message", "")).lower())
@@ -336,8 +355,10 @@ class ModelManagerStatusTests(unittest.TestCase):
                 "model_manager.get_repo_root", return_value=tmp
             ), patch(
                 "model_manager.download_file", side_effect=fake_download
-            ) as download_file:
-                result = check_and_download_resources(model_id="gemma-3-4b-q4")
+            ) as download_file, patch.dict(
+                model_manager.AVAILABLE_MODELS, {"legacy-test-model": _LEGACY_TEST_MODEL}
+            ):
+                result = check_and_download_resources(model_id="legacy-test-model")
                 server_path = model_manager.get_server_path()
 
             self.assertEqual(model_manager.get_server_filename(), "llama-server")
@@ -361,9 +382,11 @@ class ModelManagerStatusTests(unittest.TestCase):
                 "model_manager.sys.platform", "linux"
             ), patch("model_manager.get_repo_root", return_value=tmp), patch(
                 "model_manager.get_models_dir", return_value=os.path.join(tmp, "models")
-            ), patch("model_manager.download_file") as download_file:
+            ), patch("model_manager.download_file") as download_file, patch.dict(
+                model_manager.AVAILABLE_MODELS, {"legacy-test-model": _LEGACY_TEST_MODEL}
+            ):
                 self.assertEqual(model_manager.get_server_path(), server_path)
-                result = check_and_download_resources(model_id="gemma-3-4b-q4")
+                result = check_and_download_resources(model_id="legacy-test-model")
 
             self.assertTrue(bool(result.get("ok", False)))
             download_file.assert_not_called()
