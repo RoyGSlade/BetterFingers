@@ -129,6 +129,48 @@ class WipeRouteIntegrationTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200, resp.json())
         self.assertTrue(resp.json()["ok"])
 
+    def test_populated_wipe_is_200_and_ok(self):
+        import os
+        import history_store
+        history_store.init()
+        directory = server.recordings.get_recordings_dir()
+        with open(os.path.join(directory, "orphan.wav"), "w") as fh:
+            fh.write("x")
+        with server.draft_lock:
+            server.draft_queue.append({"id": 1, "final_text": "secret"})
+        resp = self.client.post("/privacy/wipe", json={"wipe_voices": False})
+        self.assertEqual(resp.status_code, 200, resp.json())
+        self.assertTrue(resp.json()["ok"])
+        self.assertTrue(resp.json()["postconditions"]["recordings_dir_empty"])
+
+    def test_history_db_recreation_failure_returns_500(self):
+        # Failure injection (Phase 1.3): the DB could not be wiped/recreated.
+        import history_store
+        history_store.init()
+        with patch.object(server.history_store, "wipe_database",
+                          return_value={"ok": False, "recreated": False, "removed": []}):
+            resp = self.client.post("/privacy/wipe", json={"wipe_voices": False})
+        self.assertEqual(resp.status_code, 500, resp.json())
+        body = resp.json()
+        self.assertFalse(body["ok"])
+        self.assertFalse(body["postconditions"]["history_db_recreated"])
+
+    def test_voice_deletion_failure_returns_500(self):
+        # Failure injection (Phase 1.3): rmtree silently no-ops, so the voices
+        # dir remains and the voices_absent postcondition cannot hold.
+        import os
+        import history_store
+        history_store.init()
+        voices_dir = server.ensure_voices_dir()
+        with open(os.path.join(str(voices_dir), "cloned_Me.wav"), "w") as fh:
+            fh.write("x")
+        with patch.object(server.shutil, "rmtree", lambda *a, **k: None):
+            resp = self.client.post("/privacy/wipe", json={"wipe_voices": True})
+        self.assertEqual(resp.status_code, 500, resp.json())
+        body = resp.json()
+        self.assertFalse(body["ok"])
+        self.assertFalse(body["postconditions"]["voices_absent"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,6 +5,20 @@ iteration reads it, does one bounded/committable chunk, and appends here.
 **Never mix unrelated behavior changes in one commit.** Work happens on branch
 `remediation/phased-loop`.
 
+> ## 🛑 STOP CONDITION (standing instruction from the user, 2026-07-17)
+> Keep looping until **every** phase (1–9) and its Definition of Done is
+> complete — i.e. every item in the phase/task tracker below is ✅. When that
+> is true, the loop must **self-terminate**:
+> 1. Call `CronList`, find the recurring remediation job (prompt contains
+>    "BetterFingers remediation plan"), and `CronDelete` it.
+> 2. Send a one-line completion notice via `PushNotification`.
+> 3. Do **not** schedule any further work.
+>
+> Until then, each iteration just does the next chunk and updates this file.
+> If a phase is genuinely blocked (needs hardware, external creds, or a
+> product decision), record the blocker here, mark it ⛔, and move to the next
+> unblocked task rather than stalling the loop.
+
 ---
 
 ## Baseline (Phase 0 — recorded 2026-07-16)
@@ -43,11 +57,13 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 - **Phase 0 — Baseline** 🚧
   - ✅ 0.a Create tracking changelog (this file)
   - ⬜ 0.b Regression-test placeholders for every confirmed issue
-- **Phase 1 — Truthful privacy wipe** 🚧 (release blocking)
+- **Phase 1 — Truthful privacy wipe** ✅ (release blocking)
   - ✅ 1.1 Correct the HTTP contract (`/privacy/wipe` no longer 200 on failure)
   - ✅ 1.2 Make the renderer defensive (`if (!result?.ok) throw`; show what/why/retry)
-  - 🚧 1.3 End-to-end contract tests (route status test + renderer summary test done;
-    remaining failure-injection cases — history-DB recreation fails, voice deletion fails — pending)
+  - ✅ 1.3 End-to-end contract tests: route status mapping, renderer summary unit tests,
+    and failure-injection through the route — history-DB recreation → 500, voice deletion
+    → 500, empty wipe → 200, populated wipe → 200. Pipeline-quiesce / output-drain /
+    recording-remains covered by `test_privacy_wipe_verified.py`.
 - **Phase 2 — Unified data-lifecycle (DataRegistry)** ⬜ (release blocking)
 - **Phase 3 — Support-report privacy** ⬜ (release blocking)
 - **Phase 4 — Runtime & process boundaries** ⬜ (release blocking)
@@ -141,3 +157,43 @@ Phase 1 can be marked done. Add backend failure-injection tests proving
 (b) voice deletion fails (patch `history_store.wipe_database` /
 `shutil.rmtree` to fail, assert 500 through the route). Then flip Phase 1 to ✅
 and begin Phase 2 (DataRegistry).
+
+### Iteration 3 — 2026-07-17 — Phase 1.3 (Phase 1 COMPLETE) + stop condition
+
+**Standing instruction recorded.** The user asked the loop to run until the
+whole plan is done, then close itself — captured as the STOP CONDITION block at
+the top of this file. Every iteration checks it.
+
+**Changed.**
+- `tests/test_privacy_wipe_contract.py`: added four end-to-end route tests —
+  `test_populated_wipe_is_200_and_ok`, `test_history_db_recreation_failure_returns_500`
+  (patches `history_store.wipe_database` to fail), `test_voice_deletion_failure_returns_500`
+  (patches `shutil.rmtree` to no-op so `voices_absent` cannot hold). These prove a
+  real backend failure yields `ok:false` **and** an honest 500 through the route.
+- `REMEDIATION_CHANGELOG.md`: Phase 1 flipped to ✅; stop condition added.
+
+**Why.** Phase 1.3 DoD: "no backend-declared wipe failure can produce a renderer
+success message." The status contract (1.1), the defensive renderer (1.2), and
+now failure-injection coverage across both success and failure paths satisfy it.
+The pipeline-quiesce, output-drain, and recording-remains cases were already
+covered by `tests/test_privacy_wipe_verified.py`.
+
+**Verification.** `pytest tests/test_privacy_wipe_contract.py` → 15 passed,
+4 subtests passed.
+
+**Phase 1 (release-blocking) is DONE.** ✅ 1.1 ✅ 1.2 ✅ 1.3
+
+**Next up →** Phase 2 (DataRegistry) — the most important architectural
+correction. Begin 2.1: create `domain/privacy/registry.py` (or a top-level
+`data_registry.py` consistent with the current flat layout) defining the frozen
+`DataCategory` dataclass and a registry. Inventory the existing persistent
+stores first (recordings, drafts JSON, history DB, voices, profiles, personas,
+dictionary, macros, voice presets, app state, wake models, MCP config, graph,
+debug log, sidecar raw log, overlay state, model/runtime metadata, temp audio)
+by grepping for their path helpers in `app_paths.py` / `server.py`, then
+register each with real `paths`/`size`/`wipe`/`verify` callables. Land it as
+several small PRs: (a) the dataclass + empty registry + tests that fail if a
+category is missing metadata, (b) register the read-only fields for all
+categories, (c) wire `size`/`paths`, (d) wire `wipe`/`verify` and back
+`_perform_privacy_wipe` with it. Keep the existing wipe behavior green
+throughout.
