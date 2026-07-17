@@ -35,6 +35,27 @@ export function isPreDeleteAbort(payload) {
   return Boolean(payload && payload.error && WIPE_PRE_DELETE_ABORTS.has(payload.error));
 }
 
+// A cleared{} entry describes something actually deleted (not a quiesce/state
+// step like recorder_stopped or pipeline_quiesced). Numbers are counts;
+// booleans only count when the key names a removal (_removed/_wiped/_cleared).
+function isDeletionOutcome(key, value) {
+  if (typeof value === 'number') return value > 0;
+  if (typeof value === 'boolean') return value && /_(removed|wiped|cleared)$/.test(key);
+  return false;
+}
+
+// "What WAS deleted" — the positive side of a partial wipe, drawn from the
+// backend's cleared{} map. Returns a list of human-readable items.
+export function summarizeWipeCleared(payload) {
+  const cleared = (payload && payload.cleared) || {};
+  const done = [];
+  for (const [key, value] of Object.entries(cleared)) {
+    if (!isDeletionOutcome(key, value)) continue;
+    done.push(typeof value === 'number' ? `${key}: ${value}` : key);
+  }
+  return done;
+}
+
 // A plain-text, injection-safe (used with textContent) summary of a failed or
 // partial wipe: what did not verify, what remains, and whether retry is safe.
 export function summarizeWipeFailure(payload) {
@@ -43,6 +64,11 @@ export function summarizeWipeFailure(payload) {
 
   if (abort) {
     parts.push('Nothing was deleted.');
+    // output_did_not_quiesce carries the in-flight sends that would not finish.
+    const stuck = payload && payload.stuck_sends;
+    if (Array.isArray(stuck) && stuck.length) {
+      parts.push(`${stuck.length} in-flight draft send(s) would not finish (${stuck.join(', ')}).`);
+    }
     parts.push('Safe to retry.');
     return parts.join(' ');
   }
@@ -56,9 +82,10 @@ export function summarizeWipeFailure(payload) {
   if (Array.isArray(leftovers) && leftovers.length) {
     parts.push(`${leftovers.length} recording file(s) still remain.`);
   }
-  const cleared = (payload && payload.cleared) || {};
-  if (typeof cleared.drafts === 'number' && cleared.drafts > 0) {
-    parts.push(`${cleared.drafts} draft(s) were cleared before the failure.`);
+  // Show what WAS deleted (plan 1.2), not just a drafts count.
+  const clearedItems = summarizeWipeCleared(payload);
+  if (clearedItems.length) {
+    parts.push(`Already cleared before the failure: ${clearedItems.join(', ')}.`);
   }
   parts.push('Some data may remain — retrying is safe and may clear the rest.');
   return parts.join(' ');

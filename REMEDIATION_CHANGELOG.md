@@ -70,14 +70,19 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 
 - **Phase 0 — Baseline** 🚧
   - ✅ 0.a Create tracking changelog (this file)
-  - ⬜ 0.b Regression-test placeholders for every confirmed issue
+  - ✅ 0.b Regression coverage is folded into each phase's own tests (a
+    deliberate deviation from upfront placeholders): every confirmed issue
+    lands with its regression test in the phase that fixes it — 1.1/1.2/1.3 and
+    2.1a already do. Enforced going forward by the "commit each chunk with its
+    test" rule.
 - **Phase 1 — Truthful privacy wipe** ✅ (release blocking)
   - ✅ 1.1 Correct the HTTP contract (`/privacy/wipe` no longer 200 on failure)
   - ✅ 1.2 Make the renderer defensive (`if (!result?.ok) throw`; show what/why/retry)
   - ✅ 1.3 End-to-end contract tests: route status mapping, renderer summary unit tests,
     and failure-injection through the route — history-DB recreation → 500, voice deletion
-    → 500, empty wipe → 200, populated wipe → 200. Pipeline-quiesce / output-drain /
-    recording-remains covered by `test_privacy_wipe_verified.py`.
+    → 500, empty wipe → 200, populated wipe → 200. Pipeline-quiesce and
+    recording-remains covered by `test_privacy_wipe_verified.py`; output-drain
+    covered by `test_wipe_send_race.py:165` (attribution corrected per review).
 - **Phase 2 — Unified data-lifecycle (DataRegistry)** 🚧 (release blocking)
   - 🚧 2.1 DataRegistry
     - ✅ 2.1a `DataCategory`/`WipeResult`/`VerificationResult` types, controlled
@@ -199,8 +204,8 @@ the top of this file. Every iteration checks it.
 **Why.** Phase 1.3 DoD: "no backend-declared wipe failure can produce a renderer
 success message." The status contract (1.1), the defensive renderer (1.2), and
 now failure-injection coverage across both success and failure paths satisfy it.
-The pipeline-quiesce, output-drain, and recording-remains cases were already
-covered by `tests/test_privacy_wipe_verified.py`.
+The pipeline-quiesce and recording-remains cases were already covered by
+`tests/test_privacy_wipe_verified.py`; output-drain by `test_wipe_send_race.py`.
 
 **Verification.** `pytest tests/test_privacy_wipe_contract.py` → 15 passed,
 4 subtests passed.
@@ -251,3 +256,36 @@ marker, wake models/training artifacts, MCP config, debug log, overlay state,
 model/runtime metadata, temp audio). Add a test asserting the registry contains
 the full expected id set so a forgotten store fails CI. Keep each category's
 `may_contain_user_text` and `sensitivity` honest.
+
+### Iteration 5 — 2026-07-17 — Phase 1.2 polish (review response) + housekeeping
+
+Overseer `bf-plan-reviewer` APPROVED Phase 1 + 2.1a (verified by running the
+suites: 33 py + 5 node passing) with 5 minor findings. Closed them:
+
+- **Finding 3 (plan 1.2 "show what WAS deleted"):** `wipeSummary.mjs` now has
+  `summarizeWipeCleared()` which enumerates the backend `cleared{}` map —
+  counts (`drafts: N`) and boolean removals (`history_file_removed`, …) — while
+  excluding quiesce/state steps (recorder_stopped, pipeline_quiesced). The
+  failure summary reports "Already cleared before the failure: …".
+- **Finding 4 (surface `stuck_sends`):** the output-drain abort branch now lists
+  the in-flight sends that would not finish.
+- **Finding 1 (attribution):** corrected — output-drain coverage is in
+  `test_wipe_send_race.py:165`, not `test_privacy_wipe_verified.py` (fixed in the
+  tracker and the iteration-3 entry above).
+- **Finding 2 (Phase 0.b):** resolved — regression coverage is folded into each
+  phase's own tests rather than upfront placeholders; 0.b marked ✅ with that
+  deviation recorded.
+- **Finding 5 (commit 2.1a):** already done before the review snapshot —
+  `eea6314` (registry) + `e868033` (collab note).
+
+**Files.** `app/src/renderer/lib/wipeSummary.mjs`,
+`app/tests/wipe-summary.test.mjs` (+3 tests, updated 1 assertion),
+`REMEDIATION_CHANGELOG.md`. No handler change needed — `handleWipeData` already
+renders whatever `summarizeWipeFailure` returns.
+
+**Verification.** `node --check`; `node --test app/tests/wipe-summary.test.mjs`
+→ 8 passed.
+
+**Next up →** Phase 2.1b (unchanged): register every persistent category's
+read-only metadata against the validated registry, with a test asserting the
+full expected id set so a forgotten store fails CI.
