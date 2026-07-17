@@ -64,7 +64,17 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
     and failure-injection through the route — history-DB recreation → 500, voice deletion
     → 500, empty wipe → 200, populated wipe → 200. Pipeline-quiesce / output-drain /
     recording-remains covered by `test_privacy_wipe_verified.py`.
-- **Phase 2 — Unified data-lifecycle (DataRegistry)** ⬜ (release blocking)
+- **Phase 2 — Unified data-lifecycle (DataRegistry)** 🚧 (release blocking)
+  - 🚧 2.1 DataRegistry
+    - ✅ 2.1a `DataCategory`/`WipeResult`/`VerificationResult` types, controlled
+      vocabularies, mode-nesting validation, `DataRegistry`, empty `REGISTRY`
+    - ⬜ 2.1b Register every persistent category's read-only fields
+    - ⬜ 2.1c Wire real `paths` + `size` callables
+    - ⬜ 2.1d Wire `wipe`/`verify`; back `_perform_privacy_wipe` with the registry
+  - ⬜ 2.2 Explicit wipe modes (conversations / personal / factory reset) + UI preview
+  - ⬜ 2.3 Coordinate every writer via a shared lifecycle gate
+  - ⬜ 2.4 Coordinate Electron-owned data over IPC
+  - ⬜ 2.5 Generate the privacy UI (`GET /privacy`) from the registry
 - **Phase 3 — Support-report privacy** ⬜ (release blocking)
 - **Phase 4 — Runtime & process boundaries** ⬜ (release blocking)
 - **Phase 5 — API/renderer security boundary** ⬜
@@ -183,17 +193,47 @@ covered by `tests/test_privacy_wipe_verified.py`.
 
 **Phase 1 (release-blocking) is DONE.** ✅ 1.1 ✅ 1.2 ✅ 1.3
 
-**Next up →** Phase 2 (DataRegistry) — the most important architectural
-correction. Begin 2.1: create `domain/privacy/registry.py` (or a top-level
-`data_registry.py` consistent with the current flat layout) defining the frozen
-`DataCategory` dataclass and a registry. Inventory the existing persistent
-stores first (recordings, drafts JSON, history DB, voices, profiles, personas,
-dictionary, macros, voice presets, app state, wake models, MCP config, graph,
-debug log, sidecar raw log, overlay state, model/runtime metadata, temp audio)
-by grepping for their path helpers in `app_paths.py` / `server.py`, then
-register each with real `paths`/`size`/`wipe`/`verify` callables. Land it as
-several small PRs: (a) the dataclass + empty registry + tests that fail if a
-category is missing metadata, (b) register the read-only fields for all
-categories, (c) wire `size`/`paths`, (d) wire `wipe`/`verify` and back
-`_perform_privacy_wipe` with it. Keep the existing wipe behavior green
-throughout.
+**Next up →** Phase 2 (DataRegistry) — begin 2.1a (below).
+
+### Iteration 4 — 2026-07-17 — Phase 2.1a (registry mechanism)
+
+**Changed.**
+- `data_registry.py` (new, top-level flat module — stdlib only, no FastAPI, so
+  routes/domain/tests can all import it; Phase 6 relocates it to
+  `domain/privacy/registry.py`):
+  - Frozen `DataCategory` with the exact fields the plan specifies
+    (id/label/owner/sensitivity/paths/retention/wipe_modes/included_in_report/
+    included_in_export/may_contain_user_text/size/wipe/verify), plus frozen
+    `WipeResult` and `VerificationResult`.
+  - Controlled vocabularies `OWNERS`, `SENSITIVITIES`, and the three explicit
+    wipe modes (`clear_conversations` ⊆ `clear_personal_data` ⊆ `factory_reset`).
+  - `validate_category()` — the enforcement point behind the Phase 2 DoD:
+    rejects blank id/label/retention, bad owner/sensitivity, unknown wipe
+    modes, non-callable `paths`/`size`/`wipe`/`verify`, non-bool flags, and
+    **mode-nesting violations** (a category in an inner mode must also be in the
+    outer modes that contain it).
+  - `DataRegistry` (register/get/all/ids/in_mode/len) that validates on
+    register and rejects duplicate ids; a process-wide empty `REGISTRY`.
+- `tests/test_data_registry.py` (new): 18 tests covering valid registration and
+  every rejection path, including the nesting invariant and duplicate ids.
+
+**Why.** Phase 2.1 DoD: "adding a new persistent store requires registering it,
+and tests fail if its lifecycle metadata is incomplete." This chunk builds the
+mechanism + the failing-on-incomplete-metadata guarantee before any concrete
+category is registered, so 2.1b can register stores against a proven gate.
+
+**Verification.** `py_compile data_registry.py`; `pytest tests/test_data_registry.py`
+→ 18 passed. No existing modules touched, so no regression surface.
+
+**Next up →** Phase 2.1b: register every persistent category's *read-only*
+fields (id/label/owner/sensitivity/retention/wipe_modes/flags) — no live
+`paths`/`size`/`wipe`/`verify` yet (stub them, e.g. `lambda: []`, `lambda: 0`,
+returning not-yet-implemented results) so the set of categories and their
+metadata is reviewable on its own. Inventory the real stores by grepping path
+helpers in `app_paths.py` and `server.py` (`get_user_data_path`,
+`get_voices_path`, `get_graph_path`, history DB path, recordings dir, drafts
+file, profiles, personas, dictionary, macros, voice presets, app-state/first-run
+marker, wake models/training artifacts, MCP config, debug log, overlay state,
+model/runtime metadata, temp audio). Add a test asserting the registry contains
+the full expected id set so a forgotten store fails CI. Keep each category's
+`may_contain_user_text` and `sensitivity` honest.
