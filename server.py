@@ -3315,6 +3315,27 @@ def _perform_privacy_wipe(wipe_voices: bool):
     }
 
 
+# Phase 1.1 (remediation): map a truthful wipe result to an honest HTTP status.
+# An unsuccessful wipe must never return 200. The structured payload
+# (ok/error/message/cleared/postconditions) is preserved unchanged.
+_WIPE_ERROR_STATUS = {
+    "wipe_already_running": 409,      # a wipe is already running -> conflict
+    "pipeline_did_not_quiesce": 409,  # pipeline could not be quiesced -> conflict
+    "output_did_not_quiesce": 503,    # a subsystem could not drain -> unavailable
+}
+
+
+def _wipe_status_code(result: dict) -> int:
+    """200 only when every postcondition passed; otherwise an honest error.
+
+    ok is False with no recognized pre-deletion abort code means deletion ran
+    but a postcondition (or verification) did not hold -> 500.
+    """
+    if result.get("ok"):
+        return 200
+    return _WIPE_ERROR_STATUS.get(result.get("error"), 500)
+
+
 @app.post("/privacy/wipe")
 async def privacy_wipe(request: PrivacyWipeRequest = PrivacyWipeRequest()):
     """Delete app-generated conversational data: drafts, the draft-history
@@ -3323,8 +3344,12 @@ async def privacy_wipe(request: PrivacyWipeRequest = PrivacyWipeRequest()):
     intentionally NOT touched; cloned voices are removed only when
     explicitly requested. Note: without at-rest encryption this is logical
     deletion — nothing readable remains through the app or its files, but
-    SSD-level forensic erasure is not promised."""
-    return await run_in_threadpool(_perform_privacy_wipe, request.wipe_voices)
+    SSD-level forensic erasure is not promised.
+
+    Returns an honest HTTP status (see _wipe_status_code): a wipe that did not
+    fully succeed never reports 200."""
+    result = await run_in_threadpool(_perform_privacy_wipe, request.wipe_voices)
+    return JSONResponse(status_code=_wipe_status_code(result), content=result)
 
 
 @app.get("/mcp/status")
