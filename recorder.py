@@ -8,6 +8,7 @@ from typing import Callable, Optional
 import numpy as np
 import sounddevice as sd
 
+from audio_device_resolver import resolve_input_device
 from audio_ducker import AudioDucker
 from audio_gate import TrailingSilenceDetector
 from utils import load_profile
@@ -93,6 +94,20 @@ class AudioRecorder:
                 configured_device = config.get("input_device_index", -1)
                 if isinstance(configured_device, int) and configured_device >= 0:
                     device = configured_device
+                    # The stored index is only a hint — PortAudio indices shift
+                    # after reboots/USB churn. Resolve the saved fingerprint to
+                    # the device's current index; an unresolvable fingerprint
+                    # keeps the hint, and the existing fallback below still
+                    # rescues a failed open with the system default.
+                    fingerprint = config.get("input_device_fingerprint")
+                    resolved = resolve_input_device(fingerprint) if fingerprint else None
+                    if resolved is not None:
+                        if resolved != configured_device:
+                            logging.info(
+                                f"Input device '{fingerprint.get('name')}' moved from index "
+                                f"{configured_device} to {resolved}; using the current index."
+                            )
+                        device = resolved
                 if config.get("audio_ducking", False):
                     duck_level_percent = float(config.get("audio_ducking_level_percent", 18.0))
                     restore_fallback_percent = float(

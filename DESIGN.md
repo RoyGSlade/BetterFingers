@@ -8,11 +8,29 @@ planning doc (`MASTER_PLAN`, `REMAINING_WORK`, `VOICE_CONTROL_PLAN`, `PERSONA_FO
 `MARKETING_PLAN`, and the external product audit of 2026-07). Historical detail lives in
 git history; only what defines the product or remains to be done lives here.
 
-Last reconciled against the codebase: **2026-07-09** (main @ `2e24c72`). The cross-test
-state leak that made `test_token_concepts.py::Phase2PassThroughTest` fail in the full run
-is **fixed** (autouse reset of `server.transcriber`/`tts_engine` in
-[`tests/conftest.py`](tests/conftest.py)); the model-free subset that reproduced it now
-runs fully green (600 passed). Plus 19+ Playwright e2e tests.
+Last reconciled against the codebase: **2026-07-14** (main @ `0770f9a`; this reconciliation
+was done from the `fix/review-blockers` branch, which several sessions are landing P0/P1
+review fixes onto concurrently — see the "in flight" note below). The cross-test state leak
+that made `test_token_concepts.py::Phase2PassThroughTest` fail in the full run is **fixed**
+(autouse reset of `server.transcriber`/`tts_engine` in
+[`tests/conftest.py`](tests/conftest.py)).
+
+**Do not hard-code test totals in this file.** The suite grows every week (it was ~600
+in July, it is over 1000 now) and a stale number here is worse than no number — run
+`python3 -m pytest -q --collect-only` for the current count and `cd app && npx playwright
+test --list` for e2e.
+
+**CI is currently RED.** The `ci` GitHub Actions job has failed on each of the last three
+merged PRs (#48, #49, #50) on `main`; `codeql` is green. `ci-red-matrix` is actively
+diagnosing root cause and tightening branch protection — until that lands, a green local
+`pytest` run does not mean a green CI run, and the M1 gate (§6.1) cannot be claimed as
+progressing while CI is red on main.
+
+**In flight right now (2026-07-14):** this branch (`fix/review-blockers`) is a shared
+working tree for multiple concurrent sessions closing out review findings — see §3.1 for
+the live list. Sections below reflect what has actually landed in git, not what is
+mid-edit; check `git log`/`git diff` for the authoritative current state of any file this
+doc references.
 
 ---
 
@@ -46,6 +64,17 @@ transformation from **impressive** to **dependable**.
 > benchmark in §6.** Meetings mode, brainstorm mode, MCP tool execution, further cloning
 > polish, and large visual redesigns are all explicitly parked (§14).
 
+**Known deviation, flagged not hidden:** real cloned-voice synthesis (Kokoro→Kanade voice
+conversion, §10 M5 U6) shipped 2026-07-14 while the M1 reliability benchmark (§6.1) is
+still `needs-hardware` — i.e. not green. That is exactly the class of work this rule exists
+to defer. It shipped anyway because it closed a previously-spec'd, already-scoped U6 gap
+rather than opening new surface area, but that is a judgment call, not an exemption written
+into the rule as stated above. Recorded here so it can be explicitly ratified (amend the
+rule to distinguish "finish a started, scoped item" from "new top-level mode") or treated
+as a rule violation to walk back (flag it experimental-only, gate it behind a flag until M1
+is green). Until one of those happens, treat the rule as **not currently being followed**,
+not as a clean gate.
+
 ### Positioning (from the marketing plan, kept as product constraints)
 
 - **Private by design** — 100% local STT/LLM/TTS; only model downloads touch the network;
@@ -66,8 +95,8 @@ Electron (app/)                          Python sidecar (repo root)
 │         global hotkeys (uiohook-napi), ├─ transcriber      faster-whisper (+confidence)
 │         sidecar spawn/health/restart,  ├─ llm_engine.py    llama-server client, personas,
 │         clipboard + injection IPC      │                   chunking, stitching, foundry
-├─ preload/  auth token + backendOrigin  ├─ tts_engine.py    Kokoro (+blend/modulation)
-│            bridge                      ├─ recorder / audio_gate / hotkey_manager
+├─ preload/  contextBridge boundary      ├─ tts_engine.py    Kokoro (+blend/modulation)
+│            (see note below)            ├─ recorder / audio_gate / hotkey_manager
 └─ renderer/ dashboard (4 tabs today),   ├─ dictionary / macros / dictation_commands
    overlay.html, review-overlay.html     ├─ voice_commands / voice_edit_commands /
                                          │  utterance_history / voice_preview
@@ -82,6 +111,17 @@ Separation of concerns is non-negotiable: Electron owns windows/tray/overlays/ho
 clipboard/injection; Python owns STT/LLM/TTS/models/recordings/personas/privacy/history.
 The REST+WS boundary stays inspectable and version-gated (`schema_version` handshake gates
 the renderer).
+
+**Preload boundary note (was stale — this diagram previously said the preload script
+exposed the auth token directly to the renderer; that is no longer an accurate
+description and is being actively tightened).** `sqlite-canon-ipc` is mid-refactor
+replacing the renderer's generic `backendRequest` proxy: destructive/sensitive routes
+(privacy wipe, model delete, voice delete, job cancel, draft send, health) are moving to
+typed IPC channels with payload schema validation and a required `confirm: true` for
+destructive ones; the remaining generic channel validates against an exact
+(method, route) allowlist instead of prefix matching. Confirm the exact shape of
+`preload.js`/`ipc.js` in git before restating a security claim about it here — it is
+changing under active review right now.
 
 Packaging: electron-builder (NSIS / AppImage / DMG targets defined), PyInstaller backend
 build stage (`app/scripts/build-backend.js`), pinned-Linux CI screenshot job
@@ -131,8 +171,10 @@ the standard route. 61 dedicated tests; verified end-to-end live.
 cache-keyed). Modulation DSP (pitch/energy/warmth/brightness, pause styles). Named voice
 presets with API + UI. Persona-aware voice resolution (preset XOR inline, tested).
 Clone QA gate (`voice_clone_qa.py`: duration/noise/clipping checks, hard consent
-requirement, provenance `.meta.json` sidecar) — **no actual cloning synthesis engine is
-installed** (see §11).
+requirement, provenance `.meta.json` sidecar). **Cloning synthesis is now real but
+experimental** (Kokoro→Kanade voice conversion, shipped 2026-07-14, see §10 M5 U6 and the
+stabilization-rule note in §1) — treat it as pre-M1 experimental scope, not a finished
+1.0 feature; `clone-review-loop` is still working through its review findings (§3.1).
 
 **Voice control (scopes 1–3 + shells).** `utterance_history.py` ring buffer;
 `voice_commands.py` intent parser (context-gated, confidence-thresholded, hardcoded
@@ -148,12 +190,61 @@ model recommender with RAM-fit guarantees + informational alternatives catalog
 (never silently downloadable), Gemma 4 family in the catalog, WER scoring core (`wer.py`,
 stdlib Levenshtein) + golden-audio fixture format (§13).
 
-**Quality infrastructure.** 639 Python tests; Playwright Electron suites (smoke walk +
-review-overlay flows) that found real shipped bugs (review-overlay 401s, bootstrap
-cold-start race — both fixed); packaged-app screenshot CI on pinned ubuntu-24.04;
-all 22 findings of the post-merge gap review closed (privacy wipe completeness, persona
-prompt preservation, window lifecycle, history retention, deepcopy hardening, dead deps
-removed, race guards, HTML escaping, corrupt-store `.corrupt` quarantine, etc.).
+**Quality infrastructure.** A large and growing Python test suite (see the note at the top
+of this doc for how to get the current count — do not hard-code it); Playwright Electron
+suites (smoke walk + review-overlay flows) that found real shipped bugs (review-overlay
+401s, bootstrap cold-start race — both fixed); packaged-app screenshot CI on pinned
+ubuntu-24.04. The post-merge gap review's original 22 findings are closed (privacy wipe
+completeness, persona prompt preservation, window lifecycle, history retention, deepcopy
+hardening, dead deps removed, race guards, HTML escaping, corrupt-store `.corrupt`
+quarantine, etc.), but **that review has since reopened**: shipping voice cloning and
+SQLite-canonical drafts surfaced a new round of findings that are not yet closed — see
+§3.1. Do not restate "all findings closed" until §3.1 is empty.
+
+### 3.1 Unresolved review findings (live as of 2026-07-14)
+
+Tracked here instead of only in session chat so this file stays the single source of
+truth. Remove a line only once its fix has actually landed in git (check the log, not the
+session's self-report).
+
+- **Voice-wipe postcondition** — `get_voices_dir` conflated "look up the path" with
+  "create the directory," so a privacy wipe could recreate the directory it just deleted.
+  Fix in progress (`voice-wipe-fix`): split into `get_voices_path` (pure lookup) /
+  `ensure_voices_dir` (mkdir), used correctly by wipe vs. write paths.
+- **Send/wipe race** — an in-flight draft send can re-persist history *after* a privacy
+  wipe deletes it. Fix in progress (`wipe-send-race`): new `output_coordinator.py`
+  (`OutputCoordinator`) with an active-send registry, cancellation event, and exclusive
+  lease; wipe drains through it before deleting, aborting (not deleting) on timeout.
+- **TTS unload race** — the TTS runtime's read lease doesn't cover worker-thread
+  generation/playback, so an unload can race active speech. Fix in progress
+  (`tts-lease-playback`): extend the lease to cover the whole worker-thread lifetime.
+- **Privacy wipe doesn't drain TTS/cloning** — wipe needs to stop playback, cancel any
+  in-flight voice-clone conversion, clear the TTS cache, and verify idle postconditions
+  before it deletes. Fix in progress (`tts-wipe-drain`); sequenced after the lease fix
+  above lands (same worker loop).
+- **Voice-cloning review findings** — availability check, job-state surfacing (`speak()`
+  currently returns `ok:true` at queue admission with no `queued→loading→synthesizing→
+  converting→playing→completed|failed` visibility to the renderer), TTS cache key missing
+  a reference fingerprint (sample SHA-256 + mtime + engine/model revision — otherwise
+  re-cloning the same name can replay stale audio), atomic saves, voice ID validation, STT
+  coordinator interaction. In progress (`clone-review-loop`, feeding job-state work to
+  `tts-lease-playback` once its lease work is safe to build on).
+- **Renderer IPC surface** — generic `backendRequest` proxy replaced with a typed IPC
+  layer for destructive/sensitive routes (privacy wipe, model delete, voice delete, job
+  cancel, draft send, health): payload schema validation, `confirm: true` required for
+  destructive calls, exact `(method, route)` allowlist for the rest. In progress
+  (`sqlite-canon-ipc`), see the preload note in §2.
+- **SQLite as canonical draft store** — JSON draft storage becomes a one-time
+  import/backup rather than the source of truth. In progress (`sqlite-canon-ipc`).
+- **Windows dependency/release qualification** — `requirements-win.lock` needs
+  `--require-hashes` in CI + a drift check + an optional-cloning-deps manifest; release
+  qualification CI (NSIS install/upgrade/uninstall, AppImage, checksums, provenance) is
+  not yet built. In progress (`win-lock-release`).
+- **CI is red** — see the note at the top of this doc; `ci-red-matrix` is diagnosing root
+  cause across the last three merged PRs.
+- **Torch version drift** — `requirements-linux.lock` pins `torch==2.13.0` but the dev
+  venv actually runs `2.12.1+cu130`; `tools/setup_voice_cloning.py` needs to stop being
+  able to resolver-upgrade torch out from under the lock.
 
 **LLM cleanup reliability (found + fixed live, 2026-07-10).** `_call_api` used a fixed 30s
 HTTP read timeout with `DEFAULT_MAX_OUTPUT_TOKENS=1100`. On the CPU floor tier a longer
@@ -210,6 +301,37 @@ M6–M7 make it **safe to extend**; M8+ is post-1.0.
 Operational note: this file is the roadmap, but work items should be mirrored into GitHub
 issues with milestone labels (`core-loop`, `data-safety`, `platform/*`, `security`,
 `needs-hardware`, `needs-manual-qa`) — markdown plans drift; issues have owners and state.
+
+### 4.1 Scope split — what gates what
+
+The milestone table above is the binding *order*; this is the same work grouped by
+*release stage*, so a "why isn't X done yet" question has one answer instead of a
+milestone-number lookup.
+
+**Public-alpha blockers** (must be true before anyone outside the team runs a build):
+CI green on `main` (currently red, §3.1); all §3.1 findings closed; M0 release-integrity
+baseline (checksums, SBOM, provenance, Windows build verified end-to-end); M1 reliability
+benchmark run to a green gate on real hardware; M2 injection matrix filled for the top-10
+apps on at least one platform; the privacy wipe verifiably leaves nothing behind
+(the send/wipe race and TTS/cloning drain findings in §3.1 block this specifically).
+
+**Beta work** (needed before a wider public release, not before a signed alpha): M3 voice
+control completion (wake word, settings UI, safety invariants); M4 DataRegistry +
+at-rest protection; remainder of M5 (persona editor polish, model catalog remainder,
+golden-audio WER gate, screenshot QA baselines); cloning promoted from experimental to
+supported (export routes, native backend blending, audible disclosure marker — see the
+stabilization-rule note in §1 for why it shipped early).
+
+**1.0 work**: M6 architecture decomposition (`server.py`/`main.js` split, input/audio/model
+coordinators); M7 automation & platform (MCP tool invocation, per-app injection profiles,
+cross-vendor GPU builds, electron-updater, published capability matrix); the full §11 UI
+paradigm land (design tokens → status rail → Stream → three-space navigation).
+
+**Post-1.0 experiments** (§14, explicitly parked — do not build before the M1 gate is
+actually green, not just "harness built"): Meetings mode (U10), Brainstorm mode (U11),
+Threads/Echo cards, sqlite-vec semantic search, MCP write automation beyond M7's gated
+core, further cloning polish beyond the M5 engine integration, large visual redesigns
+beyond §11's incremental path.
 
 ---
 
@@ -749,7 +871,8 @@ env respected end-to-end). Linux llama-server lives at
 
 ### Automated gates (every session)
 
-- `python3 -m pytest -q` — full Python suite green (639 tests as of this writing).
+- `python3 -m pytest -q` — full Python suite green. **CI is currently red on `main`** (see
+  the top of this doc and §3.1) — a green local run does not mean this gate is met.
 - `cd app && npm run test:unit` — Node's built-in runner over `app/tests/**/*.test.mjs`
   (pure renderer-helper units, e.g. the draft-summary formatter). Fast, no Electron.
 - `cd app && npx playwright test` — 19+ e2e (review-overlay spec needs a local LLM +
