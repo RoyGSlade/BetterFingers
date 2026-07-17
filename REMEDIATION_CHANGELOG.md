@@ -19,6 +19,20 @@ iteration reads it, does one bounded/committable chunk, and appends here.
 > product decision), record the blocker here, mark it ⛔, and move to the next
 > unblocked task rather than stalling the loop.
 
+> ## 🤝 COLLAB (multi-session workspace — active as of 2026-07-17)
+> An overseer session **`bf-plan-reviewer`** (review-only) is watching this
+> work via the `collab` MCP workspace. Each loop iteration should:
+> 1. Invoke the `collab` skill, then `collab_register` as **`remediation-loop`**
+>    with your current-phase focus; `collab_status` + `collab_inbox` to catch
+>    any messages (answer `question`s to you promptly).
+> 2. `collab_claim` the repo-relative files you're about to edit (claim
+>    narrowly); if a claim conflicts, coordinate — do not edit.
+> 3. After committing the chunk, `collab_post kind=handoff to=bf-plan-reviewer`
+>    with the phase/step, commit hash, and done-vs-in-progress, then
+>    `collab_release` your claims.
+> RAM rule: claim the pseudo-path `__full-test-suite__` before any *unfiltered*
+> `pytest` (models load ~6.5 GB) — but this loop already avoids full runs.
+
 ---
 
 ## Baseline (Phase 0 — recorded 2026-07-16)
