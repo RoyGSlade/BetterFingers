@@ -67,6 +67,9 @@ async function proxyRequest(method, url, body, timeoutMs = 2500) {
     const error = new Error(errorMessageFromBody(res.body, url, res.status));
     error.status = res.status;
     error.detail = res.body && res.body.detail;
+    // Phase 1.2: preserve the full parsed body so callers can inspect a
+    // structured error payload (e.g. the wipe's cleared/postconditions).
+    error.body = res.body;
     throw error;
   }
   return res.body;

@@ -94,6 +94,7 @@ import {
   fetchWakeTrainStatus,
   importWakeModel,
 } from './api/backend.js';
+import { summarizeWipeFailure } from './lib/wipeSummary.mjs';
 
 const backendStatusEl = document.getElementById('backendStatus');
 const backendDetailEl = document.getElementById('backendDetail');
@@ -3296,16 +3297,35 @@ async function handleWipeData() {
       '? This cannot be undone.',
   );
   if (!confirmed) return;
+  const messageEl = document.getElementById('privacyMessage');
   if (button) button.disabled = true;
   try {
     const result = await wipeData(wipeVoices);
-    const cleared = result?.cleared || {};
+    // Phase 1.2: defense in depth. Even on HTTP 200, never claim success
+    // unless the backend proved every postcondition held. A failed wipe now
+    // returns a non-2xx status (see server.py _wipe_status_code) and lands in
+    // the catch below, but a 200-with-ok:false must never slip through here.
+    if (!result?.ok) {
+      const summary = summarizeWipeFailure(result);
+      throw new Error(
+        `${result?.message || 'The privacy wipe did not complete.'} ${summary}`.trim(),
+      );
+    }
+    const cleared = result.cleared || {};
     showToast(`Data wiped (${cleared.drafts ?? 0} drafts cleared).`, 'success');
-    setMessage(document.getElementById('privacyMessage'), 'Your data was wiped.', 'success');
+    setMessage(messageEl, 'Your data was wiped.', 'success');
     await refreshPrivacy();
     await refreshDrafts().catch(() => {});
   } catch (error) {
-    showToast(`Wipe failed: ${error.message}`, 'danger');
+    // Failure arrives either as a thrown non-2xx (error.body carries the wipe
+    // payload) or the defensive throw above (message already summarized).
+    // Surface the truthful detail: what remained and whether retry is safe.
+    const payload = error?.body;
+    const base = error?.message || 'The privacy wipe did not complete.';
+    const detail = payload ? summarizeWipeFailure(payload) : '';
+    showToast(`Wipe failed: ${base}`, 'danger');
+    setMessage(messageEl, detail ? `${base} ${detail}` : base, 'danger');
+    await refreshPrivacy().catch(() => {});
   } finally {
     if (button) button.disabled = false;
   }

@@ -45,8 +45,9 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
   - ⬜ 0.b Regression-test placeholders for every confirmed issue
 - **Phase 1 — Truthful privacy wipe** 🚧 (release blocking)
   - ✅ 1.1 Correct the HTTP contract (`/privacy/wipe` no longer 200 on failure)
-  - ⬜ 1.2 Make the renderer defensive (`if (!result?.ok) throw`; show what/why/retry)
-  - 🚧 1.3 End-to-end contract tests (route-level status test added; more cases pending)
+  - ✅ 1.2 Make the renderer defensive (`if (!result?.ok) throw`; show what/why/retry)
+  - 🚧 1.3 End-to-end contract tests (route status test + renderer summary test done;
+    remaining failure-injection cases — history-DB recreation fails, voice deletion fails — pending)
 - **Phase 2 — Unified data-lifecycle (DataRegistry)** ⬜ (release blocking)
 - **Phase 3 — Support-report privacy** ⬜ (release blocking)
 - **Phase 4 — Runtime & process boundaries** ⬜ (release blocking)
@@ -96,3 +97,47 @@ handler in `app/src/renderer/main.js`, ensure it throws unless
 `result?.ok === true`, and surface what was deleted / what was not / which
 postcondition failed / whether retry is safe. Never display "Your data was
 wiped" unless `ok === true`.
+
+### Iteration 2 — 2026-07-17 — Phase 1.2 (renderer defensive)
+
+(Note: a first attempt at this chunk on 2026-07-16 was interrupted before any
+edit; it made read-only investigation only. Nothing to revert. Resumed here.)
+
+**Context found.** `wipeData()` → `postJson` → `proxyRequest` in
+`app/src/renderer/api/backend.js` already *throws* on any non-2xx, and
+`errorMessageFromBody` reads `body.message` — so Phase 1.1's new 409/500/503
+statuses already route a failed wipe into `handleWipeData`'s catch. Two gaps
+remained: (1) the success path set "Your data was wiped." **without checking
+`result.ok`** (no defense against a 200-with-ok:false), and (2) failures did
+not surface *what* remained / which postcondition failed / retry safety.
+
+**Changed.**
+- `app/src/renderer/lib/wipeSummary.mjs` (new): pure, DOM-free helper —
+  `summarizeWipeFailure()`, `failedPostconditions()`, `isPreDeleteAbort()`,
+  `WIPE_PRE_DELETE_ABORTS`. Same testable pattern as `lib/draftSummary.mjs`.
+  Distinguishes pre-deletion aborts ("Nothing was deleted. Safe to retry.")
+  from partial failures (lists the postconditions that did not verify, counts
+  leftover recordings, notes retry is safe).
+- `app/src/renderer/api/backend.js`: `proxyRequest` now attaches `error.body`
+  (the full parsed payload) to thrown non-2xx errors so callers can inspect
+  structured detail. Minimal additive change; no behavior change for existing
+  callers.
+- `app/src/renderer/main.js`: `handleWipeData` now (a) throws unless
+  `result?.ok === true` even on HTTP 200 (defense in depth), and (b) renders a
+  truthful failure message via `summarizeWipeFailure` from either the returned
+  body or `error.body`. "Your data was wiped." is shown only when `ok === true`.
+- `app/tests/wipe-summary.test.mjs` (new): 5 unit tests for the helper.
+
+**Why.** Phase 1.2 DoD: never display success unless `result.ok === true`; show
+what was/wasn't deleted, which postcondition failed, and retry safety.
+
+**Verification.** `node --check` on all three changed JS files; `node --test`
+on the new + existing renderer suites → **27 passed, 0 failed**. (Full Electron
+E2E not run inside the loop; the pure helper is covered by unit tests.)
+
+**Next up →** Phase 1.3: close the remaining end-to-end contract-test cases so
+Phase 1 can be marked done. Add backend failure-injection tests proving
+`ok:false` + the right HTTP status when (a) history-DB recreation fails and
+(b) voice deletion fails (patch `history_store.wipe_database` /
+`shutil.rmtree` to fail, assert 500 through the route). Then flip Phase 1 to ✅
+and begin Phase 2 (DataRegistry).
