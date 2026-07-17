@@ -87,9 +87,14 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
   - 🚧 2.1 DataRegistry
     - ✅ 2.1a `DataCategory`/`WipeResult`/`VerificationResult` types, controlled
       vocabularies, mode-nesting validation, `DataRegistry`, empty `REGISTRY`
-    - ⬜ 2.1b Register every persistent category's read-only fields
-    - ⬜ 2.1c Wire real `paths` + `size` callables
-    - ⬜ 2.1d Wire `wipe`/`verify`; back `_perform_privacy_wipe` with the registry
+    - ✅ 2.1b Register all 21 persistent categories' read-only metadata
+      (`data_categories.py`) + hard-coded full-id-set CI guard
+    - ⬜ 2.1c Wire real `paths` + `size` callables (from `app_paths`/`server` helpers)
+    - ⬜ 2.1d Wire `wipe`/`verify`; back `_perform_privacy_wipe` with the registry.
+      **Also here:** review finding #3-residual — normalize the
+      `cleared.history_db_wiped` dict server-side (or teach `isDeletionOutcome`
+      to accept a `{ok:true}`/`removed[]` dict) so the history DB appears in the
+      renderer's "already cleared" list. Deferred here to avoid throwaway JS.
   - ⬜ 2.2 Explicit wipe modes (conversations / personal / factory reset) + UI preview
   - ⬜ 2.3 Coordinate every writer via a shared lifecycle gate
   - ⬜ 2.4 Coordinate Electron-owned data over IPC
@@ -289,3 +294,44 @@ renders whatever `summarizeWipeFailure` returns.
 **Next up →** Phase 2.1b (unchanged): register every persistent category's
 read-only metadata against the validated registry, with a test asserting the
 full expected id set so a forgotten store fails CI.
+
+### Iteration 6 — 2026-07-17 — Phase 2.1b (category inventory)
+
+Overseer VERIFIED `9193da2` and left one non-blocking residual on finding #3
+(`cleared.history_db_wiped` is a dict, so the history DB never shows in the
+"already cleared" list). Per their steer, **deferred to 2.1d** (recorded above)
+to avoid patching JS that 2.1d may make moot, and proceeded with 2.1b.
+
+**Changed.**
+- `data_categories.py` (new): the concrete inventory — **21 categories** covering
+  the plan's list plus `downloaded_models` (opt-in) and `support_report`. Each
+  has honest `owner`/`sensitivity`/`retention`/`wipe_modes`/flags;
+  `paths`/`size`/`wipe`/`verify` are stubbed (2.1c/2.1d wire them). Wipe-mode
+  membership uses the nesting-valid sets (conversations ⊆ personal ⊆ factory;
+  downloaded_models = none). `build_registry()` returns a fresh validated
+  registry. Electron-owned stores (`sidecar_raw_log`, `overlay_position`,
+  `overlay_appearance`) declared `owner="electron"` for the Phase 2.4 IPC path.
+- `tests/test_data_categories.py` (new, 11 tests): **hard-coded** EXPECTED_IDS
+  completeness guard (a forgotten/renamed store fails CI), explicit checks for
+  the easy-to-forget stores the reviewer named, and metadata-honesty checks
+  (electron ownership, `may_contain_user_text` for text stores vs audio/settings,
+  conversation-data-in-every-mode, settings-only-on-factory-reset,
+  downloaded-models-opt-in).
+
+**Why.** Phase 2.1 DoD: adding a store must require registration and fail tests
+if incomplete. 2.1a built the gate; 2.1b registers every store through it with a
+CI guard so the inventory can't silently drift.
+
+**Verification.** `py_compile data_categories.py`; `pytest tests/test_data_categories.py`
+→ 11 passed. No existing modules imported/changed → zero regression surface.
+
+**Next up →** Phase 2.1c: replace the stub `paths`/`size` callables with real
+ones. Map each category id to its filesystem path(s) via `app_paths.py` and the
+`server.py` helpers (`get_user_data_path`, `get_voices_path` (voices),
+`get_graph_path` (graph_data), the history DB path + WAL/SHM, recordings dir,
+draft_history.json, profiles/personas/dictionary/macros/presets files, app-state
+/first-run marker, wake models dir, MCP config, debug log). Give `size` a shared
+"sum of existing paths" helper. Electron-owned paths (sidecar log, overlay state)
+stay stubbed until 2.4's IPC exists — note that explicitly. Add tests using a
+temp data dir (patch `get_user_data_path`) asserting paths resolve under the
+data root and size sums real bytes.
