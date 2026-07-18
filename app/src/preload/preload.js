@@ -7,6 +7,20 @@ const api = {
   // method/path/size allowlist. Returns { ok, status, body } or { ok:false, error }.
   backendRequest: (method, path, body, timeoutMs) =>
     ipcRenderer.invoke('backend:request', { method, path, body, timeoutMs }),
+  // Typed operations: destructive/sensitive routes are refused by the generic
+  // proxy and only reachable through these fixed-shape channels.
+  fetchHealth: (timeoutMs) => ipcRenderer.invoke('backend:fetch-health', { timeoutMs }),
+  sendDraft: (id, { action, openChat, allowResend } = {}, timeoutMs) =>
+    ipcRenderer.invoke('backend:send-draft', { id, action, openChat, allowResend, timeoutMs }),
+  wipePrivacyData: ({ wipeVoices, confirm } = {}, timeoutMs) =>
+    ipcRenderer.invoke('backend:wipe-privacy', { wipeVoices, confirm, timeoutMs }),
+  deleteLlmModel: (modelId, { confirm } = {}, timeoutMs) =>
+    ipcRenderer.invoke('backend:delete-llm-model', { modelId, confirm, timeoutMs }),
+  deleteWhisperModel: (modelSize, { confirm } = {}, timeoutMs) =>
+    ipcRenderer.invoke('backend:delete-whisper-model', { modelSize, confirm, timeoutMs }),
+  deleteVoice: (voiceId, { confirm } = {}, timeoutMs) =>
+    ipcRenderer.invoke('backend:delete-voice', { voiceId, confirm, timeoutMs }),
+  cancelJob: (jobId, timeoutMs) => ipcRenderer.invoke('backend:cancel-job', { jobId, timeoutMs }),
   uploadVoiceSample: (payload) =>
     ipcRenderer.invoke('backend:upload-voice-sample', payload),
   uploadWakeModel: (payload) =>

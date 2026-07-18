@@ -358,27 +358,58 @@ def save_draft_history(changed_draft_id=None):
                 elif mirror_ids:
                     _draft_pending_changed_ids.update(mirror_ids)
 
-def load_draft_history():
-    global next_draft_id
+def _load_draft_history_json(history_file):
+    """Read draft_history.json into a list of draft dicts. Never raises."""
     import json
+    try:
+        with open(history_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return [d for d in data if isinstance(d, dict) and "id" in d]
+    except Exception as exc:
+        logging.exception(f"Failed to load draft history from {history_file}: {exc}")
+    return []
+
+
+def load_draft_history():
+    """Populate the working draft queue at startup, SQLite-first.
+
+    history_store (SQLite) holds complete draft records and is the canonical
+    store; draft_history.json is consulted only as a fallback when the
+    database is empty or unrecoverable. When that fallback is used, the JSON
+    is imported into SQLite once and renamed to a migration backup so it is
+    never read as an authority again — no parallel canonical store.
+    """
+    global next_draft_id
     history_file = os.path.join(get_user_data_path(), "draft_history.json")
-    if os.path.exists(history_file):
+
+    records = []
+    try:
+        history_store.init()
+        if history_store.verify_schema().get("ok"):
+            records = history_store.load_recent_full(limit=MAX_DRAFT_HISTORY)
+    except Exception as exc:
+        logging.warning(f"history_store unavailable at startup, falling back to JSON: {exc}")
+        records = []
+
+    if not records and os.path.exists(history_file):
+        records = _load_draft_history_json(history_file)
         try:
-            with open(history_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, list):
-                with draft_lock:
-                    draft_queue.clear()
-                    max_id = 0
-                    for d in data:
-                        if isinstance(d, dict) and "id" in d:
-                            draft_queue.append(d)
-                            if d["id"] > max_id:
-                                max_id = d["id"]
-                    next_draft_id = max_id + 1
-            logging.info(f"Loaded {len(draft_queue)} drafts from history, next draft ID is {next_draft_id}")
+            history_store.migrate_from_json(history_file)
+            os.replace(history_file, history_file + ".migrated")
         except Exception as exc:
-            logging.exception(f"Failed to load draft history from {history_file}: {exc}")
+            logging.warning(f"JSON->SQLite migration/backup failed: {exc}")
+
+    with draft_lock:
+        draft_queue.clear()
+        max_id = 0
+        for d in records:
+            if isinstance(d, dict) and "id" in d:
+                draft_queue.append(d)
+                if d["id"] > max_id:
+                    max_id = d["id"]
+        next_draft_id = max_id + 1
+    logging.info(f"Loaded {len(draft_queue)} drafts from history, next draft ID is {next_draft_id}")
 
 
 def recover_interrupted_sends():
@@ -1273,6 +1304,9 @@ def speak_text_aloud(text: str):
     if not phrase:
         return
 
+    if _reject_if_wiping("review TTS"):
+        return
+
     profile_name = get_last_active_profile()
     try:
         config = load_profile(profile_name)
@@ -1291,7 +1325,14 @@ def speak_text_aloud(text: str):
     if engine is not None:
         setattr(engine, "_kokoro_quantization", quantization)
         logging.info(f"Speaking text aloud: {redact_user_text(phrase)} (voice={voice_id}, speed={speed}x, quant={quantization})")
-        engine.speak(phrase, speed=speed, voice_hint=voice_id)
+        # Same guard as /tts/speak and /drafts/{id}/tts: a concurrent
+        # destructive TTS reconfiguration (write lease) fails this fast
+        # rather than letting the keyboard path bypass runtime coordination.
+        try:
+            with model_runtime.read_lease("tts"):
+                engine.speak(phrase, speed=speed, voice_hint=voice_id)
+        except RuntimeBusyError:
+            logging.info("Review TTS skipped: TTS runtime is being reconfigured.")
 
 
 def handle_review_tts_shortcut():
@@ -1925,15 +1966,13 @@ async def startup_event():
         except Exception as exc:
             logging.warning(f"Legacy data migration skipped: {exc}")
     loop = asyncio.get_event_loop()
+    # SQLite-first (history_store is canonical); load_draft_history() falls
+    # back to draft_history.json only if the DB is empty/unrecoverable, and
+    # imports+retires the JSON as a migration backup when it does (C8/P1).
     load_draft_history()
     # Reconcile any draft a crashed process left mid-send (→ send_interrupted,
     # outcome unknown) so it is never silently double-sent or silently dropped.
     recover_interrupted_sends()
-    # One-time backfill of the searchable archive from the legacy JSON (C8).
-    try:
-        history_store.migrate_from_json(os.path.join(get_user_data_path(), "draft_history.json"))
-    except Exception as exc:
-        logging.debug(f"history archive migration skipped: {exc}")
     lazy_startup = is_lazy_startup_enabled()
     residency_settings = get_model_residency_settings()
     for component, pinned in residency_settings.items():
@@ -3173,6 +3212,70 @@ def _drain_output_injector(timeout=OUTPUT_DRAIN_TIMEOUT_SECONDS):
                                      timeout=timeout)
 
 
+TTS_DRAIN_TIMEOUT_SECONDS = 10.0
+
+
+def _drain_tts_and_clone(timeout=TTS_DRAIN_TIMEOUT_SECONDS):
+    """Quiesce speech synthesis for a privacy wipe: stop playback, drop any
+    queued speech, join the TTS worker, then wait out any in-flight
+    voice-clone conversion (the chunked-playback generation thread can
+    outlive the worker join and keep converting audio). Only once both are
+    verified idle does it clear the synthesized-audio cache and unload the
+    clone model — mirroring the on-failure-don't-touch-state discipline of
+    the recorder/pipeline/output drains above.
+
+    Returns (ok, results): ok=False means the wipe must ABORT without
+    deleting — a live synthesis or conversion could still hold user
+    text/audio.
+    """
+    import voice_clone_engine
+
+    results = {
+        "tts_playback_stopped": True,
+        "tts_worker_idle": True,
+        "tts_queue_empty": True,
+        "voice_clone_conversion_idle": True,
+        "voice_cache_cleared": True,
+    }
+    engine = tts_engine  # module global; draining must not itself initialize one
+    if engine is not None:
+        try:
+            engine.stop_current()
+        except Exception as exc:
+            logging.warning(f"Privacy wipe: TTS stop_current failed: {exc}")
+            results["tts_playback_stopped"] = False
+        try:
+            drained = engine.drain(timeout=timeout)
+            results["tts_worker_idle"] = bool(drained.get("worker_idle"))
+            results["tts_queue_empty"] = bool(drained.get("queue_empty"))
+        except Exception as exc:
+            logging.error(f"Privacy wipe: TTS drain failed: {exc}")
+            results["tts_worker_idle"] = False
+            results["tts_queue_empty"] = False
+
+    # Backstop beyond the worker join: a chunked-playback generation thread
+    # can still be mid-conversion even after the worker thread itself exits.
+    results["voice_clone_conversion_idle"] = voice_clone_engine.wait_for_conversion_idle(timeout=timeout)
+
+    ok = (results["tts_playback_stopped"] and results["tts_worker_idle"]
+          and results["tts_queue_empty"] and results["voice_clone_conversion_idle"])
+    if not ok:
+        return False, results
+
+    if engine is not None:
+        try:
+            results["voice_cache_cleared"] = bool(engine.clear_audio_cache())
+        except Exception as exc:
+            logging.error(f"Privacy wipe: TTS cache clear failed: {exc}")
+            results["voice_cache_cleared"] = False
+    try:
+        voice_clone_engine.unload()
+    except Exception as exc:
+        logging.debug(f"Privacy wipe: clone unload skipped: {exc}")
+
+    return results["voice_cache_cleared"], results
+
+
 def _perform_privacy_wipe(wipe_voices: bool):
     """Quiesce fully, then delete, then verify — and only claim success when
     every postcondition holds. Reaching the final line is not proof of an
@@ -3180,8 +3283,9 @@ def _perform_privacy_wipe(wipe_voices: bool):
 
     Sets privacy_wipe_in_progress for the whole operation so recordings,
     dictation processing, recovery saves, sends, TTS, and retranscription all
-    refuse while it runs. Aborts (without deleting) if the pipeline cannot be
-    quiesced, so we never delete out from under a running job.
+    refuse while it runs. Aborts (without deleting) if the pipeline, output,
+    or TTS/voice-clone path cannot be quiesced, so we never delete out from
+    under a running job, send, or speech synthesis.
     """
     if privacy_wipe_in_progress.is_set():
         return {"ok": False, "error": "wipe_already_running",
@@ -3246,6 +3350,23 @@ def _perform_privacy_wipe(wipe_voices: bool):
                 "message": "Wipe aborted: a draft send would not finish. Nothing was deleted; try again.",
             }
 
+        # 3b. Drain speech synthesis: new TTS is already rejected via
+        #     privacy_wipe_in_progress (both /tts routes and the keyboard
+        #     review-TTS path check it); now stop playback, drop the queue,
+        #     join the worker, and wait out any in-flight clone conversion.
+        #     Same abort-without-deleting shape as steps 2 and 3.
+        tts_ok, tts_results = _drain_tts_and_clone()
+        cleared.update(tts_results)
+        if not tts_ok:
+            logging.error(f"Privacy wipe aborted: TTS/clone did not quiesce: {tts_results}")
+            return {
+                "ok": False,
+                "error": "tts_did_not_quiesce",
+                "cleared": cleared,
+                "postconditions": {},
+                "message": "Wipe aborted: speech synthesis would not stop. Nothing was deleted; try again.",
+            }
+
         # 4. Delete in-memory queues.
         with draft_lock:
             cleared["drafts"] = len(draft_queue)
@@ -3294,6 +3415,11 @@ def _perform_privacy_wipe(wipe_voices: bool):
             "history_db_wiped": bool(db_result.get("ok")),
             "recordings_dir_empty": not leftover_recordings,
             "leftover_recordings": leftover_recordings[:20],
+            "tts_worker_idle": cleared["tts_worker_idle"],
+            "tts_queue_empty": cleared["tts_queue_empty"],
+            "tts_playback_stopped": cleared["tts_playback_stopped"],
+            "voice_clone_conversion_idle": cleared["voice_clone_conversion_idle"],
+            "voice_cache_cleared": cleared["voice_cache_cleared"],
         }
         if wipe_voices:
             postconditions["voices_absent"] = not get_voices_path().exists()
@@ -3340,11 +3466,14 @@ def _wipe_status_code(result: dict) -> int:
 async def privacy_wipe(request: PrivacyWipeRequest = PrivacyWipeRequest()):
     """Delete app-generated conversational data: drafts, the draft-history
     file, the searchable history database (C8), and persisted raw-audio
-    recordings (C6), plus in-memory queues. Models and profiles are
-    intentionally NOT touched; cloned voices are removed only when
-    explicitly requested. Note: without at-rest encryption this is logical
-    deletion — nothing readable remains through the app or its files, but
-    SSD-level forensic erasure is not promised.
+    recordings (C6), plus in-memory queues. Also drains any active TTS
+    playback and voice-clone conversion and clears the synthesized-audio
+    cache unconditionally (it holds spoken user text regardless of the
+    wipe_voices toggle). Models and profiles are intentionally NOT touched;
+    cloned voice samples are removed only when explicitly requested. Note:
+    without at-rest encryption this is logical deletion — nothing readable
+    remains through the app or its files, but SSD-level forensic erasure is
+    not promised.
 
     Returns an honest HTTP status (see _wipe_status_code): a wipe that did not
     fully succeed never reports 200."""

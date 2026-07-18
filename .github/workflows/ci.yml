@@ -53,9 +53,10 @@ jobs:
           cache: pip
 
       - name: Install PortAudio (Linux)
-        # sounddevice needs the native PortAudio library; without it three
-        # test files fail at *collection*, which aborts the whole pytest run.
-        # The Windows/macOS sounddevice wheels bundle PortAudio.
+        # The sounddevice wheel bundles PortAudio on Windows/macOS but not on
+        # Linux; without the system lib, importing sounddevice raises OSError
+        # and kills collection of test_audio_gate / test_auto_stop_silence /
+        # test_recorder_device.
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libportaudio2
 

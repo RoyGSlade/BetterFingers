@@ -92,6 +92,44 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthT
     return backendProxy.request({ method, path, body, timeoutMs });
   });
 
+  // Typed channels for destructive/sensitive operations. Each maps to exactly
+  // one HTTP method + route with a schema-validated payload (enforced in
+  // backendProxy); the generic channel above refuses these routes outright.
+  handleTrusted('backend:fetch-health', (_event, req) => {
+    const { timeoutMs } = req || {};
+    return backendProxy.fetchHealth({ timeoutMs });
+  });
+
+  handleTrusted('backend:send-draft', (_event, req) => {
+    const { id, action, openChat, allowResend, timeoutMs } = req || {};
+    return backendProxy.sendDraft({ id, action, openChat, allowResend, timeoutMs });
+  });
+
+  handleTrusted('backend:wipe-privacy', (_event, req) => {
+    const { wipeVoices, confirm, timeoutMs } = req || {};
+    return backendProxy.wipePrivacyData({ wipeVoices, confirm, timeoutMs });
+  });
+
+  handleTrusted('backend:delete-llm-model', (_event, req) => {
+    const { modelId, confirm, timeoutMs } = req || {};
+    return backendProxy.deleteLlmModel({ modelId, confirm, timeoutMs });
+  });
+
+  handleTrusted('backend:delete-whisper-model', (_event, req) => {
+    const { modelSize, confirm, timeoutMs } = req || {};
+    return backendProxy.deleteWhisperModel({ modelSize, confirm, timeoutMs });
+  });
+
+  handleTrusted('backend:delete-voice', (_event, req) => {
+    const { voiceId, confirm, timeoutMs } = req || {};
+    return backendProxy.deleteVoice({ voiceId, confirm, timeoutMs });
+  });
+
+  handleTrusted('backend:cancel-job', (_event, req) => {
+    const { jobId, timeoutMs } = req || {};
+    return backendProxy.cancelJob({ jobId, timeoutMs });
+  });
+
   handleTrusted('backend:upload-voice-sample', (_event, req) => {
     const { bytes, filename, name, consent, timeoutMs } = req || {};
     return backendProxy.uploadVoiceSample({ bytes, filename, name, consent, timeoutMs });

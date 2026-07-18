@@ -45,6 +45,7 @@ import json
 import logging
 import os
 import platform
+import re
 import subprocess
 import tempfile
 import threading
@@ -57,6 +58,12 @@ import app_paths
 
 # The cloned-voice id namespace ("cloned_<name>"), as written by POST /tts/clone.
 CLONED_PREFIX = "cloned_"
+
+# Canonical cloned-voice id form, enforced wherever an id names a stored voice
+# (lookup here; creation/deletion/selection/export in server.py). Namespace
+# detection (is_cloned_voice_id) is deliberately looser so a malformed id still
+# routes to the clone path and fails honestly instead of speaking a built-in voice.
+CLONED_ID_PATTERN = re.compile(r"^cloned_[A-Za-z0-9_-]{1,64}$")
 
 # Pinned supply chain (update both together, deliberately).
 KANADE_TOKENIZER_REPO = "https://github.com/frothywater/kanade-tokenizer"
@@ -107,6 +114,12 @@ def is_cloned_voice_id(voice_id) -> bool:
     return isinstance(voice_id, str) and voice_id.strip().lower().startswith(CLONED_PREFIX)
 
 
+def is_valid_cloned_voice_id(voice_id) -> bool:
+    """Whether the id is in the canonical stored-voice form. Every operation
+    that touches a stored voice by id must pass this gate."""
+    return isinstance(voice_id, str) and bool(CLONED_ID_PATTERN.match(voice_id.strip()))
+
+
 def get_voices_path():
     # Pure lookup — never creates the directory (see server.ensure_voices_dir
     # for the sole creation point).
@@ -115,9 +128,9 @@ def get_voices_path():
 
 def find_reference_sample(voice_id):
     """Absolute path of the stored reference sample for a cloned voice id, or
-    None. Only ever resolves inside the voices dir (ids are sanitized at clone
-    time, but never trust a path segment)."""
-    if not is_cloned_voice_id(voice_id):
+    None. Ids must be in canonical form (which cannot contain a path
+    separator); basename() stays as a second line of defense."""
+    if not is_valid_cloned_voice_id(voice_id):
         return None
     safe = os.path.basename(str(voice_id).strip())
     path = os.path.join(str(get_voices_path()), f"{safe}.wav")

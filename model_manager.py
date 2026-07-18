@@ -516,7 +516,13 @@ def _extract_tar_flat(archive_path, dest_dir):
             if member.isfile():
                 target_path = os.path.join(dest_dir, name)
                 if os.path.lexists(target_path) and not os.path.isdir(target_path):
-                    os.remove(target_path)
+                    try:
+                        os.remove(target_path)
+                    except PermissionError:
+                        # Windows refuses to unlink read-only files; clear the
+                        # bit and retry (0o555-installed runtimes are normal).
+                        os.chmod(target_path, 0o644)
+                        os.remove(target_path)
                 member.name = name
                 archive.extract(member, path=dest_dir)
             elif member.issym():

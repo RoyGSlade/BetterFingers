@@ -41,6 +41,23 @@ class ClonedIdTests(unittest.TestCase):
                 self.assertIsNone(voice_clone_engine.find_reference_sample("cloned_../../etc/passwd"))
 
 
+class CanonicalIdTests(unittest.TestCase):
+    def test_valid_canonical_ids(self):
+        for vid in ("cloned_Me", "cloned_My-Voice_2", "cloned_" + "a" * 64):
+            self.assertTrue(voice_clone_engine.is_valid_cloned_voice_id(vid), vid)
+
+    def test_invalid_ids_rejected(self):
+        for vid in ("cloned_", "cloned_a b", "cloned_a.b", "cloned_../x",
+                    "Cloned_Me", "cloned_" + "a" * 65, "af_heart", "", None, 42):
+            self.assertFalse(voice_clone_engine.is_valid_cloned_voice_id(vid), repr(vid))
+
+    def test_lookup_rejects_non_canonical_even_when_file_exists(self):
+        with tempfile.TemporaryDirectory() as d:
+            open(os.path.join(d, "cloned_a b.wav"), "w").close()
+            with patch.object(voice_clone_engine, "get_voices_path", return_value=d):
+                self.assertIsNone(voice_clone_engine.find_reference_sample("cloned_a b"))
+
+
 class AvailabilityTests(unittest.TestCase):
     def test_reports_missing_dependency_with_setup_hint(self):
         real_import = builtins.__import__

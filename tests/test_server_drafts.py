@@ -853,14 +853,51 @@ class ServerDraftTests(unittest.TestCase):
                 "long_text": False
             }
         ])
-        # Stop the global mock so we can test the real load function
+        # Stop the global mock so we can test the real load function. SQLite is
+        # canonical now (P1): mock history_store as empty/unrecoverable so the
+        # load falls back to the JSON fixture below, exactly like a fresh
+        # install migrating pre-existing draft_history.json.
         self._load_draft_patcher.stop()
         try:
-            with patch("server.get_user_data_path", return_value="/tmp"), patch("server.os.path.exists", return_value=True), patch("builtins.open", unittest.mock.mock_open(read_data=mock_data)):
+            with patch("server.get_user_data_path", return_value="/tmp"), \
+                 patch("server.os.path.exists", return_value=True), \
+                 patch("server.os.replace") as mock_load_replace, \
+                 patch("builtins.open", unittest.mock.mock_open(read_data=mock_data)), \
+                 patch("server.history_store.init"), \
+                 patch("server.history_store.verify_schema", return_value={"ok": True}), \
+                 patch("server.history_store.load_recent_full", return_value=[]), \
+                 patch("server.history_store.migrate_from_json", return_value=0):
                 server.load_draft_history()
                 self.assertEqual(len(server.draft_queue), 1)
                 self.assertEqual(server.draft_queue[0]["id"], 42)
                 self.assertEqual(server.next_draft_id, 43)
+                # The JSON fallback is imported into SQLite and retired as a
+                # migration backup, never read as canonical again.
+                mock_load_replace.assert_called_with("/tmp/draft_history.json", "/tmp/draft_history.json.migrated")
+        finally:
+            self._load_draft_patcher.start()
+
+    def test_load_draft_history_prefers_sqlite_over_json(self):
+        # When history_store already has records, it is canonical: the JSON
+        # file must not be read, imported, or touched at all (P1).
+        self._load_draft_patcher.stop()
+        try:
+            with patch("server.get_user_data_path", return_value="/tmp"), \
+                 patch("server.os.path.exists", return_value=True) as mock_exists, \
+                 patch("server.os.replace") as mock_replace, \
+                 patch("builtins.open", unittest.mock.mock_open()) as mock_file, \
+                 patch("server.history_store.init"), \
+                 patch("server.history_store.verify_schema", return_value={"ok": True}), \
+                 patch("server.history_store.load_recent_full", return_value=[{"id": 7, "final_text": "from db"}]), \
+                 patch("server.history_store.migrate_from_json") as mock_migrate:
+                server.load_draft_history()
+                self.assertEqual(len(server.draft_queue), 1)
+                self.assertEqual(server.draft_queue[0]["id"], 7)
+                self.assertEqual(server.next_draft_id, 8)
+                mock_file.assert_not_called()
+                mock_migrate.assert_not_called()
+                mock_replace.assert_not_called()
+                mock_exists.assert_not_called()
         finally:
             self._load_draft_patcher.start()
 

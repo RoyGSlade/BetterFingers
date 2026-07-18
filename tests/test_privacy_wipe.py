@@ -3,7 +3,7 @@ import tempfile
 import time
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 from fastapi.testclient import TestClient
@@ -12,6 +12,7 @@ import history_store
 import recordings
 import routes_wake
 import server
+import voice_clone_engine
 
 
 class DummyTranscriber:
@@ -175,6 +176,145 @@ class PrivacyWipeTests(unittest.TestCase):
             # stop_wake_listener() as its own safety net and would otherwise
             # append a third entry here.
             self.assertEqual(call_order[:2], ["wake_listener_stopped", "recorder_drained"])
+
+
+class _FakeTTSEngine:
+    """Stand-in for ReviewTTSEngine that only implements the drain surface
+    the wipe relies on."""
+
+    def __init__(self, drain_result=None, stop_ok=True):
+        self.drain_result = drain_result or {"worker_idle": True, "queue_empty": True}
+        self.stop_ok = stop_ok
+        self.cache_cleared = True
+        self.drain_calls = []
+        self.cache_clear_calls = 0
+        self.speak = MagicMock(return_value={"ok": True, "queued": True})
+
+    def stop_current(self):
+        if not self.stop_ok:
+            raise RuntimeError("stop failed")
+
+    def drain(self, timeout=10.0):
+        self.drain_calls.append(timeout)
+        return dict(self.drain_result)
+
+    def clear_audio_cache(self):
+        self.cache_clear_calls += 1
+        return self.cache_cleared
+
+
+class TTSWipeDrainTests(PrivacyWipeTests):
+    """The wipe must drain TTS playback and voice-clone conversion, not just
+    recordings/history/output — see the P0 finding this closes."""
+
+    def test_wipe_drains_tts_and_reports_postconditions(self):
+        with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ):
+            fake = _FakeTTSEngine()
+            with patch.object(server, "tts_engine", fake), \
+                 patch.object(voice_clone_engine, "wait_for_conversion_idle", return_value=True) as wait_idle, \
+                 patch.object(voice_clone_engine, "unload") as unload:
+                with self._client() as client:
+                    resp = client.post("/privacy/wipe", json={})
+
+            self.assertEqual(resp.status_code, 200, resp.text)
+            payload = resp.json()
+            self.assertTrue(payload["ok"], payload)
+            post = payload["postconditions"]
+            for key in ("tts_worker_idle", "tts_queue_empty", "tts_playback_stopped",
+                        "voice_clone_conversion_idle", "voice_cache_cleared"):
+                self.assertTrue(post[key], key)
+            self.assertEqual(fake.cache_clear_calls, 1)
+            unload.assert_called_once()
+            wait_idle.assert_called()
+
+    def test_wipe_aborts_without_deleting_when_tts_wont_quiesce(self):
+        with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ):
+            self._seed_history()
+            fake = _FakeTTSEngine(drain_result={"worker_idle": False, "queue_empty": True})
+            with patch.object(server, "tts_engine", fake):
+                with self._client() as client:
+                    resp = client.post("/privacy/wipe", json={})
+
+            payload = resp.json()
+            self.assertFalse(payload["ok"])
+            self.assertEqual(payload["error"], "tts_did_not_quiesce")
+            self.assertTrue(history_store.search("hello"))  # nothing deleted
+            self.assertEqual(fake.cache_clear_calls, 0)      # no cache clear before quiesce
+
+    def test_wipe_aborts_when_clone_conversion_wont_finish(self):
+        with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ):
+            self._seed_history()
+            fake = _FakeTTSEngine()
+            with patch.object(server, "tts_engine", fake), \
+                 patch.object(voice_clone_engine, "wait_for_conversion_idle", return_value=False):
+                with self._client() as client:
+                    resp = client.post("/privacy/wipe", json={})
+
+            payload = resp.json()
+            self.assertFalse(payload["ok"])
+            self.assertEqual(payload["error"], "tts_did_not_quiesce")
+            self.assertTrue(history_store.search("hello"))
+
+    def test_wipe_with_no_tts_engine_still_ok(self):
+        with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ), patch.object(server, "tts_engine", None), \
+             patch.object(voice_clone_engine, "wait_for_conversion_idle", return_value=True):
+            with self._client() as client:
+                resp = client.post("/privacy/wipe", json={})
+
+            payload = resp.json()
+            self.assertTrue(payload["ok"], payload)
+            self.assertTrue(payload["postconditions"]["tts_worker_idle"])
+
+
+class KeyboardReviewTTSGatingTests(unittest.TestCase):
+    """The keyboard review-TTS shortcut (speak_text_aloud) must respect the
+    same wipe flag and runtime lease as the HTTP TTS routes."""
+
+    def test_speak_text_aloud_refuses_during_wipe(self):
+        fake = _FakeTTSEngine()
+        server.privacy_wipe_in_progress.set()
+        try:
+            with patch.object(server, "ensure_tts_initialized", return_value=fake):
+                server.speak_text_aloud("secret draft text")
+        finally:
+            server.privacy_wipe_in_progress.clear()
+        fake.speak.assert_not_called()
+
+    def test_speak_text_aloud_holds_tts_read_lease(self):
+        fake = _FakeTTSEngine()
+        seen = {}
+
+        def record_busy(*args, **kwargs):
+            seen["busy_during_speak"] = server.model_runtime.is_busy("tts")
+            return {"ok": True}
+
+        fake.speak.side_effect = record_busy
+        with patch.object(server, "ensure_tts_initialized", return_value=fake), \
+             patch.object(server, "load_profile", return_value={"review_tts_enabled": True}):
+            server.speak_text_aloud("hello")
+        fake.speak.assert_called_once()
+        self.assertTrue(seen.get("busy_during_speak"))
+
+    def test_speak_text_aloud_skips_when_tts_reconfiguring(self):
+        # Simulate a concurrent destructive reconfiguration (write lease held)
+        # without actually blocking this thread on the real read lease, which
+        # would deadlock synchronously against the write lease we're holding.
+        fake = _FakeTTSEngine()
+        from model_runtime_coordinator import RuntimeBusyError
+
+        with patch.object(server, "ensure_tts_initialized", return_value=fake), \
+             patch.object(server, "load_profile", return_value={"review_tts_enabled": True}), \
+             patch.object(server.model_runtime, "read_lease", side_effect=RuntimeBusyError("tts busy")):
+            server.speak_text_aloud("hello")  # must not raise
+        fake.speak.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -235,6 +235,25 @@ def _coerce_choice(value, default, allowed):
     return str(default).strip().lower()
 
 
+def _coerce_device_fingerprint(value):
+    """Normalize a stored microphone fingerprint to its known shape.
+
+    A fingerprint without a device name can't identify anything, so it
+    collapses to {} ("no specific device selected")."""
+    if not isinstance(value, dict):
+        return {}
+    name = _coerce_str(value.get("name", "")).strip()
+    if not name:
+        return {}
+    return {
+        "name": name,
+        "host_api": _coerce_str(value.get("host_api", "")).strip(),
+        "max_input_channels": _coerce_int(value.get("max_input_channels", 0), 0, minimum=0),
+        "default_samplerate": _coerce_float(value.get("default_samplerate", 0.0), 0.0, minimum=0.0),
+        "last_known_index": _coerce_int(value.get("last_known_index", -1), -1, minimum=-1),
+    }
+
+
 def _coerce_color(value, default):
     parsed = _coerce_str(value, default).strip()
     if re.fullmatch(r"#[0-9a-fA-F]{6}", parsed):
@@ -322,6 +341,9 @@ def _sanitize_profile_values(config, defaults):
 
     cfg["input_device_index"] = _coerce_int(
         cfg.get("input_device_index", d["input_device_index"]), d["input_device_index"], minimum=-1
+    )
+    cfg["input_device_fingerprint"] = _coerce_device_fingerprint(
+        cfg.get("input_device_fingerprint", d["input_device_fingerprint"])
     )
     cfg["audio_ducking"] = _coerce_bool(cfg.get("audio_ducking", d["audio_ducking"]), d["audio_ducking"])
     cfg["auto_submit"] = _coerce_bool(cfg.get("auto_submit", d["auto_submit"]), d["auto_submit"])
@@ -730,6 +752,12 @@ def _profile_defaults():
         # Input (microphone) device index into sounddevice's device list. -1 means
         # "use the system default input device" (the prior always-on behavior).
         "input_device_index": -1,
+        # Stable identity of the selected microphone (name, host API, channel
+        # count, sample rate, last-known index). PortAudio indices shift after
+        # reboots/USB churn/driver updates, so the index above is only a hint;
+        # recording start resolves this fingerprint to the current index.
+        # Empty dict means "no specific device selected".
+        "input_device_fingerprint": {},
         "audio_ducking": False,
         "audio_ducking_level_percent": 18.0,
         "audio_ducking_fallback_return_percent": 100.0,
@@ -1042,6 +1070,33 @@ def validate_profile_settings(data: dict):
             raise ValueError(f"Duplicate hotkey detected: '{key}' is assigned to both '{other_name}' and '{name}'.")
         seen_keys[key] = name
 
+def _refresh_input_device_fingerprint(payload):
+    """Keep the stored microphone fingerprint in sync with the selected index.
+
+    The settings UI submits only the numeric input_device_index; the
+    fingerprint is what survives index churn, so it is (re)captured here
+    whenever the selection changes. A fingerprint for an unchanged selection
+    is left alone — the device may simply be unplugged at save time, and its
+    fingerprint is exactly what lets us find it again later."""
+    index = payload.get("input_device_index", -1)
+    if not isinstance(index, int) or index < 0:
+        payload["input_device_fingerprint"] = {}
+        return
+    current = payload.get("input_device_fingerprint")
+    if isinstance(current, dict) and current.get("name") and current.get("last_known_index") == index:
+        return
+    try:
+        from audio_device_resolver import build_input_device_fingerprint
+
+        fingerprint = build_input_device_fingerprint(index)
+    except Exception as exc:
+        logging.warning(f"Input device fingerprint capture failed: {exc}")
+        fingerprint = None
+    # A changed selection that can't be fingerprinted (headless, device just
+    # vanished) clears the old fingerprint rather than mislabeling the new pick.
+    payload["input_device_fingerprint"] = fingerprint or {}
+
+
 def save_profile(profile_name, data):
     """Saves data to a profile yaml file atomically with a backup."""
     profiles_dir = get_profiles_dir()
@@ -1054,6 +1109,7 @@ def save_profile(profile_name, data):
         _migrate_controller_binding(payload)
         _migrate_output_delivery(payload)
         _sanitize_profile_values(payload, defaults)
+        _refresh_input_device_fingerprint(payload)
         payload["schema_version"] = _PROFILE_SCHEMA_VERSION
 
         # Validate values strictly

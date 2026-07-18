@@ -47,12 +47,7 @@ function errorMessageFromBody(body, url, status) {
   return `${url} failed with status ${status}`;
 }
 
-async function proxyRequest(method, url, body, timeoutMs = 2500) {
-  const bridge = window.betterFingers && window.betterFingers.backendRequest;
-  if (typeof bridge !== 'function') {
-    throw new Error('Backend bridge is unavailable.');
-  }
-  const res = await bridge(method, pathOf(url), body, timeoutMs);
+function unwrapProxyResult(res, label, timeoutMs) {
   if (!res) {
     throw new Error('Backend request returned no result.');
   }
@@ -64,7 +59,7 @@ async function proxyRequest(method, url, body, timeoutMs = 2500) {
     throw new Error(res.error || 'Backend request failed.');
   }
   if (!res.ok) {
-    const error = new Error(errorMessageFromBody(res.body, url, res.status));
+    const error = new Error(errorMessageFromBody(res.body, label, res.status));
     error.status = res.status;
     error.detail = res.body && res.body.detail;
     // Phase 1.2: preserve the full parsed body so callers can inspect a
@@ -73,6 +68,25 @@ async function proxyRequest(method, url, body, timeoutMs = 2500) {
     throw error;
   }
   return res.body;
+}
+
+async function proxyRequest(method, url, body, timeoutMs = 2500) {
+  const bridge = window.betterFingers && window.betterFingers.backendRequest;
+  if (typeof bridge !== 'function') {
+    throw new Error('Backend bridge is unavailable.');
+  }
+  return unwrapProxyResult(await bridge(method, pathOf(url), body, timeoutMs), url, timeoutMs);
+}
+
+// Destructive/sensitive operations don't go through the generic proxy at all:
+// each calls a dedicated typed IPC method on the preload bridge (exact route,
+// exact HTTP method, validated payload in the main process).
+async function typedRequest(name, label, timeoutMs, ...args) {
+  const bridge = window.betterFingers && window.betterFingers[name];
+  if (typeof bridge !== 'function') {
+    throw new Error('Backend bridge is unavailable.');
+  }
+  return unwrapProxyResult(await bridge(...args, timeoutMs), label, timeoutMs);
 }
 
 async function fetchDoctor(refreshAudio = false, timeoutMs = 5000) {
@@ -88,7 +102,7 @@ async function fetchVersion(timeoutMs = 2500) {
 }
 
 async function fetchHealth(timeoutMs = 2500) {
-  return proxyRequest('GET', HEALTH_URL, undefined, timeoutMs);
+  return typedRequest('fetchHealth', HEALTH_URL, timeoutMs);
 }
 
 async function fetchJson(url, timeoutMs = 2500) {
@@ -176,8 +190,11 @@ async function fetchPrivacy(timeoutMs = 2500) {
   return fetchJson(`${BACKEND_ORIGIN}/privacy`, timeoutMs);
 }
 
-async function wipeData(wipeVoices = false, timeoutMs = 10000) {
-  return postJson(`${BACKEND_ORIGIN}/privacy/wipe`, { wipe_voices: wipeVoices }, timeoutMs);
+async function wipeData(wipeVoices = false, timeoutMs = 10000, { confirmed = false } = {}) {
+  return typedRequest('wipePrivacyData', '/privacy/wipe', timeoutMs, {
+    wipeVoices,
+    confirm: confirmed === true,
+  });
 }
 
 async function fetchRecordings(timeoutMs = 2500) {
@@ -198,7 +215,7 @@ async function fetchJobs(activeOnly = false, timeoutMs = 2500) {
 }
 
 async function cancelJob(jobId, timeoutMs = 5000) {
-  return postJson(`${BACKEND_ORIGIN}/jobs/${encodeURIComponent(jobId)}/cancel`, {}, timeoutMs);
+  return typedRequest('cancelJob', '/jobs/cancel', timeoutMs, String(jobId));
 }
 
 async function clearRecordings(timeoutMs = 10000) {
@@ -274,8 +291,10 @@ async function fetchLlmDownloadState(modelId, timeoutMs = 2500) {
   return fetchJson(`${MODELS_LLM_URL}/${encodeURIComponent(modelId)}/download-state`, timeoutMs);
 }
 
-async function deleteLlmModel(modelId, timeoutMs = 10000) {
-  return deleteJson(`${MODELS_LLM_URL}/${encodeURIComponent(modelId)}`, timeoutMs);
+async function deleteLlmModel(modelId, timeoutMs = 10000, { confirmed = false } = {}) {
+  return typedRequest('deleteLlmModel', `${MODELS_LLM_URL}/${modelId}`, timeoutMs, String(modelId), {
+    confirm: confirmed === true,
+  });
 }
 
 async function fetchWhisperModels(timeoutMs = 2500) {
@@ -286,8 +305,10 @@ async function downloadWhisperModel(modelSize, preferGpu = true, timeoutMs = 180
   return postJson(`${MODELS_WHISPER_URL}/download`, { model_size: modelSize, prefer_gpu: preferGpu }, timeoutMs);
 }
 
-async function deleteWhisperModel(modelSize, timeoutMs = 10000) {
-  return deleteJson(`${MODELS_WHISPER_URL}/${encodeURIComponent(modelSize)}`, timeoutMs);
+async function deleteWhisperModel(modelSize, timeoutMs = 10000, { confirmed = false } = {}) {
+  return typedRequest('deleteWhisperModel', `${MODELS_WHISPER_URL}/${modelSize}`, timeoutMs, String(modelSize), {
+    confirm: confirmed === true,
+  });
 }
 
 async function selectWhisperModel(modelSize, timeoutMs = 15000) {
@@ -363,7 +384,7 @@ async function speakTts(text, voiceId = 'standard_female', speed = 1.0, pitch = 
 }
 
 async function sendDraft(id, { action = 'copy_only', openChat = false } = {}, timeoutMs = 120000) {
-  return postJson(`${DRAFTS_URL}/${id}/send`, { action, open_chat: openChat }, timeoutMs);
+  return typedRequest('sendDraft', `${DRAFTS_URL}/${id}/send`, timeoutMs, Number(id), { action, openChat });
 }
 
 async function runPrimaryAction(timeoutMs = 120000) {
@@ -406,6 +427,12 @@ async function saveVoicePreset(name, fields = {}, timeoutMs = 5000) {
 
 async function deleteVoicePreset(name, timeoutMs = 5000) {
   return deleteJson(`${VOICE_PRESETS_URL}/${encodeURIComponent(name)}`, timeoutMs);
+}
+
+async function deleteVoice(voiceId, timeoutMs = 10000, { confirmed = false } = {}) {
+  return typedRequest('deleteVoice', `${TTS_VOICES_URL}/${voiceId}`, timeoutMs, String(voiceId), {
+    confirm: confirmed === true,
+  });
 }
 
 async function cloneVoice(file, name, consent, timeoutMs = 30000) {
@@ -692,6 +719,7 @@ export {
   trainWakePhrase,
   fetchWakeTrainStatus,
   importWakeModel,
+  deleteVoice,
   lintPersona,
   testPersona,
   savePersona,

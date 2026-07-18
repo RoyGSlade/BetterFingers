@@ -3300,7 +3300,7 @@ async function handleWipeData() {
   const messageEl = document.getElementById('privacyMessage');
   if (button) button.disabled = true;
   try {
-    const result = await wipeData(wipeVoices);
+    const result = await wipeData(wipeVoices, undefined, { confirmed: true });
     // Phase 1.2: defense in depth. Even on HTTP 200, never claim success
     // unless the backend proved every postcondition held. A failed wipe now
     // returns a non-2xx status (see server.py _wipe_status_code) and lands in
@@ -5520,7 +5520,8 @@ downloadLlmModelButton?.addEventListener('click', () => {
 
 deleteLlmModelButton?.addEventListener('click', () => {
   const modelId = llmModelSelectEl?.value;
-  runModelAction(deleteLlmModelButton, 'Delete LLM', () => deleteLlmModel(modelId));
+  if (!modelId || !window.confirm(`Delete the downloaded LLM model "${modelId}"? You can re-download it later.`)) return;
+  runModelAction(deleteLlmModelButton, 'Delete LLM', () => deleteLlmModel(modelId, undefined, { confirmed: true }));
 });
 
 selectWhisperModelButton?.addEventListener('click', () => {
@@ -5535,7 +5536,8 @@ downloadWhisperButton?.addEventListener('click', () => {
 
 deleteWhisperButton?.addEventListener('click', () => {
   const modelSize = whisperModelSelectEl?.value;
-  runModelAction(deleteWhisperButton, 'Delete Whisper', () => deleteWhisperModel(modelSize));
+  if (!modelSize || !window.confirm(`Delete the downloaded Whisper model "${modelSize}"? You can re-download it later.`)) return;
+  runModelAction(deleteWhisperButton, 'Delete Whisper', () => deleteWhisperModel(modelSize, undefined, { confirmed: true }));
 });
 
 unloadSttButton?.addEventListener('click', () => {
