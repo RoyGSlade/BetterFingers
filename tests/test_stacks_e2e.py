@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 
 from backend.lan_playground.stacks_api import StacksRoomManager, create_stacks_app
 from backend.lan_playground.stacks_engine import StacksEngineAdapter
-from backend.lan_playground.stacks_protocol import Command, FAMILIES_WITH_PRIVATE_CLUE, ROOM_FAMILY_BY_D8
+from backend.lan_playground.stacks_protocol import Command, ROOM_FAMILY_BY_D8
 
 ACCESS_CODE = "test-stacks-e2e-access-code"
 ALLOWED_HOSTS = {"testserver"}
@@ -85,11 +85,14 @@ def _entrance_doors(client: TestClient, code: str, token: str, hero_id: str) -> 
 def _seed_with_two_doors_and_clue_family(*, upper_bound: int = 3000) -> int:
     """Scan seeds through the real engine for one whose entrance has >= 2
     breachable doors (so two heroes can genuinely split into different rooms)
-    and whose first breach lands in a private-clue family (mystery_chamber or
-    study), so the same scenario also exercises projection privacy. The
-    resulting family/door count is read from real emitted events, never
-    predicted from a bare RNG draw (contract S9 -- the real engine burns RNG
-    draws generating the whole map topology before any breach d8 roll).
+    and whose first breach lands in mystery_chamber, the one family with a
+    real puzzle template this wave (board task #5 -- wave-1's embellishment
+    covered mystery_chamber and study alike with synthesized filler text;
+    the real Mystery Chamber puzzle in systems/puzzles.py only instantiates
+    for mystery_chamber, so this scan narrows to match). The resulting
+    family/door count is read from real emitted events, never predicted from
+    a bare RNG draw (contract S9 -- the real engine burns RNG draws
+    generating the whole map topology before any breach d8 roll).
     """
     for seed in range(upper_bound):
         adapter = StacksEngineAdapter()
@@ -125,7 +128,7 @@ def _seed_with_two_doors_and_clue_family(*, upper_bound: int = 3000) -> int:
             ),
         )
         family = next(e.payload["family"] for e in result.events if e.type == "die_rolled")
-        if family in FAMILIES_WITH_PRIVATE_CLUE:
+        if family == "mystery_chamber":
             return seed
     raise AssertionError("no seed found in range satisfying scenario constraints")
 

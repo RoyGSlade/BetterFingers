@@ -53,6 +53,13 @@ class Command:
 Wave-1 command types (§33 slice): `join_run`, `move`, `breach`, `observe`, `inspect`,
 `pass`, `check` (generic d20 check invocation used by exploration/interaction rules).
 
+Wave-2 additions (board task #5, Mystery Chamber puzzle rooms -- §9.1, §10):
+`inspect_object` `{object_id: str}`, `submit_solution` `{solution: list[str]}`,
+`request_hint` `{}`. All three require the acting hero to be in a room with an
+active `RoomState.puzzle` (`illegal_action` otherwise). `submit_solution`/
+`request_hint` also reject with `illegal_action` once the puzzle is `solved`
+or `forced`.
+
 ## 3. Event envelope
 
 ```python
@@ -65,7 +72,8 @@ class Event:
     actor_hero_id: str | None
     room_id: str | None
     type: str                    # e.g. "hero_moved", "room_breached", "energy_spent", ...
-                                   # full wave-1 vocabulary: EventType in domain/events.py
+                                   # full vocabulary: EventType in domain/events.py (wave-1
+                                   # exploration/checks + wave-2 puzzle/effect-op additions, §5 below)
     visibility: Visibility        # PUBLIC | PRIVATE(hero_id) | PARTY (all current-run heroes)
     payload: dict
 ```
@@ -103,33 +111,94 @@ class Event:
   presentation (LLM prose) is looked up by content hash and is not part of replay state
   (§20, §22.1).
 
-## 5. Content-effect interface -- NOT YET IMPLEMENTED THIS WAVE
+## 5. Content-effect interface -- LIVE as of wave 2 (board task #5, stacks-effects)
 
-Corrected 2026-07-19: this section previously claimed handlers shipped for
-`reveal_room` and `spend_energy`. That was wrong -- as of this wave `backend/lan_playground/
-systems/` has **no effect-op dispatcher or handler of any kind**; grep confirms zero
-references to `reveal_room`, `grant_check`, `spend_energy`, or `emit_fact` anywhere in
-`domain/` or `systems/`. Board task #1's acceptance criteria (state/commands/events/
-reducer + map/Energy/world-round systems) does not require this interface, so it was
-correctly out of scope for wave-1 engine work -- but the doc should not have claimed it
-existed. Treat the shape below as a **design placeholder for a future wave**, not a
-callable contract:
+All four wave-1-authored ops now have real, wired handlers in
+`backend/lan_playground/systems/effects.py` (`dispatch()`), reachable through the
+reducer via `systems/puzzles.py`'s Mystery Chamber success/failure consequences.
+`content/schemas.py`'s `KNOWN_OPS` marks all four `OpStatus.LIVE`.
 
 ```yaml
-# NOT IMPLEMENTED -- design sketch only, no code binds to this yet.
-- op: reveal_room          # exposes a connector's target room
-  args: {connector: north}
-- op: grant_check           # trigger a d20 check via systems/checks.py
-  args: {attribute: insight, skill: read, dc: 11}
-- op: spend_energy
+- op: reveal_room          # exposes a connector's target room (marks discovered=True;
+  args: {connector: north} # no-op if no room exists at that coordinate at all -- it does
+                            # NOT require an existing DOOR connector, since it's meant to
+                            # unlock exposure beyond ordinary §7.1 connectivity)
+- op: grant_check           # resolves a real d20 check via systems/checks.py (flat
+  args: {attribute: insight, skill: read, dc: 11}  # attribute_score=0/skill_rank=0 --
+                            # no hero-sheet attributes exist yet, Phase 3 is still out of
+                            # scope; attribute/skill args are recorded on the event for a
+                            # future hero-sheet lookup, not applied as bonuses yet)
+- op: spend_energy          # deducts from the acting hero, clamped at 0 (never negative)
   args: {amount: 1}
-- op: emit_fact             # authored fact available to book/prose pipeline later
-  args: {fact_id: string}
+- op: emit_fact             # appends fact_id to RunState.facts (deduplicated), the seam
+  args: {fact_id: string}   # the future book/prose pipeline (§18.4) reads from
 ```
 
-Content packs should NOT assume any of these ops are wired to the reducer yet. If your
-lane needs one exercised end to end this wave, post an `urgent` request to `stacks-engine`
-before building on top of it.
+Each op emits its own domain `EventType`: `reveal_room` -> `ROOM_REVEALED_BY_EFFECT`,
+`spend_energy` -> `EFFECT_ENERGY_SPENT`, `grant_check` -> `CHECK_RESOLVED` (reuses the
+existing check-resolution event/applier), `emit_fact` -> `FACT_EMITTED`. `dispatch()`
+silently skips any op without a registered handler (defense in depth -- content
+validators are what actually guarantee only a known op reaches it), so it stays
+forward-compatible as later ops graduate from `PLANNED` to `LIVE` without a flag day.
+
+Cards/items/conditions/enemies are not wired into gameplay yet (combat/inventory are
+out of scope this wave too -- see §10 below), so in practice `dispatch()` is only
+exercised by `systems/puzzles.py` today. Any future caller reuses it unchanged.
+
+### 5.1 Mystery Chamber puzzle rooms (§9.1, §10)
+
+On breach into a `mystery_chamber` room (d8 == 1), `exploration.handle_breach` calls
+`systems/puzzles.py`'s `build_instantiate_events`, which instantiates a real, seeded
+`content.puzzles.ordering_sequence` instance (the only puzzle template with a generator
+this wave; all `mystery_chamber` subtypes get the same template for now) and stores it
+on `RoomState.puzzle` (`domain/state.py`'s `PuzzleRoomState`).
+
+New domain event types: `MYSTERY_PUZZLE_INSTANTIATED` (PUBLIC -- objects only, no clue
+text, no solution), `PRIVATE_CLUE_REVEALED` (PRIVATE, payload
+`{"viewer_hero_id": hero_id, "clues": [...]}`), `PUZZLE_OBJECT_INSPECTED` (PRIVATE),
+`PUZZLE_HINT_REVEALED` (PARTY), `PUZZLE_SOLUTION_ACCEPTED` / `PUZZLE_SOLUTION_REJECTED`
+(PUBLIC), `PUZZLE_FORCE_PROGRESS` (PUBLIC, `reason: "hints_exhausted"|"attempts_exhausted"`).
+
+Asymmetric distributed clues (§10.3 #8): the four §10.2 objects are anchor / key /
+contradiction / red_herring. Anchor, contradiction, and red_herring are single shared
+facts -- any hero physically in the room who inspects one sees the same text. Key is a
+*pool* of clue fragments (the ordering chain's individual `immediately_before` facts):
+the breaching hero claims the first fragment immediately as part of breaching (exactly
+one `private_clue_assigned` wire event, preserving the wave-1 wire contract
+tests/test_stacks_api.py hard-codes); every other hero claims their own
+never-claimed fragment the first time *they* `inspect_object` the key object while
+standing in the room. No single hero's view ever contains the full key chain once more
+than one hero has claimed a fragment.
+
+Solution checking is validator-owned (§10.1, §20.2): `submit_solution` only ever
+compares the caller's answer against `instance.accepted_solutions` -- never re-solved,
+never seen by the LLM. Hints escalate through `instance.hint_steps` (3 steps); calling
+`request_hint` a fourth time is how the party accepts §10.4's defined consequence and
+force-progresses. Every wrong `submit_solution` -- and hint exhaustion -- dispatches the
+instance's `failure_events` through `systems/effects.py` (fail-forward, never
+"nothing happens"); a correct submission dispatches `success_events` the same way.
+Exhausting `attempt_limit` wrong guesses force-progresses identically to hint exhaustion.
+
+### 5.2 Wire projection shape (`StacksEngineAdapter.project()`)
+
+`project(state, viewer)`'s returned dict gains a top-level `"puzzles"` key:
+`{room_id: {instance_id, template_id, difficulty, objects: [{id, role, fallback,
+accessible}], solved, forced, attempts_used, attempt_limit, hints_revealed: [{fallback,
+accessible}], your_private_clues: [{clue_id, fallback, accessible}]}}`.
+
+`hints_revealed` and `your_private_clues` are both viewer-filtered by
+`stacks_projections.project_puzzles()`: empty for a spectator (`viewer is None`);
+`your_private_clues` contains only clues assigned to that specific hero_id, never any
+other hero's fragment. `solution` and `accepted_solutions` are never present in this
+dict at all (stripped before `stacks_engine.py` ever builds the neutral snapshot) --
+they exist only in internal domain state (`PuzzleRoomState`), never in any projection.
+
+Known open item (per director, 2026-07-19 16:30): stacks-ui's wave-2 fixtures
+(`tests/fixtures/stacks_ui/puzzle_mystery_chamber.json`) were authored before this
+section landed and use a different field vocabulary (`puzzle.objects/private_clue/
+shared_notes/hints`). This section is the authoritative engine projection shape; the
+fixture/selector reconciliation is a follow-up pass at wave close, not a reason to
+reshape this projection.
 
 ## 6. Core state aggregates (wave-1 subset of §22.4)
 
@@ -231,9 +300,12 @@ the only caller. No other module (including `checks.py` and `room_generation.py`
 the point they need randomness) constructs its own `Random` instance — they receive
 the shared `StacksRNG` from `handle`.
 
-## 10. What's out of scope this wave
+## 10. What's out of scope
 
-Combat, cards, inventory, puzzles, shops, books — stubs only where the effect-op
-interface above needs a placeholder. Engine only guarantees the golden-floor slice:
+Combat, cards, inventory, shops, books remain unwired this wave too (combat is a
+standalone package, `backend/lan_playground/combat/**`, per docs/INFINITE_STACKS_COMBAT.md
+-- reducer wiring for it is wave 3). Wave-1 engine guarantees the golden-floor slice:
 join, split, move, breach (with visible d8 + subtype), observe, inspect, Energy
-spend/refresh, world-round advance, and deterministic replay.
+spend/refresh, world-round advance, and deterministic replay. Wave 2 (board task #5)
+added real Mystery Chamber puzzle rooms and the four §5 effect ops on top of that --
+see §5/§5.1/§5.2 above.

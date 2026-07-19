@@ -162,3 +162,157 @@ export function selectLegalActionsSummary(state) {
 export function selectLastError(state) {
   return state.lastError;
 }
+
+// Which non-map screen (if any) is active. Combat takes precedence over a
+// puzzle in the same room, which takes precedence over a plain entered-room
+// view; state.combat/state.puzzle/state.enteredRoom are mutually-optional,
+// server-populated wire objects (wave 2: fixture-driven, see
+// tests/fixtures/stacks_ui/).
+export function selectActiveScreen(state) {
+  if (state.combat) return "combat";
+  if (state.puzzle) return "puzzle";
+  if (state.enteredRoom) return "room";
+  return "map";
+}
+
+function mapStatus(status) {
+  return { id: status.id, roundsRemaining: status.rounds_remaining };
+}
+
+// Generic entered-room view (infinite_stacks.md S9/S24.1/S24.4): occupants,
+// inspectable objects, exits with their Energy cost, and any corruption
+// tells. Wire shape is snake_case (state.enteredRoom); this returns the
+// camelCase plain data screens/room.js renders directly.
+export function selectEnteredRoomView(state) {
+  const room = state.enteredRoom;
+  if (!room) return null;
+  return {
+    roomId: room.room_id,
+    familyLabel: ROOM_FAMILY_LABELS[room.family] || room.family || "Unknown",
+    subtypeLabel: room.subtype_label || null,
+    occupants: (room.occupants || []).map((occupant) => ({
+      id: occupant.id,
+      name: occupant.name,
+      kind: occupant.kind,
+      isYou: !!occupant.is_you,
+      statuses: (occupant.statuses || []).map(mapStatus),
+    })),
+    objects: (room.objects || []).map((object) => ({ id: object.id, label: object.label, inspected: !!object.inspected })),
+    exits: (room.exits || []).map((exit) => ({
+      direction: exit.direction,
+      label: exit.label,
+      energyCost: exit.energy_cost,
+      legal: !!exit.legal,
+    })),
+    corruptionTells: (room.corruption_tells || []).map((tell) => ({ id: tell.id, text: tell.text })),
+  };
+}
+
+// Mystery Chamber puzzle view (infinite_stacks.md S10, S24.4). Wire shape is
+// snake_case (state.puzzle); this returns the camelCase plain data
+// screens/puzzle.js renders directly.
+export function selectPuzzleView(state) {
+  const puzzle = state.puzzle;
+  if (!puzzle) return null;
+  return {
+    puzzleId: puzzle.puzzle_id,
+    templateLabel: puzzle.template_label,
+    difficulty: puzzle.difficulty,
+    objects: (puzzle.objects || []).map((object) => ({
+      id: object.id,
+      label: object.label,
+      inspected: !!object.inspected,
+      description: object.description || null,
+    })),
+    privateClue: puzzle.private_clue ? { text: puzzle.private_clue.text, shared: !!puzzle.private_clue.shared } : null,
+    sharedNotes: (puzzle.shared_notes || []).map((note) => ({
+      id: note.id,
+      text: note.text,
+      authorName: note.author_name,
+      linkedNoteIds: note.linked_note_ids || [],
+      contradiction: !!note.contradiction,
+    })),
+    hints: {
+      used: puzzle.hints.used,
+      tiers: (puzzle.hints.tiers || []).map((tier) => ({ level: tier.level, description: tier.description, cost: tier.cost })),
+      nextHintCost: puzzle.hints.next_hint_cost || null,
+      forceProgressAvailable: !!puzzle.hints.force_progress_available,
+      forceProgressConsequence: puzzle.hints.force_progress_consequence || null,
+    },
+    submission: {
+      legal: !!puzzle.submission.legal,
+      slots: (puzzle.submission.slots || []).map((slot) => ({
+        id: slot.id,
+        label: slot.label,
+        selectedId: slot.selected_id || null,
+        options: (slot.options || []).map((option) => ({ id: option.id, label: option.label })),
+      })),
+    },
+  };
+}
+
+// Combat view (infinite_stacks.md S14, S24.3). Wire shape is snake_case
+// (state.combat); this returns the camelCase plain data screens/combat.js
+// renders directly.
+export function selectCombatView(state) {
+  const combat = state.combat;
+  if (!combat) return null;
+  const legalActions = combat.legal_actions || {};
+  return {
+    encounterId: combat.encounter_id,
+    round: combat.round,
+    initiativeOrder: (combat.initiative_order || []).map((entry) => ({
+      id: entry.id,
+      name: entry.name,
+      initiative: entry.initiative,
+      isCurrentTurn: !!entry.is_current_turn,
+      hasReactionAvailable: !!entry.has_reaction_available,
+    })),
+    enemies: (combat.enemies || []).map((enemy) => ({
+      id: enemy.id,
+      name: enemy.name,
+      hp: enemy.hp,
+      maxHp: enemy.max_hp,
+      intent: { label: enemy.intent.label, glyph: enemy.intent.glyph, description: enemy.intent.description },
+      statuses: (enemy.statuses || []).map(mapStatus),
+    })),
+    heroes: (combat.heroes || []).map((hero) => ({
+      id: hero.id,
+      name: hero.name,
+      hp: hero.hp,
+      maxHp: hero.max_hp,
+      reactionAvailable: !!hero.reaction_available,
+      statuses: (hero.statuses || []).map(mapStatus),
+    })),
+    legalActions: {
+      attacks: (legalActions.attacks || []).map((attack) => ({
+        id: attack.id,
+        label: attack.label,
+        targetId: attack.target_id,
+        targetLabel: attack.target_label,
+        expectedEffect: attack.expected_effect,
+      })),
+      maneuvers: (legalActions.maneuvers || []).map((maneuver) => ({
+        id: maneuver.id,
+        label: maneuver.label,
+        targetId: maneuver.target_id,
+        targetLabel: maneuver.target_label,
+        accuracyModifier: maneuver.accuracy_modifier,
+        expectedEffect: maneuver.expected_effect,
+      })),
+      reactions: (legalActions.reactions || []).map((reaction) => ({ id: reaction.id, label: reaction.label, available: !!reaction.available })),
+    },
+    lastCheckReceipt: combat.last_check_receipt
+      ? {
+          action: combat.last_check_receipt.action,
+          target: combat.last_check_receipt.target,
+          attribute: combat.last_check_receipt.attribute,
+          skill: combat.last_check_receipt.skill,
+          dieResult: combat.last_check_receipt.die_result,
+          modifiers: (combat.last_check_receipt.modifiers || []).map((modifier) => ({ source: modifier.source, value: modifier.value })),
+          targetNumber: combat.last_check_receipt.target_number,
+          outcome: combat.last_check_receipt.outcome,
+        }
+      : null,
+  };
+}

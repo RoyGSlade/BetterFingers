@@ -310,14 +310,24 @@ def test_effect_rejects_unknown_op_directly():
         S.Effect(op="not_a_real_op", args={})
 
 
-def test_known_ops_wave1_contract_ops_are_not_marked_live_this_wave():
-    """docs/INFINITE_STACKS_CONTRACTS.md §5 is an authoring contract only this
-    wave (corrected 2026-07-19: no systems/ dispatcher exists for any of the
-    four ops yet). Guard against silently re-marking one LIVE without an
-    accompanying engine handler landing."""
+def test_known_ops_marked_live_have_a_real_systems_handler():
+    """Wave 2 update (2026-07-19, board task #5, stacks-effects): reveal_room,
+    spend_energy, grant_check, and emit_fact now have real handlers wired
+    through systems/effects.py's dispatch table (reached via systems/
+    puzzles.py's Mystery Chamber success/failure consequences), so
+    content/schemas.py marks all four OpStatus.LIVE. This replaces the
+    wave-1 guard (which asserted the opposite -- that no op was LIVE yet,
+    because no dispatcher existed at all) with the general rule going
+    forward: nothing may be marked LIVE in KNOWN_OPS unless
+    systems/effects.py actually dispatches it."""
 
-    for op_name in ("reveal_room", "grant_check", "spend_energy", "emit_fact"):
-        assert S.KNOWN_OPS[op_name].status is not S.OpStatus.LIVE
+    live_ops = {name for name, spec in S.KNOWN_OPS.items() if spec.status is S.OpStatus.LIVE}
+    assert live_ops == {"reveal_room", "spend_energy", "grant_check", "emit_fact"}
+
+    from backend.lan_playground.systems import effects as E
+
+    for op_name in live_ops:
+        assert op_name in E.LIVE_OPS, f"{op_name} is marked LIVE but systems/effects.py has no handler for it"
 
 
 def test_compile_effects_round_trips_to_event_dict_ir():

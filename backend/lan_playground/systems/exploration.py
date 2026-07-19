@@ -11,7 +11,7 @@ from ..domain.commands import Command, CommandError, ErrorCode
 from ..domain.events import Event, EventType, Visibility, make_event_id
 from ..domain.rng import StacksRNG
 from ..domain.state import DELTA, ConnectorState, Direction, MapState, RunState, room_id_for
-from . import map_generation, room_generation, turns
+from . import map_generation, puzzles, room_generation, turns
 
 
 def _hero(state: RunState, hero_id: str | None) -> "HeroState":
@@ -49,6 +49,7 @@ def legal_action_summary(state: RunState, hero_id: str) -> list[str]:
             actions.append(f"observe:{direction.value}")
     if hero.energy >= turns.ENERGY_COSTS["inspect"]:
         actions.append("inspect")
+    actions.extend(puzzles.legal_action_names(state, hero_id))
     return actions
 
 
@@ -216,7 +217,10 @@ def handle_breach(command: Command, state: RunState, rng: StacksRNG, seq: int) -
             "subtype": subtype,
         },
     )
-    return (energy_event, breach_event)
+    events: tuple[Event, ...] = (energy_event, breach_event)
+    if family == "mystery_chamber":
+        events += puzzles.build_instantiate_events(command, state, rng, target_room_id, hero_id, seq + 2)
+    return events
 
 
 def apply_room_breached(state: RunState, event: Event) -> RunState:

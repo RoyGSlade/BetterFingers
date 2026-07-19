@@ -120,25 +120,22 @@ class OpSpec:
 
 
 # Wave-1 ops (`reveal_room`, `grant_check`, `spend_energy`, `emit_fact`) come
-# verbatim from docs/INFINITE_STACKS_CONTRACTS.md §5. IMPORTANT (corrected
-# 2026-07-19 per stacks-engine's audit + director's ruling): §5 is an
-# AUTHORING contract, not a callable one this wave -- `systems/` ships no
-# effect-op dispatcher or handler at all yet, for any of the four ops. All
-# four are therefore STUB here, not LIVE. Content should keep authoring
-# against this vocabulary (it's still what CI validates against -- unknown
-# ops fail validators) but must not assume any op executes against a live
-# RunState this wave. Flip an op to LIVE only once stacks-engine confirms a
-# real wired handler exists.
+# verbatim from docs/INFINITE_STACKS_CONTRACTS.md §5. WAVE 2 UPDATE (2026-07-19,
+# stacks-effects, board task #5): all four now have real, wired handlers in
+# `systems/effects.py` (`dispatch()`), reachable through the reducer via
+# systems/puzzles.py's Mystery Chamber success/failure consequences, and are
+# therefore LIVE. (Wave-1 note for history: they were STUB for one wave --
+# `systems/` genuinely shipped no dispatcher of any kind before this.)
 # The remaining ops are this content pack's declared vocabulary for cards, items,
 # conditions, and enemies (Phase 3-5 per infinite_stacks.md §27); engine explicitly
-# scopes combat/cards/inventory/puzzles out of wave 1 (contracts doc §10), so these
+# scopes combat/cards/inventory out of this wave too (contracts doc §10), so these
 # are PLANNED rather than unknown. Extend this table -- never special-case an op
 # name inside a card/item/enemy definition.
 KNOWN_OPS: dict[str, OpSpec] = {
-    "reveal_room": OpSpec(("connector",), OpStatus.STUB),
-    "spend_energy": OpSpec(("amount",), OpStatus.STUB),
-    "grant_check": OpSpec(("attribute", "skill", "dc"), OpStatus.STUB),
-    "emit_fact": OpSpec(("fact_id",), OpStatus.STUB),
+    "reveal_room": OpSpec(("connector",), OpStatus.LIVE),
+    "spend_energy": OpSpec(("amount",), OpStatus.LIVE),
+    "grant_check": OpSpec(("attribute", "skill", "dc"), OpStatus.LIVE),
+    "emit_fact": OpSpec(("fact_id",), OpStatus.LIVE),
     "damage": OpSpec(("amount",), OpStatus.PLANNED),
     "heal": OpSpec(("amount",), OpStatus.PLANNED),
     "modify_hp": OpSpec(("amount",), OpStatus.PLANNED),

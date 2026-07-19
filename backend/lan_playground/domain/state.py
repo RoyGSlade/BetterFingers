@@ -47,6 +47,103 @@ def room_id_for(x: int, y: int) -> str:
 
 
 @dataclass
+class PuzzleObjectView:
+    """One of the §10.2 four inspectable objects. Public shape only -- which
+    clues a viewer may see through it is a runtime/per-hero decision made by
+    systems/puzzles.py, not part of this static view."""
+
+    id: str
+    role: str  # PuzzleObjectRole value: anchor|key|contradiction|red_herring
+    fallback: str
+    accessible: str
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "role": self.role, "fallback": self.fallback, "accessible": self.accessible}
+
+    @staticmethod
+    def from_dict(d: dict) -> "PuzzleObjectView":
+        return PuzzleObjectView(id=d["id"], role=d["role"], fallback=d["fallback"], accessible=d["accessible"])
+
+
+@dataclass
+class PuzzleRoomState:
+    """Runtime state for a real Mystery Chamber puzzle instance (§10.1),
+    reconstructed deterministically from (seed, difficulty) by
+    systems/puzzles.py -- never re-rolled. `solution`/`accepted_solutions`
+    live here because they are authoritative replay state, but they are never
+    read by anything outside systems/puzzles.py's `submit_solution` handler
+    and must never be copied into a wire projection (stacks_engine.py /
+    stacks_projections.py)."""
+
+    instance_id: str
+    template_id: str
+    seed: int
+    difficulty: int
+    objects: tuple[PuzzleObjectView, ...] = ()
+    object_clue_ids: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    clue_text: dict[str, tuple[str, str]] = field(default_factory=dict)  # clue_id -> (fallback, accessible)
+    unclaimed_key_clue_ids: list[str] = field(default_factory=list)
+    private_clue_assignments: dict[str, tuple[str, ...]] = field(default_factory=dict)  # hero_id -> clue_ids
+    solution: tuple[str, ...] = ()
+    accepted_solutions: tuple[tuple[str, ...], ...] = ()
+    hint_steps: tuple[tuple[str, str], ...] = ()  # (fallback, accessible) per step
+    attempt_limit: int | None = None
+    failure_effects: tuple[dict, ...] = ()  # compiled {"op","args"} dicts, contract §5 IR
+    success_effects: tuple[dict, ...] = ()
+    attempts_used: int = 0
+    hints_used: int = 0
+    solved: bool = False
+    forced: bool = False
+
+    def to_dict(self) -> dict:
+        return {
+            "instance_id": self.instance_id,
+            "template_id": self.template_id,
+            "seed": self.seed,
+            "difficulty": self.difficulty,
+            "objects": [o.to_dict() for o in self.objects],
+            "object_clue_ids": {k: list(v) for k, v in sorted(self.object_clue_ids.items())},
+            "clue_text": {k: list(v) for k, v in sorted(self.clue_text.items())},
+            "unclaimed_key_clue_ids": list(self.unclaimed_key_clue_ids),
+            "private_clue_assignments": {k: list(v) for k, v in sorted(self.private_clue_assignments.items())},
+            "solution": list(self.solution),
+            "accepted_solutions": [list(s) for s in self.accepted_solutions],
+            "hint_steps": [list(h) for h in self.hint_steps],
+            "attempt_limit": self.attempt_limit,
+            "failure_effects": [dict(e) for e in self.failure_effects],
+            "success_effects": [dict(e) for e in self.success_effects],
+            "attempts_used": self.attempts_used,
+            "hints_used": self.hints_used,
+            "solved": self.solved,
+            "forced": self.forced,
+        }
+
+    @staticmethod
+    def from_dict(d: dict) -> "PuzzleRoomState":
+        return PuzzleRoomState(
+            instance_id=d["instance_id"],
+            template_id=d["template_id"],
+            seed=d["seed"],
+            difficulty=d["difficulty"],
+            objects=tuple(PuzzleObjectView.from_dict(o) for o in d["objects"]),
+            object_clue_ids={k: tuple(v) for k, v in d["object_clue_ids"].items()},
+            clue_text={k: tuple(v) for k, v in d["clue_text"].items()},
+            unclaimed_key_clue_ids=list(d["unclaimed_key_clue_ids"]),
+            private_clue_assignments={k: tuple(v) for k, v in d["private_clue_assignments"].items()},
+            solution=tuple(d["solution"]),
+            accepted_solutions=tuple(tuple(s) for s in d["accepted_solutions"]),
+            hint_steps=tuple(tuple(h) for h in d["hint_steps"]),
+            attempt_limit=d["attempt_limit"],
+            failure_effects=tuple(d["failure_effects"]),
+            success_effects=tuple(d["success_effects"]),
+            attempts_used=d["attempts_used"],
+            hints_used=d["hints_used"],
+            solved=d["solved"],
+            forced=d["forced"],
+        )
+
+
+@dataclass
 class RoomState:
     room_id: str
     x: int
@@ -59,6 +156,7 @@ class RoomState:
     required: bool = False
     is_entrance: bool = False
     is_exit: bool = False
+    puzzle: PuzzleRoomState | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -73,6 +171,7 @@ class RoomState:
             "required": self.required,
             "is_entrance": self.is_entrance,
             "is_exit": self.is_exit,
+            "puzzle": self.puzzle.to_dict() if self.puzzle is not None else None,
         }
 
     @staticmethod
@@ -89,6 +188,7 @@ class RoomState:
             required=d["required"],
             is_entrance=d["is_entrance"],
             is_exit=d["is_exit"],
+            puzzle=PuzzleRoomState.from_dict(d["puzzle"]) if d.get("puzzle") else None,
         )
 
 
@@ -163,6 +263,7 @@ class RunState:
     chapter_floor_index: int = 0
     heroes: dict[str, HeroState] = field(default_factory=dict)
     map: MapState | None = None
+    facts: tuple[str, ...] = field(default_factory=tuple)  # emit_fact op ledger (§5, §18.4 seam)
 
     @staticmethod
     def initial(run_id: str, seed: int, chapter_floor_index: int = 0) -> "RunState":
@@ -186,6 +287,7 @@ class RunState:
             "chapter_floor_index": self.chapter_floor_index,
             "heroes": {hid: h.to_dict() for hid, h in sorted(self.heroes.items())},
             "map": self.map.to_dict() if self.map else None,
+            "facts": list(self.facts),
         }
 
     def state_hash(self) -> str:

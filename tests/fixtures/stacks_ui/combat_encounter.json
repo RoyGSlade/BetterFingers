@@ -1,0 +1,91 @@
+{
+  "description": "A Conflict-room encounter (infinite_stacks.md S14/S24.3) mid-round: initiative order with the acting hero, one enemy telegraphing its next intent, legal attacks/maneuvers/reactions, and the S12.5 check receipt for the last resolved attack. Wire shape for state.combat (core/selectors.js selectCombatView).",
+  "encounter_id": "enc_9d0b1e22",
+  "round": 2,
+  "initiative_order": [
+    { "id": "hero_bram", "name": "Bram", "initiative": 18, "is_current_turn": true, "has_reaction_available": true },
+    { "id": "enemy_goblin", "name": "Shelf-Lighter Goblin", "initiative": 14, "is_current_turn": false, "has_reaction_available": true },
+    { "id": "hero_indra", "name": "Indra", "initiative": 9, "is_current_turn": false, "has_reaction_available": false }
+  ],
+  "enemies": [
+    {
+      "id": "enemy_goblin",
+      "name": "Shelf-Lighter Goblin",
+      "hp": 5,
+      "max_hp": 8,
+      "intent": {
+        "label": "Ignite",
+        "glyph": "▲",
+        "description": "Marks the reference shelf it plans to set alight next round."
+      },
+      "statuses": [{ "id": "marked", "rounds_remaining": 3 }]
+    }
+  ],
+  "heroes": [
+    {
+      "id": "hero_bram",
+      "name": "Bram",
+      "hp": 6,
+      "max_hp": 12,
+      "reaction_available": true,
+      "statuses": [{ "id": "prone", "rounds_remaining": 1 }]
+    },
+    {
+      "id": "hero_indra",
+      "name": "Indra",
+      "hp": 10,
+      "max_hp": 10,
+      "reaction_available": false,
+      "statuses": []
+    }
+  ],
+  "legal_actions": {
+    "attacks": [
+      {
+        "id": "attack_bonk",
+        "label": "Bonk (d6 weapon)",
+        "target_id": "enemy_goblin",
+        "target_label": "Shelf-Lighter Goblin",
+        "expected_effect": "Hit on 12+, d6 damage on success"
+      }
+    ],
+    "maneuvers": [
+      {
+        "id": "maneuver_trip",
+        "label": "Trip",
+        "target_id": "enemy_goblin",
+        "target_label": "Shelf-Lighter Goblin",
+        "accuracy_modifier": -4,
+        "expected_effect": "Reduced damage, inflicts Prone on hit"
+      },
+      {
+        "id": "maneuver_disarm",
+        "label": "Disarm",
+        "target_id": "enemy_goblin",
+        "target_label": "Shelf-Lighter Goblin",
+        "accuracy_modifier": -4,
+        "expected_effect": "Reduced damage, removes held torch on hit"
+      }
+    ],
+    "reactions": [
+      { "id": "reaction_dodge", "label": "Dodge", "available": true },
+      { "id": "reaction_protect", "label": "Protect", "available": true },
+      { "id": "reaction_counter", "label": "Counter", "available": false }
+    ]
+  },
+  "last_check_receipt": {
+    "action": "Bonk",
+    "target": "Shelf-Lighter Goblin",
+    "attribute": "Finesse",
+    "skill": "Bonk",
+    "die_result": 14,
+    "modifiers": [
+      { "source": "Finesse", "value": 3 },
+      { "source": "Bonk skill rank", "value": 2 },
+      { "source": "d6 weapon", "value": 0 },
+      { "source": "Flanking advantage vs. Disadvantage (Prone)", "value": 0 }
+    ],
+    "target_number": 15,
+    "outcome": "Progress with cost, exposure, or reduced effect"
+  }
+}

@@ -8,14 +8,21 @@
 import { createRoom, joinRoom, fetchSnapshot, submitCommandOverRest } from "./core/api.js";
 import { createStacksSocket } from "./core/socket.js";
 import { createStore, createInitialState, reduceServerMessage } from "./core/store.js";
-import { moveCommand, breachCommand, observeCommand, inspectCommand, passCommand } from "./core/commands.js";
+import { moveCommand, breachCommand, observeCommand, inspectCommand, passCommand, buildCommand } from "./core/commands.js";
+import { selectActiveScreen } from "./core/selectors.js";
 import { renderMapScreen } from "./screens/map.js";
+import { renderRoomScreen } from "./screens/room.js";
+import { renderPuzzleScreen } from "./screens/puzzle.js";
+import { renderCombatScreen } from "./screens/combat.js";
 
 const store = createStore(createInitialState());
 let socket = null;
 
 const joinPanel = document.getElementById("join-panel");
 const mapScreen = document.getElementById("map-screen");
+const roomScreen = document.getElementById("room-screen");
+const puzzleScreen = document.getElementById("puzzle-screen");
+const combatScreen = document.getElementById("combat-screen");
 const joinStatus = document.getElementById("join-status");
 
 function setJoinStatus(text) {
@@ -64,11 +71,43 @@ const handlers = {
     const current = store.getState().selectedAllyId;
     store.setState({ selectedAllyId: current === heroId ? null : heroId });
   },
+  // Wave 2 screens (infinite_stacks.md S24.3/S24.4): these dispatch new
+  // command types over the existing sendCommand path. Reducer handling for
+  // them lands with the effects/combat lanes (director's wave-2 note); until
+  // then the server rejects them as unknown_target/schema_error, same as
+  // any other not-yet-wired command.
+  onInspectObject: (objectId) => sendCommand(buildCommand("inspect_object", { object_id: objectId }, { expectedRevision: currentRevision() })),
+  onUseExit: (direction) => sendCommand(buildCommand("use_exit", { direction }, { expectedRevision: currentRevision() })),
+  onShareClue: () => sendCommand(buildCommand("share_clue", {}, { expectedRevision: currentRevision() })),
+  onAddNote: (text) => sendCommand(buildCommand("add_note", { text }, { expectedRevision: currentRevision() })),
+  onReorderNote: (noteId, direction) => sendCommand(buildCommand("reorder_note", { note_id: noteId, direction }, { expectedRevision: currentRevision() })),
+  onLinkNotes: (noteId, otherNoteId) =>
+    sendCommand(buildCommand("link_notes", { note_id: noteId, other_note_id: otherNoteId }, { expectedRevision: currentRevision() })),
+  onToggleContradiction: (noteId) => sendCommand(buildCommand("toggle_contradiction", { note_id: noteId }, { expectedRevision: currentRevision() })),
+  onRequestHint: () => sendCommand(buildCommand("request_hint", {}, { expectedRevision: currentRevision() })),
+  onForceProgress: () => sendCommand(buildCommand("force_progress", {}, { expectedRevision: currentRevision() })),
+  onSubmitSolution: (answer) => sendCommand(buildCommand("submit_solution", { answer }, { expectedRevision: currentRevision() })),
+  onAttack: (attackId, targetId) => sendCommand(buildCommand("combat_attack", { attack_id: attackId, target_id: targetId }, { expectedRevision: currentRevision() })),
+  onDeclareManeuver: (maneuverId, targetId) =>
+    sendCommand(buildCommand("combat_maneuver", { maneuver_id: maneuverId, target_id: targetId }, { expectedRevision: currentRevision() })),
+  onReact: (reactionId) => sendCommand(buildCommand("combat_reaction", { reaction_id: reactionId }, { expectedRevision: currentRevision() })),
 };
 
+// Exactly one non-map screen is visible at a time, selected by
+// selectActiveScreen (core/selectors.js) -- combat > puzzle > room > map.
 function render(state) {
   if (!mapScreen) return;
-  renderMapScreen(mapScreen, state, handlers);
+  const activeScreen = selectActiveScreen(state);
+
+  mapScreen.hidden = activeScreen !== "map";
+  if (roomScreen) roomScreen.hidden = activeScreen !== "room";
+  if (puzzleScreen) puzzleScreen.hidden = activeScreen !== "puzzle";
+  if (combatScreen) combatScreen.hidden = activeScreen !== "combat";
+
+  if (activeScreen === "map") renderMapScreen(mapScreen, state, handlers);
+  else if (activeScreen === "room" && roomScreen) renderRoomScreen(roomScreen, state, handlers);
+  else if (activeScreen === "puzzle" && puzzleScreen) renderPuzzleScreen(puzzleScreen, state, handlers);
+  else if (activeScreen === "combat" && combatScreen) renderCombatScreen(combatScreen, state, handlers);
 }
 
 function watchReducedMotion() {

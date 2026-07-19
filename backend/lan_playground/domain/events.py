@@ -28,6 +28,21 @@ class EventType(str, Enum):
     WORLD_ROUND_ADVANCED = "world_round_advanced"
     CHECK_RESOLVED = "check_resolved"
 
+    # Mystery Chamber puzzle rooms (infinite_stacks.md §9.1, §10; systems/puzzles.py)
+    MYSTERY_PUZZLE_INSTANTIATED = "mystery_puzzle_instantiated"
+    PRIVATE_CLUE_REVEALED = "private_clue_revealed"
+    PUZZLE_OBJECT_INSPECTED = "puzzle_object_inspected"
+    PUZZLE_HINT_REVEALED = "puzzle_hint_revealed"
+    PUZZLE_SOLUTION_ACCEPTED = "puzzle_solution_accepted"
+    PUZZLE_SOLUTION_REJECTED = "puzzle_solution_rejected"
+    PUZZLE_FORCE_PROGRESS = "puzzle_force_progress"
+
+    # Content-effect ops (contract doc §5; systems/effects.py)
+    ROOM_REVEALED_BY_EFFECT = "room_revealed_by_effect"   # reveal_room op
+    EFFECT_ENERGY_SPENT = "effect_energy_spent"           # spend_energy op
+    FACT_EMITTED = "fact_emitted"                          # emit_fact op
+    # grant_check op reuses CHECK_RESOLVED above
+
 
 @dataclass(frozen=True)
 class Event:

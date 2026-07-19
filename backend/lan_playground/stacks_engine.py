@@ -12,12 +12,14 @@ translates between the real engine's Command/Event/RunState shapes and the
 wire shapes in stacks_protocol.py, which is a stable contract the client was
 built against and does not change here.
 
-Two things the real engine does not implement this wave (per contract doc S5,
-"content-effect interface -- not yet implemented") are still synthesized here,
-exactly as the wave-1 stub did, purely as adapter-owned wire embellishment
-(never mutating real engine state): per-hero private clues on breach/inspect
-into a mystery_chamber/study room, used to exercise the projection-privacy
-mechanism end to end ahead of the real content-effect pipeline landing.
+Wave 2 (board task #5): the wave-1 adapter-synthesized private-clue
+embellishment is gone. Mystery Chamber rooms now run a real, seeded
+`content.puzzles.ordering_sequence` instance through `backend.lan_playground.
+systems.puzzles`; this class only translates the resulting domain events
+(mystery_puzzle_instantiated, private_clue_revealed, puzzle_object_inspected,
+puzzle_hint_revealed, puzzle_solution_accepted/rejected, puzzle_force_progress)
+into wire events and folds a solution-free puzzle snapshot into `project()`
+-- it never invents puzzle content itself anymore.
 
 Split out of stacks_api.py (board task #3 follow-up) to keep each module
 under the infinite_stacks.md S22.2 soft 500-line cap.
@@ -42,9 +44,9 @@ from backend.lan_playground.systems import map_generation
 from backend.lan_playground.stacks_projections import events_since as _events_since
 from backend.lan_playground.stacks_projections import legal_actions as _legal_actions
 from backend.lan_playground.stacks_projections import project as _project
+from backend.lan_playground.stacks_projections import project_puzzles as _project_puzzles
 from backend.lan_playground.stacks_protocol import (
     DISPLAY_NAME_MAX_CHARS,
-    FAMILIES_WITH_PRIVATE_CLUE,
     ApplyResult,
     Command,
     CommandError,
@@ -107,7 +109,48 @@ class StacksEngineAdapter:
         return _legal_actions(state, hero_id)
 
     def project(self, state: RunState, viewer: str | None) -> dict[str, Any]:
-        return _project(state, viewer)
+        base = _project(state, viewer)
+        domain_state = self._domain_states.get(state.run_id)
+        puzzles_by_room: dict[str, Any] = {}
+        if domain_state is not None and domain_state.map is not None:
+            for room_id, room in domain_state.map.rooms.items():
+                if room.puzzle is not None:
+                    puzzles_by_room[room_id] = self._neutral_puzzle_snapshot(room.puzzle)
+        base["puzzles"] = _project_puzzles(puzzles_by_room, viewer)
+        return base
+
+    @staticmethod
+    def _neutral_puzzle_snapshot(puzzle: Any) -> dict[str, Any]:
+        """Domain PuzzleRoomState -> a viewer-agnostic wire-safe dict. Never
+        includes `solution`/`accepted_solutions` (contract: never serialized
+        in any projection) -- stacks_projections.project_puzzles() does the
+        remaining per-viewer filtering of `private_clues`."""
+
+        return {
+            "instance_id": puzzle.instance_id,
+            "template_id": puzzle.template_id,
+            "difficulty": puzzle.difficulty,
+            "objects": [o.to_dict() for o in puzzle.objects],
+            "solved": puzzle.solved,
+            "forced": puzzle.forced,
+            "attempts_used": puzzle.attempts_used,
+            "attempt_limit": puzzle.attempt_limit,
+            "hints_revealed": [
+                {"fallback": fallback, "accessible": accessible}
+                for fallback, accessible in puzzle.hint_steps[: puzzle.hints_used]
+            ],
+            "private_clues": {
+                hero_id: [
+                    {
+                        "clue_id": cid,
+                        "fallback": puzzle.clue_text[cid][0],
+                        "accessible": puzzle.clue_text[cid][1],
+                    }
+                    for cid in clue_ids
+                ]
+                for hero_id, clue_ids in puzzle.private_clue_assignments.items()
+            },
+        }
 
     def events_since(self, state: RunState, viewer: str | None, since_revision: int) -> list[Event]:
         return _events_since(state, viewer, since_revision)
@@ -337,6 +380,84 @@ class StacksEngineAdapter:
                     )
                 )
                 pending_energy = 0
+            elif de.type == DomainEventType.MYSTERY_PUZZLE_INSTANTIATED:
+                events.append(self._translate_puzzle_instantiated(state, de))
+            elif de.type == DomainEventType.PRIVATE_CLUE_REVEALED:
+                events.append(self._translate_private_clue_revealed(state, de))
+            elif de.type == DomainEventType.PUZZLE_OBJECT_INSPECTED:
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "object_inspected",
+                        visibility="private",
+                        visible_to=de.payload["viewer_hero_id"],
+                        payload={
+                            "object_id": de.payload["object_id"],
+                            "role": de.payload["role"],
+                            "fallback": de.payload["fallback"],
+                            "accessible": de.payload["accessible"],
+                            "revealed_clues": de.payload["revealed_clues"],
+                        },
+                    )
+                )
+            elif de.type == DomainEventType.PUZZLE_HINT_REVEALED:
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "puzzle_hint_revealed",
+                        visibility="party",
+                        payload={
+                            "hint_index": de.payload["hint_index"],
+                            "fallback": de.payload["fallback"],
+                            "accessible": de.payload["accessible"],
+                        },
+                    )
+                )
+            elif de.type == DomainEventType.PUZZLE_SOLUTION_ACCEPTED:
+                events.append(
+                    self._wire_event(
+                        state, de, "puzzle_solved", payload={"attempts_used": de.payload["attempts_used"]}
+                    )
+                )
+            elif de.type == DomainEventType.PUZZLE_SOLUTION_REJECTED:
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "puzzle_solution_rejected",
+                        payload={
+                            "attempts_used": de.payload["attempts_used"],
+                            "attempt_limit": de.payload["attempt_limit"],
+                            "forced": de.payload["forced"],
+                        },
+                    )
+                )
+            elif de.type == DomainEventType.PUZZLE_FORCE_PROGRESS:
+                events.append(
+                    self._wire_event(state, de, "puzzle_force_progress", payload={"reason": de.payload["reason"]})
+                )
+            elif de.type == DomainEventType.ROOM_REVEALED_BY_EFFECT:
+                events.append(
+                    self._wire_event(
+                        state, de, "room_revealed_by_effect", payload={"room_id": de.payload["room_id"]}
+                    )
+                )
+            elif de.type == DomainEventType.EFFECT_ENERGY_SPENT:
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "effect_energy_spent",
+                        visibility="party",
+                        payload={"hero_id": de.actor_hero_id, "amount": de.payload["amount"]},
+                    )
+                )
+            elif de.type == DomainEventType.FACT_EMITTED:
+                events.append(
+                    self._wire_event(state, de, "fact_emitted", payload={"fact_id": de.payload["fact_id"]})
+                )
             elif de.type == DomainEventType.TURN_SUBMITTED:
                 events.append(self._wire_event(state, de, "turn_passed", payload={"hero_id": de.actor_hero_id}))
             elif de.type == DomainEventType.WORLD_ROUND_ADVANCED:
@@ -393,30 +514,39 @@ class StacksEngineAdapter:
                 },
             ),
         ]
-        if family in FAMILIES_WITH_PRIVATE_CLUE:
-            clue = f"Only {hero_id} can read this: the {family} holds a private clue."
-            state.heroes[hero_id].private_clue = clue
-            room.secrets[hero_id] = clue
-            events.append(
-                self._wire_event(
-                    state, de, "private_clue_assigned", visibility="private", visible_to=hero_id, payload={"clue": clue}
-                )
-            )
         return events
 
     def _translate_room_inspected(self, state: RunState, de: DomainEvent) -> Event:
         hero_id = de.actor_hero_id
-        room = state.rooms[de.room_id]
-        hero = state.heroes[hero_id]
-        if hero_id not in room.secrets and room.family in FAMILIES_WITH_PRIVATE_CLUE and hero.private_clue is None:
-            clue = f"Only {hero_id} can read this: something about the {room.family} here doesn't add up."
-            hero.private_clue = clue
-            room.secrets[hero_id] = clue
-            return self._wire_event(
-                state, de, "private_clue_assigned", visibility="private", visible_to=hero_id, payload={"clue": clue}
-            )
         return self._wire_event(
             state, de, "object_inspected", payload={"hero_id": hero_id, "room_id": de.room_id}
+        )
+
+    def _translate_puzzle_instantiated(self, state: RunState, de: DomainEvent) -> Event:
+        domain_state = self._domain_states[state.run_id]
+        room = domain_state.map.rooms[de.payload["room_id"]] if domain_state.map else None
+        objects = [o.to_dict() for o in room.puzzle.objects] if room is not None and room.puzzle is not None else []
+        return self._wire_event(
+            state,
+            de,
+            "puzzle_instantiated",
+            payload={
+                "room_id": de.payload["room_id"],
+                "instance_id": de.payload["instance_id"],
+                "template_id": de.payload["template_id"],
+                "difficulty": de.payload["difficulty"],
+                "objects": objects,
+            },
+        )
+
+    def _translate_private_clue_revealed(self, state: RunState, de: DomainEvent) -> Event:
+        hero_id = de.payload["viewer_hero_id"]
+        clues = de.payload["clues"]
+        hero = state.heroes.get(hero_id)
+        if hero is not None and clues:
+            hero.private_clue = " ".join(c["fallback"] for c in clues)
+        return self._wire_event(
+            state, de, "private_clue_assigned", visibility="private", visible_to=hero_id, payload={"clues": clues}
         )
 
     def _direction_between(self, state: RunState, from_room_id: str, to_room_id: str) -> str | None:

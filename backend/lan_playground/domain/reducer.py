@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..systems import checks, exploration, turns
+from ..systems import checks, effects, exploration, puzzles, turns
 from .commands import Command, CommandError, CommandType, ErrorCode
 from .events import Event
 from .rng import StacksRNG
@@ -26,6 +26,9 @@ _VALIDATORS = {
     CommandType.INSPECT: lambda state, hero_id, payload: exploration.validate_inspect(state, hero_id, payload),
     CommandType.PASS: lambda state, hero_id, payload: None,
     CommandType.CHECK: lambda state, hero_id, payload: turns.require_energy(state, hero_id, "major_skill_interaction"),
+    CommandType.INSPECT_OBJECT: lambda state, hero_id, payload: puzzles.validate_inspect_object(state, hero_id, payload),
+    CommandType.SUBMIT_SOLUTION: lambda state, hero_id, payload: puzzles.validate_submit_solution(state, hero_id, payload),
+    CommandType.REQUEST_HINT: lambda state, hero_id, payload: puzzles.validate_request_hint(state, hero_id, payload),
 }
 
 _HANDLERS = {
@@ -36,9 +39,18 @@ _HANDLERS = {
     CommandType.INSPECT: exploration.handle_inspect,
     CommandType.PASS: lambda command, state, rng, seq: turns.handle_pass(command, state, seq),
     CommandType.CHECK: checks.handle_check,
+    CommandType.INSPECT_OBJECT: puzzles.handle_inspect_object,
+    CommandType.SUBMIT_SOLUTION: puzzles.handle_submit_solution,
+    CommandType.REQUEST_HINT: puzzles.handle_request_hint,
 }
 
-EVENT_APPLIERS = {**turns.EVENT_APPLIERS, **exploration.EVENT_APPLIERS, **checks.EVENT_APPLIERS}
+EVENT_APPLIERS = {
+    **turns.EVENT_APPLIERS,
+    **exploration.EVENT_APPLIERS,
+    **checks.EVENT_APPLIERS,
+    **puzzles.EVENT_APPLIERS,
+    **effects.EVENT_APPLIERS,
+}
 
 
 def validate(command: Command, state: RunState, viewer: str | None) -> None:

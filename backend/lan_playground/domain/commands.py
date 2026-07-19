@@ -13,6 +13,9 @@ class CommandType(str, Enum):
     INSPECT = "inspect"
     PASS = "pass"
     CHECK = "check"
+    INSPECT_OBJECT = "inspect_object"
+    SUBMIT_SOLUTION = "submit_solution"
+    REQUEST_HINT = "request_hint"
 
 
 class ErrorCode(str, Enum):

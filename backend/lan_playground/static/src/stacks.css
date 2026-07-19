@@ -420,3 +420,218 @@ button.stacks-tile {
 .stacks-rows-22 { grid-template-rows: repeat(22, auto); }
 .stacks-rows-23 { grid-template-rows: repeat(23, auto); }
 .stacks-rows-24 { grid-template-rows: repeat(24, auto); }
+
+/* Wave 2: room / puzzle / combat screens + shared components (card,
+   check-receipt, status). Same rule as above -- every stateful indicator
+   keeps a text label in the markup; color here only reinforces it. */
+
+#room-screen,
+#puzzle-screen,
+#combat-screen {
+  padding: 1rem;
+}
+
+.stacks-room-heading,
+.stacks-puzzle-heading {
+  margin-bottom: 1rem;
+}
+
+.stacks-room-layout,
+.stacks-puzzle-layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+
+.stacks-room-occupants,
+.stacks-room-objects,
+.stacks-room-exits,
+.stacks-room-corruption-tells,
+.stacks-puzzle-objects,
+.stacks-puzzle-private-clue,
+.stacks-puzzle-shared-notes,
+.stacks-puzzle-hints,
+.stacks-puzzle-submission,
+.stacks-combat-initiative,
+.stacks-combat-enemies,
+.stacks-combat-heroes,
+.stacks-combat-attacks,
+.stacks-combat-maneuvers,
+.stacks-combat-reactions {
+  background: var(--stacks-panel);
+  border: 1px solid var(--stacks-border);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+}
+
+.stacks-room-object,
+.stacks-room-exit,
+.stacks-puzzle-object,
+.stacks-combat-attack-button,
+.stacks-combat-maneuver-button,
+.stacks-combat-reaction-button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  width: 100%;
+  text-align: left;
+  background: #262a35;
+  border: 1px solid var(--stacks-border);
+  border-radius: 0.4rem;
+  padding: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.stacks-room-object.is-inspected,
+.stacks-puzzle-object.is-inspected {
+  border-color: var(--stacks-accent);
+}
+
+.stacks-room-exit:disabled,
+.stacks-combat-attack-button:disabled,
+.stacks-combat-maneuver-button:disabled,
+.stacks-combat-reaction-button:disabled,
+.stacks-puzzle-submit-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.stacks-room-exit-cost,
+.stacks-combat-attack-effect,
+.stacks-combat-maneuver-effect {
+  font-size: 0.8rem;
+  color: var(--stacks-muted);
+}
+
+.stacks-puzzle-note {
+  border-bottom: 1px solid var(--stacks-border);
+  padding-bottom: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.stacks-puzzle-note.is-contradiction {
+  border-left: 3px solid var(--stacks-accent);
+  padding-left: 0.5rem;
+}
+
+.stacks-puzzle-note-order button,
+.stacks-puzzle-note-link-button,
+.stacks-puzzle-note-contradiction-button,
+.stacks-puzzle-share-clue-button,
+.stacks-puzzle-add-note-button,
+.stacks-puzzle-request-hint-button,
+.stacks-puzzle-force-progress-button,
+.stacks-puzzle-submit-button {
+  background: #2f3340;
+  border: 1px solid var(--stacks-border);
+  border-radius: 0.3rem;
+  padding: 0.35rem 0.75rem;
+  margin-right: 0.4rem;
+}
+
+.stacks-puzzle-hint-tier.is-used {
+  opacity: 0.6;
+}
+
+.stacks-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: #2f3340;
+  border: 1px solid var(--stacks-border);
+  border-radius: 0.3rem;
+  padding: 0.1rem 0.4rem;
+  margin: 0.15rem 0.25rem 0.15rem 0;
+  font-size: 0.8rem;
+}
+
+.stacks-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: #262a35;
+  border: 1px solid var(--stacks-border);
+  border-radius: 0.5rem;
+  padding: 0.6rem;
+  margin-bottom: 0.5rem;
+}
+.stacks-card-heading {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 600;
+}
+.stacks-card-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.5rem;
+  font-size: 0.8rem;
+  color: var(--stacks-muted);
+  margin: 0.4rem 0;
+}
+.stacks-card-tags {
+  list-style: none;
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+  padding: 0;
+  margin: 0.4rem 0;
+}
+.stacks-card-tag {
+  background: #2f3340;
+  border-radius: 0.3rem;
+  padding: 0.1rem 0.4rem;
+  font-size: 0.75rem;
+}
+
+.stacks-check-receipt {
+  background: var(--stacks-panel);
+  border: 1px solid var(--stacks-border);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  margin-bottom: 1rem;
+}
+.stacks-check-receipt-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.5rem;
+  margin: 0.4rem 0;
+}
+.stacks-check-receipt-modifiers {
+  margin: 0.4rem 0;
+  padding-left: 1.25rem;
+}
+.stacks-check-receipt-outcome--strong,
+.stacks-check-receipt-outcome--clean {
+  color: #8fe0a0;
+}
+.stacks-check-receipt-outcome--cost {
+  color: #f0c56a;
+}
+.stacks-check-receipt-outcome--setback {
+  color: #ff8a8a;
+}
+
+.stacks-combat-enemy-list,
+.stacks-combat-hero-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 0.5rem;
+}
+.stacks-combat-enemy-card,
+.stacks-combat-hero-card {
+  background: #262a35;
+  border: 1px solid var(--stacks-border);
+  border-radius: 0.4rem;
+  padding: 0.5rem;
+}
+.stacks-combat-initiative-item.is-current-turn {
+  border-left: 3px solid var(--stacks-accent);
+  padding-left: 0.5rem;
+}
+.stacks-combat-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}

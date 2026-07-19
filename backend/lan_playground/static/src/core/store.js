@@ -23,6 +23,14 @@ export function createInitialState() {
     legalActions: null,
     lastError: null,
     reducedMotion: false,
+    // Wave 2 (infinite_stacks.md S24.3/S24.4): server-populated wire objects
+    // consumed via core/selectors.js's selectActiveScreen/selectEnteredRoomView/
+    // selectPuzzleView/selectCombatView. Reducer wiring for the events that
+    // populate these lands with the effects/combat lanes; wave 2 exercises
+    // the screens against committed JSON fixtures (tests/fixtures/stacks_ui/).
+    enteredRoom: null,
+    puzzle: null,
+    combat: null,
   };
 }
 

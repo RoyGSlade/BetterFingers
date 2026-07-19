@@ -111,6 +111,25 @@ def project(state: RunState, viewer: str | None) -> dict[str, Any]:
     }
 
 
+def project_puzzles(puzzles_by_room: dict[str, dict[str, Any]], viewer: str | None) -> dict[str, Any]:
+    """Viewer-filter a room_id -> neutral-puzzle-snapshot dict (built by
+    stacks_engine.py from real domain PuzzleRoomState, already stripped of
+    `solution`/`accepted_solutions` before it ever reaches this function).
+
+    `hints_revealed` is party-shared knowledge (§21.3), so it is visible to
+    any authenticated hero viewer but never to a spectator/system view
+    (viewer is None). `private_clues` is trimmed to the viewer's own hero_id
+    only -- every other hero's fragment is dropped, not merely hidden."""
+
+    projected: dict[str, Any] = {}
+    for room_id, puzzle in puzzles_by_room.items():
+        entry = {k: v for k, v in puzzle.items() if k not in ("private_clues", "hints_revealed")}
+        entry["hints_revealed"] = list(puzzle.get("hints_revealed", [])) if viewer is not None else []
+        entry["your_private_clues"] = puzzle.get("private_clues", {}).get(viewer, []) if viewer is not None else []
+        projected[room_id] = entry
+    return projected
+
+
 def event_wire(event: Event) -> dict[str, Any]:
     return {
         "event_id": event.event_id,
