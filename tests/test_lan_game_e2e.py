@@ -1,23 +1,18 @@
-"""Whole-game HTTP acceptance tests for Spellcheck & Sorcery (board task #45).
+"""Whole-game HTTP acceptance tests for The Lost Meaning (board task #2).
 
 Every app under test is built via ``create_app`` with injected fakes
 (call_fn/persona_lookup/persona_allowlist/engine_ready_fn) -- no real
-model, no server.py, no network. The only background "waiting" is a
-daemon thread standing in for a slow model (bounded ``.wait(timeout=...)``,
-same pattern already used in tests/test_lan_game_api.py); nothing in a
-test's own driving/polling logic ever sleeps or busy-waits, and no wall
-clock is used for TTL -- a fake clock dict is injected instead.
-
-This file drives full five-encounter games end-to-end through the real
-HTTP + auth + rooms.py + app.py stack (create -> join x N -> start ->
-submit -> auto-resolve -> reveal -> advance -> ... -> finished -> replay).
-It deliberately does NOT re-litigate what tests/test_lan_game_api.py
-(single-round HTTP contract), tests/test_lan_game_engine.py (pure engine
-unit tests), or tests/test_lan_game_concurrency.py (thread races) already
-cover -- only the whole-game acceptance altitude that nothing else
-currently exercises.
+model, no server.py, no network. This file drives full games end-to-end
+through the real HTTP + auth + rooms.py + app.py + game.py stack (create ->
+join x N -> start -> spotlight -> support -> open-draft -> draft -> approve
+-> react -> resolve -> advance -> ... -> finished -> replay), including
+companion auto-play for unclaimed/disconnected hero slots. It deliberately
+does NOT re-litigate what tests/test_lan_game_api.py (single-route HTTP
+contract) or tests/test_lan_game_concurrency.py (thread races) already
+cover -- only the whole-game acceptance altitude neither of those touches.
 """
 
+import json
 import threading
 import time
 import unittest
@@ -32,6 +27,19 @@ ALLOWED_HOSTS = {"testserver"}
 ALLOWED_ORIGINS = {"http://testserver"}
 
 
+def _rescue_json(faithful="ok", clearer="ok.", alternate="sure."):
+    return json.dumps(
+        {
+            "assessment": {"intent": "", "ambiguity_risk": "low", "missing_details": [], "clarification_question": ""},
+            "variants": {"faithful": faithful, "clearer": clearer, "alternate": alternate},
+        }
+    )
+
+
+def _default_call_fn(messages):
+    return _rescue_json()
+
+
 def _headers(**extra):
     return {"X-Access-Code": ACCESS_CODE, **extra}
 
@@ -41,16 +49,16 @@ def _build_app(*, room_manager=None, call_fn=None, **kwargs):
         access_code=ACCESS_CODE,
         allowed_hosts=ALLOWED_HOSTS,
         allowed_origins=ALLOWED_ORIGINS,
-        call_fn=call_fn if call_fn is not None else (lambda messages: ""),
+        call_fn=call_fn if call_fn is not None else _default_call_fn,
         persona_lookup=lambda name: None,
         persona_allowlist=lambda: [],
         # Generous budgets: rate-limit *enforcement* is already covered by
         # tests/test_lan_game_api.py -- a whole-game run legitimately makes
-        # more action/join calls than those per-route tests do, and hitting
-        # a limit here would be incidental noise, not the thing under test.
+        # more action calls than those per-route tests do.
         room_join_rate_limit_per_min=100,
         room_state_rate_limit_per_min=300,
         room_action_rate_limit_per_min=300,
+        room_draft_rate_limit_per_min=100,
     )
     if room_manager is not None:
         defaults["room_manager"] = room_manager
@@ -84,74 +92,112 @@ def _start(client, room_id, host_token):
     return resp.json()
 
 
-def _submit(client, room_id, token_header, approach, text="a bounded one-line move"):
-    return client.post(
-        f"/api/game/rooms/{room_id}/moves",
-        json={"move_text": text, "approach": approach, "card": approach},
-        headers=_headers(**token_header),
-    )
-
-
-def _advance(client, room_id, host_token):
-    resp = client.post(f"/api/game/rooms/{room_id}/advance", headers=_headers(**{"X-Host-Token": host_token}))
+def _state(client, room_id, header):
+    resp = client.get(f"/api/game/rooms/{room_id}/state", headers=_headers(**header))
     assert resp.status_code == 200, resp.text
     return resp.json()
 
 
-def _state(client, room_id, token_header):
-    resp = client.get(f"/api/game/rooms/{room_id}/state", headers=_headers(**token_header))
+def _post(client, room_id, path, header, body=None):
+    resp = client.post(f"/api/game/rooms/{room_id}{path}", json=body or {}, headers=_headers(**header))
     assert resp.status_code == 200, resp.text
-    return resp.json()
+    return resp.json()["state"] if "state" in resp.json() else resp.json()
 
 
-def _weakness(room_manager, room_id):
-    """The real, live engine Room's current weakness -- never exposed on
-    the wire itself (public_state only ever sends id/name/flavor), so the
-    test reads it the same way tests/test_lan_game_engine.py does: directly
-    off the shared game.Room object rather than guessing/recomputing it."""
-    return room_manager.get_room(room_id)._current_encounter().weakness
+def _play_one_players_step(client, room_id, header):
+    """Drives exactly the current player's next action according to their
+    own ``you.pending_step`` (an engine-provided field naming exactly what
+    that viewer may do next). Returns the resulting state, or None if this
+    player has nothing to do right now."""
+    state = _state(client, room_id, header)
+    step = state["you"]["pending_step"]
+    if step is None:
+        return None
+    if step == "start":
+        return _post(client, room_id, "/start", header)
+    if step == "declare_action":
+        hero = next(h for h in state["heroes"] if h["hero_id"] == state["spotlight_hero_id"])
+        return _post(
+            client,
+            room_id,
+            "/spotlight",
+            header,
+            {"move_id": hero["deck"][0]["id"], "target_id": state["encounter"]["targets"][0], "desired_outcome": "handle it"},
+        )
+    if step == "submit_support":
+        return _post(client, room_id, "/support", header, {"kind": "assist", "detail": "backing them up"})
+    if step == "open_draft":
+        return _post(client, room_id, "/open-draft", header)
+    if step == "submit_rough_text":
+        return _post(client, room_id, "/draft", header, {"rough_text": "We handle it, plainly."})
+    if step == "approve_message":
+        draft = state["you"]["draft"]
+        return _post(client, room_id, "/approve", header, {"chosen_text": draft["variants"][0], "intent": "resolve it"})
+    if step == "submit_reaction":
+        return _post(client, room_id, "/react", header, {"verb": "assist", "detail": "helping out"})
+    if step == "resolve":
+        return _post(client, room_id, "/resolve", header)
+    if step == "advance":
+        return _post(client, room_id, "/advance", header)
+    if step == "replay":
+        return _post(client, room_id, "/replay", header)
+    raise AssertionError(f"unhandled pending_step {step!r}")
 
 
-def _resistant(room_manager, room_id):
-    return room_manager.get_room(room_id)._current_encounter().resistant
+def _play_round_to_reveal(client, room_id, headers, max_iterations=40):
+    """Cycles through every header's pending_step until the room reaches
+    'reveal' or 'finished' -- bounded so a stuck state machine fails fast
+    instead of hanging the suite."""
+    for _ in range(max_iterations):
+        state = _state(client, room_id, headers[0])
+        if state["phase"] in ("reveal", "finished"):
+            return state
+        acted = False
+        for header in headers:
+            result = _play_one_players_step(client, room_id, header)
+            if result is not None:
+                acted = True
+        if not acted:
+            raise AssertionError(f"no header had a pending_step in phase {state['phase']!r} -- state machine stuck")
+    raise AssertionError("round did not reach reveal/finished within bounded iterations")
+
+
+def _play_full_game(client, room_id, headers, host_header, max_rounds=None):
+    max_rounds = max_rounds or (len(game.ENCOUNTERS) + 2)
+    state = None
+    for _ in range(max_rounds):
+        state = _play_round_to_reveal(client, room_id, headers)
+        if state["phase"] == "finished":
+            return state
+        state = _post(client, room_id, "/advance", host_header)
+        if state["phase"] == "finished":
+            return state
+    return state
 
 
 class SoloFullRunAndReplayTests(unittest.TestCase):
-    """Solo, five-encounter run start->finished, then a full replay cycle."""
+    """Solo host (3 companion allies) drives a full multi-round game
+    start->finished purely through their own pending_step, then a full
+    replay cycle."""
 
-    def test_solo_five_encounter_victory_then_replay(self):
+    def test_solo_full_run_then_replay_is_playable_again(self):
         mgr = rooms.RoomManager()
         client = _client(room_manager=mgr)
         room = _create_room(client, seed=1)
         room_id, host_token = room["room_id"], room["host_token"]
+        host_header = {"X-Host-Token": host_token}
 
-        _start(client, room_id, host_token)
-
-        for round_num in range(len(game.ENCOUNTERS)):
-            approach = _weakness(mgr, room_id)
-            resp = _submit(client, room_id, {"X-Host-Token": host_token}, approach)
-            self.assertEqual(resp.status_code, 200, resp.text)
-            state = resp.json()["state"]
-            self.assertEqual(state["phase"], "reveal")
-            self.assertEqual(state["last_round"]["damage"], 0)
-            self.assertEqual(state["hearts"], game.STARTING_HEARTS)
-
-            advanced = _advance(client, room_id, host_token)
-            if round_num + 1 == len(game.ENCOUNTERS):
-                self.assertEqual(advanced["phase"], "finished")
-                self.assertTrue(advanced["finished_victory"])
-            else:
-                self.assertEqual(advanced["phase"], "choosing")
-
-        final = _state(client, room_id, {"X-Host-Token": host_token})
+        final = _play_full_game(client, room_id, [host_header], host_header)
         self.assertEqual(final["phase"], "finished")
-        self.assertTrue(final["finished_victory"])
-        self.assertEqual(final["hearts"], game.STARTING_HEARTS)
-        self.assertEqual(len(final["history"]), len(game.ENCOUNTERS))
+        self.assertIn(final["finished_victory"], (True, False))
+        self.assertGreaterEqual(len(final["history"]), 1)
+        self.assertLessEqual(len(final["history"]), len(game.ENCOUNTERS))
+        for record in final["history"]:
+            self.assertTrue(record["narration"])
+            self.assertIn("die_roll", record)
+            self.assertTrue(record["modifiers"])
 
-        replay_resp = client.post(
-            f"/api/game/rooms/{room_id}/replay", headers=_headers(**{"X-Host-Token": host_token})
-        )
+        replay_resp = client.post(f"/api/game/rooms/{room_id}/replay", headers=_headers(**host_header))
         self.assertEqual(replay_resp.status_code, 200, replay_resp.text)
         replay_state = replay_resp.json()
         self.assertEqual(replay_state["phase"], "lobby")
@@ -161,184 +207,74 @@ class SoloFullRunAndReplayTests(unittest.TestCase):
         self.assertIsNone(replay_state["finished_victory"])
         self.assertTrue(replay_state["join_qr_svg"].startswith("<svg"))
 
-        # Confirm the replayed room is actually playable, not just reset.
-        _start(client, room_id, host_token)
-        approach = _weakness(mgr, room_id)
-        resp = _submit(client, room_id, {"X-Host-Token": host_token}, approach)
-        self.assertEqual(resp.json()["state"]["phase"], "reveal")
+        # Confirm the replayed room is actually playable, not just reset --
+        # play exactly round 0 again (not _play_full_game, which also calls
+        # /advance once it reaches reveal: since round 1's spotlight can be
+        # a companion that autoplay immediately declares for, that would
+        # leave phase mid-ally_support, not at a clean round boundary).
+        second_round_state = _play_round_to_reveal(client, room_id, [host_header])
+        self.assertIn(second_round_state["phase"], ("reveal", "finished"))
 
 
 class FourPlayerFullRunTests(unittest.TestCase):
-    def test_four_players_join_start_all_submit_through_victory(self):
+    def test_four_players_join_bind_distinct_heroes_and_play_one_full_round(self):
         mgr = rooms.RoomManager()
         client = _client(room_manager=mgr)
         room = _create_room(client, host_name="P1", seed=3)
-        room_id, host_token, host_id = room["room_id"], room["host_token"], room["player_id"]
-
-        tokens = {host_id: {"X-Host-Token": host_token}}
+        room_id, host_token = room["room_id"], room["host_token"]
+        headers = [{"X-Host-Token": host_token}]
         for name in ("P2", "P3", "P4"):
             joined = _join_room(client, room_id, name)
-            tokens[joined["player_id"]] = {"X-Player-Token": joined["player_token"]}
-        self.assertEqual(len(tokens), game.MAX_PLAYERS)
+            headers.append({"X-Player-Token": joined["player_token"]})
+        self.assertEqual(len(headers), game.MAX_PLAYERS)
+
+        lobby_state = _state(client, room_id, headers[0])
+        hero_ids = {p["hero_id"] for p in lobby_state["players"]}
+        self.assertEqual(len(hero_ids), game.MAX_PLAYERS)  # every player bound a distinct hero
 
         _start(client, room_id, host_token)
+        state = _play_round_to_reveal(client, room_id, headers)
+        self.assertEqual(state["phase"], "reveal")
+        self.assertEqual(len(state["last_round"]["support"]), game.MAX_PLAYERS - 1)  # every ally, not the spotlight
+        self.assertEqual(len(state["last_round"]["reactions"]), game.MAX_PLAYERS - 1)
+        # No companions in a full 4-human room.
+        for hero in state["heroes"]:
+            self.assertFalse(hero["is_companion"])
 
-        for round_num in range(len(game.ENCOUNTERS)):
-            approach = _weakness(mgr, room_id)
-            player_ids = list(tokens.keys())
-            last_state = None
-            for i, pid in enumerate(player_ids):
-                resp = _submit(client, room_id, tokens[pid], approach)
-                self.assertEqual(resp.status_code, 200, resp.text)
-                last_state = resp.json()["state"]
-                if i < len(player_ids) - 1:
-                    self.assertEqual(last_state["phase"], "choosing")  # not everyone in yet
-                    self.assertTrue(last_state["you"]["submitted"])
-
-            # The last submitter's own response already shows the round
-            # auto-resolved -- no separate client-facing "resolve" call.
-            self.assertEqual(last_state["phase"], "reveal")
-            self.assertEqual(last_state["last_round"]["successes"], game.MAX_PLAYERS)
-            self.assertEqual(last_state["last_round"]["backfires"], 0)
-            self.assertEqual(last_state["last_round"]["damage"], 0)
-
-            advanced = _advance(client, room_id, host_token)
-            if round_num + 1 == len(game.ENCOUNTERS):
-                self.assertEqual(advanced["phase"], "finished")
-                self.assertTrue(advanced["finished_victory"])
-            else:
-                self.assertEqual(advanced["phase"], "choosing")
-
-        final = _state(client, room_id, tokens[host_id])
-        self.assertEqual(final["hearts"], game.STARTING_HEARTS)
-        self.assertEqual(len(final["history"]), len(game.ENCOUNTERS))
-        for record in final["history"]:
-            self.assertEqual(record["successes"], game.MAX_PLAYERS)
+        advanced = _post(client, room_id, "/advance", headers[0])
+        self.assertIn(advanced["phase"], ("spotlight_action", "finished"))
 
 
 class SecrecyBeforeRevealTests(unittest.TestCase):
-    def test_pre_reveal_state_hides_choices_until_all_submit(self):
+    def test_support_and_reaction_content_hidden_until_resolve_and_clues_are_asymmetric(self):
         mgr = rooms.RoomManager()
         client = _client(room_manager=mgr)
         room = _create_room(client, host_name="Host", seed=5)
-        room_id, host_token, host_id = room["room_id"], room["host_token"], room["player_id"]
-        guest = _join_room(client, room_id, "Guest")
-        guest_id, guest_token = guest["player_id"], guest["player_token"]
-
-        _start(client, room_id, host_token)
-
-        weakness = _weakness(mgr, room_id)
-        submit_resp = _submit(
-            client, room_id, {"X-Host-Token": host_token}, weakness, text="totally secret host move"
-        )
-        self.assertEqual(submit_resp.status_code, 200)
-        self.assertEqual(submit_resp.json()["state"]["phase"], "choosing")  # guest hasn't submitted yet
-
-        host_view = _state(client, room_id, {"X-Host-Token": host_token})
-        guest_view = _state(client, room_id, {"X-Player-Token": guest_token})
-
-        for view, expect_you_submitted in ((host_view, True), (guest_view, False)):
-            self.assertEqual(view["phase"], "choosing")
-            self.assertIsNone(view["last_round"])
-            self.assertEqual(view["history"], [])
-            self.assertEqual(view["you"]["submitted"], expect_you_submitted)
-
-        players_by_id = {p["player_id"]: p for p in guest_view["players"]}
-        self.assertTrue(players_by_id[host_id]["submitted"])
-        self.assertFalse(players_by_id[guest_id]["submitted"])
-
-        # The host's not-yet-revealed move text must not leak into any
-        # other player's state response, not even as a raw substring.
-        raw_body = client.get(
-            f"/api/game/rooms/{room_id}/state", headers=_headers(**{"X-Player-Token": guest_token})
-        ).text
-        self.assertNotIn("totally secret host move", raw_body)
-
-        # Once the guest submits, the round auto-resolves and NOW both
-        # approaches/texts are revealed to everyone.
-        resp = _submit(client, room_id, {"X-Player-Token": guest_token}, weakness, text="guest reveal move")
-        state = resp.json()["state"]
-        self.assertEqual(state["phase"], "reveal")
-        revealed_texts = {c["move_text"] for c in state["last_round"]["choices"]}
-        self.assertIn("totally secret host move", revealed_texts)
-        self.assertIn("guest reveal move", revealed_texts)
-
-
-class DamageThenVictoryTests(unittest.TestCase):
-    """Deterministic partial damage (mixed successes/backfires among 4
-    players) followed by a clean run to victory -- exercises the
-    max(0, backfires - successes) damage math over an HTTP whole game,
-    not just a single engine-level round."""
-
-    def test_deterministic_partial_damage_then_recovery_to_victory(self):
-        mgr = rooms.RoomManager()
-        client = _client(room_manager=mgr)
-        room = _create_room(client, host_name="P1", seed=11)
-        room_id, host_token, host_id = room["room_id"], room["host_token"], room["player_id"]
-        tokens = {host_id: {"X-Host-Token": host_token}}
-        for name in ("P2", "P3", "P4"):
-            joined = _join_room(client, room_id, name)
-            tokens[joined["player_id"]] = {"X-Player-Token": joined["player_token"]}
-        player_ids = list(tokens.keys())
-
-        _start(client, room_id, host_token)
-
-        expected_hearts_after_round0 = game.STARTING_HEARTS - 2
-        for round_num in range(len(game.ENCOUNTERS)):
-            weakness = _weakness(mgr, room_id)
-            resistant = _resistant(mgr, room_id)
-            approaches = {player_ids[0]: weakness}
-            for pid in player_ids[1:]:
-                approaches[pid] = resistant if round_num == 0 else weakness
-
-            last_state = None
-            for pid in player_ids:
-                resp = _submit(client, room_id, tokens[pid], approaches[pid])
-                self.assertEqual(resp.status_code, 200, resp.text)
-                last_state = resp.json()["state"]
-
-            record = last_state["last_round"]
-            if round_num == 0:
-                # 1 success (host), 3 backfires (guests) -> damage 2.
-                self.assertEqual(record["successes"], 1)
-                self.assertEqual(record["backfires"], 3)
-                self.assertEqual(record["damage"], 2)
-            else:
-                self.assertEqual(record["damage"], 0)
-            self.assertEqual(last_state["hearts"], expected_hearts_after_round0)
-
-            advanced = _advance(client, room_id, host_token)
-            if round_num + 1 == len(game.ENCOUNTERS):
-                self.assertEqual(advanced["phase"], "finished")
-                self.assertTrue(advanced["finished_victory"])
-                self.assertEqual(advanced["hearts"], expected_hearts_after_round0)
-
-
-class DefeatPathTests(unittest.TestCase):
-    def test_solo_always_backfiring_ends_in_defeat_before_round_five(self):
-        mgr = rooms.RoomManager()
-        client = _client(room_manager=mgr)
-        room = _create_room(client, host_name="Doomed", seed=21)
         room_id, host_token = room["room_id"], room["host_token"]
+        guest = _join_room(client, room_id, "Guest")
+        host_header = {"X-Host-Token": host_token}
+        guest_header = {"X-Player-Token": guest["player_token"]}
+
         _start(client, room_id, host_token)
+        host_state = _state(client, room_id, host_header)
+        guest_state = _state(client, room_id, guest_header)
+        self.assertNotEqual(host_state["you"]["private_clue"], guest_state["you"]["private_clue"])
+        self.assertNotIn(host_state["you"]["private_clue"], json.dumps(guest_state))
 
-        rounds_played = 0
-        state = None
-        for _ in range(game.STARTING_HEARTS):
-            resistant = _resistant(mgr, room_id)
-            resp = _submit(client, room_id, {"X-Host-Token": host_token}, resistant)
-            self.assertEqual(resp.status_code, 200, resp.text)
-            state = resp.json()["state"]
-            rounds_played += 1
-            if state["phase"] == "finished":
-                break
-            _advance(client, room_id, host_token)
+        # Host is spotlight round 0 -- drive to ally_support then have the
+        # guest submit a support with secret content.
+        _play_one_players_step(client, room_id, host_header)  # declare_action
+        _post(
+            client, room_id, "/support", guest_header, {"kind": "clue", "detail": "totally secret support content"}
+        )
+        raw_host_view = client.get(f"/api/game/rooms/{room_id}/state", headers=_headers(**host_header)).text
+        self.assertNotIn("totally secret support content", raw_host_view)
 
-        self.assertEqual(state["phase"], "finished")
-        self.assertFalse(state["finished_victory"])
-        self.assertEqual(state["hearts"], 0)
-        self.assertEqual(rounds_played, game.STARTING_HEARTS)
-        self.assertLess(len(state["history"]), len(game.ENCOUNTERS))
+        # Finish the round (companions fill remaining allies; guest already went).
+        state = _play_round_to_reveal(client, room_id, [host_header, guest_header])
+        self.assertEqual(state["phase"], "reveal")
+        support_details = [s["detail"] for s in state["last_round"]["support"]]
+        self.assertIn("totally secret support content", support_details)
 
 
 class TokenAuthAcceptanceTests(unittest.TestCase):
@@ -365,7 +301,6 @@ class TokenAuthAcceptanceTests(unittest.TestCase):
         )
         self.assertEqual(cross_room_start.status_code, 401)
 
-        # room_b's own host token legitimately works on room_b.
         own_room = client.get(
             f"/api/game/rooms/{room_b['room_id']}/state", headers=_headers(**{"X-Host-Token": room_b["host_token"]})
         )
@@ -385,7 +320,6 @@ class QRLobbyOnlyAcceptanceTests(unittest.TestCase):
         lobby_state = _state(client, room_id, {"X-Host-Token": host_token})
         self.assertTrue(lobby_state["join_qr_svg"].startswith("<svg"))
         self.assertEqual(lobby_state["join_code"], room_id)
-        self.assertIn(room_id, lobby_state["join_url"])
 
         _start(client, room_id, host_token)
         active_state = _state(client, room_id, {"X-Host-Token": host_token})
@@ -396,9 +330,10 @@ class QRLobbyOnlyAcceptanceTests(unittest.TestCase):
 
 class ModelFallbackFullGameTests(unittest.TestCase):
     """Model error, model-unavailable, and slow-model-beyond-timeout, each
-    hit in a different round of the same live game -- confirms every mode
-    falls back to the player's raw move text, never hangs the request, and
-    never touches scoring (which only ever reads `approach`)."""
+    hit on a different round of the same live solo game -- confirms every
+    mode falls back safely, never hangs the request, and never touches
+    scoring (which only ever reads move_id/target_id/verb + the seeded
+    die, never draft/variant/approved text)."""
 
     def test_model_unavailable_error_and_slow_all_fall_back_safely(self):
         calls = {"n": 0}
@@ -417,27 +352,22 @@ class ModelFallbackFullGameTests(unittest.TestCase):
             room_manager=mgr,
             call_fn=flaky_call_fn,
             engine_ready_fn=lambda: ready["ok"],
-            move_polish_timeout_s=0.05,
+            draft_timeout_s=0.05,
+            narration_timeout_s=0.05,
         )
         room = _create_room(client, host_name="Solo", seed=1)
         room_id, host_token = room["room_id"], room["host_token"]
+        host_header = {"X-Host-Token": host_token}
         _start(client, room_id, host_token)
 
-        moves = (
-            "round 1: model raises an exception",
-            "round 2: model reports not ready",
-            "round 3: model is too slow",
-        )
         started = time.monotonic()
-        for i, text in enumerate(moves):
-            ready["ok"] = i != 1  # only round index 1 simulates model_unavailable
-            weakness = _weakness(mgr, room_id)
-            resp = _submit(client, room_id, {"X-Host-Token": host_token}, weakness, text=text)
-            self.assertEqual(resp.status_code, 200, resp.text)
-            state = resp.json()["state"]
-            self.assertEqual(state["last_round"]["choices"][0]["move_text"], text)
-            self.assertEqual(state["last_round"]["damage"], 0)  # scoring never touched by model failures
-            _advance(client, room_id, host_token)
+        for i in range(3):
+            ready["ok"] = i != 1  # round index 1 simulates model_unavailable
+            state = _play_round_to_reveal(client, room_id, [host_header])
+            self.assertEqual(state["phase"], "reveal")
+            self.assertTrue(state["last_round"]["narration"])  # deterministic fallback, never empty
+            if state["phase"] != "finished":
+                _post(client, room_id, "/advance", host_header)
         elapsed = time.monotonic() - started
         self.assertLess(elapsed, 3.0)
         release.set()

@@ -1,123 +1,239 @@
-# Spellcheck & Sorcery -- Game Spec (board #39)
+# The Lost Meaning -- Game Spec (board task #1)
 
-A 1-4 player, humor-forward co-op card-board adventure built on the LAN
-playground (`backend/lan_playground/`). The party shares 3 hearts and faces
-five absurd office-life "encounters." Each round every player secretly picks
-one of three approaches -- **Charm**, **Scheme**, or **Bonk** -- plus a
-bounded one-line flavor move. The host reveals everyone's choice at once and
-the engine resolves the round deterministically from the approaches alone.
+A 1-4 player cooperative communication adventure built on the LAN
+playground (`backend/lan_playground/`). Four fixed heroes -- each with a
+persona, an ability, a distinct move deck, an exclusive signature move, and
+a private per-encounter clue about the encounter's real (hidden) objective
+-- face five absurd office-life encounters. Every round the rotating
+Spotlight hero declares a move + target + desired outcome, teammates pledge
+support, the Spotlight drafts a rough line that BetterFingers turns into
+three candidate rewrites, the Spotlight edits and approves one message +
+intent, teammates react (interpret/assist/challenge/protect), and the
+engine resolves the round from a fully transparent modifier ledger plus one
+seeded die -- no hidden state, no randomness outside that one die.
 
 This document specifies the rules and the `Room`/`GameRegistry` contract
 implemented in `backend/lan_playground/game.py` (tests in
-`tests/test_lan_game_engine.py`). It is the frozen interface for:
+`tests/test_lan_game_engine.py`, 59 tests, all passing). It is the frozen
+interface for:
 
-- **game-server-sonnet** (board #40) -- wraps `GameRegistry`/`Room` in HTTP
-  routes, mints/serves QR-joinable links, owns tokens-over-the-wire.
-- **game-client-sonnet** (board #41) -- renders `public_state()` and posts
-  player actions.
+- **lost-meaning-server** (board task #2) -- wraps `GameRegistry`/`Room` in
+  HTTP routes, mints/serves QR-joinable links, owns tokens-over-the-wire,
+  calls the BetterFingers rewrite pipeline and feeds its output into
+  `submit_variants()`.
+- **lost-meaning-client** (board task #3) -- renders `public_state()` and
+  posts player actions.
+
+This replaces the prior Charm/Scheme/Bonk simultaneous-choice combat loop
+(the old five-encounter engine with a shared hearts pool and a single
+secret approach pick per round) entirely; nothing about that loop's method
+names or phases survives.
 
 ## Design invariants
 
 - **Pure engine.** `game.py` has zero FastAPI, network, or LLM imports. It
   is a plain, thread-safe, in-memory state machine -- fully unit-testable
   with no server/model boot required (mirrors `backend/lan_playground/security.py`).
-- **Cosmetic prose cannot alter score.** Resolution reads only the fixed
-  `approach` string (`"charm" | "scheme" | "bonk"`) a player submitted.
-  Free-text `move_text` and any persona/LLM-rewritten flavor text
-  (`Room.set_flavor()`) are display-only and are never inspected by
-  `resolve()`. A game is exactly as fair with an LLM running as with the
-  model completely offline and every line falling back to its canonical
-  text -- this satisfies "playable without a model via deterministic
-  fallback content" (see `progress.md`).
+- **Prose can never alter resolution.** Free text -- `desired_outcome`,
+  rough/variant/approved text, `intent`, support/reaction `detail`, and any
+  `set_flavor()` overlay -- is display-only and is never read by
+  `resolve()`. Resolution only ever reads `move_id`/`target_id`/reaction
+  `verb` fields (fixed enums) plus one seeded die. A game is exactly as
+  fair with BetterFingers running as with the model completely offline and
+  every rewrite falling back to three identical copies of the canonical
+  text -- the deterministic model-free fallback.
+- **Cards and clues are transparent, secrets are scoped, not hidden by
+  default.** A hero's move deck, signature move, ability, and persona are
+  always public (`heroes[]`). The Spotlight's move/target/desired-outcome
+  become public the instant they're declared (`current_action`) -- this is
+  not a simultaneous hidden-choice game. Only two things are ever actually
+  secret: (1) a hero's private clue, visible solely to that hero via `you`,
+  and (2) support/reaction *content* (kind/verb/detail/move_id), which
+  stays invisible to every viewer -- including the contributor's own
+  future reads and the host -- until `resolve()` reveals it in
+  `last_round`/`history`. Before that, only a boolean "have they gone yet"
+  (`heroes[].submitted_current_step`) is visible. The Spotlight's own
+  rough-text/variants/approved-text-in-progress are visible only to that
+  Spotlight's own viewer (`you.draft`), not even to the host.
 - **No secrets leak.** `Room.public_state()` never includes any player's
-  token, and never includes another player's submitted approach/move_text
-  for the round currently in progress -- only whether they've submitted.
-  Choices become visible to everyone only after `resolve()` reveals them.
-- **Disconnect never deadlocks.** If the host disconnects, the next active
-  player (join order) is auto-promoted to host so someone can always drive
-  the game. If everyone disconnects (solo host included), the room simply
-  waits; the departed host keeps/reclaims the role on reconnect.
-- **Deterministic seed.** Each room shuffles the 5 encounters' order from
-  an integer seed (`random.Random(seed).shuffle`). Same seed -> same
-  encounter order, every time -- useful for tests, and for a host who wants
-  to reproduce a specific run via `replay(seed=...)`.
+  token.
+- **Solo and disconnects are always playable.** Heroes are fixed (see
+  below) and always all four are "in play" every game. Any hero slot with
+  no human controller -- never claimed, or claimed by a player who is
+  currently disconnected -- is played by small, deterministic,
+  seed/round-derived companion logic, so a 1-player game (or a game where
+  someone drops mid-round) always has all four heroes acting and the room
+  never stalls waiting on a human who isn't there. Autoplay runs
+  synchronously inside every phase-transitioning call (including
+  `disconnect()`), so a companion's pending step is always filled before
+  any human could ever observe it as merely "pending."
+- **Deterministic seed.** Each room shuffles the first four of five
+  encounters' order from an integer seed (`random.Random(seed).shuffle`);
+  the Red-Tape Dragon always occupies the final stop. The one die rolled
+  per round is also seed-derived (`random.Random(seed * 1_000_003 +
+  encounter_index)`), so a given seed reproduces an identical run --
+  useful for tests and for `replay(seed=...)`.
+
+## The four heroes
+
+Heroes are fixed -- there is no character-creation or selection step.
+`Room.join()` binds each new player to the next open slot in this order:
+
+| Order | Hero | Persona | Ability | Deck | Signature move |
+|---|---|---|---|---|---|
+| 0 | Bram Correctly | Overly-formal municipal clerk who fights bureaucracy with more bureaucracy, kindly | **Steady Hand** -- playing Precision Bonk or The Unimpeachable Memo as Spotlight reduces that round's backfire damage by 1 | Empathic Mirror, Precision Bonk, Cross-Reference | The Unimpeachable Memo (scheme) |
+| 1 | Nadia Quickwit | Fast-talking dispute-resolution specialist, sharp and a little chaotic | **Loophole Sense** -- her own challenge reaction gets +1 extra | Loophole with Consequences, Disarming Honesty, Cross-Reference | The Airtight Rebuttal (scheme) |
+| 2 | Otis Barnstorm | Blunt, warm-hearted forklift-driver-turned-negotiator | **Follow-Through** -- as Spotlight playing his weakness school, +1 extra | Precision Bonk, Smash the Right Thing, Improvised Bonk | The One True Thump (bonk) |
+| 3 | Ilona Softword | Gentle, empathetic mediator, a master of tone | **Read the Room** -- her own protect reaction reduces damage by 2 instead of 1 | Empathic Mirror, Defend the Speaker, Disarming Honesty | The Perfect Pause (charm) |
+
+The Spotlight rotates by `encounter_index % 4`, i.e. hero 0, 1, 2, 3, 0
+across the five rounds -- hero 0 gets a second turn in round 4 (the
+Red-Tape Dragon). Any slot beyond the number of humans who joined (or
+belonging to a currently-disconnected player) is a **companion**: deterministic,
+round-derived choices (its deck move at `encounter_index % len(deck)`,
+first listed target, a fixed canned line for support/draft, and a
+round-derived reaction verb) so the game is always fully playable solo.
+
+## Moves (schools remain Charm/Scheme/Bonk, cards are distinct)
+
+| Move | School | Reaction affinity |
+|---|---|---|
+| Empathic Mirror | charm | assist, interpret |
+| Disarming Honesty | charm | assist, challenge |
+| Cross-Reference | scheme | interpret |
+| Loophole with Consequences | scheme | challenge |
+| Precision Bonk | bonk | (none -- pure Spotlight card) |
+| Defend the Speaker | bonk | protect |
+| Smash the Right Thing | bonk | (none -- pure Spotlight card) |
+| Improvised Bonk | bonk | assist, protect |
+| *(signature, one per hero)* The Unimpeachable Memo / The Airtight Rebuttal / The One True Thump / The Perfect Pause | scheme / scheme / bonk / charm | interpret+challenge / challenge / (none) / protect+assist |
+
+Any move may be played as the Spotlight's primary action regardless of its
+`verbs` tag -- the tag only matters when an ally *cites* a move while
+reacting (see "Card synergy" below). A hero's available moves are always
+their 3-card deck plus their one exclusive signature move (never reused by
+anyone else); decks are not consumed or drawn from -- every hero's full kit
+is available every round.
+
+## The five encounters
+
+Same five absurd office-life encounters as before -- each weak to one
+school, resistant to another (distinct), neutral to the third -- now each
+also carries 2-3 named **targets** (one of them the actual `true_target`)
+and one **private clue per hero**, asymmetric and truthful, hinting at
+which target is real without stating it outright:
+
+| Encounter | Weak to | Resistant to | True target |
+|---|---|---|---|
+| The Passive-Aggressive Troll | scheme | bonk | the toll ledger |
+| The Goblin HR Department | charm | scheme | the tiny rubber stamp |
+| The Suggestion-Box Mimic | bonk | charm | the hinge of its lid |
+| The Bridge of Needlessly Complicated Riddles | charm | bonk | the gargoyle's mood |
+| The Red-Tape Dragon *(final boss)* | scheme | charm | the filing cabinet's index |
+
+The first four are shuffled by the room seed; the Dragon always occupies
+the final stop. Clue text lives in `Encounter.clues: dict[hero_id, str]` --
+see `backend/lan_playground/game.py` for exact wording.
 
 ## Phases
 
 ```
-lobby -> choosing -> reveal -> choosing -> reveal -> ... -> finished
-  ^                                                             |
-  '-------------------------- replay() -------------------------'
+lobby -> spotlight_action -> ally_support -> spotlight_draft -> ally_reaction -> reveal -> ...(loop)... -> finished
+                                                                                              |
+                                                                                          replay() -> lobby
 ```
 
-- **lobby** -- players may `join()` (max 4 active). Host is whoever
-  created the room (`GameRegistry.create_room`'s first `join()`). Host
-  calls `start()` to begin.
-- **choosing** -- every active player secretly `submit_choice()`s an
-  approach + move_text for the current encounter. Once every *active*
-  player has submitted (`can_resolve()` is true), the host calls
-  `resolve()`.
-- **reveal** -- `resolve()` has just revealed everyone's choice for this
-  round and applied hearts damage. The host calls `advance()` to continue.
-  If that resolve brought hearts to 0, the room skips reveal and goes
-  straight to **finished** (defeat) -- there is nothing left to advance to.
-- **finished** -- either victory (all 5 encounters survived) or defeat
-  (hearts hit 0). Host may `replay()` to reset to a fresh **lobby** with
-  the same roster and a new deterministic seed.
+- **lobby** -- players `join()` (max 4; each bound to the next open hero
+  slot). Host is whoever created the room. Host calls `start()`.
+- **spotlight_action** -- the current Spotlight hero's controller calls
+  `submit_spotlight_action(move_id, target_id, desired_outcome)`. If the
+  Spotlight is a companion this round, the engine fills it immediately and
+  the phase advances to `ally_support` with no call needed.
+- **ally_support** -- every other active hero's controller calls
+  `submit_support(kind, detail)` once (`kind` one of `clue`/`item`/`assist`/`reaction`).
+  Companion allies are auto-filled immediately. Once everyone's in
+  (`can_open_draft()`), the host calls `open_draft()`.
+- **spotlight_draft** -- the Spotlight calls, in order,
+  `submit_rough_text(text)`, then `submit_variants([v1, v2, v3])` (the
+  transport layer's three BetterFingers rewrites, or three identical
+  copies of the rough text as the deterministic offline fallback -- the
+  engine never generates this prose itself), then
+  `approve_message(chosen_text, intent)` (one of the variants, edited or
+  not, plus a stated intent). Approval advances the phase to
+  `ally_reaction`. If the Spotlight is a companion, all three steps happen
+  automatically and instantly.
+- **ally_reaction** -- every other active hero's controller calls
+  `submit_reaction(verb, detail, move_id=None)` once (`verb` one of
+  `interpret`/`assist`/`challenge`/`protect`; `move_id` optionally cites one
+  of that hero's own moves for a synergy bonus). Companion allies are
+  auto-filled immediately. Once everyone's in (`can_resolve()`), the host
+  calls `resolve()`, which reveals everything and applies damage.
+- **reveal** -- `resolve()` has just returned the round's full
+  `round_record`. The host calls `advance()`. If that round brought hearts
+  to 0, `resolve()` skips straight to **finished** (defeat) instead.
+- **finished** -- victory (all 5 rounds survived) or defeat (hearts hit 0).
+  Host may `replay()` to reset to a fresh **lobby**, same roster, reseeded.
 
-## Approaches and combat resolution
+## Resolution: the modifier ledger and the one seeded die
 
-Every encounter is weak to exactly one approach, resistant to exactly one
-(different) approach, and neutral to the third:
+Every round, `resolve()` builds an ordered list of modifiers -- nothing is
+ever computed and then hidden; every contributing fact appears in
+`round_record["modifiers"]` as `{source, label, value, affects}`, where
+`affects` is `"score"` or `"damage"`:
 
-| Approach | Effect when it matches the encounter's `weakness` | Effect when it matches the encounter's `resistant` | Effect when it's the `neutral` approach |
-|---|---|---|---|
-| any | +1 to `successes` | +1 to `backfires` | no effect (always safe) |
+1. **School match** (`affects: score`) -- the Spotlight's move school vs.
+   the encounter: `+3` weakness, `-3` resistant, `0` neutral.
+2. **Target insight** (`affects: score`) -- `+1` if `target_id ==
+   true_target`, else `0`.
+3. **Spotlight abilities** (`affects: score`, only when eligible) --
+   Otis's Follow-Through (+1, weakness match).
+4. **Support contributions** (`affects: score`, one entry per ally) --
+   `assist`/`item`/`clue` give `+1` each (clue also reveals that hero's
+   clue text); `reaction` gives `0` (a free, no-effect contribution for a
+   player who just wants to say something).
+5. **Ally reactions** (one entry per ally, plus a possible card-synergy
+   entry) -- `assist`/`interpret` give `+1` (`affects: score`; interpret
+   also always reveals that hero's clue); `challenge` gives `+1` (`affects:
+   score`) and is Nadia's own +1 extra (Loophole Sense) if she's the one
+   challenging; `protect` gives `0` to score but `-1` (or `-2` for Ilona,
+   Read the Room) `affects: damage`. Citing an owned move whose `verbs`
+   include the chosen verb adds a further `+1` "card synergy" (`affects:
+   score`).
+6. **The die** (`affects: score`) -- `random.Random(seed * 1_000_003 +
+   encounter_index).randint(1, 6) - 3`, i.e. -2..+3, recorded as both
+   `die_roll` (the raw 1-6) and this modifier's value.
+7. **Bram's Steady Hand** (`affects: damage`, only when eligible) -- `-1`
+   when he's Spotlight playing Precision Bonk or The Unimpeachable Memo.
+8. **Challenge risk** (`affects: damage`, only if the round is already a
+   backfire) -- `+ (number of challenges)`, only added when `score < 0`.
 
-Per round:
+Then:
 
 ```
-damage = max(0, backfires - successes)
+score = sum(value for modifiers where affects == "score")
+raw_damage = max(0, -score)
+damage = max(0, raw_damage + sum(value for modifiers where affects == "damage"))
 hearts = max(0, hearts - damage)
 ```
 
-This is fully deterministic given the set of submitted approaches -- no
-randomness, no hidden dice. Playing every encounter's `weakness` as a group
-guarantees zero damage forever; playing its `resistant` as a group deals
-damage equal to the number of players who did so, discounted 1-for-1 by
-anyone who played the `weakness` instead. `neutral` is the "safe but does
-nothing" fallback for an unsure player.
-
-## The five encounters
-
-| Encounter | Weak to | Resistant to | Neutral | Flavor |
-|---|---|---|---|---|
-| The Passive-Aggressive Troll | Scheme | Bonk | Charm | A bridge clerk with seventeen unchecked boxes. Out-file it; punching only creates another incident report. |
-| The Goblin HR Department | Charm | Scheme | Bonk | Five goblins and nine clipboards. Warmth gets the lunch-break request stamped; schemes trigger a compliance seminar. |
-| The Suggestion-Box Mimic | Bonk | Charm | Scheme | Reads anonymous feedback aloud and has far too many teeth. Charm only encourages it. |
-| The Bridge of Needlessly Complicated Riddles | Charm | Bonk | Scheme | Every answer unlocks two more forks. Be pleasant to the gargoyles; force adds another approval layer. |
-| The Red-Tape Dragon *(final boss)* | Scheme | Charm | Bonk | Forged from forms and filing cabinets. Out-procedure it; kindness triggers a mandatory survey. |
-
-All five (weakness, resistant) pairs are distinct, so no two encounters
-reward identical team strategy. The room seed shuffles the first four map
-stops; the Red-Tape Dragon always occupies stop five.
+With exactly three mandatory allies contributing every round (every
+support/reaction choice is worth `>=0` toward safety by design -- nothing
+an ally can pick ever actively hurts the party), a well-supported,
+correctly-targeted weakness play is always very safe. A resistant,
+wrong-targeted play with unhelpful allies and a bad die roll can still
+genuinely cost hearts -- the `+-3` base (not `+-1`) leaves real room below
+the guaranteed floor of ally support for that to matter. See
+`VictoryDefeatTests` in the test suite for a worked "guaranteed victory"
+strategy and a searched "can genuinely cause defeat" seed.
 
 ## Identity and tokens
 
-- `Room.join(name)` -> `(player_id, token)`. `player_id` is a public,
-  stable identity (used in `public_state()`); `token` is a secret,
-  returned exactly once, and must be supplied by the caller on every
-  subsequent mutating call (`start`, `submit_choice`, `resolve`, `advance`,
-  `replay`, `disconnect`, `reconnect`) and is checked with a constant-time
-  comparison (`secrets.compare_digest`), matching the access-code pattern in
-  `backend/lan_playground/security.py`.
-- `Room.verify_token(player_id, token) -> bool` is a read-only check for
-  GET-style "who am I" endpoints -- it never raises and never mutates
-  state.
-- The first player to `join()` an empty room becomes host
-  (`GameRegistry.create_room` performs this join for you). Host authority
-  transfers automatically if the host disconnects and another active
-  player exists (see "Disconnect never deadlocks" above).
+Unchanged from the prior contract: `Room.join(name)` -> `(player_id,
+token)`; `token` is secret, returned once, and must be supplied on every
+subsequent mutating call, checked with `secrets.compare_digest`.
+`Room.verify_token(player_id, token) -> bool` is a read-only, never-raising
+check. The first player to `join()` becomes host; host authority transfers
+to the next active player if the host disconnects (unchanged from before).
 
 ## `Room` API (backend/lan_playground/game.py)
 
@@ -125,25 +241,47 @@ stops; the Red-Tape Dragon always occupies stop five.
 class Room:
     room_id: str
     seed: int
-    phase: Literal["lobby", "choosing", "reveal", "finished"]
+    phase: Literal["lobby", "spotlight_action", "ally_support", "spotlight_draft",
+                   "ally_reaction", "reveal", "finished"]
     hearts: int
     max_hearts: int
     host_id: str | None
     encounter_index: int
 
-    def join(self, name: str) -> tuple[str, str]: ...          # (player_id, token)
+    def join(self, name: str) -> tuple[str, str]: ...            # (player_id, token)
     def disconnect(self, player_id: str, token: str) -> None: ...
     def reconnect(self, player_id: str, token: str) -> None: ...
     def verify_token(self, player_id: str, token: str) -> bool: ...
 
-    def start(self, player_id: str, token: str) -> None: ...                    # host only
-    def submit_choice(self, player_id: str, token: str, approach: str, move_text: str) -> None: ...
+    def start(self, player_id: str, token: str) -> None: ...     # host only, lobby -> spotlight_action
+
+    def submit_spotlight_action(
+        self, player_id: str, token: str, move_id: str, target_id: str, desired_outcome: str
+    ) -> None: ...                                                # current Spotlight hero's controller only
+
+    def submit_support(self, player_id: str, token: str, kind: str, detail: str = "") -> None: ...
+                                                                   # kind: clue|item|assist|reaction; any ally, once
+    def can_open_draft(self) -> bool: ...
+    def open_draft(self, player_id: str, token: str) -> None: ... # host only
+
+    def submit_rough_text(self, player_id: str, token: str, text: str) -> None: ...      # Spotlight only
+    def submit_variants(self, player_id: str, token: str, variants: list[str]) -> None: ...
+                                                                   # Spotlight only; must be a list of EXACTLY 3
+    def approve_message(self, player_id: str, token: str, chosen_text: str, intent: str) -> None: ...
+                                                                   # Spotlight only -> ally_reaction
+
+    def submit_reaction(
+        self, player_id: str, token: str, verb: str, detail: str = "", move_id: str | None = None
+    ) -> None: ...                                                # verb: interpret|assist|challenge|protect; any ally, once
     def can_resolve(self) -> bool: ...
-    def resolve(self, player_id: str, token: str) -> dict: ...                  # host only -> round_record
-    def advance(self, player_id: str, token: str) -> None: ...                  # host only
+    def resolve(self, player_id: str, token: str) -> dict: ...    # host only -> round_record
+
+    def advance(self, player_id: str, token: str) -> None: ...                    # host only
     def replay(self, player_id: str, token: str, seed: int | None = None) -> None: ...  # host only
 
-    def set_flavor(self, key: str, text: str) -> None: ...       # cosmetic overlay only
+    def update_voice_profile(self, player_id: str, token: str, metadata: dict) -> None: ...
+                                                                   # caller's own hero only, any phase
+    def set_flavor(self, key: str, text: str) -> None: ...        # cosmetic overlay only, no auth
     def public_state(self, viewer_player_id: str | None = None) -> dict: ...
 ```
 
@@ -158,72 +296,122 @@ class GameRegistry:
 
 ### Exceptions (all subclass `GameError`)
 
-`RoomFullError`, `InvalidPhaseError`, `NotHostError`, `UnknownPlayerError`,
-`InvalidTokenError`, `InactivePlayerError`, `AlreadySubmittedError`,
-`NotAllSubmittedError`, `InvalidApproachError`. The transport layer maps
-these to HTTP status codes (e.g. 409 for phase/already-submitted, 403 for
-host/token errors, 404 for unknown player, 422 for invalid approach).
+`RoomFullError`, `InvalidPhaseError`, `NotHostError`, `WrongTurnError` (not
+the acting party for this step -- wrong hero for a Spotlight-only call, or
+the Spotlight trying to submit an ally-only step), `UnknownPlayerError`,
+`InvalidTokenError`, `AlreadySubmittedError`, `NotAllSubmittedError`,
+`InvalidMoveError`, `InvalidTargetError`, `InvalidSupportKindError`,
+`InvalidReactionVerbError`, `NoItemsRemainingError`, `InvalidVariantsError`.
+The transport layer maps these to HTTP status codes as before (409 for
+phase/already-submitted/not-all-submitted, 403 for host/turn/token errors,
+404 for unknown player, 422 for invalid move/target/kind/verb/variants, 429
+or 409 for no-items-remaining).
 
 ## `public_state(viewer_player_id=None)` shape
 
 ```jsonc
 {
   "room_id": "room_AbC123",
-  "phase": "choosing",
-  "hearts": 2,
-  "max_hearts": 3,
+  "phase": "ally_reaction",
+  "hearts": 2, "max_hearts": 3,
   "host_id": "p_xyz",
-  "players": [
-    {"player_id": "p_xyz", "name": "Roy", "is_host": true,  "active": true, "submitted": true},
-    {"player_id": "p_abc", "name": "Dee", "is_host": false, "active": true, "submitted": false}
+  "spotlight_hero_id": "nadia_quickwit",
+  "players": [                      // human accounts only -- token-bearing identities
+    {"player_id": "p_xyz", "name": "Roy", "is_host": true, "active": true, "hero_id": "bram_correctly"}
   ],
-  "round_index": 2,
-  "total_rounds": 5,
-  "encounter": {"id": "suggestion_box_mimic", "name": "The Suggestion-Box Mimic", "flavor": "..."},
-  "last_round": null,          // or the most recent round_record (see below)
-  "history": [],               // all prior round_records, oldest first
-  "finished_victory": null,    // true | false | null (still playing)
-  "you": {                     // only present if viewer_player_id is a known player
-    "player_id": "p_abc", "is_host": false, "active": true, "submitted": false
+  "heroes": [                        // always exactly 4 -- public character sheets, always visible to everyone
+    {
+      "hero_id": "bram_correctly", "name": "Bram Correctly", "persona": "...",
+      "ability_name": "Steady Hand", "ability_description": "...",
+      "deck": [{"id": "empathic_mirror", "name": "Empathic Mirror", "school": "charm", "verbs": ["assist", "interpret"], "description": "..."}, "..."],
+      "signature_move": {"id": "unimpeachable_memo", "name": "The Unimpeachable Memo", "school": "scheme", "verbs": ["interpret", "challenge"], "description": "..."},
+      "player_id": "p_xyz", "is_companion": false, "active": true,
+      "items_remaining": 1, "voice_calibrated": false,
+      "submitted_current_step": true
+    }
+  ],
+  "round_index": 1, "total_rounds": 5,
+  "encounter": {"id": "goblin_hr_department", "name": "The Goblin HR Department", "flavor": "...", "targets": ["the lunch-break form", "the compliance seminar sign-up", "the tiny rubber stamp"]},
+  "current_action": null,           // or {hero_id, move, target_id, desired_outcome, approved_text, intent} once declared -- approved_text/intent null until approve_message()
+  "last_round": null,               // or the most recent round_record (see below), including narration
+  "history": [],                    // all prior round_records, oldest first
+  "finished_victory": null,         // true | false | null
+  "you": {                          // only present if viewer_player_id is a known player
+    "player_id": "p_xyz", "is_host": true, "active": true, "hero_id": "bram_correctly",
+    "private_clue": "The quill only signs what the ledger already allows.",
+    "draft": null,                  // {rough_text, variants, approved_text, intent} ONLY if you == current Spotlight hero AND phase == spotlight_draft
+    "voice_profile": {},            // your own hero's session-only metadata (utterance_count/confidence/calibrated), never another viewer's
+    "items_remaining": 1,
+    "pending_step": "submit_support" // convenience hint; see game.py's _pending_step_locked for the full state machine
   }
 }
 ```
 
-No entry above ever contains a `token`. No entry for another player ever
-contains their `approach` or `move_text` before that round's `resolve()`.
+No entry above ever contains a `token`. No viewer -- including the
+contributor -- ever sees support/reaction `kind`/`verb`/`detail`/`move_id`
+before `resolve()`; only `submitted_current_step` is visible before that.
+No viewer other than the Spotlight ever sees `draft` content, host
+included.
 
-### `round_record` shape (returned by `resolve()`, also in `last_round`/`history`)
+### `round_record` shape (`resolve()` return value, and each entry of `last_round`/`history`)
 
 ```jsonc
 {
-  "round": 2,
-  "encounter": {"id": "suggestion_box_mimic", "name": "The Suggestion-Box Mimic", "flavor": "..."},
-  "choices": [
-    {"player_id": "p_xyz", "name": "Roy", "approach": "bonk", "move_text": "we stamp the box first"},
-    {"player_id": "p_abc", "name": "Dee", "approach": "charm", "move_text": "we compliment its lovely teeth"}
-  ],
-  "successes": 1,
-  "backfires": 1,
+  "round": 1,
+  "encounter": {"id": "goblin_hr_department", "name": "...", "flavor": "...", "targets": [...]},
+  "spotlight_hero_id": "nadia_quickwit",
+  "action": {
+    "hero_id": "nadia_quickwit", "move_id": "loophole_with_consequences", "move_name": "Loophole with Consequences",
+    "school": "scheme", "target_id": "the tiny rubber stamp", "desired_outcome": "...",
+    "approved_text": "...", "intent": "..."
+  },
+  "support": [{"hero_id": "otis_barnstorm", "name": "Otis Barnstorm", "kind": "assist", "detail": "..."}],
+  "reactions": [{"hero_id": "ilona_softword", "name": "Ilona Softword", "verb": "protect", "detail": "...", "move_id": "defend_the_speaker"}],
+  "true_target_id": "the tiny rubber stamp",
+  "revealed_clues": [{"hero_id": "otis_barnstorm", "name": "Otis Barnstorm", "clue_text": "The form doesn't matter until it's stamped."}],
+  "modifiers": [{"source": "school_match", "label": "...", "value": 3, "affects": "score"}, "..."],
+  "die_roll": 4,
+  "score": 5,
   "damage": 0,
-  "hearts_before": 2,
-  "hearts_after": 2
+  "hearts_before": 3, "hearts_after": 3,
+  "narration": ""                  // overlaid live at read time from set_flavor(f"narration:{round}", ...); "" until the transport layer sets it
 }
 ```
 
+`revealed_clues` only ever includes heroes who *voluntarily* exposed their
+clue (via support `kind="clue"` or reaction `verb="interpret"`) -- the
+Spotlight's own clue, and any ally who did neither, never appears.
+
 ## Persona/LLM rewrite integration point
 
-`game.py` never calls an LLM. The transport layer may run a persona rewrite
-over an encounter's `flavor` or a player's `move_text` for display flavor,
-then call:
+`game.py` never calls an LLM. The transport layer generates three
+BetterFingers rewrites of the Spotlight's rough text and calls
+`submit_variants([v1, v2, v3])` (or, offline / for a companion Spotlight,
+three identical copies of the rough text -- the deterministic model-free
+fallback baked into the engine itself for companions). For narration, call
 
 ```python
-room.set_flavor(f"encounter:{encounter.id}", rewritten_encounter_blurb)
-room.set_flavor(f"move:{player_id}:{room.encounter_index}", rewritten_move_line)
+room.set_flavor(f"narration:{round_index}", narration_text)
 ```
 
-**Call `set_flavor()` before `resolve()`** for a given round if you want the
-rewritten move text baked into that round's `round_record` -- `resolve()`
-reads the overlay at reveal time. `set_flavor()` never touches `approach`
-and cannot change `successes`/`backfires`/`damage`; if the LLM is offline or
+**after** `resolve()` for that round -- `public_state()` overlays this onto
+`last_round`/`history` at read time (`_round_record_public_locked`), so it
+can only ever describe facts already recorded in that round's
+`round_record`; it is never read by `resolve()` and cannot influence a
+score that has already been computed. `room.set_flavor(f"encounter:{id}",
+text)` similarly overlays an encounter's cosmetic `flavor` line (works
+before or after resolution, same as before). If the model is offline or
 `set_flavor()` is never called, every encounter/round renders its plain
 canonical text and the game is identical in outcome.
+
+## Session-only voice-learning metadata
+
+`update_voice_profile(player_id, token, metadata)` accepts exactly three
+bounded scalar keys -- `utterance_count` (int, clamped 0-9999), `confidence`
+(float, clamped 0.0-1.0), `calibrated` (bool) -- for the caller's own hero,
+in any phase. Unknown keys are silently ignored; raw audio is never
+accepted in any form, and nothing here is ever persisted to disk (this
+module has no I/O, so the data lives only as long as the `Room` object
+does). It is visible to its owner only via `you.voice_profile`; every other
+viewer sees only a derived `voice_calibrated: bool` in that hero's public
+`heroes[]` entry.

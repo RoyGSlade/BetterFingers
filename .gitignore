@@ -36,6 +36,9 @@ env/
 # Playwright run output (regenerated every run; churns the tree)
 app/test-results/
 app/playwright-report/
+# Root-level Playwright CLI logs + generated web-game output (LAN game test runs)
+.playwright-cli/
+/output/
 # Per-run QA screenshots. Curated reg-actions baselines get checked in
 # deliberately under a separate path, not this one.
 app/artifacts/

@@ -5,17 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <link rel="icon" href="/art/game-icon.png" type="image/png">
-<title>Spellcheck &amp; Sorcery</title>
+<title>The Lost Meaning</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to main content</a>
 <header class="topbar">
   <div class="topbar-row">
-    <h1>Spellcheck &amp; Sorcery</h1>
+    <h1>The Lost Meaning</h1>
     <button id="fullscreen-toggle" type="button" aria-pressed="false" title="Toggle fullscreen (f)">&#x26F6;<span class="sr-only"> Fullscreen</span></button>
   </div>
-  <p class="subtitle">Freelance heroes for hire, in a kingdom where every miscommunication becomes real. Local network only &mdash; nothing you type is saved or sent anywhere outside it.</p>
+  <p class="subtitle">A 1&ndash;4 player co-op word-adventure. One hero speaks at a time; everyone else shapes what it becomes. Local network only &mdash; nothing you type is saved or sent anywhere outside it.</p>
 </header>
 
 <main id="main">
@@ -36,8 +36,9 @@
 
   <!-- Phase: home (create or join a room) -->
   <section class="panel" id="home-screen" hidden aria-labelledby="home-heading">
-    <img class="hero-art" src="/art/key-art.png" alt="Four unlikely adventurers confronting an enormous dragon made of paperwork" width="1672" height="941" decoding="async" fetchpriority="high">
-    <h2 id="home-heading">Gather your party</h2>
+    <img class="hero-art" src="/art/key-art.png" alt="Four unlikely heroes facing an enormous dragon made of paperwork" width="1672" height="941" decoding="async" fetchpriority="high">
+    <h2 id="home-heading">The kingdom's words have gone missing</h2>
+    <p>Something ate the meaning out of every sign, memo and spell in the realm. One to four heroes, one shared story &mdash; take turns in the spotlight while your party helps you find the words that work.</p>
     <div class="home-grid">
       <form id="create-form" class="home-card">
         <h3>Host a new adventure</h3>
@@ -64,7 +65,7 @@
       <div class="lobby-share-text">
         <p class="lobby-code-row">Room code: <strong id="lobby-code"></strong> <button id="copy-code-button" type="button">Copy code</button></p>
         <p class="lobby-link-row">Link: <span id="lobby-link" class="lobby-link-text"></span> <button id="copy-link-button" type="button">Copy link</button></p>
-        <p class="hint">Share either one with up to 3 friends on the same network.</p>
+        <p class="hint">Share either one with up to 3 friends on the same network. 1&ndash;4 heroes total.</p>
       </div>
       <div class="lobby-qr" id="lobby-qr" aria-label="QR code to join this room">
         <p id="lobby-qr-fallback" class="hint">A scannable code will appear here once the room is ready.</p>
@@ -75,22 +76,34 @@
     <ul id="lobby-players" class="player-list"></ul>
     <p id="lobby-solo-hint" hidden>Playing solo right now &mdash; recruit friends with the link above, or start solo whenever you like.</p>
 
+    <div id="your-hero-panel" class="panel-inset" hidden aria-labelledby="your-hero-heading">
+      <h3 id="your-hero-heading">Your hero</h3>
+      <p id="your-hero-name" class="your-hero-name"></p>
+      <p id="your-hero-persona" class="hint"></p>
+      <p id="your-hero-ability"></p>
+      <ul id="your-hero-cards" class="move-card-list"></ul>
+    </div>
+
     <button id="start-button" type="button" hidden>Start the adventure</button>
     <p id="lobby-status" role="status" aria-live="polite"></p>
   </section>
 
-  <!-- Phase: board (choosing / waiting / reveal all live here) -->
-  <section class="panel" id="board-screen" hidden aria-labelledby="board-heading">
-    <h2 id="board-heading" class="sr-only">The adventure board</h2>
+  <!-- Phase: round (spotlight loop lives here) -->
+  <section class="panel" id="round-screen" hidden aria-labelledby="round-heading">
+    <h2 id="round-heading" class="sr-only">The adventure</h2>
 
-    <div class="board-layout">
-      <canvas id="board-canvas" width="640" height="300" role="img" aria-label="Adventure board"></canvas>
+    <div id="spotlight-banner" class="spotlight-banner" role="status" aria-live="polite">
+      <span id="spotlight-round">Round 1 of 5</span>
+      <span id="spotlight-name" class="spotlight-name"></span>
+    </div>
 
+    <div class="objective-layout">
+      <figure class="encounter-figure">
+        <img id="objective-art" class="encounter-art" src="/art/encounter-troll.png" alt="" width="1254" height="1254" decoding="async" fetchpriority="high">
+        <figcaption id="objective-name">Your next extremely official obstacle</figcaption>
+      </figure>
       <div class="board-side">
-        <figure class="encounter-figure">
-          <img id="encounter-art" class="encounter-art" src="/art/encounter-troll.png" alt="" width="1254" height="1254" decoding="async" fetchpriority="high">
-          <figcaption id="encounter-caption">Your next extremely official obstacle</figcaption>
-        </figure>
+        <p id="objective-description" class="objective-description"></p>
         <div class="hearts-row">
           <span id="hearts-label">Party hearts</span>
           <div id="hearts-display" class="hearts-display" role="img" aria-labelledby="hearts-label"></div>
@@ -99,56 +112,175 @@
       </div>
     </div>
 
-    <!-- Move submission -->
-    <form id="move-form" class="panel-inset" hidden aria-labelledby="move-heading">
-      <h3 id="move-heading">Your move</h3>
-      <div class="field">
-        <label for="move-persona">Speak as</label>
-        <select id="move-persona" name="persona" required>
-          <option value="" disabled selected>Loading personas&hellip;</option>
-        </select>
-      </div>
+    <!-- Private clue: only ever populated from "you"-scoped state; genuinely secret -->
+    <div id="private-panel" class="panel-inset private-panel" aria-labelledby="private-heading">
+      <h3 id="private-heading"><span aria-hidden="true">&#x1F512;</span> Your private clue <span class="private-tag">Only you can see this</span></h3>
+      <p id="private-clue"></p>
+    </div>
 
+    <!-- Your hero's hand: public character-sheet info (deck + signature move), shown for reference -->
+    <div id="your-hero-hand-panel" class="panel-inset" hidden aria-labelledby="your-hero-hand-heading">
+      <h3 id="your-hero-hand-heading">Your hand</h3>
+      <ul id="your-hero-hand-cards" class="move-card-list"></ul>
+    </div>
+
+    <!-- Declared action summary, visible once the Spotlight has committed to a card/target/outcome -->
+    <div id="declared-action-panel" class="panel-inset" hidden aria-labelledby="declared-action-heading">
+      <h3 id="declared-action-heading">The move so far</h3>
+      <p id="declared-action-summary"></p>
+      <div id="declared-action-approved" hidden>
+        <blockquote id="declared-action-approved-text" class="approved-message"></blockquote>
+        <p id="declared-action-approved-intent" class="approved-intent"></p>
+      </div>
+    </div>
+
+    <!-- Sub-phase: spotlight_action (Spotlight only) -->
+    <form id="action-builder-panel" class="panel-inset" hidden aria-labelledby="action-builder-heading">
+      <h3 id="action-builder-heading">Choose your move</h3>
       <fieldset class="card-fieldset">
-        <legend>Choose your secret card</legend>
+        <legend>Card</legend>
+        <div id="action-card-choices" class="card-choices"></div>
+      </fieldset>
+      <div class="field">
+        <label for="action-target-select">Target</label>
+        <select id="action-target-select" name="action-target" required></select>
+      </div>
+      <div class="field">
+        <label for="action-outcome-input">Desired outcome</label>
+        <textarea id="action-outcome-input" name="action-outcome" rows="2" maxlength="140" required placeholder="e.g. Get the goblins to stamp the request without a seminar."></textarea>
+        <p class="hint"><span id="action-outcome-count">0</span> / 140 characters</p>
+      </div>
+      <button id="action-submit" type="submit">Declare move</button>
+      <p id="action-status" role="status" aria-live="polite"></p>
+    </form>
+
+    <!-- Sub-phase: ally_support (everyone but Spotlight) -->
+    <form id="support-panel" class="panel-inset" hidden aria-labelledby="support-heading">
+      <h3 id="support-heading">Add your support</h3>
+      <p id="support-items-hint" class="hint"></p>
+      <fieldset class="card-fieldset">
+        <legend>Kind</legend>
         <div class="card-choices">
-          <label class="card-choice" data-card="charm">
-            <input type="radio" name="move-card" value="charm" required>
-            <span class="card-face card-charm"><img class="card-art" src="/art/charm.png" alt="" width="1254" height="1254" decoding="async"><span class="card-icon" aria-hidden="true">&#x2764;</span><span class="card-name">Charm</span></span>
+          <label class="card-choice" data-stance="clue">
+            <input type="radio" name="support-kind" value="clue" required>
+            <span class="card-face card-stance-clue"><span class="card-icon" aria-hidden="true">&#x1F50D;</span><span class="card-name">Clue</span></span>
           </label>
-          <label class="card-choice" data-card="scheme">
-            <input type="radio" name="move-card" value="scheme">
-            <span class="card-face card-scheme"><img class="card-art" src="/art/scheme.png" alt="" width="1254" height="1254" decoding="async"><span class="card-icon" aria-hidden="true">&#x2699;</span><span class="card-name">Scheme</span></span>
+          <label class="card-choice" data-stance="item">
+            <input type="radio" name="support-kind" value="item">
+            <span class="card-face card-stance-item"><span class="card-icon" aria-hidden="true">&#x1F9F0;</span><span class="card-name">Item</span></span>
           </label>
-          <label class="card-choice" data-card="bonk">
-            <input type="radio" name="move-card" value="bonk">
-            <span class="card-face card-bonk"><img class="card-art" src="/art/bonk.png" alt="" width="1254" height="1254" decoding="async"><span class="card-icon" aria-hidden="true">&#x2733;</span><span class="card-name">Bonk</span></span>
+          <label class="card-choice" data-stance="assist">
+            <input type="radio" name="support-kind" value="assist">
+            <span class="card-face card-stance-assist"><span class="card-icon" aria-hidden="true">&#x2795;</span><span class="card-name">Assist</span></span>
+          </label>
+          <label class="card-choice" data-stance="reaction">
+            <input type="radio" name="support-kind" value="reaction">
+            <span class="card-face card-stance-reaction"><span class="card-icon" aria-hidden="true">&#x1F4AC;</span><span class="card-name">Reaction</span></span>
           </label>
         </div>
       </fieldset>
-
       <div class="field">
-        <label for="move-text">What do you say or do?</label>
-        <textarea id="move-text" name="move-text" rows="3" maxlength="140" required placeholder="e.g. Politely threaten the door with a strongly worded memo."></textarea>
-        <p class="hint"><span id="move-text-count">0</span> / 140 characters</p>
+        <label for="support-detail">Detail (optional)</label>
+        <textarea id="support-detail" name="support-detail" rows="2" maxlength="140" placeholder="e.g. I hand over the compliance seminar sign-up sheet, already filled out."></textarea>
+        <p class="hint"><span id="support-detail-count">0</span> / 140 characters</p>
       </div>
-
-      <button id="move-submit" type="submit">Submit move</button>
-      <p id="move-status" role="status" aria-live="polite"></p>
+      <button id="support-submit" type="submit">Send support</button>
+      <p id="support-status" role="status" aria-live="polite"></p>
     </form>
 
-    <!-- Waiting -->
-    <div id="waiting-panel" class="panel-inset" hidden>
-      <p class="spinner-line"><span class="spinner" aria-hidden="true"></span> Waiting for other heroes&hellip; <span id="waiting-count"></span></p>
+    <!-- Sub-phase: spotlight_draft (Spotlight only) -->
+    <form id="draft-panel" class="panel-inset" hidden aria-labelledby="draft-heading">
+      <h3 id="draft-heading">Say it</h3>
+      <div class="field">
+        <label for="draft-rough-text">Your rough idea (type it, or say it out loud and type what you meant)</label>
+        <textarea id="draft-rough-text" name="draft-rough-text" rows="3" maxlength="240" placeholder="e.g. look we just need the form stamped todya thanks"></textarea>
+        <p class="hint"><span id="draft-rough-count">0</span> / 240 characters</p>
+      </div>
+      <button id="draft-voice-button" type="button">I said this out loud</button>
+      <p id="draft-voice-status" class="hint" role="status" aria-live="polite"></p>
+      <button id="draft-generate-button" type="button">Get 3 rewrites</button>
+      <p id="draft-loading" role="status" aria-live="polite" hidden>Asking BetterFingers for three takes&hellip;</p>
+      <p id="draft-error" role="alert" hidden></p>
+
+      <div id="variant-list" class="variant-list" hidden></div>
+
+      <div id="draft-approval" hidden>
+        <div class="field">
+          <label for="draft-edit-text">Your message (editable)</label>
+          <textarea id="draft-edit-text" name="draft-edit-text" rows="3" maxlength="240"></textarea>
+        </div>
+        <div class="field">
+          <label for="draft-intent-text">Your intent (what you actually want to happen &mdash; approved separately)</label>
+          <textarea id="draft-intent-text" name="draft-intent-text" rows="2" maxlength="160"></textarea>
+        </div>
+        <button id="draft-approve-button" type="button">Approve message &amp; intent</button>
+      </div>
+      <p id="draft-status" role="status" aria-live="polite"></p>
+    </form>
+
+    <!-- Sub-phase: ally_reaction (everyone but Spotlight) -->
+    <form id="reaction-panel" class="panel-inset" hidden aria-labelledby="reaction-heading">
+      <h3 id="reaction-heading">React to the moment</h3>
+      <blockquote id="reaction-message" class="approved-message"></blockquote>
+      <p id="reaction-intent" class="approved-intent"></p>
+      <fieldset class="card-fieldset">
+        <legend>Your verb</legend>
+        <div class="card-choices">
+          <label class="card-choice" data-stance="interpret">
+            <input type="radio" name="reaction-verb" value="interpret" required>
+            <span class="card-face card-stance-interpret"><span class="card-icon" aria-hidden="true">&#x1F9E9;</span><span class="card-name">Interpret</span></span>
+          </label>
+          <label class="card-choice" data-stance="assist">
+            <input type="radio" name="reaction-verb" value="assist">
+            <span class="card-face card-stance-assist"><span class="card-icon" aria-hidden="true">&#x2795;</span><span class="card-name">Assist</span></span>
+          </label>
+          <label class="card-choice" data-stance="challenge">
+            <input type="radio" name="reaction-verb" value="challenge">
+            <span class="card-face card-stance-challenge"><span class="card-icon" aria-hidden="true">&#x26A1;</span><span class="card-name">Challenge</span></span>
+          </label>
+          <label class="card-choice" data-stance="protect">
+            <input type="radio" name="reaction-verb" value="protect">
+            <span class="card-face card-stance-protect"><span class="card-icon" aria-hidden="true">&#x1F6E1;</span><span class="card-name">Protect</span></span>
+          </label>
+        </div>
+      </fieldset>
+      <div class="field">
+        <label for="reaction-move-select">Use a move from your deck (optional)</label>
+        <select id="reaction-move-select" name="reaction-move"><option value="">No move</option></select>
+      </div>
+      <div class="field">
+        <label for="reaction-detail">Detail (optional)</label>
+        <textarea id="reaction-detail" name="reaction-detail" rows="2" maxlength="140"></textarea>
+        <p class="hint"><span id="reaction-detail-count">0</span> / 140 characters</p>
+      </div>
+      <button id="reaction-submit" type="submit">Lock in reaction</button>
+      <p id="reaction-status" role="status" aria-live="polite"></p>
+    </form>
+
+    <!-- Sub-phase: reveal (everyone) -->
+    <div id="reveal-panel" class="panel-inset" hidden aria-labelledby="reveal-heading">
+      <h3 id="reveal-heading">The reveal</h3>
+      <ul id="die-roll-display" class="breakdown-list"></ul>
+      <ul id="modifier-breakdown" class="breakdown-list"></ul>
+      <p id="reveal-outcome" class="round-summary"></p>
+      <div id="revealed-clues-wrap" hidden>
+        <h4>Clues revealed</h4>
+        <ul id="revealed-clues-list" class="contribution-list"></ul>
+      </div>
+      <div id="round-log-wrap" hidden>
+        <h4>What the party did</h4>
+        <ul id="round-log-list" class="contribution-list"></ul>
+      </div>
+      <p id="reveal-narration"></p>
+      <button id="reveal-continue-button" type="button" hidden>Onward!</button>
+      <p id="reveal-status" role="status" aria-live="polite"></p>
     </div>
 
-    <!-- Reveal -->
-    <div id="reveal-panel" class="panel-inset" hidden aria-labelledby="reveal-heading">
-      <h3 id="reveal-heading">The trial unfolds&hellip;</h3>
-      <ul id="reveal-list" class="reveal-list"></ul>
-      <p id="round-summary" class="round-summary"></p>
-      <button id="advance-button" type="button" hidden>Onward!</button>
-      <p id="advance-status" role="status" aria-live="polite"></p>
+    <!-- Generic waiting state: shown whenever the viewer has nothing to do this phase -->
+    <div id="round-waiting-panel" class="panel-inset" hidden>
+      <p class="spinner-line"><span class="spinner" aria-hidden="true"></span> <span id="round-waiting-text">Waiting for the rest of the party&hellip;</span></p>
+      <button id="host-opendraft-button" type="button" hidden>Open the draft</button>
+      <button id="host-resolve-button" type="button" hidden>Reveal the roll</button>
     </div>
   </section>
 
@@ -157,6 +289,7 @@
     <img id="finale-art" class="finale-art" src="/art/victory.png" alt="" width="1672" height="941" loading="lazy" decoding="async">
     <h2 id="finale-heading"></h2>
     <p id="finale-summary"></p>
+    <ul id="finale-recap" class="finale-recap"></ul>
     <button id="replay-button" type="button">Play again</button>
   </section>
 </main>

@@ -1,14 +1,25 @@
 "use strict";
 /*
- * Spellcheck & Sorcery -- LAN party game client (board #41).
+ * The Lost Meaning -- LAN party game client (board #41, redesign task #3).
  *
- * No microphone/audio/TTS APIs are used here (text-only, canvas-and-DOM
- * game). The site access code and any room/player tokens live only in
- * module-scope variables for this page load -- never persisted by the
- * browser in any way -- and any `?code=`/`?room=` query params are read
- * once, then stripped from the visible URL immediately. All
- * player-supplied strings (names, move text) are rendered with
- * textContent only, never raw-HTML insertion.
+ * No microphone/audio/TTS APIs are used here (text-only, DOM game). The
+ * site access code and any room/player tokens live only in module-scope
+ * variables for this page load -- never persisted by the browser in any
+ * way -- and any `?code=`/`?room=` query params are read once, then
+ * stripped from the visible URL immediately. All player-supplied strings
+ * (names, move text, clues) are rendered with textContent only, never
+ * raw-HTML insertion.
+ *
+ * CONTRACT (per the final engine/server handoff, 2026-07-19): a fixed 4-hero roster
+ * (HERO_ROSTER) is auto-bound to players in join order -- there is no
+ * character-builder step. Phases: lobby -> spotlight_action -> ally_support
+ * -> spotlight_draft -> ally_reaction -> reveal -> finished (+ replay ->
+ * lobby). Everything the server sends is funneled through
+ * normalizeState(raw) below into one canonical view-model shape (`vm`).
+ * Every render function reads only from `vm`, never from the raw payload,
+ * so future field-name corrections only touch normalizeState()/the action
+ * functions, never layout. Route paths and pending-step names below match
+ * the final FastAPI and engine contracts and are covered by static tests.
  */
 
 (function () {
@@ -23,12 +34,6 @@
   function vSetTimeout(cb, delay) {
     const id = nextTimerId++;
     timers.push({ id, remaining: Math.max(0, delay), delay, cb, repeat: false });
-    return id;
-  }
-
-  function vSetInterval(cb, delay) {
-    const id = nextTimerId++;
-    timers.push({ id, remaining: Math.max(1, delay), delay: Math.max(1, delay), cb, repeat: true });
     return id;
   }
 
@@ -109,10 +114,10 @@
   let joinCode = "";
   let joinUrl = "";
 
-  let state = null; // last state document from the server
-  let screen = "gate"; // gate | home | lobby | board | finale
-  let moveFormRoundKey = null; // tracks which round the move form was last reset for
-  let personasLoaded = false;
+  let state = null; // last raw state document from the server
+  let vm = null; // normalizeState(state) -- everything below renders from this
+  let screen = "gate"; // gate | home | lobby | round | finale
+  let roundStageKey = null; // tracks phase+round+spotlight so forms only reset on real transitions
 
   let pollTimerId = null;
   let pollFailures = 0;
@@ -121,7 +126,16 @@
   const POLL_MAX_INTERVAL_MS = 8000;
 
   const reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  let animRoomIndex = 0;
+
+  const VARIANT_SLOT_COUNT = 3;
+  const SCHOOL_ICONS = { charm: "❤", scheme: "⚙", bonk: "✳" };
+  const ENCOUNTER_ART = {
+    passive_aggressive_troll: "/art/encounter-troll.png",
+    goblin_hr_department: "/art/encounter-goblins.png",
+    suggestion_box_mimic: "/art/encounter-mimic.png",
+    needlessly_complicated_riddle_bridge: "/art/encounter-bridge.png",
+    red_tape_dragon: "/art/encounter-dragon.png",
+  };
 
   // ---------------------------------------------------------------------
   // DOM references
@@ -152,40 +166,97 @@
     lobbyQr: document.getElementById("lobby-qr"),
     lobbyPlayers: document.getElementById("lobby-players"),
     lobbySoloHint: document.getElementById("lobby-solo-hint"),
+    yourHeroPanel: document.getElementById("your-hero-panel"),
+    yourHeroName: document.getElementById("your-hero-name"),
+    yourHeroPersona: document.getElementById("your-hero-persona"),
+    yourHeroAbility: document.getElementById("your-hero-ability"),
+    yourHeroCards: document.getElementById("your-hero-cards"),
     startButton: document.getElementById("start-button"),
     lobbyStatus: document.getElementById("lobby-status"),
 
-    board: document.getElementById("board-screen"),
-    canvas: document.getElementById("board-canvas"),
-    encounterArt: document.getElementById("encounter-art"),
-    encounterCaption: document.getElementById("encounter-caption"),
+    round: document.getElementById("round-screen"),
+    spotlightBanner: document.getElementById("spotlight-banner"),
+    spotlightRound: document.getElementById("spotlight-round"),
+    spotlightName: document.getElementById("spotlight-name"),
+    objectiveArt: document.getElementById("objective-art"),
+    objectiveName: document.getElementById("objective-name"),
+    objectiveDescription: document.getElementById("objective-description"),
     heartsDisplay: document.getElementById("hearts-display"),
     playersRoster: document.getElementById("players-roster"),
 
-    moveForm: document.getElementById("move-form"),
-    movePersona: document.getElementById("move-persona"),
-    moveText: document.getElementById("move-text"),
-    moveTextCount: document.getElementById("move-text-count"),
-    moveSubmit: document.getElementById("move-submit"),
-    moveStatus: document.getElementById("move-status"),
+    privateClue: document.getElementById("private-clue"),
+    yourHeroHandPanel: document.getElementById("your-hero-hand-panel"),
+    yourHeroHandCards: document.getElementById("your-hero-hand-cards"),
 
-    waitingPanel: document.getElementById("waiting-panel"),
-    waitingCount: document.getElementById("waiting-count"),
+    declaredActionPanel: document.getElementById("declared-action-panel"),
+    declaredActionSummary: document.getElementById("declared-action-summary"),
+    declaredActionApproved: document.getElementById("declared-action-approved"),
+    declaredActionApprovedText: document.getElementById("declared-action-approved-text"),
+    declaredActionApprovedIntent: document.getElementById("declared-action-approved-intent"),
+
+    actionBuilderPanel: document.getElementById("action-builder-panel"),
+    actionCardChoices: document.getElementById("action-card-choices"),
+    actionTargetSelect: document.getElementById("action-target-select"),
+    actionOutcomeInput: document.getElementById("action-outcome-input"),
+    actionOutcomeCount: document.getElementById("action-outcome-count"),
+    actionSubmit: document.getElementById("action-submit"),
+    actionStatus: document.getElementById("action-status"),
+
+    supportPanel: document.getElementById("support-panel"),
+    supportItemsHint: document.getElementById("support-items-hint"),
+    supportDetail: document.getElementById("support-detail"),
+    supportDetailCount: document.getElementById("support-detail-count"),
+    supportSubmit: document.getElementById("support-submit"),
+    supportStatus: document.getElementById("support-status"),
+
+    draftPanel: document.getElementById("draft-panel"),
+    draftRoughText: document.getElementById("draft-rough-text"),
+    draftRoughCount: document.getElementById("draft-rough-count"),
+    draftVoiceButton: document.getElementById("draft-voice-button"),
+    draftVoiceStatus: document.getElementById("draft-voice-status"),
+    draftGenerateButton: document.getElementById("draft-generate-button"),
+    draftLoading: document.getElementById("draft-loading"),
+    draftError: document.getElementById("draft-error"),
+    variantList: document.getElementById("variant-list"),
+    draftApproval: document.getElementById("draft-approval"),
+    draftEditText: document.getElementById("draft-edit-text"),
+    draftIntentText: document.getElementById("draft-intent-text"),
+    draftApproveButton: document.getElementById("draft-approve-button"),
+    draftStatus: document.getElementById("draft-status"),
+
+    reactionPanel: document.getElementById("reaction-panel"),
+    reactionMessage: document.getElementById("reaction-message"),
+    reactionIntent: document.getElementById("reaction-intent"),
+    reactionMoveSelect: document.getElementById("reaction-move-select"),
+    reactionDetail: document.getElementById("reaction-detail"),
+    reactionDetailCount: document.getElementById("reaction-detail-count"),
+    reactionSubmit: document.getElementById("reaction-submit"),
+    reactionStatus: document.getElementById("reaction-status"),
 
     revealPanel: document.getElementById("reveal-panel"),
-    revealList: document.getElementById("reveal-list"),
-    roundSummary: document.getElementById("round-summary"),
-    advanceButton: document.getElementById("advance-button"),
-    advanceStatus: document.getElementById("advance-status"),
+    dieRollDisplay: document.getElementById("die-roll-display"),
+    modifierBreakdown: document.getElementById("modifier-breakdown"),
+    revealOutcome: document.getElementById("reveal-outcome"),
+    revealedCluesWrap: document.getElementById("revealed-clues-wrap"),
+    revealedCluesList: document.getElementById("revealed-clues-list"),
+    roundLogWrap: document.getElementById("round-log-wrap"),
+    roundLogList: document.getElementById("round-log-list"),
+    revealNarration: document.getElementById("reveal-narration"),
+    revealContinueButton: document.getElementById("reveal-continue-button"),
+    revealStatus: document.getElementById("reveal-status"),
+
+    roundWaitingPanel: document.getElementById("round-waiting-panel"),
+    roundWaitingText: document.getElementById("round-waiting-text"),
+    hostOpenDraftButton: document.getElementById("host-opendraft-button"),
+    hostResolveButton: document.getElementById("host-resolve-button"),
 
     finale: document.getElementById("finale-screen"),
     finaleArt: document.getElementById("finale-art"),
     finaleHeading: document.getElementById("finale-heading"),
     finaleSummary: document.getElementById("finale-summary"),
+    finaleRecap: document.getElementById("finale-recap"),
     replayButton: document.getElementById("replay-button"),
   };
-
-  const ctx = els.canvas.getContext("2d");
 
   // ---------------------------------------------------------------------
   // Small helpers
@@ -238,15 +309,37 @@
     return fetch(path, Object.assign({}, opts, { headers }));
   }
 
+  function describeApiFailure(status, fallback) {
+    if (status === 404) {
+      return "The game backend isn't available yet on this server.";
+    }
+    if (status === 429) {
+      return "The server is busy right now. Try again shortly.";
+    }
+    return fallback + " (status " + status + ")";
+  }
+
+  function currentCheckedValue(container) {
+    const checked = container.querySelector("input:checked");
+    return checked ? checked.value : null;
+  }
+
+  function roomPath(suffix) {
+    return "/api/game/rooms/" + encodeURIComponent(roomId) + suffix;
+  }
+
   // ---------------------------------------------------------------------
   // Screen management
   // ---------------------------------------------------------------------
   function setScreen(next) {
+    if (screen === "round" && next !== "round") {
+      roundStageKey = null;
+    }
     screen = next;
     els.gate.hidden = next !== "gate";
     els.home.hidden = next !== "home";
     els.lobby.hidden = next !== "lobby";
-    els.board.hidden = next !== "board";
+    els.round.hidden = next !== "round";
     els.finale.hidden = next !== "finale";
   }
 
@@ -257,6 +350,7 @@
     roomId = null;
     playerId = null;
     state = null;
+    vm = null;
     stopPolling();
     setScreen("gate");
     els.gateStatus.textContent = message;
@@ -268,6 +362,7 @@
     roomId = null;
     playerId = null;
     state = null;
+    vm = null;
     stopPolling();
     setScreen("home");
     els.homeStatus.textContent = message || "";
@@ -279,35 +374,6 @@
   function unlock(code) {
     accessCode = code;
     setScreen("home");
-    loadPersonas();
-  }
-
-  async function loadPersonas() {
-    if (personasLoaded) {
-      return;
-    }
-    try {
-      const resp = await apiFetch("/api/personas");
-      if (resp.status === 401) {
-        lockOut("That access code was rejected. Reload the page and try again.");
-        return;
-      }
-      if (!resp.ok) {
-        return;
-      }
-      const data = await resp.json();
-      const personas = data.personas || [];
-      els.movePersona.innerHTML = "";
-      personas.forEach(function (name) {
-        const opt = document.createElement("option");
-        opt.value = name;
-        opt.textContent = name;
-        els.movePersona.appendChild(opt);
-      });
-      personasLoaded = personas.length > 0;
-    } catch (err) {
-      /* persona select will just show the loading placeholder; harmless */
-    }
   }
 
   // ---------------------------------------------------------------------
@@ -317,7 +383,7 @@
     event.preventDefault();
     const name = els.createName.value.trim();
     if (!name) {
-      els.homeStatus.textContent = "Enter a hero name first.";
+      els.homeStatus.textContent = "Enter your name first.";
       return;
     }
     els.homeStatus.textContent = "Creating room…";
@@ -347,7 +413,7 @@
     const code = els.joinCodeInput.value.trim().toUpperCase();
     const name = els.joinNameInput.value.trim();
     if (!code || !name) {
-      els.homeStatus.textContent = "Enter a room code and a hero name first.";
+      els.homeStatus.textContent = "Enter a room code and your name first.";
       return;
     }
     els.homeStatus.textContent = "Joining…";
@@ -397,16 +463,6 @@
     startPolling();
   }
 
-  function describeApiFailure(status, fallback) {
-    if (status === 404) {
-      return "The game backend isn't available yet on this server.";
-    }
-    if (status === 429) {
-      return "The server is busy right now. Try again shortly.";
-    }
-    return fallback + " (status " + status + ")";
-  }
-
   // ---------------------------------------------------------------------
   // Polling / reconnect
   // ---------------------------------------------------------------------
@@ -430,7 +486,7 @@
     }
     pollInFlight = true;
     try {
-      const resp = await apiFetch("/api/game/rooms/" + encodeURIComponent(roomId) + "/state");
+      const resp = await apiFetch(roomPath("/state"));
       if (resp.status === 401) {
         lockOut("That access code was rejected. Reload the page and try again.");
         return;
@@ -468,79 +524,283 @@
   }
 
   // ---------------------------------------------------------------------
-  // Applying state -> screen + render
+  // normalizeState -- the one place the real server contract plugs in
   // ---------------------------------------------------------------------
-  function isFinale(s) {
-    return s.phase === "finished" || s.finished_victory === true || s.finished_victory === false;
+  function normalizeCard(raw) {
+    if (raw == null) {
+      return null;
+    }
+    if (typeof raw === "string") {
+      return { id: raw, name: raw, school: "bonk", description: "" };
+    }
+    return {
+      id: raw.id || raw.name,
+      name: raw.name || raw.id || "Move",
+      school: raw.school || "bonk",
+      description: raw.description || "",
+    };
   }
 
-  function isLobby(s) {
-    return s.phase === "lobby";
+  function normalizeHero(raw) {
+    return {
+      hero_id: raw.hero_id,
+      name: raw.name || raw.hero_id,
+      persona: raw.persona || "",
+      ability_name: raw.ability_name || "",
+      ability_description: raw.ability_description || "",
+      deck: (raw.deck || []).map(normalizeCard).filter(Boolean),
+      signature_move: raw.signature_move ? normalizeCard(raw.signature_move) : null,
+      player_id: raw.player_id || null,
+      is_companion: !!raw.is_companion,
+      active: raw.active !== false,
+      items_remaining: typeof raw.items_remaining === "number" ? raw.items_remaining : 0,
+      voice_calibrated: !!raw.voice_calibrated,
+      submitted_current_step: !!raw.submitted_current_step,
+    };
   }
 
-  function findYou(s) {
-    const you = s.you || {};
-    const players = s.players || [];
-    const match = players.find(function (p) { return p.player_id === you.player_id || p.player_id === playerId; });
-    return Object.assign({}, match || {}, you);
+  function heroHand(hero) {
+    if (!hero) {
+      return [];
+    }
+    return hero.signature_move ? hero.deck.concat([hero.signature_move]) : hero.deck.slice();
   }
 
-  function applyState(s) {
-    if (!s || typeof s !== "object") {
+  function heroById(viewModel, heroId) {
+    if (!heroId) {
+      return null;
+    }
+    return viewModel.heroes.find(function (h) { return h.hero_id === heroId; }) || null;
+  }
+
+  function resolveMoveRef(hero, moveRef) {
+    if (moveRef == null) {
+      return null;
+    }
+    if (typeof moveRef === "object") {
+      return normalizeCard(moveRef);
+    }
+    const hand = heroHand(hero);
+    const found = hand.find(function (c) { return c.id === moveRef; });
+    return found || { id: moveRef, name: String(moveRef), school: "bonk", description: "" };
+  }
+
+  function normalizeState(raw) {
+    if (!raw || typeof raw !== "object") {
+      return null;
+    }
+    const heroes = (raw.heroes || []).map(normalizeHero);
+    const heroMap = {};
+    heroes.forEach(function (h) { heroMap[h.hero_id] = h; });
+
+    const players = (raw.players || []).map(function (p) {
+      return {
+        player_id: p.player_id,
+        name: p.name || "Hero",
+        is_host: !!p.is_host,
+        active: p.active !== false,
+        hero_id: p.hero_id || null,
+        hero: p.hero_id ? heroMap[p.hero_id] || null : null,
+      };
+    });
+
+    const encounterRaw = raw.encounter || {};
+    const targets = (encounterRaw.targets || []).map(function (t, i) {
+      if (typeof t === "string") {
+        return { id: t, name: t };
+      }
+      return { id: t.id || t.name || String(i), name: t.name || t.id || String(i) };
+    });
+
+    const currentActionRaw = raw.current_action || null;
+    const currentAction = currentActionRaw ? {
+      hero_id: currentActionRaw.hero_id || raw.spotlight_hero_id || null,
+      move: resolveMoveRef(heroMap[currentActionRaw.hero_id || raw.spotlight_hero_id], currentActionRaw.move),
+      target_id: currentActionRaw.target_id || null,
+      desired_outcome: currentActionRaw.desired_outcome || "",
+      approved_text: currentActionRaw.approved_text || null,
+      intent: currentActionRaw.intent || null,
+    } : null;
+
+    const you = raw.you || {};
+    const draftRaw = you.draft || {};
+    const voiceRaw = you.voice_profile || {};
+
+    return {
+      room_id: raw.room_id || null,
+      phase: raw.phase || "lobby",
+      hearts: typeof raw.hearts === "number" ? raw.hearts : null,
+      max_hearts: typeof raw.max_hearts === "number" ? raw.max_hearts : null,
+      host_id: raw.host_id || null,
+      spotlight_hero_id: raw.spotlight_hero_id || null,
+      players: players,
+      heroes: heroes,
+      round_index: typeof raw.round_index === "number" ? raw.round_index : 0,
+      total_rounds: typeof raw.total_rounds === "number" ? raw.total_rounds : 5,
+      encounter: { id: encounterRaw.id || null, name: encounterRaw.name || "", flavor: encounterRaw.flavor || "", targets: targets },
+      current_action: currentAction,
+      last_round: raw.last_round || null,
+      history: raw.history || [],
+      finished_victory: typeof raw.finished_victory === "boolean" ? raw.finished_victory : null,
+      join_code: raw.join_code || null,
+      join_url: raw.join_url || null,
+      join_qr_data_url: raw.join_qr_data_url || null,
+      join_qr_svg: raw.join_qr_svg || null,
+      you: {
+        player_id: you.player_id || playerId,
+        is_host: !!you.is_host,
+        active: you.active !== false,
+        hero_id: you.hero_id || null,
+        hero: you.hero_id ? heroMap[you.hero_id] || null : null,
+        private_clue: you.private_clue || "",
+        draft: {
+          rough_text: draftRaw.rough_text || "",
+          variants: (draftRaw.variants || []).slice(0, VARIANT_SLOT_COUNT).map(function (v, i) {
+            if (typeof v === "string") {
+              return { id: String(i), text: v, provenance: "" };
+            }
+            return { id: v.id || String(i), text: v.text || "", provenance: v.provenance || "" };
+          }),
+          approved_text: draftRaw.approved_text || null,
+          intent: draftRaw.intent || null,
+        },
+        voice_profile: {
+          utterance_count: typeof voiceRaw.utterance_count === "number" ? voiceRaw.utterance_count : 0,
+          confidence: typeof voiceRaw.confidence === "number" ? voiceRaw.confidence : 0,
+          calibrated: !!voiceRaw.calibrated,
+        },
+        items_remaining: typeof you.items_remaining === "number" ? you.items_remaining : null,
+        pending_step: you.pending_step || null,
+      },
+    };
+  }
+
+  function applyState(raw) {
+    if (!raw || typeof raw !== "object") {
       return;
     }
-    state = s;
-    if (s.you && s.you.player_id) {
-      playerId = s.you.player_id;
+    state = raw;
+    vm = normalizeState(raw);
+    if (!vm) {
+      return;
     }
-    if (s.join_code) {
-      joinCode = s.join_code;
+    if (vm.you.player_id) {
+      playerId = vm.you.player_id;
     }
-    if (s.join_url) {
-      joinUrl = s.join_url;
+    if (vm.join_code) {
+      joinCode = vm.join_code;
+    }
+    if (vm.join_url) {
+      joinUrl = vm.join_url;
     }
 
-    if (isFinale(s)) {
+    if (vm.phase === "finished") {
       setScreen("finale");
-      renderFinale(s);
+      renderFinale(vm);
       announce("The adventure has ended.");
       return;
     }
-    if (isLobby(s)) {
+    if (vm.phase === "lobby") {
       setScreen("lobby");
-      renderLobby(s);
-      announce("In the lobby with " + ((s.players || []).length) + " hero(es).");
+      renderLobby(vm);
+      announce("In the lobby with " + vm.players.length + " hero(es).");
       return;
     }
-    setScreen("board");
-    renderBoard(s);
+    setScreen("round");
+    renderRound(vm);
+  }
+
+  // ---------------------------------------------------------------------
+  // Shared card rendering helpers
+  // ---------------------------------------------------------------------
+  function renderCardChoices(container, cards, radioName, checkedId) {
+    container.innerHTML = "";
+    cards.forEach(function (card) {
+      const label = document.createElement("label");
+      label.className = "card-choice";
+      label.dataset.card = card.school || "bonk";
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = radioName;
+      input.value = card.id;
+      input.required = true;
+      if (card.id === checkedId) {
+        input.checked = true;
+      }
+      label.appendChild(input);
+      const face = document.createElement("span");
+      face.className = "card-face";
+      const icon = document.createElement("span");
+      icon.className = "card-icon";
+      icon.setAttribute("aria-hidden", "true");
+      icon.textContent = SCHOOL_ICONS[card.school] || "✳";
+      face.appendChild(icon);
+      const name = document.createElement("span");
+      name.className = "card-name";
+      name.textContent = card.name;
+      face.appendChild(name);
+      label.appendChild(face);
+      container.appendChild(label);
+    });
+  }
+
+  function renderCardListReadOnly(container, cards, signatureId) {
+    container.innerHTML = "";
+    cards.forEach(function (card) {
+      const li = document.createElement("li");
+      li.className = "move-card school-" + (card.school || "bonk") + (card.id === signatureId ? " is-signature" : "");
+      const name = document.createElement("span");
+      name.className = "move-card-name";
+      name.textContent = card.name + (card.id === signatureId ? " (signature)" : "");
+      li.appendChild(name);
+      const school = document.createElement("span");
+      school.className = "move-card-school";
+      school.textContent = card.school || "";
+      li.appendChild(school);
+      if (card.description) {
+        const desc = document.createElement("p");
+        desc.className = "move-card-description";
+        desc.textContent = card.description;
+        li.appendChild(desc);
+      }
+      container.appendChild(li);
+    });
   }
 
   // ---------------------------------------------------------------------
   // Lobby rendering
   // ---------------------------------------------------------------------
-  function renderLobby(s) {
-    // Being back in the lobby (fresh game or a replay) means any leftover
-    // move-form state from a previous game is stale; force the next board
-    // render to reset it rather than comparing round numbers that also
-    // start over at 0 for a replay.
-    moveFormRoundKey = null;
+  function renderYourHeroPanel(viewModel) {
+    const hero = viewModel.you.hero;
+    if (!hero) {
+      els.yourHeroPanel.hidden = true;
+      return;
+    }
+    els.yourHeroPanel.hidden = false;
+    els.yourHeroName.textContent = hero.name;
+    els.yourHeroPersona.textContent = hero.persona ? "Persona: " + hero.persona : "";
+    els.yourHeroAbility.textContent = hero.ability_name
+      ? hero.ability_name + (hero.ability_description ? " — " + hero.ability_description : "")
+      : "";
+    renderCardListReadOnly(els.yourHeroCards, heroHand(hero), hero.signature_move && hero.signature_move.id);
+  }
+
+  function renderLobby(viewModel) {
     els.lobbyCode.textContent = joinCode || "–";
     els.lobbyLink.textContent = joinUrl || "";
     if (joinUrl && /^https?:\/\//i.test(joinUrl)) {
       els.lobbyLink.setAttribute("data-href", joinUrl);
     }
 
-    renderQr(s);
+    renderQr(viewModel);
 
-    const players = s.players || [];
     els.lobbyPlayers.innerHTML = "";
-    players.forEach(function (p) {
+    viewModel.players.forEach(function (p) {
       const li = document.createElement("li");
       li.className = "player-list-item";
       const nameSpan = document.createElement("span");
       nameSpan.className = "player-name";
-      nameSpan.textContent = p.name || "Hero";
+      nameSpan.textContent = p.name + (p.hero ? " as " + p.hero.name : "");
       li.appendChild(nameSpan);
       if (p.is_host) {
         const tag = document.createElement("span");
@@ -548,7 +808,7 @@
         tag.textContent = "Host";
         li.appendChild(tag);
       }
-      if (p.active === false) {
+      if (!p.active) {
         const tag = document.createElement("span");
         tag.className = "player-tag player-tag-warn";
         tag.textContent = "Disconnected";
@@ -557,15 +817,16 @@
       els.lobbyPlayers.appendChild(li);
     });
 
-    const you = findYou(s);
-    els.lobbySoloHint.hidden = players.length > 1;
-    if (you.is_host) {
+    renderYourHeroPanel(viewModel);
+
+    els.lobbySoloHint.hidden = viewModel.players.length > 1;
+    if (viewModel.you.is_host) {
       els.startButton.hidden = false;
-      els.startButton.textContent = players.length > 1 ? "Start the adventure" : "Start solo adventure";
+      els.startButton.textContent = viewModel.players.length > 1 ? "Start the adventure" : "Start solo adventure";
       els.lobbyStatus.textContent = "";
     } else {
       els.startButton.hidden = true;
-      els.lobbyStatus.textContent = "Waiting for the host to start…";
+      els.lobbyStatus.textContent = "Waiting for the host to begin…";
     }
   }
 
@@ -592,10 +853,10 @@
     return el;
   }
 
-  function renderQr(s) {
+  function renderQr(viewModel) {
     els.lobbyQr.innerHTML = "";
-    const dataUrl = s.join_qr_data_url;
-    const svgText = s.join_qr_svg;
+    const dataUrl = viewModel.join_qr_data_url;
+    const svgText = viewModel.join_qr_svg;
     if (typeof dataUrl === "string" && dataUrl.indexOf("data:image/") === 0) {
       const img = document.createElement("img");
       img.src = dataUrl;
@@ -631,73 +892,11 @@
   }
 
   // ---------------------------------------------------------------------
-  // Board rendering
+  // Round rendering: shared context (banner/objective/private/log)
   // ---------------------------------------------------------------------
-  const CARD_LABELS = { charm: "Charm", scheme: "Scheme", bonk: "Bonk" };
-  const ENCOUNTER_ART = {
-    passive_aggressive_troll: "/art/encounter-troll.png",
-    goblin_hr_department: "/art/encounter-goblins.png",
-    suggestion_box_mimic: "/art/encounter-mimic.png",
-    needlessly_complicated_riddle_bridge: "/art/encounter-bridge.png",
-    red_tape_dragon: "/art/encounter-dragon.png",
-  };
-
-  // The engine deliberately never reveals an encounter's weakness ahead of
-  // time (see docs/LAN_GAME_SPEC.md) -- card choice is a gamble/vibe check,
-  // not a min-max decision. Past encounters come from `history`, the
-  // current one from `encounter`; anything further out is unknown.
-  function buildEncounterSlots(s) {
-    const total = typeof s.total_rounds === "number" ? s.total_rounds : 5;
-    const roundIndex = typeof s.round_index === "number" ? s.round_index : 0;
-    const history = s.history || [];
-    const slots = [];
-    for (let i = 0; i < total; i += 1) {
-      if (i < roundIndex && history[i]) {
-        slots.push({ name: history[i].encounter && history[i].encounter.name, status: "cleared" });
-      } else if (i === roundIndex && s.encounter) {
-        slots.push({ name: s.encounter.name, status: "current" });
-      } else {
-        slots.push({ name: null, status: "unknown" });
-      }
-    }
-    return slots;
-  }
-
-  function renderBoard(s) {
-    const roundIndex = typeof s.round_index === "number" ? s.round_index : 0;
-    const slots = buildEncounterSlots(s);
-
-    renderHearts(s.hearts, s.max_hearts);
-    renderRoster(s);
-    renderEncounterArt(s.encounter || {});
-    drawBoardCanvas(slots, roundIndex);
-
-    const you = findYou(s);
-    const lastRound = s.last_round;
-    const revealing = s.phase === "reveal" && !!lastRound;
-    const submitted = !!you.submitted;
-
-    els.moveForm.hidden = revealing || submitted;
-    els.waitingPanel.hidden = revealing || !submitted;
-    els.revealPanel.hidden = !revealing;
-
-    if (!revealing && !submitted) {
-      renderMoveForm(s);
-    } else if (!revealing && submitted) {
-      const players = s.players || [];
-      const total = players.length;
-      const received = players.filter(function (p) { return p.submitted; }).length;
-      els.waitingCount.textContent = "(" + received + " / " + total + " submitted)";
-    } else {
-      renderReveal(lastRound, you);
-    }
-  }
-
-  function renderEncounterArt(encounter) {
-    const name = encounter.name || "Mysterious administrative obstacle";
-    els.encounterArt.src = ENCOUNTER_ART[encounter.id] || "/art/encounter-troll.png";
-    els.encounterArt.alt = name + " encounter illustration";
-    els.encounterCaption.textContent = name;
+  function spotlightName(viewModel) {
+    const hero = heroById(viewModel, viewModel.spotlight_hero_id);
+    return hero ? hero.name : "the Spotlight";
   }
 
   function renderHearts(hearts, maxHearts) {
@@ -713,29 +912,34 @@
     els.heartsDisplay.setAttribute("aria-label", current + " of " + max + " hearts remaining");
   }
 
-  function renderRoster(s) {
-    const players = s.players || [];
+  function renderRoster(viewModel) {
     els.playersRoster.innerHTML = "";
-    players.forEach(function (p) {
+    viewModel.players.forEach(function (p) {
       const li = document.createElement("li");
       li.className = "player-list-item";
       const nameSpan = document.createElement("span");
       nameSpan.className = "player-name";
-      nameSpan.textContent = p.name || "Hero";
+      nameSpan.textContent = p.name + (p.hero ? " as " + p.hero.name : "");
       li.appendChild(nameSpan);
+      if (p.hero_id === viewModel.spotlight_hero_id) {
+        const tag = document.createElement("span");
+        tag.className = "player-tag player-tag-spotlight";
+        tag.textContent = "Spotlight";
+        li.appendChild(tag);
+      }
       if (p.is_host) {
         const tag = document.createElement("span");
         tag.className = "player-tag";
         tag.textContent = "Host";
         li.appendChild(tag);
       }
-      if (p.submitted) {
+      if (p.hero && p.hero.submitted_current_step) {
         const tag = document.createElement("span");
         tag.className = "player-tag player-tag-ready";
         tag.textContent = "Ready";
         li.appendChild(tag);
       }
-      if (p.active === false) {
+      if (!p.active) {
         const tag = document.createElement("span");
         tag.className = "player-tag player-tag-warn";
         tag.textContent = "Disconnected";
@@ -745,258 +949,575 @@
     });
   }
 
-  function renderMoveForm(s) {
-    const encounter = s.encounter || {};
-    // renderBoard() re-invokes this on every ~1.5s poll while the form is
-    // still showing, so only reset the fields the first time a given round's
-    // form appears -- never while the player is mid-typing on that same
-    // round (that would erase their draft on every poll), but always when
-    // the round has actually moved on (otherwise the previous round's move
-    // text/card selection silently carries over as a pre-filled, easy-to-
-    // miss resubmission for the new round).
-    const roundKey = (encounter.id || "") + ":" + (typeof s.round_index === "number" ? s.round_index : "");
-    if (roundKey !== moveFormRoundKey) {
-      moveFormRoundKey = roundKey;
-      els.moveText.value = "";
-      els.moveTextCount.textContent = "0";
-      const checked = els.moveForm.querySelector('input[name="move-card"]:checked');
+  function renderObjectiveArt(encounter) {
+    const name = encounter.name || "Mysterious administrative obstacle";
+    els.objectiveArt.src = ENCOUNTER_ART[encounter.id] || "/art/encounter-troll.png";
+    els.objectiveArt.alt = name + " encounter illustration";
+    els.objectiveName.textContent = name;
+    els.objectiveDescription.textContent = encounter.flavor || "";
+  }
+
+  function renderPrivatePanel(viewModel) {
+    els.privateClue.textContent = viewModel.you.private_clue || "No clue revealed yet.";
+  }
+
+  function renderYourHeroHand(viewModel) {
+    const hero = viewModel.you.hero;
+    if (!hero) {
+      els.yourHeroHandPanel.hidden = true;
+      return;
+    }
+    els.yourHeroHandPanel.hidden = false;
+    renderCardListReadOnly(els.yourHeroHandCards, heroHand(hero), hero.signature_move && hero.signature_move.id);
+  }
+
+  function renderDeclaredAction(viewModel) {
+    const action = viewModel.current_action;
+    if (!action) {
+      els.declaredActionPanel.hidden = true;
+      return;
+    }
+    els.declaredActionPanel.hidden = false;
+    const spotlightHero = heroById(viewModel, action.hero_id) || heroById(viewModel, viewModel.spotlight_hero_id);
+    const target = viewModel.encounter.targets.find(function (t) { return t.id === action.target_id; });
+    const parts = [];
+    parts.push((spotlightHero ? spotlightHero.name : "The Spotlight") + " uses " + (action.move ? action.move.name : "a move"));
+    if (target) {
+      parts.push("on " + target.name);
+    }
+    if (action.desired_outcome) {
+      parts.push("— hoping to: " + action.desired_outcome);
+    }
+    els.declaredActionSummary.textContent = parts.join(" ");
+
+    if (action.approved_text) {
+      els.declaredActionApproved.hidden = false;
+      els.declaredActionApprovedText.textContent = "“" + action.approved_text + "”";
+      els.declaredActionApprovedIntent.textContent = action.intent ? "Intent: " + action.intent : "";
+    } else {
+      els.declaredActionApproved.hidden = true;
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Round rendering: per-phase sub-panels
+  // ---------------------------------------------------------------------
+  function panelForPhase(viewModel) {
+    const step = viewModel.you.pending_step;
+    if (step === "declare_action" || step === "spotlight_action") {
+      return "action-builder";
+    }
+    if (step === "submit_support" || step === "ally_support") {
+      return "support";
+    }
+    if (["submit_rough_text", "awaiting_variants", "approve_message", "spotlight_draft"].includes(step)) {
+      return "draft";
+    }
+    if (step === "submit_reaction" || step === "ally_reaction") {
+      return "reaction";
+    }
+    if (viewModel.phase === "reveal") {
+      return "reveal";
+    }
+    return "waiting";
+  }
+
+  function alliesReady(viewModel) {
+    const allies = viewModel.heroes.filter(function (h) {
+      return h.active && h.hero_id !== viewModel.spotlight_hero_id;
+    });
+    if (!allies.length) {
+      return true;
+    }
+    return allies.every(function (h) { return h.submitted_current_step; });
+  }
+
+  function renderActionBuilder(viewModel, isNewStage) {
+    const hand = heroHand(viewModel.you.hero);
+    const checked = isNewStage ? null : currentCheckedValue(els.actionCardChoices);
+    renderCardChoices(els.actionCardChoices, hand, "action-card", checked);
+
+    const previousTarget = els.actionTargetSelect.value;
+    els.actionTargetSelect.innerHTML = "";
+    viewModel.encounter.targets.forEach(function (t) {
+      const opt = document.createElement("option");
+      opt.value = t.id;
+      opt.textContent = t.name;
+      els.actionTargetSelect.appendChild(opt);
+    });
+    if (!isNewStage && previousTarget && Array.from(els.actionTargetSelect.options).some(function (o) { return o.value === previousTarget; })) {
+      els.actionTargetSelect.value = previousTarget;
+    }
+
+    if (isNewStage) {
+      els.actionOutcomeInput.value = "";
+      els.actionOutcomeCount.textContent = "0";
+    }
+    els.actionSubmit.disabled = false;
+    els.actionStatus.textContent = viewModel.encounter.name ? "Facing: " + viewModel.encounter.name : "";
+  }
+
+  function renderSupportForm(viewModel, isNewStage) {
+    const items = viewModel.you.items_remaining;
+    els.supportItemsHint.textContent = typeof items === "number" ? "Items remaining: " + items : "";
+    const itemInput = els.supportPanel.querySelector('input[name="support-kind"][value="item"]');
+    if (itemInput) {
+      const disabled = typeof items === "number" && items <= 0;
+      itemInput.disabled = disabled;
+      itemInput.closest(".card-choice").classList.toggle("is-disabled", disabled);
+    }
+    if (isNewStage) {
+      const checked = els.supportPanel.querySelector('input[name="support-kind"]:checked');
       if (checked) {
         checked.checked = false;
       }
+      els.supportDetail.value = "";
+      els.supportDetailCount.textContent = "0";
     }
-    els.moveSubmit.disabled = false;
-    els.moveStatus.textContent = encounter.name ? "Trial: " + encounter.name + (encounter.flavor ? " — " + encounter.flavor : "") : "";
+    els.supportSubmit.disabled = false;
+    els.supportStatus.textContent = "";
   }
 
-  function renderReveal(roundRecord, you) {
-    els.revealList.innerHTML = "";
-    (roundRecord.choices || []).forEach(function (entry) {
-      const li = document.createElement("li");
-      li.className = "reveal-item";
-
-      const head = document.createElement("div");
-      head.className = "reveal-head";
-      const nameSpan = document.createElement("span");
-      nameSpan.className = "player-name";
-      nameSpan.textContent = entry.name || entry.player_id || "Hero";
-      head.appendChild(nameSpan);
-      const approach = entry.approach || entry.card || "";
-      const cardSpan = document.createElement("span");
-      cardSpan.className = "reveal-card card-" + approach;
-      cardSpan.textContent = CARD_LABELS[approach] || approach;
-      head.appendChild(cardSpan);
-      li.appendChild(head);
-
-      if (entry.move_text) {
-        const moveP = document.createElement("p");
-        moveP.className = "reveal-move";
-        moveP.textContent = entry.move_text;
-        li.appendChild(moveP);
-      }
-      els.revealList.appendChild(li);
+  function renderVariantList(viewModel) {
+    const variants = viewModel.you.draft.variants;
+    els.variantList.innerHTML = "";
+    if (!variants.length) {
+      els.variantList.hidden = true;
+      return;
+    }
+    els.variantList.hidden = false;
+    variants.forEach(function (variant) {
+      const label = document.createElement("label");
+      label.className = "variant-choice";
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = "draft-variant";
+      input.value = variant.id;
+      label.appendChild(input);
+      const card = document.createElement("span");
+      card.className = "variant-card";
+      const badge = document.createElement("span");
+      const provenance = variant.provenance || "";
+      badge.className = "variant-provenance" + (/fallback|offline/i.test(provenance) ? " provenance-fallback" : "");
+      badge.textContent = provenance ? provenance.charAt(0).toUpperCase() + provenance.slice(1) : "Rewrite";
+      card.appendChild(badge);
+      const text = document.createElement("p");
+      text.className = "variant-text";
+      text.textContent = variant.text;
+      card.appendChild(text);
+      label.appendChild(card);
+      els.variantList.appendChild(label);
     });
+  }
 
-    const successes = typeof roundRecord.successes === "number" ? roundRecord.successes : 0;
-    const backfires = typeof roundRecord.backfires === "number" ? roundRecord.backfires : 0;
-    const damage = typeof roundRecord.damage === "number" ? roundRecord.damage : 0;
-    els.roundSummary.textContent =
-      successes + " success(es), " + backfires + " backfire(s) → " +
-      (damage > 0 ? damage + " heart" + (damage === 1 ? "" : "s") + " lost." : "no damage taken.");
+  els.variantList.addEventListener("change", function (event) {
+    if (!event.target || event.target.name !== "draft-variant" || !vm) {
+      return;
+    }
+    const variant = vm.you.draft.variants.find(function (v) { return v.id === event.target.value; });
+    if (!variant) {
+      return;
+    }
+    els.draftEditText.value = variant.text;
+    if (!els.draftIntentText.value) {
+      els.draftIntentText.value = (vm.current_action && vm.current_action.desired_outcome) || "";
+    }
+    els.draftApproval.hidden = false;
+  });
 
-    if (you.is_host) {
-      els.advanceButton.hidden = false;
-      els.advanceStatus.textContent = "";
+  function renderDraftPanel(viewModel, isNewStage) {
+    if (isNewStage) {
+      els.draftRoughText.value = viewModel.you.draft.rough_text || "";
+      els.draftRoughCount.textContent = String(els.draftRoughText.value.length);
+      els.draftError.hidden = true;
+      els.draftError.textContent = "";
+      els.draftLoading.hidden = true;
+    }
+    const voice = viewModel.you.voice_profile;
+    els.draftVoiceStatus.textContent = "Practiced " + voice.utterance_count + " time(s)"
+      + (voice.calibrated ? " — voice calibrated." : ".");
+    renderVariantList(viewModel);
+    if (viewModel.you.draft.variants.length) {
+      els.draftApproval.hidden = false;
+      if (isNewStage || !els.draftEditText.value) {
+        els.draftEditText.value = viewModel.you.draft.approved_text || viewModel.you.draft.variants[0].text || "";
+      }
+      if (isNewStage || !els.draftIntentText.value) {
+        els.draftIntentText.value = viewModel.you.draft.intent || (viewModel.current_action && viewModel.current_action.desired_outcome) || "";
+      }
     } else {
-      els.advanceButton.hidden = true;
-      els.advanceStatus.textContent = "Waiting for the host to continue…";
+      els.draftApproval.hidden = true;
+    }
+    els.draftStatus.textContent = "";
+  }
+
+  function renderReactionForm(viewModel, isNewStage) {
+    const action = viewModel.current_action || {};
+    els.reactionMessage.textContent = action.approved_text || "";
+    els.reactionIntent.textContent = action.intent ? "Intent: " + action.intent : "";
+    if (isNewStage) {
+      const hand = heroHand(viewModel.you.hero);
+      const previous = els.reactionMoveSelect.value;
+      els.reactionMoveSelect.innerHTML = "";
+      const noneOpt = document.createElement("option");
+      noneOpt.value = "";
+      noneOpt.textContent = "No move";
+      els.reactionMoveSelect.appendChild(noneOpt);
+      hand.forEach(function (card) {
+        const opt = document.createElement("option");
+        opt.value = card.id;
+        opt.textContent = card.name;
+        els.reactionMoveSelect.appendChild(opt);
+      });
+      els.reactionMoveSelect.value = previous && Array.from(els.reactionMoveSelect.options).some(function (o) { return o.value === previous; }) ? previous : "";
+
+      const checked = els.reactionPanel.querySelector('input[name="reaction-verb"]:checked');
+      if (checked) {
+        checked.checked = false;
+      }
+      els.reactionDetail.value = "";
+      els.reactionDetailCount.textContent = "0";
+    }
+    els.reactionSubmit.disabled = false;
+    els.reactionStatus.textContent = "";
+  }
+
+  function describeClue(entry) {
+    if (typeof entry === "string") {
+      return entry;
+    }
+    if (entry && typeof entry === "object") {
+      return (entry.name ? entry.name + ": " : "") + (entry.clue || entry.text || entry.detail || "revealed a clue");
+    }
+    return "revealed a clue";
+  }
+
+  function renderRoundLogEntry(container, item, className) {
+    const li = document.createElement("li");
+    li.className = "contribution-item";
+    const tag = document.createElement("span");
+    tag.className = "stance-tag stance-" + (item[className] || "assist");
+    tag.textContent = item[className] || "";
+    li.appendChild(tag);
+    const name = document.createElement("strong");
+    name.textContent = (item.name || "Someone") + ": ";
+    li.appendChild(name);
+    li.appendChild(document.createTextNode(item.detail || ""));
+    container.appendChild(li);
+  }
+
+  function renderRevealPanel(viewModel) {
+    const round = viewModel.last_round;
+    els.dieRollDisplay.innerHTML = "";
+    els.modifierBreakdown.innerHTML = "";
+    els.revealedCluesList.innerHTML = "";
+    els.roundLogList.innerHTML = "";
+
+    if (!round) {
+      els.revealOutcome.textContent = "Waiting for the roll…";
+      els.revealNarration.textContent = "";
+      els.revealedCluesWrap.hidden = true;
+      els.roundLogWrap.hidden = true;
+    } else {
+      if (typeof round.die_roll !== "undefined") {
+        const li = document.createElement("li");
+        li.textContent = "Die roll: " + round.die_roll;
+        els.dieRollDisplay.appendChild(li);
+      }
+      (round.modifiers || []).forEach(function (m) {
+        const li = document.createElement("li");
+        const value = typeof m.value === "number" ? m.value : 0;
+        li.textContent = (m.label || m.source || "modifier") + " (" + (m.affects || "score") + "): ";
+        const span = document.createElement("span");
+        span.className = value > 0 ? "value-positive" : (value < 0 ? "value-negative" : "");
+        span.textContent = (value > 0 ? "+" : "") + value;
+        li.appendChild(span);
+        els.modifierBreakdown.appendChild(li);
+      });
+
+      const target = viewModel.encounter.targets.find(function (t) { return t.id === round.true_target_id; });
+      const parts = [];
+      if (typeof round.score === "number") {
+        parts.push("Score " + round.score);
+      }
+      if (typeof round.damage === "number") {
+        parts.push(round.damage > 0 ? round.damage + " heart(s) lost" : "no damage taken");
+      }
+      if (typeof round.hearts_before === "number" && typeof round.hearts_after === "number") {
+        parts.push(round.hearts_before + " → " + round.hearts_after + " hearts");
+      }
+      if (target) {
+        parts.push("true target: " + target.name);
+      }
+      els.revealOutcome.textContent = parts.join(" — ");
+      els.revealNarration.textContent = round.narration || "";
+
+      const clues = round.revealed_clues || [];
+      els.revealedCluesWrap.hidden = clues.length === 0;
+      clues.forEach(function (c) {
+        const li = document.createElement("li");
+        li.textContent = describeClue(c);
+        els.revealedCluesList.appendChild(li);
+      });
+
+      const support = round.support || [];
+      const reactions = round.reactions || [];
+      els.roundLogWrap.hidden = support.length === 0 && reactions.length === 0;
+      support.forEach(function (s) { renderRoundLogEntry(els.roundLogList, s, "kind"); });
+      reactions.forEach(function (r) { renderRoundLogEntry(els.roundLogList, r, "verb"); });
+    }
+
+    els.revealContinueButton.hidden = !viewModel.you.is_host;
+    els.revealStatus.textContent = viewModel.you.is_host ? "" : "Waiting for the host to continue…";
+  }
+
+  function renderRoundWaiting(viewModel) {
+    let text = "Waiting for the rest of the party…";
+    const isSpotlight = viewModel.you.hero_id === viewModel.spotlight_hero_id;
+    if (viewModel.phase === "spotlight_action") {
+      text = isSpotlight ? "Waiting…" : "Waiting for " + spotlightName(viewModel) + " to choose a move…";
+    } else if (viewModel.phase === "ally_support") {
+      text = isSpotlight ? "Your party is chiming in…" : "Support sent — waiting for the rest of the party…";
+    } else if (viewModel.phase === "spotlight_draft") {
+      text = "Waiting for " + spotlightName(viewModel) + " to find the words…";
+    } else if (viewModel.phase === "ally_reaction") {
+      text = isSpotlight ? "Waiting for your party to react…" : "Reaction locked in — waiting for the rest of the party…";
+    }
+    els.roundWaitingText.textContent = text;
+
+    const ready = alliesReady(viewModel);
+    els.hostOpenDraftButton.hidden = !(viewModel.you.is_host && viewModel.phase === "ally_support" && ready);
+    els.hostResolveButton.hidden = !(viewModel.you.is_host && viewModel.phase === "ally_reaction" && ready);
+  }
+
+  function showRoundPanel(viewModel, isNewStage) {
+    const panel = panelForPhase(viewModel);
+    els.actionBuilderPanel.hidden = panel !== "action-builder";
+    els.supportPanel.hidden = panel !== "support";
+    els.draftPanel.hidden = panel !== "draft";
+    els.reactionPanel.hidden = panel !== "reaction";
+    els.revealPanel.hidden = panel !== "reveal";
+    els.roundWaitingPanel.hidden = panel !== "waiting";
+
+    if (panel === "action-builder") {
+      renderActionBuilder(viewModel, isNewStage);
+    } else if (panel === "support") {
+      renderSupportForm(viewModel, isNewStage);
+    } else if (panel === "draft") {
+      renderDraftPanel(viewModel, isNewStage);
+    } else if (panel === "reaction") {
+      renderReactionForm(viewModel, isNewStage);
+    } else if (panel === "reveal") {
+      renderRevealPanel(viewModel);
+    } else {
+      renderRoundWaiting(viewModel);
     }
   }
 
-  // ---------------------------------------------------------------------
-  // Canvas board art (decorative; all interactive state has a DOM equivalent)
-  // ---------------------------------------------------------------------
-  const SLOT_COLORS = { cleared: "#9fd8b0", current: "#ff6fae", unknown: "#b9b3d6" };
+  function renderRound(viewModel) {
+    els.spotlightRound.textContent = "Round " + (viewModel.round_index + 1) + " of " + viewModel.total_rounds;
+    const isSpotlight = viewModel.you.hero_id === viewModel.spotlight_hero_id;
+    els.spotlightName.textContent = spotlightName(viewModel) + (isSpotlight ? " (you!)" : "");
+    els.spotlightBanner.classList.toggle("is-you", isSpotlight);
 
-  function drawBoardCanvas(slots, currentIndex) {
-    const w = els.canvas.width;
-    const h = els.canvas.height;
-    ctx.clearRect(0, 0, w, h);
+    renderObjectiveArt(viewModel.encounter);
+    renderHearts(viewModel.hearts, viewModel.max_hearts);
+    renderRoster(viewModel);
+    renderPrivatePanel(viewModel);
+    renderYourHeroHand(viewModel);
+    renderDeclaredAction(viewModel);
 
-    // The generated fantasy map is the CSS background; canvas remains a
-    // transparent, accessible state overlay so the game still works if the
-    // optional art pack is missing or slow to load.
-    ctx.fillStyle = "rgba(255, 248, 240, 0.18)";
-    ctx.fillRect(0, 0, w, h);
-
-    const count = slots.length;
-    const marginX = 60;
-    const step = (w - marginX * 2) / Math.max(count - 1, 1);
-    const y = h / 2 + 20;
-    const points = [];
-    for (let i = 0; i < count; i += 1) {
-      points.push({ x: marginX + step * i, y: y - Math.sin(i * 1.1) * 40 });
-    }
-
-    ctx.strokeStyle = "#c9b8ff";
-    ctx.lineWidth = 6;
-    ctx.beginPath();
-    points.forEach(function (p, i) {
-      if (i === 0) {
-        ctx.moveTo(p.x, p.y);
-      } else {
-        ctx.lineTo(p.x, p.y);
-      }
-    });
-    ctx.stroke();
-
-    points.forEach(function (p, i) {
-      const slot = slots[i] || { status: "unknown" };
-      const isCurrent = slot.status === "current";
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, isCurrent ? 26 : 20, 0, Math.PI * 2);
-      ctx.fillStyle = SLOT_COLORS[slot.status] || SLOT_COLORS.unknown;
-      ctx.globalAlpha = slot.status === "cleared" ? 0.6 : 1;
-      ctx.fill();
-      ctx.globalAlpha = 1;
-      ctx.lineWidth = isCurrent ? 4 : 2;
-      ctx.strokeStyle = "#2a2540";
-      ctx.stroke();
-
-      ctx.fillStyle = "#2a2540";
-      ctx.font = "bold 14px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(slot.status === "unknown" ? "?" : String(i + 1), p.x, p.y + 5);
-    });
-
-    if (!reduceMotion && animRoomIndex !== currentIndex) {
-      animRoomIndex += animRoomIndex < currentIndex ? 1 : -1;
-      vSetTimeout(function () { drawBoardCanvas(slots, currentIndex); }, 120);
-    } else {
-      animRoomIndex = currentIndex;
-    }
-
-    const tokenPoint = points[Math.max(0, Math.min(points.length - 1, animRoomIndex))];
-    if (tokenPoint) {
-      ctx.beginPath();
-      ctx.arc(tokenPoint.x, tokenPoint.y - 34, 10, 0, Math.PI * 2);
-      ctx.fillStyle = "#ffd23f";
-      ctx.fill();
-      ctx.strokeStyle = "#2a2540";
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    }
-
-    const current = slots[currentIndex] || {};
-    els.canvas.setAttribute(
-      "aria-label",
-      "Encounter " + (currentIndex + 1) + " of " + count + (current.name ? ": " + current.name : "")
-    );
+    const stageKey = viewModel.phase + ":" + viewModel.round_index + ":" + (viewModel.spotlight_hero_id || "");
+    const isNewStage = stageKey !== roundStageKey;
+    roundStageKey = stageKey;
+    showRoundPanel(viewModel, isNewStage);
   }
 
   // ---------------------------------------------------------------------
   // Finale rendering
   // ---------------------------------------------------------------------
-  function renderFinale(s) {
-    const victory = s.finished_victory === true;
+  function renderFinale(viewModel) {
+    const victory = viewModel.finished_victory === true;
     els.finaleArt.src = victory ? "/art/victory.png" : "/art/defeat.png";
     els.finaleArt.alt = victory
       ? "The adventuring party celebrating amid defeated magical paperwork"
       : "The adventuring party buried beneath an avalanche of enchanted paperwork";
-    els.finaleHeading.textContent = victory ? "The kingdom is saved!" : "The kingdom remains chaotic.";
-    const rounds = (s.history || []).length + (s.last_round ? 1 : 0);
+    els.finaleHeading.textContent = victory ? "The words are found." : "The meaning stays lost… for now.";
+    const rounds = viewModel.history.length;
     els.finaleSummary.textContent = victory
-      ? "Your party talked, schemed, and bonked its way through all 5 encounters with " + (s.hearts || 0) + " heart(s) to spare."
-      : "The party's hearts ran out after " + rounds + " encounter(s). The kingdom's miscommunications win this round.";
+      ? "Your party talked its way through " + rounds + " encounter(s) with " + (viewModel.hearts || 0) + " heart(s) to spare."
+      : "The party's hearts ran out after " + rounds + " encounter(s). The kingdom's meaning stays scrambled — for now.";
+    els.finaleRecap.innerHTML = "";
+    viewModel.history.forEach(function (round, idx) {
+      const li = document.createElement("li");
+      const name = (round.encounter && round.encounter.name) || ("Round " + (idx + 1));
+      const damage = typeof round.damage === "number" ? (round.damage > 0 ? round.damage + " heart(s) lost" : "no damage") : "";
+      li.textContent = (idx + 1) + ". " + name + (damage ? " — " + damage : "");
+      els.finaleRecap.appendChild(li);
+    });
   }
 
   // ---------------------------------------------------------------------
   // Actions
   // ---------------------------------------------------------------------
+  async function postAction(path, body, statusEl, onSuccess, onFinally) {
+    try {
+      const resp = await apiFetch(roomPath(path), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body || {}),
+      });
+      if (resp.status === 401) {
+        lockOut("That access code was rejected. Reload the page and try again.");
+        return;
+      }
+      if (!resp.ok) {
+        if (statusEl) {
+          statusEl.textContent = describeApiFailure(resp.status, "That wasn't accepted.");
+        }
+        return;
+      }
+      const data = await resp.json();
+      applyState(data.state || data);
+      if (onSuccess) {
+        onSuccess();
+      }
+    } catch (err) {
+      if (statusEl) {
+        statusEl.textContent = "Couldn't reach the game server.";
+      }
+    } finally {
+      if (onFinally) {
+        onFinally();
+      }
+    }
+  }
+
   async function startGame() {
     if (!roomId) {
       return;
     }
     els.lobbyStatus.textContent = "Starting…";
-    try {
-      const resp = await apiFetch("/api/game/rooms/" + encodeURIComponent(roomId) + "/start", { method: "POST" });
-      if (resp.status === 403) {
-        els.lobbyStatus.textContent = "Only the host can start the adventure.";
-        return;
-      }
-      if (!resp.ok) {
-        els.lobbyStatus.textContent = describeApiFailure(resp.status, "Couldn't start the adventure.");
-        return;
-      }
-      const data = await resp.json();
-      applyState(data);
-    } catch (err) {
-      els.lobbyStatus.textContent = "Couldn't reach the game server.";
-    }
+    await postAction("/start", {}, els.lobbyStatus);
   }
 
-  async function submitMove(event) {
+  async function submitAction(event) {
     event.preventDefault();
-    const persona = els.movePersona.value;
-    const cardInput = els.moveForm.querySelector('input[name="move-card"]:checked');
-    const card = cardInput ? cardInput.value : "";
-    const moveText = els.moveText.value.trim();
-    if (!persona || !card || !moveText) {
-      els.moveStatus.textContent = "Choose a persona, a card, and write your move first.";
+    const cardInput = els.actionBuilderPanel.querySelector('input[name="action-card"]:checked');
+    const targetId = els.actionTargetSelect.value;
+    const outcome = els.actionOutcomeInput.value.trim();
+    if (!cardInput || !targetId || !outcome) {
+      els.actionStatus.textContent = "Choose a card, a target, and a desired outcome first.";
       return;
     }
-    els.moveSubmit.disabled = true;
-    els.moveStatus.textContent = "Submitting…";
-    try {
-      const resp = await apiFetch("/api/game/rooms/" + encodeURIComponent(roomId) + "/moves", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ persona: persona, approach: card, card: card, move_text: moveText }),
-      });
-      if (resp.status === 409) {
-        els.moveStatus.textContent = "You've already submitted this round.";
-        return;
-      }
-      if (resp.status === 422) {
-        els.moveStatus.textContent = "That move wasn't accepted. Try shortening it.";
-        els.moveSubmit.disabled = false;
-        return;
-      }
-      if (!resp.ok) {
-        els.moveStatus.textContent = describeApiFailure(resp.status, "Couldn't submit your move.");
-        els.moveSubmit.disabled = false;
-        return;
-      }
-      els.moveStatus.textContent = "";
-      const data = await resp.json().catch(function () { return null; });
-      if (data && data.state) {
-        applyState(data.state);
-      } else {
-        // No inline state in the ack -- poll immediately rather than
-        // waiting out the regular interval for the waiting view to show.
-        stopPolling();
-        pollTimerId = vSetTimeout(pollTick, 0);
-      }
-    } catch (err) {
-      els.moveStatus.textContent = "Couldn't reach the game server.";
-      els.moveSubmit.disabled = false;
-    }
+    els.actionSubmit.disabled = true;
+    els.actionStatus.textContent = "Declaring…";
+    await postAction(
+      "/spotlight",
+      { move_id: cardInput.value, target_id: targetId, desired_outcome: outcome },
+      els.actionStatus,
+      null,
+      function () { els.actionSubmit.disabled = false; }
+    );
   }
 
-  async function advanceRound() {
+  async function submitSupport(event) {
+    event.preventDefault();
+    const kindInput = els.supportPanel.querySelector('input[name="support-kind"]:checked');
+    if (!kindInput) {
+      els.supportStatus.textContent = "Choose a kind of support first.";
+      return;
+    }
+    els.supportSubmit.disabled = true;
+    els.supportStatus.textContent = "Sending…";
+    await postAction(
+      "/support",
+      { kind: kindInput.value, detail: els.supportDetail.value.trim() },
+      els.supportStatus,
+      null,
+      function () { els.supportSubmit.disabled = false; }
+    );
+  }
+
+  async function openDraft() {
+    await postAction("/open-draft", {}, els.roundWaitingText);
+  }
+
+  async function practiceVoice() {
+    if (!vm) {
+      return;
+    }
+    const next = vm.you.voice_profile.utterance_count + 1;
+    await postAction("/voice-profile", { utterance_count: next }, els.draftVoiceStatus);
+  }
+
+  async function generateVariants() {
     if (!roomId) {
       return;
     }
-    els.advanceStatus.textContent = "";
-    try {
-      const resp = await apiFetch("/api/game/rooms/" + encodeURIComponent(roomId) + "/advance", { method: "POST" });
-      if (resp.ok) {
-        const data = await resp.json();
-        applyState(data);
+    const roughText = els.draftRoughText.value.trim();
+    els.draftError.hidden = true;
+    els.draftError.textContent = "";
+    els.draftLoading.hidden = false;
+    els.draftGenerateButton.disabled = true;
+    await postAction(
+      "/draft",
+      { rough_text: roughText },
+      null,
+      null,
+      function () {
+        els.draftLoading.hidden = true;
+        els.draftGenerateButton.disabled = false;
       }
-      /* 404/other failures: rely on the next poll to reflect server-driven advance */
-    } catch (err) {
-      /* best-effort; polling will recover */
+    );
+  }
+
+  async function approveDraft() {
+    if (!roomId) {
+      return;
     }
+    const variantInput = els.variantList.querySelector('input[name="draft-variant"]:checked');
+    const editedText = els.draftEditText.value.trim();
+    const intent = els.draftIntentText.value.trim();
+    if (!editedText || !intent) {
+      els.draftStatus.textContent = "Write your message and your intent before approving.";
+      return;
+    }
+    els.draftApproveButton.disabled = true;
+    els.draftStatus.textContent = "Approving…";
+    await postAction(
+      "/approve",
+      { chosen_text: editedText, intent: intent, variant_id: variantInput ? variantInput.value : null },
+      els.draftStatus,
+      null,
+      function () { els.draftApproveButton.disabled = false; }
+    );
+  }
+
+  async function submitReaction(event) {
+    event.preventDefault();
+    const verbInput = els.reactionPanel.querySelector('input[name="reaction-verb"]:checked');
+    if (!verbInput) {
+      els.reactionStatus.textContent = "Choose a verb first.";
+      return;
+    }
+    els.reactionSubmit.disabled = true;
+    els.reactionStatus.textContent = "Locking in…";
+    await postAction(
+      "/react",
+      { verb: verbInput.value, detail: els.reactionDetail.value.trim(), move_id: els.reactionMoveSelect.value || null },
+      els.reactionStatus,
+      null,
+      function () { els.reactionSubmit.disabled = false; }
+    );
+  }
+
+  async function resolveRound() {
+    await postAction("/resolve", {}, els.revealStatus);
+  }
+
+  async function continueRound() {
+    await postAction("/advance", {}, els.revealStatus);
   }
 
   async function replayGame() {
@@ -1004,10 +1525,10 @@
       return;
     }
     try {
-      const resp = await apiFetch("/api/game/rooms/" + encodeURIComponent(roomId) + "/replay", { method: "POST" });
+      const resp = await apiFetch(roomPath("/replay"), { method: "POST" });
       if (resp.ok) {
         const data = await resp.json();
-        applyState(data);
+        applyState(data.state || data);
       }
     } catch (err) {
       showError("Couldn't reach the game server to start a replay.");
@@ -1079,12 +1600,32 @@
   els.copyLinkButton.addEventListener("click", function () { copyText(joinUrl, els.lobbyStatus); });
   els.startButton.addEventListener("click", startGame);
 
-  els.moveText.addEventListener("input", function () {
-    els.moveTextCount.textContent = String(els.moveText.value.length);
+  els.actionOutcomeInput.addEventListener("input", function () {
+    els.actionOutcomeCount.textContent = String(els.actionOutcomeInput.value.length);
   });
-  els.moveForm.addEventListener("submit", submitMove);
+  els.actionBuilderPanel.addEventListener("submit", submitAction);
 
-  els.advanceButton.addEventListener("click", advanceRound);
+  els.supportDetail.addEventListener("input", function () {
+    els.supportDetailCount.textContent = String(els.supportDetail.value.length);
+  });
+  els.supportPanel.addEventListener("submit", submitSupport);
+
+  els.draftRoughText.addEventListener("input", function () {
+    els.draftRoughCount.textContent = String(els.draftRoughText.value.length);
+  });
+  els.draftVoiceButton.addEventListener("click", practiceVoice);
+  els.draftGenerateButton.addEventListener("click", generateVariants);
+  els.draftApproveButton.addEventListener("click", approveDraft);
+
+  els.reactionDetail.addEventListener("input", function () {
+    els.reactionDetailCount.textContent = String(els.reactionDetail.value.length);
+  });
+  els.reactionPanel.addEventListener("submit", submitReaction);
+
+  els.hostOpenDraftButton.addEventListener("click", openDraft);
+  els.hostResolveButton.addEventListener("click", resolveRound);
+  els.revealContinueButton.addEventListener("click", continueRound);
+
   els.replayButton.addEventListener("click", replayGame);
   els.fullscreenToggle.addEventListener("click", toggleFullscreen);
 
@@ -1101,38 +1642,34 @@
       lines.push("gate-status: " + els.gateStatus.textContent);
     } else if (screen === "home") {
       lines.push("home-status: " + els.homeStatus.textContent);
-    } else if (screen === "lobby" && state) {
-      const players = state.players || [];
+    } else if (screen === "lobby" && vm) {
       lines.push("room-code: " + joinCode);
-      lines.push("players: " + players.length + "/4");
-      players.forEach(function (p) {
-        lines.push("  - " + (p.name || "hero") + (p.is_host ? " (host)" : "") + (p.active === false ? " [disconnected]" : ""));
+      lines.push("players: " + vm.players.length + "/4");
+      vm.players.forEach(function (p) {
+        lines.push("  - " + p.name + (p.hero ? " as " + p.hero.name : "") + (p.is_host ? " (host)" : "") + (!p.active ? " [disconnected]" : ""));
       });
-      lines.push("solo: " + (players.length <= 1));
+      lines.push("solo: " + (vm.players.length <= 1));
       lines.push("start-visible: " + !els.startButton.hidden);
-    } else if (screen === "board" && state) {
-      const total = typeof state.total_rounds === "number" ? state.total_rounds : 5;
-      lines.push("encounter: " + ((state.round_index || 0) + 1) + "/" + total + (state.encounter ? " (" + state.encounter.name + ")" : ""));
-      lines.push("hearts: " + (typeof state.hearts === "number" ? state.hearts : "?") + "/" + (typeof state.max_hearts === "number" ? state.max_hearts : "?"));
-      if (!els.moveForm.hidden) {
-        lines.push("sub-view: choosing-move");
-        lines.push("move-text-length: " + els.moveText.value.length + "/140");
-      } else if (!els.waitingPanel.hidden) {
-        lines.push("sub-view: waiting");
-        lines.push("waiting: " + els.waitingCount.textContent);
-      } else if (!els.revealPanel.hidden) {
-        lines.push("sub-view: reveal");
-        const lastRound = state.last_round || {};
-        (lastRound.choices || []).forEach(function (entry) {
-          lines.push("  - " + (entry.name || entry.player_id) + ": " + (entry.approach || entry.card));
-        });
-        lines.push("round-summary: " + els.roundSummary.textContent);
-        lines.push("advance-visible: " + !els.advanceButton.hidden);
+    } else if (screen === "round" && vm) {
+      lines.push("phase: " + vm.phase);
+      lines.push("round: " + (vm.round_index + 1) + "/" + vm.total_rounds + (vm.encounter.name ? " (" + vm.encounter.name + ")" : ""));
+      lines.push("hearts: " + (vm.hearts === null ? "?" : vm.hearts) + "/" + (vm.max_hearts === null ? "?" : vm.max_hearts));
+      lines.push("spotlight: " + spotlightName(vm) + (vm.you.hero_id === vm.spotlight_hero_id ? " (you)" : ""));
+      lines.push("private-clue: " + (vm.you.private_clue ? "[set]" : "[none]"));
+      lines.push("hand-size: " + heroHand(vm.you.hero).length);
+      const panel = panelForPhase(vm);
+      lines.push("panel: " + panel);
+      if (panel === "draft") {
+        lines.push("variants: " + vm.you.draft.variants.length);
+        lines.push("draft-approved: " + !!vm.you.draft.approved_text);
       }
-      (state.players || []).forEach(function (p) {
-        lines.push("player: " + (p.name || "hero") + (p.submitted ? " submitted" : ""));
+      if (panel === "reveal") {
+        lines.push("reveal-outcome: " + els.revealOutcome.textContent);
+      }
+      vm.players.forEach(function (p) {
+        lines.push("player: " + p.name + (p.hero_id === vm.spotlight_hero_id ? " [spotlight]" : ""));
       });
-    } else if (screen === "finale" && state) {
+    } else if (screen === "finale" && vm) {
       lines.push("finale-heading: " + els.finaleHeading.textContent);
       lines.push("finale-summary: " + els.finaleSummary.textContent);
     }
