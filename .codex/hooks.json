@@ -1,0 +1,52 @@
+{
+  "description": "Collab-workspace lifecycle hooks for Codex CLI. Uses the repo's client-neutral hooks.py dispatcher (invoked with --client=codex so output uses Codex's flat systemMessage schema), but pointed at the MACHINE-WIDE room via COLLAB_WS_DIR — the room this project's Claude sessions and the Codex MCP entry (.codex/config.toml) actually use. See AGENTS.md.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "COLLAB_WS_DIR=\"$HOME/.claude/collab\" python3 \"$(git rev-parse --show-toplevel)/.claude/collab-mcp/hooks.py\" session_start --client=codex",
+            "statusMessage": "Checking collab workspace status",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "COLLAB_WS_DIR=\"$HOME/.claude/collab\" python3 \"$(git rev-parse --show-toplevel)/.claude/collab-mcp/hooks.py\" user_prompt --client=codex",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "COLLAB_WS_DIR=\"$HOME/.claude/collab\" python3 \"$(git rev-parse --show-toplevel)/.claude/collab-mcp/hooks.py\" pre_tool --client=codex",
+            "statusMessage": "Checking collab file claims (warning only — see AGENTS.md)",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "COLLAB_WS_DIR=\"$HOME/.claude/collab\" python3 \"$(git rev-parse --show-toplevel)/.claude/collab-mcp/hooks.py\" post_tool --client=codex",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

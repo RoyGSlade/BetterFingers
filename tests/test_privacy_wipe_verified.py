@@ -63,6 +63,11 @@ class TempDataDirMixin(unittest.TestCase):
             patch("recordings.get_user_data_path", return_value=self._tmp.name),
             patch("history_store.get_user_data_path", return_value=self._tmp.name),
             patch("server.get_user_data_path", return_value=self._tmp.name),
+            # PersonaLearningStore resolves its path via utils.get_user_data_path
+            # directly (not a server.py-bound copy) -- patch it too so the wipe's
+            # PersonaLearningStore().clear_all() call stays inside this test's
+            # throwaway dir instead of the session-wide conftest isolation dir.
+            patch("utils.get_user_data_path", return_value=self._tmp.name),
         ]
         for p in patchers:
             p.start()

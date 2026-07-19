@@ -1,0 +1,10 @@
+{
+  "id": "filler_heavy",
+  "description": "Two segments dense with filler markers (um, uh, you know) drawn from the calculator's known filler vocabulary.",
+  "segments": [
+    {"start_s": 0.0, "end_s": 3.0, "text": "um so I think, uh, you know we should maybe go with it"},
+    {"start_s": 3.5, "end_s": 5.5, "text": "uh yeah, um, you know, that one seems fine I guess"}
+  ],
+  "audio_duration_s": 5.5,
+  "energy_windows": null
+}

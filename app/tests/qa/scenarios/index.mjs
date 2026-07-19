@@ -23,6 +23,9 @@ import { privacyScenarios } from './privacy.mjs';
 import { modelResourcesScenarios } from './model-resources.mjs';
 import { doctorWarningsScenarios } from './doctor-warnings.mjs';
 import { voiceCloningScenarios } from './voice-cloning.mjs';
+import { messageRescueScenarios } from './message-rescue.mjs';
+import { messageRescueDraftScenarios } from './message-rescue-draft.mjs';
+import { textPlaygroundScenarios } from './text-playground.mjs';
 
 export const scenarios = [
   ...baselineScenarios,
@@ -31,4 +34,7 @@ export const scenarios = [
   ...modelResourcesScenarios,
   ...doctorWarningsScenarios,
   ...voiceCloningScenarios,
+  ...messageRescueScenarios,
+  ...messageRescueDraftScenarios,
+  ...textPlaygroundScenarios,
 ];

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "generated_by": "tests/fixtures/speech_signals/ - see docs/TEST_DATA_POLICY.md for regeneration rules",
+  "checksum_algorithm": "sha256",
+  "files": {
+    "empty.json": "f1c1680530e72fe8717029b936210e618eaadd96d515108198b932a9d39416ef",
+    "fast.json": "1a7123c7638392f5365bbc05ec2c59498f301519fc5123c9e52c89f3ecd35b58",
+    "filler_heavy.json": "0dbc0d364544c876e21cec1bdb69f484056ea5e16a144d05dc7f39272f3943d1",
+    "noisy.json": "d5091c366580ef80016bf907cbe32dea9d6ce5867eb262f9da5074de30bcce34",
+    "paused.json": "1dfb1e374574c7eea721233f0cf68c956d7dd0b2a205e1d5fe97aa836d502154",
+    "quiet.json": "bef82e93017f2c2c708010a3051623462e2792c35ce80cce04123e8247b16310",
+    "self_correcting.json": "75f93987880cdba2fff10e0b8a0d1273f6d1dbb15994631d0cb00bfc983c80db",
+    "slow.json": "9462c425766fcb9c148bc201f23735b2c57191235d4226536bcacb92458b567b"
+  }
+}

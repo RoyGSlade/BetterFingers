@@ -10,7 +10,8 @@ from faster_whisper import WhisperModel
 from huggingface_hub import scan_cache_dir
 from huggingface_hub.constants import HF_HUB_CACHE
 
-from log_redaction import redact_exc
+from backend.domain.contracts import TimedSegment, TranscriptionResult
+from log_redaction import redact_exc, redact_user_text
 from text_formatter import TextFormatter
 from utils import load_profile
 
@@ -69,6 +70,10 @@ def _is_hallucination(text: str) -> bool:
         if most_common in _HALLUCINATION_PHRASES and counts[most_common] >= len(sentences) * 0.6:
             return True
     return False
+
+
+def _optional_float(value):
+    return None if value is None else float(value)
 
 SUPPORTED_MODEL_SIZES = (
     "tiny.en",
@@ -550,13 +555,20 @@ class Transcriber:
             "no_speech_prob": round(worst_no_speech, 3),
         }
 
-    def transcribe_with_confidence(self, audio_array, hotwords=None):
-        """Return (text, confidence_dict). confidence_dict has score/avg_logprob/
-        no_speech_prob (score is None-safe 0..1). Optional `hotwords` biases the
-        model toward user-dictionary terms (C1)."""
+    def _transcribe_core(self, audio_array, hotwords=None):
+        """Shared decode+guard path behind transcribe_with_confidence and
+        transcribe_structured — runs the model exactly once per call.
+
+        Returns (raw_text, confidence_dict, seg_list, audio_duration_s).
+        seg_list holds the raw faster-whisper segments used to build raw_text;
+        it is emptied alongside raw_text whenever the hallucination/no-speech
+        guard discards the result, so the structured caller never surfaces
+        hallucinated segment text either.
+        """
         empty_conf = {"score": None, "avg_logprob": None, "no_speech_prob": None}
+        audio_duration_s = len(audio_array) / 16000.0
         if not self.ensure_loaded():
-            return "", empty_conf
+            return "", empty_conf, [], audio_duration_s
 
         try:
             if hasattr(audio_array, "dtype") and audio_array.dtype != np.float32:
@@ -565,12 +577,11 @@ class Transcriber:
             with self._model_lock:
                 model = self.model
                 if model is None:
-                    return "", empty_conf
+                    return "", empty_conf, [], audio_duration_s
 
                 # --- Fast Lane & VRAM Protection ---
                 # For short audio (< 2.0s), use greedy search (beam_size=1) for speed.
-                duration = len(audio_array) / 16000.0
-                beam_size = 1 if duration < 2.0 else 5
+                beam_size = 1 if audio_duration_s < 2.0 else 5
 
                 transcribe_kwargs = {"beam_size": beam_size}
                 if hotwords:
@@ -578,21 +589,64 @@ class Transcriber:
                 segments, _info = model.transcribe(audio_array, **transcribe_kwargs)
 
                 # Periodic GC to prevent VRAM fragmentation/leaks
-                if duration > 5.0:
+                if audio_duration_s > 5.0:
                     gc.collect()
 
             seg_list = list(segments)
             if not seg_list:
-                return "", empty_conf
+                return "", empty_conf, [], audio_duration_s
             raw = TextFormatter.format_segments(seg_list, paragraph_threshold=1.2)
             if _is_hallucination(raw):
-                logging.debug("Hallucination detected, discarding: %r", raw)
-                return "", empty_conf
-            return raw, self._compute_confidence(seg_list)
+                logging.debug("Hallucination detected, discarding: %s", redact_user_text(raw))
+                return "", empty_conf, [], audio_duration_s
+            return raw, self._compute_confidence(seg_list), seg_list, audio_duration_s
         except Exception as exc:
             # Broad catch over segment formatting/hallucination-check, which
             # operates directly on the decoded transcript — an exception here
             # could echo it (found by the logging-leak regression gate, not
             # in the original Phase 0 audit).
             logging.error(f"Error during transcription: {redact_exc(exc)}")
-            return "", empty_conf
+            return "", empty_conf, [], audio_duration_s
+
+    def transcribe_with_confidence(self, audio_array, hotwords=None):
+        """Return (text, confidence_dict). confidence_dict has score/avg_logprob/
+        no_speech_prob (score is None-safe 0..1). Optional `hotwords` biases the
+        model toward user-dictionary terms (C1)."""
+        raw, confidence, _seg_list, _audio_duration_s = self._transcribe_core(audio_array, hotwords=hotwords)
+        return raw, confidence
+
+    def transcribe_structured(self, audio_array, hotwords=None):
+        """Return a frozen TranscriptionResult (backend.domain.contracts) for the
+        same decode used by transcribe_with_confidence: per-segment start/end/
+        text/avg_logprob/no_speech_prob, an aggregate confidence score, and
+        audio_duration_s. Additive — existing tuple/text-return callers are
+        untouched. Segments are empty whenever the hallucination/no-speech
+        guard discards the result, same as the legacy text output."""
+        _raw, _confidence, result = self.transcribe_with_structured(audio_array, hotwords=hotwords)
+        return result
+
+    def transcribe_with_structured(self, audio_array, hotwords=None):
+        """Single-decode combined call: (raw_text, confidence_dict, TranscriptionResult)
+        from one _transcribe_core() run. A caller that needs both the legacy
+        confidence dict (send-policy score) and the structured segments (e.g. for
+        speech-signal computation, I3.1) should use this instead of calling
+        transcribe_with_confidence() and transcribe_structured() separately —
+        each of those decodes independently and would double STT cost."""
+        raw, confidence, seg_list, audio_duration_s = self._transcribe_core(audio_array, hotwords=hotwords)
+        segments = [
+            TimedSegment(
+                start_s=float(getattr(seg, "start", 0.0) or 0.0),
+                end_s=float(getattr(seg, "end", 0.0) or 0.0),
+                text=str(getattr(seg, "text", "") or "").strip(),
+                avg_logprob=_optional_float(getattr(seg, "avg_logprob", None)),
+                no_speech_prob=_optional_float(getattr(seg, "no_speech_prob", None)),
+            )
+            for seg in seg_list
+        ]
+        result = TranscriptionResult(
+            text=raw,
+            segments=segments,
+            confidence=confidence.get("score"),
+            audio_duration_s=audio_duration_s,
+        )
+        return raw, confidence, result

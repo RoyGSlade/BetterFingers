@@ -1,0 +1,7 @@
+{
+  "id": "empty",
+  "description": "No speech segments at all (silence / nothing captured). Every derived signal must degrade to a safe zero.",
+  "segments": [],
+  "audio_duration_s": null,
+  "energy_windows": null
+}

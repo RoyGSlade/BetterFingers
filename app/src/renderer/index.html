@@ -213,6 +213,99 @@
 
           <div id="draftMetadata" class="draft-metadata">No recording metadata yet.</div>
 
+          <!-- Message Rescue, live-bound to this draft (I3.5-I3.7). Behind the
+               same default-off pref_message_rescue_enabled flag as F2.8's
+               static #messageRescuePanel preview; see
+               features/messageRescueDraft.js (wired explicitly from
+               main.js's composition, not a self-initializing script tag,
+               because it needs to write into #draftFinalText below). -->
+          <div id="draftRescuePanel" class="message-rescue-region draft-rescue-panel" aria-labelledby="draftRescueHeading" hidden>
+            <div class="message-rescue-region-header">
+              <h3 id="draftRescueHeading" class="status-label">Message Rescue</h3>
+              <span id="draftRescueDraftLabel" class="draft-metadata"></span>
+            </div>
+
+            <div class="draft-rescue-actions">
+              <button id="draftRescueCaptureButton" class="secondary-button compact-button" type="button">Capture selection as context</button>
+              <button id="draftRescueClearContextButton" class="secondary-button compact-button" type="button" disabled>Clear context</button>
+            </div>
+            <p id="draftRescueContextMessage" class="status-detail"></p>
+            <p id="draftRescueContextStatus" class="status-detail">No context captured.</p>
+            <p id="draftRescueContextPreview" class="draft-text message-rescue-context-preview empty-state">No preview captured yet.</p>
+            <div id="draftRescueContextMeta" class="draft-metadata"></div>
+
+            <div class="draft-rescue-run-row">
+              <button id="draftRescueRunButton" class="secondary-button primary-button" type="button" disabled>Rescue this message</button>
+              <button id="draftRescueCancelButton" class="secondary-button" type="button" disabled>Cancel</button>
+            </div>
+            <p id="draftRescueStatus" class="status-detail" role="status" aria-live="polite">Ready.</p>
+            <div id="draftRescueError" class="warning-banner inline-warning" role="alert" hidden></div>
+            <div id="draftRescueFallback" class="warning-banner inline-warning" role="alert" hidden></div>
+
+            <div id="draftRescueAssessment" class="message-rescue-region" aria-labelledby="draftRescueAssessmentHeading" hidden>
+              <h4 id="draftRescueAssessmentHeading" class="status-label">Assessment</h4>
+              <div class="detail-row">
+                <span class="detail-label">Intent</span>
+                <span id="draftRescueAssessmentIntent" class="detail-value"></span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Ambiguity risk</span>
+                <span id="draftRescueAssessmentAmbiguity" class="detail-value"></span>
+              </div>
+            </div>
+
+            <div class="message-rescue-region">
+              <span class="status-label">Delivery signals</span>
+              <div class="message-rescue-delivery-row">
+                <div id="draftRescueDeliveryLabels" class="message-rescue-chip-row" aria-label="Delivery labels">
+                  <span class="empty-state">No delivery signals yet.</span>
+                </div>
+                <span id="draftRescueDeliveryConfidence" class="confidence-badge hidden" title="Delivery-signal confidence"></span>
+              </div>
+              <span class="status-label">Evidence</span>
+              <ul id="draftRescueDeliveryEvidence" class="message-rescue-evidence-list"></ul>
+            </div>
+
+            <div id="draftRescueClarification" class="message-rescue-region" role="note" aria-labelledby="draftRescueClarificationHeading" hidden>
+              <h4 id="draftRescueClarificationHeading" class="status-label">One clarifying question</h4>
+              <p id="draftRescueClarificationQuestion" class="draft-text"></p>
+              <span class="status-label">Missing details</span>
+              <ul id="draftRescueClarificationDetails" class="message-rescue-evidence-list"></ul>
+            </div>
+
+            <fieldset id="draftRescueVariants" class="message-rescue-region message-rescue-variants">
+              <legend class="status-label">Choose a variant to use</legend>
+              <p class="setting-desc">Selecting a variant applies it to the Cleaned output editor above -- your raw transcript is never changed.</p>
+              <div class="message-rescue-variant-options">
+                <label class="message-rescue-variant-option">
+                  <input type="radio" name="draftRescueVariant" id="draftRescueVariantFaithful" value="faithful" checked disabled />
+                  <span>Faithful</span>
+                </label>
+                <label class="message-rescue-variant-option">
+                  <input type="radio" name="draftRescueVariant" id="draftRescueVariantClearer" value="clearer" disabled />
+                  <span>Clearer</span>
+                </label>
+                <label class="message-rescue-variant-option">
+                  <input type="radio" name="draftRescueVariant" id="draftRescueVariantAlternate" value="alternate" disabled />
+                  <span>Alternate</span>
+                </label>
+              </div>
+              <p id="draftRescueVariantText" class="draft-text message-rescue-variant-text" tabindex="0"></p>
+            </fieldset>
+
+            <div class="message-rescue-region">
+              <h4 class="status-label">Preservation checks</h4>
+              <ul id="draftRescuePreservationList" class="message-rescue-check-list"></ul>
+            </div>
+
+            <div id="draftRescueWarnings" class="warning-banner inline-warning" role="alert" hidden>
+              <strong>Preservation warning:</strong>
+              <ul id="draftRescueWarningsList" class="message-rescue-warnings-list"></ul>
+            </div>
+
+            <p id="draftRescueApplyMessage" class="draft-metadata" role="status" aria-live="polite"></p>
+          </div>
+
           <div>
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
               <span class="status-label">Draft history</span>
@@ -241,6 +334,228 @@
               Waiting for voice activity…
             </p>
           </div>
+        </section>
+
+        <!-- Message Rescue (F2.8): static, accessible panel behind a
+             default-off local feature flag (pref_message_rescue_enabled).
+             Hidden and inert until the flag is set; see
+             features/messageRescuePanel.js, loaded by its own script tag
+             below main.js so this never requires editing the composition
+             root. No backend calls happen here -- only a fixed, synthetic
+             example is ever rendered. -->
+        <section id="messageRescuePanel" class="stream-panel message-rescue-panel" aria-hidden="true" aria-labelledby="messageRescueHeading" hidden>
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Experimental</p>
+              <h2 id="messageRescueHeading">Message Rescue</h2>
+            </div>
+          </div>
+          <p class="section-desc">
+            Reviews a captured message for ambiguity and delivery, then offers faithful, clearer, and alternate
+            rewrites to compare before you send anything. Nothing here is sent anywhere automatically.
+          </p>
+
+          <div class="message-rescue-region" aria-labelledby="messageRescueContextHeading">
+            <div class="message-rescue-region-header">
+              <h3 id="messageRescueContextHeading" class="status-label">Captured context</h3>
+              <button id="messageRescueClearContextButton" class="secondary-button compact-button" type="button">Clear</button>
+            </div>
+            <p id="messageRescueContextStatus" class="status-detail">No context captured.</p>
+            <p id="messageRescueContextPreview" class="draft-text message-rescue-context-preview empty-state">No preview captured yet.</p>
+            <div id="messageRescueContextMeta" class="draft-metadata"></div>
+          </div>
+
+          <div id="messageRescueAssessment" class="message-rescue-region" aria-labelledby="messageRescueAssessmentHeading" hidden>
+            <h3 id="messageRescueAssessmentHeading" class="status-label">Assessment</h3>
+            <div class="detail-row">
+              <span class="detail-label">Intent</span>
+              <span id="messageRescueAssessmentIntent" class="detail-value"></span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Ambiguity risk</span>
+              <span id="messageRescueAssessmentAmbiguity" class="detail-value"></span>
+            </div>
+          </div>
+
+          <div class="message-rescue-region" aria-labelledby="messageRescueDeliveryHeading">
+            <h3 id="messageRescueDeliveryHeading" class="status-label">Delivery signals</h3>
+            <div class="message-rescue-delivery-row">
+              <div id="messageRescueDeliveryLabels" class="message-rescue-chip-row" aria-label="Delivery labels">
+                <span class="empty-state">No delivery signals yet.</span>
+              </div>
+              <span id="messageRescueDeliveryConfidence" class="confidence-badge hidden" title="Delivery-signal confidence"></span>
+            </div>
+            <span class="status-label">Evidence</span>
+            <ul id="messageRescueDeliveryEvidence" class="message-rescue-evidence-list"></ul>
+          </div>
+
+          <div id="messageRescueClarification" class="message-rescue-region" role="note" aria-labelledby="messageRescueClarificationHeading" hidden>
+            <h3 id="messageRescueClarificationHeading" class="status-label">One clarifying question</h3>
+            <p id="messageRescueClarificationQuestion" class="draft-text"></p>
+            <span class="status-label">Missing details</span>
+            <ul id="messageRescueClarificationDetails" class="message-rescue-evidence-list"></ul>
+          </div>
+
+          <fieldset id="messageRescueVariants" class="message-rescue-region message-rescue-variants">
+            <legend class="status-label">Choose a variant</legend>
+            <p id="messageRescueVariantsHint" class="setting-desc">
+              Faithful stays closest to what you said. Clearer and Alternate are rewrites to preview before choosing.
+            </p>
+            <div class="message-rescue-variant-options">
+              <label class="message-rescue-variant-option">
+                <input type="radio" name="messageRescueVariant" id="messageRescueVariantFaithful" value="faithful" checked />
+                <span>Faithful</span>
+              </label>
+              <label class="message-rescue-variant-option">
+                <input type="radio" name="messageRescueVariant" id="messageRescueVariantClearer" value="clearer" />
+                <span>Clearer</span>
+              </label>
+              <label class="message-rescue-variant-option">
+                <input type="radio" name="messageRescueVariant" id="messageRescueVariantAlternate" value="alternate" />
+                <span>Alternate</span>
+              </label>
+            </div>
+            <p id="messageRescueVariantText" class="draft-text message-rescue-variant-text" tabindex="0"></p>
+          </fieldset>
+
+          <div class="message-rescue-region" aria-labelledby="messageRescuePreservationHeading">
+            <h3 id="messageRescuePreservationHeading" class="status-label">Preservation checks</h3>
+            <ul id="messageRescuePreservationList" class="message-rescue-check-list"></ul>
+          </div>
+
+          <div id="messageRescueWarnings" class="warning-banner inline-warning" role="alert" hidden>
+            <strong>Preservation warning:</strong>
+            <ul id="messageRescueWarningsList" class="message-rescue-warnings-list"></ul>
+          </div>
+        </section>
+
+        <section id="textPlaygroundSection" class="stream-panel text-playground-panel" aria-labelledby="textPlaygroundHeading">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Silent playground</p>
+              <h2 id="textPlaygroundHeading">Text &amp; Persona Playground</h2>
+            </div>
+          </div>
+          <p class="section-desc">
+            Paste or type a message, pick a persona, and run it through the local model -- no microphone, no
+            transcription, no text-to-speech, and nothing is sent anywhere until you choose Apply or Copy.
+          </p>
+
+          <div class="message-rescue-region">
+            <label class="status-label" for="textPlaygroundText">Message text</label>
+            <textarea id="textPlaygroundText" class="text-playground-textarea" rows="4" placeholder="Paste or type the message to test..."></textarea>
+          </div>
+
+          <div class="message-rescue-region">
+            <label class="status-label" for="textPlaygroundContext">Context (optional)</label>
+            <textarea id="textPlaygroundContext" class="text-playground-textarea" rows="2" placeholder="What is this replying to? Used once, then discarded."></textarea>
+          </div>
+
+          <div class="message-rescue-region text-playground-controls-row">
+            <div>
+              <label class="status-label" for="textPlaygroundPersonaSelect">Persona</label>
+              <select id="textPlaygroundPersonaSelect" class="settings-input"></select>
+            </div>
+            <div class="text-playground-actions">
+              <button id="textPlaygroundRunButton" class="primary-button" type="button" disabled>Run</button>
+              <button id="textPlaygroundCancelButton" class="secondary-button" type="button" disabled>Cancel</button>
+              <button id="textPlaygroundClearButton" class="secondary-button compact-button" type="button">Clear</button>
+            </div>
+          </div>
+
+          <p id="textPlaygroundStatus" class="status-detail" role="status" aria-live="polite">Ready.</p>
+          <div id="textPlaygroundError" class="warning-banner inline-warning" role="alert" hidden></div>
+          <p id="textPlaygroundRanInfo" class="draft-metadata"></p>
+          <div id="textPlaygroundFallback" class="warning-banner inline-warning" role="alert" hidden></div>
+
+          <div id="textPlaygroundAssessment" class="message-rescue-region" aria-labelledby="textPlaygroundAssessmentHeading" hidden>
+            <h3 id="textPlaygroundAssessmentHeading" class="status-label">Assessment</h3>
+            <div class="detail-row">
+              <span class="detail-label">Intent</span>
+              <span id="textPlaygroundAssessmentIntent" class="detail-value"></span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Ambiguity risk</span>
+              <span id="textPlaygroundAssessmentAmbiguity" class="detail-value"></span>
+            </div>
+          </div>
+
+          <div class="message-rescue-region">
+            <h3 class="status-label">Delivery signals</h3>
+            <div class="message-rescue-delivery-row">
+              <div id="textPlaygroundDeliveryLabels" class="message-rescue-chip-row" aria-label="Delivery labels">
+                <span class="empty-state">No delivery signals yet.</span>
+              </div>
+              <span id="textPlaygroundDeliveryConfidence" class="confidence-badge hidden" title="Delivery-signal confidence"></span>
+            </div>
+            <span class="status-label">Evidence</span>
+            <ul id="textPlaygroundDeliveryEvidence" class="message-rescue-evidence-list"></ul>
+          </div>
+
+          <div id="textPlaygroundClarification" class="message-rescue-region" role="note" aria-labelledby="textPlaygroundClarificationHeading" hidden>
+            <h3 id="textPlaygroundClarificationHeading" class="status-label">One clarifying question</h3>
+            <p id="textPlaygroundClarificationQuestion" class="draft-text"></p>
+            <span class="status-label">Missing details</span>
+            <ul id="textPlaygroundClarificationDetails" class="message-rescue-evidence-list"></ul>
+          </div>
+
+          <div class="message-rescue-region">
+            <h3 class="status-label">Compare raw, faithful, clearer, alternate</h3>
+            <div class="text-playground-columns">
+              <div class="text-playground-column">
+                <div class="text-playground-column-header">
+                  <span class="status-label">Raw (as typed)</span>
+                  <button id="textPlaygroundColumnRawButton" class="secondary-button compact-button" type="button" aria-pressed="false" disabled>Use this</button>
+                </div>
+                <p id="textPlaygroundColumnRawText" class="draft-text text-playground-column-text" tabindex="0"></p>
+              </div>
+              <div class="text-playground-column">
+                <div class="text-playground-column-header">
+                  <span class="status-label">Faithful</span>
+                  <button id="textPlaygroundColumnFaithfulButton" class="secondary-button compact-button" type="button" aria-pressed="false" disabled>Use this</button>
+                </div>
+                <p id="textPlaygroundColumnFaithfulText" class="draft-text text-playground-column-text" tabindex="0"></p>
+              </div>
+              <div class="text-playground-column">
+                <div class="text-playground-column-header">
+                  <span class="status-label">Clearer</span>
+                  <button id="textPlaygroundColumnClearerButton" class="secondary-button compact-button" type="button" aria-pressed="false" disabled>Use this</button>
+                </div>
+                <p id="textPlaygroundColumnClearerText" class="draft-text text-playground-column-text" tabindex="0"></p>
+              </div>
+              <div class="text-playground-column">
+                <div class="text-playground-column-header">
+                  <span class="status-label">Alternate</span>
+                  <button id="textPlaygroundColumnAlternateButton" class="secondary-button compact-button" type="button" aria-pressed="false" disabled>Use this</button>
+                </div>
+                <p id="textPlaygroundColumnAlternateText" class="draft-text text-playground-column-text" tabindex="0"></p>
+              </div>
+            </div>
+          </div>
+
+          <div class="message-rescue-region" aria-labelledby="textPlaygroundPreservationHeading">
+            <h3 id="textPlaygroundPreservationHeading" class="status-label">Preservation checks</h3>
+            <ul id="textPlaygroundPreservationList" class="message-rescue-check-list"></ul>
+          </div>
+
+          <div id="textPlaygroundWarnings" class="warning-banner inline-warning" role="alert" hidden>
+            <strong>Preservation warning:</strong>
+            <ul id="textPlaygroundWarningsList" class="message-rescue-warnings-list"></ul>
+          </div>
+
+          <div class="message-rescue-region text-playground-controls-row">
+            <div>
+              <label class="status-label" for="textPlaygroundDraftSelect">Apply to draft</label>
+              <select id="textPlaygroundDraftSelect" class="settings-input">
+                <option value="">Choose a draft…</option>
+              </select>
+            </div>
+            <div class="text-playground-actions">
+              <button id="textPlaygroundApplyButton" class="secondary-button" type="button" disabled>Apply to draft</button>
+              <button id="textPlaygroundCopyButton" class="secondary-button" type="button" disabled>Copy</button>
+            </div>
+          </div>
+          <p id="textPlaygroundApplyMessage" class="status-detail" role="status" aria-live="polite"></p>
         </section>
       </div>
 
@@ -1078,8 +1393,8 @@
 
                 <div class="setting-row">
                   <div class="setting-info">
-                    <label class="status-label" for="settingReviewTtsVoiceHint">Review TTS Voice</label>
-                    <span class="setting-desc">Base voice — the foundation any blend/modulation below is layered onto.</span>
+                    <label class="status-label" for="settingReviewTtsVoiceHint">Active voice</label>
+                    <span class="setting-desc">The base voice — this, plus any blend/modulation below, is what actually speaks: the Review TTS hotkey, voice-command read-back, and the Audition/Read-aloud buttons all use this exact mix. Changes take effect once you Save Settings.</span>
                   </div>
                   <div class="setting-control">
                     <select id="settingReviewTtsVoiceHint" class="settings-input min-w-200"></select>
@@ -1119,7 +1434,7 @@
 
               <div class="setting-group">
                 <h3>Voice Presets</h3>
-                <p class="setting-desc">Saved voices — pick one to load its base/blend/modulation into the controls here.</p>
+                <p class="setting-desc">Named, reusable voice configurations — separate from the active voice above. Applying one loads its base/blend/modulation into the controls here; it still only takes effect once you Save Settings.</p>
 
                 <div class="setting-row">
                   <div class="setting-info">
@@ -1142,13 +1457,14 @@
 
               <div class="setting-group">
                 <h3>Blend</h3>
-                <p class="setting-desc">Mix in up to two extra voices. Weights auto-normalize on the backend — set relative amounts, no math required.</p>
+                <p class="setting-desc">Mix in up to two extra voices. Weights are relative amounts, not percentages — the backend normalizes them against the base voice automatically.</p>
 
-                <div id="voiceBlendRows" class="voice-blend-rows"></div>
+                <div id="voiceBlendRows" class="voice-blend-rows" role="group" aria-label="Blend layers"></div>
+                <p id="voiceEffectiveMix" class="setting-desc voice-effective-mix" aria-live="polite"></p>
 
                 <div class="action-row mt-12">
                   <button id="addVoiceLayerButton" class="secondary-button" type="button">+ Add voice layer</button>
-                  <button id="resetVoiceBlendButton" class="secondary-button" type="button">Reset to original</button>
+                  <button id="resetVoiceBlendButton" class="secondary-button" type="button">Reset (clear blend)</button>
                 </div>
 
                 <div class="mt-12">
@@ -1896,5 +2212,7 @@
     </div>
 
     <script type="module" src="./main.js"></script>
+    <script type="module" src="./features/messageRescuePanel.js"></script>
+    <script type="module" src="./features/textPlayground.js"></script>
   </body>
 </html>

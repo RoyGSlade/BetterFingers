@@ -5,6 +5,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import server
+from backend.domain.contracts import TimedSegment, TranscriptionResult
 
 
 class DummyTranscriber:
@@ -21,6 +22,28 @@ class EmptyTranscriber(DummyTranscriber):
     def transcribe(self, audio_data):
         self.calls.append(audio_data)
         return ""
+
+
+class FakeStructuredTranscriber(DummyTranscriber):
+    """Exposes I3.1's combined transcribe_with_structured() API (single decode:
+    raw text, legacy confidence dict, structured TranscriptionResult)."""
+
+    def transcribe_with_structured(self, audio_data, hotwords=None):
+        self.calls.append(audio_data)
+        segments = [TimedSegment(start_s=0.0, end_s=1.0, text="raw transcript", avg_logprob=-0.1, no_speech_prob=0.01)]
+        confidence = {"score": 0.93, "avg_logprob": -0.1, "no_speech_prob": 0.01}
+        result = TranscriptionResult(text="raw transcript", segments=segments, confidence=0.93, audio_duration_s=1.0)
+        return "raw transcript", confidence, result
+
+
+class EmptyStructuredTranscriber(EmptyTranscriber):
+    """Same combined API, but for the no-usable-audio case (empty text/segments)."""
+
+    def transcribe_with_structured(self, audio_data, hotwords=None):
+        self.calls.append(audio_data)
+        confidence = {"score": None, "avg_logprob": None, "no_speech_prob": None}
+        result = TranscriptionResult(text="", segments=[], confidence=None, audio_duration_s=0.1)
+        return "", confidence, result
 
 
 class DummyEngine:
@@ -235,6 +258,101 @@ class ServerDraftTests(unittest.TestCase):
         self.assertEqual(statuses[2][1]["final_text"], "True Janitor: raw transcript")
         self.assertEqual(draft["metadata"]["sample_rate"], 16000)
         self.assertEqual(draft["metadata"]["stop_reason"], "manual")
+
+    def test_process_recording_result_persists_structured_transcription_and_speech_signals(self):
+        """I3.1: a transcriber exposing transcribe_with_structured() gets its
+        structured result + computed speech signals attached to the finalized
+        draft, with the legacy raw/final text and confidence-driven send-policy
+        fields completely unaffected."""
+        with patch.object(server, "Transcriber", FakeStructuredTranscriber), patch.object(
+            server, "get_engine", return_value=DummyEngine()
+        ), patch.object(server, "broadcast_status_threadsafe"):
+            draft = server.process_recording_result(DummyRecordingResult())
+
+        self.assertEqual(draft["status"], "pending")
+        self.assertEqual(draft["raw_text"], "raw transcript")
+        self.assertEqual(draft["final_text"], "True Janitor: raw transcript")
+        self.assertEqual(draft["confidence"]["score"], 0.93)
+        self.assertIn("auto_send_ok", draft)
+
+        tr = draft["transcription_result"]
+        self.assertIsNotNone(tr)
+        self.assertEqual(set(tr.keys()), {"text", "segments", "confidence", "audio_duration_s"})
+        self.assertEqual(tr["text"], "raw transcript")
+        self.assertEqual(tr["segments"][0]["text"], "raw transcript")
+
+        signals = draft["speech_signals"]
+        self.assertIsNotNone(signals)
+        self.assertIn("words_per_minute", signals)
+        self.assertIn("evidence", signals)
+        # SpeechSignals evidence is counts/metrics only, never raw dictated text.
+        self.assertNotIn("raw transcript", " ".join(signals["evidence"]))
+
+    def test_process_recording_result_without_structured_api_leaves_new_fields_none(self):
+        """A transcriber exposing only the legacy tuple API (no
+        transcribe_with_structured) behaves exactly as before I3.1."""
+        with patch.object(server, "Transcriber", DummyTranscriber), patch.object(
+            server, "get_engine", return_value=DummyEngine()
+        ), patch.object(server, "broadcast_status_threadsafe"):
+            draft = server.process_recording_result(DummyRecordingResult())
+
+        self.assertEqual(draft["raw_text"], "raw transcript")
+        self.assertIsNone(draft["transcription_result"])
+        self.assertIsNone(draft["speech_signals"])
+
+    def test_blocked_no_audio_draft_also_carries_structured_data_when_available(self):
+        with patch.object(server, "Transcriber", EmptyStructuredTranscriber), patch.object(
+            server, "get_engine", side_effect=AssertionError("LLM should not run for blocked audio")
+        ), patch.object(server, "broadcast_status_threadsafe"):
+            draft = server.process_recording_result(SilentRecordingResult())
+
+        self.assertEqual(draft["status"], "blocked")
+        self.assertIsNotNone(draft["transcription_result"])
+        self.assertEqual(draft["transcription_result"]["segments"], [])
+        self.assertIsNotNone(draft["speech_signals"])
+        self.assertEqual(draft["speech_signals"]["evidence"], ["no speech segments provided"])
+
+    def test_cancellation_does_not_persist_structured_data(self):
+        class CancellingStructuredTranscriber(FakeStructuredTranscriber):
+            def transcribe_with_structured(self, audio_data, hotwords=None):
+                server.cancellation_event.set()
+                return super().transcribe_with_structured(audio_data, hotwords=hotwords)
+
+        with patch.object(server, "Transcriber", CancellingStructuredTranscriber), patch.object(
+            server, "get_engine", side_effect=AssertionError("LLM should not run when cancelled")
+        ), patch.object(server, "broadcast_status_threadsafe"):
+            draft = server.process_recording_result(DummyRecordingResult())
+
+        self.assertEqual(draft["status"], "error")
+        self.assertIn("Operation cancelled by user", draft["error"])
+        self.assertIsNone(draft["transcription_result"])
+        self.assertIsNone(draft["speech_signals"])
+
+    def test_llm_failure_does_not_persist_structured_data(self):
+        with patch.object(server, "Transcriber", FakeStructuredTranscriber), patch.object(
+            server, "get_engine", side_effect=RuntimeError("llm offline")
+        ), patch.object(server, "broadcast_status_threadsafe"):
+            draft = server.process_recording_result(DummyRecordingResult())
+
+        self.assertEqual(draft["status"], "error")
+        self.assertIsNone(draft["transcription_result"])
+        self.assertIsNone(draft["speech_signals"])
+
+    def test_speech_signal_computation_failure_never_breaks_pipeline(self):
+        """If compute_speech_signals somehow raises, the dictation pipeline must
+        still complete normally — signals simply stay absent (I3.1 is additive
+        and must never be able to break the hot path)."""
+        with patch.object(server, "Transcriber", FakeStructuredTranscriber), patch.object(
+            server, "get_engine", return_value=DummyEngine()
+        ), patch.object(server, "compute_speech_signals", side_effect=RuntimeError("boom")), patch.object(
+            server, "broadcast_status_threadsafe"
+        ):
+            draft = server.process_recording_result(DummyRecordingResult())
+
+        self.assertEqual(draft["status"], "pending")
+        self.assertEqual(draft["final_text"], "True Janitor: raw transcript")
+        self.assertIsNotNone(draft["transcription_result"])
+        self.assertIsNone(draft["speech_signals"])
 
     def test_long_recording_emits_progress_statuses(self):
         import os

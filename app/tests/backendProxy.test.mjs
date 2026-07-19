@@ -23,16 +23,43 @@ test('accepts known backend routes with the right method', () => {
     ['POST', '/recordings/abc/retranscribe'],
     ['DELETE', '/recordings/abc'],
     ['DELETE', '/macros/hello'],
+    ['GET', '/message-rescue/context'],
+    ['GET', '/message-rescue/generate/job-1'],
+    ['POST', '/message-rescue/context/selection'],
+    ['POST', '/message-rescue/context/manual'],
+    ['POST', '/message-rescue/generate'],
+    ['POST', '/message-rescue/generate/job-1/cancel'],
+    ['DELETE', '/message-rescue/context'],
+    ['GET', '/personas/Assistant/examples'],
+    ['POST', '/personas/Assistant/examples'],
+    ['DELETE', '/personas/Assistant/examples/abc123'],
+    ['DELETE', '/personas/Assistant/examples'],
   ];
   for (const [method, path] of allowed) {
     assert.equal(proxy._validateRequest(method, path), null, `${method} ${path} should be allowed`);
   }
 });
 
+test('persona example id segment must be a single param, not a subpath', () => {
+  assert.notEqual(proxy._validateRequest('DELETE', '/personas/Assistant/examples/abc/extra'), null);
+  assert.notEqual(proxy._validateRequest('GET', '/personas/Assistant/examples/abc123'), null);
+});
+
 test('rejects an allowed route with the wrong method', () => {
   assert.notEqual(proxy._validateRequest('DELETE', '/drafts/latest'), null);
   assert.notEqual(proxy._validateRequest('POST', '/runtime/status'), null);
   assert.notEqual(proxy._validateRequest('GET', '/models/llm/select'), null);
+  assert.notEqual(proxy._validateRequest('DELETE', '/message-rescue/generate/job-1'), null);
+  assert.notEqual(proxy._validateRequest('GET', '/message-rescue/generate'), null);
+  // Persona-example routes: DELETE (single/all) is not GET/POST, and there is
+  // no DELETE-single-example without an id.
+  assert.notEqual(proxy._validateRequest('PUT', '/personas/Assistant/examples'), null);
+  assert.notEqual(proxy._validateRequest('DELETE', '/personas/Assistant/examples/abc123/extra'), null);
+});
+
+test('message-rescue generate id segment must be a single param, not a subpath', () => {
+  assert.notEqual(proxy._validateRequest('GET', '/message-rescue/generate/job-1/extra'), null);
+  assert.notEqual(proxy._validateRequest('POST', '/message-rescue/generate/job-1/cancel/extra'), null);
 });
 
 test('route match requires a path boundary, not a prefix', () => {

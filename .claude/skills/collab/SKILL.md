@@ -40,6 +40,22 @@ other and lets them talk. The user watches the conversation live at
 - `handoff` — you finished something they should pick up or rebase onto.
 - `info` — FYI broadcast (what you changed, what you're starting).
 
+## Workspace hygiene (clearing stale chat)
+
+New sessions shouldn't have to wade through hundreds of stale messages from
+finished tasks. If the room's history is clearly stale:
+
+- `collab_clear` resets the message log. Default `mode: "archive"` saves the
+  full log to `backlog/` inside the collab workspace first (recoverable);
+  `mode: "discard"` drops it. Every session's read cursor is reset and a
+  system notice records who cleared and why — pass a `note` with the reason.
+- `collab_backlog` lists the archived logs; read the `.jsonl` files directly
+  if old context needs to be recovered.
+- Etiquette: check `collab_status` first. If other sessions look mid-task,
+  ask via `collab_post` before clearing — clearing archives their undelivered
+  messages instead of delivering them. Prefer archive over discard unless the
+  chatter is genuinely worthless.
+
 ## Heavy shared resources (RAM, ports, servers)
 
 Claims work for more than files. This laptop has 15 GB RAM and the **full

@@ -40,6 +40,10 @@ import voice_clone_qa
 import history_store
 import mcp_client
 from job_manager import JOBS, JobState
+from backend.runtime.dependencies import JobManagerCancellationBridge, PipelineDependencies
+from backend.services.dictation_pipeline import DictationPipeline, FunctionStage
+from backend.services.speech_signals import compute_speech_signals
+from backend.domain.contracts import to_dict as _contract_to_dict
 from output_coordinator import OutputCoordinator
 import voice_commands
 import voice_edit_commands
@@ -199,11 +203,7 @@ output_injector = None
 _output_injector_lock = threading.RLock()
 tts_engine = None
 active_websockets = []
-draft_queue = []
-draft_recordings = {}
 pending_manual_send_ids = []
-next_draft_id = 1
-draft_lock = threading.RLock()
 MAX_DRAFT_HISTORY = 100
 is_processing_draft = False
 # Unique to this process run. A send stamps the draft it is injecting with this
@@ -213,23 +213,38 @@ is_processing_draft = False
 # recovery moves it to "send_interrupted" rather than silently reverting it.
 SEND_PROCESS_TOKEN = uuid.uuid4().hex
 
-# Draft-history persistence writer state. Every mutation calls save_draft_history
-# (outside draft_lock). Two problems the naive "snapshot + os.replace" had:
-#   1. Lost updates: two concurrent savers each os.replace their own snapshot; if
-#      the older snapshot lands last, the JSON on disk regresses to a stale state
-#      (memory + SQLite mirror stay correct, so it only bites after a restart).
-#   2. Redundant IO: a burst of mutations each does a full disk+SQLite write.
-# Fix: a monotonic request revision tags each save; a single-writer lock
-# serializes the actual write; a saver whose revision is already covered by a
-# newer flush skips entirely (coalescing). _draft_written_rev is only ever set to
-# a revision the on-disk state is guaranteed to be at least as new as, so skips
-# never drop an update — at worst an extra (correct) write happens.
-_draft_persist_lock = threading.Lock()   # guards the counters + pending mirror set
-_draft_write_lock = threading.Lock()     # serializes the write-to-disk step
-_draft_request_rev = 0                    # bumped once per save_draft_history call
-_draft_written_rev = 0                    # highest revision flushed to disk
-_draft_pending_full_mirror = False        # a full-queue mirror was requested
-_draft_pending_changed_ids = set()        # narrowed mirror ids awaiting a flush
+# Draft persistence + lookup (queue, recordings, id counter, the coalesced
+# JSON+SQLite writer, startup load, and crash-recovery reclassification) live
+# in backend/stores/drafts.py (A1.5). draft_queue/draft_recordings/draft_lock
+# below are the SAME objects the store owns (identity-shared, not copies) so
+# every existing direct reference/mutation throughout this file and the test
+# suite keeps working unchanged. get_user_data_path is passed as a thunk (not
+# resolved once) so `patch("server.get_user_data_path", ...)` in tests still
+# takes effect on every call, exactly as it did before extraction.
+from backend.stores.drafts import DraftStore  # noqa: E402
+
+_draft_store = DraftStore(
+    data_dir_fn=lambda: get_user_data_path(),
+    history_store=history_store,
+    send_process_token=SEND_PROCESS_TOKEN,
+    max_history=MAX_DRAFT_HISTORY,
+)
+draft_queue = _draft_store.draft_queue
+draft_recordings = _draft_store.draft_recordings
+draft_lock = _draft_store.lock
+next_draft_id = _draft_store.next_draft_id
+
+# Vestigial: no longer read by save_draft_history (the revision-guarded writer
+# now lives entirely inside DraftStore's instance state), kept only so the
+# persistence tests' setUp reset of this "shared writer state" doesn't need to
+# change (test isolation predates the extraction and doesn't assert on these
+# values afterward).
+_draft_persist_lock = threading.Lock()
+_draft_write_lock = threading.Lock()
+_draft_request_rev = 0
+_draft_written_rev = 0
+_draft_pending_full_mirror = False
+_draft_pending_changed_ids = set()
 cancellation_event = threading.Event()
 # Single-flight gate for the dictation pipeline. is_processing_draft remains as
 # a read-only mirror for status displays/hotkey guards; the coordinator owns
@@ -291,160 +306,23 @@ runtime_error_history = []
 runtime_error_lock = threading.Lock()
 MAX_RUNTIME_ERROR_HISTORY = 50
 
+# The wrappers below delegate to _draft_store (backend/stores/drafts.py,
+# A1.5). Each passes server.py's *current* module-level bindings (bare name
+# lookups, resolved at call time) rather than values captured once, so
+# `patch("server.save_draft_history", ...)`, `patch("server.get_user_data_path",
+# ...)`, etc. in the test suite keep intercepting exactly as before extraction.
 def save_draft_history(changed_draft_id=None):
-    """Persist the draft queue durably, ordered, and coalesced.
-
-    Every mutation calls this (outside draft_lock). A monotonic revision tags the
-    request; a single-writer lock serializes the actual write; whoever writes
-    always snapshots the *latest* queue and stamps _draft_written_rev, so a
-    concurrent saver whose revision is already covered skips (coalescing) and a
-    stale snapshot can never regress the file (ordering). changed_draft_id
-    narrows the searchable-archive mirror to the drafts that actually changed;
-    coalesced requests accumulate their ids so a single flush mirrors them all.
-    The JSON snapshot is still written in full (bounded at MAX_DRAFT_HISTORY) and
-    atomically (temp + os.replace) so a crash mid-write cannot corrupt it.
-    """
-    global _draft_request_rev, _draft_written_rev, _draft_pending_full_mirror
-
-    # 1) Register intent: claim a revision and record what the mirror owes.
-    with _draft_persist_lock:
-        _draft_request_rev += 1
-        my_rev = _draft_request_rev
-        if changed_draft_id is None:
-            _draft_pending_full_mirror = True
-        else:
-            _draft_pending_changed_ids.add(changed_draft_id)
-
-    # 2) Serialize writers. If a newer-or-equal flush already ran while we waited
-    #    for the lock, our state is already on disk — coalesce away.
-    with _draft_write_lock:
-        with _draft_persist_lock:
-            if _draft_written_rev >= my_rev:
-                return
-            # Claim everything pending up to now; the snapshot below covers it.
-            claimed_rev = _draft_request_rev
-            mirror_full = _draft_pending_full_mirror
-            mirror_ids = None if mirror_full else set(_draft_pending_changed_ids)
-            _draft_pending_full_mirror = False
-            _draft_pending_changed_ids.clear()
-
-        history_file = os.path.join(get_user_data_path(), "draft_history.json")
-        try:
-            import json
-            with draft_lock:
-                serializable_drafts = [dict(draft) for draft in draft_queue]
-            tmp_file = history_file + ".tmp"
-            with open(tmp_file, "w", encoding="utf-8") as f:
-                json.dump(serializable_drafts, f, indent=2)
-            os.replace(tmp_file, history_file)
-            # Mark persisted only after the file is in place. claimed_rev is a
-            # lower bound on how new the snapshot is, so skips stay safe.
-            with _draft_persist_lock:
-                if claimed_rev > _draft_written_rev:
-                    _draft_written_rev = claimed_rev
-            # Mirror into the searchable, uncapped archive (C8). Defensive: never
-            # fatal. On failure the ids are re-queued so the next flush retries.
-            if mirror_full:
-                history_store.upsert_many(serializable_drafts)
-            elif mirror_ids:
-                changed = [d for d in serializable_drafts if d.get("id") in mirror_ids]
-                history_store.upsert_many(changed)
-        except Exception as exc:
-            logging.exception(f"Failed to save draft history to {history_file}: {exc}")
-            # Re-arm the mirror debt so a subsequent save reattempts it.
-            with _draft_persist_lock:
-                if mirror_full:
-                    _draft_pending_full_mirror = True
-                elif mirror_ids:
-                    _draft_pending_changed_ids.update(mirror_ids)
-
-def _load_draft_history_json(history_file):
-    """Read draft_history.json into a list of draft dicts. Never raises."""
-    import json
-    try:
-        with open(history_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, list):
-            return [d for d in data if isinstance(d, dict) and "id" in d]
-    except Exception as exc:
-        logging.exception(f"Failed to load draft history from {history_file}: {exc}")
-    return []
+    _draft_store.save_history(changed_draft_id)
 
 
 def load_draft_history():
-    """Populate the working draft queue at startup, SQLite-first.
-
-    history_store (SQLite) holds complete draft records and is the canonical
-    store; draft_history.json is consulted only as a fallback when the
-    database is empty or unrecoverable. When that fallback is used, the JSON
-    is imported into SQLite once and renamed to a migration backup so it is
-    never read as an authority again — no parallel canonical store.
-    """
     global next_draft_id
-    history_file = os.path.join(get_user_data_path(), "draft_history.json")
-
-    records = []
-    try:
-        history_store.init()
-        if history_store.verify_schema().get("ok"):
-            records = history_store.load_recent_full(limit=MAX_DRAFT_HISTORY)
-    except Exception as exc:
-        logging.warning(f"history_store unavailable at startup, falling back to JSON: {exc}")
-        records = []
-
-    if not records and os.path.exists(history_file):
-        records = _load_draft_history_json(history_file)
-        try:
-            history_store.migrate_from_json(history_file)
-            os.replace(history_file, history_file + ".migrated")
-        except Exception as exc:
-            logging.warning(f"JSON->SQLite migration/backup failed: {exc}")
-
-    with draft_lock:
-        draft_queue.clear()
-        max_id = 0
-        for d in records:
-            if isinstance(d, dict) and "id" in d:
-                draft_queue.append(d)
-                if d["id"] > max_id:
-                    max_id = d["id"]
-        next_draft_id = max_id + 1
-    logging.info(f"Loaded {len(draft_queue)} drafts from history, next draft ID is {next_draft_id}")
+    _draft_store.load_history(max_history=MAX_DRAFT_HISTORY)
+    next_draft_id = _draft_store.next_draft_id
 
 
 def recover_interrupted_sends():
-    """Reconcile drafts a previous process left mid-send.
-
-    A draft persisted as "sending" whose ``send_process_token`` is not this
-    process's token was interrupted by a crash while injecting. Injection is not
-    idempotent (re-sending re-types the text), and the text may or may not have
-    already landed, so such a draft must NOT be auto-resent and must NOT be
-    quietly reverted to a resendable state as if the send never happened —
-    either could double-paste or hide that content may already be out. It is
-    moved to the honest terminal state "send_interrupted" (outcome unknown); the
-    user explicitly decides whether to resend.
-
-    Idempotent and safe to call at startup after load_draft_history(). Returns
-    the list of recovered draft ids.
-    """
-    recovered = []
-    with draft_lock:
-        for draft in draft_queue:
-            if draft.get("status") == "sending" \
-                    and draft.get("send_process_token") != SEND_PROCESS_TOKEN:
-                draft["status"] = "send_interrupted"
-                draft["send_outcome"] = "interrupted"
-                draft["pending_send"] = False
-                draft.pop("send_process_token", None)
-                recovered.append(draft["id"])
-    if recovered:
-        logging.warning(
-            "Recovered %d draft(s) interrupted mid-send (injection outcome "
-            "unknown, marked send_interrupted): %s", len(recovered), recovered)
-        # One full save (bounded at MAX_DRAFT_HISTORY) mirrors every reclassified
-        # row rather than N narrowed writes.
-        save_draft_history()
-    return recovered
+    return _draft_store.recover_interrupted_sends(save_fn=save_draft_history)
 
 
 def get_voices_path() -> Path:
@@ -962,51 +840,28 @@ def update_draft_review_fields(draft):
     return draft
 
 
-def create_draft(raw_text, final_text, preset="True Janitor", status="pending", metadata=None, error="", gate_reasons=None, recording_result=None, confidence=None):
+def _serialize_optional_contract(value):
+    """None-safe backend.domain.contracts.to_dict() for I3.1's optional
+    structured-transcription/speech-signal pipeline extras."""
+    return _contract_to_dict(value) if value is not None else None
+
+
+def create_draft(raw_text, final_text, preset="True Janitor", status="pending", metadata=None, error="", gate_reasons=None, recording_result=None, confidence=None, transcription_result=None, speech_signals=None):
     global next_draft_id
-
-    with draft_lock:
-        draft = {
-            "id": next_draft_id,
-            "raw_text": raw_text or "",
-            "final_text": final_text or "",
-            "preset": preset,
-            "status": status or "pending",
-            "metadata": metadata or {},
-            "error": error or "",
-            "gate_reasons": list(gate_reasons or []),
-            "confidence": confidence or {"score": None, "avg_logprob": None, "no_speech_prob": None},
-            "pending_send": False,
-            "send_result": None,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        update_draft_review_fields(draft)
-        next_draft_id += 1
-        draft_queue.append(draft)
-        if recording_result is not None:
-            draft_recordings[draft["id"]] = recording_result
-
-        if len(draft_queue) > MAX_DRAFT_HISTORY:
-            removed = draft_queue[: len(draft_queue) - MAX_DRAFT_HISTORY]
-            del draft_queue[: len(draft_queue) - MAX_DRAFT_HISTORY]
-            for removed_draft in removed:
-                draft_recordings.pop(removed_draft["id"], None)
-
-        response = dict(draft)
-        new_id = draft["id"]
-
-    # Persist outside the lock (§9): serializing + JSON + SQLite while holding
-    # the reentrant draft lock made every create stall concurrent draft reads.
-    save_draft_history(changed_draft_id=new_id)
-    return response
+    _draft_store.next_draft_id = next_draft_id
+    result = _draft_store.create_draft(
+        raw_text, final_text, preset=preset, status=status, metadata=metadata,
+        error=error, gate_reasons=gate_reasons, recording_result=recording_result,
+        confidence=confidence, review_fields_fn=update_draft_review_fields,
+        save_fn=save_draft_history, max_history=MAX_DRAFT_HISTORY,
+        transcription_result=transcription_result, speech_signals=speech_signals,
+    )
+    next_draft_id = _draft_store.next_draft_id
+    return result
 
 
 def get_draft_by_id(draft_id):
-    with draft_lock:
-        for draft in draft_queue:
-            if draft["id"] == draft_id:
-                return draft
-    return None
+    return _draft_store.get_draft_by_id(draft_id)
 
 
 def get_profile_output_settings():
@@ -1320,6 +1175,20 @@ def speak_text_aloud(text: str):
     voice_id = normalize_tts_voice_id(config.get("review_tts_voice_hint") or "standard_female")
     quantization = str(config.get("kokoro_quantization", "fp32") or "fp32").strip()
     speed = max(0.5, min(3.0, float(config.get("review_tts_speed") or 0.95)))
+    # Voice Studio's blend/modulation, carried through the same profile
+    # (utils.py _profile_defaults/_sanitize_profile_values). This is the
+    # canonical/automatic playback path (Review TTS hotkey, voice-command
+    # read-back) — it used to call engine.speak() with only voice_id/speed,
+    # silently dropping any blend or modulation the user had set up, even
+    # though /tts/speak and /drafts/{id}/tts already forward both.
+    blend = voice_presets._coerce_blend(config.get("review_tts_blend"))
+    modulation = {
+        "pitch": float(config.get("review_tts_pitch", 0.0) or 0.0),
+        "energy": float(config.get("review_tts_energy", 0.5) or 0.5),
+        "warmth": float(config.get("review_tts_warmth", 0.0) or 0.0),
+        "brightness": float(config.get("review_tts_brightness", 0.0) or 0.0),
+        "pause_style": str(config.get("review_tts_pause_style", "natural") or "natural"),
+    }
 
     engine = ensure_tts_initialized()
     if engine is not None:
@@ -1330,7 +1199,7 @@ def speak_text_aloud(text: str):
         # rather than letting the keyboard path bypass runtime coordination.
         try:
             with model_runtime.read_lease("tts"):
-                engine.speak(phrase, speed=speed, voice_hint=voice_id)
+                engine.speak(phrase, speed=speed, voice_hint=voice_id, blend=blend or None, modulation=modulation)
         except RuntimeBusyError:
             logging.info("Review TTS skipped: TTS runtime is being reconfigured.")
 
@@ -1570,6 +1439,27 @@ class _StatusHeartbeat:
         self._thread = None
 
 
+class _RecordingsRecoverySink:
+    """Real ``RecoverySinkLike`` adapter (A1.6 risk #2): persists the raw
+    recording via the ``recordings`` module, matching the pre-A1.9 inline
+    persist-audio call exactly (same metadata shape, same swallow-and-log
+    error handling so a disk failure never breaks dictation)."""
+
+    def save(self, recording_result, *, reason):
+        try:
+            recordings.save_recording(
+                recording_result,
+                rec_id=recordings.new_rec_id(),
+                metadata={"stop_reason": getattr(recording_result, "stop_reason", "manual")},
+            )
+        except Exception as exc:
+            logging.debug(f"Could not persist recording: {exc}")
+        return None
+
+
+_dictation_recovery_sink = _RecordingsRecoverySink()
+
+
 def process_recording_result(recording_result):
     global is_processing_draft, _active_dictation_job_id
     # A privacy wipe must operate on a quiescent system: never start (or
@@ -1610,7 +1500,9 @@ def process_recording_result(recording_result):
     # Admission is won. From here the gate MUST be released on every exit.
     # Registering the job (and its first transition) runs in its own guard so a
     # failure there cannot leak the gate or leave is_processing_draft stuck —
-    # the main try/finally below only starts after the job exists.
+    # the main try/finally below only starts after the job exists. The job is
+    # created here (not inside the pipeline) so its id is visible to external
+    # cancel-dispatch (emergency stop, /jobs/{id}/cancel) before any stage runs.
     try:
         with draft_lock:
             is_processing_draft = True
@@ -1628,32 +1520,32 @@ def process_recording_result(recording_result):
         broadcast_status_threadsafe("idle")
         return None
 
-    def check_cancelled():
-        if cancellation_event.is_set() or JOBS.is_cancel_requested(job.id):
-            raise InterruptedError("Operation cancelled by user.")
-
     preset = "True Janitor"
     raw_text = ""
+    final_text = ""
+    dict_terms = []
+    confidence = {"score": None, "avg_logprob": None, "no_speech_prob": None}
+    profile_config = {}
+    pipeline_flags = {}
+    stt_ms = post_ms = llm_ms = None
     try:
         metadata = get_recording_metadata(recording_result)
     except Exception as exc:
         logging.debug(f"metadata extraction failed: {exc}")
         metadata = {}
-    # Persist the raw audio up front so it survives even a processing crash (C6).
-    try:
-        recordings.save_recording(
-            recording_result,
-            rec_id=recordings.new_rec_id(),
-            metadata={"stop_reason": getattr(recording_result, "stop_reason", "manual")},
-        )
-    except Exception as exc:
-        logging.debug(f"Could not persist recording: {exc}")
     pipeline_t0 = time.perf_counter()
-    stt_ms = None
-    post_ms = None
-    llm_ms = None
-    try:
-        check_cancelled()
+
+    # Named stages, each a thin wrapper around the exact logic that used to be
+    # inlined here — composed and run by DictationPipeline (backend/services/
+    # dictation_pipeline.py), which owns cancellation checks (before every
+    # stage, matching the four former check_cancelled() call sites),
+    # recovery-first persistence, and per-stage JobState transitions. These
+    # closures read/write the locals above via `nonlocal` so the outer
+    # cancelled/failed handling below sees the same state the old inline
+    # except-blocks did.
+
+    def _stage_transcribe(ctx, deps):
+        nonlocal raw_text, confidence, stt_ms, dict_terms
         broadcast_status_threadsafe("transcribing")
         trans = ensure_transcriber_initialized(preload=False)
         audio_data = getattr(recording_result, "audio_data", recording_result)
@@ -1670,12 +1562,27 @@ def process_recording_result(recording_result):
             # STT read lease: a Whisper reload/unload cannot free the model
             # mid-transcription (it will 409 or wait for this to finish).
             with model_runtime.read_lease("stt"):
-                if hasattr(trans, "transcribe_with_confidence"):
+                if hasattr(trans, "transcribe_with_structured"):
+                    # Single decode covers both the legacy confidence dict and
+                    # the structured segments (I3.1) — transcribe_with_confidence
+                    # + transcribe_structured would each decode independently.
+                    raw_text, confidence, structured = trans.transcribe_with_structured(audio_data, hotwords=hotwords)
+                    ctx.extra["transcription_result"] = structured
+                    try:
+                        ctx.extra["speech_signals"] = compute_speech_signals(
+                            structured.segments, audio_duration_s=structured.audio_duration_s,
+                        )
+                    except Exception as exc:
+                        logging.debug(f"speech signal computation failed: {exc}")
+                elif hasattr(trans, "transcribe_with_confidence"):
                     raw_text, confidence = trans.transcribe_with_confidence(audio_data, hotwords=hotwords)
                 else:
                     raw_text = trans.transcribe(audio_data)
         stt_ms = (time.perf_counter() - _stt_start) * 1000.0
+        ctx.raw_text = raw_text
 
+    def _stage_post_process(ctx, deps):
+        nonlocal raw_text, preset, profile_config, pipeline_flags, post_ms
         _post_start = time.perf_counter()
         # Post-ASR correction snaps near-miss tokens back to dictionary terms.
         if raw_text and dict_terms:
@@ -1713,7 +1620,11 @@ def process_recording_result(recording_result):
                         "scratched_text": popped.final_text if popped else "",
                     },
                 )
-                return draft
+                ctx.raw_text = raw_text
+                ctx.draft = draft
+                ctx.extra["result_ref"] = f"draft:{draft['id']}"
+                ctx.extra["_pipeline_stop"] = True
+                return
             raw_text = voice_edit_commands.apply_inline_edits(raw_text)
         # Spoken dictation commands (C2): "new paragraph", "period", "all caps", ...
         if raw_text and pipeline_flags["voice_commands"]:
@@ -1722,8 +1633,9 @@ def process_recording_result(recording_result):
         if raw_text and pipeline_flags["macros"]:
             raw_text = macros.apply_macros(raw_text)
         post_ms = (time.perf_counter() - _post_start) * 1000.0
+        ctx.raw_text = raw_text
 
-        check_cancelled()
+    def _stage_no_audio_gate(ctx, deps):
         blocked, reasons = should_block_for_no_audio(
             recording_result,
             raw_text,
@@ -1739,6 +1651,8 @@ def process_recording_result(recording_result):
                 error="No usable audio was recorded.",
                 gate_reasons=reasons,
                 recording_result=recording_result,
+                transcription_result=_serialize_optional_contract(ctx.extra.get("transcription_result")),
+                speech_signals=_serialize_optional_contract(ctx.extra.get("speech_signals")),
             )
             broadcast_status_threadsafe(
                 "draft_blocked",
@@ -1753,12 +1667,13 @@ def process_recording_result(recording_result):
                     "long_text": draft["long_text"],
                 },
             )
-            JOBS.complete(job.id, result_ref=f"draft:{draft['id']}")
-            return draft
+            ctx.draft = draft
+            ctx.extra["result_ref"] = f"draft:{draft['id']}"
+            ctx.extra["_pipeline_stop"] = True
 
-        check_cancelled()
+    def _stage_rewrite(ctx, deps):
+        nonlocal final_text, llm_ms
         broadcast_status_threadsafe("rewriting")
-        JOBS.transition(job.id, JobState.REFINING)
         engine = get_selected_llm_engine()
         # llm_chunk_size + completion cap come from the profile dict already
         # loaded at the top of this request (no second disk read).
@@ -1814,8 +1729,9 @@ def process_recording_result(recording_result):
             if heartbeat is not None:
                 heartbeat.stop()
         llm_ms = (time.perf_counter() - _llm_start) * 1000.0
+        ctx.final_text = final_text
 
-        check_cancelled()
+    def _stage_finalize(ctx, deps):
         draft = create_draft(
             raw_text,
             final_text,
@@ -1823,6 +1739,8 @@ def process_recording_result(recording_result):
             metadata=metadata,
             recording_result=recording_result,
             confidence=confidence,
+            transcription_result=_serialize_optional_contract(ctx.extra.get("transcription_result")),
+            speech_signals=_serialize_optional_contract(ctx.extra.get("speech_signals")),
         )
         if pipeline_flags["editing_commands"]:
             utterance_history.record(
@@ -1858,46 +1776,64 @@ def process_recording_result(recording_result):
                 "force_review_reason": draft["force_review_reason"],
             },
         )
-        JOBS.transition(job.id, JobState.REVIEW_READY)
-        JOBS.complete(job.id, result_ref=f"draft:{draft['id']}")
-        return draft
-    except InterruptedError as exc:
-        logging.info("Recording processing was cancelled by the user.")
-        JOBS.mark_cancelled(job.id)
-        draft = create_draft(
-            raw_text,
-            "",
-            preset=preset,
-            status="error",
-            metadata=metadata,
-            error=str(exc),
-            recording_result=recording_result,
-        )
-        broadcast_status_threadsafe(
-            "draft_error",
-            {
-                "draft_id": draft["id"],
-                "raw_text": draft["raw_text"],
-                "final_text": draft["final_text"],
-                "error": draft["error"],
-                "token_count": draft["token_count"],
-                "token_limit": draft["token_limit"],
-                "long_text": draft["long_text"],
-            },
-        )
-        broadcast_status_threadsafe("error", {"message": str(exc), "draft_id": draft["id"]})
-        return draft
-    except Exception as exc:
+        ctx.draft = draft
+        ctx.extra["result_ref"] = f"draft:{draft['id']}"
+
+    stages = [
+        FunctionStage(name="transcribe", func=_stage_transcribe),
+        FunctionStage(name="post_process", func=_stage_post_process),
+        FunctionStage(name="no_audio_gate", func=_stage_no_audio_gate),
+        FunctionStage(name="rewrite", func=_stage_rewrite, job_state=JobState.REFINING),
+        FunctionStage(name="finalize", func=_stage_finalize, job_state=JobState.REVIEW_READY),
+    ]
+    deps = PipelineDependencies(
+        job_manager=JobManagerCancellationBridge(JOBS, cancellation_event),
+        recovery_sink=_dictation_recovery_sink,
+    )
+    pipeline = DictationPipeline(stages, deps, kind="dictation", label="Dictation")
+
+    try:
+        outcome = pipeline.run(recording_result, metadata=metadata, job=job)
+        if outcome.completed:
+            return outcome.context.draft
+        if outcome.cancelled:
+            logging.info("Recording processing was cancelled by the user.")
+            error_msg = outcome.error or "Operation cancelled by user."
+            draft = create_draft(
+                raw_text,
+                "",
+                preset=preset,
+                status="error",
+                metadata=metadata,
+                error=error_msg,
+                recording_result=recording_result,
+            )
+            broadcast_status_threadsafe(
+                "draft_error",
+                {
+                    "draft_id": draft["id"],
+                    "raw_text": draft["raw_text"],
+                    "final_text": draft["final_text"],
+                    "error": draft["error"],
+                    "token_count": draft["token_count"],
+                    "token_limit": draft["token_limit"],
+                    "long_text": draft["long_text"],
+                },
+            )
+            broadcast_status_threadsafe("error", {"message": error_msg, "draft_id": draft["id"]})
+            return draft
+        # Failed: any exception raised by a stage lands here (mirrors the old
+        # inline `except Exception as exc:` branch exactly).
+        exc = outcome.exception if outcome.exception is not None else Exception(outcome.error)
         logging.error(f"Recording processing failed: {redact_exc(exc)}")
-        JOBS.fail(job.id, str(exc))
-        record_runtime_error("recording", str(exc))
+        record_runtime_error("recording", outcome.error)
         draft = create_draft(
             raw_text,
             "",
             preset=preset,
             status="error",
             metadata=metadata,
-            error=str(exc),
+            error=outcome.error,
             recording_result=recording_result,
         )
         broadcast_status_threadsafe(
@@ -1912,7 +1848,7 @@ def process_recording_result(recording_result):
                 "long_text": draft["long_text"],
             },
         )
-        broadcast_status_threadsafe("error", {"message": str(exc), "draft_id": draft["id"]})
+        broadcast_status_threadsafe("error", {"message": outcome.error, "draft_id": draft["id"]})
         return draft
     finally:
         with draft_lock:
@@ -2585,126 +2521,12 @@ async def settings_export_profile(profile_name: str):
 # Persona Foundry (guided interview -> compile -> stress-test) is its own vertical
 # slice in routes_foundry.py (M6); its router is registered at the end of this
 # file and server._foundry_sessions is re-bound there for existing callers/tests.
-
-
-class PersonaRequest(BaseModel):
-    name: str
-    prompt: str
-    # Optional persona schema v2 fields (U7). Omitted fields are left untouched on
-    # update, so legacy {name, prompt} clients keep working unchanged.
-    temperature: Optional[float] = None
-    model_hint: Optional[str] = None
-    dictionary_scope: Optional[str] = None
-    voice: Optional[dict] = None
-    format: Optional[dict] = None
-    few_shot: Optional[list] = None
-    # Phase 7 builder fields:
-    output_policy: Optional[str] = None
-    safety_mode: Optional[str] = None
-    max_completion_tokens: Optional[int] = None
-    chunk_size: Optional[int] = None
-    # Persona Foundry field:
-    persona_card: Optional[dict] = None
-
-
-@app.get("/personas")
-async def list_personas_route():
-    from llm_engine import load_personas
-    return load_personas(force_reload=True)
-
-
-@app.get("/personas-builtins")
-async def list_builtin_persona_names_route():
-    """Names of the built-in personas, so the renderer doesn't have to keep
-    its own hardcoded list in sync with llm_engine._DEFAULT_PERSONAS."""
-    from llm_engine import get_builtin_persona_names
-    return {"builtins": get_builtin_persona_names()}
-
-
-@app.get("/personas/{name}")
-async def get_persona_route(name: str):
-    """Return the full schema v2 persona dict for the editor."""
-    from llm_engine import get_persona
-    entry = get_persona(name)
-    if entry is None:
-        raise HTTPException(status_code=404, detail=f"Persona '{name}' not found.")
-    return entry
-
-
-@app.post("/personas")
-async def save_persona_route(request: PersonaRequest):
-    from llm_engine import upsert_persona
-    # Build a v2 payload from the provided fields; drop unspecified ones so an
-    # update preserves prior rich values (upsert_persona merges partial dicts).
-    payload = {"prompt": request.prompt}
-    for key in (
-        "temperature", "model_hint", "dictionary_scope", "voice", "format", "few_shot",
-        "output_policy", "safety_mode", "max_completion_tokens", "chunk_size", "persona_card",
-    ):
-        value = getattr(request, key)
-        if value is not None:
-            payload[key] = value
-    ok, msg = upsert_persona(request.name, payload)
-    if not ok:
-        raise HTTPException(status_code=400, detail=msg)
-    return {"message": msg}
-
-
-class PersonaLintRequest(BaseModel):
-    prompt: str = ""
-    temperature: Optional[float] = None
-    safety_mode: Optional[str] = None
-    output_policy: Optional[str] = None
-    chunk_size: Optional[int] = None
-
-
-@app.post("/personas/lint")
-async def lint_persona_route(request: PersonaLintRequest):
-    """Non-blocking builder warnings for the persona currently being edited."""
-    from llm_engine import lint_persona
-    payload = {k: v for k, v in request.model_dump().items() if v is not None}
-    return {"warnings": lint_persona(payload)}
-
-
-class PersonaTestRequest(BaseModel):
-    prompt: str
-    sample: str
-    temperature: Optional[float] = None
-    few_shot: Optional[list] = None
-    format: Optional[dict] = None
-    dictionary_scope: Optional[str] = None
-    output_policy: Optional[str] = None
-    safety_mode: Optional[str] = None
-    max_completion_tokens: Optional[int] = None
-
-
-@app.post("/personas/test")
-async def test_persona_route(request: PersonaTestRequest):
-    """Run one sample utterance through an unsaved persona for the test panel."""
-    sample = str(request.sample or "").strip()
-    if not sample:
-        raise HTTPException(status_code=400, detail="A sample utterance is required.")
-    persona = {k: v for k, v in request.model_dump().items() if k != "sample" and v is not None}
-    engine = get_selected_llm_engine()
-    try:
-        result = await run_in_threadpool(
-            engine.run_persona_preview,
-            persona,
-            sample,
-            max_output_tokens=get_active_completion_tokens(),
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Persona test failed: {exc}")
-    return {"result": result}
-
-
-@app.delete("/personas/{name}")
-async def delete_persona_route(name: str):
-    from llm_engine import delete_persona
-    ok, msg = delete_persona(name)
-    if not ok:
-        raise HTTPException(status_code=400, detail=msg)
-    return {"message": msg}
+#
+# Persona CRUD/lint/preview routes (list/get/save/delete/lint/test) are their
+# own slice in backend/api/routes/personas.py (A1.2); its router is registered
+# at the end of this file, after get_selected_llm_engine and
+# get_active_completion_tokens below are defined (the test route reaches them
+# via a lazy ``import server`` at request time).
 
 
 @app.get("/capabilities")
@@ -3059,7 +2881,8 @@ async def cancel_job_endpoint(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
     JOBS.request_cancel(job_id)
     # For the active dictation job, also trip the pipeline's cancellation event so
-    # check_cancelled() unwinds process_recording_result promptly.
+    # the DictationPipeline's per-stage cancellation check (via
+    # JobManagerCancellationBridge) unwinds process_recording_result promptly.
     if job_id == _active_dictation_job_id:
         cancellation_event.set()
     updated = JOBS.get(job_id)
@@ -3081,6 +2904,30 @@ def _path_size_bytes(path):
         return total
     except OSError:
         return 0
+
+
+def _message_rescue_privacy_snapshot():
+    """Counts-only Message Rescue + persona-learning state for /privacy and
+    the support report (I3.4). Context/stored-results are in-memory (F2.5/
+    F2.7); persona examples are the sole on-disk learned store (F2.6). Never
+    includes captured/rewritten text, raw/out example pairs, or previews --
+    only booleans, counts, and the store's file path."""
+    from backend.services.persona_learning import PersonaLearningStore
+
+    counts = routes_message_rescue.router.state_counts()
+    persona_store = PersonaLearningStore()
+    persona_names = persona_store.list_personas()
+    total_examples = sum(len(persona_store.list_examples(name)) for name in persona_names)
+    return {
+        "context": {"active": counts["context_active"], "in_memory_only": True},
+        "stored_results": {"count": counts["stored_results"], "in_memory_only": True},
+        "persona_examples": {
+            "total": total_examples,
+            "personas": len(persona_names),
+            "persisted": True,
+            "path": persona_store.path,
+        },
+    }
 
 
 def get_privacy_report():
@@ -3149,6 +2996,9 @@ def get_privacy_report():
         # Every root the app writes (or historically wrote) to, so the user can
         # see exactly where their data lives — current and any legacy location.
         "data_directories": app_paths.describe_locations(),
+        # Message Rescue's held context/results (in-memory) + learned persona
+        # examples (on-disk) -- counts/paths only, never content (I3.4).
+        "message_rescue": _message_rescue_privacy_snapshot(),
         "retention": {
             "recordings_persisted_to_disk": True,
             "recordings_in_memory": recordings_in_memory,
@@ -3402,6 +3252,34 @@ def _perform_privacy_wipe(wipe_voices: bool):
                 logging.warning(f"Could not remove voices dir: {exc}")
             cleared["voices_removed"] = not voices_dir.exists()
 
+        # 5b. Clear Message Rescue's held context, stored generation results,
+        #     and cancellation handles (F2.5/F2.7 in-memory state). Best-effort
+        #     against new callers only -- an in-flight generation keeps
+        #     running (that's /generate/{id}/cancel's job), but nothing
+        #     rescued survives in memory after this point.
+        mr_clear_result = routes_message_rescue.router.clear_state()
+        mr_counts_after = routes_message_rescue.router.state_counts()
+        cleared["message_rescue_context_cleared"] = not mr_counts_after["context_active"]
+        cleared["message_rescue_results_cleared"] = mr_clear_result["stored_results_cleared"]
+        cleared["message_rescue_generations_cleared"] = mr_clear_result["active_generations_cleared"]
+
+        # 5c. Clear every learned persona example (F2.6 on-disk store),
+        #     persona-by-persona so a single write failure is reported rather
+        #     than silently skipped. Keys are dropped, not blacklisted -- a
+        #     later add_example (with fresh consent) recreates them.
+        from backend.services.persona_learning import PersonaLearningStore
+        persona_store = PersonaLearningStore()
+        persona_examples_ok = True
+        for persona_name in persona_store.list_personas():
+            persona_result = persona_store.clear_persona(persona_name)
+            if not persona_result.get("ok"):
+                persona_examples_ok = False
+                logging.warning(
+                    f"Privacy wipe: failed to clear persona examples for "
+                    f"{persona_name!r}: {persona_result.get('message')}"
+                )
+        cleared["persona_examples_cleared"] = persona_examples_ok and not persona_store.list_personas()
+
         # 6. Verify every target and report per-path postconditions.
         leftover_recordings = recordings.list_leftover_files()
         postconditions = {
@@ -3420,6 +3298,8 @@ def _perform_privacy_wipe(wipe_voices: bool):
             "tts_playback_stopped": cleared["tts_playback_stopped"],
             "voice_clone_conversion_idle": cleared["voice_clone_conversion_idle"],
             "voice_cache_cleared": cleared["voice_cache_cleared"],
+            "message_rescue_context_cleared": cleared["message_rescue_context_cleared"],
+            "persona_examples_cleared": cleared["persona_examples_cleared"],
         }
         if wipe_voices:
             postconditions["voices_absent"] = not get_voices_path().exists()
@@ -3698,6 +3578,7 @@ def gather_support_report():
         "hardware_tier": hardware_tier,
         "runtime": runtime,
         "resources": resources,
+        "message_rescue": _message_rescue_privacy_snapshot(),
         "recent_errors": get_runtime_error_history(),
         "paths": get_runtime_paths_snapshot(),
     }
@@ -4858,11 +4739,15 @@ import routes_foundry  # noqa: E402
 import routes_user_config  # noqa: E402
 import routes_models_resources  # noqa: E402
 import routes_wake  # noqa: E402
+from backend.api.routes import personas as routes_personas  # noqa: E402
+from backend.api.routes import message_rescue as routes_message_rescue  # noqa: E402
 
 app.include_router(routes_foundry.router)
 app.include_router(routes_user_config.router)
 app.include_router(routes_models_resources.router)
 app.include_router(routes_wake.router)
+app.include_router(routes_personas.router)
+app.include_router(routes_message_rescue.router)
 _foundry_sessions = routes_foundry._foundry_sessions
 
 

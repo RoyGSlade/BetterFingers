@@ -27,6 +27,7 @@ const PERSONAS_URL = `${BACKEND_ORIGIN}/personas`;
 const TTS_VOICES_URL = `${BACKEND_ORIGIN}/tts/voices`;
 const VOICE_PRESETS_URL = `${BACKEND_ORIGIN}/voice-presets`;
 const WAKE_URL = `${BACKEND_ORIGIN}/wake`;
+const MESSAGE_RESCUE_URL = `${BACKEND_ORIGIN}/message-rescue`;
 // Phase 3c: no token in the renderer. Every backend call goes through the
 // main-process proxy, which attaches the credential and enforces the route
 // allowlist. These helpers translate a full URL into the proxy's (method,
@@ -323,6 +324,53 @@ async function fetchLatestDraft(timeoutMs = 2500) {
   return fetchJson(`${DRAFTS_URL}/latest`, timeoutMs);
 }
 
+// --- Message Rescue (I3.2): context capture + text/persona generation. ---
+// Board #31's text playground is the first live caller of the generate
+// route -- context/manual and generate both go through the proxy's existing
+// ROUTE_ALLOWLIST entries (no backendProxy.js change needed).
+
+async function fetchMessageRescueContext(timeoutMs = 2500) {
+  return fetchJson(`${MESSAGE_RESCUE_URL}/context`, timeoutMs);
+}
+
+async function captureManualMessageRescueContext(text, timeoutMs = 5000) {
+  return postJson(`${MESSAGE_RESCUE_URL}/context/manual`, { text }, timeoutMs);
+}
+
+// Server-side OS selection/clipboard capture (I3.6) -- no text is sent in the
+// request; the backend reads the current selection (or falls back to
+// pre-existing clipboard contents) itself and returns only the resulting
+// ContextEnvelope status. On failure the proxy's error carries `.detail` as
+// `capture_empty` (nothing selected) or `capture_unsupported` (no working
+// clipboard backend on this platform) -- see backend/services/selection_capture.py.
+async function captureSelectionMessageRescueContext(timeoutMs = 5000) {
+  return postJson(`${MESSAGE_RESCUE_URL}/context/selection`, {}, timeoutMs);
+}
+
+async function clearMessageRescueContext(timeoutMs = 5000) {
+  return deleteJson(`${MESSAGE_RESCUE_URL}/context`, timeoutMs);
+}
+
+// `signals` is optional and only meaningful for a real dictation (F2.1
+// SpeechSignals); the text playground never passes it since there is no
+// audio to derive delivery signals from. Timeout defaults to just above the
+// route's own 190s generate_timeout_s ceiling so the client never gives up
+// before the server has a chance to return its own graceful "timeout" status.
+async function generateMessageRescue({ transcript, persona = null, useContext = false, signals = null } = {}, timeoutMs = 200000) {
+  const body = { transcript, use_context: Boolean(useContext) };
+  if (persona) body.persona = persona;
+  if (signals) body.signals = signals;
+  return postJson(`${MESSAGE_RESCUE_URL}/generate`, body, timeoutMs);
+}
+
+async function cancelMessageRescueGeneration(jobId, timeoutMs = 5000) {
+  return postJson(`${MESSAGE_RESCUE_URL}/generate/${encodeURIComponent(jobId)}/cancel`, {}, timeoutMs);
+}
+
+async function fetchMessageRescueResult(jobId, timeoutMs = 5000) {
+  return fetchJson(`${MESSAGE_RESCUE_URL}/generate/${encodeURIComponent(jobId)}`, timeoutMs);
+}
+
 async function postJson(url, payload = {}, timeoutMs = 2500) {
   return proxyRequest('POST', url, payload, timeoutMs);
 }
@@ -401,6 +449,36 @@ async function toggleRecording(timeoutMs = 120000) {
 
 async function fetchPersonas(timeoutMs = 2500) {
   return fetchJson(PERSONAS_URL, timeoutMs);
+}
+
+async function fetchPersonaExamples(name, timeoutMs = 2500) {
+  return fetchJson(`${PERSONAS_URL}/${encodeURIComponent(name)}/examples`, timeoutMs);
+}
+
+async function addPersonaExample(name, raw, out, consent = false, timeoutMs = 10000) {
+  return postJson(
+    `${PERSONAS_URL}/${encodeURIComponent(name)}/examples`,
+    { raw, out, consent: consent === true },
+    timeoutMs,
+  );
+}
+
+async function deletePersonaExample(name, exampleId, timeoutMs = 10000) {
+  return proxyRequest(
+    'DELETE',
+    `${PERSONAS_URL}/${encodeURIComponent(name)}/examples/${encodeURIComponent(exampleId)}`,
+    undefined,
+    timeoutMs,
+  );
+}
+
+async function clearPersonaExamples(name, timeoutMs = 10000) {
+  return proxyRequest(
+    'DELETE',
+    `${PERSONAS_URL}/${encodeURIComponent(name)}/examples`,
+    undefined,
+    timeoutMs,
+  );
 }
 
 async function fetchBuiltinPersonaNames(timeoutMs = 2500) {
@@ -700,6 +778,10 @@ export {
   addMacro,
   deleteMacro,
   fetchPersonas,
+  fetchPersonaExamples,
+  addPersonaExample,
+  deletePersonaExample,
+  clearPersonaExamples,
   fetchBuiltinPersonaNames,
   getPersonaV2,
   fetchTtsVoices,
@@ -731,6 +813,13 @@ export {
   fetchDrafts,
   fetchHealth,
   fetchLatestDraft,
+  fetchMessageRescueContext,
+  captureManualMessageRescueContext,
+  captureSelectionMessageRescueContext,
+  clearMessageRescueContext,
+  generateMessageRescue,
+  cancelMessageRescueGeneration,
+  fetchMessageRescueResult,
   fetchLlmDownloadState,
   fetchLlmModels,
   fetchOutputSettings,

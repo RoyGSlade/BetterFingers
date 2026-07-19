@@ -43,6 +43,11 @@ def _sample_data():
             "llama_server_path": "/opt/llama/llama-server", "llama_server_exists": True,
             "default_model_path": "/models/gemma.gguf", "default_model_exists": False,
         },
+        "message_rescue": {
+            "context": {"active": True},
+            "stored_results": {"count": 2},
+            "persona_examples": {"total": 5, "personas": 2},
+        },
     }
 
 
@@ -51,6 +56,7 @@ class RenderSupportReportTests(unittest.TestCase):
         md = support_report.render_support_report(_sample_data())
         for heading in ("# BetterFingers Support Report", "## Version", "## Platform",
                         "## Hardware", "## Runtime validation", "## Loaded models (resident)",
+                        "## Message Rescue & persona learning",
                         "## Recent errors (redacted)", "## Paths"):
             self.assertIn(heading, md)
 
@@ -82,6 +88,26 @@ class RenderSupportReportTests(unittest.TestCase):
         data["resources"]["ledger"] = {"llm": None, "stt": None, "tts": None}
         md = support_report.render_support_report(data)
         self.assertIn("no models resident", md.lower())
+
+    def test_message_rescue_section_reports_counts_only_never_content(self):
+        data = _sample_data()
+        data["message_rescue"] = {
+            "context": {"active": True},
+            "stored_results": {"count": 3},
+            "persona_examples": {"total": 7, "personas": 4},
+        }
+        md = support_report.render_support_report(data)
+        self.assertIn("3 (in memory only)", md)
+        self.assertIn("7 across 4 persona(s)", md)
+        self.assertIn("active (in memory only)", md)
+
+    def test_message_rescue_section_empty_state_does_not_crash(self):
+        data = _sample_data()
+        del data["message_rescue"]
+        md = support_report.render_support_report(data)
+        self.assertIn("## Message Rescue & persona learning", md)
+        self.assertIn("- **Captured context:** none", md)
+        self.assertIn("0 (in memory only)", md)
 
 
 class RedactErrorMessageTests(unittest.TestCase):

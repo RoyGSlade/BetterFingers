@@ -1,0 +1,10 @@
+{
+  "id": "self_correcting",
+  "description": "Two segments with repeated self-correction markers (stutter repeats and correction phrases) drawn from the calculator's known correction vocabulary.",
+  "segments": [
+    {"start_s": 0.0, "end_s": 3.0, "text": "send the the file to accounting, I mean, sorry I meant to legal"},
+    {"start_s": 3.5, "end_s": 6.0, "text": "no wait, let me rephrase, we need the the final version, correction, the draft version"}
+  ],
+  "audio_duration_s": 6.0,
+  "energy_windows": null
+}

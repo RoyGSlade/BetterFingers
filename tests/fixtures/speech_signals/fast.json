@@ -1,0 +1,9 @@
+{
+  "id": "fast",
+  "description": "A single dense segment with many words packed into a short duration (high words-per-minute, high urgency).",
+  "segments": [
+    {"start_s": 0.0, "end_s": 3.0, "text": "we need to ship this right now and get it out the door immediately no delay"}
+  ],
+  "audio_duration_s": 3.0,
+  "energy_windows": null
+}
