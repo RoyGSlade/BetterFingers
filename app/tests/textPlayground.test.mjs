@@ -257,7 +257,7 @@ test('buildDraftOptions: truncates long snippets, prefers final_text over raw_te
 
 test('buildDraftOptionsHtml: escapes raw draft text (XSS-shaped content is dictated user text)', () => {
   const html = buildDraftOptionsHtml([{ id: 1, raw_text: '<script>alert(1)</script>' }], '');
-  assert.doesNotMatch(html, /<script>/);
+  assert.doesNotMatch(html, /<script\b/i);
   assert.match(html, /&lt;script&gt;/);
   assert.match(html, /Choose a draft…/);
 });

@@ -246,7 +246,7 @@ test('buildPersonaLearningModel: examplesHtml escapes raw/out/id -- no injected 
     { id: '<img src=x onerror=alert(1)>', raw: '<script>alert("raw")</script>', out: '<b>bold</b> & "quoted"', created_at: '' },
   ]);
   const model = buildPersonaLearningModel(state);
-  assert.doesNotMatch(model.examplesHtml, /<script>/);
+  assert.doesNotMatch(model.examplesHtml, /<script\b/i);
   assert.doesNotMatch(model.examplesHtml, /<img src=x/);
   assert.match(model.examplesHtml, /&lt;script&gt;/);
   assert.match(model.examplesHtml, /&lt;b&gt;bold&lt;\/b&gt;/);

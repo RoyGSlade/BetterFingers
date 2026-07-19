@@ -8,6 +8,7 @@ inside the one handler that needs the selected LLM engine, since server.py
 imports this module only after every server-level name is defined.
 """
 
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -18,6 +19,7 @@ from backend.services import personas as persona_service
 from backend.services.persona_learning import PersonaLearningStore
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # Bound on a single learned example's raw/out text (I3.3). Mirrors the
 # paired-text size discipline backend.services.message_rescue already uses
@@ -161,8 +163,12 @@ async def test_persona_route(request: PersonaTestRequest):
             sample,
             max_output_tokens=server.get_active_completion_tokens(),
         )
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Persona test failed: {exc}")
+    except Exception:
+        logger.exception("Persona preview failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Persona test failed. Check the application logs for details.",
+        )
     return {"result": result}
 
 

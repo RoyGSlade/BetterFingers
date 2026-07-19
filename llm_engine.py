@@ -1256,7 +1256,7 @@ def upsert_persona(name, persona):
         return True, f"Saved persona '{persona_name}'."
     except Exception as exc:
         logging.error("Failed to save persona '%s': %s", persona_name, exc)
-        return False, f"Failed to save persona '{persona_name}': {exc}"
+        return False, f"Failed to save persona '{persona_name}'. Check the application logs for details."
 
 
 def delete_persona(name, allow_builtin=False):
@@ -1285,7 +1285,7 @@ def delete_persona(name, allow_builtin=False):
         return True, f"Deleted persona '{persona_name}'."
     except Exception as exc:
         logging.error("Failed deleting persona '%s': %s", persona_name, exc)
-        return False, f"Failed to delete persona '{persona_name}': {exc}"
+        return False, f"Failed to delete persona '{persona_name}'. Check the application logs for details."
 
 
 def build_guided_persona_prompt(goal, tone, constraints, output_style):
