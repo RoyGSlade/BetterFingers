@@ -20,6 +20,8 @@ STATIC_DIR = Path(__file__).resolve().parent.parent / "backend" / "lan_playgroun
 INDEX_HTML = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
 APP_JS = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
 STYLE_CSS = (STATIC_DIR / "style.css").read_text(encoding="utf-8")
+APP_JS_BYTES = (STATIC_DIR / "app.js").read_bytes()
+STYLE_CSS_BYTES = (STATIC_DIR / "style.css").read_bytes()
 
 REQUIRED_IDS = [
     "error-banner",
@@ -225,13 +227,13 @@ class StaticFileServingTests(unittest.TestCase):
         client = self._client()
         resp = client.get("/app.js")
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.text, APP_JS)
+        self.assertEqual(resp.content, APP_JS_BYTES)
 
     def test_style_css_route_serves_current_file(self):
         client = self._client()
         resp = client.get("/style.css")
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.text, STYLE_CSS)
+        self.assertEqual(resp.content, STYLE_CSS_BYTES)
 
     def test_allowlisted_art_is_served_and_cached(self):
         resp = self._client().get("/art/map.png")

@@ -977,7 +977,7 @@ class ServerDraftTests(unittest.TestCase):
         # install migrating pre-existing draft_history.json.
         self._load_draft_patcher.stop()
         try:
-            with patch("server.get_user_data_path", return_value="/tmp"), \
+            with patch("server.get_user_data_path", return_value=data_dir), \
                  patch("server.os.path.exists", return_value=True), \
                  patch("server.os.replace") as mock_load_replace, \
                  patch("builtins.open", unittest.mock.mock_open(read_data=mock_data)), \
@@ -991,7 +991,8 @@ class ServerDraftTests(unittest.TestCase):
                 self.assertEqual(server.next_draft_id, 43)
                 # The JSON fallback is imported into SQLite and retired as a
                 # migration backup, never read as canonical again.
-                mock_load_replace.assert_called_with("/tmp/draft_history.json", "/tmp/draft_history.json.migrated")
+                history_path = os.path.join(data_dir, "draft_history.json")
+                mock_load_replace.assert_called_with(history_path, history_path + ".migrated")
         finally:
             self._load_draft_patcher.start()
 

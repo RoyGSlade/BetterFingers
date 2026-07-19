@@ -1,2 +1,8 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Byte-for-byte fixtures and served game assets must be identical on every OS.
+tests/fixtures/speech_signals/*.json text eol=lf
+backend/lan_playground/static/*.html text eol=lf
+backend/lan_playground/static/*.js text eol=lf
+backend/lan_playground/static/*.css text eol=lf

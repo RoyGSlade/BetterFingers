@@ -29,6 +29,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import posixpath
 import re
 import sys
 
@@ -54,7 +55,7 @@ def _iter_files(root, ext):
             if not filename.endswith(ext):
                 continue
             full = os.path.join(dirpath, filename)
-            found.append(os.path.relpath(full, REPO_ROOT))
+            found.append(os.path.relpath(full, REPO_ROOT).replace(os.sep, "/"))
     return sorted(found)
 
 
@@ -67,7 +68,7 @@ def _file_stats(rel_path):
 
 
 def _py_module_name(rel_path):
-    parts = rel_path[: -len(".py")].split(os.sep)
+    parts = rel_path[: -len(".py")].split("/")
     if parts[-1] == "__init__":
         parts = parts[:-1]
     return ".".join(parts)
@@ -88,7 +89,7 @@ def _py_imports(rel_path, known_modules):
             if node.level == 0:
                 imported.add(node.module)
             else:
-                pkg_parts = rel_path[: -len(".py")].split(os.sep)
+                pkg_parts = rel_path[: -len(".py")].split("/")
                 if pkg_parts[-1] == "__init__":
                     pkg_parts = pkg_parts[:-1]
                 base = pkg_parts[: -(node.level - 1)] if node.level > 1 else pkg_parts
@@ -114,11 +115,11 @@ def _js_imports(rel_path, known_modules):
         text = handle.read()
 
     hits = set()
-    file_dir = os.path.dirname(rel_path)
+    file_dir = posixpath.dirname(rel_path)
     for spec in _JS_IMPORT_RE.findall(text):
         if not spec.startswith("."):
             continue  # external/node package, not part of the internal graph
-        resolved = os.path.normpath(os.path.join(file_dir, spec))
+        resolved = posixpath.normpath(posixpath.join(file_dir, spec))
         if resolved in known_modules:
             hits.add(resolved)
     return hits
