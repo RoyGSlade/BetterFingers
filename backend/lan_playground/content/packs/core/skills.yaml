@@ -1,0 +1,67 @@
+# The Lost Meaning: Infinite Stacks -- core pack.
+# The five skills (infinite_stacks.md §11.2). Ranks 0-3, paired with whichever
+# attribute the declared action makes sense for (chosen per-action, not fixed here).
+skills:
+  - id: bonk
+    name: Bonk
+    prose:
+      fallback: Force applied directly -- melee, breaking, pushing, restraining, or a well-timed intimidating demonstration.
+      accessible: "Skill: Bonk. Covers melee combat, breaking objects, pushing, restraining, and physical intimidation."
+    typical_uses:
+      - melee
+      - breaking
+      - pushing
+      - restraining
+      - intimidating through demonstrated force
+
+  - id: scheme
+    name: Scheme
+    prose:
+      fallback: Stealth, traps, deception, ambushes, sleight of hand, and dirty tricks.
+      accessible: "Skill: Scheme. Covers stealth, traps, deception, ambushes, sleight of hand, and dirty tricks."
+    typical_uses:
+      - stealth
+      - traps
+      - deception
+      - ambushes
+      - sleight of hand
+      - dirty tricks
+
+  - id: tinker
+    name: Tinker
+    prose:
+      fallback: Mechanisms, repairs, crafting, medicine tools, and environmental manipulation.
+      accessible: "Skill: Tinker. Covers mechanisms, repairs, crafting, medicine tools, and environmental manipulation."
+    typical_uses:
+      - mechanisms
+      - repairs
+      - crafting
+      - medicine tools
+      - environmental manipulation
+
+  - id: read
+    name: Read
+    prose:
+      fallback: Clues, people, intent, danger, tracks, sickness, and contradictions.
+      accessible: "Skill: Read. Covers clues, people, intent, danger, tracks, sickness, and contradictions."
+    typical_uses:
+      - clues
+      - people
+      - intent
+      - danger
+      - tracks
+      - sickness
+      - contradictions
+
+  - id: wordcraft
+    name: Wordcraft
+    prose:
+      fallback: Persuasion, rewriting, leadership, riddles, and social magic.
+      accessible: "Skill: Wordcraft. Covers persuasion, rewriting, leadership, riddles, and social magic."
+    typical_uses:
+      - persuasion
+      - rewriting
+      - leadership
+      - riddles
+      - social magic
+      - precise refusal

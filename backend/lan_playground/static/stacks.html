@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>The Lost Meaning: Infinite Stacks</title>
+<link rel="stylesheet" href="/src/stacks.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to main content</a>
+<header class="topbar">
+  <h1>The Lost Meaning: Infinite Stacks</h1>
+</header>
+
+<main id="main">
+  <p id="game-status" class="sr-only" role="status" aria-live="polite"></p>
+
+  <section id="join-panel" aria-labelledby="join-heading">
+    <h2 id="join-heading">Enter the Spire</h2>
+    <label for="access-code-input">Access code</label>
+    <input id="access-code-input" name="access-code" type="password" autocomplete="off" spellcheck="false">
+
+    <label for="display-name-input">Your hero's name</label>
+    <input id="display-name-input" name="display-name" type="text" autocomplete="off" spellcheck="false" maxlength="40">
+
+    <label for="room-code-input">Room code (leave blank to host a new run)</label>
+    <input id="room-code-input" name="room-code" type="text" autocomplete="off" spellcheck="false">
+
+    <div class="stacks-join-actions">
+      <button id="create-room-button" type="button">Host a new run</button>
+      <button id="join-room-button" type="button">Join a run</button>
+    </div>
+    <p id="join-status" role="status" aria-live="polite"></p>
+  </section>
+
+  <section id="map-screen" aria-label="Map" hidden></section>
+</main>
+
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>

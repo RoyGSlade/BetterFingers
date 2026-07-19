@@ -1,0 +1,13 @@
+# The Lost Meaning: Infinite Stacks -- core pack.
+# Registry metadata for the ordering/sequence Mystery Chamber template
+# (infinite_stacks.md §10.3 family 1). The generator + independent solver are
+# code, not data: backend/lan_playground/content/puzzles/ordering_sequence.py.
+# The LLM may name and describe these facts but never owns the solution (§10.1, §20.2).
+puzzle_template:
+  id: core_ordering_sequence
+  family: ordering_sequence
+  name: The Reshelving
+  prose:
+    fallback: A run of damaged index cards must be placed back in the one order that lets the shelf mechanism accept them.
+    accessible: "Puzzle: The Reshelving. Place a set of index cards into the single correct order using clues found on four inspectable objects: an anchor, a key, a contradiction, and a red herring."
+  difficulty_range: [1, 5]

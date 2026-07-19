@@ -1,0 +1,220 @@
+# The Lost Meaning: Infinite Stacks -- core pack.
+# 11 starter cards (>= 8 required). Covers every §13.3 contract field: timing,
+# range/targets, required state, exact base effect OR check+outcome table,
+# combination tags, discard/Exhaust, fallback text, accessible text. Sources:
+# general (5), one per background (4), equipment-granted (2).
+cards:
+  - id: steady_strike
+    name: Steady Strike
+    prose:
+      fallback: A disciplined melee blow, thrown with more control than force.
+      accessible: "Card: Steady Strike. Main action, melee range, targets one enemy. Force + Bonk check against DC 11."
+    accessible_text: "Steady Strike. Main action. Melee range. Target: one enemy. Roll Force + Bonk vs DC 11. Strong success deals 3 damage, clean success deals 2, a costly success deals 1 damage, a setback grants the enemy Advantage on its next action."
+    timing: main_action
+    range: melee
+    legal_targets: [enemy]
+    check:
+      attribute: force
+      skill: bonk
+      dc: 11
+      outcomes:
+        strong_success:
+          - {op: damage, args: {amount: 3}}
+        success:
+          - {op: damage, args: {amount: 2}}
+        cost:
+          - {op: damage, args: {amount: 1}}
+        setback:
+          - {op: grant_disadvantage, args: {}}
+    combination_tags: [melee, bonk]
+    end_state: discard
+    source: general
+
+  - id: read_the_room
+    name: Read the Room
+    prose:
+      fallback: Take a breath and notice what everyone else is missing.
+      accessible: "Card: Read the Room. Quick interaction, affects the current room, targets self. Insight + Read check against DC 11."
+    accessible_text: "Read the Room. Quick interaction. Range: the current room. Target: self. Roll Insight + Read vs DC 11. Strong success reveals two tells, clean success reveals one tell, a costly success records a partial read, a setback grants Disadvantage on the hero's next check."
+    timing: quick_interaction
+    range: room
+    legal_targets: [self]
+    check:
+      attribute: insight
+      skill: read
+      dc: 11
+      outcomes:
+        strong_success:
+          - {op: reveal_tell, args: {}}
+          - {op: reveal_tell, args: {}}
+        success:
+          - {op: reveal_tell, args: {}}
+        cost:
+          - {op: emit_fact, args: {fact_id: partial_read}}
+        setback:
+          - {op: grant_disadvantage, args: {}}
+    combination_tags: [information, read]
+    end_state: discard
+    source: general
+
+  - id: guarded_stance
+    name: Guarded Stance
+    prose:
+      fallback: Plant both feet and take the hit on purpose.
+      accessible: "Card: Guarded Stance. Reaction, self only. Blocks 2 damage from the triggering attack, no roll required."
+    accessible_text: "Guarded Stance. Reaction. Target: self. Blocks 2 damage from the attack that triggered it. No roll."
+    timing: reaction
+    range: self
+    legal_targets: [self]
+    base_effects:
+      - {op: block_damage, args: {amount: 2}}
+    combination_tags: [defense]
+    end_state: discard
+    source: general
+
+  - id: rally_cry
+    name: Rally Cry
+    prose:
+      fallback: One sharp, sincere word aimed at whoever needs it most.
+      accessible: "Card: Rally Cry. Main action, affects the current room, targets one ally. Removes the Frightened condition, no roll required."
+    accessible_text: "Rally Cry. Main action. Range: the current room. Target: one ally. Removes the Frightened condition from the target. No roll."
+    timing: main_action
+    range: room
+    legal_targets: [ally]
+    base_effects:
+      - {op: remove_condition, args: {condition_id: frightened}}
+    combination_tags: [support, wordcraft]
+    end_state: discard
+    source: general
+
+  - id: plain_warning
+    name: Plain Warning
+    prose:
+      fallback: A short, unambiguous sentence spoken so everyone in earshot understands it the same way.
+      accessible: "Card: Plain Warning. Free speech, affects the current room, can target an ally or an enemy. Records a warning fact, no roll required."
+    accessible_text: "Plain Warning. Free speech. Range: the current room. Target: one ally or one enemy. Records that a warning was given. No roll."
+    timing: free_speech
+    range: room
+    legal_targets: [ally, enemy]
+    base_effects:
+      - {op: emit_fact, args: {fact_id: warning_given}}
+    combination_tags: [communication]
+    end_state: discard
+    source: general
+
+  - id: blank_contract
+    name: Blank Contract
+    prose:
+      fallback: A single clause, left open until it is spoken aloud and marked binding or not.
+      accessible: "Card: Blank Contract. Quick interaction, self only. Records that a phrase has been marked binding or non-binding ahead of being spoken, no roll required. Exiled Court Scribe background card."
+    accessible_text: "Blank Contract. Quick interaction. Target: self. Records that the next spoken phrase has been marked binding or non-binding. No roll."
+    timing: quick_interaction
+    range: self
+    legal_targets: [self]
+    base_effects:
+      - {op: emit_fact, args: {fact_id: binding_clause_marked}}
+    combination_tags: [contract, wordcraft]
+    end_state: discard
+    source: exiled_court_scribe
+
+  - id: field_patch
+    name: Field Patch
+    prose:
+      fallback: A quick mend, good enough to keep someone standing.
+      accessible: "Card: Field Patch. Main action, melee range, targets self or an ally. Requires a carried repair patch. Heals 2 HP, no roll required. Back-Alley Fixer background card."
+    accessible_text: "Field Patch. Main action. Melee range. Target: self or one ally. Requires a carried repair patch. Heals 2 HP. No roll. Consumes the card on use."
+    timing: main_action
+    range: melee
+    legal_targets: [self, ally]
+    required_state: ["tag:has_repair_patch"]
+    base_effects:
+      - {op: heal, args: {amount: 2}}
+    combination_tags: [support, tinker]
+    end_state: exhaust
+    source: back_alley_fixer
+
+  - id: trophy_notes
+    name: Trophy Notes
+    prose:
+      fallback: Flip to the page about this exact kind of monster.
+      accessible: "Card: Trophy Notes. Quick interaction, self only. Requires that this enemy has already revealed its intent this fight. Reveals one more tell, no roll required. Retired Monster Hunter background card."
+    accessible_text: "Trophy Notes. Quick interaction. Target: self. Requires that the enemy has already revealed an intent this fight. Reveals one additional tell. No roll."
+    timing: quick_interaction
+    range: self
+    legal_targets: [self]
+    required_state: ["tag:enemy_intent_revealed"]
+    base_effects:
+      - {op: reveal_tell, args: {}}
+    combination_tags: [knowledge, read]
+    end_state: discard
+    source: retired_monster_hunter
+
+  - id: false_front
+    name: False Front
+    prose:
+      fallback: Present the ordinary thing as though it were dangerous, valuable, or official.
+      accessible: "Card: False Front. Main action, affects the current room, targets one NPC. Finesse + Scheme check against DC 11. Traveling Charlatan background card."
+    accessible_text: "False Front. Main action. Range: the current room. Target: one NPC. Roll Finesse + Scheme vs DC 11. Strong success fully establishes the deception, clean success establishes it, a costly success only partly sells it, a setback grants the NPC Advantage on noticing."
+    timing: main_action
+    range: room
+    legal_targets: [npc]
+    check:
+      attribute: finesse
+      skill: scheme
+      dc: 11
+      outcomes:
+        strong_success:
+          - {op: emit_fact, args: {fact_id: deception_upgraded}}
+        success:
+          - {op: emit_fact, args: {fact_id: deception_established}}
+        cost:
+          - {op: emit_fact, args: {fact_id: deception_partial}}
+        setback:
+          - {op: grant_disadvantage, args: {}}
+    combination_tags: [deception, scheme]
+    end_state: discard
+    source: traveling_charlatan
+
+  - id: comma_cut
+    name: Comma Cut
+    prose:
+      fallback: A called Break aimed at whatever links this enemy to its power.
+      accessible: "Card: Comma Cut. Main action, melee range, targets one enemy. Requires the Comma Blade. Finesse + Bonk check against DC 14."
+    accessible_text: "Comma Cut. Main action. Melee range. Target: one enemy. Requires the Comma Blade equipped. Roll Finesse + Bonk vs DC 14. Strong success deals 3 damage and Silences the target, clean success deals 2 damage, a costly success deals 1 damage, a setback grants the enemy Advantage on its next action. Consumes the card on use."
+    timing: main_action
+    range: melee
+    legal_targets: [enemy]
+    required_state: ["tag:comma_blade_equipped"]
+    check:
+      attribute: finesse
+      skill: bonk
+      dc: 14
+      outcomes:
+        strong_success:
+          - {op: damage, args: {amount: 3}}
+          - {op: apply_condition, args: {condition_id: silenced}}
+        success:
+          - {op: damage, args: {amount: 2}}
+        cost:
+          - {op: damage, args: {amount: 1}}
+        setback:
+          - {op: grant_disadvantage, args: {}}
+    combination_tags: [called_maneuver, break]
+    end_state: exhaust
+    source: equipment
+
+  - id: subtext_flash
+    name: Subtext Flash
+    prose:
+      fallback: Turn the lantern just enough to catch what the room is trying not to say.
+      accessible: "Card: Subtext Flash. Quick interaction, affects the current room, targets self. Requires the Lantern of Subtext. Reveals one tell, no roll required. Usable once per room."
+    accessible_text: "Subtext Flash. Quick interaction. Range: the current room. Target: self. Requires the Lantern of Subtext equipped. Reveals one observable tell. No roll. Usable once per room."
+    timing: quick_interaction
+    range: room
+    legal_targets: [self]
+    required_state: ["tag:lantern_of_subtext_equipped"]
+    base_effects:
+      - {op: reveal_tell, args: {}}
+    combination_tags: [information, once_per_room]
+    end_state: discard
+    source: equipment
