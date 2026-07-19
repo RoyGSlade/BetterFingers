@@ -329,6 +329,25 @@ def _sanitize_profile_values(config, defaults):
         _coerce_str(cfg.get("review_tts_voice_hint", d["review_tts_voice_hint"]), d["review_tts_voice_hint"]).strip()
         or d["review_tts_voice_hint"]
     )
+    blend = cfg.get("review_tts_blend", d["review_tts_blend"])
+    cfg["review_tts_blend"] = blend if isinstance(blend, dict) else dict(d["review_tts_blend"])
+    cfg["review_tts_pitch"] = _coerce_float(
+        cfg.get("review_tts_pitch", d["review_tts_pitch"]), d["review_tts_pitch"], minimum=-12.0, maximum=12.0
+    )
+    cfg["review_tts_energy"] = _coerce_float(
+        cfg.get("review_tts_energy", d["review_tts_energy"]), d["review_tts_energy"], minimum=0.0, maximum=1.0
+    )
+    cfg["review_tts_warmth"] = _coerce_float(
+        cfg.get("review_tts_warmth", d["review_tts_warmth"]), d["review_tts_warmth"], minimum=0.0, maximum=1.0
+    )
+    cfg["review_tts_brightness"] = _coerce_float(
+        cfg.get("review_tts_brightness", d["review_tts_brightness"]), d["review_tts_brightness"], minimum=0.0, maximum=1.0
+    )
+    cfg["review_tts_pause_style"] = _coerce_choice(
+        cfg.get("review_tts_pause_style", d["review_tts_pause_style"]),
+        d["review_tts_pause_style"],
+        {"natural", "compact", "dramatic"},
+    )
     cfg["current_preset"] = _coerce_str(cfg.get("current_preset", d["current_preset"]), d["current_preset"])
     cfg["experience_preset"] = _coerce_choice(
         cfg.get("experience_preset", d["experience_preset"]),
@@ -790,6 +809,17 @@ def _profile_defaults():
         "review_tts_hotkey": "ctrl+shift+space",
         "review_tts_speed": 1.5,
         "review_tts_voice_hint": "english",
+        # Voice Studio blend/modulation (side-track: voice blending UI + TTS
+        # sync). Previously these lived only in ephemeral renderer state, so
+        # the automatic/canonical playback path (speak_text_aloud) never saw
+        # them and reset to nothing on every reload. Now part of the same
+        # profile boundary as review_tts_voice_hint/review_tts_speed above.
+        "review_tts_blend": {},
+        "review_tts_pitch": 0.0,
+        "review_tts_energy": 0.5,
+        "review_tts_warmth": 0.0,
+        "review_tts_brightness": 0.0,
+        "review_tts_pause_style": "natural",
         "organic_formatting_enabled": True,
         "model_keep_llm_loaded": True,
         "model_keep_stt_loaded": True,

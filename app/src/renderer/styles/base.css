@@ -1962,6 +1962,190 @@ body.theme-light.high-contrast {
 .confidence-badge[data-tone='warning'] { color: var(--warning); border-color: rgba(255, 200, 107, 0.4); }
 .confidence-badge[data-tone='danger'] { color: var(--danger); border-color: rgba(255, 124, 135, 0.4); }
 
+.compact-button {
+  padding: 4px 12px;
+  font-size: 0.8rem;
+}
+
+/* Screen-reader-only text: visually hidden but still announced. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ==========================================
+   Message Rescue panel (F2.8) -- static, behind a default-off feature flag
+   ========================================== */
+.message-rescue-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.message-rescue-region {
+  display: grid;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.message-rescue-region:first-of-type {
+  padding-top: 0;
+  border-top: none;
+}
+
+.message-rescue-region-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.message-rescue-context-preview {
+  min-height: 0;
+}
+
+.message-rescue-delivery-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.message-rescue-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 1;
+}
+
+.message-rescue-chip {
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 0.82rem;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.message-rescue-evidence-list,
+.message-rescue-check-list,
+.message-rescue-warnings-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.message-rescue-evidence-list li,
+.message-rescue-warnings-list li {
+  font-size: 0.9rem;
+  color: var(--muted);
+  padding-left: 14px;
+  position: relative;
+}
+
+.message-rescue-evidence-list li::before,
+.message-rescue-warnings-list li::before {
+  content: '·';
+  position: absolute;
+  left: 0;
+}
+
+.message-rescue-variants {
+  border: none;
+  margin: 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.message-rescue-variant-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin: 10px 0;
+}
+
+.message-rescue-variant-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.92rem;
+  cursor: pointer;
+}
+
+.message-rescue-variant-option input[type='radio'] {
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.message-rescue-variant-option input[type='radio']:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.message-rescue-variant-text {
+  min-height: 44px;
+}
+
+.message-rescue-check {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.9rem;
+}
+
+.message-rescue-check-icon {
+  flex-shrink: 0;
+  font-weight: 700;
+}
+
+.message-rescue-check--pass .message-rescue-check-icon { color: var(--accent); }
+.message-rescue-check--fail .message-rescue-check-icon { color: var(--danger); }
+
+.message-rescue-check-name {
+  font-weight: 600;
+}
+
+.message-rescue-check-detail {
+  color: var(--muted);
+}
+
+.message-rescue-check-detail::before {
+  content: '— ';
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message-rescue-panel * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* Message Rescue, live-bound to the Review Draft panel (I3.5-I3.7) -- reuses
+   every .message-rescue-* class above; these two are its own layout only. */
+.draft-rescue-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.draft-rescue-actions,
+.draft-rescue-run-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
 /* ==========================================
    Personal dictionary (C1)
    ========================================== */
@@ -2009,6 +2193,7 @@ body.theme-light.high-contrast {
 .voice-blend-row select { flex: 1 1 160px; }
 .voice-blend-row input[type='range'] { flex: 1 1 120px; }
 .voice-blend-weight-label { min-width: 3.2em; text-align: right; }
+.voice-effective-mix { font-style: italic; margin-top: 4px; }
 .voice-preset-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
 .voice-preset-row {
   padding: 8px 10px;
@@ -2139,4 +2324,63 @@ textarea:focus-visible,
 }
 .model-download-progress[data-state='error'] #llmDownloadProgressLabel {
   color: var(--danger);
+}
+
+/* ==========================================
+   Text Playground (board #31) -- silent text-only persona/LLM test flow
+   ========================================== */
+.text-playground-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.text-playground-textarea {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  font: inherit;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.text-playground-controls-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.text-playground-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.text-playground-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+}
+
+.text-playground-column {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.text-playground-column-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.text-playground-column-text {
+  min-height: 64px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }

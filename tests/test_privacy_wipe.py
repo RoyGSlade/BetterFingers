@@ -142,6 +142,74 @@ class PrivacyWipeTests(unittest.TestCase):
                     resp2 = client.get("/privacy")
                 self.assertTrue(resp2.json()["wake_listener"]["active"])
 
+    def test_privacy_report_describes_context_and_persona_examples_without_content(self):
+        with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ):
+            with self._client() as client:
+                secret_context = "SECRET CONTEXT: order #48213, ship to 900 Maple"
+                client.post("/message-rescue/context/manual", json={"text": secret_context})
+                client.post(
+                    "/personas/PrivacyReportTestPersona/examples",
+                    json={"raw": "call me back", "out": "Please call me back today.", "consent": True},
+                )
+                try:
+                    resp = client.get("/privacy")
+                    self.assertEqual(resp.status_code, 200, resp.text)
+                    data = resp.json()
+                    mr = data["message_rescue"]
+                    self.assertTrue(mr["context"]["active"])
+                    self.assertTrue(mr["context"]["in_memory_only"])
+                    self.assertEqual(mr["stored_results"]["count"], 0)
+                    self.assertTrue(mr["stored_results"]["in_memory_only"])
+                    self.assertEqual(mr["persona_examples"]["total"], 1)
+                    self.assertEqual(mr["persona_examples"]["personas"], 1)
+                    self.assertTrue(mr["persona_examples"]["persisted"])
+                    self.assertTrue(mr["persona_examples"]["path"])
+
+                    raw_text = resp.text
+                    for secret in (secret_context, "48213", "call me back", "Please call me back today"):
+                        self.assertNotIn(secret, raw_text)
+                finally:
+                    client.delete("/message-rescue/context")
+                    client.delete("/personas/PrivacyReportTestPersona/examples")
+
+    def test_wipe_clears_message_rescue_context_results_and_persona_examples(self):
+        with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ):
+            with self._client() as client:
+                client.post("/message-rescue/context/manual", json={"text": "some context"})
+                client.post(
+                    "/personas/WipeTestPersona/examples",
+                    json={"raw": "raw text", "out": "out text", "consent": True},
+                )
+
+                resp = client.post("/privacy/wipe", json={})
+                self.assertEqual(resp.status_code, 200, resp.text)
+                payload = resp.json()
+                self.assertTrue(payload["ok"], payload)
+                cleared = payload["cleared"]
+                self.assertTrue(cleared["message_rescue_context_cleared"])
+                self.assertTrue(cleared["persona_examples_cleared"])
+
+                report = client.get("/privacy").json()
+                self.assertFalse(report["message_rescue"]["context"]["active"])
+                self.assertEqual(report["message_rescue"]["stored_results"]["count"], 0)
+                self.assertEqual(report["message_rescue"]["persona_examples"]["total"], 0)
+
+    def test_wipe_message_rescue_and_persona_clear_is_idempotent(self):
+        with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ):
+            with self._client() as client:
+                resp1 = client.post("/privacy/wipe", json={})
+                resp2 = client.post("/privacy/wipe", json={})
+            self.assertTrue(resp1.json()["ok"], resp1.json())
+            self.assertTrue(resp2.json()["ok"], resp2.json())
+            self.assertTrue(resp2.json()["cleared"]["message_rescue_context_cleared"])
+            self.assertTrue(resp2.json()["cleared"]["persona_examples_cleared"])
+
     def test_wipe_stops_wake_listener_before_draining_recorder(self):
         """The wake mic stream is a second, independent audio consumer --
         it must be stopped before (not after/instead of) the recorder drain,

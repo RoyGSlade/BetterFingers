@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="/art/game-icon.png" type="image/png">
+<title>Spellcheck &amp; Sorcery</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to main content</a>
+<header class="topbar">
+  <div class="topbar-row">
+    <h1>Spellcheck &amp; Sorcery</h1>
+    <button id="fullscreen-toggle" type="button" aria-pressed="false" title="Toggle fullscreen (f)">&#x26F6;<span class="sr-only"> Fullscreen</span></button>
+  </div>
+  <p class="subtitle">Freelance heroes for hire, in a kingdom where every miscommunication becomes real. Local network only &mdash; nothing you type is saved or sent anywhere outside it.</p>
+</header>
+
+<main id="main">
+  <p id="game-status" class="sr-only" role="status" aria-live="polite"></p>
+  <div id="error-banner" class="error-banner" role="alert" hidden></div>
+
+  <!-- Phase: access gate -->
+  <section class="panel" id="access-gate" aria-labelledby="access-gate-heading">
+    <h2 id="access-gate-heading">Access code</h2>
+    <p>Ask whoever is hosting for the access code, or use the link they sent you (it fills this in automatically).</p>
+    <label for="access-code-input">Access code</label>
+    <div class="row">
+      <input id="access-code-input" name="access-code" type="password" autocomplete="off" spellcheck="false" aria-describedby="access-gate-status">
+      <button id="access-code-submit" type="button">Unlock</button>
+    </div>
+    <p id="access-gate-status" role="status" aria-live="polite"></p>
+  </section>
+
+  <!-- Phase: home (create or join a room) -->
+  <section class="panel" id="home-screen" hidden aria-labelledby="home-heading">
+    <img class="hero-art" src="/art/key-art.png" alt="Four unlikely adventurers confronting an enormous dragon made of paperwork" width="1672" height="941" decoding="async" fetchpriority="high">
+    <h2 id="home-heading">Gather your party</h2>
+    <div class="home-grid">
+      <form id="create-form" class="home-card">
+        <h3>Host a new adventure</h3>
+        <label for="create-name">Your hero name</label>
+        <input id="create-name" name="create-name" maxlength="24" required autocomplete="off" placeholder="e.g. Bramble">
+        <button id="create-submit" type="submit">Create a room</button>
+      </form>
+      <form id="join-form" class="home-card">
+        <h3>Join a friend's adventure</h3>
+        <label for="join-code-input">Room code</label>
+        <input id="join-code-input" name="join-code" maxlength="8" autocomplete="off" spellcheck="false" placeholder="e.g. FROG42">
+        <label for="join-name-input">Your hero name</label>
+        <input id="join-name-input" name="join-name" maxlength="24" autocomplete="off" placeholder="e.g. Nettle">
+        <button id="join-submit" type="submit">Join room</button>
+      </form>
+    </div>
+    <p id="home-status" role="status" aria-live="polite"></p>
+  </section>
+
+  <!-- Phase: lobby -->
+  <section class="panel" id="lobby-screen" hidden aria-labelledby="lobby-heading">
+    <h2 id="lobby-heading">Lobby</h2>
+    <div class="lobby-share">
+      <div class="lobby-share-text">
+        <p class="lobby-code-row">Room code: <strong id="lobby-code"></strong> <button id="copy-code-button" type="button">Copy code</button></p>
+        <p class="lobby-link-row">Link: <span id="lobby-link" class="lobby-link-text"></span> <button id="copy-link-button" type="button">Copy link</button></p>
+        <p class="hint">Share either one with up to 3 friends on the same network.</p>
+      </div>
+      <div class="lobby-qr" id="lobby-qr" aria-label="QR code to join this room">
+        <p id="lobby-qr-fallback" class="hint">A scannable code will appear here once the room is ready.</p>
+      </div>
+    </div>
+
+    <h3>Party</h3>
+    <ul id="lobby-players" class="player-list"></ul>
+    <p id="lobby-solo-hint" hidden>Playing solo right now &mdash; recruit friends with the link above, or start solo whenever you like.</p>
+
+    <button id="start-button" type="button" hidden>Start the adventure</button>
+    <p id="lobby-status" role="status" aria-live="polite"></p>
+  </section>
+
+  <!-- Phase: board (choosing / waiting / reveal all live here) -->
+  <section class="panel" id="board-screen" hidden aria-labelledby="board-heading">
+    <h2 id="board-heading" class="sr-only">The adventure board</h2>
+
+    <div class="board-layout">
+      <canvas id="board-canvas" width="640" height="300" role="img" aria-label="Adventure board"></canvas>
+
+      <div class="board-side">
+        <figure class="encounter-figure">
+          <img id="encounter-art" class="encounter-art" src="/art/encounter-troll.png" alt="" width="1254" height="1254" decoding="async" fetchpriority="high">
+          <figcaption id="encounter-caption">Your next extremely official obstacle</figcaption>
+        </figure>
+        <div class="hearts-row">
+          <span id="hearts-label">Party hearts</span>
+          <div id="hearts-display" class="hearts-display" role="img" aria-labelledby="hearts-label"></div>
+        </div>
+        <ol id="players-roster" class="player-list roster"></ol>
+      </div>
+    </div>
+
+    <!-- Move submission -->
+    <form id="move-form" class="panel-inset" hidden aria-labelledby="move-heading">
+      <h3 id="move-heading">Your move</h3>
+      <div class="field">
+        <label for="move-persona">Speak as</label>
+        <select id="move-persona" name="persona" required>
+          <option value="" disabled selected>Loading personas&hellip;</option>
+        </select>
+      </div>
+
+      <fieldset class="card-fieldset">
+        <legend>Choose your secret card</legend>
+        <div class="card-choices">
+          <label class="card-choice" data-card="charm">
+            <input type="radio" name="move-card" value="charm" required>
+            <span class="card-face card-charm"><img class="card-art" src="/art/charm.png" alt="" width="1254" height="1254" decoding="async"><span class="card-icon" aria-hidden="true">&#x2764;</span><span class="card-name">Charm</span></span>
+          </label>
+          <label class="card-choice" data-card="scheme">
+            <input type="radio" name="move-card" value="scheme">
+            <span class="card-face card-scheme"><img class="card-art" src="/art/scheme.png" alt="" width="1254" height="1254" decoding="async"><span class="card-icon" aria-hidden="true">&#x2699;</span><span class="card-name">Scheme</span></span>
+          </label>
+          <label class="card-choice" data-card="bonk">
+            <input type="radio" name="move-card" value="bonk">
+            <span class="card-face card-bonk"><img class="card-art" src="/art/bonk.png" alt="" width="1254" height="1254" decoding="async"><span class="card-icon" aria-hidden="true">&#x2733;</span><span class="card-name">Bonk</span></span>
+          </label>
+        </div>
+      </fieldset>
+
+      <div class="field">
+        <label for="move-text">What do you say or do?</label>
+        <textarea id="move-text" name="move-text" rows="3" maxlength="140" required placeholder="e.g. Politely threaten the door with a strongly worded memo."></textarea>
+        <p class="hint"><span id="move-text-count">0</span> / 140 characters</p>
+      </div>
+
+      <button id="move-submit" type="submit">Submit move</button>
+      <p id="move-status" role="status" aria-live="polite"></p>
+    </form>
+
+    <!-- Waiting -->
+    <div id="waiting-panel" class="panel-inset" hidden>
+      <p class="spinner-line"><span class="spinner" aria-hidden="true"></span> Waiting for other heroes&hellip; <span id="waiting-count"></span></p>
+    </div>
+
+    <!-- Reveal -->
+    <div id="reveal-panel" class="panel-inset" hidden aria-labelledby="reveal-heading">
+      <h3 id="reveal-heading">The trial unfolds&hellip;</h3>
+      <ul id="reveal-list" class="reveal-list"></ul>
+      <p id="round-summary" class="round-summary"></p>
+      <button id="advance-button" type="button" hidden>Onward!</button>
+      <p id="advance-status" role="status" aria-live="polite"></p>
+    </div>
+  </section>
+
+  <!-- Phase: finale -->
+  <section class="panel" id="finale-screen" hidden aria-labelledby="finale-heading">
+    <img id="finale-art" class="finale-art" src="/art/victory.png" alt="" width="1672" height="941" loading="lazy" decoding="async">
+    <h2 id="finale-heading"></h2>
+    <p id="finale-summary"></p>
+    <button id="replay-button" type="button">Play again</button>
+  </section>
+</main>
+
+<footer>
+  <p>Nothing you type here is saved, logged, or sent anywhere outside this local network.</p>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

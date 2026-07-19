@@ -1,0 +1,11 @@
+{
+  "id": "paused",
+  "description": "Three short segments separated by two gaps longer than the 0.5s pause threshold (high hesitation).",
+  "segments": [
+    {"start_s": 0.0, "end_s": 1.0, "text": "so I think"},
+    {"start_s": 2.5, "end_s": 3.5, "text": "we should"},
+    {"start_s": 5.5, "end_s": 6.5, "text": "go with option two"}
+  ],
+  "audio_duration_s": 6.5,
+  "energy_windows": null
+}

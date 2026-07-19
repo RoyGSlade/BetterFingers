@@ -1,0 +1,9 @@
+{
+  "id": "slow",
+  "description": "A single sparse segment with few words stretched over a long duration (low words-per-minute).",
+  "segments": [
+    {"start_s": 0.0, "end_s": 8.0, "text": "well I suppose we could maybe try that"}
+  ],
+  "audio_duration_s": 8.0,
+  "energy_windows": null
+}

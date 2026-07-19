@@ -30,6 +30,24 @@ class SupportReportRouteTests(unittest.TestCase):
         self.assertIsNone(server.transcriber)
         self.assertIsNone(server.tts_engine)
 
+    def test_message_rescue_section_counts_only_no_content_leak(self):
+        secret_context = "SECRET CONTEXT: order #48213, ship to 900 Maple"
+        self.client.post("/message-rescue/context/manual", json={"text": secret_context})
+        secret_example = {"raw": "call them back", "out": "Please call them back today.", "consent": True}
+        self.client.post("/personas/SupportReportTestPersona/examples", json=secret_example)
+        try:
+            resp = self.client.get("/diagnostics/support-report")
+            self.assertEqual(resp.status_code, 200, resp.text)
+            md = resp.json()["markdown"]
+            self.assertIn("## Message Rescue & persona learning", md)
+            self.assertIn("active (in memory only)", md)
+            self.assertIn("persisted to disk", md)
+            for secret in (secret_context, "48213", "call them back", "call them back today"):
+                self.assertNotIn(secret, md)
+        finally:
+            self.client.delete("/message-rescue/context")
+            self.client.delete("/personas/SupportReportTestPersona/examples")
+
     def test_recent_errors_are_redacted(self):
         # A runtime error whose message carries a long multi-line string must be
         # collapsed + length-capped in the rendered report (defense in depth).

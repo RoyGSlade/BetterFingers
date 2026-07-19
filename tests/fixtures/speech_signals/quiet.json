@@ -1,0 +1,10 @@
+{
+  "id": "quiet",
+  "description": "Two calm, evenly-paced segments with very low, stable energy windows.",
+  "segments": [
+    {"start_s": 0.0, "end_s": 2.0, "text": "The report is ready for review today"},
+    {"start_s": 2.3, "end_s": 4.0, "text": "Please take a look when you have time"}
+  ],
+  "audio_duration_s": 4.0,
+  "energy_windows": [0.01, 0.015, 0.012, 0.01]
+}

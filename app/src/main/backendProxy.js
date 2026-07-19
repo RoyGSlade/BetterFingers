@@ -31,10 +31,12 @@ const ROUTE_ALLOWLIST = {
     '/settings/profiles', '/settings/profiles/:name',
     '/settings/profiles/:name/export',
     '/personas', '/personas-builtins', '/personas/:name',
+    '/personas/:name/examples',
     '/tts/voices', '/voice-presets',
     '/drafts', '/drafts/latest',
     '/wake/status', '/wake/models', '/wake/models/:id/download-state',
     '/wake/train/status',
+    '/message-rescue/context', '/message-rescue/generate/:id',
   ],
   POST: [
     '/runtime/audio-devices/refresh', '/runtime/warmup',
@@ -55,9 +57,12 @@ const ROUTE_ALLOWLIST = {
     '/personas', '/personas/lint', '/personas/test',
     '/personas/interview/start', '/personas/interview/answer',
     '/personas/compile', '/personas/test-suite/run',
+    '/personas/:name/examples',
     '/voice-presets',
     '/wake/enable', '/wake/disable', '/wake/test', '/wake/train',
     '/wake/models/:id/download',
+    '/message-rescue/context/selection', '/message-rescue/context/manual',
+    '/message-rescue/generate', '/message-rescue/generate/:id/cancel',
   ],
   DELETE: [
     '/settings/profiles/:name',
@@ -65,7 +70,9 @@ const ROUTE_ALLOWLIST = {
     '/history', '/drafts',
     '/dictionary/:term', '/macros/:trigger',
     '/voice-presets/:name', '/personas/:name',
+    '/personas/:name/examples/:example_id', '/personas/:name/examples',
     '/wake/models/:id',
+    '/message-rescue/context',
   ],
 };
 const ALLOWED_METHODS = new Set(Object.keys(ROUTE_ALLOWLIST));

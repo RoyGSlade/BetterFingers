@@ -191,6 +191,22 @@ def _render_errors(data) -> str:
     return _section("Recent errors (redacted)", lines)
 
 
+def _render_message_rescue(data) -> str:
+    mr = data.get("message_rescue") or {}
+    ctx = mr.get("context") or {}
+    results = mr.get("stored_results") or {}
+    examples = mr.get("persona_examples") or {}
+    lines = [
+        _bullet("Captured context", "active (in memory only)" if ctx.get("active") else "none"),
+        _bullet("Stored generation results", f"{results.get('count', 0)} (in memory only)"),
+        _bullet(
+            "Learned persona examples",
+            f"{examples.get('total', 0)} across {examples.get('personas', 0)} persona(s) (persisted to disk)",
+        ),
+    ]
+    return _section("Message Rescue & persona learning", lines)
+
+
 def _render_paths(data) -> str:
     paths = data.get("paths") or {}
     def mark(key, exists_key=None):
@@ -229,6 +245,7 @@ def render_support_report(data) -> str:
         _render_hardware(data),
         _render_runtime(data),
         _render_loaded_models(data),
+        _render_message_rescue(data),
         _render_errors(data),
         _render_paths(data),
     ]

@@ -15,7 +15,7 @@ build/
 dist/
 app/out/
 app/release/
-app/node_modules/
+node_modules/
 app/.electron-backend-build/
 app/resources/backend/*
 !app/resources/backend/.gitkeep

@@ -1,0 +1,337 @@
+# BetterFingers Remediation — Change Log
+
+This log is the coordination point for the phased remediation. Each work
+iteration reads it, does one bounded/committable chunk, and appends here.
+**Never mix unrelated behavior changes in one commit.** Work happens on branch
+`remediation/phased-loop`.
+
+> ## 🛑 STOP CONDITION (standing instruction from the user, 2026-07-17)
+> Keep looping until **every** phase (1–9) and its Definition of Done is
+> complete — i.e. every item in the phase/task tracker below is ✅. When that
+> is true, the loop must **self-terminate**:
+> 1. Call `CronList`, find the recurring remediation job (prompt contains
+>    "BetterFingers remediation plan"), and `CronDelete` it.
+> 2. Send a one-line completion notice via `PushNotification`.
+> 3. Do **not** schedule any further work.
+>
+> Until then, each iteration just does the next chunk and updates this file.
+> If a phase is genuinely blocked (needs hardware, external creds, or a
+> product decision), record the blocker here, mark it ⛔, and move to the next
+> unblocked task rather than stalling the loop.
+
+> ## 🤝 COLLAB (multi-session workspace — active as of 2026-07-17)
+> An overseer session **`bf-plan-reviewer`** (review-only) is watching this
+> work via the `collab` MCP workspace. Each loop iteration should:
+> 1. Invoke the `collab` skill, then `collab_register` as **`remediation-loop`**
+>    with your current-phase focus; `collab_status` + `collab_inbox` to catch
+>    any messages (answer `question`s to you promptly).
+> 2. `collab_claim` the repo-relative files you're about to edit (claim
+>    narrowly); if a claim conflicts, coordinate — do not edit.
+> 3. After committing the chunk, `collab_post kind=handoff to=bf-plan-reviewer`
+>    with the phase/step, commit hash, and done-vs-in-progress, then
+>    `collab_release` your claims.
+> RAM rule: claim the pseudo-path `__full-test-suite__` before any *unfiltered*
+> `pytest` (models load ~6.5 GB) — but this loop already avoids full runs.
+
+---
+
+## Baseline (Phase 0 — recorded 2026-07-16)
+
+Reference baseline claimed by the plan; treated as the "must stay green" bar.
+Full suites are **not** re-run inside a 3-minute loop iteration — targeted
+checks (`py_compile`, focused `pytest`) are used per chunk instead.
+
+| Signal | Baseline |
+| --- | --- |
+| Python tests | 1,229 passing |
+| Electron unit tests | 40 passing |
+| Production build | passing |
+| CodeQL | passing |
+| E2E CI | passing |
+
+Repo state at Phase 0: branch `main`, clean tree, up to date with `origin/main`.
+A `feat/windows-vulkan-fallback` branch already exists (Phase 4-related, not
+touched by this loop yet).
+
+### Release levels
+
+| Level | Requirements |
+| --- | --- |
+| Development | Existing tests remain green |
+| Friends alpha | Phases 1–4 complete |
+| Public alpha | Phases 1–7 complete, signed installers |
+| 1.0 | Reliability benchmark, injection matrix, DataRegistry, modular architecture complete |
+
+---
+
+## Phase / task tracker
+
+Legend: ✅ done · 🚧 in progress · ⬜ not started
+
+- **Phase 0 — Baseline** 🚧
+  - ✅ 0.a Create tracking changelog (this file)
+  - ✅ 0.b Regression coverage is folded into each phase's own tests (a
+    deliberate deviation from upfront placeholders): every confirmed issue
+    lands with its regression test in the phase that fixes it — 1.1/1.2/1.3 and
+    2.1a already do. Enforced going forward by the "commit each chunk with its
+    test" rule.
+- **Phase 1 — Truthful privacy wipe** ✅ (release blocking)
+  - ✅ 1.1 Correct the HTTP contract (`/privacy/wipe` no longer 200 on failure)
+  - ✅ 1.2 Make the renderer defensive (`if (!result?.ok) throw`; show what/why/retry)
+  - ✅ 1.3 End-to-end contract tests: route status mapping, renderer summary unit tests,
+    and failure-injection through the route — history-DB recreation → 500, voice deletion
+    → 500, empty wipe → 200, populated wipe → 200. Pipeline-quiesce and
+    recording-remains covered by `test_privacy_wipe_verified.py`; output-drain
+    covered by `test_wipe_send_race.py:165` (attribution corrected per review).
+- **Phase 2 — Unified data-lifecycle (DataRegistry)** 🚧 (release blocking)
+  - 🚧 2.1 DataRegistry
+    - ✅ 2.1a `DataCategory`/`WipeResult`/`VerificationResult` types, controlled
+      vocabularies, mode-nesting validation, `DataRegistry`, empty `REGISTRY`
+    - ✅ 2.1b Register all 21 persistent categories' read-only metadata
+      (`data_categories.py`) + hard-coded full-id-set CI guard
+    - ⬜ 2.1c Wire real `paths` + `size` callables (from `app_paths`/`server` helpers)
+    - ⬜ 2.1d Wire `wipe`/`verify`; back `_perform_privacy_wipe` with the registry.
+      **Also here:** review finding #3-residual — normalize the
+      `cleared.history_db_wiped` dict server-side (or teach `isDeletionOutcome`
+      to accept a `{ok:true}`/`removed[]` dict) so the history DB appears in the
+      renderer's "already cleared" list. Deferred here to avoid throwaway JS.
+  - ⬜ 2.2 Explicit wipe modes (conversations / personal / factory reset) + UI preview
+  - ⬜ 2.3 Coordinate every writer via a shared lifecycle gate
+  - ⬜ 2.4 Coordinate Electron-owned data over IPC
+  - ⬜ 2.5 Generate the privacy UI (`GET /privacy`) from the registry
+- **Phase 3 — Support-report privacy** ⬜ (release blocking)
+- **Phase 4 — Runtime & process boundaries** ⬜ (release blocking)
+- **Phase 5 — API/renderer security boundary** ⬜
+- **Phase 6 — Backend modularization** ⬜
+- **Phase 7 — Renderer modularization** ⬜
+- **Phase 8 — Quality/dependency/release gates** ⬜
+- **Phase 9 — KISS boundary** ⬜
+
+---
+
+## Iteration log
+
+### Iteration 1 — 2026-07-16 — Phase 0 + Phase 1.1
+
+**Context found.** The backend already computes a *truthful* wipe result:
+`server._perform_privacy_wipe()` quiesces the pipeline, drains output, deletes,
+verifies postconditions, and returns `{ok, error, message, cleared,
+postconditions}`. Function-level truthfulness is well covered by
+`tests/test_privacy_wipe_verified.py`. **The only defect at the HTTP layer was
+that the route returned every result as HTTP 200**, so a failed wipe looked
+successful to any HTTP client.
+
+**Changed.**
+- `server.py`: `/privacy/wipe` route now maps the result to an honest status
+  via new `_wipe_status_code()` helper, returning a `JSONResponse`:
+  - `200` — every postcondition passed (`ok is True`)
+  - `409` — `wipe_already_running` or `pipeline_did_not_quiesce`
+  - `503` — `output_did_not_quiesce` (a subsystem could not drain)
+  - `500` — `ok is False` with no pre-deletion abort code (deletion ran but a
+    postcondition/verification failed)
+  The structured payload is preserved byte-for-byte; `_perform_privacy_wipe`
+  return type is unchanged so all existing function-level tests still pass.
+- `tests/test_privacy_wipe_contract.py`: new route-level contract test
+  asserting the status/payload mapping for success, already-running (409),
+  pipeline-stall (409), output-stall (503), and postcondition-failure (500).
+
+**Why.** Phase 1.1 definition of done: "an unsuccessful operation does not
+return HTTP 200 as though it succeeded." Backend already knew the truth; the
+route was laundering it into a 200.
+
+**Verification.** `python -m py_compile server.py` + focused
+`pytest tests/test_privacy_wipe_contract.py tests/test_privacy_wipe_verified.py`.
+
+**Next up →** Phase 1.2: make the renderer defensive. Find the privacy-wipe
+handler in `app/src/renderer/main.js`, ensure it throws unless
+`result?.ok === true`, and surface what was deleted / what was not / which
+postcondition failed / whether retry is safe. Never display "Your data was
+wiped" unless `ok === true`.
+
+### Iteration 2 — 2026-07-17 — Phase 1.2 (renderer defensive)
+
+(Note: a first attempt at this chunk on 2026-07-16 was interrupted before any
+edit; it made read-only investigation only. Nothing to revert. Resumed here.)
+
+**Context found.** `wipeData()` → `postJson` → `proxyRequest` in
+`app/src/renderer/api/backend.js` already *throws* on any non-2xx, and
+`errorMessageFromBody` reads `body.message` — so Phase 1.1's new 409/500/503
+statuses already route a failed wipe into `handleWipeData`'s catch. Two gaps
+remained: (1) the success path set "Your data was wiped." **without checking
+`result.ok`** (no defense against a 200-with-ok:false), and (2) failures did
+not surface *what* remained / which postcondition failed / retry safety.
+
+**Changed.**
+- `app/src/renderer/lib/wipeSummary.mjs` (new): pure, DOM-free helper —
+  `summarizeWipeFailure()`, `failedPostconditions()`, `isPreDeleteAbort()`,
+  `WIPE_PRE_DELETE_ABORTS`. Same testable pattern as `lib/draftSummary.mjs`.
+  Distinguishes pre-deletion aborts ("Nothing was deleted. Safe to retry.")
+  from partial failures (lists the postconditions that did not verify, counts
+  leftover recordings, notes retry is safe).
+- `app/src/renderer/api/backend.js`: `proxyRequest` now attaches `error.body`
+  (the full parsed payload) to thrown non-2xx errors so callers can inspect
+  structured detail. Minimal additive change; no behavior change for existing
+  callers.
+- `app/src/renderer/main.js`: `handleWipeData` now (a) throws unless
+  `result?.ok === true` even on HTTP 200 (defense in depth), and (b) renders a
+  truthful failure message via `summarizeWipeFailure` from either the returned
+  body or `error.body`. "Your data was wiped." is shown only when `ok === true`.
+- `app/tests/wipe-summary.test.mjs` (new): 5 unit tests for the helper.
+
+**Why.** Phase 1.2 DoD: never display success unless `result.ok === true`; show
+what was/wasn't deleted, which postcondition failed, and retry safety.
+
+**Verification.** `node --check` on all three changed JS files; `node --test`
+on the new + existing renderer suites → **27 passed, 0 failed**. (Full Electron
+E2E not run inside the loop; the pure helper is covered by unit tests.)
+
+**Next up →** Phase 1.3: close the remaining end-to-end contract-test cases so
+Phase 1 can be marked done. Add backend failure-injection tests proving
+`ok:false` + the right HTTP status when (a) history-DB recreation fails and
+(b) voice deletion fails (patch `history_store.wipe_database` /
+`shutil.rmtree` to fail, assert 500 through the route). Then flip Phase 1 to ✅
+and begin Phase 2 (DataRegistry).
+
+### Iteration 3 — 2026-07-17 — Phase 1.3 (Phase 1 COMPLETE) + stop condition
+
+**Standing instruction recorded.** The user asked the loop to run until the
+whole plan is done, then close itself — captured as the STOP CONDITION block at
+the top of this file. Every iteration checks it.
+
+**Changed.**
+- `tests/test_privacy_wipe_contract.py`: added four end-to-end route tests —
+  `test_populated_wipe_is_200_and_ok`, `test_history_db_recreation_failure_returns_500`
+  (patches `history_store.wipe_database` to fail), `test_voice_deletion_failure_returns_500`
+  (patches `shutil.rmtree` to no-op so `voices_absent` cannot hold). These prove a
+  real backend failure yields `ok:false` **and** an honest 500 through the route.
+- `REMEDIATION_CHANGELOG.md`: Phase 1 flipped to ✅; stop condition added.
+
+**Why.** Phase 1.3 DoD: "no backend-declared wipe failure can produce a renderer
+success message." The status contract (1.1), the defensive renderer (1.2), and
+now failure-injection coverage across both success and failure paths satisfy it.
+The pipeline-quiesce and recording-remains cases were already covered by
+`tests/test_privacy_wipe_verified.py`; output-drain by `test_wipe_send_race.py`.
+
+**Verification.** `pytest tests/test_privacy_wipe_contract.py` → 15 passed,
+4 subtests passed.
+
+**Phase 1 (release-blocking) is DONE.** ✅ 1.1 ✅ 1.2 ✅ 1.3
+
+**Next up →** Phase 2 (DataRegistry) — begin 2.1a (below).
+
+### Iteration 4 — 2026-07-17 — Phase 2.1a (registry mechanism)
+
+**Changed.**
+- `data_registry.py` (new, top-level flat module — stdlib only, no FastAPI, so
+  routes/domain/tests can all import it; Phase 6 relocates it to
+  `domain/privacy/registry.py`):
+  - Frozen `DataCategory` with the exact fields the plan specifies
+    (id/label/owner/sensitivity/paths/retention/wipe_modes/included_in_report/
+    included_in_export/may_contain_user_text/size/wipe/verify), plus frozen
+    `WipeResult` and `VerificationResult`.
+  - Controlled vocabularies `OWNERS`, `SENSITIVITIES`, and the three explicit
+    wipe modes (`clear_conversations` ⊆ `clear_personal_data` ⊆ `factory_reset`).
+  - `validate_category()` — the enforcement point behind the Phase 2 DoD:
+    rejects blank id/label/retention, bad owner/sensitivity, unknown wipe
+    modes, non-callable `paths`/`size`/`wipe`/`verify`, non-bool flags, and
+    **mode-nesting violations** (a category in an inner mode must also be in the
+    outer modes that contain it).
+  - `DataRegistry` (register/get/all/ids/in_mode/len) that validates on
+    register and rejects duplicate ids; a process-wide empty `REGISTRY`.
+- `tests/test_data_registry.py` (new): 18 tests covering valid registration and
+  every rejection path, including the nesting invariant and duplicate ids.
+
+**Why.** Phase 2.1 DoD: "adding a new persistent store requires registering it,
+and tests fail if its lifecycle metadata is incomplete." This chunk builds the
+mechanism + the failing-on-incomplete-metadata guarantee before any concrete
+category is registered, so 2.1b can register stores against a proven gate.
+
+**Verification.** `py_compile data_registry.py`; `pytest tests/test_data_registry.py`
+→ 18 passed. No existing modules touched, so no regression surface.
+
+**Next up →** Phase 2.1b: register every persistent category's *read-only*
+fields (id/label/owner/sensitivity/retention/wipe_modes/flags) — no live
+`paths`/`size`/`wipe`/`verify` yet (stub them, e.g. `lambda: []`, `lambda: 0`,
+returning not-yet-implemented results) so the set of categories and their
+metadata is reviewable on its own. Inventory the real stores by grepping path
+helpers in `app_paths.py` and `server.py` (`get_user_data_path`,
+`get_voices_path`, `get_graph_path`, history DB path, recordings dir, drafts
+file, profiles, personas, dictionary, macros, voice presets, app-state/first-run
+marker, wake models/training artifacts, MCP config, debug log, overlay state,
+model/runtime metadata, temp audio). Add a test asserting the registry contains
+the full expected id set so a forgotten store fails CI. Keep each category's
+`may_contain_user_text` and `sensitivity` honest.
+
+### Iteration 5 — 2026-07-17 — Phase 1.2 polish (review response) + housekeeping
+
+Overseer `bf-plan-reviewer` APPROVED Phase 1 + 2.1a (verified by running the
+suites: 33 py + 5 node passing) with 5 minor findings. Closed them:
+
+- **Finding 3 (plan 1.2 "show what WAS deleted"):** `wipeSummary.mjs` now has
+  `summarizeWipeCleared()` which enumerates the backend `cleared{}` map —
+  counts (`drafts: N`) and boolean removals (`history_file_removed`, …) — while
+  excluding quiesce/state steps (recorder_stopped, pipeline_quiesced). The
+  failure summary reports "Already cleared before the failure: …".
+- **Finding 4 (surface `stuck_sends`):** the output-drain abort branch now lists
+  the in-flight sends that would not finish.
+- **Finding 1 (attribution):** corrected — output-drain coverage is in
+  `test_wipe_send_race.py:165`, not `test_privacy_wipe_verified.py` (fixed in the
+  tracker and the iteration-3 entry above).
+- **Finding 2 (Phase 0.b):** resolved — regression coverage is folded into each
+  phase's own tests rather than upfront placeholders; 0.b marked ✅ with that
+  deviation recorded.
+- **Finding 5 (commit 2.1a):** already done before the review snapshot —
+  `eea6314` (registry) + `e868033` (collab note).
+
+**Files.** `app/src/renderer/lib/wipeSummary.mjs`,
+`app/tests/wipe-summary.test.mjs` (+3 tests, updated 1 assertion),
+`REMEDIATION_CHANGELOG.md`. No handler change needed — `handleWipeData` already
+renders whatever `summarizeWipeFailure` returns.
+
+**Verification.** `node --check`; `node --test app/tests/wipe-summary.test.mjs`
+→ 8 passed.
+
+**Next up →** Phase 2.1b (unchanged): register every persistent category's
+read-only metadata against the validated registry, with a test asserting the
+full expected id set so a forgotten store fails CI.
+
+### Iteration 6 — 2026-07-17 — Phase 2.1b (category inventory)
+
+Overseer VERIFIED `9193da2` and left one non-blocking residual on finding #3
+(`cleared.history_db_wiped` is a dict, so the history DB never shows in the
+"already cleared" list). Per their steer, **deferred to 2.1d** (recorded above)
+to avoid patching JS that 2.1d may make moot, and proceeded with 2.1b.
+
+**Changed.**
+- `data_categories.py` (new): the concrete inventory — **21 categories** covering
+  the plan's list plus `downloaded_models` (opt-in) and `support_report`. Each
+  has honest `owner`/`sensitivity`/`retention`/`wipe_modes`/flags;
+  `paths`/`size`/`wipe`/`verify` are stubbed (2.1c/2.1d wire them). Wipe-mode
+  membership uses the nesting-valid sets (conversations ⊆ personal ⊆ factory;
+  downloaded_models = none). `build_registry()` returns a fresh validated
+  registry. Electron-owned stores (`sidecar_raw_log`, `overlay_position`,
+  `overlay_appearance`) declared `owner="electron"` for the Phase 2.4 IPC path.
+- `tests/test_data_categories.py` (new, 11 tests): **hard-coded** EXPECTED_IDS
+  completeness guard (a forgotten/renamed store fails CI), explicit checks for
+  the easy-to-forget stores the reviewer named, and metadata-honesty checks
+  (electron ownership, `may_contain_user_text` for text stores vs audio/settings,
+  conversation-data-in-every-mode, settings-only-on-factory-reset,
+  downloaded-models-opt-in).
+
+**Why.** Phase 2.1 DoD: adding a store must require registration and fail tests
+if incomplete. 2.1a built the gate; 2.1b registers every store through it with a
+CI guard so the inventory can't silently drift.
+
+**Verification.** `py_compile data_categories.py`; `pytest tests/test_data_categories.py`
+→ 11 passed. No existing modules imported/changed → zero regression surface.
+
+**Next up →** Phase 2.1c: replace the stub `paths`/`size` callables with real
+ones. Map each category id to its filesystem path(s) via `app_paths.py` and the
+`server.py` helpers (`get_user_data_path`, `get_voices_path` (voices),
+`get_graph_path` (graph_data), the history DB path + WAL/SHM, recordings dir,
+draft_history.json, profiles/personas/dictionary/macros/presets files, app-state
+/first-run marker, wake models dir, MCP config, debug log). Give `size` a shared
+"sum of existing paths" helper. Electron-owned paths (sidecar log, overlay state)
+stay stubbed until 2.4's IPC exists — note that explicitly. Add tests using a
+temp data dir (patch `get_user_data_path`) asserting paths resolve under the
+data root and size sums real bytes.

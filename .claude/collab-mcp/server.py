@@ -2,7 +2,9 @@
 """Minimal stdio MCP server exposing the multi-session collab workspace.
 
 No dependencies: speaks newline-delimited JSON-RPC 2.0 on stdin/stdout.
-State helpers live in collab_lib.py; identity = parent (claude) PID.
+Shared by Claude Code and Codex CLI (see .mcp.json / .codex/config.toml).
+State helpers live in collab_lib.py; identity is client-neutral — see
+collab_lib.my_session_id().
 """
 import json
 import sys
@@ -14,9 +16,9 @@ TOOLS = [
     {
         "name": "collab_register",
         "description": (
-            "Register this session in the shared workspace so other Claude sessions in this "
-            "repo can see you. Call once at the start of work with a short session name and "
-            "what you're working on. Re-call to update your focus."
+            "Register this session in the shared workspace so other sessions in this "
+            "repo (Claude Code or Codex CLI) can see you. Call once at the start of work with "
+            "a short session name and what you're working on. Re-call to update your focus."
         ),
         "inputSchema": {
             "type": "object",
@@ -79,6 +81,37 @@ TOOLS = [
         "description": "Read messages from other sessions posted since you last checked. Check when starting a task and periodically during long work.",
         "inputSchema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "collab_clear",
+        "description": (
+            "Clear the shared message log so new sessions aren't flooded with stale history. "
+            "Default mode 'archive' saves the current log to .claude/collab/backlog/ before "
+            "clearing (recoverable via collab_backlog); 'discard' drops it outright. Resets "
+            "every session's read cursor and posts a system notice saying who cleared and why. "
+            "Etiquette: clear only stale or finished conversation — if other sessions look "
+            "mid-task in collab_status, ask via collab_post first."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": ["archive", "discard"],
+                    "description": "archive (default): save the log to backlog/ first; discard: drop it",
+                },
+                "note": {"type": "string", "description": "Optional reason, recorded in the system notice"},
+            },
+        },
+    },
+    {
+        "name": "collab_backlog",
+        "description": (
+            "List message logs archived by collab_clear (oldest first). Each entry is a "
+            ".jsonl file under .claude/collab/backlog/ that can be read directly if old "
+            "context needs to be recovered."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
 ]
 
 
@@ -89,7 +122,7 @@ def fmt_ts(ts):
 def status_text():
     sessions = cl.get_sessions()
     claims = cl.get_claims()
-    me = cl.my_claude_pid()
+    me = cl.my_session_id()
     lines = [f"Live sessions ({len(sessions)}):"]
     for pid, s in sessions.items():
         tag = " (you)" if pid == me else ""
@@ -143,6 +176,27 @@ def handle_tool(name, args):
         return "\n".join(
             f"[{fmt_ts(m['ts'])}] {m['from']} ({m['kind']}{', to you' if m.get('to') else ''}): {m['text']}"
             for m in msgs
+        )
+
+    if name == "collab_clear":
+        mode = args.get("mode") or "archive"
+        if mode not in ("archive", "discard"):
+            raise ValueError("mode must be 'archive' or 'discard'")
+        count, archive = cl.clear_messages(mode=mode, note=args.get("note"))
+        if not count:
+            return "Message log already empty — nothing to clear."
+        where = f"archived to {archive}" if archive else "discarded (no archive)"
+        return (
+            f"Cleared {count} message(s); {where}. All read cursors reset; "
+            "a system notice was posted so other sessions know."
+        )
+
+    if name == "collab_backlog":
+        entries = cl.list_backlog()
+        if not entries:
+            return "Backlog empty — no archived message logs. collab_clear (mode=archive) creates them."
+        return "Archived message logs (oldest first):\n" + "\n".join(
+            f"  - {e['file']} ({e['messages']} messages)" for e in entries
         )
 
     raise ValueError(f"unknown tool {name}")
