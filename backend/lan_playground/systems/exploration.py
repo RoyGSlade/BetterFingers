@@ -11,7 +11,7 @@ from ..domain.commands import Command, CommandError, ErrorCode
 from ..domain.events import Event, EventType, Visibility, make_event_id
 from ..domain.rng import StacksRNG
 from ..domain.state import DELTA, ConnectorState, Direction, MapState, RunState, room_id_for
-from . import combat, map_generation, puzzles, room_generation, turns
+from . import combat, heroes_wire, map_generation, puzzles, room_generation, turns
 
 
 def _hero(state: RunState, hero_id: str | None) -> "HeroState":
@@ -50,6 +50,7 @@ def legal_action_summary(state: RunState, hero_id: str) -> list[str]:
     if hero.energy >= turns.ENERGY_COSTS["inspect"]:
         actions.append("inspect")
     actions.extend(puzzles.legal_action_names(state, hero_id))
+    actions.extend(heroes_wire.legal_action_names(state, hero_id))
     return actions
 
 
@@ -248,6 +249,10 @@ def handle_breach(command: Command, state: RunState, rng: StacksRNG, seq: int) -
         events += puzzles.build_instantiate_events(command, state, rng, target_room_id, hero_id, seq + 2)
     elif family == "conflict":
         events += combat.build_start_encounter_events(command, state, rng, target_room_id, hero_id, seq + 2)
+    # §11.3 once_per_room signature charges refresh at this room boundary.
+    events += heroes_wire.build_room_boundary_refresh_events(
+        state, hero_id, target_room_id, seq + len(events), command.command_id
+    )
     return events
 
 

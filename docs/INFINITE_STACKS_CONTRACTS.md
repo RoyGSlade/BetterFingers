@@ -240,6 +240,87 @@ docs/INFINITE_STACKS_COMBAT.md), the same "project by folding the event log" pat
 stay in sync with it (`HeroState.sync_life_state`) so older client code keeps working
 unchanged.
 
+### 5.4 Heroes wiring (wave 4, stacks-herowire, board task #13)
+
+`backend.lan_playground.heroes/**` (pure, accepted wave 3,
+docs/INFINITE_STACKS_HEROES.md) is now wired into the domain reducer via
+`systems/heroes_wire.py`. `HeroState` gains `pending_dice`, `sheet`
+(`heroes.creation.HeroSheet`), `deck` (`heroes.deck.DeckState`), `inventory`
+(`heroes.inventory.InventoryState`), and `signature_charge`
+(`heroes.backgrounds.SignatureCharge`) -- embedded directly (domain now has a
+one-way dependency on `heroes/`, the same pattern `systems/combat.py` already
+has on `combat/`). All five are `None`/empty until a hero completes creation;
+every pre-wave-4 code path (heroes created via plain `join_run` alone, e.g.
+existing puzzle/conflict fixtures) is completely unaffected.
+
+New `CommandType` members: `roll_attribute_dice`, `create_hero`, `play_card`,
+`draw_cards`, `safe_rest`, `pickup_item`, `drop_item`, `trade_item`,
+`recover_body_loot`. New `EventType` members: `attribute_dice_rolled`,
+`hero_created`, `card_drawn`, `card_played`, `deck_reshuffled`,
+`signature_charge_refreshed`, `item_picked_up`, `item_pickup_rejected`,
+`item_dropped`, `item_traded`, `body_loot_recovered`.
+
+- **Creation** is two commands: `roll_attribute_dice` (rolls and stores four
+  visible d4s on `pending_dice`, for the dice-animation UI) then `create_hero`
+  (`{name, background_id, attribute_assignment, general_card_ids,
+  persona_card_id, equipment_card_ids?}`) which assigns attributes, applies
+  the background bonus, builds the starting deck through
+  `heroes.deck.build_starting_deck` (the build-time LIVE-op gate stays --
+  `NonLiveEffectOpError`/`DeckError` surface as `schema_error`), draws an
+  opening hand of 4, and seeds inventory from the background's starting
+  items. Because `build_starting_deck` shuffles (an RNG draw), the
+  `hero_created` event carries the fully resolved sheet/deck/inventory/charge
+  as dicts -- replay never re-draws RNG, matching the `MYSTERY_PUZZLE_
+  INSTANTIATED` precedent for any RNG-consuming step. `draw_cards`/`play_card`
+  are pure deterministic slices with no RNG draw of their own, so their
+  events carry only the minimal replay input (count / card_id) and their
+  appliers just re-call the same `heroes.deck` function.
+- **Card play** (`play_card`) compiles a card's effects to LIVE ops and
+  dispatches them through `systems/effects.py`, exactly like Mystery Chamber
+  puzzle consequences. If the card has a `check`, it resolves through
+  `systems/checks.py` using the hero's **real** `sheet.attributes`/
+  `sheet.skills` (the seam `effects.py`'s `grant_check`/`checks.py`'s
+  `handle_check` still hardcode `0`/`0` for -- see §5 above -- `play_card` is
+  where a real hero-sheet lookup first lands). `safe_rest` reshuffles the
+  deck and refreshes a `once_per_floor` signature charge if the hero has one.
+- **Signature charges** (`heroes.backgrounds.SignatureCharge`, §11.3) refresh
+  at three boundaries: room (`systems/exploration.py`'s `handle_breach` calls
+  `heroes_wire.build_room_boundary_refresh_events` for the breaching hero),
+  safe rest (`once_per_floor`, folded into `safe_rest` above), and fight
+  (`heroes_wire.build_fight_boundary_refresh_events`, published for
+  `systems/combat.py`'s encounter-start handler to call and fold into its own
+  event tuple -- no live caller yet this wave).
+- **Inventory** (`pickup_item`/`drop_item`/`trade_item`/`recover_body_loot`):
+  `RoomState` gains `ground_items` (`item_instance_id -> item_id`, items
+  available for pickup) and `item_claims` (`item_instance_id -> hero_id`, the
+  single-owner contest ledger `heroes.inventory.attempt_pickup` needs).
+  `HeroState.carried_item_ids` (the wave-1 §13.6 placeholder) is kept as a
+  synced mirror of `inventory.items` on every mutation here, so
+  `systems/combat.py`'s existing permanent-death body-loot transfer (which
+  reads/clears `carried_item_ids` directly) needed zero changes.
+  `recover_body_loot` is the "ally recovers a dead hero's items" half of
+  §13.6 -- it reads `RoomState.body_item_ids`, respects the recovering
+  hero's real carry slots, and is the wave-4 caller of the
+  `heroes.inventory.hero_died_with_items` bridge concept (the death-side
+  transfer into `body_item_ids` predates this wave in `systems/combat.py`).
+- **Combat equipment seam**: `systems/heroes_wire.resolve_hero_combat_equipment
+  (hero: HeroState) -> dict` resolves real `Attributes`/skills/`Weapon`/
+  equipment bonuses from `hero.sheet` + `hero.inventory` + content-pack item
+  data (never a raw wire number, per the wave-3 director ruling), shaped as
+  kwargs for `systems/combat_wire.hero_combatant_from_state` (equipment seam
+  published by stacks-combat-depth, wave 4 board task #14). Returns `{}` for
+  a hero with no completed creation, preserving today's flat defaults.
+  `content.schemas.Item` gained four optional fields for this:
+  `weapon_die_faces`/`weapon_damage_bonus`/`weapon_accuracy_bonus` (only
+  meaningful when `"weapon" in tags`) and `passive_defense_bonus`.
+- **Legal-attacks catalog on the wire**: `StacksEngineAdapter.
+  _neutral_conflict_snapshot`'s per-hero dict gains `legal_attacks`, a list
+  of `{type: "attack", target_id, accuracy_bonus, weapon_die_faces,
+  damage_bonus}` per living enemy, built from the hero's real
+  `force`+`bonk` skill rank and `resolve_hero_combat_equipment`'s weapon --
+  never a client-suppliable number. Empty for a hero with no completed
+  character creation.
+
 ## 6. Core state aggregates (wave-1 subset of §22.4)
 
 Corrected 2026-07-19 to match `backend/lan_playground/domain/state.py` exactly --

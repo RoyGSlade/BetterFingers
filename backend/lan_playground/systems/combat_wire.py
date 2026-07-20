@@ -69,6 +69,8 @@ def hero_combatant_to_dict(h: HeroCombatant) -> dict:
         "max_hp": h.max_hp,
         "skills": dict(h.skills),
         "equipment_defense_bonus": h.equipment_defense_bonus,
+        "equipment_accuracy_bonus": h.equipment_accuracy_bonus,
+        "equipment_damage_bonus": h.equipment_damage_bonus,
         "weapon": _weapon_to_dict(h.weapon),
         "hp": h.hp,
         "life_state": h.life_state.value,
@@ -91,6 +93,8 @@ def hero_combatant_from_dict(d: dict) -> HeroCombatant:
         max_hp=d["max_hp"],
         skills=dict(d["skills"]),
         equipment_defense_bonus=d["equipment_defense_bonus"],
+        equipment_accuracy_bonus=d["equipment_accuracy_bonus"],
+        equipment_damage_bonus=d["equipment_damage_bonus"],
         weapon=_weapon_from_dict(d["weapon"]),
         hp=d["hp"],
         life_state=LifeState(d["life_state"]),
@@ -175,13 +179,36 @@ def _wave_from_dict(d: dict) -> combat_threat.ReinforcementWave:
     )
 
 
-def hero_combatant_from_state(hero: HeroState) -> HeroCombatant:
-    attrs = Attributes(force=DEFAULT_ATTRIBUTE, finesse=DEFAULT_ATTRIBUTE, insight=DEFAULT_ATTRIBUTE, presence=DEFAULT_ATTRIBUTE)
+def hero_combatant_from_state(
+    hero: HeroState,
+    *,
+    attributes: Attributes | None = None,
+    skills: dict[str, int] | None = None,
+    weapon: Weapon | None = None,
+    equipment_defense_bonus: int = 0,
+    equipment_accuracy_bonus: int = 0,
+    equipment_damage_bonus: int = 0,
+) -> HeroCombatant:
+    """Builds a `HeroCombatant` for a fresh/rejoining encounter. Every
+    equipment-derived argument defaults to a flat zero/no-op -- callers
+    (herowire, once HeroState carries hero-sheet/inventory data) pass
+    already-resolved, already-verified concrete values (a real `Weapon`,
+    real bonus ints) here; this function never accepts a raw item/source id
+    and never resolves one itself (per the wave-3 director ruling: no
+    numeric combat modifier comes from the wire unverified)."""
+    attrs = attributes or Attributes(
+        force=DEFAULT_ATTRIBUTE, finesse=DEFAULT_ATTRIBUTE, insight=DEFAULT_ATTRIBUTE, presence=DEFAULT_ATTRIBUTE
+    )
     return HeroCombatant(
         hero_id=hero.hero_id,
         name=hero.hero_id,
         attributes=attrs,
         max_hp=hero.max_hp,
+        skills=dict(skills or {}),
+        equipment_defense_bonus=equipment_defense_bonus,
+        equipment_accuracy_bonus=equipment_accuracy_bonus,
+        equipment_damage_bonus=equipment_damage_bonus,
+        weapon=weapon or Weapon(),
         hp=hero.hp,
         life_state=LifeState(hero.life_state),
         stabilization_successes=hero.stabilization_successes,

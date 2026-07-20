@@ -13,9 +13,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from . import initiative, lifecycle, threat
+from . import initiative, lifecycle, statuses, threat
 from .events import CombatEventType, EventSequencer, Visibility
 from .models import EnemyCombatant, HeroCombatant, LifeState
+
+TICKING_STATUSES = ("bleeding", "burning")  # §16.4 -- the two statuses with a damage_per_tick
 
 Combatant = HeroCombatant | EnemyCombatant
 
@@ -105,6 +107,47 @@ def run_downed_turn_checks(encounter: Encounter, rng, *, caused_by: str) -> list
     return events
 
 
+def tick_status_damage(encounter: Encounter, *, caused_by: str) -> list[dict]:
+    """§16.4 end-of-round Bleeding/Burning ticks -- the one place this
+    package auto-mutates HP outside an explicit action, and it still goes
+    through `lifecycle.apply_damage` (the single HP seam) like every other
+    damage source, so a tick on a Downed hero adds a death-check failure the
+    same way an attack would. Deterministic order (heroes then enemies, both
+    id-sorted) so replay never depends on dict iteration order."""
+    events: list[dict] = []
+    heroes = sorted(encounter.heroes.values(), key=lambda h: h.hero_id)
+    enemies = sorted(encounter.enemies.values(), key=lambda e: e.instance_id)
+    for hero in heroes:
+        if hero.life_state == LifeState.DEAD:
+            continue
+        events.extend(_tick_combatant(hero, hero.hero_id, encounter, caused_by))
+    for enemy in enemies:
+        if not enemy.alive:
+            continue
+        events.extend(_tick_combatant(enemy, enemy.instance_id, encounter, caused_by))
+    return events
+
+
+def _tick_combatant(combatant, combatant_id: str, encounter: Encounter, caused_by: str) -> list[dict]:
+    events: list[dict] = []
+    for status_id in TICKING_STATUSES:
+        if status_id not in combatant.statuses:
+            continue
+        amount = statuses.status_damage_amount(status_id)
+        events.extend(
+            lifecycle.apply_damage(
+                combatant,
+                amount,
+                combat_round=encounter.combat_round,
+                sequencer=encounter.sequencer,
+                caused_by=caused_by,
+                target_id=combatant_id,
+                source=f"{status_id}_tick",
+            )
+        )
+    return events
+
+
 def schedule_reinforcements(
     encounter: Encounter,
     budget_remaining: int,
@@ -174,6 +217,7 @@ def advance_round(
             encounter.order, combat_round=encounter.combat_round, sequencer=encounter.sequencer, caused_by=caused_by
         )
     )
+    events.extend(tick_status_damage(encounter, caused_by=caused_by))
     events.extend(run_downed_turn_checks(encounter, rng, caused_by=caused_by))
     return events
 

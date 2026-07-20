@@ -60,6 +60,8 @@ class HeroCombatant:
     max_hp: int
     skills: dict[str, int] = field(default_factory=dict)
     equipment_defense_bonus: int = 0
+    equipment_accuracy_bonus: int = 0  # non-weapon item/accessory accuracy bonus (§13, verified by the caller)
+    equipment_damage_bonus: int = 0    # non-weapon item/accessory damage bonus (§13, verified by the caller)
     weapon: Weapon = field(default_factory=Weapon)
     hp: int | None = None
     life_state: LifeState = LifeState.ALIVE

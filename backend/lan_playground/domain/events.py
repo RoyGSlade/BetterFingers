@@ -53,6 +53,21 @@ class EventType(str, Enum):
     CONFLICT_ENCOUNTER_ENDED = "conflict_encounter_ended"
     JOINED_CONFLICT_ROOM = "joined_conflict_room"
 
+    # Heroes wiring (infinite_stacks.md §11, §13; wave 4, board task #13;
+    # systems/heroes_wire.py). Character creation, deck lifecycle, and
+    # inventory -- domain schema posted to the collab room 2026-07-19.
+    ATTRIBUTE_DICE_ROLLED = "attribute_dice_rolled"
+    HERO_CREATED = "hero_created"
+    CARD_DRAWN = "card_drawn"
+    CARD_PLAYED = "card_played"
+    DECK_RESHUFFLED = "deck_reshuffled"
+    SIGNATURE_CHARGE_REFRESHED = "signature_charge_refreshed"
+    ITEM_PICKED_UP = "item_picked_up"
+    ITEM_PICKUP_REJECTED = "item_pickup_rejected"
+    ITEM_DROPPED = "item_dropped"
+    ITEM_TRADED = "item_traded"
+    BODY_LOOT_RECOVERED = "body_loot_recovered"
+
 
 @dataclass(frozen=True)
 class Event:

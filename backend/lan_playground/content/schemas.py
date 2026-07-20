@@ -338,6 +338,16 @@ class Item:
     passive_effects: tuple[Effect, ...] = ()
     use_effects: tuple[Effect, ...] = ()
     tags: tuple[str, ...] = ()
+    # Wave-4 herowire addition (board task #13): the real weapon/equipment
+    # modifiers that reach backend.lan_playground.combat.models.HeroCombatant
+    # via systems/heroes_wire.py::resolve_hero_combat_equipment. Optional,
+    # zero-value defaults so every pre-existing item stays unaffected --
+    # flat numeric bonuses stay secondary to the §13.4 option-changing
+    # effects above, never the primary reason an item exists.
+    weapon_die_faces: int | None = None  # only meaningful when "weapon" in tags
+    weapon_damage_bonus: int = 0
+    weapon_accuracy_bonus: int = 0
+    passive_defense_bonus: int = 0
 
     def __post_init__(self) -> None:
         validate_id(self.id, kind="item")
@@ -348,6 +358,11 @@ class Item:
                 f"item {self.id!r} must grant a card, a passive effect, or a use effect "
                 "(§13.4: items change options, not just numbers)"
             )
+        if self.weapon_die_faces is not None:
+            if self.weapon_die_faces not in (4, 6, 8, 10):
+                raise ContentError(f"item {self.id!r} weapon_die_faces must be one of 4/6/8/10 (§14.3)")
+            if "weapon" not in self.tags:
+                raise ContentError(f"item {self.id!r} declares weapon_die_faces but is not tagged 'weapon'")
 
 
 # ---------------------------------------------------------------------------

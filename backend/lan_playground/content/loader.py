@@ -16,8 +16,10 @@ from typing import Any, Callable, Mapping
 import yaml
 
 from . import schemas as S
+from ..shops import models as shop_models
 
 CORE_PACK_DIR = Path(__file__).resolve().parent / "packs" / "core"
+SHOPS_FILENAME = "shops.yaml"
 
 
 class LoaderError(S.ContentError):
@@ -181,6 +183,13 @@ def _load_item(raw: Any, *, where: str) -> S.Item:
         "passive_effects",
         "use_effects",
         "tags",
+        # Wave-4 herowire addition (board task #13): real weapon/equipment
+        # modifiers, straight pass-through to S.Item -- see schemas.py's Item
+        # for the zero-value defaults these fall back to when omitted.
+        "weapon_die_faces",
+        "weapon_damage_bonus",
+        "weapon_accuracy_bonus",
+        "passive_defense_bonus",
     }
     raw = _require_keys(raw, allowed, where=where)
     try:
@@ -194,6 +203,10 @@ def _load_item(raw: Any, *, where: str) -> S.Item:
             passive_effects=_effects(raw.get("passive_effects"), where=f"{where}.passive_effects"),
             use_effects=_effects(raw.get("use_effects"), where=f"{where}.use_effects"),
             tags=tuple(raw.get("tags", [])),
+            weapon_die_faces=raw.get("weapon_die_faces"),
+            weapon_damage_bonus=raw.get("weapon_damage_bonus", 0),
+            weapon_accuracy_bonus=raw.get("weapon_accuracy_bonus", 0),
+            passive_defense_bonus=raw.get("passive_defense_bonus", 0),
         )
     except S.ContentError as exc:
         raise LoaderError(f"{where}: {exc}") from exc
@@ -389,3 +402,128 @@ def load_pack(pack_dir: Path, *, pack_id: str) -> S.ContentPack:
 
 def load_core_pack() -> S.ContentPack:
     return load_pack(CORE_PACK_DIR, pack_id="core")
+
+
+# ---------------------------------------------------------------------------
+# Shops (infinite_stacks.md §9.6, board task #15). Kept separate from
+# `S.ContentPack`/`load_pack` above: the shop dataclasses live in
+# `shops.models` rather than `content/schemas.py` (off-limits to the shops
+# lane for wave 4 -- see docs/INFINITE_STACKS_SHOPS.md), so `ContentPack`
+# gains no new field this wave. `load_shops` is tolerant of a missing
+# shops.yaml (returns `{}`), the same pattern `load_puzzle_templates` above
+# uses for an optional pack section -- existing packs/fixtures with no
+# shops.yaml keep loading and validating exactly as before.
+# ---------------------------------------------------------------------------
+
+
+def _load_persona(raw: Any, *, where: str) -> shop_models.MerchantPersona:
+    raw = _require_keys(raw, {"name", "tagline", "tone"}, where=where)
+    try:
+        return shop_models.MerchantPersona(name=raw["name"], tagline=raw["tagline"], tone=raw["tone"])
+    except shop_models.ShopModelError as exc:
+        raise LoaderError(f"{where}: {exc}") from exc
+
+
+def _load_rumor(raw: Any, *, where: str) -> shop_models.Rumor:
+    raw = _require_keys(raw, {"id", "text", "accessible_text"}, where=where)
+    try:
+        return shop_models.Rumor(id=raw["id"], text=raw["text"], accessible_text=raw["accessible_text"])
+    except shop_models.ShopModelError as exc:
+        raise LoaderError(f"{where}: {exc}") from exc
+
+
+def _load_relationship_complication(raw: Any, *, where: str) -> shop_models.RelationshipComplication:
+    raw = _require_keys(raw, {"id", "description", "accessible_text"}, where=where)
+    try:
+        return shop_models.RelationshipComplication(
+            id=raw["id"], description=raw["description"], accessible_text=raw["accessible_text"]
+        )
+    except shop_models.ShopModelError as exc:
+        raise LoaderError(f"{where}: {exc}") from exc
+
+
+def _load_inventory_listing(raw: Any, *, where: str) -> shop_models.InventoryListing:
+    raw = _require_keys(raw, {"item_id", "buy_price", "stock"}, where=where)
+    try:
+        return shop_models.InventoryListing(
+            item_id=raw["item_id"], buy_price=raw["buy_price"], stock=raw.get("stock")
+        )
+    except shop_models.ShopModelError as exc:
+        raise LoaderError(f"{where}: {exc}") from exc
+
+
+def _load_shop(raw: Any, *, where: str) -> shop_models.ShopArchetype:
+    allowed = {
+        "id",
+        "name",
+        "persona",
+        "services",
+        "sell_price_ratio",
+        "repair_cost_per_wear",
+        "identify_price",
+        "treatment_price",
+        "guaranteed_inventory",
+        "rotating_pool",
+        "rotating_slots",
+        "rumor",
+        "relationship_complication",
+    }
+    raw = _require_keys(raw, allowed, where=where)
+    try:
+        services = frozenset(shop_models.ShopService(s) for s in raw.get("services", []))
+    except ValueError as exc:
+        raise LoaderError(f"{where}: invalid service in {raw.get('services')!r}") from exc
+
+    guaranteed = tuple(
+        _load_inventory_listing(item, where=f"{where}.guaranteed_inventory[{i}]")
+        for i, item in enumerate(raw.get("guaranteed_inventory", []))
+    )
+    pool = tuple(
+        _load_inventory_listing(item, where=f"{where}.rotating_pool[{i}]")
+        for i, item in enumerate(raw.get("rotating_pool", []))
+    )
+    try:
+        return shop_models.ShopArchetype(
+            id=raw["id"],
+            name=raw["name"],
+            persona=_load_persona(raw["persona"], where=f"{where}.persona"),
+            services=services,
+            guaranteed_inventory=guaranteed,
+            rotating_pool=pool,
+            rotating_slots=raw.get("rotating_slots", 0),
+            sell_price_ratio=raw["sell_price_ratio"],
+            repair_cost_per_wear=raw["repair_cost_per_wear"],
+            identify_price=raw["identify_price"],
+            treatment_price=raw["treatment_price"],
+            rumor=_load_rumor(raw["rumor"], where=f"{where}.rumor"),
+            relationship_complication=_load_relationship_complication(
+                raw["relationship_complication"], where=f"{where}.relationship_complication"
+            ),
+        )
+    except shop_models.ShopModelError as exc:
+        raise LoaderError(f"{where}: {exc}") from exc
+
+
+def load_shops(pack_dir: Path) -> dict[str, shop_models.ShopArchetype]:
+    path = pack_dir / SHOPS_FILENAME
+    if not path.exists():
+        return {}
+    raw = load_yaml_file(path) or {}
+    if not isinstance(raw, Mapping) or "shops" not in raw:
+        raise LoaderError(f"{path}: expected top-level key 'shops'")
+    shops_raw = raw["shops"]
+    if not isinstance(shops_raw, list):
+        raise LoaderError(f"{path}: 'shops' must be a list")
+
+    shops: dict[str, shop_models.ShopArchetype] = {}
+    for i, item_raw in enumerate(shops_raw):
+        where = f"{path.name}:shops[{i}]"
+        shop = _load_shop(item_raw, where=where)
+        if shop.id in shops:
+            raise LoaderError(f"{where}: duplicate id {shop.id!r}")
+        shops[shop.id] = shop
+    return shops
+
+
+def load_core_shops() -> dict[str, shop_models.ShopArchetype]:
+    return load_shops(CORE_PACK_DIR)

@@ -39,8 +39,9 @@ from backend.lan_playground.domain.events import Event as DomainEvent
 from backend.lan_playground.domain.events import EventType as DomainEventType
 from backend.lan_playground.domain.rng import StacksRNG
 from backend.lan_playground.domain.state import ConflictEncounterState
+from backend.lan_playground.domain.state import HeroState as DomainHeroState
 from backend.lan_playground.domain.state import RunState as DomainRunState
-from backend.lan_playground.systems import map_generation
+from backend.lan_playground.systems import heroes_wire, map_generation
 
 from backend.lan_playground.stacks_projections import events_since as _events_since
 from backend.lan_playground.stacks_projections import legal_actions as _legal_actions
@@ -119,40 +120,78 @@ class StacksEngineAdapter:
                 if room.puzzle is not None:
                     puzzles_by_room[room_id] = self._neutral_puzzle_snapshot(room.puzzle)
                 if room.encounter is not None:
-                    conflict_by_room[room_id] = self._neutral_conflict_snapshot(room.encounter)
+                    conflict_by_room[room_id] = self._neutral_conflict_snapshot(room.encounter, domain_state.heroes)
         base["puzzles"] = _project_puzzles(puzzles_by_room, viewer)
         base["conflict"] = conflict_by_room
         return base
 
     @staticmethod
-    def _neutral_conflict_snapshot(encounter: Any) -> dict[str, Any]:
+    def _neutral_conflict_snapshot(
+        encounter: Any, domain_heroes: dict[str, DomainHeroState] | None = None
+    ) -> dict[str, Any]:
         """Domain ConflictEncounterState -> a viewer-agnostic wire-safe dict
         (docs/INFINITE_STACKS_CONTRACTS.md §5.3). No hidden combat state
         leaks: no resists/weaknesses/converts tables, no un-telegraphed
         intent (that folds from combat_events on each conflict_* wire event
         instead, same pattern as puzzles' hints_revealed). Never imports
         backend.lan_playground.combat -- everything needed is already a
-        plain field on the domain snapshot."""
+        plain field on the domain snapshot.
+
+        `legal_attacks` (wave-4, board task #13 acceptance item 5): a
+        per-hero enumeration of real attack options against every living
+        enemy, built from the hero's actual character-sheet skill rank and
+        resolved weapon (heroes_wire.resolve_hero_combat_equipment) -- never
+        a client-suppliable number -- so the combat UI can render per-target
+        buttons instead of a generic form. Empty for a hero with no
+        `domain_heroes` entry or no completed character creation yet
+        (pre-wave-4 heroes), matching every other seam's zero-modifier
+        fallback."""
 
         living_ids = {hid for hid, h in encounter.heroes.items() if h["life_state"] == "alive"}
-        living_ids |= {eid for eid, e in encounter.enemies.items() if e["alive"]}
+        living_enemy_ids = {eid for eid, e in encounter.enemies.items() if e["alive"]}
+        living_ids |= living_enemy_ids
         initiative_order = [c["combatant_id"] for c in encounter.order if c["combatant_id"] in living_ids]
+
+        domain_heroes = domain_heroes or {}
+        heroes_wire_data: dict[str, Any] = {}
+        for hid, h in encounter.heroes.items():
+            legal_attacks: list[dict[str, Any]] = []
+            domain_hero = domain_heroes.get(hid)
+            if h["life_state"] == "alive" and domain_hero is not None and domain_hero.sheet is not None:
+                equipment = heroes_wire.resolve_hero_combat_equipment(domain_hero)
+                accuracy_bonus = (
+                    domain_hero.sheet.attributes.get("force")
+                    + domain_hero.sheet.skills.get("bonk", 0)
+                    + equipment["weapon"].accuracy_bonus
+                    + equipment["equipment_accuracy_bonus"]
+                )
+                damage_bonus = equipment["weapon"].damage_bonus + equipment["equipment_damage_bonus"]
+                for eid in sorted(living_enemy_ids):
+                    legal_attacks.append(
+                        {
+                            "type": "attack",
+                            "target_id": eid,
+                            "accuracy_bonus": accuracy_bonus,
+                            "weapon_die_faces": equipment["weapon"].die_faces,
+                            "damage_bonus": damage_bonus,
+                        }
+                    )
+            heroes_wire_data[hid] = {
+                "hp": h["hp"],
+                "max_hp": h["max_hp"],
+                "life_state": h["life_state"],
+                "position": h["position"],
+                "reaction_available": h["reaction_available"],
+                "legal_attacks": legal_attacks,
+            }
+
         return {
             "encounter_id": encounter.encounter_id,
             "status": encounter.status,
             "combat_round": encounter.combat_round,
             "current_actor_id": encounter.current_actor_id,
             "initiative_order": initiative_order,
-            "heroes": {
-                hid: {
-                    "hp": h["hp"],
-                    "max_hp": h["max_hp"],
-                    "life_state": h["life_state"],
-                    "position": h["position"],
-                    "reaction_available": h["reaction_available"],
-                }
-                for hid, h in encounter.heroes.items()
-            },
+            "heroes": heroes_wire_data,
             "enemies": {
                 eid: {"name": e["name"], "hp": e["hp"], "max_hp": e["max_hp"], "alive": e["alive"], "position": e["position"]}
                 for eid, e in encounter.enemies.items()
@@ -539,9 +578,10 @@ class StacksEngineAdapter:
         the client can fold enemy-intent telegraphs and §12.5 check receipts
         the same way it folds `domain.reducer.project()`'s own event log."""
         encounter_snapshot = ConflictEncounterState.from_dict(de.payload["encounter"])
+        domain_state = self._domain_states[state.run_id]
         payload: dict[str, Any] = {
             "room_id": de.payload["room_id"],
-            "encounter": self._neutral_conflict_snapshot(encounter_snapshot),
+            "encounter": self._neutral_conflict_snapshot(encounter_snapshot, domain_state.heroes),
             "combat_events": de.payload["combat_events"],
             "hero_updates": de.payload["hero_updates"],
         }

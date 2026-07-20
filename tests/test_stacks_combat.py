@@ -34,7 +34,7 @@ from backend.lan_playground.content import loader as content_loader
 
 def make_hero(hero_id, *, force=2, finesse=2, insight=2, presence=2, skills=None,
               die_faces=6, damage_bonus=0, accuracy_bonus=0, equipment_defense_bonus=0,
-              max_hp=None):
+              equipment_accuracy_bonus=0, equipment_damage_bonus=0, max_hp=None):
     attrs = Attributes(force=force, finesse=finesse, insight=insight, presence=presence)
     hp = max_hp if max_hp is not None else 8 + 2 * force
     return HeroCombatant(
@@ -44,6 +44,8 @@ def make_hero(hero_id, *, force=2, finesse=2, insight=2, presence=2, skills=None
         max_hp=hp,
         skills=dict(skills or {}),
         equipment_defense_bonus=equipment_defense_bonus,
+        equipment_accuracy_bonus=equipment_accuracy_bonus,
+        equipment_damage_bonus=equipment_damage_bonus,
         weapon=Weapon(die_faces=die_faces, damage_bonus=damage_bonus, accuracy_bonus=accuracy_bonus),
     )
 
@@ -216,6 +218,25 @@ def test_attack_miss_deals_no_damage():
 def test_attack_defense_formula_matches_spec():
     hero = make_hero("hero_a", finesse=3, equipment_defense_bonus=2)
     assert hero.defense == 10 + 3 + 2
+
+
+def test_equipment_accuracy_and_damage_bonus_fold_into_attack_math():
+    hero = make_hero(
+        "hero_a", force=2, skills={"bonk": 1}, die_faces=6, damage_bonus=1, accuracy_bonus=1,
+        equipment_accuracy_bonus=3, equipment_damage_bonus=2,
+    )
+    enemy = make_enemy("enemy_a", defense=10, hp=50)
+    rng = ScriptedRNG(d20=[5], randints=[3])
+    budget = actions.TurnBudget(hero_id="hero_a")
+    result = actions.attack(
+        hero, enemy, attribute="force", skill="bonk", rng=rng,
+        combat_round=1, sequencer=new_sequencer(), caused_by="test", budget=budget,
+    )
+    # total = 5(die) + 2(force) + 1(bonk) + 1(weapon accuracy) + 3(equipment accuracy) = 12 >= 10 -> hit
+    assert result.total == 12
+    assert result.hit is True
+    # damage = 3(die) + 1(weapon damage) + 2(equipment damage) = 6
+    assert result.damage == 6
 
 
 # --------------------------------------------------------------------------- maneuvers
@@ -435,6 +456,205 @@ def test_reaction_only_one_per_round():
     assert hero.reaction_available is True
 
 
+# --------------------------------------------------------------------------- reaction interrupt window (§14.5, task #14)
+
+
+def test_interrupt_window_block_reduces_damage_mid_resolution_and_may_wear_item():
+    attacker = make_hero("hero_a", force=5, skills={"bonk": 3}, die_faces=6, damage_bonus=2)
+    defender = make_hero("hero_b", finesse=1)
+    rng = ScriptedRNG(d20=[15], randints=[4, 10])  # attack roll, damage die, then block's wear_roll
+
+    def hook(window):
+        reduced, events = reactions.block(
+            window.defender, window.provisional_damage, item_id="buckler", block_amount=3,
+            rng=window.rng, combat_round=window.combat_round, sequencer=window.sequencer,
+            caused_by=window.caused_by, wear_chance=0.25,
+        )
+        return actions.ReactionOutcome(events=events, hit=window.hit, damage=reduced)
+
+    budget = actions.TurnBudget(hero_id="hero_a")
+    result = actions.attack(
+        attacker, defender, attribute="force", skill="bonk", rng=rng,
+        combat_round=1, sequencer=new_sequencer(), caused_by="test", budget=budget, reaction_hook=hook,
+    )
+    assert result.hit is True
+    assert result.damage == (4 + 2) - 3  # provisional damage reduced by block_amount
+    assert defender.hp == defender.max_hp - result.damage
+    block_event = next(e for e in result.events if e["payload"].get("reaction") == "block")
+    assert block_event["payload"]["took_wear"] is True
+    assert defender.reaction_available is False
+
+
+def test_interrupt_window_dodge_negates_hit_and_repositions_on_success():
+    attacker = make_hero("hero_a", force=5, skills={"bonk": 3}, die_faces=6, damage_bonus=2)
+    defender = make_hero("hero_b", finesse=10)
+    rng = ScriptedRNG(d20=[15, 18], randints=[4])  # attack roll, dodge roll, damage die
+
+    def hook(window):
+        success, events = reactions.dodge(
+            window.defender, window.incoming_attack_total, window.rng,
+            combat_round=window.combat_round, sequencer=window.sequencer, caused_by=window.caused_by,
+            new_position=9,
+        )
+        if success:
+            return actions.ReactionOutcome(events=events, hit=False, damage=0)
+        return actions.ReactionOutcome(events=events, hit=window.hit, damage=window.provisional_damage)
+
+    budget = actions.TurnBudget(hero_id="hero_a")
+    result = actions.attack(
+        attacker, defender, attribute="force", skill="bonk", rng=rng,
+        combat_round=1, sequencer=new_sequencer(), caused_by="test", budget=budget, reaction_hook=hook,
+    )
+    assert result.hit is False
+    assert result.damage == 0
+    assert defender.hp == defender.max_hp
+    assert defender.position == 9
+    assert defender.reaction_available is False
+    assert any(e["payload"].get("reaction") == "dodge" for e in result.events)
+
+
+def test_interrupt_window_dodge_failure_still_lands_and_applies_damage():
+    attacker = make_hero("hero_a", force=5, skills={"bonk": 3}, die_faces=6, damage_bonus=2)
+    defender = make_hero("hero_b", finesse=1)
+    rng = ScriptedRNG(d20=[15, 1], randints=[4])  # attack roll, dodge roll (fails), damage die
+
+    def hook(window):
+        success, events = reactions.dodge(
+            window.defender, window.incoming_attack_total, window.rng,
+            combat_round=window.combat_round, sequencer=window.sequencer, caused_by=window.caused_by,
+        )
+        if success:
+            return actions.ReactionOutcome(events=events, hit=False, damage=0)
+        return actions.ReactionOutcome(events=events, hit=window.hit, damage=window.provisional_damage)
+
+    budget = actions.TurnBudget(hero_id="hero_a")
+    result = actions.attack(
+        attacker, defender, attribute="force", skill="bonk", rng=rng,
+        combat_round=1, sequencer=new_sequencer(), caused_by="test", budget=budget, reaction_hook=hook,
+    )
+    assert result.hit is True
+    assert result.damage == 4 + 2
+    assert defender.hp == defender.max_hp - (4 + 2)
+
+
+def test_interrupt_window_protect_redirects_damage_to_protector():
+    attacker = make_hero("hero_a", force=5, skills={"bonk": 3}, die_faces=6, damage_bonus=0)
+    defender = make_hero("hero_b", finesse=1)
+    protector = make_hero("hero_c", finesse=1)
+    rng = ScriptedRNG(d20=[15], randints=[4])
+
+    def hook(window):
+        assert window.protectors == (protector,)
+        p = window.protectors[0]
+        events = reactions.protect(
+            p, window.defender, combat_round=window.combat_round, sequencer=window.sequencer,
+            caused_by=window.caused_by,
+        )
+        return actions.ReactionOutcome(events=events, hit=window.hit, damage=window.provisional_damage, damage_target=p)
+
+    budget = actions.TurnBudget(hero_id="hero_a")
+    result = actions.attack(
+        attacker, defender, attribute="force", skill="bonk", rng=rng,
+        combat_round=1, sequencer=new_sequencer(), caused_by="test", budget=budget,
+        reaction_hook=hook, protectors=[protector],
+    )
+    assert result.hit is True
+    assert defender.hp == defender.max_hp  # original target untouched, damage redirected
+    assert protector.hp == protector.max_hp - result.damage
+    assert protector.reaction_available is False
+
+
+def test_interrupt_window_offered_via_protector_even_when_defenders_own_reaction_is_spent():
+    attacker = make_hero("hero_a", force=5, skills={"bonk": 3})
+    defender = make_hero("hero_b", finesse=1)
+    defender.reaction_available = False
+    protector = make_hero("hero_c", finesse=1)
+    rng = ScriptedRNG(d20=[15], randints=[4])
+    called = []
+
+    def hook(window):
+        called.append(window.protectors)
+        return None
+
+    budget = actions.TurnBudget(hero_id="hero_a")
+    actions.attack(
+        attacker, defender, attribute="force", skill="bonk", rng=rng,
+        combat_round=1, sequencer=new_sequencer(), caused_by="test", budget=budget,
+        reaction_hook=hook, protectors=[protector],
+    )
+    assert called == [(protector,)]
+
+
+def test_interrupt_window_counter_fires_on_miss_by_5_or_more():
+    attacker = make_hero("hero_a", force=1, skills={})
+    defender = make_hero("hero_b", finesse=1, force=4, skills={"bonk": 2})
+    rng = ScriptedRNG(d20=[2, 15], randints=[4])  # attack roll misses badly, counter roll, counter damage die
+
+    def hook(window):
+        if window.hit or window.margin > -5:
+            return None
+        _, events = reactions.counter(
+            window.defender, window.attacker, window.margin, permitted=True,
+            attribute="force", skill="bonk", rng=window.rng,
+            combat_round=window.combat_round, sequencer=window.sequencer, caused_by=window.caused_by,
+        )
+        return actions.ReactionOutcome(events=events, hit=window.hit, damage=window.provisional_damage)
+
+    budget = actions.TurnBudget(hero_id="hero_a")
+    result = actions.attack(
+        attacker, defender, attribute="force", skill=None, rng=rng,
+        combat_round=1, sequencer=new_sequencer(), caused_by="test", budget=budget, reaction_hook=hook,
+    )
+    assert result.hit is False
+    assert result.damage == 0
+    assert any(e["payload"].get("action") == "counter" for e in result.events)
+    assert attacker.hp == attacker.max_hp - 4  # counter-attack damage landed on the original attacker
+    assert defender.reaction_available is False
+
+
+def test_interrupt_window_hook_returning_none_leaves_resolution_unchanged():
+    attacker = make_hero("hero_a", force=5, skills={"bonk": 3}, die_faces=6, damage_bonus=1)
+    defender = make_hero("hero_b", finesse=1)
+    rng = ScriptedRNG(d20=[15], randints=[4])
+    result = actions.attack(
+        attacker, defender, attribute="force", skill="bonk", rng=rng,
+        combat_round=1, sequencer=new_sequencer(), caused_by="test", budget=actions.TurnBudget(hero_id="hero_a"),
+        reaction_hook=lambda window: None,
+    )
+    assert result.hit is True
+    assert result.damage == 4 + 1
+    assert defender.reaction_available is True  # the window was offered but no reaction was taken
+
+
+def test_interrupt_window_not_offered_when_no_reaction_available():
+    attacker = make_hero("hero_a", force=5, skills={"bonk": 3})
+    defender = make_hero("hero_b", finesse=1)
+    defender.reaction_available = False
+    rng = ScriptedRNG(d20=[15], randints=[4])
+    called = []
+    result = actions.attack(
+        attacker, defender, attribute="force", skill="bonk", rng=rng,
+        combat_round=1, sequencer=new_sequencer(), caused_by="test", budget=actions.TurnBudget(hero_id="hero_a"),
+        reaction_hook=lambda window: called.append(True) or None,
+    )
+    assert called == []
+    assert result.hit is True
+
+
+def test_interrupt_window_never_fires_for_enemy_defenders():
+    attacker = make_hero("hero_a", force=5, skills={"bonk": 3})
+    defender = make_enemy("enemy_a", defense=8, hp=20)
+    rng = ScriptedRNG(d20=[15], randints=[4])
+    called = []
+    result = actions.attack(
+        attacker, defender, attribute="force", skill="bonk", rng=rng,
+        combat_round=1, sequencer=new_sequencer(), caused_by="test", budget=actions.TurnBudget(hero_id="hero_a"),
+        reaction_hook=lambda window: called.append(True) or None,
+    )
+    assert called == []
+    assert result.hit is True
+
+
 # --------------------------------------------------------------------------- statuses
 
 
@@ -573,6 +793,76 @@ def test_party_wiped_true_only_when_no_hero_alive():
     assert lifecycle.party_wiped([a, b]) is False
     b.life_state = LifeState.DEAD
     assert lifecycle.party_wiped([a, b]) is True
+
+
+# --------------------------------------------------------------------------- status ticks (§16.4 round boundary, task #14)
+
+
+def test_tick_status_damage_applies_bleeding_and_burning_via_apply_damage():
+    hero_a = make_hero("hero_a", max_hp=20)
+    hero_b = make_hero("hero_b", max_hp=20)
+    enemy = make_enemy("enemy_a", hp=20)
+    seq = new_sequencer()
+    statuses.apply_status(hero_a, "bleeding", combat_round=1, sequencer=seq, caused_by="test", target_id="hero_a")
+    statuses.apply_status(hero_b, "burning", combat_round=1, sequencer=seq, caused_by="test", target_id="hero_b")
+    statuses.apply_status(enemy, "burning", combat_round=1, sequencer=seq, caused_by="test", target_id="enemy_a")
+    encounter = encounter_mod.Encounter(
+        encounter_id="enc_tick", heroes={"hero_a": hero_a, "hero_b": hero_b}, enemies={"enemy_a": enemy},
+        sequencer=seq, combat_round=1,
+    )
+    events = encounter_mod.tick_status_damage(encounter, caused_by="test")
+    assert hero_a.hp == 19
+    assert hero_b.hp == 19
+    assert enemy.hp == 19
+    damage_events = [e for e in events if e["type"] == "damage_applied"]
+    assert len(damage_events) == 3
+    # deterministic order: heroes (id-sorted) before enemies (id-sorted)
+    assert [e["target_id"] for e in damage_events] == ["hero_a", "hero_b", "enemy_a"]
+    assert all(e["payload"]["source"] in ("bleeding_tick", "burning_tick") for e in damage_events)
+
+
+def test_tick_skips_combatants_without_bleeding_or_burning():
+    hero = make_hero("hero_a", max_hp=20)
+    seq = new_sequencer()
+    statuses.apply_status(hero, "prone", combat_round=1, sequencer=seq, caused_by="test", target_id="hero_a")
+    encounter = encounter_mod.Encounter(
+        encounter_id="enc_tick_none", heroes={"hero_a": hero}, enemies={}, sequencer=seq, combat_round=1,
+    )
+    events = encounter_mod.tick_status_damage(encounter, caused_by="test")
+    assert hero.hp == 20
+    assert events == []
+
+
+def test_tick_on_downed_hero_adds_death_check_failure():
+    hero = make_hero("hero_a", max_hp=10)
+    hero.life_state = LifeState.DOWNED
+    hero.hp = 0
+    seq = new_sequencer()
+    statuses.apply_status(hero, "bleeding", combat_round=1, sequencer=seq, caused_by="test", target_id="hero_a")
+    encounter = encounter_mod.Encounter(
+        encounter_id="enc_tick_downed", heroes={"hero_a": hero}, enemies={}, sequencer=seq, combat_round=1,
+    )
+    events = encounter_mod.tick_status_damage(encounter, caused_by="test")
+    assert hero.life_state == LifeState.DOWNED
+    assert hero.death_failures == 1
+    assert any(
+        e["type"] == "death_check_resolved" and e["payload"].get("reason") == "damage_while_downed"
+        for e in events
+    )
+
+
+def test_advance_round_auto_ticks_statuses_at_the_round_boundary():
+    hero = make_hero("hero_a", max_hp=20, finesse=3)
+    encounter, _ = encounter_mod.start_encounter("enc_tick_auto", [hero], [], MinRollRNG())
+    statuses.apply_status(
+        hero, "burning", combat_round=encounter.combat_round, sequencer=encounter.sequencer, caused_by="test",
+        target_id="hero_a",
+    )
+    events = encounter_mod.advance_round(encounter, MinRollRNG(), caused_by="test")
+    assert hero.hp == 19
+    assert any(
+        e["type"] == "damage_applied" and e["payload"]["source"] == "burning_tick" for e in events
+    )
 
 
 # --------------------------------------------------------------------------- threat budget

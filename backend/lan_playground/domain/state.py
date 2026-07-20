@@ -8,10 +8,16 @@ RunState in place.
 from __future__ import annotations
 
 import copy
+import dataclasses
 import hashlib
 import json
 from dataclasses import dataclass, field, replace
 from enum import Enum
+
+from ..heroes.backgrounds import SignatureCharge
+from ..heroes.creation import HeroSheet
+from ..heroes.deck import DeckState
+from ..heroes.inventory import InventoryState
 
 
 class Direction(str, Enum):
@@ -233,6 +239,12 @@ class RoomState:
     puzzle: PuzzleRoomState | None = None
     encounter: ConflictEncounterState | None = None
     body_item_ids: dict[str, tuple[str, ...]] = field(default_factory=dict)  # §13.6: dead hero's items stay with the body
+    # Wave-4 herowire additions (board task #13, §13.6): items lying in the
+    # room available for pickup (item_instance_id -> item_id) and the
+    # single-owner pickup contest ledger heroes.inventory.attempt_pickup
+    # needs (item_instance_id -> claiming hero_id).
+    ground_items: dict[str, str] = field(default_factory=dict)
+    item_claims: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -250,6 +262,8 @@ class RoomState:
             "puzzle": self.puzzle.to_dict() if self.puzzle is not None else None,
             "encounter": self.encounter.to_dict() if self.encounter is not None else None,
             "body_item_ids": {k: list(v) for k, v in sorted(self.body_item_ids.items())},
+            "ground_items": dict(sorted(self.ground_items.items())),
+            "item_claims": dict(sorted(self.item_claims.items())),
         }
 
     @staticmethod
@@ -269,6 +283,8 @@ class RoomState:
             puzzle=PuzzleRoomState.from_dict(d["puzzle"]) if d.get("puzzle") else None,
             encounter=ConflictEncounterState.from_dict(d["encounter"]) if d.get("encounter") else None,
             body_item_ids={k: tuple(v) for k, v in d.get("body_item_ids", {}).items()},
+            ground_items=dict(d.get("ground_items", {})),
+            item_claims=dict(d.get("item_claims", {})),
         )
 
 
@@ -331,7 +347,17 @@ class HeroState:
     life_state: str = LIFE_STATE_ALIVE          # §16.1 Downed/Stable/Dead, persists across rooms
     death_failures: int = 0
     stabilization_successes: int = 0
-    carried_item_ids: tuple[str, ...] = ()      # §13.6 placeholder pending the heroes-lane inventory system
+    carried_item_ids: tuple[str, ...] = ()      # §13.6: kept as a synced mirror of inventory.items
+    # Wave-4 herowire additions (board task #13, §11/§13). All None until the
+    # hero completes character creation (roll_attribute_dice -> create_hero);
+    # existing heroes created via plain join_run alone (older tests, puzzle/
+    # conflict fixtures) simply never populate these and keep every prior
+    # behavior (0/0 checks, flat combat defaults) unchanged.
+    pending_dice: tuple[int, ...] | None = None   # rolled, not yet assigned to attributes
+    sheet: HeroSheet | None = None
+    deck: DeckState | None = None
+    inventory: InventoryState | None = None
+    signature_charge: SignatureCharge | None = None
 
     def sync_life_state(self, life_state: str) -> None:
         """Set life_state and derive conscious/alive so existing exploration
@@ -362,6 +388,11 @@ class HeroState:
             "death_failures": self.death_failures,
             "stabilization_successes": self.stabilization_successes,
             "carried_item_ids": list(self.carried_item_ids),
+            "pending_dice": list(self.pending_dice) if self.pending_dice is not None else None,
+            "sheet": dataclasses.asdict(self.sheet) if self.sheet is not None else None,
+            "deck": dataclasses.asdict(self.deck) if self.deck is not None else None,
+            "inventory": dataclasses.asdict(self.inventory) if self.inventory is not None else None,
+            "signature_charge": dataclasses.asdict(self.signature_charge) if self.signature_charge is not None else None,
         }
 
 

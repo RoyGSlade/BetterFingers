@@ -25,6 +25,17 @@ class CommandType(str, Enum):
     COMBAT_BARRICADE = "combat_barricade"
     COMBAT_END_TURN = "combat_end_turn"
 
+    # Heroes wiring (infinite_stacks.md §11, §13; wave 4, board task #13)
+    ROLL_ATTRIBUTE_DICE = "roll_attribute_dice"
+    CREATE_HERO = "create_hero"
+    PLAY_CARD = "play_card"
+    DRAW_CARDS = "draw_cards"
+    SAFE_REST = "safe_rest"
+    PICKUP_ITEM = "pickup_item"
+    DROP_ITEM = "drop_item"
+    TRADE_ITEM = "trade_item"
+    RECOVER_BODY_LOOT = "recover_body_loot"
+
 
 class ErrorCode(str, Enum):
     STALE_REVISION = "stale_revision"

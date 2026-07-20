@@ -6,10 +6,20 @@ someone else's turn). `TurnBudget` enforces "one of each" per turn; callers
 create a fresh one in `start_turn` and discard it at the end of the turn --
 only `reaction_available` on the combatant persists turn-to-turn (cleared by
 reactions.use_reaction, refreshed at the top of the combatant's next turn).
+
+`attack()` also owns the §14.5 reaction interrupt window: a caller-supplied
+`reaction_hook` fires between hit determination and damage application
+whenever the defender is a `HeroCombatant` with a reaction available (or has
+an eligible `protector`). This module never decides *which* reaction to use
+-- that policy is entirely the hook's business (a test's scripted policy
+today; a player command in a future wave) -- it only guarantees the hook
+sees the attack roll before damage lands and that its verdict is what
+actually gets applied. See `ReactionWindow`/`ReactionOutcome` below.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable, Sequence
 
 from .events import CombatEventType, EventSequencer, Visibility
 from .lifecycle import apply_damage
@@ -134,6 +144,42 @@ class AttackResult:
     natural_1: bool = False
 
 
+@dataclass
+class ReactionWindow:
+    """Snapshot handed to a `reaction_hook` after hit determination (and the
+    provisional damage roll, if any) but before damage is applied. Nothing
+    here has been mutated yet -- `defender`/`protectors` reaction flags are
+    still whatever they were before the attack."""
+
+    attacker: Combatant
+    defender: HeroCombatant
+    protectors: tuple[HeroCombatant, ...]
+    hit: bool
+    margin: int                # total - defender.defense; matches AttackResult.margin
+    incoming_attack_total: int  # the attacker's resolved total (dodge opposes this)
+    provisional_damage: int     # rolled damage if hit, else 0 -- not yet applied
+    rng: CombatRNG
+    combat_round: int
+    sequencer: EventSequencer
+    caused_by: str
+
+
+@dataclass
+class ReactionOutcome:
+    """What a `reaction_hook` decides: the final hit/damage/target after any
+    reaction resolves. `damage_target=None` means damage (if any) still lands
+    on the original defender; set it to a protector to redirect (§14.5
+    Protect)."""
+
+    events: list[dict]
+    hit: bool
+    damage: int
+    damage_target: HeroCombatant | None = None
+
+
+ReactionHook = Callable[[ReactionWindow], "ReactionOutcome | None"]
+
+
 def attack(
     attacker: HeroCombatant,
     defender: Combatant,
@@ -152,10 +198,20 @@ def attack(
     damage_multiplier: float = 1.0,   # called maneuvers may deal reduced/boosted damage
     bonus_damage_dice: int = 0,       # e.g. Crushing Blow adds one extra weapon die
     action_label: str = "attack",
+    reaction_hook: ReactionHook | None = None,
+    protectors: Sequence[HeroCombatant] = (),
 ) -> AttackResult:
-    """§14.3: `d20 + attribute + skill + weapon.accuracy_bonus` vs
-    `Defense = 10 + Finesse + equipment`; damage = weapon die + explicit
-    bonuses. Consumes the attacker's main action."""
+    """§14.3: `d20 + attribute + skill + weapon.accuracy_bonus + equipment
+    bonuses` vs `Defense = 10 + Finesse + equipment`; damage = weapon die +
+    explicit bonuses. Consumes the attacker's main action.
+
+    §14.5 reaction interrupt window: if `defender` is a `HeroCombatant` with
+    a reaction available (or a `protectors` entry does), `reaction_hook` is
+    called after hit determination and before damage is applied. Returning
+    `None` means no reaction was taken and resolution proceeds unchanged;
+    returning a `ReactionOutcome` overrides hit/damage/target with whatever
+    the hook (and the reaction functions it called) decided.
+    """
     budget.mark_main_action()
 
     net = _net_advantage(advantage_sources, disadvantage_sources)
@@ -169,7 +225,10 @@ def attack(
     attribute_score = attacker.attributes.get(attribute)
     skill_rank = attacker.skill_rank(skill) if skill else 0
     weapon = attacker.weapon
-    total = chosen + attribute_score + skill_rank + weapon.accuracy_bonus + accuracy_modifier
+    total = (
+        chosen + attribute_score + skill_rank + weapon.accuracy_bonus
+        + attacker.equipment_accuracy_bonus + accuracy_modifier
+    )
     defender_id = _combatant_id(defender)
     margin = total - defender.defense
     hit = total >= defender.defense
@@ -203,16 +262,44 @@ def attack(
         damage_roll = roll_die(rng, weapon.die_faces)
         for _ in range(bonus_damage_dice):
             damage_roll += roll_die(rng, weapon.die_faces)
-        damage = round((damage_roll + weapon.damage_bonus + extra_damage_bonus) * damage_multiplier)
-    if damage > 0:
-        events.extend(
-            apply_damage(
-                defender,
-                damage,
+        damage = round(
+            (damage_roll + weapon.damage_bonus + attacker.equipment_damage_bonus + extra_damage_bonus)
+            * damage_multiplier
+        )
+
+    final_hit, final_damage, final_target = hit, damage, defender
+    if reaction_hook is not None and isinstance(defender, HeroCombatant):
+        eligible = defender.reaction_available or any(p.reaction_available for p in protectors)
+        if eligible:
+            window = ReactionWindow(
+                attacker=attacker,
+                defender=defender,
+                protectors=tuple(protectors),
+                hit=hit,
+                margin=margin,
+                incoming_attack_total=total,
+                provisional_damage=damage,
+                rng=rng,
                 combat_round=combat_round,
                 sequencer=sequencer,
                 caused_by=caused_by,
-                target_id=defender_id,
+            )
+            outcome = reaction_hook(window)
+            if outcome is not None:
+                events.extend(outcome.events)
+                final_hit = outcome.hit
+                final_damage = outcome.damage
+                final_target = outcome.damage_target or defender
+
+    if final_damage > 0:
+        events.extend(
+            apply_damage(
+                final_target,
+                final_damage,
+                combat_round=combat_round,
+                sequencer=sequencer,
+                caused_by=caused_by,
+                target_id=_combatant_id(final_target),
                 actor_id=attacker.hero_id,
                 source=action_label,
             )
@@ -220,10 +307,10 @@ def attack(
 
     return AttackResult(
         events=events,
-        hit=hit,
+        hit=final_hit,
         total=total,
         margin=margin,
-        damage=damage,
+        damage=final_damage,
         natural_20=(chosen == 20),
         natural_1=(chosen == 1),
     )

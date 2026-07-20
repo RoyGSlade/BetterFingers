@@ -17,6 +17,7 @@ items:
       - op: block_damage
         args: {amount: 1}
     tags: [shield, reaction]
+    passive_defense_bonus: 1
 
   - id: comma_blade
     name: Comma Blade
@@ -26,6 +27,8 @@ items:
     slot_cost: 1
     granted_card_ids: [comma_cut]
     tags: [weapon, melee]
+    weapon_die_faces: 6
+    weapon_damage_bonus: 1
 
   - id: boots_of_premature_entrance
     name: Boots of Premature Entrance
@@ -163,6 +166,7 @@ items:
       - op: block_damage
         args: {amount: 1}
     tags: [shield]
+    passive_defense_bonus: 1
 
   - id: family_notes
     name: Family Notes

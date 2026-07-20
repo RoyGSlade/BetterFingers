@@ -17,16 +17,28 @@ No hero-sheet system exists yet (Phase 3 out of scope, matching effects.py's
 director ruling (2026-07-19 17:15), no numeric combat modifier is ever
 accepted from a command payload -- accuracy/damage bonuses, advantage
 sources, and maneuver parameters are always server-computed defaults, never
-a raw value from the wire.
+a raw value from the wire. `combat_wire.hero_combatant_from_state` accepts
+verified `Weapon`/equipment-bonus arguments for exactly this reason -- see
+docs/INFINITE_STACKS_COMBAT.md §3/§13 for the equipment-modifier contract
+herowire resolves source ids against.
 
-Known wave-3 simplifications (posted to the collab room and accepted by the
-director as wave-4 follow-ups):
-  - Reactions cannot truly interrupt `combat_attack`'s synchronous
-    resolution without editing combat/actions.py (forbidden this wave) --
-    dodge/block/protect/counter/escape are wired as caller-supplied-context
-    reactions rather than mid-resolution interrupts.
-  - Status tick damage (bleeding/burning at round end) is not auto-applied;
-    combat/statuses.py deliberately never touches HP itself.
+Status tick damage (bleeding/burning) is wired at the combat-round boundary
+inside `combat/encounter.py::advance_round` (called from
+`build_round_advance_combat_events` below), always through
+`lifecycle.apply_damage` -- `combat/statuses.py` itself still never touches
+HP directly.
+
+Wave-4 note: `combat/actions.py::attack()` now supports a true mid-resolution
+reaction interrupt window (`reaction_hook`, see docs/INFINITE_STACKS_COMBAT.md
+§7) for Block/Dodge/Protect/Counter. No live caller in this file passes one
+yet -- every attack a hero currently faces from an enemy resolves as a flat,
+unconditional content-authored effect (`combat/intents.py`'s `damage` op has
+no to-hit roll of its own), so there is no attack-roll moment for a hero to
+interrupt. `handle_combat_reaction` below remains the caller-supplied-context
+path for Escape/Prepared Trigger and for reacting to intent-driven damage;
+wiring intent-driven enemy attacks through a real to-hit roll (and therefore
+through the interrupt window) is future-wave scope, since it would change
+`combat/intents.py`'s accepted wave-2 contract and content authoring.
 """
 from __future__ import annotations
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..systems import checks, combat, effects, exploration, puzzles, turns
+from ..systems import checks, combat, effects, exploration, heroes_wire, puzzles, turns
 from .commands import Command, CommandError, CommandType, ErrorCode
 from .events import Event
 from .rng import StacksRNG
@@ -39,6 +39,19 @@ _VALIDATORS = {
     CommandType.COMBAT_STABILIZE: lambda state, hero_id, payload: combat.validate_combat_stabilize(state, hero_id, payload),
     CommandType.COMBAT_BARRICADE: lambda state, hero_id, payload: combat.validate_combat_barricade(state, hero_id, payload),
     CommandType.COMBAT_END_TURN: lambda state, hero_id, payload: combat.validate_combat_end_turn(state, hero_id, payload),
+    CommandType.ROLL_ATTRIBUTE_DICE: lambda state, hero_id, payload: heroes_wire.validate_roll_attribute_dice(
+        state, hero_id, payload
+    ),
+    CommandType.CREATE_HERO: lambda state, hero_id, payload: heroes_wire.validate_create_hero(state, hero_id, payload),
+    CommandType.PLAY_CARD: lambda state, hero_id, payload: heroes_wire.validate_play_card(state, hero_id, payload),
+    CommandType.DRAW_CARDS: lambda state, hero_id, payload: heroes_wire.validate_draw_cards(state, hero_id, payload),
+    CommandType.SAFE_REST: lambda state, hero_id, payload: heroes_wire.validate_safe_rest(state, hero_id, payload),
+    CommandType.PICKUP_ITEM: lambda state, hero_id, payload: heroes_wire.validate_pickup_item(state, hero_id, payload),
+    CommandType.DROP_ITEM: lambda state, hero_id, payload: heroes_wire.validate_drop_item(state, hero_id, payload),
+    CommandType.TRADE_ITEM: lambda state, hero_id, payload: heroes_wire.validate_trade_item(state, hero_id, payload),
+    CommandType.RECOVER_BODY_LOOT: lambda state, hero_id, payload: heroes_wire.validate_recover_body_loot(
+        state, hero_id, payload
+    ),
 }
 
 _HANDLERS = {
@@ -60,6 +73,15 @@ _HANDLERS = {
     CommandType.COMBAT_STABILIZE: combat.handle_combat_stabilize,
     CommandType.COMBAT_BARRICADE: combat.handle_combat_barricade,
     CommandType.COMBAT_END_TURN: combat.handle_combat_end_turn,
+    CommandType.ROLL_ATTRIBUTE_DICE: heroes_wire.handle_roll_attribute_dice,
+    CommandType.CREATE_HERO: heroes_wire.handle_create_hero,
+    CommandType.PLAY_CARD: heroes_wire.handle_play_card,
+    CommandType.DRAW_CARDS: heroes_wire.handle_draw_cards,
+    CommandType.SAFE_REST: heroes_wire.handle_safe_rest,
+    CommandType.PICKUP_ITEM: heroes_wire.handle_pickup_item,
+    CommandType.DROP_ITEM: heroes_wire.handle_drop_item,
+    CommandType.TRADE_ITEM: heroes_wire.handle_trade_item,
+    CommandType.RECOVER_BODY_LOOT: heroes_wire.handle_recover_body_loot,
 }
 
 EVENT_APPLIERS = {
@@ -69,6 +91,7 @@ EVENT_APPLIERS = {
     **puzzles.EVENT_APPLIERS,
     **effects.EVENT_APPLIERS,
     **combat.EVENT_APPLIERS,
+    **heroes_wire.EVENT_APPLIERS,
 }
 
 

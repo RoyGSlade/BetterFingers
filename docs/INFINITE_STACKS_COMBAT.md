@@ -1,4 +1,4 @@
-# Infinite Stacks — Combat Contracts (wave 2)
+# Infinite Stacks — Combat Contracts (wave 2, updated wave 4)
 
 > Authoritative schema for `backend/lan_playground/combat/**`. Standalone,
 > pure, deterministic, rng-injected: zero I/O, zero LLM calls, and no import
@@ -95,7 +95,8 @@ Weapon(die_faces, damage_bonus, accuracy_bonus)  # die_faces in {4,6,8,10}
 
 HeroCombatant:
     hero_id, name, attributes, max_hp, skills: dict[str,int],
-    equipment_defense_bonus, weapon, hp, life_state (ALIVE|DOWNED|STABLE|DEAD),
+    equipment_defense_bonus, equipment_accuracy_bonus, equipment_damage_bonus,
+    weapon, hp, life_state (ALIVE|DOWNED|STABLE|DEAD),
     stabilization_successes, death_failures, reaction_available,
     position, held_item, prepared_trigger, exposed_until_next_turn,
     statuses: dict[status_id, StatusInstance]
@@ -133,13 +134,15 @@ not a fixed tick-down duration).
 Every module is well under the ~500-line cap (largest is `maneuvers.py` at
 ~345 lines).
 
-## 5. Attack math (§14.3)
+## 5. Attack math (§14.3) and the equipment-modifier input contract (§13, task #14)
 
 ```text
 attack_total = d20 (or adv/disadv-resolved) + attribute_score + skill_rank
-             + weapon.accuracy_bonus + accuracy_modifier (e.g. -4 for a maneuver)
-hit = attack_total >= defender.defense   # defense = 10 + Finesse + equipment
-damage = weapon_die_roll(s) + weapon.damage_bonus + extra_damage_bonus  (only rolled/applied on a hit)
+             + weapon.accuracy_bonus + attacker.equipment_accuracy_bonus
+             + accuracy_modifier (e.g. -4 for a maneuver)
+hit = attack_total >= defender.defense   # defense = 10 + Finesse + equipment_defense_bonus
+damage = weapon_die_roll(s) + weapon.damage_bonus + attacker.equipment_damage_bonus
+       + extra_damage_bonus  (only rolled/applied on a hit)
 ```
 
 `actions.attack()` also accepts `damage_multiplier` and `bonus_damage_dice`,
@@ -149,6 +152,24 @@ maneuver/attack that resolves to **zero** damage (Rattle "replaces physical
 damage") never calls `lifecycle.apply_damage` and never emits
 `damage_applied` -- no HP or death-check side effects from a hit that
 deals no damage.
+
+**Equipment-modifier inputs (published early to the room, task #14).**
+`weapon.accuracy_bonus`/`weapon.damage_bonus`/`weapon.die_faces` (existing,
+wave 2) and two wave-4 additions on `HeroCombatant` --
+`equipment_accuracy_bonus: int = 0` and `equipment_damage_bonus: int = 0`
+(non-weapon item/accessory bonuses, e.g. a ring or gloves, parallel to the
+existing `equipment_defense_bonus`) -- are the only equipment inputs
+`attack()` reads. All four are **verified concrete values**, never raw wire
+numbers: `systems/combat_wire.hero_combatant_from_state(hero, *,
+attributes=None, skills=None, weapon=None, equipment_defense_bonus=0,
+equipment_accuracy_bonus=0, equipment_damage_bonus=0)` accepts an
+already-built `Weapon`/already-verified ints as keyword arguments (every one
+optional, defaulting to today's flat zero-modifier/default-weapon
+behavior). Whoever resolves a source id to a concrete value (the domain lane
+that owns hero-sheet/inventory) calls this constructor with the resolved
+values; this function itself never accepts or resolves a raw item/source id
+(per the wave-3 director ruling -- no unverified numeric modifier ever comes
+from the wire).
 
 ## 6. Called maneuvers and the resist/weakness/convert hooks (§14.4)
 
@@ -174,7 +195,7 @@ Content packs today only author `resists` / `weaknesses` (see
 `content/packs/core/enemies.yaml` — none of the three current enemies use
 them yet, but the `Enemy` dataclass already carries the tuples).
 
-## 7. Reactions (§14.5)
+## 7. Reactions (§14.5) and the mid-resolution interrupt window (task #14)
 
 One reaction per round: `HeroCombatant.reaction_available`, cleared by
 `reactions.use_reaction()` and refreshed by `reactions.refresh_reaction()`.
@@ -188,6 +209,62 @@ of that hero's turn instead).
 incoming attack must have missed by 5+ (`margin <= -5`) **and** a card/item
 must grant permission (`permitted=True`, caller-supplied — combat doesn't
 know about cards/items).
+
+`dodge()`/`block()`/`protect()`/`counter()`/`escape()`/`set_prepared_trigger()`/
+`execute_prepared_trigger()` are unchanged, standalone, and still directly
+callable (that's how `escape` and `prepared_trigger` work, and how a caller
+can offer a reaction outside an attack entirely). What's new this wave is
+that `actions.attack()` can invoke Block/Dodge/Protect/Counter genuinely
+*mid-resolution* instead of forcing a caller to reconstruct
+`incoming_attack_total`/`incoming_damage`/`incoming_attack_margin` after the
+fact from caller-supplied context:
+
+```python
+result = actions.attack(
+    attacker, defender, attribute=..., skill=..., rng=..., combat_round=...,
+    sequencer=..., caused_by=..., budget=...,
+    reaction_hook=my_policy,          # Callable[[ReactionWindow], ReactionOutcome | None]
+    protectors=[ally_a, ally_b],      # optional: heroes who could Protect `defender`
+)
+```
+
+`attack()` rolls the attack (and, on a hit, the provisional damage) exactly
+as before, emits `attack_resolved`, and — if `defender` is a `HeroCombatant`
+with a reaction available (or any `protectors` entry does) — calls
+`reaction_hook(window)` before touching HP. `ReactionWindow` carries
+`attacker`, `defender`, `protectors`, `hit`, `margin`, `incoming_attack_total`
+(the attacker's resolved total, exactly what `dodge()` expects to oppose),
+`provisional_damage` (0 on a miss), plus the shared `rng`/`combat_round`/
+`sequencer`/`caused_by`. The hook is free to call `reactions.dodge/block/
+protect/counter` directly (their signatures are unchanged) and packages the
+result as a `ReactionOutcome(events, hit, damage, damage_target=None)`:
+`hit=False` negates the attack (Dodge), a lower `damage` reduces it (Block),
+`damage_target=<protector>` redirects it (Protect); `counter()`'s own nested
+`attack()` call already applies its own damage internally, so a Counter
+outcome just leaves the original attack's `hit`/`damage` as-is and folds the
+counter-attack's events in. Returning `None` means no reaction was taken —
+resolution proceeds exactly as if no hook had been passed, and the
+reaction is **not** consumed. The hook decides policy; `attack()` only
+guarantees the window opens at the right moment and that whatever the hook
+returns is what actually lands. This mirrors `combat/encounter.py`'s
+existing "combat doesn't decide tactics" split.
+
+Coverage is at the pure-package level (`tests/test_stacks_combat.py`'s
+`test_interrupt_window_*`): Block reduces damage and may flag item Wear,
+Dodge negates a hit and repositions on success (and does nothing extra on
+failure), Protect redirects HP loss to the protector, Counter fires only on
+`margin <= -5` and lands its own attack on the original attacker, and the
+window is never offered to a non-hero (enemy) defender or when no reaction
+is available. **No live caller wires a `reaction_hook` yet**: every attack a
+hero currently faces from an enemy resolves through `combat/intents.py`'s
+flat, unconditional `damage` op (§8 below) rather than a to-hit roll, so
+there is no attack-roll moment today for a hero to interrupt.
+`systems/combat.py::handle_combat_reaction` remains the caller-supplied-
+context command path for Escape/Prepared Trigger and for reacting to
+intent-driven damage narratively. Wiring intent-driven enemy attacks through
+a real to-hit roll (and therefore through this window) is future-wave scope
+— it would change `combat/intents.py`'s wave-2-accepted flat-damage contract
+and require new content-authored accuracy data.
 
 ## 8. Enemy intents (§14.6)
 
@@ -265,9 +342,25 @@ the cap **consolidates** — the status applied longest ago
 `status_consolidated` event names both the replaced and applied status.
 `statuses.status_damage_amount(status_id)` exposes the `bleeding`/`burning`
 per-tick damage figure (`1`, matching no explicit number in the spec — a
-documented default in the spirit of §32, revisit through playtesting) for
-whoever ticks end-of-round/post-action effects; `statuses.py` itself never
-touches HP, keeping it independent of the Downed/death-check state machine.
+documented default in the spirit of §32, revisit through playtesting).
+`statuses.py` itself still never touches HP directly, keeping it independent
+of the Downed/death-check state machine — but as of wave 4 the tick is no
+longer unapplied. `combat/encounter.py::tick_status_damage(encounter, *,
+caused_by)` walks every living hero (id-sorted) then every living enemy
+(id-sorted, deterministic order for replay) and, for each `bleeding`/
+`burning` entry in `.statuses`, calls `lifecycle.apply_damage(...,
+source="bleeding_tick"|"burning_tick")` — the same single HP seam every
+other damage source uses, so "damage while Downed adds a death-check
+failure" (§16.2) applies to a status tick exactly like an attack
+(`tests/test_stacks_combat.py::test_tick_on_downed_hero_adds_death_check_failure`).
+`combat/encounter.py::advance_round` calls `tick_status_damage` at the
+combat-round boundary (right after the new round's `combat_round_started`
+event, before the Downed-hero death-check cadence), so both
+`systems/combat.py::build_round_advance_combat_events` and
+`systems/turns.py::build_round_advance_events` (which calls it whenever a
+world round advances) pick the tick up automatically — no changes were
+needed in either wiring file beyond this doc, since `advance_round` was
+already the single round-boundary seam both call through.
 
 ## 12. What's out of scope this wave
 
@@ -279,4 +372,7 @@ when reviving without proper supplies but does not create an Injury object.
 Cards/items beyond a flat `Weapon`/`held_item` (§13) aren't modeled; called
 maneuvers and reactions accept plain numeric/boolean parameters (e.g.
 `counter`'s `permitted: bool`) rather than resolving card legality
-themselves.
+themselves. Wiring a `reaction_hook` (§7) into a live command handler, and
+routing enemy intents through a real to-hit roll instead of
+`combat/intents.py`'s flat `damage` op, are both future-wave scope (see §7
+for why).
