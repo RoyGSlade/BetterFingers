@@ -51,7 +51,8 @@ def make_hero(hero_id, *, force=2, finesse=2, insight=2, presence=2, skills=None
 
 
 def make_enemy(instance_id, *, def_id=None, hp=10, defense=12, threat_cost=2,
-                threat_tier="standard", resists=(), weaknesses=(), converts=None, initiative_bonus=0):
+                threat_tier="standard", resists=(), weaknesses=(), converts=None, initiative_bonus=0,
+                accuracy_bonus=0):
     return EnemyCombatant(
         instance_id=instance_id,
         def_id=def_id or instance_id,
@@ -62,6 +63,7 @@ def make_enemy(instance_id, *, def_id=None, hp=10, defense=12, threat_cost=2,
         threat_cost=threat_cost,
         threat_tier=threat_tier,
         initiative_bonus=initiative_bonus,
+        accuracy_bonus=accuracy_bonus,
         resists=resists,
         weaknesses=weaknesses,
         converts=converts or {},
@@ -915,11 +917,12 @@ def test_intents_are_data_driven_from_real_enemies_yaml():
     assert telegraph_events[0]["type"] == "intent_telegraphed"
     assert telegraph_events[0]["payload"]["counterplay"]
 
-    effect_events = intents.resolve_intent_effects(
+    effect_result = intents.resolve_intent_effects(
         chosen_after_mark, enemy, target, combat_round=1, sequencer=seq, caused_by="test"
     )
+    assert effect_result.pending is None
     assert statuses.has_status(target, "burning")
-    assert any(e["type"] == "status_applied" for e in effect_events)
+    assert any(e["type"] == "status_applied" for e in effect_result.events)
 
 
 def test_intent_selection_is_deterministic_not_rng_driven():
@@ -996,8 +999,8 @@ def _run_simple_fight(encounter, rng, *, max_rounds, hero_intents):
                 all_events.extend(
                     intents.resolve_intent_effects(
                         chosen, enemy, targets[0], combat_round=encounter.combat_round,
-                        sequencer=encounter.sequencer, caused_by="test",
-                    )
+                        sequencer=encounter.sequencer, caused_by="test", rng=rng,
+                    ).events
                 )
             if encounter_mod.is_victory(encounter) or encounter_mod.is_party_wiped(encounter):
                 break
@@ -1032,7 +1035,8 @@ def test_full_party_fight_to_victory():
 def test_full_party_fight_to_total_party_kill():
     heroes = [make_hero(f"hero_{i}", force=1, finesse=1, skills={}, die_faces=4) for i in range(4)]
     # attack total max = 20(die) + 1(force) = 21 < enemy defense(25) -> heroes can never hit
-    enemies = [make_enemy("enemy_boss", hp=200, defense=25, threat_cost=5, threat_tier="elite")]
+    # hero defense = 10 + finesse(1) = 11; boss accuracy_bonus=15 -> min roll 1+15=16 >= 11 -> always hits (task #16)
+    enemies = [make_enemy("enemy_boss", hp=200, defense=25, threat_cost=5, threat_tier="elite", accuracy_bonus=15)]
 
     rng = MinRollRNG()  # also drives death checks: 1 + force(1) = 2 < 10 -> always fails
     encounter, _ = encounter_mod.start_encounter("enc_tpk", heroes, enemies, rng)

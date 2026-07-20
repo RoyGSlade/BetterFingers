@@ -36,6 +36,17 @@ export async function joinRoom({ accessCode, roomCode, displayName }) {
   return parseJsonResponse(resp);
 }
 
+// Static background/card/item reference content (§11) for the
+// character-builder screen -- access-code gated like every other route, but
+// no player token: it names no run or hero (backend/lan_playground/
+// stacks_api.py's /api/stacks/content-catalog).
+export async function fetchContentCatalog({ accessCode }) {
+  const resp = await fetch("/api/stacks/content-catalog", {
+    headers: { [ACCESS_CODE_HEADER]: accessCode },
+  });
+  return parseJsonResponse(resp);
+}
+
 export async function fetchSnapshot({ accessCode, roomCode, playerToken }) {
   const resp = await fetch(`/api/stacks/rooms/${encodeURIComponent(roomCode)}/snapshot`, {
     headers: { [ACCESS_CODE_HEADER]: accessCode, [PLAYER_TOKEN_HEADER]: playerToken },

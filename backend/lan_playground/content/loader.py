@@ -6,6 +6,17 @@ fields, wrong types, invalid enum values, and duplicate IDs all raise
 `LoaderError` (a `ContentError`) at load time rather than surfacing later as a
 runtime KeyError or a silently-ignored typo. Content never executes code --
 `yaml.safe_load` only.
+
+Shop content (`shops.yaml`) loads through `backend.lan_playground.shops.
+content_loader` instead of this module -- wave 4 shipped it here with a
+`from ..shops import models as shop_models` import, a documented backwards
+edge (content depending on a package, the reverse of every other package's
+"content never imports the package" discipline). Wave 5 (board task #18)
+moved the loading/validation code into the shops package instead of moving
+`shops.models`'s dataclasses into `schemas.py`: the ECON-001-proven economy/
+services/seeding modules have no other content-side consumer, so relocating
+the *entry point* removes the edge with zero change to that already-tested
+surface. This module now has no import of `shops` at all.
 """
 
 from __future__ import annotations
@@ -16,17 +27,15 @@ from typing import Any, Callable, Mapping
 import yaml
 
 from . import schemas as S
-from ..shops import models as shop_models
 
 CORE_PACK_DIR = Path(__file__).resolve().parent / "packs" / "core"
-SHOPS_FILENAME = "shops.yaml"
 
 
 class LoaderError(S.ContentError):
     """Raised when a pack YAML file is malformed or violates the content schema."""
 
 
-def _require_keys(raw: Any, allowed: set[str], *, where: str) -> Mapping[str, Any]:
+def require_keys(raw: Any, allowed: set[str], *, where: str) -> Mapping[str, Any]:
     if not isinstance(raw, Mapping):
         raise LoaderError(f"{where}: expected a mapping, got {type(raw).__name__}")
     unknown = set(raw) - allowed
@@ -36,7 +45,7 @@ def _require_keys(raw: Any, allowed: set[str], *, where: str) -> Mapping[str, An
 
 
 def _prose(raw: Any, *, where: str) -> S.Prose:
-    raw = _require_keys(raw, {"fallback", "accessible"}, where=f"{where}.prose")
+    raw = require_keys(raw, {"fallback", "accessible"}, where=f"{where}.prose")
     fallback = raw.get("fallback", "")
     accessible = raw.get("accessible", fallback)
     return S.Prose(fallback=fallback, accessible=accessible)
@@ -49,7 +58,7 @@ def _effects(raw: Any, *, where: str) -> tuple[S.Effect, ...]:
         raise LoaderError(f"{where}: expected a list of effect ops")
     out = []
     for i, item in enumerate(raw):
-        item = _require_keys(item, {"op", "args"}, where=f"{where}[{i}]")
+        item = require_keys(item, {"op", "args"}, where=f"{where}[{i}]")
         try:
             out.append(S.Effect(op=item["op"], args=item.get("args", {}) or {}))
         except S.ContentError as exc:
@@ -58,7 +67,7 @@ def _effects(raw: Any, *, where: str) -> tuple[S.Effect, ...]:
 
 
 def _load_skill(raw: Any, *, where: str) -> S.Skill:
-    raw = _require_keys(raw, {"id", "name", "prose", "typical_uses"}, where=where)
+    raw = require_keys(raw, {"id", "name", "prose", "typical_uses"}, where=where)
     return S.Skill(
         id=raw["id"],
         name=raw["name"],
@@ -68,7 +77,7 @@ def _load_skill(raw: Any, *, where: str) -> S.Skill:
 
 
 def _load_background(raw: Any, *, where: str) -> S.Background:
-    raw = _require_keys(
+    raw = require_keys(
         raw,
         {
             "id",
@@ -82,7 +91,7 @@ def _load_background(raw: Any, *, where: str) -> S.Background:
         where=where,
     )
     sig_where = f"{where}.signature_ability"
-    sig_raw = _require_keys(
+    sig_raw = require_keys(
         raw["signature_ability"], {"id", "name", "prose", "frequency", "effects"}, where=sig_where
     )
     signature = S.SignatureAbility(
@@ -107,9 +116,9 @@ def _load_background(raw: Any, *, where: str) -> S.Background:
 
 
 def _load_check(raw: Any, *, where: str) -> S.CardCheck:
-    raw = _require_keys(raw, {"attribute", "skill", "dc", "outcomes"}, where=where)
+    raw = require_keys(raw, {"attribute", "skill", "dc", "outcomes"}, where=where)
     o_where = f"{where}.outcomes"
-    o_raw = _require_keys(
+    o_raw = require_keys(
         raw.get("outcomes", {}),
         {"strong_success", "success", "cost", "setback"},
         where=o_where,
@@ -142,7 +151,7 @@ def _load_card(raw: Any, *, where: str) -> S.Card:
         "end_state",
         "source",
     }
-    raw = _require_keys(raw, allowed, where=where)
+    raw = require_keys(raw, allowed, where=where)
     try:
         timing = S.CardTiming(raw["timing"])
     except ValueError as exc:
@@ -191,7 +200,7 @@ def _load_item(raw: Any, *, where: str) -> S.Item:
         "weapon_accuracy_bonus",
         "passive_defense_bonus",
     }
-    raw = _require_keys(raw, allowed, where=where)
+    raw = require_keys(raw, allowed, where=where)
     try:
         return S.Item(
             id=raw["id"],
@@ -213,9 +222,9 @@ def _load_item(raw: Any, *, where: str) -> S.Item:
 
 
 def _load_condition(raw: Any, *, where: str) -> S.Condition:
-    raw = _require_keys(raw, {"id", "name", "prose", "primary_effect", "duration", "treatments"}, where=where)
+    raw = require_keys(raw, {"id", "name", "prose", "primary_effect", "duration", "treatments"}, where=where)
     pe_where = f"{where}.primary_effect"
-    pe_raw = _require_keys(raw["primary_effect"], {"op", "args"}, where=pe_where)
+    pe_raw = require_keys(raw["primary_effect"], {"op", "args"}, where=pe_where)
     try:
         primary = S.Effect(op=pe_raw["op"], args=pe_raw.get("args", {}) or {})
     except S.ContentError as exc:
@@ -224,7 +233,7 @@ def _load_condition(raw: Any, *, where: str) -> S.Condition:
     treatments = []
     for i, t_raw in enumerate(raw.get("treatments", [])):
         t_where = f"{where}.treatments[{i}]"
-        t_raw = _require_keys(t_raw, {"id", "prose", "effects"}, where=t_where)
+        t_raw = require_keys(t_raw, {"id", "prose", "effects"}, where=t_where)
         treatments.append(
             S.Treatment(
                 id=t_raw["id"],
@@ -260,7 +269,7 @@ def _load_enemy(raw: Any, *, where: str) -> S.Enemy:
         "weaknesses",
         "non_elimination_routes",
     }
-    raw = _require_keys(raw, allowed, where=where)
+    raw = require_keys(raw, allowed, where=where)
     try:
         tier = S.ThreatTier(raw["threat_tier"])
     except ValueError as exc:
@@ -269,7 +278,7 @@ def _load_enemy(raw: Any, *, where: str) -> S.Enemy:
     intents = []
     for i, intent_raw in enumerate(raw.get("intents", [])):
         i_where = f"{where}.intents[{i}]"
-        intent_raw = _require_keys(intent_raw, {"id", "prose", "trigger", "effects", "counterplay"}, where=i_where)
+        intent_raw = require_keys(intent_raw, {"id", "prose", "trigger", "effects", "counterplay"}, where=i_where)
         try:
             intents.append(
                 S.EnemyIntent(
@@ -303,7 +312,7 @@ def _load_enemy(raw: Any, *, where: str) -> S.Enemy:
 
 
 def _load_puzzle_template_meta(raw: Any, *, where: str) -> S.PuzzleTemplateMeta:
-    raw = _require_keys(raw, {"id", "family", "name", "prose", "difficulty_range"}, where=where)
+    raw = require_keys(raw, {"id", "family", "name", "prose", "difficulty_range"}, where=where)
     dr = raw.get("difficulty_range", [1, 5])
     try:
         return S.PuzzleTemplateMeta(
@@ -402,128 +411,3 @@ def load_pack(pack_dir: Path, *, pack_id: str) -> S.ContentPack:
 
 def load_core_pack() -> S.ContentPack:
     return load_pack(CORE_PACK_DIR, pack_id="core")
-
-
-# ---------------------------------------------------------------------------
-# Shops (infinite_stacks.md §9.6, board task #15). Kept separate from
-# `S.ContentPack`/`load_pack` above: the shop dataclasses live in
-# `shops.models` rather than `content/schemas.py` (off-limits to the shops
-# lane for wave 4 -- see docs/INFINITE_STACKS_SHOPS.md), so `ContentPack`
-# gains no new field this wave. `load_shops` is tolerant of a missing
-# shops.yaml (returns `{}`), the same pattern `load_puzzle_templates` above
-# uses for an optional pack section -- existing packs/fixtures with no
-# shops.yaml keep loading and validating exactly as before.
-# ---------------------------------------------------------------------------
-
-
-def _load_persona(raw: Any, *, where: str) -> shop_models.MerchantPersona:
-    raw = _require_keys(raw, {"name", "tagline", "tone"}, where=where)
-    try:
-        return shop_models.MerchantPersona(name=raw["name"], tagline=raw["tagline"], tone=raw["tone"])
-    except shop_models.ShopModelError as exc:
-        raise LoaderError(f"{where}: {exc}") from exc
-
-
-def _load_rumor(raw: Any, *, where: str) -> shop_models.Rumor:
-    raw = _require_keys(raw, {"id", "text", "accessible_text"}, where=where)
-    try:
-        return shop_models.Rumor(id=raw["id"], text=raw["text"], accessible_text=raw["accessible_text"])
-    except shop_models.ShopModelError as exc:
-        raise LoaderError(f"{where}: {exc}") from exc
-
-
-def _load_relationship_complication(raw: Any, *, where: str) -> shop_models.RelationshipComplication:
-    raw = _require_keys(raw, {"id", "description", "accessible_text"}, where=where)
-    try:
-        return shop_models.RelationshipComplication(
-            id=raw["id"], description=raw["description"], accessible_text=raw["accessible_text"]
-        )
-    except shop_models.ShopModelError as exc:
-        raise LoaderError(f"{where}: {exc}") from exc
-
-
-def _load_inventory_listing(raw: Any, *, where: str) -> shop_models.InventoryListing:
-    raw = _require_keys(raw, {"item_id", "buy_price", "stock"}, where=where)
-    try:
-        return shop_models.InventoryListing(
-            item_id=raw["item_id"], buy_price=raw["buy_price"], stock=raw.get("stock")
-        )
-    except shop_models.ShopModelError as exc:
-        raise LoaderError(f"{where}: {exc}") from exc
-
-
-def _load_shop(raw: Any, *, where: str) -> shop_models.ShopArchetype:
-    allowed = {
-        "id",
-        "name",
-        "persona",
-        "services",
-        "sell_price_ratio",
-        "repair_cost_per_wear",
-        "identify_price",
-        "treatment_price",
-        "guaranteed_inventory",
-        "rotating_pool",
-        "rotating_slots",
-        "rumor",
-        "relationship_complication",
-    }
-    raw = _require_keys(raw, allowed, where=where)
-    try:
-        services = frozenset(shop_models.ShopService(s) for s in raw.get("services", []))
-    except ValueError as exc:
-        raise LoaderError(f"{where}: invalid service in {raw.get('services')!r}") from exc
-
-    guaranteed = tuple(
-        _load_inventory_listing(item, where=f"{where}.guaranteed_inventory[{i}]")
-        for i, item in enumerate(raw.get("guaranteed_inventory", []))
-    )
-    pool = tuple(
-        _load_inventory_listing(item, where=f"{where}.rotating_pool[{i}]")
-        for i, item in enumerate(raw.get("rotating_pool", []))
-    )
-    try:
-        return shop_models.ShopArchetype(
-            id=raw["id"],
-            name=raw["name"],
-            persona=_load_persona(raw["persona"], where=f"{where}.persona"),
-            services=services,
-            guaranteed_inventory=guaranteed,
-            rotating_pool=pool,
-            rotating_slots=raw.get("rotating_slots", 0),
-            sell_price_ratio=raw["sell_price_ratio"],
-            repair_cost_per_wear=raw["repair_cost_per_wear"],
-            identify_price=raw["identify_price"],
-            treatment_price=raw["treatment_price"],
-            rumor=_load_rumor(raw["rumor"], where=f"{where}.rumor"),
-            relationship_complication=_load_relationship_complication(
-                raw["relationship_complication"], where=f"{where}.relationship_complication"
-            ),
-        )
-    except shop_models.ShopModelError as exc:
-        raise LoaderError(f"{where}: {exc}") from exc
-
-
-def load_shops(pack_dir: Path) -> dict[str, shop_models.ShopArchetype]:
-    path = pack_dir / SHOPS_FILENAME
-    if not path.exists():
-        return {}
-    raw = load_yaml_file(path) or {}
-    if not isinstance(raw, Mapping) or "shops" not in raw:
-        raise LoaderError(f"{path}: expected top-level key 'shops'")
-    shops_raw = raw["shops"]
-    if not isinstance(shops_raw, list):
-        raise LoaderError(f"{path}: 'shops' must be a list")
-
-    shops: dict[str, shop_models.ShopArchetype] = {}
-    for i, item_raw in enumerate(shops_raw):
-        where = f"{path.name}:shops[{i}]"
-        shop = _load_shop(item_raw, where=where)
-        if shop.id in shops:
-            raise LoaderError(f"{where}: duplicate id {shop.id!r}")
-        shops[shop.id] = shop
-    return shops
-
-
-def load_core_shops() -> dict[str, shop_models.ShopArchetype]:
-    return load_shops(CORE_PACK_DIR)

@@ -18,6 +18,14 @@ from ..heroes.backgrounds import SignatureCharge
 from ..heroes.creation import HeroSheet
 from ..heroes.deck import DeckState
 from ..heroes.inventory import InventoryState
+from ..shops.models import ShopInstance
+
+# §9.6/§17.1 GEAR-001 starting wealth: decided as data this wave (board task
+# #18) since infinite_stacks.md names no figure. 20 affords one shop's
+# treatment service or a mid-priced item from the core pack's price range
+# (4-22) without trivializing every purchase -- a single named constant so
+# nothing scatters a magic number across the domain/systems wiring.
+STARTING_GOLD = 20
 
 
 class Direction(str, Enum):
@@ -186,6 +194,12 @@ class ConflictEncounterState:
     threat_budget: dict = field(default_factory=dict)
     pending_joiner_hero_ids: list[str] = field(default_factory=list)
     sequencer_seq: int = 0
+    # Wave-5 addition (board task #16, stacks-enemyroll; domain registration
+    # requested via chat 2026-07-19): an open reaction-interrupt window
+    # (§14.5) between hit-determination and damage-application. Plain
+    # JSON-safe dict, same pass-through discipline as turn_budget/
+    # threat_budget -- systems/combat.py owns its shape.
+    pending_reaction: dict | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -202,6 +216,7 @@ class ConflictEncounterState:
             "threat_budget": dict(self.threat_budget),
             "pending_joiner_hero_ids": list(self.pending_joiner_hero_ids),
             "sequencer_seq": self.sequencer_seq,
+            "pending_reaction": dict(self.pending_reaction) if self.pending_reaction is not None else None,
         }
 
     @staticmethod
@@ -220,6 +235,7 @@ class ConflictEncounterState:
             threat_budget=dict(d["threat_budget"]),
             pending_joiner_hero_ids=list(d["pending_joiner_hero_ids"]),
             sequencer_seq=d["sequencer_seq"],
+            pending_reaction=dict(d["pending_reaction"]) if d.get("pending_reaction") is not None else None,
         )
 
 
@@ -245,6 +261,12 @@ class RoomState:
     # needs (item_instance_id -> claiming hero_id).
     ground_items: dict[str, str] = field(default_factory=dict)
     item_claims: dict[str, str] = field(default_factory=dict)
+    # Wave-5 shopwire addition (board task #18, §9.6): the seeded shop
+    # instantiated on a d8=6 breach, embedded directly the same way heroes'
+    # dataclasses are (a one-way domain -> shops dependency, mirroring
+    # domain -> heroes) -- systems/shops_wire.py is the sole place that reads
+    # `shops.models`/`shops.services`/`shops.economy` to act on it.
+    shop: ShopInstance | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -264,10 +286,16 @@ class RoomState:
             "body_item_ids": {k: list(v) for k, v in sorted(self.body_item_ids.items())},
             "ground_items": dict(sorted(self.ground_items.items())),
             "item_claims": dict(sorted(self.item_claims.items())),
+            "shop": (
+                {"archetype_id": self.shop.archetype_id, "stock": dict(sorted(self.shop.stock.items()))}
+                if self.shop is not None
+                else None
+            ),
         }
 
     @staticmethod
     def from_dict(d: dict) -> "RoomState":
+        shop_d = d.get("shop")
         return RoomState(
             room_id=d["room_id"],
             x=d["x"],
@@ -285,6 +313,7 @@ class RoomState:
             body_item_ids={k: tuple(v) for k, v in d.get("body_item_ids", {}).items()},
             ground_items=dict(d.get("ground_items", {})),
             item_claims=dict(d.get("item_claims", {})),
+            shop=ShopInstance(archetype_id=shop_d["archetype_id"], stock=dict(shop_d["stock"])) if shop_d else None,
         )
 
 
@@ -358,6 +387,20 @@ class HeroState:
     deck: DeckState | None = None
     inventory: InventoryState | None = None
     signature_charge: SignatureCharge | None = None
+    # Wave-5 shopwire additions (board task #18, §9.6, §16.4-16.5). Bridges
+    # heroes.inventory.InventoryState (the single owner of "does this hero
+    # hold this item") to shops.models.ShopperState's economy fields without
+    # merging the two: systems/shops_wire.py builds a transient ShopperState
+    # from these fields plus `inventory` for each transaction and writes the
+    # result back here, never storing a ShopperState itself on HeroState.
+    gold: int = STARTING_GOLD
+    item_wear: dict[str, int] = field(default_factory=dict)          # item_id -> Wear level, pricing only
+    identified_item_ids: tuple[str, ...] = ()                         # items this hero has paid to identify
+    # Persistent §16.4/16.5 statuses/injuries (distinct from combat's own
+    # in-encounter StatusInstance dict on ConflictEncounterState, which is
+    # ephemeral to a single fight) -- content.schemas.Condition ids currently
+    # afflicting this hero, e.g. from a played card's apply_condition effect.
+    active_condition_ids: tuple[str, ...] = ()
 
     def sync_life_state(self, life_state: str) -> None:
         """Set life_state and derive conscious/alive so existing exploration
@@ -393,6 +436,10 @@ class HeroState:
             "deck": dataclasses.asdict(self.deck) if self.deck is not None else None,
             "inventory": dataclasses.asdict(self.inventory) if self.inventory is not None else None,
             "signature_charge": dataclasses.asdict(self.signature_charge) if self.signature_charge is not None else None,
+            "gold": self.gold,
+            "item_wear": dict(sorted(self.item_wear.items())),
+            "identified_item_ids": list(self.identified_item_ids),
+            "active_condition_ids": list(self.active_condition_ids),
         }
 
 
@@ -406,6 +453,12 @@ class RunState:
     heroes: dict[str, HeroState] = field(default_factory=dict)
     map: MapState | None = None
     facts: tuple[str, ...] = field(default_factory=tuple)  # emit_fact op ledger (§5, §18.4 seam)
+    # Wave-5 shopwire addition (board task #18): room_id -> clue_ids a hero has
+    # `share_clue`'d to the party (systems/puzzles.py). PARTY-visibility, so
+    # every current hero's projection may include these; a hero's *unshared*
+    # private clues stay exactly where they already lived (PuzzleRoomState.
+    # private_clue_assignments), never duplicated here.
+    party_shared_clues: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     @staticmethod
     def initial(run_id: str, seed: int, chapter_floor_index: int = 0) -> "RunState":
@@ -424,6 +477,13 @@ class RunState:
         living = self.living_conscious_hero_ids()
         if not living:
             return False
+        # Wave-5 (board task #16, stacks-enemyroll): an open reaction-interrupt
+        # window must block world-round advance, not auto-resolve.
+        if self.map is not None and any(
+            r.encounter is not None and r.encounter.status == "active" and r.encounter.pending_reaction is not None
+            for r in self.map.rooms.values()
+        ):
+            return False
         return all(self.heroes[hid].submitted_turn for hid in living)
 
     def to_dict(self) -> dict:
@@ -436,6 +496,7 @@ class RunState:
             "heroes": {hid: h.to_dict() for hid, h in sorted(self.heroes.items())},
             "map": self.map.to_dict() if self.map else None,
             "facts": list(self.facts),
+            "party_shared_clues": {k: list(v) for k, v in sorted(self.party_shared_clues.items())},
         }
 
     def state_hash(self) -> str:

@@ -5,7 +5,7 @@
 // core/{api,socket,store,commands}.js to screens/map.js and to the static
 // join-panel markup in stacks.html. No other module in static/src/ does this.
 
-import { createRoom, joinRoom, fetchSnapshot, submitCommandOverRest } from "./core/api.js";
+import { createRoom, joinRoom, fetchSnapshot, fetchContentCatalog, submitCommandOverRest } from "./core/api.js";
 import { createStacksSocket } from "./core/socket.js";
 import {
   createStore,
@@ -17,6 +17,8 @@ import {
   linkManualNotes,
   toggleManualNoteContradiction,
   markObjectInspected,
+  setContentCatalog,
+  updateCharacterDraft,
 } from "./core/store.js";
 import {
   moveCommand,
@@ -30,13 +32,23 @@ import {
   requestHintCommand,
   combatAttackCommand,
   combatManeuverCommand,
-  combatReactionCommand,
+  resolveReactionCommand,
+  rollAttributeDiceCommand,
+  createHeroCommand,
+  drawCardsCommand,
+  playCardCommand,
+  safeRestCommand,
+  pickupItemCommand,
+  dropItemCommand,
+  tradeItemCommand,
+  recoverBodyLootCommand,
 } from "./core/commands.js";
 import { selectActiveScreen, selectYouHero } from "./core/selectors.js";
 import { renderMapScreen } from "./screens/map.js";
 import { renderRoomScreen } from "./screens/room.js";
 import { renderPuzzleScreen } from "./screens/puzzle.js";
 import { renderCombatScreen } from "./screens/combat.js";
+import { renderCharacterBuilderScreen } from "./screens/character-builder.js";
 
 const store = createStore(createInitialState());
 let socket = null;
@@ -46,6 +58,7 @@ const mapScreen = document.getElementById("map-screen");
 const roomScreen = document.getElementById("room-screen");
 const puzzleScreen = document.getElementById("puzzle-screen");
 const combatScreen = document.getElementById("combat-screen");
+const characterBuilderScreen = document.getElementById("character-builder-screen");
 const joinStatus = document.getElementById("join-status");
 
 function setJoinStatus(text) {
@@ -160,11 +173,27 @@ const handlers = {
   onAttack: (targetId, attribute, skill) => sendCommand(combatAttackCommand(targetId, attribute, skill, currentRevision(), currentEncounterId())),
   onDeclareManeuver: (maneuver, targetId, attribute, skill) =>
     sendCommand(combatManeuverCommand(maneuver, targetId, attribute, skill, currentRevision(), currentEncounterId())),
-  onReact: (reaction) => sendCommand(combatReactionCommand(reaction, currentRevision(), currentEncounterId())),
+  // §21.4 reaction interrupt window (board task #16/#17): reactionId ties
+  // the response to the exact pending interrupt combat.js's
+  // renderReactionPrompt is showing.
+  onReact: (reactionId, reaction) => sendCommand(resolveReactionCommand(reactionId, reaction, currentRevision(), currentEncounterId())),
+  // Wave-5 hero commands (docs/INFINITE_STACKS_CONTRACTS.md S5.4, board task
+  // #17): character creation, hand/deck, and inventory.
+  onRollAttributeDice: () => sendCommand(rollAttributeDiceCommand(currentRevision())),
+  onCreateHero: (draft) => sendCommand(createHeroCommand(draft, currentRevision())),
+  onUpdateCharacterDraft: (patch) => store.setState((s) => updateCharacterDraft(s, patch)),
+  onDrawCards: (count) => sendCommand(drawCardsCommand(count, currentRevision())),
+  onPlayCard: (cardId, target) => sendCommand(playCardCommand(cardId, target, currentRevision(), currentEncounterId())),
+  onSafeRest: () => sendCommand(safeRestCommand(currentRevision())),
+  onPickupItem: (itemInstanceId) => sendCommand(pickupItemCommand(itemInstanceId, currentRevision())),
+  onDropItem: (itemId) => sendCommand(dropItemCommand(itemId, currentRevision())),
+  onTradeItem: (toHeroId, itemId) => sendCommand(tradeItemCommand(toHeroId, itemId, currentRevision())),
+  onRecoverBodyLoot: (deadHeroId, itemIds) => sendCommand(recoverBodyLootCommand(deadHeroId, itemIds, currentRevision())),
 };
 
 // Exactly one non-map screen is visible at a time, selected by
-// selectActiveScreen (core/selectors.js) -- combat > puzzle > room > map.
+// selectActiveScreen (core/selectors.js) -- character-builder > combat >
+// puzzle > room > map.
 function render(state) {
   if (!mapScreen) return;
   const activeScreen = selectActiveScreen(state);
@@ -173,8 +202,11 @@ function render(state) {
   if (roomScreen) roomScreen.hidden = activeScreen !== "room";
   if (puzzleScreen) puzzleScreen.hidden = activeScreen !== "puzzle";
   if (combatScreen) combatScreen.hidden = activeScreen !== "combat";
+  if (characterBuilderScreen) characterBuilderScreen.hidden = activeScreen !== "character-builder";
 
-  if (activeScreen === "map") renderMapScreen(mapScreen, state, handlers);
+  if (activeScreen === "character-builder" && characterBuilderScreen) {
+    renderCharacterBuilderScreen(characterBuilderScreen, state, handlers);
+  } else if (activeScreen === "map") renderMapScreen(mapScreen, state, handlers);
   else if (activeScreen === "room" && roomScreen) renderRoomScreen(roomScreen, state, handlers);
   else if (activeScreen === "puzzle" && puzzleScreen) renderPuzzleScreen(puzzleScreen, state, handlers);
   else if (activeScreen === "combat" && combatScreen) renderCombatScreen(combatScreen, state, handlers);
@@ -208,6 +240,11 @@ function enterRun({ heroId, roomCode, accessCode, playerToken, revision }) {
   openGameSocket({ accessCode, roomCode, playerToken });
   fetchSnapshot({ accessCode, roomCode, playerToken })
     .then((resp) => store.setState((s) => reduceServerMessage(s, { kind: "snapshot", view: resp.view, revision: resp.revision })))
+    .catch(() => {});
+  // Static background/card/item catalog for the character-builder screen
+  // (board task #17) -- fetched once per run, independent of the snapshot.
+  fetchContentCatalog({ accessCode })
+    .then((catalog) => store.setState((s) => setContentCatalog(s, catalog)))
     .catch(() => {});
 }
 

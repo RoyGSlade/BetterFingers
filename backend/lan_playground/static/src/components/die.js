@@ -39,3 +39,23 @@ export function renderDie(dieDisplay, { reducedMotion = false } = {}) {
 
   return wrap;
 }
+
+// One visible d4 from the character-builder's four simultaneous attribute
+// rolls (infinite_stacks.md S11.1/S24.2): the server supplies `value`
+// (attribute_dice_rolled's payload.dice[index]) -- this only ever displays a
+// value it was given, same discipline as renderDie above. Reduced-motion
+// mode skips the rolling animation and shows the readable result immediately.
+export function renderAttributeDie(value, { reducedMotion = false, label } = {}) {
+  const wrap = document.createElement("div");
+  wrap.className = "stacks-die stacks-die--attribute" + (reducedMotion ? " stacks-die--instant" : "");
+  wrap.setAttribute("role", "img");
+  wrap.setAttribute("aria-label", label ? `${label}: d4 rolled ${value}` : `d4 rolled ${value}`);
+
+  const face = document.createElement("div");
+  face.className = "stacks-die-face" + (reducedMotion ? "" : " stacks-die-face--rolling");
+  face.textContent = String(value);
+  face.setAttribute("aria-hidden", "true");
+  wrap.appendChild(face);
+
+  return wrap;
+}

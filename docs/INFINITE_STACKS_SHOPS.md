@@ -36,31 +36,36 @@ shops/
 
 ## 2. Content pack data is passed in, never loaded
 
-No module in `shops/` imports `content.schemas` or `content.loader` at
-runtime -- this mirrors `heroes/`. `ShopArchetype` (the authored shape) is
-constructed by `content/loader.py`'s `load_shops()`, not by anything in this
-package reading YAML.
+No module in `shops/` (`models.py`/`economy.py`/`services.py`/`seeding.py`/
+`run_summary.py`) imports `content.schemas` or `content.loader` at runtime --
+this mirrors `heroes/`. `ShopArchetype` (the authored shape) is constructed
+by `shops/content_loader.py`'s `load_shops()`, not by anything in the pure
+economy modules reading YAML.
 
-**Ownership note, wave-4-specific:** `content/schemas.py` is off-limits to
-this lane this wave (director's wave-4 file-ownership rule), so
-`ShopArchetype`/`InventoryListing`/etc. live in `shops/models.py` instead of
-`content/schemas.py`, and `content.ContentPack` gains **no new field** this
-wave -- `content/loader.py`'s `load_shops(pack_dir) -> dict[str, ShopArchetype]`
-is a separate entry point from `load_pack`/`load_core_pack`, tolerant of a
-missing `shops.yaml` (returns `{}`, same pattern `load_puzzle_templates`
-already uses for its optional section). This means the dependency edge for
-wave 4 runs `content.loader -> shops.models` (the reverse of `heroes`'
-"content never imports the package" story) -- deliberate, not an oversight,
-and called out again in `content/loader.py`'s module docstring. If shop
-content ever needs to become a first-class `ContentPack` field, that's a
-schema change to coordinate with the director/schema owner in a later wave;
-`content.validators.validate_core_pack_and_shops()` is written so that
-migration only touches loader.py/validators.py, not this package.
+**Layering, wave-5-corrected (board task #18):** wave 4 shipped
+`load_shops()`/`check_shop_item_references()` on the *content* side
+(`content/loader.py`/`content/validators.py`), because `content/schemas.py`
+was off-limits to this lane that wave -- that produced a documented backwards
+dependency edge, `content.loader -> shops.models`, the reverse of `heroes`'
+"content never imports the package" story. Wave 5 moved the loading/
+validation *entry point* into `shops/content_loader.py` instead of moving
+`ShopArchetype`/`InventoryListing`/etc. into `content/schemas.py`: nothing
+else on the content side ever consumed those dataclasses, so relocating the
+entry point removes the edge with zero change to the ECON-001-proven
+`economy.py`/`services.py`/`seeding.py` modules (1000-seed property test
+untouched) and no Enum/dataclass duplication across packages. `content/
+loader.py` and `content/validators.py` no longer import anything from
+`shops/`; `shops/content_loader.py` is the only place the dependency now
+runs, and it runs shops -> content (the same forward direction
+`systems/heroes_wire.py` already uses for its own pack lookups), never the
+reverse. Wave-5 domain/reducer wiring (`systems/shops_wire.py`) is the
+runtime caller: it loads shop archetypes via `shops.content_loader.
+load_core_shops()`, same as `heroes_wire.py`'s own `_core_pack()` cache.
 
-`content.validators.check_shop_item_references(shops, pack)` is the CI-style
-cross-reference check (§23.2 "unknown ... item ... references"): every
-`item_id` a shop's `guaranteed_inventory`/`rotating_pool` lists must exist in
-`pack.items`, or it's an `unknown_reference` `Finding`.
+`shops.content_loader.check_shop_item_references(shops, pack)` is the
+CI-style cross-reference check (§23.2 "unknown ... item ... references"):
+every `item_id` a shop's `guaranteed_inventory`/`rotating_pool` lists must
+exist in `pack.items`, or it's an `unknown_reference` `Finding`.
 `validate_core_pack_and_shops()` is the one-call entry point that validates
 both together and raises `ValidationError` with every finding from either
 half.

@@ -120,6 +120,7 @@ def enemy_combatant_to_dict(e: EnemyCombatant) -> dict:
         "threat_cost": e.threat_cost,
         "threat_tier": e.threat_tier,
         "initiative_bonus": e.initiative_bonus,
+        "accuracy_bonus": e.accuracy_bonus,
         "hp": e.hp,
         "resists": list(e.resists),
         "weaknesses": list(e.weaknesses),
@@ -141,6 +142,7 @@ def enemy_combatant_from_dict(d: dict) -> EnemyCombatant:
         threat_cost=d["threat_cost"],
         threat_tier=d["threat_tier"],
         initiative_bonus=d["initiative_bonus"],
+        accuracy_bonus=d.get("accuracy_bonus", 0),
         hp=d["hp"],
         resists=tuple(d["resists"]),
         weaknesses=tuple(d["weaknesses"]),
@@ -239,6 +241,7 @@ def snapshot_from_live(
     threat_budget: dict,
     pending_joiner_hero_ids: list,
     room_id: str,
+    pending_reaction: dict | None = None,
 ) -> ConflictEncounterState:
     return ConflictEncounterState(
         encounter_id=live.encounter_id,
@@ -254,6 +257,7 @@ def snapshot_from_live(
         threat_budget=dict(threat_budget),
         pending_joiner_hero_ids=list(pending_joiner_hero_ids),
         sequencer_seq=live.sequencer._seq,
+        pending_reaction=dict(pending_reaction) if pending_reaction is not None else None,
     )
 
 

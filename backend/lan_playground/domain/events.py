@@ -68,6 +68,27 @@ class EventType(str, Enum):
     ITEM_TRADED = "item_traded"
     BODY_LOOT_RECOVERED = "body_loot_recovered"
 
+    # Content-effect ops, wave-5 additions (infinite_stacks.md §16.4-16.6;
+    # systems/effects.py). Both ops already appear in authored content
+    # (enemies.yaml's apply_condition, conditions.yaml/cards.yaml/items.yaml's
+    # remove_condition) but had no dispatcher before this wave.
+    CONDITION_APPLIED = "condition_applied"
+    CONDITION_REMOVED = "condition_removed"
+
+    # Shops wiring (infinite_stacks.md §9.6; wave 5, board task #18;
+    # systems/shops_wire.py). Domain schema posted to the collab room
+    # 2026-07-19.
+    SHOP_INSTANTIATED = "shop_instantiated"
+    SHOP_ITEM_BOUGHT = "shop_item_bought"
+    SHOP_ITEM_SOLD = "shop_item_sold"
+    SHOP_ITEM_REPAIRED = "shop_item_repaired"
+    SHOP_ITEM_IDENTIFIED = "shop_item_identified"
+    SHOP_CONDITION_TREATED = "shop_condition_treated"
+    SHOP_TRANSACTION_REJECTED = "shop_transaction_rejected"
+
+    # Server-side clue sharing (wave 5, board task #18; systems/puzzles.py)
+    CLUE_SHARED = "clue_shared"
+
 
 @dataclass(frozen=True)
 class Event:

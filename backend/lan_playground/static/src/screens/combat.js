@@ -29,7 +29,7 @@ import { renderCheckReceipt } from "../components/check-receipt.js";
 const CALLED_MANEUVER_ACCURACY = -4;
 const ATTRIBUTES = ["force", "finesse", "insight", "presence"];
 const MANEUVERS = ["disarm", "trip", "drive_back", "break", "crushing_blow", "rattle"];
-const REACTIONS = ["dodge", "block", "protect", "counter", "escape"];
+const REACTIONS = ["dodge", "block", "protect", "counter", "pass"];
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -147,10 +147,17 @@ function buildSelect(id, labelText, options) {
   return { wrap, select };
 }
 
-// Legal targets are visible (only living enemies); the -4 accuracy cost on a
-// called maneuver is shown on its own control before confirmation (S14.4/
-// S24.3), matching maneuver.accuracyModifier so it stays a labeled fact, not
-// a hidden number.
+// Wave-4/5 (docs/INFINITE_STACKS_CONTRACTS.md S5.4 item 5, board task #17):
+// one button per living enemy, built from the wire's `legalAttacks` catalog
+// -- real accuracy/weapon-die/damage facts resolved server-side from the
+// hero's actual sheet + equipment (S24.3 "legal targets and expected base
+// effects are visible"), never a client-typed attribute/skill guess. Every
+// legal attack this wave resolves through Force + Bonk (the same pair the
+// server used to compute the catalog), so the button sends that pair
+// explicitly rather than re-deriving it. Falls back to the pre-wave-4
+// freeform attribute/skill form only for a hero with no completed character
+// creation yet (empty legalAttacks), so combat never becomes unplayable for
+// an older or incomplete hero.
 function renderAttacks(combat, handlers) {
   const panel = el("section", "stacks-combat-attacks");
   panel.setAttribute("aria-label", "Attack");
@@ -163,6 +170,28 @@ function renderAttacks(combat, handlers) {
   }
   if (!combat.isYourTurn) {
     panel.appendChild(el("p", null, "Not your turn."));
+    return panel;
+  }
+
+  const yourHero = combat.heroes.find((h) => h.id === combat.yourHeroId);
+  const legalAttacks = yourHero ? yourHero.legalAttacks : [];
+  if (legalAttacks.length) {
+    const list = el("div", "stacks-combat-attack-list");
+    for (const attack of legalAttacks) {
+      const target = targets.find((e) => e.id === attack.targetId);
+      if (!target) continue;
+      const button = el("button", "stacks-combat-attack-target-button");
+      button.type = "button";
+      const accuracySign = attack.accuracyBonus >= 0 ? "+" : "";
+      const damageSign = attack.damageBonus >= 0 ? "+" : "";
+      const factText = `d${attack.weaponDieFaces} ${damageSign}${attack.damageBonus} damage, ${accuracySign}${attack.accuracyBonus} accuracy`;
+      button.setAttribute("aria-label", `Attack ${target.name}: ${factText}`);
+      button.appendChild(el("span", "stacks-combat-attack-target-name", `Attack ${target.name}`));
+      button.appendChild(el("span", "stacks-combat-attack-target-facts", factText));
+      button.addEventListener("click", () => handlers.onAttack(attack.targetId, "force", "bonk"));
+      list.appendChild(button);
+    }
+    panel.appendChild(list);
     return panel;
   }
 
@@ -250,16 +279,50 @@ function renderManeuvers(combat, handlers) {
   return panel;
 }
 
-function renderReactions(combat, handlers) {
+// §21.3/§21.4 reaction interrupt window (stacks-enemyroll's wave-5
+// transport-injection spec, board task #16): the actionable Dodge/Block/
+// Protect/Counter/pass buttons render ONLY on the client whose hero_id is
+// the pending reaction's defender or appears in its protector_ids -- every
+// other viewer only sees that the encounter is paused on a reaction, never
+// the buttons (§21.3 "no player view receives another player's ... reaction
+// prompt"; here the wire itself doesn't withhold pending_reaction, since
+// every viewer needs to know combat is paused, but only the eligible
+// hero's client renders the decision controls). Renders nothing at all
+// while combat.pendingReaction is null (no interrupt in flight -- true for
+// every encounter today, until board task #16 lands the domain field).
+// combatReactionCommand's resolve_reaction envelope carries reactionId so
+// a stale/duplicate click can never resolve the wrong interrupt.
+function renderReactionPrompt(combat, handlers) {
+  const pending = combat.pendingReaction;
+  if (!pending) return null;
+
   const panel = el("section", "stacks-combat-reactions");
-  panel.setAttribute("aria-label", "Reactions");
+  panel.setAttribute("aria-label", "Reaction");
   panel.appendChild(el("h2", "stacks-panel-heading", "Reaction"));
+
+  const isEligible = pending.defenderId === combat.yourHeroId || pending.protectorIds.includes(combat.yourHeroId);
+  if (!isEligible) {
+    panel.appendChild(el("p", "stacks-combat-reaction-paused", "Combat is paused on another hero's reaction."));
+    return panel;
+  }
+
+  panel.appendChild(
+    el("p", "stacks-combat-reaction-prompt", `${pending.actionLabel || "An attack"} is incoming -- respond now.`),
+  );
+  panel.appendChild(
+    el(
+      "p",
+      "stacks-combat-reaction-timer",
+      "If you don't respond in time, this automatically resolves as a pass (infinite_stacks.md S21.4).",
+    ),
+  );
+
   const list = el("div", "stacks-combat-reactions-list");
   for (const reaction of REACTIONS) {
     const button = el("button", "stacks-combat-reaction-button", reaction);
     button.type = "button";
     button.setAttribute("aria-label", `React with ${reaction}`);
-    button.addEventListener("click", () => handlers.onReact(reaction));
+    button.addEventListener("click", () => handlers.onReact(pending.reactionId, reaction));
     list.appendChild(button);
   }
   panel.appendChild(list);
@@ -288,6 +351,7 @@ export function renderCombatScreen(container, state, handlers) {
   const actions = el("div", "stacks-combat-actions");
   actions.appendChild(renderAttacks(combat, handlers));
   actions.appendChild(renderManeuvers(combat, handlers));
-  actions.appendChild(renderReactions(combat, handlers));
+  const reactionPrompt = renderReactionPrompt(combat, handlers);
+  if (reactionPrompt) actions.appendChild(reactionPrompt);
   container.appendChild(actions);
 }

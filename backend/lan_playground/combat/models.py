@@ -110,6 +110,7 @@ class EnemyCombatant:
     threat_cost: int
     threat_tier: str
     initiative_bonus: int = 0
+    accuracy_bonus: int = 0           # §14.3 to-hit contribution for enemy attack-type intents (wave 5, task #16)
     hp: int | None = None
     resists: tuple[str, ...] = ()     # maneuver names this enemy resists outright
     weaknesses: tuple[str, ...] = ()  # maneuver names that expose an extra weakness

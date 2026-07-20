@@ -690,3 +690,182 @@ button.stacks-tile {
   gap: 1rem;
   margin-top: 1rem;
 }
+
+/* Wave 5: character-builder screen + hand/inventory panel + per-target
+   combat buttons + reaction prompt (board task #17). Same rule as every
+   other section above -- every stateful indicator keeps a text label in the
+   markup; color here only reinforces it. */
+
+#character-builder-screen {
+  padding: 1rem;
+  max-width: 48rem;
+  margin: 0 auto;
+}
+
+.stacks-builder-layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+
+.stacks-builder-roll,
+.stacks-builder-dice,
+.stacks-builder-assignment,
+.stacks-builder-background,
+.stacks-builder-cards,
+.stacks-builder-name,
+.stacks-builder-preview,
+.stacks-builder-submit {
+  background: var(--stacks-panel);
+  border: 1px solid var(--stacks-border);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+}
+
+.stacks-builder-dice-row {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.stacks-die--attribute .stacks-die-face {
+  width: 3rem;
+  height: 3rem;
+  font-size: 1.2rem;
+}
+
+.stacks-builder-field {
+  margin-bottom: 0.5rem;
+}
+.stacks-builder-field label {
+  display: block;
+  margin-bottom: 0.2rem;
+}
+
+.stacks-builder-background-details {
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
+  color: var(--stacks-muted);
+}
+
+.stacks-builder-card-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+#stacks-builder-name-input {
+  width: 100%;
+  padding: 0.4rem;
+}
+
+.stacks-builder-preview-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.5rem;
+}
+
+.stacks-builder-submit-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.stacks-builder-submit-hint {
+  color: var(--stacks-muted);
+  font-size: 0.85rem;
+}
+
+.stacks-hand-panel,
+.stacks-inventory-panel {
+  background: var(--stacks-panel);
+  border: 1px solid var(--stacks-border);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.stacks-hand-card-with-target {
+  margin-bottom: 0.5rem;
+}
+.stacks-hand-target-field {
+  margin: 0.3rem 0;
+}
+.stacks-hand-target-field label {
+  display: block;
+  font-size: 0.85rem;
+}
+
+.stacks-hand-pile-counts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.5rem;
+  font-size: 0.85rem;
+  color: var(--stacks-muted);
+  margin: 0.5rem 0;
+}
+
+.stacks-hand-draw-button,
+.stacks-hand-safe-rest-button,
+.stacks-hand-play-targeted-button,
+.stacks-inventory-drop-button,
+.stacks-inventory-trade-button,
+.stacks-inventory-pickup-button,
+.stacks-inventory-recover-button {
+  background: #2f3340;
+  border: 1px solid var(--stacks-border);
+  border-radius: 0.3rem;
+  padding: 0.35rem 0.75rem;
+  margin-right: 0.4rem;
+  margin-top: 0.3rem;
+}
+
+.stacks-inventory-carried-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.stacks-inventory-carried-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--stacks-border);
+}
+
+.stacks-inventory-ground-item,
+.stacks-inventory-body {
+  margin-bottom: 0.3rem;
+}
+
+.stacks-combat-attack-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.stacks-combat-attack-target-button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  width: 100%;
+  text-align: left;
+  background: #262a35;
+  border: 1px solid var(--stacks-border);
+  border-radius: 0.4rem;
+  padding: 0.5rem;
+}
+.stacks-combat-attack-target-facts {
+  font-size: 0.8rem;
+  color: var(--stacks-muted);
+}
+
+.stacks-combat-reaction-prompt {
+  font-weight: 600;
+}
+.stacks-combat-reaction-timer,
+.stacks-combat-reaction-paused {
+  font-size: 0.85rem;
+  color: var(--stacks-muted);
+}

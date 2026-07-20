@@ -15,6 +15,7 @@ pattern in tests/test_lan_game_api.py.
 
 from __future__ import annotations
 
+import asyncio
 import unittest
 
 from fastapi.testclient import TestClient
@@ -354,6 +355,333 @@ class ProjectionPrivacyTests(unittest.TestCase):
                 self.assertNotIn("secrets", room_payload)
 
 
+def _snapshot(client: TestClient, code: str, token: str) -> dict:
+    resp = client.get(f"/api/stacks/rooms/{code}/snapshot", headers={**ACCESS_HEADER, **_token_header(token)})
+    assert resp.status_code == 200, resp.text
+    return resp.json()["view"]
+
+
+def _content_catalog(client: TestClient) -> dict:
+    resp = client.get("/api/stacks/content-catalog", headers=ACCESS_HEADER)
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def _first_live_general_and_persona_cards(catalog: dict) -> tuple[list[str], str]:
+    general = [cid for cid, c in catalog["cards"].items() if c["source"] == "general" and c["live_at_creation"]][:2]
+    persona = next(cid for cid, c in catalog["cards"].items() if c["source"] == "persona")
+    return general, persona
+
+
+def _make_hero(client: TestClient, code: str, token: str, name: str, catalog: dict, cmd_prefix: str) -> dict:
+    """roll_attribute_dice -> create_hero over REST, returning the final
+    command response body (so callers can inspect its `events`)."""
+    background_id = sorted(catalog["backgrounds"])[0]
+    general_card_ids, persona_card_id = _first_live_general_and_persona_cards(catalog)
+
+    revision = _snapshot(client, code, token)["revision"]
+    roll_resp = _submit(
+        client, code, token, command_id=f"{cmd_prefix}-roll", idempotency_key=f"{cmd_prefix}-roll",
+        expected_revision=revision, type="roll_attribute_dice",
+    )
+    assert roll_resp.status_code == 200, roll_resp.text
+    roll_body = roll_resp.json()
+    dice = roll_body["events"][0]["payload"]["dice"]
+    attribute_names = ("force", "finesse", "insight", "presence")
+    assignment = dict(zip(attribute_names, dice))
+
+    create_resp = _submit(
+        client, code, token, command_id=f"{cmd_prefix}-create", idempotency_key=f"{cmd_prefix}-create",
+        expected_revision=roll_body["revision"], type="create_hero",
+        payload={
+            "name": name,
+            "background_id": background_id,
+            "attribute_assignment": assignment,
+            "general_card_ids": general_card_ids,
+            "persona_card_id": persona_card_id,
+        },
+    )
+    assert create_resp.status_code == 200, create_resp.text
+    return create_resp.json()
+
+
+class ContentCatalogTests(unittest.TestCase):
+    def test_catalog_lists_backgrounds_cards_and_items(self):
+        client = _client()
+        catalog = _content_catalog(client)
+        self.assertEqual(len(catalog["backgrounds"]), 4)
+        self.assertGreaterEqual(len(catalog["cards"]), 20)
+        self.assertGreaterEqual(len(catalog["items"]), 15)
+        # Every card declares whether it can be picked at creation this wave
+        # (heroes.deck.build_starting_deck's LIVE-op build-time gate) so the
+        # character-builder picker never offers a card that would 400.
+        for card in catalog["cards"].values():
+            self.assertIn("live_at_creation", card)
+        general_cards, persona_card = _first_live_general_and_persona_cards(catalog)
+        self.assertEqual(len(general_cards), 2)
+        self.assertEqual(catalog["cards"][persona_card]["source"], "persona")
+
+    def test_catalog_requires_access_code(self):
+        client = _client()
+        resp = client.get("/api/stacks/content-catalog")
+        self.assertEqual(resp.status_code, 401)
+
+
+class HeroCreationTests(unittest.TestCase):
+    def test_roll_then_create_hero_emits_public_sheet_and_private_hand(self):
+        client = _client()
+        room = _create_room(client)
+        code, token, hero_id = room["room_code"], room["player_token"], room["hero_id"]
+        catalog = _content_catalog(client)
+
+        result = _make_hero(client, code, token, "Rey", catalog, "h1")
+        event_types = [e["type"] for e in result["events"]]
+        self.assertIn("hero_created", event_types)
+        self.assertIn("hand_dealt", event_types)
+
+        hero_created = next(e for e in result["events"] if e["type"] == "hero_created")
+        self.assertEqual(hero_created["visibility"], "public")
+        self.assertNotIn("hand", hero_created["payload"])
+        self.assertIn("card_ids", hero_created["payload"]["deck"])
+        self.assertEqual(hero_created["payload"]["deck"]["hand_count"], 4)
+
+        hand_dealt = next(e for e in result["events"] if e["type"] == "hand_dealt")
+        self.assertEqual(hand_dealt["visibility"], "private")
+        self.assertEqual(len(hand_dealt["payload"]["hand"]), 4)
+
+        view = _snapshot(client, code, token)
+        self.assertEqual(len(view["heroes"][hero_id]["hand"]), 4)
+        self.assertIsNotNone(view["heroes"][hero_id]["sheet"])
+        self.assertEqual(view["heroes"][hero_id]["deck"]["hand_count"], 4)
+
+    def test_hand_and_pending_dice_never_leak_to_another_viewer(self):
+        client = _client()
+        room = _create_room(client)
+        code, token, hero_id = room["room_code"], room["player_token"], room["hero_id"]
+        ally = _join_room(client, code, "Ally")
+        ally_token = ally["player_token"]
+        catalog = _content_catalog(client)
+
+        _make_hero(client, code, token, "Rey", catalog, "h1")
+
+        own_view = _snapshot(client, code, token)
+        self.assertIn("hand", own_view["heroes"][hero_id])
+
+        other_view = _snapshot(client, code, ally_token)
+        self.assertNotIn("hand", other_view["heroes"][hero_id])
+        # Deck COMPOSITION (the full owned card set) is public character-sheet
+        # info -- only the hand/draw-pile order is private.
+        self.assertEqual(other_view["heroes"][hero_id]["deck"]["card_ids"], own_view["heroes"][hero_id]["deck"]["card_ids"])
+        self.assertIsNotNone(other_view["heroes"][hero_id]["sheet"])
+
+    def test_ws_missed_events_never_deliver_hand_dealt_to_another_viewer(self):
+        client = _client()
+        room = _create_room(client)
+        code, token, hero_id = room["room_code"], room["player_token"], room["hero_id"]
+        ally = _join_room(client, code, "Ally")
+        ally_token = ally["player_token"]
+        catalog = _content_catalog(client)
+
+        _make_hero(client, code, token, "Rey", catalog, "h1")
+
+        with client.websocket_connect(f"/ws/stacks/{code}?access_code={ACCESS_CODE}&token={token}") as host_ws:
+            host_first = host_ws.receive_json()
+            self.assertIn("hand_dealt", [e["type"] for e in host_first["missed_events"]])
+
+        with client.websocket_connect(f"/ws/stacks/{code}?access_code={ACCESS_CODE}&token={ally_token}") as ally_ws:
+            ally_first = ally_ws.receive_json()
+            self.assertNotIn("hand_dealt", [e["type"] for e in ally_first["missed_events"]])
+            for event in ally_first["missed_events"]:
+                self.assertNotIn("hand", event["payload"])
+
+    def test_card_drawn_is_private_to_the_drawing_hero(self):
+        client = _client()
+        room = _create_room(client)
+        code, token, hero_id = room["room_code"], room["player_token"], room["hero_id"]
+        ally = _join_room(client, code, "Ally")
+        ally_token = ally["player_token"]
+        catalog = _content_catalog(client)
+
+        create_result = _make_hero(client, code, token, "Rey", catalog, "h1")
+        # Play a card first so the deck isn't empty and a fresh draw is legal.
+        hand = next(e for e in create_result["events"] if e["type"] == "hand_dealt")["payload"]["hand"]
+        revision = create_result["revision"]
+        play_resp = _submit(
+            client, code, token, command_id="play1", idempotency_key="play1",
+            expected_revision=revision, type="play_card", payload={"card_id": hand[0]},
+        )
+        self.assertEqual(play_resp.status_code, 200, play_resp.text)
+
+        draw_resp = _submit(
+            client, code, token, command_id="draw1", idempotency_key="draw1",
+            expected_revision=play_resp.json()["revision"], type="draw_cards", payload={"count": 1},
+        )
+        self.assertEqual(draw_resp.status_code, 200, draw_resp.text)
+        draw_event = next(e for e in draw_resp.json()["events"] if e["type"] == "card_drawn")
+        self.assertEqual(draw_event["visibility"], "private")
+
+        own_view = _snapshot(client, code, token)
+        other_view = _snapshot(client, code, ally_token)
+        self.assertIn("hand", own_view["heroes"][hero_id])
+        self.assertNotIn("hand", other_view["heroes"][hero_id])
+
+
+class ItemInventoryTests(unittest.TestCase):
+    def test_drop_then_pickup_by_another_hero_round_trips_through_ground_items(self):
+        client = _client()
+        room = _create_room(client)
+        code, token, hero_id = room["room_code"], room["player_token"], room["hero_id"]
+        ally = _join_room(client, code, "Ally")
+        ally_token, ally_hero_id = ally["player_token"], ally["hero_id"]
+        catalog = _content_catalog(client)
+
+        _make_hero(client, code, token, "Rey", catalog, "h1")
+        _make_hero(client, code, ally_token, "Sam", catalog, "h2")
+
+        view = _snapshot(client, code, token)
+        item_id = view["heroes"][hero_id]["inventory"]["items"][0]
+
+        drop_resp = _submit(
+            client, code, token, command_id="drop1", idempotency_key="drop1",
+            expected_revision=view["revision"], type="drop_item", payload={"item_id": item_id},
+        )
+        self.assertEqual(drop_resp.status_code, 200, drop_resp.text)
+        drop_event = next(e for e in drop_resp.json()["events"] if e["type"] == "item_dropped")
+        instance_id = drop_event["payload"]["item_instance_id"]
+        self.assertNotIn(item_id, drop_event["payload"]["inventory"]["items"])
+
+        room_id = view["heroes"][hero_id]["room_id"]
+        after_drop = _snapshot(client, code, token)
+        self.assertEqual(after_drop["rooms"][room_id]["ground_items"][instance_id], item_id)
+
+        ally_view = _snapshot(client, code, ally_token)
+        pickup_resp = _submit(
+            client, code, ally_token, command_id="pick1", idempotency_key="pick1",
+            expected_revision=ally_view["revision"], type="pickup_item", payload={"item_instance_id": instance_id},
+        )
+        self.assertEqual(pickup_resp.status_code, 200, pickup_resp.text)
+        pickup_event = next(e for e in pickup_resp.json()["events"] if e["type"] == "item_picked_up")
+        self.assertIn(item_id, pickup_event["payload"]["inventory"]["items"])
+
+        final = _snapshot(client, code, ally_token)
+        self.assertNotIn(instance_id, final["rooms"][room_id]["ground_items"])
+        self.assertIn(item_id, final["heroes"][ally_hero_id]["inventory"]["items"])
+
+    def test_trade_item_between_two_heroes_in_same_room(self):
+        client = _client()
+        room = _create_room(client)
+        code, token, hero_id = room["room_code"], room["player_token"], room["hero_id"]
+        ally = _join_room(client, code, "Ally")
+        ally_token, ally_hero_id = ally["player_token"], ally["hero_id"]
+        catalog = _content_catalog(client)
+
+        _make_hero(client, code, token, "Rey", catalog, "h1")
+        _make_hero(client, code, ally_token, "Sam", catalog, "h2")
+
+        view = _snapshot(client, code, token)
+        item_id = view["heroes"][hero_id]["inventory"]["items"][0]
+
+        trade_resp = _submit(
+            client, code, token, command_id="trade1", idempotency_key="trade1",
+            expected_revision=view["revision"], type="trade_item",
+            payload={"to_hero_id": ally_hero_id, "item_id": item_id},
+        )
+        self.assertEqual(trade_resp.status_code, 200, trade_resp.text)
+        trade_event = next(e for e in trade_resp.json()["events"] if e["type"] == "item_traded")
+        self.assertEqual(trade_event["payload"]["from_hero_id"], hero_id)
+        self.assertEqual(trade_event["payload"]["to_hero_id"], ally_hero_id)
+
+        final = _snapshot(client, code, token)
+        self.assertNotIn(item_id, final["heroes"][hero_id]["inventory"]["items"])
+        self.assertIn(item_id, final["heroes"][ally_hero_id]["inventory"]["items"])
+
+    def test_recover_body_loot_rejects_when_nothing_recoverable(self):
+        client = _client()
+        room = _create_room(client)
+        code, token = room["room_code"], room["player_token"]
+        catalog = _content_catalog(client)
+        _make_hero(client, code, token, "Rey", catalog, "h1")
+
+        view = _snapshot(client, code, token)
+        resp = _submit(
+            client, code, token, command_id="recover1", idempotency_key="recover1",
+            expected_revision=view["revision"], type="recover_body_loot",
+            payload={"dead_hero_id": "hero_nobody"},
+        )
+        self.assertEqual(resp.status_code, 422)
+        self.assertEqual(resp.json()["detail"]["code"], "illegal_action")
+
+    def test_recover_body_loot_happy_path_via_directly_seeded_body(self):
+        # Setting up a real permanent death is combat lane territory (out of
+        # this lane's claimed files); seed RoomState.body_item_ids directly on
+        # the adapter's internal domain state instead, the same
+        # reach-into-`_domain_states` pattern tests/test_stacks_e2e.py and
+        # tests/test_stacks_puzzle_rooms.py already use for setup.
+        adapter = StacksEngineAdapter()
+        manager = StacksRoomManager(adapter)
+        app = _build_app(room_manager=manager)
+        client = TestClient(app)
+        room = _create_room(client)
+        code, token, hero_id = room["room_code"], room["player_token"], room["hero_id"]
+        catalog = _content_catalog(client)
+        _make_hero(client, code, token, "Rey", catalog, "h1")
+
+        view = _snapshot(client, code, token)
+        room_id = view["heroes"][hero_id]["room_id"]
+        domain_state = adapter._domain_states[view["run_id"]]
+        domain_state.map.rooms[room_id].body_item_ids["hero_dead_ally"] = ("field_suture",)
+
+        resp = _submit(
+            client, code, token, command_id="recover1", idempotency_key="recover1",
+            expected_revision=view["revision"], type="recover_body_loot",
+            payload={"dead_hero_id": "hero_dead_ally"},
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        recover_event = next(e for e in resp.json()["events"] if e["type"] == "body_loot_recovered")
+        self.assertEqual(recover_event["payload"]["item_ids"], ["field_suture"])
+        self.assertIn("field_suture", recover_event["payload"]["inventory"]["items"])
+
+
+class AuthoritativeCommandTests(unittest.TestCase):
+    def test_apply_authoritative_runs_the_full_pipeline_with_viewer_none(self):
+        # Prep for the §21.4 reaction-timeout auto-pass / §21.5 disconnected-
+        # companion actions (stacks-enemyroll's transport-injection spec):
+        # StacksRoomManager/StacksEngineAdapter.apply_authoritative submits a
+        # command through the identical validate/handle/reduce/idempotency
+        # pipeline as a player command, but with viewer=None. No domain
+        # command actually needs viewer=None to behave differently yet
+        # (resolve_reaction doesn't exist until board task #16 lands) -- this
+        # is a plumbing regression guard: the new method must still produce a
+        # normal ApplyResult and advance revision/event_log exactly like
+        # apply() does for an ordinary command.
+        adapter = StacksEngineAdapter()
+        manager = StacksRoomManager(adapter)
+        app = _build_app(room_manager=manager)
+        client = TestClient(app)
+        room = _create_room(client)
+        code, hero_id = room["room_code"], room["hero_id"]
+
+        command = Command(
+            command_id="auth-1",
+            idempotency_key="auth-1",
+            run_id=room["run_id"],
+            hero_id=hero_id,
+            encounter_id=None,
+            expected_revision=room["revision"],
+            type="pass",
+            payload={},
+        )
+        result = manager.apply_authoritative(code, command)
+        self.assertFalse(result.replayed)
+        self.assertEqual(result.revision, room["revision"] + 1)
+        self.assertTrue(any(e.type == "turn_passed" for e in result.events))
+
+        # Idempotent replay works identically through this path too.
+        replay = manager.apply_authoritative(code, command)
+        self.assertTrue(replay.replayed)
+        self.assertEqual(replay.revision, result.revision)
+
+
 class AuthAndPolicyTests(unittest.TestCase):
     def test_commands_require_valid_player_token(self):
         client = _client()
@@ -392,6 +720,115 @@ class AuthAndPolicyTests(unittest.TestCase):
             "/api/stacks/rooms/NOPE1234/snapshot", headers={**ACCESS_HEADER, **_token_header("whatever")}
         )
         self.assertEqual(resp.status_code, 401)
+
+
+class _FakeReactionManager:
+    """Minimal StacksRoomManager stand-in for ReactionAutoPass unit tests:
+    serves scripted project() views and records apply_authoritative calls."""
+
+    def __init__(self, views):
+        self.views = list(views)  # consumed one per project() call; last repeats
+        self.applied = []
+
+    def project(self, code, viewer):
+        assert viewer is None, "auto-pass must use the authoritative (viewer=None) pipeline"
+        return self.views.pop(0) if len(self.views) > 1 else self.views[0]
+
+    def get_state(self, code):
+        class _S:
+            run_id = "run_test"
+
+        return _S()
+
+    def apply_authoritative(self, code, command):
+        self.applied.append(command)
+
+        class _R:
+            events = []
+            revision = 8
+
+        return _R()
+
+
+class _FakeHub:
+    def __init__(self):
+        self.broadcasts = []
+
+    async def broadcast_event(self, code, event, revision):
+        self.broadcasts.append((code, event, revision))
+
+
+def _pending_view(reaction_id="cevt_3_1", revision=7):
+    return {
+        "revision": revision,
+        "conflict": {
+            "room_0_0": {
+                "encounter_id": "enc_1",
+                "pending_reaction": {"reaction_id": reaction_id, "defender_id": "hero_a"},
+            }
+        },
+    }
+
+
+class ReactionAutoPassTimerTests(unittest.TestCase):
+    """S21.4 decision timer (wave-5 task #16 director close-out): the
+    transport injects a server-originated resolve_reaction "pass" when the
+    window expires unanswered; an answered window fires nothing; one window
+    is never double-armed. Wall-clock lives here in the transport -- the
+    reducer never sees a timer (wave-5 director ruling)."""
+
+    def test_expired_window_injects_a_pass_command(self):
+        from backend.lan_playground.stacks_api import ReactionAutoPass
+
+        manager = _FakeReactionManager([_pending_view()])
+        hub = _FakeHub()
+
+        async def run():
+            autopass = ReactionAutoPass(manager, hub, delay_seconds=0.01)
+            autopass.scan_and_schedule("room")
+            await asyncio.sleep(0.05)
+
+        asyncio.run(run())
+        self.assertEqual(len(manager.applied), 1)
+        command = manager.applied[0]
+        self.assertEqual(command.type, "resolve_reaction")
+        self.assertEqual(command.hero_id, "hero_a")
+        self.assertEqual(command.payload, {"reaction_id": "cevt_3_1", "reaction": "pass"})
+
+    def test_answered_window_fires_nothing(self):
+        from backend.lan_playground.stacks_api import ReactionAutoPass
+
+        # First project() arms the timer; by expiry the reaction is resolved.
+        manager = _FakeReactionManager(
+            [
+                _pending_view(),
+                {"revision": 9, "conflict": {"room_0_0": {"encounter_id": "enc_1", "pending_reaction": None}}},
+            ]
+        )
+        hub = _FakeHub()
+
+        async def run():
+            autopass = ReactionAutoPass(manager, hub, delay_seconds=0.01)
+            autopass.scan_and_schedule("room")
+            await asyncio.sleep(0.05)
+
+        asyncio.run(run())
+        self.assertEqual(manager.applied, [])
+
+    def test_same_reaction_is_never_double_armed(self):
+        from backend.lan_playground.stacks_api import ReactionAutoPass
+
+        manager = _FakeReactionManager([_pending_view()])
+        hub = _FakeHub()
+
+        async def run():
+            autopass = ReactionAutoPass(manager, hub, delay_seconds=0.01)
+            autopass.scan_and_schedule("room")
+            autopass.scan_and_schedule("room")  # second scan, same reaction_id
+            await asyncio.sleep(0.05)
+
+        asyncio.run(run())
+        self.assertEqual(len(manager.applied), 1)
 
 
 if __name__ == "__main__":

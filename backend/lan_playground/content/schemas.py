@@ -136,11 +136,18 @@ KNOWN_OPS: dict[str, OpSpec] = {
     "spend_energy": OpSpec(("amount",), OpStatus.LIVE),
     "grant_check": OpSpec(("attribute", "skill", "dc"), OpStatus.LIVE),
     "emit_fact": OpSpec(("fact_id",), OpStatus.LIVE),
+    # Wave-5 update (2026-07-19, stacks-shopwire, board task #18): real
+    # handlers now live in systems/effects.py, wiring HeroState.
+    # active_condition_ids (§16.4-16.5) -- shop_treat dispatches a condition's
+    # treatment effects (always remove_condition, conditions.yaml) through
+    # them, and the same handlers serve any other apply_condition/
+    # remove_condition-authored content (enemies.yaml, cards.yaml, items.yaml)
+    # that already referenced these ops before either was dispatchable.
+    "apply_condition": OpSpec(("condition_id",), OpStatus.LIVE),
+    "remove_condition": OpSpec(("condition_id",), OpStatus.LIVE),
     "damage": OpSpec(("amount",), OpStatus.PLANNED),
     "heal": OpSpec(("amount",), OpStatus.PLANNED),
     "modify_hp": OpSpec(("amount",), OpStatus.PLANNED),
-    "apply_condition": OpSpec(("condition_id",), OpStatus.PLANNED),
-    "remove_condition": OpSpec(("condition_id",), OpStatus.PLANNED),
     "grant_advantage": OpSpec((), OpStatus.PLANNED),
     "grant_disadvantage": OpSpec((), OpStatus.PLANNED),
     "move_target": OpSpec(("distance",), OpStatus.PLANNED),

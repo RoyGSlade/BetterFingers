@@ -319,10 +319,23 @@ def test_known_ops_marked_live_have_a_real_systems_handler():
     wave-1 guard (which asserted the opposite -- that no op was LIVE yet,
     because no dispatcher existed at all) with the general rule going
     forward: nothing may be marked LIVE in KNOWN_OPS unless
-    systems/effects.py actually dispatches it."""
+    systems/effects.py actually dispatches it.
+
+    Wave 5 update (2026-07-19, stacks-shopwire, board task #18):
+    apply_condition/remove_condition join the LIVE set -- systems/effects.py
+    now wires HeroState.active_condition_ids (§16.4-16.5), reached from
+    shop_treat's dispatched treatment effects and any other authored content
+    (enemies.yaml, cards.yaml, items.yaml) that already referenced these ops."""
 
     live_ops = {name for name, spec in S.KNOWN_OPS.items() if spec.status is S.OpStatus.LIVE}
-    assert live_ops == {"reveal_room", "spend_energy", "grant_check", "emit_fact"}
+    assert live_ops == {
+        "reveal_room",
+        "spend_energy",
+        "grant_check",
+        "emit_fact",
+        "apply_condition",
+        "remove_condition",
+    }
 
     from backend.lan_playground.systems import effects as E
 

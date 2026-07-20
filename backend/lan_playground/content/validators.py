@@ -23,9 +23,8 @@ from typing import Iterable, Sequence
 # static import graph records an edge to content.schemas rather than back to
 # the content package itself, which would form a package<->validators cycle.
 import backend.lan_playground.content.schemas as S
-from backend.lan_playground.shops import models as shop_models
 
-from .loader import CORE_PACK_DIR, load_pack, load_shops
+from .loader import load_pack
 
 
 @dataclass(frozen=True)
@@ -297,51 +296,11 @@ def check_puzzle_instance(instance: S.PuzzleInstance) -> list[Finding]:
 
 
 # ---------------------------------------------------------------------------
-# Shop item references (infinite_stacks.md §9.6, §23.2, board task #15)
+# Shop content validation moved to backend.lan_playground.shops.content_loader
+# (wave 5, board task #18): this file no longer imports `shops` at all -- see
+# that module's docstring for why the loading/validation entry point moved
+# instead of `shops.models`'s dataclasses.
 # ---------------------------------------------------------------------------
-
-
-def check_shop_item_references(
-    shops: Mapping[str, shop_models.ShopArchetype], pack: S.ContentPack
-) -> list[Finding]:
-    """Every `item_id` a shop's guaranteed/rotating inventory lists must
-    exist in the loaded pack's `items` (§23.2: "unknown ... item ...
-    references"). Kept separate from `ALL_PACK_CHECKS`/`validate_pack`
-    because shops aren't a `ContentPack` field this wave (see loader.py's
-    module note) -- callers that load shops call this explicitly, or use
-    `validate_core_pack_and_shops` below."""
-
-    findings: list[Finding] = []
-    for shop in shops.values():
-        for listing in shop.all_listings():
-            if listing.item_id not in pack.items:
-                findings.append(
-                    Finding("unknown_reference", f"shop:{shop.id}", f"unknown item {listing.item_id!r}")
-                )
-    return findings
-
-
-def validate_shops(shops: Mapping[str, shop_models.ShopArchetype], pack: S.ContentPack) -> list[Finding]:
-    return check_shop_item_references(shops, pack)
-
-
-def validate_shops_strict(shops: Mapping[str, shop_models.ShopArchetype], pack: S.ContentPack) -> None:
-    findings = validate_shops(shops, pack)
-    if findings:
-        raise ValidationError(findings)
-
-
-def validate_core_pack_and_shops() -> tuple[S.ContentPack, dict[str, shop_models.ShopArchetype]]:
-    """One-call entry point mirroring `validate_pack_dir`, extended to cover
-    the core pack's `shops.yaml`. Raises `ValidationError` carrying every
-    pack finding *and* every shop finding together if any fire."""
-
-    pack = load_pack(CORE_PACK_DIR, pack_id="core")
-    shops = load_shops(CORE_PACK_DIR)
-    findings = validate_pack(pack) + validate_shops(shops, pack)
-    if findings:
-        raise ValidationError(findings)
-    return pack, shops
 
 
 # ---------------------------------------------------------------------------

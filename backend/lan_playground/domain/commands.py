@@ -25,6 +25,11 @@ class CommandType(str, Enum):
     COMBAT_BARRICADE = "combat_barricade"
     COMBAT_END_TURN = "combat_end_turn"
 
+    # Wave-5 enemy-to-hit / reaction-interrupt window (board task #16,
+    # stacks-enemyroll; domain registration requested via chat 2026-07-19,
+    # landed by stacks-shopwire as domain schema owner)
+    RESOLVE_REACTION = "resolve_reaction"
+
     # Heroes wiring (infinite_stacks.md §11, §13; wave 4, board task #13)
     ROLL_ATTRIBUTE_DICE = "roll_attribute_dice"
     CREATE_HERO = "create_hero"
@@ -35,6 +40,16 @@ class CommandType(str, Enum):
     DROP_ITEM = "drop_item"
     TRADE_ITEM = "trade_item"
     RECOVER_BODY_LOOT = "recover_body_loot"
+
+    # Shops wiring (infinite_stacks.md §9.6, §16.4-16.6; wave 5, board task #18)
+    SHOP_BUY = "shop_buy"
+    SHOP_SELL = "shop_sell"
+    SHOP_REPAIR = "shop_repair"
+    SHOP_IDENTIFY = "shop_identify"
+    SHOP_TREAT = "shop_treat"
+
+    # Server-side clue sharing (wave 5, board task #18)
+    SHARE_CLUE = "share_clue"
 
 
 class ErrorCode(str, Enum):

@@ -190,7 +190,10 @@ export function selectLastError(state) {
   return state.lastError;
 }
 
-// Which non-map screen (if any) is active. Combat takes precedence over a
+// Which non-map screen (if any) is active. Character creation (§11) takes
+// precedence over everything else -- a hero with no sheet yet has nothing
+// legal to do in any other screen (every wave-4 hero command requires
+// `_require_sheet`/pending_dice server-side). Combat takes precedence over a
 // puzzle in the same room, which takes precedence over a plain entered-room
 // view. Both "combat" and "puzzle" are room-keyed as of wave 3 (state.conflicts/
 // state.puzzles, docs/INFINITE_STACKS_CONTRACTS.md S5.2 + stacks-conflict's
@@ -199,10 +202,175 @@ export function selectLastError(state) {
 // own selector's comment).
 export function selectActiveScreen(state) {
   const you = selectYouHero(state);
+  if (you && you.sheet == null) return "character-builder";
   if (you && state.conflicts[you.room_id]) return "combat";
   if (you && state.puzzles[you.room_id]) return "puzzle";
   if (state.enteredRoom) return "room";
   return "map";
+}
+
+// -- Character creation (infinite_stacks.md S11) ---------------------------
+
+const ATTRIBUTE_NAMES = ["force", "finesse", "insight", "presence"];
+const ATTRIBUTE_LABELS = { force: "Force", finesse: "Finesse", insight: "Insight", presence: "Presence" };
+
+export function selectContentCatalog(state) {
+  return state.contentCatalog;
+}
+
+// §11.1 derived-stat preview formulas, computed client-side purely for
+// display before the player submits create_hero -- the server (heroes.
+// creation.compute_derived_stats) is always the authoritative computation
+// that actually lands on the hero sheet; this is read-only arithmetic on
+// public formulas from infinite_stacks.md S11.1, never a value sent back to
+// the server as a raw number.
+export function computeDerivedStatsPreview(attributes) {
+  const force = attributes.force || 0;
+  const finesse = attributes.finesse || 0;
+  return {
+    maxHp: 8 + force * 2,
+    defense: 10 + finesse,
+    initiativeModifier: finesse,
+    carrySlots: 4 + force,
+  };
+}
+
+// Character-builder view: rolled dice (if any), the background/card catalog
+// (fetched once via core/api.js's fetchContentCatalog), and whether a
+// pending roll exists yet. `attributeAssignment` is `{dieIndex: attribute}`
+// -- a bijection from rolled-die INDEX (not value, since dice can repeat) to
+// attribute name, which is what main.js's onCreateHero handler turns into
+// the wire's {attribute: value} payload.
+export function selectCharacterBuilderView(state) {
+  const you = selectYouHero(state);
+  const catalog = state.contentCatalog;
+  return {
+    heroId: you ? you.hero_id : null,
+    pendingDice: you ? you.pending_dice || null : null,
+    attributeNames: ATTRIBUTE_NAMES,
+    attributeLabels: ATTRIBUTE_LABELS,
+    backgrounds: catalog ? Object.values(catalog.backgrounds).sort((a, b) => a.name.localeCompare(b.name)) : [],
+    generalCards: catalog
+      ? Object.values(catalog.cards)
+          .filter((c) => c.source === "general" && c.live_at_creation)
+          .sort((a, b) => a.name.localeCompare(b.name))
+      : [],
+    // §13.2's persona signature card is not a player choice this wave (the
+    // core pack authors exactly one, "source": "persona") -- selected
+    // automatically so the builder form has one fewer decision to make.
+    personaCard: catalog ? Object.values(catalog.cards).find((c) => c.source === "persona") || null : null,
+    catalogLoaded: !!catalog,
+  };
+}
+
+// -- Hand / deck / inventory (infinite_stacks.md S13.2, S13.6) -------------
+
+const TIMING_LABELS = {
+  main_action: "Main action",
+  quick_interaction: "Quick interaction",
+  reaction: "Reaction",
+  free_speech: "Free speech",
+};
+
+// Maps one wire card_id + its content-catalog definition into the plain
+// shape components/card.js renders (S13.3's full contract list). `effect`
+// uses the card's authored accessible_text (the only complete factual
+// description on the wire -- base_effects/check outcome tables are not
+// serialized) and `generatedDescription` uses the fallback prose, matching
+// S13.3's "generated-description fallback text" contract field.
+function cardView(cardId, catalog) {
+  const card = catalog && catalog.cards ? catalog.cards[cardId] : null;
+  if (!card) {
+    return {
+      id: cardId,
+      name: cardId,
+      timing: "",
+      cost: "",
+      range: "",
+      targets: [],
+      requirements: "",
+      effect: "",
+      checkTable: undefined,
+      tags: [],
+      exhaustOnPlay: false,
+      accessibleText: cardId,
+      generatedDescription: "",
+    };
+  }
+  return {
+    id: card.id,
+    name: card.name,
+    timing: card.timing,
+    cost: TIMING_LABELS[card.timing] || card.timing,
+    range: card.range,
+    targets: card.legal_targets,
+    requirements: (card.required_state || []).join(", "),
+    effect: card.accessible_text,
+    checkTable: undefined,
+    tags: card.combination_tags,
+    exhaustOnPlay: card.end_state === "exhaust",
+    accessibleText: card.accessible_text,
+    generatedDescription: card.fallback,
+  };
+}
+
+// Hand/deck view for the viewer's own hero: `hand` is only ever present on
+// the wire for `viewer === heroId` (stacks_engine.py's
+// `_neutral_hero_creation_snapshot`) -- this selector returns null hand data
+// for anyone else's hero rather than guessing at contents.
+export function selectHandView(state) {
+  const you = selectYouHero(state);
+  if (!you || !you.deck) return null;
+  const catalog = state.contentCatalog;
+  return {
+    hand: Array.isArray(you.hand) ? you.hand.map((cardId) => cardView(cardId, catalog)) : null,
+    deckCount: you.deck.deck_count,
+    discardCount: you.deck.discard.length,
+    exhaustedCount: you.deck.exhausted.length,
+  };
+}
+
+// Inventory view for the viewer's own hero: carried items (name + slot cost
+// from the catalog), free/total slots, ground items available to pick up in
+// the hero's current room, and any recoverable body loot in that room.
+export function selectInventoryView(state) {
+  const you = selectYouHero(state);
+  if (!you || !you.inventory) return null;
+  const catalog = state.contentCatalog;
+  const items = catalog ? catalog.items : {};
+  const room = state.rooms[you.room_id];
+
+  const carried = you.inventory.items.map((itemId) => ({
+    itemId,
+    name: items[itemId] ? items[itemId].name : itemId,
+    slotCost: items[itemId] ? items[itemId].slot_cost : 1,
+  }));
+  const usedSlots = carried.reduce((sum, item) => sum + item.slotCost, 0);
+
+  const groundItems = room
+    ? Object.entries(room.ground_items || {}).map(([instanceId, itemId]) => ({
+        instanceId,
+        itemId,
+        name: items[itemId] ? items[itemId].name : itemId,
+        claimedByHeroId: (room.item_claims || {})[instanceId] || null,
+      }))
+    : [];
+
+  const recoverableBodies = room
+    ? Object.entries(room.body_item_ids || {}).map(([deadHeroId, itemIds]) => ({
+        deadHeroId,
+        itemIds,
+      }))
+    : [];
+
+  return {
+    carried,
+    usedSlots,
+    totalSlots: you.inventory.carry_slots,
+    groundItems,
+    recoverableBodies,
+    otherHeroesHere: Object.values(state.heroes).filter((h) => h.hero_id !== you.hero_id && h.room_id === you.room_id),
+  };
 }
 
 function mapStatus(status) {
@@ -354,6 +522,7 @@ export function selectCombatView(state) {
     round: conflict.combat_round,
     currentTurnId: conflict.current_turn || null,
     isYourTurn: !!you && conflict.current_turn === you.hero_id,
+    yourHeroId: you ? you.hero_id : null,
     initiativeOrder: (conflict.initiative_order || []).map((combatantId) => ({
       id: combatantId,
       name: combatantName(combatantId),
@@ -384,8 +553,36 @@ export function selectCombatView(state) {
       danger: heroDangerTier({ ...(state.heroes[id] || {}), life_state: hero.life_state, hp: hero.hp, max_hp: hero.max_hp }),
       reactionAvailable: !!hero.reaction_available,
       position: hero.position,
+      // Per-target attack catalog (docs/INFINITE_STACKS_CONTRACTS.md S5.4
+      // item 5, wave-4 board task #13): real accuracy/damage/weapon-die
+      // numbers resolved server-side from the hero's actual sheet + equipment
+      // -- never a client-suppliable modifier. Empty for a hero with no
+      // completed character creation yet.
+      legalAttacks: (hero.legal_attacks || []).map((atk) => ({
+        targetId: atk.target_id,
+        accuracyBonus: atk.accuracy_bonus,
+        weaponDieFaces: atk.weapon_die_faces,
+        damageBonus: atk.damage_bonus,
+      })),
     })),
     threatBudget: conflict.threat_budget || null,
     lastCheckReceipt: state.conflictLastCheckReceipt[roomId] || null,
+    // §21.3/§21.4 reaction interrupt window (stacks-enemyroll's wave-5
+    // transport-injection spec, board task #16): null until their domain
+    // work lands a real `pending_reaction` on the encounter -- combat.js
+    // renders nothing while this is null, exactly today's behavior.
+    pendingReaction: conflict.pending_reaction
+      ? {
+          reactionId: conflict.pending_reaction.reaction_id,
+          attackerId: conflict.pending_reaction.attacker_id,
+          defenderId: conflict.pending_reaction.defender_id,
+          protectorIds: conflict.pending_reaction.protector_ids || [],
+          hit: conflict.pending_reaction.hit,
+          margin: conflict.pending_reaction.margin,
+          incomingAttackTotal: conflict.pending_reaction.incoming_attack_total,
+          provisionalDamage: conflict.pending_reaction.provisional_damage,
+          actionLabel: conflict.pending_reaction.action_label,
+        }
+      : null,
   };
 }

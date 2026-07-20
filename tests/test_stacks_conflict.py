@@ -146,11 +146,27 @@ def _advance_until(h: Harness, room_id: str, hero_b_id: str, predicate, max_iter
     until `predicate(encounter)` is true. hero_b travels toward the fight
     (§7.4: distant heroes keep exploring/traveling, not frozen) then
     integrates once the encounter's own round-advance processes them as a
-    joiner (§14.1: at the *next* initiative cycle, never mid-round)."""
+    joiner (§14.1: at the *next* initiative cycle, never mid-round).
+
+    Task #16: an enemy attack now pauses into a pending-reaction window
+    (§14.5/§21.3-21.4) instead of dealing flat unconditional damage. This
+    harness has no live UI/companion to answer it, so it proactively
+    declines with an explicit `resolve_reaction{reaction:"pass"}` the
+    instant one opens -- the closest faithful analog of the old flat-damage
+    behaviour (the attack always lands), while genuinely round-tripping the
+    new command. A real deployment would show the defending player a
+    prompt instead of auto-declining (see docs/INFINITE_STACKS_COMBAT.md §7)."""
     for i in range(max_iterations):
         enc = h.encounter(room_id)
         if enc.status != "active" or predicate(enc):
             return enc
+        pending = enc.pending_reaction
+        if pending is not None and pending["defender_id"] in ("hero_a", hero_b_id):
+            h.send(
+                pending["defender_id"], CommandType.RESOLVE_REACTION,
+                {"reaction_id": pending["reaction_id"], "reaction": "pass"},
+            )
+            continue
         if enc.current_actor_id == "hero_a":
             h.send("hero_a", CommandType.COMBAT_END_TURN)
             continue
@@ -322,6 +338,213 @@ def test_encounter_lost_with_permanent_death_and_body_item_persistence():
         and "hero_a" in e.payload["newly_dead_hero_ids"]
     ]
     assert newly_dead_events
+
+
+# --------------------------------------------------------------------------- §14.5/§21.3-21.4: live pending-reaction window (task #16)
+#
+# The bruiser reinforcement's `heavy_swing` is the only content-authored
+# attack-type intent that can naturally open a window (seed 14's immediate
+# enemy, goblin_firestarter, never deals direct damage -- see the module
+# docstring), and it only arrives several combat rounds out. Rather than
+# grind seeds to force a specific roll outcome, these tests white-box a
+# `pending_reaction` directly onto a live encounter -- the same pattern the
+# permadeath test above already uses ("one death-check failure away") --
+# then drive it purely through the real `resolve_reaction` command/reducer
+# path. `goblin_firestarter_0` (always present as the immediate enemy for a
+# solo/duo breach) stands in as the attacker; its own intents are irrelevant
+# here since the window is being answered, not opened.
+
+
+def _plant_pending_reaction(h: Harness, room_id: str, **overrides) -> dict:
+    enc = h.encounter(room_id)
+    pending = {
+        "reaction_id": "test_reaction_1",
+        "attacker_id": "goblin_firestarter_0",
+        "defender_id": "hero_a",
+        "protector_ids": [],
+        "hit": True,
+        "margin": 5,
+        "incoming_attack_total": 16,
+        "provisional_damage": 3,
+        "action_label": "heavy_swing",
+        "source_intent_id": "heavy_swing",
+        "remaining_effects": [],
+    }
+    pending.update(overrides)
+    enc.current_actor_id = pending["attacker_id"]
+    enc.pending_reaction = pending
+    return pending
+
+
+def test_pending_reaction_block_reduces_damage_and_may_wear():
+    h = Harness()
+    h.send("hero_a", CommandType.JOIN_RUN)
+    room_id = _breach_into_conflict(h, "hero_a")
+    hp_before = h.encounter(room_id).heroes["hero_a"]["hp"]
+    pending = _plant_pending_reaction(h, room_id)
+
+    result = h.send("hero_a", CommandType.RESOLVE_REACTION, {"reaction_id": pending["reaction_id"], "reaction": "block"})
+    combat_evts = [ce for e in result.events for ce in e.payload["combat_events"]]
+    block_event = next(ce for ce in combat_evts if ce["payload"].get("reaction") == "block")
+    reduced = block_event["payload"]["reduced_damage"]
+    assert reduced < pending["provisional_damage"]  # Block reduced the incoming damage
+    assert isinstance(block_event["payload"]["took_wear"], bool)  # item "may take Wear" (§14.5), roll is recorded either way
+
+    enc = h.encounter(room_id)
+    assert enc.pending_reaction is None
+    assert enc.heroes["hero_a"]["hp"] == hp_before - reduced
+    assert enc.heroes["hero_a"]["reaction_available"] is False  # Block consumes the reaction
+
+
+def test_pending_reaction_dodge_negates_the_hit():
+    h = Harness()
+    h.send("hero_a", CommandType.JOIN_RUN)
+    room_id = _breach_into_conflict(h, "hero_a")
+    hp_before = h.encounter(room_id).heroes["hero_a"]["hp"]
+    # incoming_attack_total pinned absurdly low so dodge succeeds regardless
+    # of the real StacksRNG's actual d20 draw -- deterministic without a
+    # scripted RNG at the domain-command level.
+    pending = _plant_pending_reaction(h, room_id, incoming_attack_total=-100)
+
+    result = h.send("hero_a", CommandType.RESOLVE_REACTION, {"reaction_id": pending["reaction_id"], "reaction": "dodge"})
+    combat_evts = [ce for e in result.events for ce in e.payload["combat_events"]]
+    dodge_event = next(ce for ce in combat_evts if ce["payload"].get("reaction") == "dodge")
+    assert dodge_event["payload"]["outcome"] == "avoided"
+
+    enc = h.encounter(room_id)
+    assert enc.pending_reaction is None
+    assert enc.heroes["hero_a"]["hp"] == hp_before  # negated -- no damage landed
+    assert enc.heroes["hero_a"]["reaction_available"] is False
+
+
+def test_pending_reaction_protect_redirects_damage_to_protector():
+    h = Harness()
+    h.send("hero_a", CommandType.JOIN_RUN)
+    h.send("hero_b", CommandType.JOIN_RUN)
+    room_id = _breach_into_conflict(h, "hero_a")
+    _advance_until(h, room_id, "hero_b", lambda e: "hero_b" in e.heroes)
+    enc = h.encounter(room_id)
+    hero_a_hp_before = enc.heroes["hero_a"]["hp"]
+    hero_b_hp_before = enc.heroes["hero_b"]["hp"]
+    pending = _plant_pending_reaction(h, room_id, protector_ids=["hero_b"])
+
+    result = h.send("hero_b", CommandType.RESOLVE_REACTION, {"reaction_id": pending["reaction_id"], "reaction": "protect"})
+    combat_evts = [ce for e in result.events for ce in e.payload["combat_events"]]
+    assert any(ce["payload"].get("reaction") == "protect" for ce in combat_evts)
+
+    enc = h.encounter(room_id)
+    assert enc.pending_reaction is None
+    assert enc.heroes["hero_a"]["hp"] == hero_a_hp_before  # original defender untouched
+    assert enc.heroes["hero_b"]["hp"] == hero_b_hp_before - pending["provisional_damage"]  # redirected
+    assert enc.heroes["hero_b"]["reaction_available"] is False  # the PROTECTOR's reaction is spent
+    assert enc.heroes["hero_a"]["reaction_available"] is True  # hero_a never acted
+
+
+def test_pending_reaction_counter_fires_on_a_big_enough_miss():
+    h = Harness()
+    h.send("hero_a", CommandType.JOIN_RUN)
+    room_id = _breach_into_conflict(h, "hero_a")
+    pending = _plant_pending_reaction(h, room_id, hit=False, margin=-6, provisional_damage=0)
+
+    result = h.send("hero_a", CommandType.RESOLVE_REACTION, {"reaction_id": pending["reaction_id"], "reaction": "counter"})
+    combat_evts = [ce for e in result.events for ce in e.payload["combat_events"]]
+    assert any(ce["payload"].get("action") == "counter" for ce in combat_evts)
+
+    enc = h.encounter(room_id)
+    assert enc.pending_reaction is None
+    assert enc.heroes["hero_a"]["reaction_available"] is False
+
+
+def test_pending_reaction_counter_rejected_when_margin_too_small():
+    h = Harness()
+    h.send("hero_a", CommandType.JOIN_RUN)
+    room_id = _breach_into_conflict(h, "hero_a")
+    pending = _plant_pending_reaction(h, room_id, hit=True, margin=2)
+
+    from backend.lan_playground.domain.commands import CommandError
+    try:
+        h.send("hero_a", CommandType.RESOLVE_REACTION, {"reaction_id": pending["reaction_id"], "reaction": "counter"})
+        raised = False
+    except CommandError:
+        raised = True
+    assert raised
+
+
+def test_pending_reaction_pass_is_the_deterministic_safe_default():
+    """§21.4: an explicit pass -- whether from a live player declining, a
+    transport-layer decision-timer expiry, or a disconnected hero's
+    companion policy (§21.5) -- is the *same* command either way (director
+    ruling): the reducer has no separate "timeout" or "companion" code
+    path. Full provisional damage lands, exactly as if no reaction existed;
+    unlike a spent reaction, declining does NOT consume it (§14.5: "the
+    reaction is not consumed" when nothing is taken)."""
+    h = Harness()
+    h.send("hero_a", CommandType.JOIN_RUN)
+    room_id = _breach_into_conflict(h, "hero_a")
+    hp_before = h.encounter(room_id).heroes["hero_a"]["hp"]
+    pending = _plant_pending_reaction(h, room_id)
+
+    h.send("hero_a", CommandType.RESOLVE_REACTION, {"reaction_id": pending["reaction_id"], "reaction": "pass"})
+
+    enc = h.encounter(room_id)
+    assert enc.pending_reaction is None
+    assert enc.heroes["hero_a"]["hp"] == hp_before - pending["provisional_damage"]  # full damage landed
+    assert enc.heroes["hero_a"]["reaction_available"] is True  # declining doesn't spend it
+
+
+def test_pending_reaction_blocks_world_round_advance_for_a_solo_last_submitter():
+    """Director ruling: an open pending reaction must genuinely block
+    `round_complete()`/world-round advance rather than auto-resolving --
+    including the edge case where the defending hero is ALSO the only (or
+    last) living-conscious hero who still needs to submit their world turn.
+    Without the round_complete() guard, this exact command sequence would
+    auto-resolve the window in the same apply() call that opened it, and
+    the player would never see a prompt."""
+    h = Harness()
+    h.send("hero_a", CommandType.JOIN_RUN)
+    room_id = _breach_into_conflict(h, "hero_a")
+    h.state.heroes["hero_a"].submitted_turn = True  # simulates: hero_a already ended their combat turn this round
+    pending = _plant_pending_reaction(h, room_id)
+
+    assert h.state.round_complete() is False  # blocked purely by the pending reaction, not by submitted_turn
+    world_round_before = h.state.world_round
+
+    h.send("hero_a", CommandType.RESOLVE_REACTION, {"reaction_id": pending["reaction_id"], "reaction": "pass"})
+
+    enc = h.encounter(room_id)
+    assert enc.pending_reaction is None
+    # Resolving was the only thing standing between this state and
+    # round_complete(); once it clears, the world round is free to advance
+    # in the same command that resolved it (matching every other
+    # last-submitter command in this file, e.g. §7.4's TURN_SUBMITTED
+    # cadence) -- proving the window opened and closed cleanly rather than
+    # deadlocking the run.
+    assert h.state.world_round == world_round_before + 1
+
+
+def test_headless_consumer_that_never_resolves_a_pending_reaction_stalls_by_design():
+    """Documents the flip side of the no-deadlock guarantee: the reducer
+    guarantees FORWARD PROGRESS IS POSSIBLE once a resolve_reaction command
+    arrives, never that one arrives on its own. A consumer that opens a
+    window and then sends no further commands genuinely stalls -- by
+    design, matching every other "waiting on a player" state this engine
+    already has (nothing auto-passes silent players during ordinary
+    exploration either). Real deployments must always have something
+    sending the command: a live player, or -- per §21.4/§21.5 -- the
+    transport layer's decision timer / companion policy, both of which are
+    still just ordinary senders of the same `resolve_reaction` command
+    (docs/INFINITE_STACKS_COMBAT.md §7)."""
+    h = Harness()
+    h.send("hero_a", CommandType.JOIN_RUN)
+    room_id = _breach_into_conflict(h, "hero_a")
+    h.state.heroes["hero_a"].submitted_turn = True
+    _plant_pending_reaction(h, room_id)
+
+    world_round_before = h.state.world_round
+    for _ in range(5):
+        assert h.state.round_complete() is False
+    assert h.state.world_round == world_round_before
+    assert h.encounter(room_id).pending_reaction is not None  # still waiting -- nothing ever answered it
 
 
 # --------------------------------------------------------------------------- replay determinism

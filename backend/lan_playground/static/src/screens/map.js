@@ -18,6 +18,7 @@ import {
 import { renderHeroCard } from "../components/hero.js";
 import { renderDie } from "../components/die.js";
 import { renderRoomTile } from "../components/room-tile.js";
+import { renderHeroPanel } from "./hero-panel.js";
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -212,6 +213,7 @@ export function renderMapScreen(container, state, handlers) {
 
   const sidebar = el("div", "stacks-map-sidebar");
   sidebar.appendChild(renderYouPanel(state, handlers));
+  renderHeroPanel(sidebar, state, handlers);
   sidebar.appendChild(renderDiePanel(state));
   sidebar.appendChild(renderLog(state));
   layout.appendChild(sidebar);

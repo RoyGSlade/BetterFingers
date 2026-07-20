@@ -321,6 +321,84 @@ New `CommandType` members: `roll_attribute_dice`, `create_hero`, `play_card`,
   never a client-suppliable number. Empty for a hero with no completed
   character creation.
 
+### 5.5 Shops wiring (wave 5, stacks-shopwire, board task #18)
+
+`backend.lan_playground.shops/**` (pure, accepted wave 4,
+docs/INFINITE_STACKS_SHOPS.md) is now wired into the domain reducer via
+`systems/shops_wire.py`. Breaching a `shop` room (d8 == 6) instantiates a
+seeded `shops.models.ShopInstance` from a randomly-chosen core-pack archetype
+and stores it on `RoomState.shop` -- embedded directly (domain now has a
+one-way dependency on `shops/`, the same pattern already established for
+`heroes/`/`combat/`). `HeroState` gains `gold` (`int`, starts at
+`domain.state.STARTING_GOLD == 20`, decided as data this wave), `item_wear`
+(`dict[item_id, int]`), `identified_item_ids` (`tuple[str, ...]`), and
+`active_condition_ids` (`tuple[str, ...]`, §16.4-16.5 persistent statuses/
+injuries) -- all plain fields on the existing hero dict, no new privacy
+scope (gold/wear/identification/conditions are exactly as visible as HP,
+per §21.3's "every hero is visible to every party member").
+
+New `CommandType` members: `shop_buy`/`shop_sell`/`shop_repair`/
+`shop_identify` (payload `{item_id: str}`), `shop_treat` (payload
+`{condition_id: str, treatment_id: str}`). New `EventType` members:
+`shop_instantiated`, `shop_item_bought`, `shop_item_sold`,
+`shop_item_repaired`, `shop_item_identified`, `shop_condition_treated`,
+`shop_transaction_rejected` (uniform rejection event across all five
+actions, payload `{action, reason, item_id}` -- mirrors `item_pickup_
+rejected`'s "always tell the caller why" discipline). `shop_treat`
+dispatches the condition's real `content.schemas.Condition.treatments[]`
+effects through `systems/effects.py` (see below) alongside its own
+transaction event -- a successful treat therefore emits *two* events
+(`shop_condition_treated` + whatever the treatment's effects produce, always
+`condition_removed` for every core-pack condition today).
+
+**Wire projection requirement (not yet built -- stacks-heroui's file):**
+`project(state, viewer)` should gain a top-level `"shops"` key, parallel to
+`"puzzles"`/`"conflict"`:
+
+```
+{room_id: {
+    archetype_id: str, name: str,
+    persona: {name, tagline, tone},
+    services: [str, ...],                 # "buy"|"sell"|"repair"|"identify"|"treat"
+    listings: [{item_id, buy_price, stock}],   # only items actually in RoomState.shop.stock
+                                                # (guaranteed + drawn rotating -- never the
+                                                # full rotating_pool candidate set, which
+                                                # would leak this shop's unseeded alternates)
+    sell_price_ratio: float, repair_cost_per_wear: int,
+    identify_price: int, treatment_price: int,
+    rumor: {text, accessible_text},
+    relationship_complication: {description, accessible_text},
+}}
+```
+
+All of the above is PUBLIC (§9.6: "Prices are authoritative game data",
+visible to any party member who has entered the room) -- the *only* dynamic
+part is `listings[].stock`, which changes as `shop_buy`/`shop_sell` events
+land; everything else is a static lookup from `shops.content_loader.
+load_core_shops()[archetype_id]` and never needs re-deriving from an event.
+`RoomState.shop` itself only stores `{archetype_id, stock}} `; the adapter
+looks up the rest from the same cached archetype dict `systems/shops_wire.py`
+already uses (`shops.content_loader.load_core_shops()`), so nothing new
+needs loading.
+
+### 5.6 Server-side clue sharing (wave 5, stacks-shopwire, board task #18)
+
+New `CommandType.share_clue` (payload `{clue_id: str}`): the acting hero must
+already own `clue_id` in their own `PuzzleRoomState.private_clue_assignments`
+(the same per-hero ledger `inspect_object` populates, §5.1 above) or the
+command is `illegal_action`. New `EventType.clue_shared` (`PARTY`
+visibility), payload `{clue_id, fallback, accessible}`. `RunState` gains
+`party_shared_clues: dict[room_id, tuple[clue_id, ...]]`.
+
+**Wire projection requirement (not yet built -- stacks-heroui's file):**
+the puzzles projection block (§5.2) should add a `party_shared_clues: [{clue_id,
+fallback, accessible}]` list per room, sourced from `RunState.
+party_shared_clues[room_id]` cross-referenced against `PuzzleRoomState.
+clue_text` for the prose -- PUBLIC to every current hero (unlike
+`your_private_clues`, which stays owner-scoped). A hero's *unshared* private
+clues are completely unaffected; sharing only ever adds to this list, never
+removes from `private_clue_assignments`.
+
 ## 6. Core state aggregates (wave-1 subset of §22.4)
 
 Corrected 2026-07-19 to match `backend/lan_playground/domain/state.py` exactly --

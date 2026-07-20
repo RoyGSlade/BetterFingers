@@ -32,6 +32,13 @@ NEW_COMPONENT_SOURCE = {name: (SRC_DIR / "components" / name).read_text(encoding
 
 ALL_NEW_JS = {**NEW_SCREEN_SOURCE, **NEW_COMPONENT_SOURCE}
 
+# Wave 5 (board task #17): character-builder screen + hand/inventory panel.
+WAVE5_SCREEN_FILES = ["character-builder.js", "hero-panel.js"]
+WAVE5_SCREEN_SOURCE = {name: (SRC_DIR / "screens" / name).read_text(encoding="utf-8") for name in WAVE5_SCREEN_FILES}
+DIE_JS = (SRC_DIR / "components" / "die.js").read_text(encoding="utf-8")
+COMMANDS_JS = (SRC_DIR / "core" / "commands.js").read_text(encoding="utf-8")
+API_JS = (SRC_DIR / "core" / "api.js").read_text(encoding="utf-8")
+
 
 def load_fixture(name):
     with open(FIXTURES_DIR / name, encoding="utf-8") as handle:
@@ -430,6 +437,220 @@ class FixtureContractTests(unittest.TestCase):
                 self.assertIn("%s:" % status["id"], source)
                 self.assertIn('label: "%s"' % status["label"], source)
                 self.assertIn('glyph: "%s"' % status["glyph"], source)
+
+
+class Wave5ModuleShapeTests(unittest.TestCase):
+    def test_character_builder_and_hero_panel_export_render_functions(self):
+        self.assertIn("export function renderCharacterBuilderScreen", WAVE5_SCREEN_SOURCE["character-builder.js"])
+        self.assertIn("export function renderHeroPanel", WAVE5_SCREEN_SOURCE["hero-panel.js"])
+
+    def test_die_component_exports_attribute_die_and_never_generates_randomness(self):
+        self.assertIn("export function renderAttributeDie", DIE_JS)
+        for forbidden in ("Math.random", "crypto.getRandomValues"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, DIE_JS)
+
+    def test_commands_js_exports_wave5_hero_commands(self):
+        for fn in (
+            "export function rollAttributeDiceCommand",
+            "export function createHeroCommand",
+            "export function drawCardsCommand",
+            "export function playCardCommand",
+            "export function safeRestCommand",
+            "export function pickupItemCommand",
+            "export function dropItemCommand",
+            "export function tradeItemCommand",
+            "export function recoverBodyLootCommand",
+            "export function resolveReactionCommand",
+        ):
+            with self.subTest(fn=fn):
+                self.assertIn(fn, COMMANDS_JS)
+
+    def test_create_hero_command_sends_no_raw_numeric_modifier_fields(self):
+        # infinite_stacks.md S24.2/S24.3: the client never determines
+        # authoritative randomness or supplies a raw combat/check modifier.
+        # attribute_assignment sends server-supplied DIE VALUES (already
+        # public via attribute_dice_rolled), not an invented score.
+        self.assertIn('background_id: backgroundId', COMMANDS_JS)
+        self.assertIn("attribute_assignment: attributeAssignment", COMMANDS_JS)
+        self.assertNotIn("accuracy_bonus", COMMANDS_JS)
+        self.assertNotIn("damage_bonus", COMMANDS_JS)
+
+    def test_resolve_reaction_command_carries_no_raw_numeric_modifier(self):
+        # Replaces the wave-3 freeform combat_reaction command (which took
+        # client-supplied incoming_attack_total/incoming_damage) with the
+        # interrupt-window shape: only a reaction_id + reaction name. Comment
+        # lines are allowed to name the fields being avoided; only code lines
+        # are checked.
+        self.assertIn('"resolve_reaction", { reaction_id: reactionId, reaction }', COMMANDS_JS)
+        self.assertNotIn("combatReactionCommand", COMMANDS_JS)
+        code_lines = [line for line in COMMANDS_JS.splitlines() if not line.strip().startswith("//")]
+        code_only = "\n".join(code_lines)
+        self.assertNotIn("incoming_attack_total", code_only)
+        self.assertNotIn("incoming_damage", code_only)
+
+    def test_api_js_exports_fetch_content_catalog(self):
+        self.assertIn("export async function fetchContentCatalog", API_JS)
+
+    def test_selectors_export_wave5_view_functions(self):
+        for name in (
+            "selectContentCatalog",
+            "selectCharacterBuilderView",
+            "computeDerivedStatsPreview",
+            "selectHandView",
+            "selectInventoryView",
+        ):
+            with self.subTest(selector=name):
+                self.assertIn("export function %s" % name, SELECTORS_JS)
+
+    def test_select_active_screen_routes_character_builder_before_a_sheet_exists(self):
+        self.assertIn('return "character-builder"', SELECTORS_JS)
+
+    def test_store_exports_content_catalog_and_character_draft_actions(self):
+        for fn in ("export function setContentCatalog", "export function updateCharacterDraft"):
+            with self.subTest(fn=fn):
+                self.assertIn(fn, STORE_JS)
+        self.assertIn("characterDraft:", STORE_JS)
+        self.assertIn("contentCatalog: null", STORE_JS)
+
+    def test_wave5_screens_never_call_network_or_store_apis_directly(self):
+        forbidden_patterns = ["fetch(", "new WebSocket", "createStore(", "setTimeout(", "setInterval("]
+        for name, source in WAVE5_SCREEN_SOURCE.items():
+            for pattern in forbidden_patterns:
+                with self.subTest(file=name, pattern=pattern):
+                    self.assertNotIn(pattern, source)
+
+    def test_wave5_screens_never_generate_randomness(self):
+        for name, source in WAVE5_SCREEN_SOURCE.items():
+            with self.subTest(file=name):
+                self.assertNotIn("Math.random", source)
+                self.assertNotIn("crypto.getRandomValues", source)
+
+    def test_wave5_screens_never_set_inline_style_properties(self):
+        for name, source in WAVE5_SCREEN_SOURCE.items():
+            with self.subTest(file=name):
+                self.assertNotRegex(source, r"\.style\.\w+\s*=", "%s sets an inline style property" % name)
+
+
+class Wave5WiringTests(unittest.TestCase):
+    def test_main_js_imports_character_builder_screen(self):
+        self.assertIn('from "./screens/character-builder.js"', MAIN_JS)
+
+    def test_main_js_has_character_builder_screen_container(self):
+        self.assertIn('getElementById("character-builder-screen")', MAIN_JS)
+
+    def test_main_js_wires_wave5_handlers(self):
+        for handler in (
+            "onRollAttributeDice",
+            "onCreateHero",
+            "onUpdateCharacterDraft",
+            "onDrawCards",
+            "onPlayCard",
+            "onSafeRest",
+            "onPickupItem",
+            "onDropItem",
+            "onTradeItem",
+            "onRecoverBodyLoot",
+        ):
+            with self.subTest(handler=handler):
+                self.assertIn(handler, MAIN_JS)
+
+    def test_main_js_fetches_content_catalog_on_entering_a_run(self):
+        self.assertIn("fetchContentCatalog", MAIN_JS)
+        self.assertIn("setContentCatalog", MAIN_JS)
+
+    def test_html_declares_character_builder_screen_hidden(self):
+        self.assertRegex(STACKS_HTML, r'<section id="character-builder-screen"[^>]*\bhidden\b')
+
+
+class Wave5AccessibilityTests(unittest.TestCase):
+    def test_character_builder_dice_assignment_uses_keyboard_navigable_selects(self):
+        source = WAVE5_SCREEN_SOURCE["character-builder.js"]
+        self.assertIn('document.createElement("select")', source)
+        self.assertIn("aria-label", DIE_JS)
+
+    def test_character_builder_background_shows_ability_text(self):
+        source = WAVE5_SCREEN_SOURCE["character-builder.js"]
+        self.assertIn("signature_ability", source)
+
+    def test_character_builder_never_submits_until_selections_complete(self):
+        source = WAVE5_SCREEN_SOURCE["character-builder.js"]
+        self.assertIn("button.disabled = !canSubmit", source)
+
+    def test_hand_cards_show_accessible_text_via_shared_card_component(self):
+        source = WAVE5_SCREEN_SOURCE["hero-panel.js"]
+        self.assertIn("renderCard(card", source)
+
+    def test_reaction_prompt_gated_on_defender_or_protector_hero_id(self):
+        source = NEW_SCREEN_SOURCE["combat.js"]
+        self.assertIn("pending.defenderId === combat.yourHeroId", source)
+        self.assertIn("pending.protectorIds.includes(combat.yourHeroId)", source)
+
+    def test_reaction_prompt_surfaces_timeout_as_text(self):
+        source = NEW_SCREEN_SOURCE["combat.js"]
+        self.assertIn("stacks-combat-reaction-timer", source)
+
+    def test_attack_buttons_show_expected_effect_facts_before_confirmation(self):
+        source = NEW_SCREEN_SOURCE["combat.js"]
+        self.assertIn("stacks-combat-attack-target-facts", source)
+        self.assertIn("attack.weaponDieFaces", source)
+
+
+class CssWave5ContractTests(unittest.TestCase):
+    def test_new_screen_and_panel_ids_have_styling_hooks(self):
+        for selector in ("#character-builder-screen", ".stacks-hand-panel", ".stacks-inventory-panel"):
+            with self.subTest(selector=selector):
+                self.assertIn(selector, STACKS_CSS)
+
+
+class Wave5FixtureContractTests(unittest.TestCase):
+    """content_catalog.json and hero_sheet.json document the wire shapes
+    stacks_engine.py's content_catalog()/_neutral_hero_creation_snapshot()
+    produce (docs/INFINITE_STACKS_CONTRACTS.md S5.4) -- these fail loudly if
+    a fixture drifts from that shape, same discipline as the wave-2/3
+    fixtures above."""
+
+    def test_content_catalog_fixture_has_required_wire_fields(self):
+        fixture = load_fixture("content_catalog.json")
+        for background in fixture["backgrounds"].values():
+            for field in ("id", "name", "fallback", "accessible", "attribute_bonus", "skill_ranks", "starting_item_ids", "signature_ability"):
+                with self.subTest(background=background["id"], field=field):
+                    self.assertIn(field, background)
+            for field in ("id", "name", "fallback", "accessible", "frequency"):
+                with self.subTest(background=background["id"], field=field):
+                    self.assertIn(field, background["signature_ability"])
+        for card in fixture["cards"].values():
+            for field in ("id", "name", "fallback", "accessible", "accessible_text", "timing", "range", "legal_targets", "source", "live_at_creation"):
+                with self.subTest(card=card["id"], field=field):
+                    self.assertIn(field, card)
+        for item in fixture["items"].values():
+            for field in ("id", "name", "fallback", "accessible", "slot_cost", "tags"):
+                with self.subTest(item=item["id"], field=field):
+                    self.assertIn(field, item)
+
+    def test_hero_sheet_fixture_has_required_wire_fields(self):
+        fixture = load_fixture("hero_sheet.json")
+        for field in ("pending_dice", "sheet", "deck", "hand", "inventory", "signature_charge"):
+            with self.subTest(field=field):
+                self.assertIn(field, fixture)
+        sheet = fixture["sheet"]
+        for field in ("hero_id", "name", "background_id", "dice", "attributes", "skills", "starting_item_ids", "derived"):
+            with self.subTest(field=field):
+                self.assertIn(field, sheet)
+        for field in ("max_hp", "defense", "initiative_modifier", "carry_slots"):
+            with self.subTest(field=field):
+                self.assertIn(field, sheet["derived"])
+        deck = fixture["deck"]
+        for field in ("card_ids", "deck_count", "hand_count", "discard", "exhausted"):
+            with self.subTest(field=field):
+                self.assertIn(field, deck)
+        # Hand contents only ever appear for the hero's OWN viewer -- proven
+        # live over the wire by tests/test_stacks_api.py's
+        # HeroCreationTests.test_hand_and_pending_dice_never_leak_to_another_viewer;
+        # this fixture documents the own-viewer shape those tests exercise.
+        self.assertIsInstance(fixture["hand"], list)
+        self.assertGreater(len(fixture["hand"]), 0)
+        self.assertEqual(fixture["deck"]["hand_count"], len(fixture["hand"]))
 
 
 if __name__ == "__main__":

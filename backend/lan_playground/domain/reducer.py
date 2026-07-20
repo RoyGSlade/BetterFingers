@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..systems import checks, combat, effects, exploration, heroes_wire, puzzles, turns
+from ..systems import checks, combat, effects, exploration, heroes_wire, puzzles, shops_wire, turns
 from .commands import Command, CommandError, CommandType, ErrorCode
 from .events import Event
 from .rng import StacksRNG
@@ -39,6 +39,7 @@ _VALIDATORS = {
     CommandType.COMBAT_STABILIZE: lambda state, hero_id, payload: combat.validate_combat_stabilize(state, hero_id, payload),
     CommandType.COMBAT_BARRICADE: lambda state, hero_id, payload: combat.validate_combat_barricade(state, hero_id, payload),
     CommandType.COMBAT_END_TURN: lambda state, hero_id, payload: combat.validate_combat_end_turn(state, hero_id, payload),
+    CommandType.RESOLVE_REACTION: lambda state, hero_id, payload: combat.validate_resolve_reaction(state, hero_id, payload),
     CommandType.ROLL_ATTRIBUTE_DICE: lambda state, hero_id, payload: heroes_wire.validate_roll_attribute_dice(
         state, hero_id, payload
     ),
@@ -52,6 +53,12 @@ _VALIDATORS = {
     CommandType.RECOVER_BODY_LOOT: lambda state, hero_id, payload: heroes_wire.validate_recover_body_loot(
         state, hero_id, payload
     ),
+    CommandType.SHOP_BUY: lambda state, hero_id, payload: shops_wire.validate_shop_buy(state, hero_id, payload),
+    CommandType.SHOP_SELL: lambda state, hero_id, payload: shops_wire.validate_shop_sell(state, hero_id, payload),
+    CommandType.SHOP_REPAIR: lambda state, hero_id, payload: shops_wire.validate_shop_repair(state, hero_id, payload),
+    CommandType.SHOP_IDENTIFY: lambda state, hero_id, payload: shops_wire.validate_shop_identify(state, hero_id, payload),
+    CommandType.SHOP_TREAT: lambda state, hero_id, payload: shops_wire.validate_shop_treat(state, hero_id, payload),
+    CommandType.SHARE_CLUE: lambda state, hero_id, payload: puzzles.validate_share_clue(state, hero_id, payload),
 }
 
 _HANDLERS = {
@@ -73,6 +80,7 @@ _HANDLERS = {
     CommandType.COMBAT_STABILIZE: combat.handle_combat_stabilize,
     CommandType.COMBAT_BARRICADE: combat.handle_combat_barricade,
     CommandType.COMBAT_END_TURN: combat.handle_combat_end_turn,
+    CommandType.RESOLVE_REACTION: combat.handle_resolve_reaction,
     CommandType.ROLL_ATTRIBUTE_DICE: heroes_wire.handle_roll_attribute_dice,
     CommandType.CREATE_HERO: heroes_wire.handle_create_hero,
     CommandType.PLAY_CARD: heroes_wire.handle_play_card,
@@ -82,6 +90,12 @@ _HANDLERS = {
     CommandType.DROP_ITEM: heroes_wire.handle_drop_item,
     CommandType.TRADE_ITEM: heroes_wire.handle_trade_item,
     CommandType.RECOVER_BODY_LOOT: heroes_wire.handle_recover_body_loot,
+    CommandType.SHOP_BUY: shops_wire.handle_shop_buy,
+    CommandType.SHOP_SELL: shops_wire.handle_shop_sell,
+    CommandType.SHOP_REPAIR: shops_wire.handle_shop_repair,
+    CommandType.SHOP_IDENTIFY: shops_wire.handle_shop_identify,
+    CommandType.SHOP_TREAT: shops_wire.handle_shop_treat,
+    CommandType.SHARE_CLUE: puzzles.handle_share_clue,
 }
 
 EVENT_APPLIERS = {
@@ -92,6 +106,7 @@ EVENT_APPLIERS = {
     **effects.EVENT_APPLIERS,
     **combat.EVENT_APPLIERS,
     **heroes_wire.EVENT_APPLIERS,
+    **shops_wire.EVENT_APPLIERS,
 }
 
 

@@ -27,10 +27,12 @@ under the infinite_stacks.md S22.2 soft 500-line cap.
 
 from __future__ import annotations
 
+import functools
 import random
 import uuid
 from typing import Any
 
+from backend.lan_playground.content import loader as content_loader
 from backend.lan_playground.domain import reducer as domain_reducer
 from backend.lan_playground.domain.commands import Command as DomainCommand
 from backend.lan_playground.domain.commands import CommandError as DomainCommandError
@@ -41,6 +43,10 @@ from backend.lan_playground.domain.rng import StacksRNG
 from backend.lan_playground.domain.state import ConflictEncounterState
 from backend.lan_playground.domain.state import HeroState as DomainHeroState
 from backend.lan_playground.domain.state import RunState as DomainRunState
+from backend.lan_playground.heroes.cards import NonLiveEffectOpError as _NonLiveEffectOpError
+from backend.lan_playground.heroes.cards import compile_card_effect_ops as _compile_card_effect_ops
+from backend.lan_playground.heroes.creation import ATTRIBUTE_NAMES as _HERO_ATTRIBUTE_NAMES
+from backend.lan_playground.shops import content_loader as shop_content_loader
 from backend.lan_playground.systems import heroes_wire, map_generation
 
 from backend.lan_playground.stacks_projections import events_since as _events_since
@@ -65,6 +71,92 @@ from backend.lan_playground.stacks_protocol import (
 # wave and never emits it here).
 _WIRE_CONNECTOR_STATE = {"none": "none", "door": "undiscovered", "open": "open"}
 _DOMAIN_DELTA = {"north": (0, 1), "south": (0, -1), "east": (1, 0), "west": (-1, 0)}
+
+
+@functools.lru_cache(maxsize=1)
+def _core_pack():
+    # Mirrors systems/heroes_wire.py's own cached loader -- this module never
+    # mutates the pack, just re-serializes it for the wire, so a second cache
+    # of the same immutable ContentPack is cheap and keeps this module from
+    # depending on heroes_wire's private helper.
+    return content_loader.load_core_pack()
+
+
+@functools.lru_cache(maxsize=1)
+def _core_shops():
+    # Mirrors systems/shops_wire.py's own cached loader (docs/
+    # INFINITE_STACKS_CONTRACTS.md §5.5): a shop room only persists
+    # {archetype_id, stock} (domain.state.RoomState.shop); everything else in
+    # the wire snapshot (persona/services/prices/rumor/complication) is a
+    # static lookup from the same archetype dict shops_wire.py already uses.
+    return shop_content_loader.load_core_shops()
+
+
+def _prose_wire(prose: Any) -> dict[str, str]:
+    return {"fallback": prose.fallback, "accessible": prose.accessible}
+
+
+def _background_wire(background: Any) -> dict[str, Any]:
+    ability = background.signature_ability
+    return {
+        "id": background.id,
+        "name": background.name,
+        "fallback": background.prose.fallback,
+        "accessible": background.prose.accessible,
+        "attribute_bonus": background.attribute_bonus,
+        "skill_ranks": dict(background.skill_ranks),
+        "starting_item_ids": list(background.starting_item_ids),
+        "signature_ability": {
+            "id": ability.id,
+            "name": ability.name,
+            "fallback": ability.prose.fallback,
+            "accessible": ability.prose.accessible,
+            "frequency": ability.frequency,
+        },
+    }
+
+
+def _card_is_live_at_creation(card: Any) -> bool:
+    # heroes.deck.build_starting_deck's build-time gate (docs/
+    # INFINITE_STACKS_HEROES.md §7): a card referencing any effect op outside
+    # this wave's LIVE set cannot be compiled into a starting deck yet. The
+    # character-builder picker must only offer cards that will actually pass
+    # create_hero, not surprise the player with a schema_error after they've
+    # already filled in a name and rolled dice.
+    try:
+        _compile_card_effect_ops(card)
+    except _NonLiveEffectOpError:
+        return False
+    return True
+
+
+def _card_wire(card: Any) -> dict[str, Any]:
+    return {
+        "id": card.id,
+        "name": card.name,
+        "fallback": card.prose.fallback,
+        "accessible": card.prose.accessible,
+        "accessible_text": card.accessible_text,
+        "timing": card.timing.value,
+        "range": card.range,
+        "legal_targets": list(card.legal_targets),
+        "required_state": list(card.required_state),
+        "combination_tags": list(card.combination_tags),
+        "end_state": card.end_state.value,
+        "source": card.source,
+        "live_at_creation": _card_is_live_at_creation(card),
+    }
+
+
+def _item_wire(item: Any) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "name": item.name,
+        "fallback": item.prose.fallback,
+        "accessible": item.prose.accessible,
+        "slot_cost": item.slot_cost,
+        "tags": list(item.tags),
+    }
 
 
 class StacksEngineAdapter:
@@ -110,20 +202,127 @@ class StacksEngineAdapter:
     def legal_actions(self, state: RunState, hero_id: str | None) -> dict[str, Any]:
         return _legal_actions(state, hero_id)
 
+    def content_catalog(self) -> dict[str, Any]:
+        """Static reference data for the character-builder screen (§11):
+        background/card/item definitions. Never viewer-filtered -- every
+        field here is authored content, not run state, so there is nothing
+        to hide (contrast HeroSheet/deck/inventory below, which ARE run
+        state and go through project()'s per-viewer privacy filter)."""
+
+        pack = _core_pack()
+        return {
+            "backgrounds": {bid: _background_wire(b) for bid, b in sorted(pack.backgrounds.items())},
+            "cards": {cid: _card_wire(c) for cid, c in sorted(pack.cards.items())},
+            "items": {iid: _item_wire(i) for iid, i in sorted(pack.items.items())},
+        }
+
     def project(self, state: RunState, viewer: str | None) -> dict[str, Any]:
         base = _project(state, viewer)
         domain_state = self._domain_states.get(state.run_id)
         puzzles_by_room: dict[str, Any] = {}
         conflict_by_room: dict[str, Any] = {}
+        shops_by_room: dict[str, Any] = {}
         if domain_state is not None and domain_state.map is not None:
             for room_id, room in domain_state.map.rooms.items():
                 if room.puzzle is not None:
-                    puzzles_by_room[room_id] = self._neutral_puzzle_snapshot(room.puzzle)
+                    shared_clue_ids = domain_state.party_shared_clues.get(room_id, ())
+                    puzzles_by_room[room_id] = self._neutral_puzzle_snapshot(room.puzzle, shared_clue_ids)
                 if room.encounter is not None:
                     conflict_by_room[room_id] = self._neutral_conflict_snapshot(room.encounter, domain_state.heroes)
+                if room.shop is not None:
+                    shop_snapshot = self._neutral_shop_snapshot(room.shop)
+                    if shop_snapshot is not None:
+                        shops_by_room[room_id] = shop_snapshot
+                wire_room = base["rooms"].get(room_id)
+                if wire_room is not None:
+                    wire_room["ground_items"] = dict(room.ground_items)
+                    wire_room["item_claims"] = dict(room.item_claims)
+                    wire_room["body_item_ids"] = {k: list(v) for k, v in room.body_item_ids.items()}
+        if domain_state is not None:
+            for hero_id, dh in domain_state.heroes.items():
+                wire_hero = base["heroes"].get(hero_id)
+                if wire_hero is not None:
+                    wire_hero.update(self._neutral_hero_creation_snapshot(dh, viewer))
         base["puzzles"] = _project_puzzles(puzzles_by_room, viewer)
         base["conflict"] = conflict_by_room
+        base["shops"] = shops_by_room
         return base
+
+    @staticmethod
+    def _neutral_hero_creation_snapshot(domain_hero: DomainHeroState, viewer: str | None) -> dict[str, Any]:
+        """Domain HeroState's wave-4 fields (pending_dice/sheet/deck/
+        inventory/signature_charge, docs/INFINITE_STACKS_CONTRACTS.md §5.4)
+        -> a wire-safe per-hero dict, merged into project()'s heroes_view
+        entry for every hero (not just the viewer's own -- attributes,
+        skills, and deck COMPOSITION are public character-sheet info, same
+        as any tabletop character sheet). The one field that stays private
+        is `hand` (which cards are currently drawn vs still in the shuffled
+        draw pile): populated only when `viewer == domain_hero.hero_id`, the
+        same "own-viewer-only key" pattern `stacks_projections.project`
+        already uses for `private_clue`. The draw pile's actual order is
+        never serialized to anyone, owner included -- only its count."""
+
+        entry: dict[str, Any] = {
+            "pending_dice": list(domain_hero.pending_dice) if domain_hero.pending_dice else None,
+            # Wave-5 shopwire additions (docs/INFINITE_STACKS_CONTRACTS.md §5.5):
+            # PUBLIC, same visibility as hp/energy -- every hero has gold from
+            # join_run onward, not just after character creation completes.
+            "gold": domain_hero.gold,
+            "item_wear": dict(sorted(domain_hero.item_wear.items())),
+            "identified_item_ids": list(domain_hero.identified_item_ids),
+            "active_condition_ids": list(domain_hero.active_condition_ids),
+        }
+        sheet = domain_hero.sheet
+        if sheet is None:
+            entry.update(sheet=None, deck=None, inventory=None, signature_charge=None)
+            return entry
+
+        entry["sheet"] = {
+            "hero_id": sheet.hero_id,
+            "name": sheet.name,
+            "background_id": sheet.background_id,
+            "dice": list(sheet.dice.values),
+            "attributes": {name: sheet.attributes.get(name) for name in _HERO_ATTRIBUTE_NAMES},
+            "skills": dict(sheet.skills),
+            "starting_item_ids": list(sheet.starting_item_ids),
+            "derived": {
+                "max_hp": sheet.derived.max_hp,
+                "defense": sheet.derived.defense,
+                "initiative_modifier": sheet.derived.initiative_modifier,
+                "carry_slots": sheet.derived.carry_slots,
+            },
+        }
+
+        deck = domain_hero.deck
+        if deck is not None:
+            owned_card_ids = sorted(set(deck.deck) | set(deck.hand) | set(deck.discard) | set(deck.exhausted))
+            entry["deck"] = {
+                "card_ids": owned_card_ids,
+                "deck_count": len(deck.deck),
+                "hand_count": len(deck.hand),
+                "discard": list(deck.discard),
+                "exhausted": list(deck.exhausted),
+            }
+            if viewer is not None and viewer == domain_hero.hero_id:
+                entry["hand"] = list(deck.hand)
+        else:
+            entry["deck"] = None
+
+        inv = domain_hero.inventory
+        entry["inventory"] = {"carry_slots": inv.carry_slots, "items": list(inv.items)} if inv is not None else None
+
+        charge = domain_hero.signature_charge
+        entry["signature_charge"] = (
+            {
+                "ability_id": charge.ability_id,
+                "frequency": charge.frequency,
+                "charges_remaining": charge.charges_remaining,
+                "max_charges": charge.max_charges,
+            }
+            if charge is not None
+            else None
+        )
+        return entry
 
     @staticmethod
     def _neutral_conflict_snapshot(
@@ -185,6 +384,13 @@ class StacksEngineAdapter:
                 "legal_attacks": legal_attacks,
             }
 
+        # `pending_reaction` (wave-5 board task #16, stacks-enemyroll): not a
+        # field on ConflictEncounterState yet -- getattr keeps this inert
+        # (always None) until that lands, at which point it activates with no
+        # further change here. Their posted shape: {reaction_id, attacker_id,
+        # defender_id, protector_ids, hit, margin, incoming_attack_total,
+        # provisional_damage, action_label, source_intent_id, remaining_effects}.
+        pending_reaction = getattr(encounter, "pending_reaction", None)
         return {
             "encounter_id": encounter.encounter_id,
             "status": encounter.status,
@@ -197,14 +403,20 @@ class StacksEngineAdapter:
                 for eid, e in encounter.enemies.items()
             },
             "threat_budget": dict(encounter.threat_budget),
+            "pending_reaction": dict(pending_reaction) if pending_reaction else None,
         }
 
     @staticmethod
-    def _neutral_puzzle_snapshot(puzzle: Any) -> dict[str, Any]:
+    def _neutral_puzzle_snapshot(puzzle: Any, shared_clue_ids: tuple[str, ...] = ()) -> dict[str, Any]:
         """Domain PuzzleRoomState -> a viewer-agnostic wire-safe dict. Never
         includes `solution`/`accepted_solutions` (contract: never serialized
         in any projection) -- stacks_projections.project_puzzles() does the
-        remaining per-viewer filtering of `private_clues`."""
+        remaining per-viewer filtering of `private_clues`/`party_shared_clues`.
+
+        `shared_clue_ids` (docs/INFINITE_STACKS_CONTRACTS.md §5.6, wave 5,
+        board task #18) is `RunState.party_shared_clues[room_id]` -- clue ids
+        a hero has `share_clue`'d to the party. A hero's *unshared* private
+        clues (`private_clues` below) are completely unaffected."""
 
         return {
             "instance_id": puzzle.instance_id,
@@ -231,12 +443,69 @@ class StacksEngineAdapter:
                 ]
                 for hero_id, clue_ids in puzzle.private_clue_assignments.items()
             },
+            "party_shared_clues": [
+                {"clue_id": cid, "fallback": puzzle.clue_text[cid][0], "accessible": puzzle.clue_text[cid][1]}
+                for cid in shared_clue_ids
+            ],
+        }
+
+    @staticmethod
+    def _neutral_shop_snapshot(shop_instance: Any) -> dict[str, Any] | None:
+        """Domain ShopInstance ({archetype_id, stock}) -> a viewer-agnostic
+        wire-safe dict (docs/INFINITE_STACKS_CONTRACTS.md §5.5). Fully
+        PUBLIC (§9.6: "Prices are authoritative game data") -- only
+        `listings[].stock` is dynamic; everything else is a static lookup
+        from the same cached archetype dict systems/shops_wire.py uses.
+        `listings` only ever includes items actually in `shop_instance.stock`
+        (guaranteed + drawn rotating), never the full `rotating_pool`
+        candidate set -- that would leak this shop's unseeded alternates."""
+
+        archetype = _core_shops().get(shop_instance.archetype_id)
+        if archetype is None:
+            return None
+        persona, rumor, complication = archetype.persona, archetype.rumor, archetype.relationship_complication
+        return {
+            "archetype_id": archetype.id,
+            "name": archetype.name,
+            "persona": {"name": persona.name, "tagline": persona.tagline, "tone": persona.tone},
+            "services": sorted(service.value for service in archetype.services),
+            "listings": [
+                {"item_id": item_id, "buy_price": archetype.listing_for(item_id).buy_price, "stock": count}
+                for item_id, count in sorted(shop_instance.stock.items())
+            ],
+            "sell_price_ratio": archetype.sell_price_ratio,
+            "repair_cost_per_wear": archetype.repair_cost_per_wear,
+            "identify_price": archetype.identify_price,
+            "treatment_price": archetype.treatment_price,
+            "rumor": {"text": rumor.text, "accessible_text": rumor.accessible_text},
+            "relationship_complication": {
+                "description": complication.description,
+                "accessible_text": complication.accessible_text,
+            },
         }
 
     def events_since(self, state: RunState, viewer: str | None, since_revision: int) -> list[Event]:
         return _events_since(state, viewer, since_revision)
 
     def apply(self, state: RunState, command: Command) -> ApplyResult:
+        return self._apply_with_viewer(state, command, viewer=command.hero_id)
+
+    def apply_authoritative(self, state: RunState, command: Command) -> ApplyResult:
+        """Server-originated command, submitted through the exact same
+        validate/handle/reduce pipeline as any player command, but with
+        viewer=None -- `domain.reducer.validate()` only enforces `viewer !=
+        hero_id` when a viewer is given, so this is the one caller allowed to
+        act on a hero's behalf. For the §21.4 reaction-timeout auto-pass
+        (stacks-enemyroll's transport-injection spec, wave-5 board task #16)
+        and §21.5 disconnected-companion actions -- both land in the normal
+        command/event log, so replay holds with no special-casing anywhere
+        else. Still goes through the same idempotency-key/expected-revision
+        checks as any command; callers must supply a fresh idempotency_key
+        per attempt."""
+
+        return self._apply_with_viewer(state, command, viewer=None)
+
+    def _apply_with_viewer(self, state: RunState, command: Command, *, viewer: str | None) -> ApplyResult:
         key = (command.hero_id or "", command.idempotency_key)
         prior = state._applied.get(key)
         if prior is not None:
@@ -280,7 +549,7 @@ class StacksEngineAdapter:
         )
 
         try:
-            result = domain_reducer.apply(domain_command, domain_state, rng, viewer=command.hero_id, seq=seq)
+            result = domain_reducer.apply(domain_command, domain_state, rng, viewer=viewer, seq=seq)
         except DomainCommandError as exc:
             raise CommandError(
                 exc.code.value, legal_actions=self.legal_actions(state, command.hero_id), message=exc.message
@@ -570,6 +839,330 @@ class StacksEngineAdapter:
                         payload={"hero_id": de.payload["hero_id"], "room_id": de.payload["room_id"]},
                     )
                 )
+            elif de.type == DomainEventType.ATTRIBUTE_DICE_ROLLED:
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "attribute_dice_rolled",
+                        payload={"hero_id": de.actor_hero_id, "dice": de.payload["dice"]},
+                    )
+                )
+            elif de.type == DomainEventType.HERO_CREATED:
+                events.extend(self._translate_hero_created(state, de))
+            elif de.type == DomainEventType.CARD_DRAWN:
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "card_drawn",
+                        visibility="private",
+                        visible_to=de.payload["viewer_hero_id"],
+                        payload={
+                            "hero_id": de.actor_hero_id,
+                            "count": de.payload["count"],
+                            "card_ids": de.payload["card_ids"],
+                        },
+                    )
+                )
+            elif de.type == DomainEventType.CARD_PLAYED:
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "card_played",
+                        payload={
+                            "hero_id": de.actor_hero_id,
+                            "card_id": de.payload["card_id"],
+                            "target_hero_id": de.payload["target_hero_id"],
+                            "target_enemy_id": de.payload["target_enemy_id"],
+                            "check_receipt": de.payload["check_receipt"],
+                            "end_state": de.payload["end_state"],
+                        },
+                    )
+                )
+            elif de.type == DomainEventType.DECK_RESHUFFLED:
+                deck = de.payload["deck"]
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "deck_reshuffled",
+                        visibility="private",
+                        visible_to=de.payload["viewer_hero_id"],
+                        payload={
+                            "hero_id": de.actor_hero_id,
+                            "deck_count": len(deck["deck"]),
+                            "hand_count": len(deck["hand"]),
+                            "discard": list(deck["discard"]),
+                            "exhausted": list(deck["exhausted"]),
+                        },
+                    )
+                )
+            elif de.type == DomainEventType.SIGNATURE_CHARGE_REFRESHED:
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "signature_charge_refreshed",
+                        payload={
+                            "hero_id": de.actor_hero_id,
+                            "boundary": de.payload["boundary"],
+                            "signature_charge": de.payload["signature_charge"],
+                        },
+                    )
+                )
+            elif de.type == DomainEventType.ITEM_PICKED_UP:
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "item_picked_up",
+                        payload={
+                            "hero_id": de.actor_hero_id,
+                            "item_instance_id": de.payload["item_instance_id"],
+                            "item_id": de.payload["item_id"],
+                            "inventory": de.payload["inventory"],
+                        },
+                    )
+                )
+            elif de.type == DomainEventType.ITEM_PICKUP_REJECTED:
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "item_pickup_rejected",
+                        payload={
+                            "hero_id": de.actor_hero_id,
+                            "item_instance_id": de.payload["item_instance_id"],
+                            "item_id": de.payload["item_id"],
+                            "reason": de.payload["reason"],
+                        },
+                    )
+                )
+            elif de.type == DomainEventType.ITEM_DROPPED:
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "item_dropped",
+                        payload={
+                            "hero_id": de.actor_hero_id,
+                            "item_id": de.payload["item_id"],
+                            "item_instance_id": de.payload["item_instance_id"],
+                            "inventory": de.payload["inventory"],
+                        },
+                    )
+                )
+            elif de.type == DomainEventType.ITEM_TRADED:
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "item_traded",
+                        payload={
+                            "item_id": de.payload["item_id"],
+                            "from_hero_id": de.payload["from_hero_id"],
+                            "to_hero_id": de.payload["to_hero_id"],
+                            "giver_inventory": de.payload["giver_inventory"],
+                            "receiver_inventory": de.payload["receiver_inventory"],
+                        },
+                    )
+                )
+            elif de.type == DomainEventType.BODY_LOOT_RECOVERED:
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "body_loot_recovered",
+                        payload={
+                            "hero_id": de.actor_hero_id,
+                            "dead_hero_id": de.payload["dead_hero_id"],
+                            "item_ids": de.payload["item_ids"],
+                            "inventory": de.payload["inventory"],
+                        },
+                    )
+                )
+            elif de.type == DomainEventType.CONDITION_APPLIED:
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "condition_applied",
+                        visibility="party",
+                        payload={"hero_id": de.actor_hero_id, "condition_id": de.payload["condition_id"]},
+                    )
+                )
+            elif de.type == DomainEventType.CONDITION_REMOVED:
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "condition_removed",
+                        visibility="party",
+                        payload={"hero_id": de.actor_hero_id, "condition_id": de.payload["condition_id"]},
+                    )
+                )
+            elif de.type == DomainEventType.SHOP_INSTANTIATED:
+                events.append(self._translate_shop_instantiated(state, de))
+            elif de.type == DomainEventType.SHOP_ITEM_BOUGHT:
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "shop_item_bought",
+                        payload={
+                            "hero_id": de.actor_hero_id,
+                            "item_id": de.payload["item_id"],
+                            "gold_delta": de.payload["gold_delta"],
+                            "new_gold": de.payload["new_gold"],
+                            "new_stock": de.payload["new_stock"],
+                            "inventory": de.payload["inventory"],
+                        },
+                    )
+                )
+            elif de.type == DomainEventType.SHOP_ITEM_SOLD:
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "shop_item_sold",
+                        payload={
+                            "hero_id": de.actor_hero_id,
+                            "item_id": de.payload["item_id"],
+                            "gold_delta": de.payload["gold_delta"],
+                            "new_gold": de.payload["new_gold"],
+                            "new_stock": de.payload["new_stock"],
+                            "inventory": de.payload["inventory"],
+                            "item_wear": de.payload["item_wear"],
+                        },
+                    )
+                )
+            elif de.type == DomainEventType.SHOP_ITEM_REPAIRED:
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "shop_item_repaired",
+                        payload={
+                            "hero_id": de.actor_hero_id,
+                            "item_id": de.payload["item_id"],
+                            "gold_delta": de.payload["gold_delta"],
+                            "new_gold": de.payload["new_gold"],
+                            "item_wear": de.payload["item_wear"],
+                        },
+                    )
+                )
+            elif de.type == DomainEventType.SHOP_ITEM_IDENTIFIED:
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "shop_item_identified",
+                        payload={
+                            "hero_id": de.actor_hero_id,
+                            "item_id": de.payload["item_id"],
+                            "gold_delta": de.payload["gold_delta"],
+                            "new_gold": de.payload["new_gold"],
+                            "identified_item_ids": de.payload["identified_item_ids"],
+                        },
+                    )
+                )
+            elif de.type == DomainEventType.SHOP_CONDITION_TREATED:
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "shop_condition_treated",
+                        payload={
+                            "hero_id": de.actor_hero_id,
+                            "condition_id": de.payload["condition_id"],
+                            "treatment_id": de.payload["treatment_id"],
+                            "gold_delta": de.payload["gold_delta"],
+                            "new_gold": de.payload["new_gold"],
+                        },
+                    )
+                )
+            elif de.type == DomainEventType.SHOP_TRANSACTION_REJECTED:
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "shop_transaction_rejected",
+                        payload={
+                            "hero_id": de.actor_hero_id,
+                            "action": de.payload["action"],
+                            "reason": de.payload["reason"],
+                            "item_id": de.payload["item_id"],
+                        },
+                    )
+                )
+            elif de.type == DomainEventType.CLUE_SHARED:
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "clue_shared",
+                        visibility="party",
+                        payload={
+                            "hero_id": de.actor_hero_id,
+                            "clue_id": de.payload["clue_id"],
+                            "fallback": de.payload["fallback"],
+                            "accessible": de.payload["accessible"],
+                        },
+                    )
+                )
+        return events
+
+    def _translate_hero_created(self, state: RunState, de: DomainEvent) -> list[Event]:
+        """§11/§13 creation completion. The domain HERO_CREATED event is
+        PUBLIC and bundles the full resolved sheet/deck/inventory (including
+        the opening hand) as a replay-safe snapshot -- but the wire must
+        never broadcast a fresh hand's contents to every viewer (contract:
+        hand is owner-only). Split here: one public event carrying the
+        public character-sheet facts (attributes/skills/background/derived
+        stats, deck COMPOSITION + pile counts, inventory, signature charge)
+        and, only if the opening hand is non-empty, one private `hand_dealt`
+        event visible solely to the hero who just finished creation --
+        exactly the `_translate_private_clue_revealed` split-by-visibility
+        pattern already used for Mystery Chamber clues."""
+
+        hero_id = de.actor_hero_id
+        sheet = de.payload["sheet"]
+        deck = de.payload["deck"]
+        owned_card_ids = sorted(set(deck["deck"]) | set(deck["hand"]) | set(deck["discard"]) | set(deck["exhausted"]))
+        public_event = self._wire_event(
+            state,
+            de,
+            "hero_created",
+            payload={
+                "hero_id": hero_id,
+                "sheet": sheet,
+                "max_hp": de.payload["max_hp"],
+                "defense": de.payload["defense"],
+                "deck": {
+                    "card_ids": owned_card_ids,
+                    "deck_count": len(deck["deck"]),
+                    "hand_count": len(deck["hand"]),
+                    "discard": list(deck["discard"]),
+                    "exhausted": list(deck["exhausted"]),
+                },
+                "inventory": de.payload["inventory"],
+                "signature_charge": de.payload["signature_charge"],
+            },
+        )
+        events = [public_event]
+        if deck["hand"]:
+            events.append(
+                self._wire_event(
+                    state,
+                    de,
+                    "hand_dealt",
+                    visibility="private",
+                    visible_to=hero_id,
+                    payload={"hero_id": hero_id, "hand": list(deck["hand"])},
+                )
+            )
         return events
 
     def _translate_conflict_event(self, state: RunState, de: DomainEvent, wire_type: str) -> Event:
@@ -653,6 +1246,17 @@ class StacksEngineAdapter:
                 "difficulty": de.payload["difficulty"],
                 "objects": objects,
             },
+        )
+
+    def _translate_shop_instantiated(self, state: RunState, de: DomainEvent) -> Event:
+        domain_state = self._domain_states[state.run_id]
+        room = domain_state.map.rooms[de.payload["room_id"]] if domain_state.map else None
+        shop = self._neutral_shop_snapshot(room.shop) if room is not None and room.shop is not None else None
+        return self._wire_event(
+            state,
+            de,
+            "shop_instantiated",
+            payload={"room_id": de.payload["room_id"], "shop": shop},
         )
 
     def _translate_private_clue_revealed(self, state: RunState, de: DomainEvent) -> Event:

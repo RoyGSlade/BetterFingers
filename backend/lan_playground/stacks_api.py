@@ -23,6 +23,7 @@ future compose drafts) is put into a log line or exception detail.
 
 from __future__ import annotations
 
+import asyncio
 import random
 import threading
 import time
@@ -59,10 +60,18 @@ from backend.lan_playground.stacks_protocol import (
 
 STATIC_DIR = Path(__file__).parent / "static"
 
+# S21.4 reaction-decision timer: when a Conflict encounter pauses into a
+# pending reaction, the transport layer (never the reducer -- wave-5 director
+# ruling) owns the wall-clock countdown and injects a server-originated
+# resolve_reaction "pass" through the ordinary command pipeline on expiry, so
+# the command log stays the single source of truth and replay holds.
+REACTION_DECISION_SECONDS = 30.0
+
 DEFAULT_ROOM_CREATE_RATE_LIMIT_PER_MIN = 6
 DEFAULT_ROOM_JOIN_RATE_LIMIT_PER_MIN = 20
 DEFAULT_ROOM_SNAPSHOT_RATE_LIMIT_PER_MIN = 90
 DEFAULT_WS_CONNECT_RATE_LIMIT_PER_MIN = 30
+DEFAULT_CONTENT_CATALOG_RATE_LIMIT_PER_MIN = 30
 
 
 # --------------------------------------------------------------------------
@@ -134,6 +143,15 @@ class StacksRoomManager:
             state = self._require_state(code)
             return self._adapter.apply(state, command)
 
+    def apply_authoritative(self, code: str, command: Command) -> ApplyResult:
+        # Server-originated command (§21.4 reaction-timeout auto-pass, §21.5
+        # disconnected-companion actions) -- see StacksEngineAdapter.
+        # apply_authoritative's docstring for why this bypasses the normal
+        # viewer==hero_id check.
+        with self._lock:
+            state = self._require_state(code)
+            return self._adapter.apply_authoritative(state, command)
+
     def project(self, code: str, viewer: str | None) -> dict[str, Any]:
         with self._lock:
             state = self._require_state(code)
@@ -148,6 +166,11 @@ class StacksRoomManager:
         with self._lock:
             state = self._require_state(code)
             return self._adapter.legal_actions(state, hero_id)
+
+    def content_catalog(self) -> dict[str, Any]:
+        # Static reference content (background/card/item definitions, §11) --
+        # no run state involved, so no lock/room lookup needed.
+        return self._adapter.content_catalog()
 
     def set_presence(self, code: str, hero_id: str, *, connected: bool | None = None, ready: bool | None = None) -> None:
         with self._lock:
@@ -238,6 +261,80 @@ class ConnectionHub:
 # --------------------------------------------------------------------------
 
 
+class ReactionAutoPass:
+    """S21.4 decision timer for pending combat reactions (wave-5 task #16).
+
+    ``scan_and_schedule`` is called after every successful command apply; for
+    each encounter currently paused on a ``pending_reaction`` it arms one
+    asyncio timer keyed by (room code, room id, reaction_id). On expiry the
+    timer re-checks state and, if the same reaction is still unanswered,
+    injects a server-originated ``resolve_reaction`` "pass" via
+    ``StacksRoomManager.apply_authoritative`` -- an ordinary logged command,
+    so determinism and replay are untouched (the reducer never sees a clock).
+    A reaction answered by a player (or a protector) before expiry simply
+    causes the fired timer to observe a different/absent reaction_id and do
+    nothing. Disconnected heroes are handled by the same injection acting as
+    the S21.5 companion default.
+    """
+
+    def __init__(self, manager: StacksRoomManager, hub: ConnectionHub, delay_seconds: float = REACTION_DECISION_SECONDS):
+        self._manager = manager
+        self._hub = hub
+        self._delay = delay_seconds
+        self._scheduled: set[tuple[str, str, str]] = set()
+
+    def scan_and_schedule(self, code: str) -> None:
+        try:
+            view = self._manager.project(code, None)
+        except RunNotFoundError:
+            return
+        for room_id, conflict in (view.get("conflict") or {}).items():
+            pending = conflict.get("pending_reaction")
+            if not pending or pending.get("reaction_id") is None:
+                continue
+            key = (code, room_id, str(pending["reaction_id"]))
+            if key in self._scheduled:
+                continue
+            self._scheduled.add(key)
+            asyncio.create_task(self._auto_pass(key, conflict.get("encounter_id")))
+
+    async def _auto_pass(self, key: tuple[str, str, str], encounter_id: str | None) -> None:
+        code, room_id, reaction_id = key
+        try:
+            await asyncio.sleep(self._delay)
+            # One retry: a player command can race us between projection and
+            # apply, bumping the revision -- re-check and try once more.
+            for _ in range(2):
+                try:
+                    view = self._manager.project(code, None)
+                    run_id = self._manager.get_state(code).run_id
+                except RunNotFoundError:
+                    return
+                conflict = (view.get("conflict") or {}).get(room_id) or {}
+                pending = conflict.get("pending_reaction")
+                if not pending or str(pending.get("reaction_id")) != reaction_id:
+                    return  # answered or encounter ended before the timer fired
+                command = Command(
+                    command_id=uuid.uuid4().hex,
+                    idempotency_key=f"autopass_{reaction_id}_{uuid.uuid4().hex[:8]}",
+                    run_id=run_id,
+                    hero_id=str(pending.get("defender_id")),
+                    encounter_id=conflict.get("encounter_id") or encounter_id,
+                    expected_revision=int(view["revision"]),
+                    type="resolve_reaction",
+                    payload={"reaction_id": reaction_id, "reaction": "pass"},
+                )
+                try:
+                    result = self._manager.apply_authoritative(code, command)
+                except CommandError:
+                    continue
+                for event in result.events:
+                    await self._hub.broadcast_event(code, event, result.revision)
+                return
+        finally:
+            self._scheduled.discard(key)
+
+
 class CreateRoomRequest(BaseModel):
     host_name: str = Field(..., min_length=1, max_length=DISPLAY_NAME_MAX_CHARS)
     seed: int | None = None
@@ -282,15 +379,19 @@ def create_stacks_app(
     room_join_rate_limit_per_min: int = DEFAULT_ROOM_JOIN_RATE_LIMIT_PER_MIN,
     room_snapshot_rate_limit_per_min: int = DEFAULT_ROOM_SNAPSHOT_RATE_LIMIT_PER_MIN,
     ws_connect_rate_limit_per_min: int = DEFAULT_WS_CONNECT_RATE_LIMIT_PER_MIN,
+    content_catalog_rate_limit_per_min: int = DEFAULT_CONTENT_CATALOG_RATE_LIMIT_PER_MIN,
+    reaction_decision_seconds: float = REACTION_DECISION_SECONDS,
 ) -> FastAPI:
     app = FastAPI(title="Infinite Stacks Transport", docs_url=None, redoc_url=None, openapi_url=None)
 
     manager = room_manager if room_manager is not None else StacksRoomManager(StacksEngineAdapter(), clock=clock)
     hub = ConnectionHub()
+    reaction_autopass = ReactionAutoPass(manager, hub, delay_seconds=reaction_decision_seconds)
     create_limiter = RateLimiter(max_requests=room_create_rate_limit_per_min, window_s=60.0)
     join_limiter = RateLimiter(max_requests=room_join_rate_limit_per_min, window_s=60.0)
     snapshot_limiter = RateLimiter(max_requests=room_snapshot_rate_limit_per_min, window_s=60.0)
     ws_limiter = RateLimiter(max_requests=ws_connect_rate_limit_per_min, window_s=60.0)
+    content_catalog_limiter = RateLimiter(max_requests=content_catalog_rate_limit_per_min, window_s=60.0)
 
     class _PolicyMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):
@@ -319,6 +420,15 @@ def create_stacks_app(
         if hero_id is None:
             raise HTTPException(status_code=401, detail="invalid_player_token")
         return hero_id
+
+    @app.get("/api/stacks/content-catalog", dependencies=[Depends(_require_access_code)])
+    async def get_content_catalog(request: Request):
+        # Static background/card/item reference data (§11) for the
+        # character-builder screen -- access-code gated like every other
+        # route, but no player token: it names no run or hero.
+        if not content_catalog_limiter.allow(_client_key(request), now=clock()):
+            raise HTTPException(status_code=429, detail="rate_limited")
+        return manager.content_catalog()
 
     @app.post("/api/stacks/rooms", dependencies=[Depends(_require_access_code)])
     async def create_room(body: CreateRoomRequest, request: Request):
@@ -385,6 +495,7 @@ def create_stacks_app(
             raise HTTPException(status_code=status, detail={"code": exc.code, "legal_actions": exc.legal_actions})
         for event in result.events:
             await hub.broadcast_event(code, event, result.revision)
+        reaction_autopass.scan_and_schedule(code)
         return {"revision": result.revision, "replayed": result.replayed, "events": [event_wire(e) for e in result.events]}
 
     @app.websocket("/ws/stacks/{code}")
@@ -437,7 +548,9 @@ def create_stacks_app(
             )
             while True:
                 message = await websocket.receive_json()
-                await _handle_ws_message(message, code=code, hero_id=hero_id, manager=manager, hub=hub, websocket=websocket)
+                await _handle_ws_message(
+                    message, code=code, hero_id=hero_id, manager=manager, hub=hub, websocket=websocket, reaction_autopass=reaction_autopass
+                )
         except WebSocketDisconnect:
             pass
         finally:
@@ -462,6 +575,7 @@ async def _handle_ws_message(
     manager: StacksRoomManager,
     hub: ConnectionHub,
     websocket: WebSocket,
+    reaction_autopass: ReactionAutoPass | None = None,
 ) -> None:
     kind = message.get("kind")
     if kind == "presence":
@@ -508,3 +622,5 @@ async def _handle_ws_message(
     )
     for event in result.events:
         await hub.broadcast_event(code, event, result.revision)
+    if reaction_autopass is not None:
+        reaction_autopass.scan_and_schedule(code)

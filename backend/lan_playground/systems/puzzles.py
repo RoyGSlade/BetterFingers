@@ -454,6 +454,54 @@ def apply_puzzle_hint_revealed(state: RunState, event: Event) -> RunState:
     return state
 
 
+# ---------------------------------------------------------------- share_clue
+
+
+def validate_share_clue(state: RunState, hero_id: str | None, payload: dict) -> tuple[RoomState, str]:
+    """Wave 5 addition (board task #18): a hero shares one of their own
+    private clues (§10.3's asymmetric distributed clues) to the party --
+    server-side, so shared notes sync across browsers instead of staying
+    client-local (board note 14). Client wiring is stacks-heroui's side; this
+    only needs the caller to already own `clue_id` (`_KEY_ROLE`'s per-hero
+    `private_clue_assignments`, the same ledger `inspect_object` populates)."""
+
+    room, puzzle = _puzzle_room(state, hero_id)
+    clue_id = payload.get("clue_id")
+    owned = puzzle.private_clue_assignments.get(hero_id, ())
+    if clue_id not in owned:
+        raise CommandError(ErrorCode.ILLEGAL_ACTION, f"{hero_id} does not own clue {clue_id!r}")
+    return room, clue_id
+
+
+def handle_share_clue(command: Command, state: RunState, rng: StacksRNG, seq: int) -> tuple[Event, ...]:
+    hero_id = command.hero_id
+    room, clue_id = validate_share_clue(state, hero_id, command.payload)
+    puzzle = room.puzzle
+    fallback, accessible = puzzle.clue_text[clue_id]
+    return (
+        Event(
+            event_id=make_event_id(state.world_round, seq),
+            run_id=state.run_id,
+            world_round=state.world_round,
+            caused_by=command.command_id,
+            type=EventType.CLUE_SHARED,
+            visibility=Visibility.PARTY,
+            actor_hero_id=hero_id,
+            room_id=room.room_id,
+            payload={"clue_id": clue_id, "fallback": fallback, "accessible": accessible},
+        ),
+    )
+
+
+def apply_clue_shared(state: RunState, event: Event) -> RunState:
+    room_id = event.room_id
+    existing = state.party_shared_clues.get(room_id, ())
+    clue_id = event.payload["clue_id"]
+    if clue_id not in existing:
+        state.party_shared_clues[room_id] = existing + (clue_id,)
+    return state
+
+
 # ---------------------------------------------------------------- legal actions
 
 
@@ -462,9 +510,16 @@ def legal_action_names(state: RunState, hero_id: str) -> list[str]:
     if hero is None or state.map is None:
         return []
     room = state.map.rooms.get(hero.room_id)
-    if room is None or room.puzzle is None or room.puzzle.solved or room.puzzle.forced:
+    if room is None or room.puzzle is None:
         return []
-    return ["inspect_object", "submit_solution", "request_hint"]
+    actions: list[str] = []
+    if not room.puzzle.solved and not room.puzzle.forced:
+        actions.extend(["inspect_object", "submit_solution", "request_hint"])
+    owned = room.puzzle.private_clue_assignments.get(hero_id, ())
+    shared = state.party_shared_clues.get(room.room_id, ())
+    if any(cid not in shared for cid in owned):
+        actions.append("share_clue")
+    return actions
 
 
 EVENT_APPLIERS = {
@@ -475,4 +530,5 @@ EVENT_APPLIERS = {
     EventType.PUZZLE_SOLUTION_ACCEPTED: apply_puzzle_solution_accepted,
     EventType.PUZZLE_SOLUTION_REJECTED: apply_puzzle_solution_rejected,
     EventType.PUZZLE_FORCE_PROGRESS: apply_puzzle_force_progress,
+    EventType.CLUE_SHARED: apply_clue_shared,
 }

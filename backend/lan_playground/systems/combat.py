@@ -121,6 +121,67 @@ def _target_for_enemy(live: combat_encounter.Encounter) -> HeroCombatant | None:
     return min(candidates, key=lambda h: (h.hp, h.hero_id))
 
 
+def _eligible_protectors(live: combat_encounter.Encounter, defender_hero_id: str) -> list[HeroCombatant]:
+    """§14.5 Protect candidates for a pending reaction window: every OTHER
+    living hero with a reaction still available. No adjacency/position gate
+    exists in this wave's room model (combat `position` is a flat int used
+    for repositioning flavor, not a spatial range), matching how
+    `_target_for_enemy` already ignores position for target selection."""
+    return [
+        h for hid, h in sorted(live.heroes.items())
+        if hid != defender_hero_id and h.life_state == LifeState.ALIVE and h.reaction_available
+    ]
+
+
+def _pending_reaction_to_dict(
+    result: "combat_intents.IntentEffectsResult", enemy: EnemyCombatant, intent: "combat_intents.EnemyIntentDef"
+) -> dict:
+    pending = result.pending
+    window = pending.window
+    return {
+        "reaction_id": result.events[-1]["event_id"],
+        "attacker_id": enemy.instance_id,
+        "defender_id": window.defender.hero_id,
+        "protector_ids": sorted(p.hero_id for p in window.protectors),
+        "hit": window.hit,
+        "margin": window.margin,
+        "incoming_attack_total": window.incoming_attack_total,
+        "provisional_damage": window.provisional_damage,
+        "action_label": pending.action_label,
+        "source_intent_id": intent.id,
+        "remaining_effects": [dict(op) for op in result.remaining_effects],
+    }
+
+
+def _run_enemy_intent_effects(
+    live: combat_encounter.Encounter,
+    rng,
+    enemy: EnemyCombatant,
+    target: HeroCombatant | None,
+    intent: "combat_intents.EnemyIntentDef",
+    caused_by: str,
+    facts: set[str],
+) -> tuple[list[dict], set[str], dict | None]:
+    """Resolves one enemy intent's effect ops, routing any `damage` op
+    through the live §14.5 pending-reaction window (task #16). Returns
+    (events, facts, pending_reaction_dict_or_None) -- a non-None pending
+    dict means the caller must stop advancing the encounter (current actor
+    stays the attacking enemy, its turn isn't over) until `resolve_reaction`
+    resumes it."""
+    protectors = _eligible_protectors(live, target.hero_id) if target is not None else []
+    result = combat_intents.resolve_intent_effects(
+        intent, enemy, target, combat_round=live.combat_round, sequencer=live.sequencer, caused_by=caused_by,
+        rng=rng, reaction_hook=combat_actions.PENDING_REACTION, protectors=protectors,
+    )
+    executed_count = len(intent.effects) - len(result.remaining_effects) if result.pending else len(intent.effects)
+    for op_spec in intent.effects[:executed_count]:
+        if op_spec["op"] == "emit_fact":
+            facts.add(op_spec["args"]["fact_id"])
+    if result.pending is not None:
+        return list(result.events), facts, _pending_reaction_to_dict(result, enemy, intent)
+    return list(result.events), facts, None
+
+
 def _begin_hero_turn(live: combat_encounter.Encounter, hero_id: str, caused_by: str) -> tuple[list[dict], dict]:
     _, event = combat_actions.start_turn(hero_id, combat_round=live.combat_round, sequencer=live.sequencer, caused_by=caused_by)
     return [event], wire.fresh_turn_budget()
@@ -128,10 +189,13 @@ def _begin_hero_turn(live: combat_encounter.Encounter, hero_id: str, caused_by: 
 
 def _cascade_enemy_turns(
     live: combat_encounter.Encounter, rng, facts: set[str], caused_by: str, current_actor_id: str | None
-) -> tuple[list[dict], str | None, set[str], str | None]:
+) -> tuple[list[dict], str | None, set[str], str | None, dict | None]:
     """Auto-resolve every consecutive enemy turn (no player decides enemy
     tactics, per combat/encounter.py's own design) until it's a hero's turn,
-    the round settles (no more active combatants), or the fight ends."""
+    the round settles (no more active combatants), the fight ends, or an
+    enemy attack opens a live pending-reaction window (task #16) -- in that
+    last case, iteration stops immediately (other enemies simply wait, like
+    a paused mid-swing) and the 5th return value carries the pending dict."""
     events: list[dict] = []
     outcome: str | None = None
     while current_actor_id is not None:
@@ -153,20 +217,16 @@ def _cascade_enemy_turns(
                 enemy, chosen, combat_round=live.combat_round, sequencer=live.sequencer, caused_by=caused_by
             )
         )
-        events.extend(
-            combat_intents.resolve_intent_effects(
-                chosen, enemy, target, combat_round=live.combat_round, sequencer=live.sequencer, caused_by=caused_by
-            )
-        )
-        for op_spec in chosen.effects:
-            if op_spec["op"] == "emit_fact":
-                facts.add(op_spec["args"]["fact_id"])
+        intent_events, facts, pending = _run_enemy_intent_effects(live, rng, enemy, target, chosen, caused_by, facts)
+        events.extend(intent_events)
+        if pending is not None:
+            return events, current_actor_id, facts, None, pending
         if combat_encounter.is_victory(live) or combat_encounter.is_party_wiped(live):
             outcome = "victory" if combat_encounter.is_victory(live) else "party_wiped"
             current_actor_id = None
             break
         current_actor_id = _next_active_id(live, current_actor_id)
-    return events, current_actor_id, facts, outcome
+    return events, current_actor_id, facts, outcome, None
 
 
 # ---------------------------------------------------------------- threat / enemy roster
@@ -202,6 +262,7 @@ def _build_result_event(
     combat_evts: list[dict],
     new_facts: set[str],
     seq: int,
+    pending_reaction: dict | None = None,
 ) -> Event:
     room = state.map.rooms[room_id]
     prior_life = {hid: h["life_state"] for hid, h in room.encounter.heroes.items()}
@@ -231,6 +292,7 @@ def _build_result_event(
         threat_budget=room.encounter.threat_budget,
         pending_joiner_hero_ids=(pending_joiners if status == "active" else []),
         room_id=room_id,
+        pending_reaction=(pending_reaction if status == "active" else None),
     )
     event_type = EventType.CONFLICT_ENCOUNTER_ENDED if status != "active" else EventType.CONFLICT_TURN_RESOLVED
     payload: dict = {
@@ -301,13 +363,13 @@ def build_start_encounter_events(
     facts = set(state.facts)
     active_ids = _active_order_ids(live)
     current_actor_id = active_ids[0] if active_ids else None
-    cascade_evts, current_actor_id, facts, outcome = _cascade_enemy_turns(
+    cascade_evts, current_actor_id, facts, outcome, pending_reaction = _cascade_enemy_turns(
         live, rng, facts, command.command_id, current_actor_id
     )
     combat_evts.extend(cascade_evts)
 
     turn_budget: dict = {}
-    if current_actor_id is not None and outcome is None:
+    if pending_reaction is None and current_actor_id is not None and outcome is None:
         begin_evts, turn_budget = _begin_hero_turn(live, current_actor_id, command.command_id)
         combat_evts.extend(begin_evts)
 
@@ -327,6 +389,7 @@ def build_start_encounter_events(
         threat_budget=threat_budget_dict,
         pending_joiner_hero_ids=[],
         room_id=room_id,
+        pending_reaction=(pending_reaction if status == "active" else None),
     )
     hero_updates = {
         hid: {
@@ -393,12 +456,12 @@ def build_round_advance_combat_events(state: RunState, rng, command_id: str, seq
         facts = set(state.facts)
         active_ids = _active_order_ids(live)
         current_actor_id = active_ids[0] if active_ids else None
-        cascade_evts, current_actor_id, facts, outcome = _cascade_enemy_turns(
+        cascade_evts, current_actor_id, facts, outcome, pending_reaction = _cascade_enemy_turns(
             live, rng, facts, command_id, current_actor_id
         )
         combat_evts.extend(cascade_evts)
         turn_budget: dict = {}
-        if current_actor_id is not None and outcome is None:
+        if pending_reaction is None and current_actor_id is not None and outcome is None:
             begin_evts, turn_budget = _begin_hero_turn(live, current_actor_id, command_id)
             combat_evts.extend(begin_evts)
         events.append(
@@ -413,6 +476,7 @@ def build_round_advance_combat_events(state: RunState, rng, command_id: str, seq
                 pending_joiners=[],
                 combat_evts=combat_evts,
                 new_facts=(facts - set(state.facts)),
+                pending_reaction=pending_reaction,
                 seq=seq + len(events),
             )
         )
@@ -429,6 +493,10 @@ def _active_encounter_room(state: RunState, hero_id: str | None):
         raise CommandError(ErrorCode.ILLEGAL_ACTION, f"no active encounter in {hero.room_id}")
     if hero_id not in room.encounter.heroes:
         raise CommandError(ErrorCode.ILLEGAL_ACTION, f"{hero_id} is not part of the encounter in {hero.room_id}")
+    if room.encounter.pending_reaction is not None:
+        raise CommandError(
+            ErrorCode.ILLEGAL_ACTION, f"encounter in {hero.room_id} has a pending reaction awaiting resolution"
+        )
     return room, room.encounter
 
 
@@ -837,9 +905,11 @@ def handle_combat_end_turn(command: Command, state: RunState, rng, seq: int) -> 
     facts = set(state.facts)
 
     next_id = _next_active_id(live, hero_id)
-    cascade_evts, next_id, facts, outcome = _cascade_enemy_turns(live, rng, facts, command.command_id, next_id)
+    cascade_evts, next_id, facts, outcome, pending_reaction = _cascade_enemy_turns(
+        live, rng, facts, command.command_id, next_id
+    )
     turn_budget: dict = {}
-    if next_id is not None and outcome is None:
+    if pending_reaction is None and next_id is not None and outcome is None:
         begin_evts, turn_budget = _begin_hero_turn(live, next_id, command.command_id)
         cascade_evts = list(cascade_evts) + begin_evts
 
@@ -865,9 +935,157 @@ def handle_combat_end_turn(command: Command, state: RunState, rng, seq: int) -> 
         pending_joiners=enc.pending_joiner_hero_ids,
         combat_evts=list(cascade_evts),
         new_facts=(facts - set(state.facts)),
+        pending_reaction=pending_reaction,
         seq=seq + 1,
     )
     return (turn_submitted, result_event)
+
+
+# ---------------------------------------------------------------- resolve_reaction (§14.5/§21.3-21.4, task #16)
+#
+# Answers a pending reaction window opened by an enemy attack-type intent
+# (see `_run_enemy_intent_effects` above). Deliberately bypasses
+# `_active_encounter_room` (which now *rejects* any command while a
+# reaction is pending) -- reacting is the one thing allowed to happen off
+# the current actor's turn, mirroring the pre-existing standalone
+# `combat_reaction` command's own off-turn precedent. No numeric bonuses
+# are ever accepted from the wire: block_amount/wear_chance/counter-
+# permission are the same server-derived defaults used everywhere else in
+# this file.
+
+_RESOLVE_REACTION_CHOICES = ("dodge", "block", "protect", "counter", "pass")
+
+
+def validate_resolve_reaction(state: RunState, hero_id, payload):
+    hero = _hero(state, hero_id)
+    room = state.map.rooms[hero.room_id]
+    enc = room.encounter
+    if enc is None or enc.status != "active" or enc.pending_reaction is None:
+        raise CommandError(ErrorCode.ILLEGAL_ACTION, f"{hero_id} has no pending reaction to resolve")
+    pending = enc.pending_reaction
+    if payload.get("reaction_id") != pending["reaction_id"]:
+        raise CommandError(ErrorCode.ILLEGAL_ACTION, "stale or unknown reaction_id")
+    reaction = payload.get("reaction")
+    if reaction not in _RESOLVE_REACTION_CHOICES:
+        raise CommandError(ErrorCode.SCHEMA_ERROR, f"unknown reaction {reaction!r}")
+    is_defender = hero_id == pending["defender_id"]
+    is_protector = hero_id in pending["protector_ids"]
+    if not (is_defender or is_protector):
+        raise CommandError(ErrorCode.ILLEGAL_ACTION, f"{hero_id} is not eligible to answer this pending reaction")
+    if reaction == "protect" and not is_protector:
+        raise CommandError(ErrorCode.ILLEGAL_ACTION, "only a listed protector may choose protect")
+    if reaction in ("dodge", "block", "counter") and not is_defender:
+        raise CommandError(ErrorCode.ILLEGAL_ACTION, f"only the defending hero may choose {reaction}")
+    if reaction == "counter" and pending["margin"] > -5:
+        raise CommandError(ErrorCode.ILLEGAL_ACTION, "counter requires the incoming attack to have missed by 5 or more")
+    return room, enc, pending, reaction
+
+
+def handle_resolve_reaction(command: Command, state: RunState, rng, seq: int) -> tuple[Event, ...]:
+    hero_id = command.hero_id
+    room, enc, pending, reaction = validate_resolve_reaction(state, hero_id, command.payload)
+    live = wire.build_live_encounter(enc)
+    attacker = live.enemies[pending["attacker_id"]]
+    defender = live.heroes[pending["defender_id"]]
+    protectors = tuple(live.heroes[pid] for pid in pending["protector_ids"] if pid in live.heroes)
+    payload = command.payload
+
+    window = combat_actions.ReactionWindow(
+        attacker=attacker,
+        defender=defender,
+        protectors=protectors,
+        hit=pending["hit"],
+        margin=pending["margin"],
+        incoming_attack_total=pending["incoming_attack_total"],
+        provisional_damage=pending["provisional_damage"],
+        rng=rng,
+        combat_round=live.combat_round,
+        sequencer=live.sequencer,
+        caused_by=command.command_id,
+    )
+    pending_attack = combat_actions.PendingAttack(events=[], window=window, action_label=pending["action_label"])
+
+    outcome = None
+    if reaction == "dodge":
+        success, r_events = combat_reactions.dodge(
+            defender, pending["incoming_attack_total"], rng, combat_round=live.combat_round,
+            sequencer=live.sequencer, caused_by=command.command_id, new_position=payload.get("new_position"),
+        )
+        outcome = combat_actions.ReactionOutcome(
+            events=r_events,
+            hit=(False if success else pending["hit"]),
+            damage=(0 if success else pending["provisional_damage"]),
+        )
+    elif reaction == "block":
+        reduced, r_events = combat_reactions.block(
+            defender, pending["provisional_damage"],
+            item_id=str(payload.get("item_id") or defender.held_item or "weapon"),
+            block_amount=_DEFAULT_BLOCK_AMOUNT, rng=rng, combat_round=live.combat_round,
+            sequencer=live.sequencer, caused_by=command.command_id,
+        )
+        outcome = combat_actions.ReactionOutcome(events=r_events, hit=pending["hit"], damage=reduced)
+    elif reaction == "protect":
+        protector = live.heroes[hero_id]
+        r_events = combat_reactions.protect(
+            protector, defender, combat_round=live.combat_round, sequencer=live.sequencer, caused_by=command.command_id,
+        )
+        outcome = combat_actions.ReactionOutcome(
+            events=r_events, hit=pending["hit"], damage=pending["provisional_damage"], damage_target=protector,
+        )
+    elif reaction == "counter":
+        _, r_events = combat_reactions.counter(
+            defender, attacker, pending["margin"], permitted=True, attribute="force", skill=None, rng=rng,
+            combat_round=live.combat_round, sequencer=live.sequencer, caused_by=command.command_id,
+        )
+        outcome = combat_actions.ReactionOutcome(events=r_events, hit=pending["hit"], damage=pending["provisional_damage"])
+    # reaction == "pass": outcome stays None -- §21.4 safe default, reaction not consumed.
+
+    result = combat_actions.resolve_pending_attack(pending_attack, outcome)
+    combat_evts = list(result.events)
+    facts = set(state.facts)
+
+    remaining_effects = pending.get("remaining_effects") or []
+    next_pending: dict | None = None
+    if remaining_effects:
+        resume_intent = combat_intents.EnemyIntentDef(
+            id=pending["source_intent_id"], trigger="", effects=tuple(remaining_effects),
+            counterplay="", telegraph_text="", accessible_text="",
+        )
+        resume_events, facts, next_pending = _run_enemy_intent_effects(
+            live, rng, attacker, defender, resume_intent, command.command_id, facts
+        )
+        combat_evts.extend(resume_events)
+
+    current_actor_id = enc.current_actor_id  # the attacking enemy, unless resolution re-pends on it
+    turn_budget = enc.turn_budget
+    if next_pending is None:
+        next_id = _next_active_id(live, pending["attacker_id"])
+        cascade_evts, next_id, facts, outcome_status, next_pending = _cascade_enemy_turns(
+            live, rng, facts, command.command_id, next_id
+        )
+        combat_evts.extend(cascade_evts)
+        current_actor_id = next_id
+        turn_budget = {}
+        if next_pending is None and next_id is not None and outcome_status is None:
+            begin_evts, turn_budget = _begin_hero_turn(live, next_id, command.command_id)
+            combat_evts.extend(begin_evts)
+
+    return (
+        _build_result_event(
+            command_id=command.command_id,
+            actor_hero_id=hero_id,
+            state=state,
+            room_id=room.room_id,
+            live=live,
+            current_actor_id=current_actor_id,
+            turn_budget=turn_budget,
+            pending_joiners=enc.pending_joiner_hero_ids,
+            combat_evts=combat_evts,
+            new_facts=(facts - set(state.facts)),
+            pending_reaction=next_pending,
+            seq=seq,
+        ),
+    )
 
 
 # ---------------------------------------------------------------- appliers

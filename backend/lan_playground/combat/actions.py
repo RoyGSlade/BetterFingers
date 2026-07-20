@@ -162,6 +162,8 @@ class ReactionWindow:
     combat_round: int
     sequencer: EventSequencer
     caused_by: str
+    natural_20: bool = False
+    natural_1: bool = False
 
 
 @dataclass
@@ -283,6 +285,8 @@ def attack(
                 combat_round=combat_round,
                 sequencer=sequencer,
                 caused_by=caused_by,
+                natural_20=(chosen == 20),
+                natural_1=(chosen == 1),
             )
             outcome = reaction_hook(window)
             if outcome is not None:
@@ -314,3 +318,165 @@ def attack(
         natural_20=(chosen == 20),
         natural_1=(chosen == 1),
     )
+
+
+# ---------------------------------------------------------------- enemy attack-type intents (§14.3/§14.6, task #16)
+
+
+class _PendingReactionSentinel:
+    def __repr__(self) -> str:
+        return "PENDING_REACTION"
+
+
+PENDING_REACTION = _PendingReactionSentinel()
+"""Pass as `reaction_hook` to `resolve_enemy_attack` to open the reaction
+window (when eligible) without resolving it: returns a `PendingAttack`
+instead of an `AttackResult`, for a caller that wants to defer the decision
+to a later live command rather than an in-process callback."""
+
+
+@dataclass
+class PendingAttack:
+    """Returned by `resolve_enemy_attack` when `reaction_hook=PENDING_REACTION`
+    and the window is open. The attack roll (and provisional damage, if any)
+    is already resolved and baked into `events` -- replay-safe, no further
+    RNG draws happen for this attack. Damage has not been applied. Call
+    `resolve_pending_attack` with a `ReactionOutcome` (or `None` to decline)
+    once the decision is known, whenever it arrives."""
+
+    events: list[dict]
+    window: ReactionWindow
+    action_label: str
+
+
+def _finish_attack(events: list[dict], window: ReactionWindow, outcome: ReactionOutcome | None, action_label: str) -> AttackResult:
+    final_hit, final_damage, final_target = window.hit, window.provisional_damage, window.defender
+    if outcome is not None:
+        events = list(events) + list(outcome.events)
+        final_hit = outcome.hit
+        final_damage = outcome.damage
+        final_target = outcome.damage_target or window.defender
+    if final_damage > 0:
+        events = list(events) + apply_damage(
+            final_target,
+            final_damage,
+            combat_round=window.combat_round,
+            sequencer=window.sequencer,
+            caused_by=window.caused_by,
+            target_id=_combatant_id(final_target),
+            actor_id=_combatant_id(window.attacker),
+            source=action_label,
+        )
+    return AttackResult(
+        events=events,
+        hit=final_hit,
+        total=window.incoming_attack_total,
+        margin=window.margin,
+        damage=final_damage,
+        natural_20=window.natural_20,
+        natural_1=window.natural_1,
+    )
+
+
+def resolve_pending_attack(pending: PendingAttack, outcome: ReactionOutcome | None) -> AttackResult:
+    """Finishes an attack that opened a window via `PENDING_REACTION`.
+    `outcome=None` means no reaction was taken (§21.4 safe default) --
+    resolution proceeds exactly as if the window had never opened."""
+    return _finish_attack(pending.events, pending.window, outcome, pending.action_label)
+
+
+def resolve_enemy_attack(
+    attacker: EnemyCombatant,
+    defender: Combatant,
+    *,
+    damage_amount: int,
+    rng: CombatRNG,
+    combat_round: int,
+    sequencer: EventSequencer,
+    caused_by: str,
+    action_label: str = "attack",
+    advantage_sources: int = 0,
+    disadvantage_sources: int = 0,
+    reaction_hook: "ReactionHook | _PendingReactionSentinel | None" = None,
+    protectors: Sequence[HeroCombatant] = (),
+) -> AttackResult | PendingAttack:
+    """§14.3 to-hit for enemy attack-type intents: `d20 (+ adv/disadv) +
+    attacker.accuracy_bonus` vs `defender.defense`. Enemies don't carry
+    weapon dice (docs/INFINITE_STACKS_COMBAT.md §12, out of scope) -- damage
+    on a hit is the flat, content-authored `amount` from the intent's
+    `damage` op (unchanged from the wave-2 contract), applied through the
+    same §14.5 reaction interrupt window `attack()` opens for hero attacks.
+
+    `reaction_hook=None` (default): no window is offered regardless of
+    `defender.reaction_available` -- resolves immediately, mirroring
+    `attack()`'s own behaviour when no hook is passed (this is what
+    scripted/pure-package callers with no live player use).
+    `reaction_hook=PENDING_REACTION`: opens the window when eligible and
+    returns a `PendingAttack` instead of resolving -- the live command
+    wiring uses this so a real player's choice can arrive as its own
+    command, possibly much later.
+    Otherwise `reaction_hook` is called synchronously exactly like
+    `attack()`'s, for scripted test policies that want to react in-process.
+    """
+    net = _net_advantage(advantage_sources, disadvantage_sources)
+    if net == 0:
+        rolls = (rng.roll_d20(),)
+        chosen = rolls[0]
+    else:
+        rolls = (rng.roll_d20(), rng.roll_d20())
+        chosen = max(rolls) if net > 0 else min(rolls)
+
+    total = chosen + attacker.accuracy_bonus
+    defender_id = _combatant_id(defender)
+    margin = total - defender.defense
+    hit = total >= defender.defense
+
+    events = [
+        sequencer.emit(
+            combat_round=combat_round,
+            caused_by=caused_by,
+            type=CombatEventType.ATTACK_RESOLVED,
+            actor_id=attacker.instance_id,
+            target_id=defender_id,
+            visibility=Visibility.PUBLIC,
+            payload={
+                "action": action_label,
+                "die_rolls": list(rolls),
+                "chosen_die": chosen,
+                "accuracy_bonus": attacker.accuracy_bonus,
+                "total": total,
+                "defense": defender.defense,
+                "margin": margin,
+                "hit": hit,
+                "natural_20": chosen == 20,
+                "natural_1": chosen == 1,
+            },
+        )
+    ]
+
+    damage = damage_amount if hit else 0
+    window = ReactionWindow(
+        attacker=attacker,
+        defender=defender,
+        protectors=tuple(protectors),
+        hit=hit,
+        margin=margin,
+        incoming_attack_total=total,
+        provisional_damage=damage,
+        rng=rng,
+        combat_round=combat_round,
+        sequencer=sequencer,
+        caused_by=caused_by,
+        natural_20=(chosen == 20),
+        natural_1=(chosen == 1),
+    )
+
+    if reaction_hook is not None and isinstance(defender, HeroCombatant):
+        eligible = defender.reaction_available or any(p.reaction_available for p in protectors)
+        if eligible:
+            if reaction_hook is PENDING_REACTION:
+                return PendingAttack(events=events, window=window, action_label=action_label)
+            outcome = reaction_hook(window)
+            return _finish_attack(events, window, outcome, action_label)
+
+    return _finish_attack(events, window, None, action_label)

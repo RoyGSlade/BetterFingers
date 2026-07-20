@@ -72,6 +72,21 @@ export function createInitialState() {
     conflicts: {},
     conflictIntents: {},
     conflictLastCheckReceipt: {},
+    // Wave-5 (board task #17, docs/INFINITE_STACKS_CONTRACTS.md S5.4): the
+    // background/card/item reference catalog for the character-builder
+    // screen, fetched once via core/api.js's fetchContentCatalog and stored
+    // here by main.js's setContentCatalog action -- it is static content,
+    // not run state, so it never comes through a snapshot/event.
+    contentCatalog: null,
+    // In-progress character-builder selections (infinite_stacks.md S11) --
+    // client-local scratch, same pattern as puzzleManualNotes/sharedClueIds
+    // above: main.js's `render()` rebuilds the active screen's whole DOM
+    // subtree on every store change (any player's event, not just this
+    // hero's own actions), so any draft held only as a closure-local
+    // variable inside the screen module would be silently wiped by an
+    // unrelated update (e.g. an ally moving while this hero is still
+    // filling out the form). Living in the store instead survives that.
+    characterDraft: { name: "", backgroundId: null, attributeAssignment: {}, generalCardIds: [] },
   };
 }
 
@@ -313,6 +328,139 @@ function applyConflictEvent(state, event) {
   };
 }
 
+// -- Wave-5 hero events (docs/INFINITE_STACKS_CONTRACTS.md S5.4) -----------
+// Folds attribute_dice_rolled/hero_created/hand_dealt/card_drawn/card_played/
+// deck_reshuffled/signature_charge_refreshed/item_*/body_loot_recovered into
+// state.heroes[hero_id] and state.rooms[room_id] incrementally, the same
+// "patch what a snapshot already carries wholesale" pattern applyPuzzleEvent/
+// applyConflictEvent use. hand_dealt/card_drawn/deck_reshuffled are only ever
+// delivered to their own hero's client (private wire events), so no
+// per-viewer check is needed here -- if this client received the event, it
+// is the hero in question.
+
+function patchHero(state, heroId, patch) {
+  const existing = state.heroes[heroId];
+  if (!existing) return state;
+  return { ...state, heroes: { ...state.heroes, [heroId]: { ...existing, ...patch } } };
+}
+
+function patchRoom(state, roomId, patch) {
+  if (!roomId) return state;
+  const existing = state.rooms[roomId];
+  if (!existing) return state;
+  return { ...state, rooms: { ...state.rooms, [roomId]: { ...existing, ...patch(existing) } } };
+}
+
+// Must match heroes.creation.ATTRIBUTE_NAMES / combat.models.ATTRIBUTE_NAMES
+// (duplicated by value, not imported -- the client has no access to the
+// Python package; every other cross-boundary vocabulary in this codebase
+// duplicates values the same way rather than sharing an import).
+const CHARACTER_ATTRIBUTE_NAMES = ["force", "finesse", "insight", "presence"];
+
+function applyHeroEvent(state, event) {
+  const payload = event.payload;
+  if (event.type === "attribute_dice_rolled") {
+    let next = patchHero(state, payload.hero_id, { pending_dice: payload.dice });
+    const hasDraftAssignment = Object.keys(state.characterDraft.attributeAssignment || {}).length > 0;
+    if (state.you.heroId === payload.hero_id && !hasDraftAssignment) {
+      const identityAssignment = {};
+      CHARACTER_ATTRIBUTE_NAMES.forEach((name, index) => {
+        identityAssignment[name] = index;
+      });
+      next = { ...next, characterDraft: { ...next.characterDraft, attributeAssignment: identityAssignment } };
+    }
+    return next;
+  }
+  if (event.type === "hero_created") {
+    let next = patchHero(state, payload.hero_id, {
+      sheet: payload.sheet,
+      deck: payload.deck,
+      inventory: payload.inventory,
+      signature_charge: payload.signature_charge,
+      pending_dice: null,
+      max_hp: payload.max_hp,
+      hp: payload.max_hp,
+    });
+    if (state.you.heroId === payload.hero_id) {
+      next = { ...next, characterDraft: createInitialState().characterDraft };
+    }
+    return next;
+  }
+  if (event.type === "hand_dealt") {
+    return patchHero(state, payload.hero_id, { hand: payload.hand });
+  }
+  if (event.type === "card_drawn") {
+    const hero = state.heroes[payload.hero_id];
+    if (!hero || !hero.deck) return state;
+    const hand = [...(hero.hand || []), ...payload.card_ids];
+    return patchHero(state, payload.hero_id, {
+      hand,
+      deck: { ...hero.deck, deck_count: hero.deck.deck_count - payload.count, hand_count: hand.length },
+    });
+  }
+  if (event.type === "card_played") {
+    const hero = state.heroes[payload.hero_id];
+    if (!hero || !hero.deck) return state;
+    const hand = Array.isArray(hero.hand) ? hero.hand.filter((id) => id !== payload.card_id) : hero.hand;
+    const discard = payload.end_state === "discard" ? [...hero.deck.discard, payload.card_id] : hero.deck.discard;
+    const exhausted = payload.end_state === "exhaust" ? [...hero.deck.exhausted, payload.card_id] : hero.deck.exhausted;
+    return patchHero(state, payload.hero_id, {
+      hand,
+      deck: { ...hero.deck, hand_count: Math.max(0, hero.deck.hand_count - 1), discard, exhausted },
+    });
+  }
+  if (event.type === "deck_reshuffled") {
+    const hero = state.heroes[payload.hero_id];
+    if (!hero || !hero.deck) return state;
+    return patchHero(state, payload.hero_id, {
+      deck: {
+        ...hero.deck,
+        deck_count: payload.deck_count,
+        hand_count: payload.hand_count,
+        discard: payload.discard,
+        exhausted: payload.exhausted,
+      },
+    });
+  }
+  if (event.type === "signature_charge_refreshed") {
+    return patchHero(state, payload.hero_id, { signature_charge: payload.signature_charge });
+  }
+  if (event.type === "item_picked_up") {
+    let next = patchHero(state, payload.hero_id, { inventory: payload.inventory });
+    next = patchRoom(next, event.room_id, (room) => {
+      const groundItems = { ...(room.ground_items || {}) };
+      delete groundItems[payload.item_instance_id];
+      return { ground_items: groundItems };
+    });
+    return next;
+  }
+  if (event.type === "item_dropped") {
+    let next = patchHero(state, payload.hero_id, { inventory: payload.inventory });
+    next = patchRoom(next, event.room_id, (room) => ({
+      ground_items: { ...(room.ground_items || {}), [payload.item_instance_id]: payload.item_id },
+    }));
+    return next;
+  }
+  if (event.type === "item_traded") {
+    let next = patchHero(state, payload.from_hero_id, { inventory: payload.giver_inventory });
+    next = patchHero(next, payload.to_hero_id, { inventory: payload.receiver_inventory });
+    return next;
+  }
+  if (event.type === "body_loot_recovered") {
+    let next = patchHero(state, payload.hero_id, { inventory: payload.inventory });
+    next = patchRoom(next, event.room_id, (room) => {
+      const bodyItemIds = { ...(room.body_item_ids || {}) };
+      const recovered = new Set(payload.item_ids);
+      const remaining = (bodyItemIds[payload.dead_hero_id] || []).filter((id) => !recovered.has(id));
+      if (remaining.length) bodyItemIds[payload.dead_hero_id] = remaining;
+      else delete bodyItemIds[payload.dead_hero_id];
+      return { body_item_ids: bodyItemIds };
+    });
+    return next;
+  }
+  return state;
+}
+
 function applyEvent(state, event) {
   let next = state;
   if (event.type === "die_rolled") {
@@ -329,6 +477,7 @@ function applyEvent(state, event) {
   }
   next = applyPuzzleEvent(next, event);
   next = applyConflictEvent(next, event);
+  next = applyHeroEvent(next, event);
   return { ...next, log: appendLog(next, describeEvent(event)) };
 }
 
@@ -439,4 +588,18 @@ export function toggleManualNoteContradiction(state, roomId, noteId) {
 // click without waiting on network latency.
 export function markObjectInspected(state, roomId, objectId) {
   return { ...state, puzzleInspectedObjects: appendUniqueToRoomList(state.puzzleInspectedObjects, roomId, objectId) };
+}
+
+// Static background/card/item catalog (fetched once by main.js via
+// core/api.js's fetchContentCatalog) -- not run state, so it is set
+// directly rather than folded from a snapshot/event.
+export function setContentCatalog(state, catalog) {
+  return { ...state, contentCatalog: catalog };
+}
+
+// In-progress character-builder form state (see createInitialState's
+// characterDraft comment) -- merges a partial patch, mirroring every other
+// client-local scratch action in this module.
+export function updateCharacterDraft(state, patch) {
+  return { ...state, characterDraft: { ...state.characterDraft, ...patch } };
 }

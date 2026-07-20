@@ -23,11 +23,12 @@ from backend.lan_playground.domain.commands import Command, CommandType
 from backend.lan_playground.domain.events import EventType
 from backend.lan_playground.domain.rng import StacksRNG
 from backend.lan_playground.domain.state import ConnectorState, RunState
+from backend.lan_playground.shops import content_loader as shop_content_loader
 from backend.lan_playground.shops import economy, run_summary, seeding, services
 from backend.lan_playground.shops import models as M
 
 CORE_ITEMS = content_loader.load_core_pack().items
-CORE_SHOPS = content_loader.load_core_shops()
+CORE_SHOPS = shop_content_loader.load_core_shops()
 
 
 # ---------------------------------------------------------------------------
@@ -523,7 +524,7 @@ def test_core_shops_reference_only_real_item_ids():
 
 
 def test_core_pack_and_shops_validate_together_clean():
-    pack, shops = V.validate_core_pack_and_shops()
+    pack, shops = shop_content_loader.validate_core_pack_and_shops()
     assert shops == CORE_SHOPS
     assert pack.items == CORE_ITEMS
 
@@ -535,7 +536,7 @@ def test_core_shops_each_declare_a_rumor_and_a_complication():
 
 
 def test_missing_shops_yaml_returns_empty_dict(tmp_path):
-    assert content_loader.load_shops(tmp_path) == {}
+    assert shop_content_loader.load_shops(tmp_path) == {}
 
 
 def test_shop_with_unknown_item_ref_fails_validation():
@@ -548,11 +549,11 @@ def test_shop_with_unknown_item_ref_fails_validation():
     )
     shops = {"bad_shop": bad_archetype}
 
-    findings = V.check_shop_item_references(shops, pack)
+    findings = shop_content_loader.check_shop_item_references(shops, pack)
     assert any(f.rule == "unknown_reference" and "nonexistent_item_xyz" in f.message for f in findings)
 
     with pytest.raises(V.ValidationError):
-        V.validate_shops_strict(shops, pack)
+        shop_content_loader.validate_shops_strict(shops, pack)
 
 
 def _minimal_shop_yaml() -> dict[str, Any]:
@@ -583,7 +584,7 @@ def _minimal_shop_yaml() -> dict[str, Any]:
 
 def test_fixture_shops_yaml_loads_clean(tmp_path):
     (tmp_path / "shops.yaml").write_text(yaml.safe_dump(_minimal_shop_yaml()), encoding="utf-8")
-    shops = content_loader.load_shops(tmp_path)
+    shops = shop_content_loader.load_shops(tmp_path)
     assert set(shops) == {"fixture_shop"}
     assert shops["fixture_shop"].guaranteed_inventory[0].item_id == "field_suture"
 
@@ -593,8 +594,8 @@ def test_shops_yaml_unknown_field_rejected(tmp_path):
     files["shops"][0]["totally_made_up_field"] = "x"
     (tmp_path / "shops.yaml").write_text(yaml.safe_dump(files), encoding="utf-8")
 
-    with pytest.raises(content_loader.LoaderError):
-        content_loader.load_shops(tmp_path)
+    with pytest.raises(shop_content_loader.LoaderError):
+        shop_content_loader.load_shops(tmp_path)
 
 
 def test_shops_yaml_duplicate_id_rejected(tmp_path):
@@ -602,8 +603,8 @@ def test_shops_yaml_duplicate_id_rejected(tmp_path):
     files["shops"].append(dict(files["shops"][0]))
     (tmp_path / "shops.yaml").write_text(yaml.safe_dump(files), encoding="utf-8")
 
-    with pytest.raises(content_loader.LoaderError):
-        content_loader.load_shops(tmp_path)
+    with pytest.raises(shop_content_loader.LoaderError):
+        shop_content_loader.load_shops(tmp_path)
 
 
 def test_shops_yaml_invalid_service_rejected(tmp_path):
@@ -611,5 +612,5 @@ def test_shops_yaml_invalid_service_rejected(tmp_path):
     files["shops"][0]["services"] = ["buy", "not_a_real_service"]
     (tmp_path / "shops.yaml").write_text(yaml.safe_dump(files), encoding="utf-8")
 
-    with pytest.raises(content_loader.LoaderError):
-        content_loader.load_shops(tmp_path)
+    with pytest.raises(shop_content_loader.LoaderError):
+        shop_content_loader.load_shops(tmp_path)

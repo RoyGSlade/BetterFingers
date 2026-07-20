@@ -255,16 +255,103 @@ Dodge negates a hit and repositions on success (and does nothing extra on
 failure), Protect redirects HP loss to the protector, Counter fires only on
 `margin <= -5` and lands its own attack on the original attacker, and the
 window is never offered to a non-hero (enemy) defender or when no reaction
-is available. **No live caller wires a `reaction_hook` yet**: every attack a
-hero currently faces from an enemy resolves through `combat/intents.py`'s
-flat, unconditional `damage` op (§8 below) rather than a to-hit roll, so
-there is no attack-roll moment today for a hero to interrupt.
-`systems/combat.py::handle_combat_reaction` remains the caller-supplied-
-context command path for Escape/Prepared Trigger and for reacting to
-intent-driven damage narratively. Wiring intent-driven enemy attacks through
-a real to-hit roll (and therefore through this window) is future-wave scope
-— it would change `combat/intents.py`'s wave-2-accepted flat-damage contract
-and require new content-authored accuracy data.
+is available. `systems/combat.py::handle_combat_reaction` remains the
+caller-supplied-context command path for Escape/Prepared Trigger (unrelated
+to the pending-reaction window below).
+
+### 7.1 Enemy attacks and the live pending-reaction window (wave 5, task #16)
+
+Enemy attack-type intents (the `damage` op) now resolve through a real
+§14.3 to-hit roll and open this same interrupt window live, in the domain.
+Two new pure-package primitives in `combat/actions.py` make this possible
+without a synchronous callback (the existing `reaction_hook` above assumes
+an in-process decision, which a real network-connected player can't give):
+
+- `resolve_enemy_attack(attacker: EnemyCombatant, defender, *, damage_amount,
+  rng, ..., reaction_hook=None)` — §14.3 to-hit for an enemy: `d20 (+
+  adv/disadv) + attacker.accuracy_bonus` vs `defender.defense`. Enemies
+  carry no weapon dice (§12): damage on a hit is the flat, content-authored
+  `amount` from the intent's `damage` op, unchanged from the wave-2
+  contract. `reaction_hook=None` (default) resolves immediately, exactly
+  like `attack()` with no hook — this is what pure-package/scripted callers
+  (`tests/test_stacks_combat.py`'s `_run_simple_fight`) still use, so no
+  window is offered there and behaviour stays deterministic.
+- `reaction_hook=actions.PENDING_REACTION` (a sentinel) — opens the window
+  when eligible and returns a `PendingAttack` (roll + provisional damage
+  already resolved and baked into its `events`, replay-safe; damage not
+  yet applied) instead of resolving. `resolve_pending_attack(pending,
+  outcome)` finishes it later, given a `ReactionOutcome` or `None` to
+  decline — this is what `systems/combat.py` uses.
+
+`EnemyCombatant.accuracy_bonus` (default 0) is combat-package data, not a
+content schema change (director ruling 2026-07-19, note-20's offered escape
+hatch): `intents.build_enemy_combatant` assigns a per-`threat_tier` default
+(minion +2 / standard +4 / specialist +6 / elite +8, `ACCURACY_BONUS_BY_TIER`
+in `combat/intents.py`) — a documented default in the §32 spirit, same
+pattern as `systems/combat.py`'s `_DEFAULT_BLOCK_AMOUNT`.
+
+`combat/intents.py::resolve_intent_effects` gained `rng` (required only
+when an op is `damage`) and `reaction_hook`/`protectors` (both optional, so
+`apply_condition`/`move_target`/`emit_fact`-only intents are unaffected).
+When a `damage` op pends, it returns `IntentEffectsResult(events, pending,
+remaining_effects)` where `remaining_effects` is whatever ops came after
+the paused one in that same intent (empty for every intent in the core
+pack today, since none author more than one effect) — resumed later by
+calling the function again with a synthetic `EnemyIntentDef` wrapping just
+those ops, `id` set to the original intent's id so damage-source tagging
+is unaffected.
+
+**Domain wiring (`systems/combat.py`, `ConflictEncounterState.pending_reaction`).**
+`_cascade_enemy_turns` (the auto-resolver for consecutive enemy turns)
+stops the instant an intent's `damage` op opens an eligible window —
+`current_actor_id` stays pinned to the attacking enemy (its turn isn't
+over); every other combat command already rejects with "not your turn", and
+`_active_encounter_room` now rejects up front with a clearer "encounter has
+a pending reaction awaiting resolution" message. Other enemies later in the
+same cascade simply wait, like a mid-swing pause.
+
+The new `resolve_reaction` command (`{reaction_id, reaction:
+"dodge"|"block"|"protect"|"counter"|"pass", new_position?, item_id?}` — no
+numeric bonuses, same no-raw-wire-numbers rule as everywhere else) answers
+it: the sender must be `pending.defender_id` (dodge/block/counter/pass) or
+listed in `pending.protector_ids` (protect/pass); first valid command wins.
+Block's amount, Dodge's opposed roll, and Counter's `permitted` (margin
+`<= -5` is the sole, server-computed gate — no card/item system exists yet
+to gate it further) are all server-derived exactly like every other combat
+default in this file. `pass` — an explicit decline, a transport-layer
+decision-timer expiry, or a disconnected hero's companion policy (§21.5) —
+all resolve identically: full provisional damage lands and, per §14.5 ("the
+reaction is not consumed" when nothing is taken), `reaction_available`
+stays true. **There is no separate timeout/companion code path in the
+reducer** — those are just other senders of the same `resolve_reaction`
+command; the wall-clock decision timer lives entirely in the transport
+layer (stacks-heroui's `stacks_api.py`), never in domain state.
+
+**No deadlock, but genuinely no auto-resolve either (director ruling
+2026-07-19).** `RunState.round_complete()` returns `False` while *any*
+active encounter has a non-null `pending_reaction`, in addition to its
+existing `submitted_turn` check — an early design that force-defaulted a
+stale pending reaction at the round boundary was rejected specifically
+because, in solo play (the most common case), the enemy cascade often runs
+in the exact command that already satisfies every other `round_complete()`
+condition; auto-resolving there would mean the defending player never sees
+a prompt. The correct guarantee is the reverse of what "no deadlock" first
+suggests: the window **genuinely stays open** — including across what
+would otherwise be a world-round boundary — until a `resolve_reaction`
+command answers it, and the reducer makes no promise that one ever will.
+**A headless/scripted consumer that opens a window and never sends
+`resolve_reaction` stalls by design** — no different from ordinary
+exploration, where nothing auto-passes a silent player either. Real
+deployments must always have something answering: a live player, or the
+transport layer's timer/companion policy per §21.4/§21.5, both ordinary
+senders of the same command.
+
+Tests: `tests/test_stacks_combat.py::test_interrupt_window_*` (unchanged,
+pure-package, synchronous hooks) plus `resolve_enemy_attack`/pending-attack
+coverage; `tests/test_stacks_conflict.py`'s dedicated pending-reaction
+section (block/dodge/protect/counter/pass, the round_complete() guard for a
+solo last-submitter, and the headless-stalls-by-design case) drives the
+real command/reducer path end to end.
 
 ## 8. Enemy intents (§14.6)
 
@@ -372,7 +459,10 @@ when reviving without proper supplies but does not create an Injury object.
 Cards/items beyond a flat `Weapon`/`held_item` (§13) aren't modeled; called
 maneuvers and reactions accept plain numeric/boolean parameters (e.g.
 `counter`'s `permitted: bool`) rather than resolving card legality
-themselves. Wiring a `reaction_hook` (§7) into a live command handler, and
-routing enemy intents through a real to-hit roll instead of
-`combat/intents.py`'s flat `damage` op, are both future-wave scope (see §7
-for why).
+themselves. Wave 5 (task #16) closed the two items previously listed here
+(live `reaction_hook` wiring, enemy to-hit rolls) — see §7.1. Still out of
+scope: called maneuvers/reactions still don't resolve card/item legality
+(counter's `permitted` stays a server-computed `margin <= -5` gate, not a
+card check), and Escape/Prepared Trigger still go through the older
+caller-supplied-context `combat_reaction` command rather than the pending-
+reaction window (they aren't attack-interrupt reactions).

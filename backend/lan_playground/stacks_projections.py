@@ -120,13 +120,20 @@ def project_puzzles(puzzles_by_room: dict[str, dict[str, Any]], viewer: str | No
     `hints_revealed` is party-shared knowledge (§21.3), so it is visible to
     any authenticated hero viewer but never to a spectator/system view
     (viewer is None). `private_clues` is trimmed to the viewer's own hero_id
-    only -- every other hero's fragment is dropped, not merely hidden."""
+    only -- every other hero's fragment is dropped, not merely hidden.
+    `party_shared_clues` (wave 5, board task #18: `share_clue`) follows the
+    same "authenticated party member, never a spectator" rule as
+    `hints_revealed` -- a hero's *unshared* private clues stay exactly where
+    `your_private_clues` already scopes them."""
 
     projected: dict[str, Any] = {}
     for room_id, puzzle in puzzles_by_room.items():
-        entry = {k: v for k, v in puzzle.items() if k not in ("private_clues", "hints_revealed")}
+        entry = {
+            k: v for k, v in puzzle.items() if k not in ("private_clues", "hints_revealed", "party_shared_clues")
+        }
         entry["hints_revealed"] = list(puzzle.get("hints_revealed", [])) if viewer is not None else []
         entry["your_private_clues"] = puzzle.get("private_clues", {}).get(viewer, []) if viewer is not None else []
+        entry["party_shared_clues"] = list(puzzle.get("party_shared_clues", [])) if viewer is not None else []
         projected[room_id] = entry
     return projected
 

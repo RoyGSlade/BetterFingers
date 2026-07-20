@@ -134,11 +134,65 @@ def _emit_fact(
     )
 
 
+def _apply_condition(
+    command: Command, state: RunState, rng: StacksRNG, seq: int, actor_hero_id: str | None, room_id: str | None, args: dict
+) -> tuple[Event, ...]:
+    """§16.4-16.5 persistent statuses/injuries (distinct from combat's own
+    in-encounter StatusInstance dict, which is ephemeral to a single fight).
+    A no-op if the hero already carries this condition -- applying a
+    duplicate never emits a second event (§16.4: "a hero should rarely track
+    more than two")."""
+
+    if actor_hero_id is None or actor_hero_id not in state.heroes:
+        return ()
+    condition_id = args["condition_id"]
+    if condition_id in state.heroes[actor_hero_id].active_condition_ids:
+        return ()
+    return (
+        Event(
+            event_id=make_event_id(state.world_round, seq),
+            run_id=state.run_id,
+            world_round=state.world_round,
+            caused_by=command.command_id,
+            type=EventType.CONDITION_APPLIED,
+            visibility=Visibility.PARTY,
+            actor_hero_id=actor_hero_id,
+            room_id=room_id,
+            payload={"condition_id": condition_id},
+        ),
+    )
+
+
+def _remove_condition(
+    command: Command, state: RunState, rng: StacksRNG, seq: int, actor_hero_id: str | None, room_id: str | None, args: dict
+) -> tuple[Event, ...]:
+    if actor_hero_id is None or actor_hero_id not in state.heroes:
+        return ()
+    condition_id = args["condition_id"]
+    if condition_id not in state.heroes[actor_hero_id].active_condition_ids:
+        return ()
+    return (
+        Event(
+            event_id=make_event_id(state.world_round, seq),
+            run_id=state.run_id,
+            world_round=state.world_round,
+            caused_by=command.command_id,
+            type=EventType.CONDITION_REMOVED,
+            visibility=Visibility.PARTY,
+            actor_hero_id=actor_hero_id,
+            room_id=room_id,
+            payload={"condition_id": condition_id},
+        ),
+    )
+
+
 _OP_HANDLERS: dict[str, Callable[..., tuple[Event, ...]]] = {
     "reveal_room": _reveal_room,
     "spend_energy": _spend_energy,
     "grant_check": _grant_check,
     "emit_fact": _emit_fact,
+    "apply_condition": _apply_condition,
+    "remove_condition": _remove_condition,
 }
 
 LIVE_OPS = frozenset(_OP_HANDLERS)
@@ -191,8 +245,26 @@ def apply_fact_emitted(state: RunState, event: Event) -> RunState:
     return state
 
 
+def apply_condition_applied(state: RunState, event: Event) -> RunState:
+    hero = state.heroes[event.actor_hero_id]
+    condition_id = event.payload["condition_id"]
+    if condition_id not in hero.active_condition_ids:
+        hero.active_condition_ids = hero.active_condition_ids + (condition_id,)
+    return state
+
+
+def apply_condition_removed(state: RunState, event: Event) -> RunState:
+    hero = state.heroes[event.actor_hero_id]
+    condition_id = event.payload["condition_id"]
+    if condition_id in hero.active_condition_ids:
+        hero.active_condition_ids = tuple(c for c in hero.active_condition_ids if c != condition_id)
+    return state
+
+
 EVENT_APPLIERS = {
     EventType.ROOM_REVEALED_BY_EFFECT: apply_room_revealed_by_effect,
     EventType.EFFECT_ENERGY_SPENT: apply_effect_energy_spent,
     EventType.FACT_EMITTED: apply_fact_emitted,
+    EventType.CONDITION_APPLIED: apply_condition_applied,
+    EventType.CONDITION_REMOVED: apply_condition_removed,
 }

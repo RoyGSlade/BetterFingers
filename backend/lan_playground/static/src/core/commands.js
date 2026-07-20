@@ -78,10 +78,78 @@ export function combatManeuverCommand(maneuver, targetId, attribute, skill, expe
   return buildCommand("combat_maneuver", { maneuver, target_id: targetId, attribute, skill }, { expectedRevision, encounterId });
 }
 
-export function combatReactionCommand(reaction, expectedRevision, encounterId) {
-  return buildCommand("combat_reaction", { reaction }, { expectedRevision, encounterId });
+// §21.4 reaction interrupt window (stacks-enemyroll's wave-5 transport-
+// injection spec, board task #16): resolve_reaction takes only the pending
+// interrupt's reaction_id (so a stale/duplicate click can never resolve the
+// wrong reaction) plus the chosen reaction name -- no client-supplied
+// incoming_attack_total/incoming_damage/position, unlike the wave-3
+// freeform combat_reaction command it replaces in the UI (that one required
+// exactly the raw numeric modifiers this codebase's wire contract forbids
+// from ever leaving the client; see combat.js's renderReactionPrompt).
+export function resolveReactionCommand(reactionId, reaction, expectedRevision, encounterId) {
+  return buildCommand("resolve_reaction", { reaction_id: reactionId, reaction }, { expectedRevision, encounterId });
 }
 
 export function combatEndTurnCommand(expectedRevision, encounterId) {
   return buildCommand("combat_end_turn", {}, { expectedRevision, encounterId });
+}
+
+// Wave-5 hero commands (docs/INFINITE_STACKS_CONTRACTS.md S5.4, board task
+// #17): payload keys/types match the domain vocabulary systems/heroes_wire.py
+// validates exactly. No raw numeric modifier ever leaves the client here --
+// attribute_assignment sends the die VALUES the player rolled (server-
+// supplied, already public via attribute_dice_rolled), never a made-up
+// score, and item/card selections are always ids.
+export function rollAttributeDiceCommand(expectedRevision) {
+  return buildCommand("roll_attribute_dice", {}, { expectedRevision });
+}
+
+export function createHeroCommand(
+  { name, backgroundId, attributeAssignment, generalCardIds, personaCardId, equipmentCardIds },
+  expectedRevision,
+) {
+  return buildCommand(
+    "create_hero",
+    {
+      name,
+      background_id: backgroundId,
+      attribute_assignment: attributeAssignment,
+      general_card_ids: generalCardIds,
+      persona_card_id: personaCardId,
+      equipment_card_ids: equipmentCardIds || [],
+    },
+    { expectedRevision },
+  );
+}
+
+export function drawCardsCommand(count, expectedRevision) {
+  return buildCommand("draw_cards", { count }, { expectedRevision });
+}
+
+export function playCardCommand(cardId, { targetHeroId = null, targetEnemyId = null } = {}, expectedRevision, encounterId) {
+  return buildCommand(
+    "play_card",
+    { card_id: cardId, target_hero_id: targetHeroId, target_enemy_id: targetEnemyId },
+    { expectedRevision, encounterId },
+  );
+}
+
+export function safeRestCommand(expectedRevision) {
+  return buildCommand("safe_rest", {}, { expectedRevision });
+}
+
+export function pickupItemCommand(itemInstanceId, expectedRevision) {
+  return buildCommand("pickup_item", { item_instance_id: itemInstanceId }, { expectedRevision });
+}
+
+export function dropItemCommand(itemId, expectedRevision) {
+  return buildCommand("drop_item", { item_id: itemId }, { expectedRevision });
+}
+
+export function tradeItemCommand(toHeroId, itemId, expectedRevision) {
+  return buildCommand("trade_item", { to_hero_id: toHeroId, item_id: itemId }, { expectedRevision });
+}
+
+export function recoverBodyLootCommand(deadHeroId, itemIds, expectedRevision) {
+  return buildCommand("recover_body_loot", { dead_hero_id: deadHeroId, item_ids: itemIds || null }, { expectedRevision });
 }
