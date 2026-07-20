@@ -569,3 +569,49 @@ def test_replay_determinism_same_seed_same_event_log_and_state_hash():
 
     replayed = replay_mod.replay(run_a.state.run_id, SEED, 0, run_a.event_log)
     assert replayed.state_hash() == run_a.state.state_hash()
+
+
+# ----------------------------------------------- wave-5 close-out: equipment + fight-boundary wiring
+
+
+def test_encounter_start_resolves_real_equipment_into_the_combatant(monkeypatch):
+    # Regression guard (director close-out): the encounter-start combatant
+    # build site must run HeroState through heroes_wire's verified equipment
+    # resolution -- otherwise the legal_attacks catalog (which does) displays
+    # weapon math that resolution ignores.
+    from backend.lan_playground.systems import heroes_wire as hw
+
+    calls: list = []
+    real = hw.resolve_hero_combat_equipment
+
+    def recording(hero):
+        calls.append(hero.hero_id)
+        return real(hero)
+
+    monkeypatch.setattr(hw, "resolve_hero_combat_equipment", recording)
+    h = Harness()
+    h.send("hero_a", CommandType.JOIN_RUN)
+    _breach_into_conflict(h, "hero_a")
+    assert "hero_a" in calls, "encounter start must resolve the breacher's equipment"
+
+
+def test_once_per_fight_signature_charge_refreshes_at_encounter_start():
+    # §11.3 once_per_fight charges refresh at the fight boundary --
+    # heroes_wire.build_fight_boundary_refresh_events finally has its live
+    # caller (director close-out; helper published in wave 4).
+    from backend.lan_playground.heroes.backgrounds import SignatureCharge
+
+    h = Harness()
+    h.send("hero_a", CommandType.JOIN_RUN)
+    h.state.heroes["hero_a"].signature_charge = SignatureCharge(
+        ability_id="test_ability", frequency="once_per_fight", charges_remaining=0, max_charges=1
+    )
+    _breach_into_conflict(h, "hero_a")
+    refreshes = [
+        e
+        for e in h.event_log
+        if e.type == EventType.SIGNATURE_CHARGE_REFRESHED and e.payload.get("boundary") == "fight"
+    ]
+    assert refreshes, "encounter start must emit a fight-boundary signature refresh"
+    assert refreshes[-1].actor_hero_id == "hero_a"
+    assert h.state.heroes["hero_a"].signature_charge.charges_remaining == 1

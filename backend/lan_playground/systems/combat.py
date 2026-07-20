@@ -54,6 +54,7 @@ from ..combat import reactions as combat_reactions
 from ..combat import threat as combat_threat
 from ..combat.models import EnemyCombatant, HeroCombatant, LifeState
 from ..content import loader as content_loader
+from . import heroes_wire
 from ..domain.commands import Command, CommandError, ErrorCode
 from ..domain.events import Event, EventType, Visibility, make_event_id
 from ..domain.state import LIFE_STATE_DEAD, LIFE_STATE_DOWNED, ConflictEncounterState, HeroState, RunState
@@ -333,7 +334,13 @@ def build_start_encounter_events(
     budget = combat_threat.calculate_threat_budget(state.total_living_heroes())
     encounter_id = f"enc_{rng.randint(0, 2**31 - 1):08x}"
 
-    hero_combatant = wire.hero_combatant_from_state(hero_state)
+    # Real equipment reaches the fight: resolve verified weapon/bonus values
+    # from HeroState (heroes_wire owns the source-id -> concrete-value step,
+    # per the wave-3 no-raw-wire-numbers ruling) so resolution matches what
+    # the legal_attacks catalog displays.
+    hero_combatant = wire.hero_combatant_from_state(
+        hero_state, **heroes_wire.resolve_hero_combat_equipment(hero_state)
+    )
     immediate, reinforcement_candidates = _select_enemies(budget.total)
     immediate_list = [immediate] if immediate is not None else []
 
@@ -411,7 +418,7 @@ def build_start_encounter_events(
     }
     if event_type is EventType.CONFLICT_ENCOUNTER_ENDED:
         payload["outcome"] = status
-    return (
+    events = [
         Event(
             event_id=make_event_id(state.world_round, seq),
             run_id=state.run_id,
@@ -423,7 +430,17 @@ def build_start_encounter_events(
             room_id=room_id,
             payload=payload,
         ),
-    )
+    ]
+    # §11.3 once_per_fight signature abilities refresh at the fight boundary
+    # (heroes_wire published this hook in wave 4; the encounter start is the
+    # fight boundary for every hero present at it).
+    if event_type is EventType.CONFLICT_ENCOUNTER_STARTED:
+        events.extend(
+            heroes_wire.build_fight_boundary_refresh_events(
+                state, breaching_hero_id, seq + len(events), command.command_id
+            )
+        )
+    return tuple(events)
 
 
 # ---------------------------------------------------------------- round-advance hook (§7.4/§14.1)
@@ -446,7 +463,9 @@ def build_round_advance_combat_events(state: RunState, rng, command_id: str, seq
             continue
         live = wire.build_live_encounter(enc)
         joiners = [
-            wire.hero_combatant_from_state(state.heroes[hid])
+            wire.hero_combatant_from_state(
+                state.heroes[hid], **heroes_wire.resolve_hero_combat_equipment(state.heroes[hid])
+            )
             for hid in enc.pending_joiner_hero_ids
             if hid in state.heroes and state.heroes[hid].alive
         ]
