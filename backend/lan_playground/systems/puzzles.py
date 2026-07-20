@@ -149,12 +149,24 @@ def apply_mystery_puzzle_instantiated(state: RunState, event: Event) -> RunState
     clue_text = {c.id: (c.prose.fallback, c.prose.accessible) for c in instance.clues}
     key_object = next(o for o in instance.objects if o.role is S.PuzzleObjectRole.KEY)
 
+    # submit_solution's {solution: [item_id, ...]} refers to these ids -- expose
+    # them PUBLIC in a fixed lexicographic order that never depends on the
+    # shuffled `instance.solution` order (never itself put on the wire), so a
+    # client can build a valid submission without seeing the answer (director
+    # fix, 2026-07-19). ordering_sequence is the only puzzle template this
+    # wave; systems/puzzles.py is already coupled to it (see module docstring).
+    items = tuple(
+        {"item_id": item_id, "fallback": ordering_sequence.item_name(item_id), "accessible": f"Item: {ordering_sequence.item_name(item_id)}"}
+        for item_id in sorted(instance.solution)
+    )
+
     room.puzzle = PuzzleRoomState(
         instance_id=instance.id,
         template_id=instance.template_id,
         seed=payload["puzzle_seed"],
         difficulty=payload["difficulty"],
         objects=objects,
+        items=items,
         object_clue_ids=object_clue_ids,
         clue_text=clue_text,
         unclaimed_key_clue_ids=list(key_object.clue_ids),

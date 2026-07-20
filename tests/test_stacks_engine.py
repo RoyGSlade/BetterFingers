@@ -293,7 +293,13 @@ def test_replay_is_stable_across_multiple_seeds():
         d = h.door_direction(entrance)
         if d:
             h.send("hero_a", CommandType.BREACH, {"direction": d.value})
-        h.send("hero_a", CommandType.PASS)
+        hero_a_room = h.state.map.rooms[h.state.heroes["hero_a"].room_id]
+        if hero_a_room.encounter is not None and hero_a_room.encounter.status == "active":
+            # Breaching a Conflict room makes hero_a a combatant (§8.3): their
+            # world turn is now submitted via combat_end_turn, not pass.
+            h.send("hero_a", CommandType.COMBAT_END_TURN)
+        else:
+            h.send("hero_a", CommandType.PASS)
         h.send("hero_b", CommandType.PASS)
 
         replayed = replay_mod.replay("run_multi", seed, 0, h.event_log)

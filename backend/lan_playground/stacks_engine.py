@@ -38,6 +38,7 @@ from backend.lan_playground.domain.commands import CommandType as DomainCommandT
 from backend.lan_playground.domain.events import Event as DomainEvent
 from backend.lan_playground.domain.events import EventType as DomainEventType
 from backend.lan_playground.domain.rng import StacksRNG
+from backend.lan_playground.domain.state import ConflictEncounterState
 from backend.lan_playground.domain.state import RunState as DomainRunState
 from backend.lan_playground.systems import map_generation
 
@@ -112,12 +113,52 @@ class StacksEngineAdapter:
         base = _project(state, viewer)
         domain_state = self._domain_states.get(state.run_id)
         puzzles_by_room: dict[str, Any] = {}
+        conflict_by_room: dict[str, Any] = {}
         if domain_state is not None and domain_state.map is not None:
             for room_id, room in domain_state.map.rooms.items():
                 if room.puzzle is not None:
                     puzzles_by_room[room_id] = self._neutral_puzzle_snapshot(room.puzzle)
+                if room.encounter is not None:
+                    conflict_by_room[room_id] = self._neutral_conflict_snapshot(room.encounter)
         base["puzzles"] = _project_puzzles(puzzles_by_room, viewer)
+        base["conflict"] = conflict_by_room
         return base
+
+    @staticmethod
+    def _neutral_conflict_snapshot(encounter: Any) -> dict[str, Any]:
+        """Domain ConflictEncounterState -> a viewer-agnostic wire-safe dict
+        (docs/INFINITE_STACKS_CONTRACTS.md §5.3). No hidden combat state
+        leaks: no resists/weaknesses/converts tables, no un-telegraphed
+        intent (that folds from combat_events on each conflict_* wire event
+        instead, same pattern as puzzles' hints_revealed). Never imports
+        backend.lan_playground.combat -- everything needed is already a
+        plain field on the domain snapshot."""
+
+        living_ids = {hid for hid, h in encounter.heroes.items() if h["life_state"] == "alive"}
+        living_ids |= {eid for eid, e in encounter.enemies.items() if e["alive"]}
+        initiative_order = [c["combatant_id"] for c in encounter.order if c["combatant_id"] in living_ids]
+        return {
+            "encounter_id": encounter.encounter_id,
+            "status": encounter.status,
+            "combat_round": encounter.combat_round,
+            "current_actor_id": encounter.current_actor_id,
+            "initiative_order": initiative_order,
+            "heroes": {
+                hid: {
+                    "hp": h["hp"],
+                    "max_hp": h["max_hp"],
+                    "life_state": h["life_state"],
+                    "position": h["position"],
+                    "reaction_available": h["reaction_available"],
+                }
+                for hid, h in encounter.heroes.items()
+            },
+            "enemies": {
+                eid: {"name": e["name"], "hp": e["hp"], "max_hp": e["max_hp"], "alive": e["alive"], "position": e["position"]}
+                for eid, e in encounter.enemies.items()
+            },
+            "threat_budget": dict(encounter.threat_budget),
+        }
 
     @staticmethod
     def _neutral_puzzle_snapshot(puzzle: Any) -> dict[str, Any]:
@@ -131,6 +172,7 @@ class StacksEngineAdapter:
             "template_id": puzzle.template_id,
             "difficulty": puzzle.difficulty,
             "objects": [o.to_dict() for o in puzzle.objects],
+            "items": [dict(i) for i in puzzle.items],
             "solved": puzzle.solved,
             "forced": puzzle.forced,
             "attempts_used": puzzle.attempts_used,
@@ -258,6 +300,7 @@ class StacksEngineAdapter:
                     max_hp=dh.max_hp,
                     conscious=dh.conscious,
                     alive=dh.alive,
+                    life_state=dh.life_state,
                 )
             else:
                 wh.room_id = dh.room_id
@@ -267,6 +310,7 @@ class StacksEngineAdapter:
                 wh.max_hp = dh.max_hp
                 wh.conscious = dh.conscious
                 wh.alive = dh.alive
+                wh.life_state = dh.life_state
 
     def _sync_rooms(self, state: RunState, domain_state: DomainRunState) -> None:
         if domain_state.map is None:
@@ -471,7 +515,39 @@ class StacksEngineAdapter:
                     )
                 )
                 state.world_round = de.payload["next_round"]
+            elif de.type == DomainEventType.CONFLICT_ENCOUNTER_STARTED:
+                events.append(self._translate_conflict_event(state, de, "conflict_encounter_started"))
+            elif de.type == DomainEventType.CONFLICT_TURN_RESOLVED:
+                events.append(self._translate_conflict_event(state, de, "conflict_turn_resolved"))
+            elif de.type == DomainEventType.CONFLICT_ENCOUNTER_ENDED:
+                events.append(self._translate_conflict_event(state, de, "conflict_encounter_ended"))
+            elif de.type == DomainEventType.JOINED_CONFLICT_ROOM:
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "joined_conflict_room",
+                        visibility="party",
+                        payload={"hero_id": de.payload["hero_id"], "room_id": de.payload["room_id"]},
+                    )
+                )
         return events
+
+    def _translate_conflict_event(self, state: RunState, de: DomainEvent, wire_type: str) -> Event:
+        """docs/INFINITE_STACKS_CONTRACTS.md §5.3: `combat_events` (raw
+        backend.lan_playground.combat event dicts) pass through unchanged so
+        the client can fold enemy-intent telegraphs and §12.5 check receipts
+        the same way it folds `domain.reducer.project()`'s own event log."""
+        encounter_snapshot = ConflictEncounterState.from_dict(de.payload["encounter"])
+        payload: dict[str, Any] = {
+            "room_id": de.payload["room_id"],
+            "encounter": self._neutral_conflict_snapshot(encounter_snapshot),
+            "combat_events": de.payload["combat_events"],
+            "hero_updates": de.payload["hero_updates"],
+        }
+        if "outcome" in de.payload:
+            payload["outcome"] = de.payload["outcome"]
+        return self._wire_event(state, de, wire_type, payload=payload)
 
     def _translate_room_breached(self, state: RunState, de: DomainEvent, energy_spent: int) -> list[Event]:
         hero_id = de.actor_hero_id

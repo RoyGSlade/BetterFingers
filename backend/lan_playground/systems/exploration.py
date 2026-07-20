@@ -11,7 +11,7 @@ from ..domain.commands import Command, CommandError, ErrorCode
 from ..domain.events import Event, EventType, Visibility, make_event_id
 from ..domain.rng import StacksRNG
 from ..domain.state import DELTA, ConnectorState, Direction, MapState, RunState, room_id_for
-from . import map_generation, puzzles, room_generation, turns
+from . import combat, map_generation, puzzles, room_generation, turns
 
 
 def _hero(state: RunState, hero_id: str | None) -> "HeroState":
@@ -155,7 +155,33 @@ def handle_move(command: Command, state: RunState, rng: StacksRNG, seq: int) -> 
         room_id=target_room_id,
         payload={"from_room_id": hero.room_id, "to_room_id": target_room_id},
     )
-    return (energy_event, move_event)
+    events: tuple[Event, ...] = (energy_event, move_event)
+
+    target_room = state.map.rooms[target_room_id]
+    encounter = target_room.encounter
+    if (
+        encounter is not None
+        and encounter.status == "active"
+        and hero_id not in encounter.heroes
+        and hero_id not in encounter.pending_joiner_hero_ids
+    ):
+        # §7.4/§14.1: a hero who reaches an active Conflict room while it is
+        # underway queues as a joiner rather than fighting immediately --
+        # they integrate at the start of the next initiative cycle.
+        events += (
+            Event(
+                event_id=make_event_id(state.world_round, seq + 2),
+                run_id=state.run_id,
+                world_round=state.world_round,
+                caused_by=command.command_id,
+                type=EventType.JOINED_CONFLICT_ROOM,
+                visibility=Visibility.PARTY,
+                actor_hero_id=hero_id,
+                room_id=target_room_id,
+                payload={"hero_id": hero_id, "room_id": target_room_id},
+            ),
+        )
+    return events
 
 
 def apply_hero_moved(state: RunState, event: Event) -> RunState:
@@ -220,6 +246,8 @@ def handle_breach(command: Command, state: RunState, rng: StacksRNG, seq: int) -
     events: tuple[Event, ...] = (energy_event, breach_event)
     if family == "mystery_chamber":
         events += puzzles.build_instantiate_events(command, state, rng, target_room_id, hero_id, seq + 2)
+    elif family == "conflict":
+        events += combat.build_start_encounter_events(command, state, rng, target_room_id, hero_id, seq + 2)
     return events
 
 

@@ -273,6 +273,40 @@ class ProjectionPrivacyTests(unittest.TestCase):
             entry = adapter.project(state, viewer)["puzzles"][room_id]
             self.assertEqual({o["role"] for o in entry["objects"]}, {"anchor", "key", "contradiction", "red_herring"})
 
+    def test_orderable_items_are_public_and_do_not_leak_solution_order(self):
+        """Director-directed fix (2026-07-19 17:30): submit_solution needs
+        item ids on the wire, but the emitted order must not reveal the
+        answer -- items are always lexicographic-by-item_id, independent of
+        the shuffled solution order."""
+        ctx = _build_scenario()
+        adapter, state, room_id = ctx["adapter"], ctx["state"], ctx["room_id"]
+        solution_order = list(ctx["puzzle"].solution)
+
+        for viewer in (None, "hero_host", "hero_ally"):
+            entry = adapter.project(state, viewer)["puzzles"][room_id]
+            items = entry["items"]
+            item_ids = [i["item_id"] for i in items]
+            self.assertEqual(set(item_ids), set(solution_order))
+            self.assertEqual(item_ids, sorted(item_ids))
+            for i in items:
+                self.assertNotIn("solution", i)
+                self.assertTrue(i["fallback"])
+                self.assertTrue(i["accessible"])
+
+        # The whole point: a real client can build a legal (if wrong) guess
+        # purely from the public item ids, with zero private/engine access.
+        spectator_item_ids = adapter.project(state, None)["puzzles"][room_id]["items"]
+        result = _send(
+            adapter, state, "hero_host", "submit_solution",
+            {"solution": [i["item_id"] for i in spectator_item_ids]},
+        )
+        rejected_or_accepted = {e.type for e in result.events}
+        self.assertTrue({"puzzle_solution_rejected", "puzzle_solved"} & rejected_or_accepted)
+
+        # And on a seed where the shuffle actually differs from sorted order,
+        # prove the emitted order is provably not the solution order.
+        self.assertNotEqual(list(item_ids), solution_order)
+
     def test_reconnect_missed_events_respect_private_clue_visibility(self):
         ctx = _build_scenario()
         adapter, state = ctx["adapter"], ctx["state"]

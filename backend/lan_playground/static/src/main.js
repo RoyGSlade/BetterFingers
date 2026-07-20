@@ -7,9 +7,32 @@
 
 import { createRoom, joinRoom, fetchSnapshot, submitCommandOverRest } from "./core/api.js";
 import { createStacksSocket } from "./core/socket.js";
-import { createStore, createInitialState, reduceServerMessage } from "./core/store.js";
-import { moveCommand, breachCommand, observeCommand, inspectCommand, passCommand, buildCommand } from "./core/commands.js";
-import { selectActiveScreen } from "./core/selectors.js";
+import {
+  createStore,
+  createInitialState,
+  reduceServerMessage,
+  shareClue,
+  addManualNote,
+  reorderManualNote,
+  linkManualNotes,
+  toggleManualNoteContradiction,
+  markObjectInspected,
+} from "./core/store.js";
+import {
+  moveCommand,
+  breachCommand,
+  observeCommand,
+  inspectCommand,
+  passCommand,
+  buildCommand,
+  inspectObjectCommand,
+  submitSolutionCommand,
+  requestHintCommand,
+  combatAttackCommand,
+  combatManeuverCommand,
+  combatReactionCommand,
+} from "./core/commands.js";
+import { selectActiveScreen, selectYouHero } from "./core/selectors.js";
 import { renderMapScreen } from "./screens/map.js";
 import { renderRoomScreen } from "./screens/room.js";
 import { renderPuzzleScreen } from "./screens/puzzle.js";
@@ -61,6 +84,26 @@ function currentRevision() {
   return store.getState().revision;
 }
 
+// The room the puzzle/notes actions below apply to: the viewer's own current
+// room (selectYouHero mirrors the map screen's "current room" notion).
+function currentRoomId() {
+  const you = selectYouHero(store.getState());
+  return you ? you.room_id : null;
+}
+
+function currentHeroName() {
+  const state = store.getState();
+  const hero = state.heroes[state.you.heroId];
+  return hero ? hero.name : state.you.heroId;
+}
+
+function currentEncounterId() {
+  const state = store.getState();
+  const roomId = currentRoomId();
+  const conflict = roomId ? state.conflicts[roomId] : null;
+  return conflict ? conflict.encounter_id : null;
+}
+
 const handlers = {
   onMove: (toRoomId) => sendCommand(moveCommand(toRoomId, currentRevision())),
   onBreach: (direction) => sendCommand(breachCommand(direction, currentRevision())),
@@ -71,26 +114,53 @@ const handlers = {
     const current = store.getState().selectedAllyId;
     store.setState({ selectedAllyId: current === heroId ? null : heroId });
   },
-  // Wave 2 screens (infinite_stacks.md S24.3/S24.4): these dispatch new
-  // command types over the existing sendCommand path. Reducer handling for
-  // them lands with the effects/combat lanes (director's wave-2 note); until
-  // then the server rejects them as unknown_target/schema_error, same as
-  // any other not-yet-wired command.
-  onInspectObject: (objectId) => sendCommand(buildCommand("inspect_object", { object_id: objectId }, { expectedRevision: currentRevision() })),
+  // Generic entered-room screen (room.js) has no live wire projection yet
+  // (docs/INFINITE_STACKS_CONTRACTS.md's project() carries no per-room
+  // occupants/objects/exits detail beyond the map's rooms[room_id] outside of
+  // puzzle rooms) -- it stays fixture-driven this wave, same as wave 2;
+  // onUseExit is kept only so that screen still renders against its fixture.
   onUseExit: (direction) => sendCommand(buildCommand("use_exit", { direction }, { expectedRevision: currentRevision() })),
-  onShareClue: () => sendCommand(buildCommand("share_clue", {}, { expectedRevision: currentRevision() })),
-  onAddNote: (text) => sendCommand(buildCommand("add_note", { text }, { expectedRevision: currentRevision() })),
-  onReorderNote: (noteId, direction) => sendCommand(buildCommand("reorder_note", { note_id: noteId, direction }, { expectedRevision: currentRevision() })),
-  onLinkNotes: (noteId, otherNoteId) =>
-    sendCommand(buildCommand("link_notes", { note_id: noteId, other_note_id: otherNoteId }, { expectedRevision: currentRevision() })),
-  onToggleContradiction: (noteId) => sendCommand(buildCommand("toggle_contradiction", { note_id: noteId }, { expectedRevision: currentRevision() })),
-  onRequestHint: () => sendCommand(buildCommand("request_hint", {}, { expectedRevision: currentRevision() })),
-  onForceProgress: () => sendCommand(buildCommand("force_progress", {}, { expectedRevision: currentRevision() })),
-  onSubmitSolution: (answer) => sendCommand(buildCommand("submit_solution", { answer }, { expectedRevision: currentRevision() })),
-  onAttack: (attackId, targetId) => sendCommand(buildCommand("combat_attack", { attack_id: attackId, target_id: targetId }, { expectedRevision: currentRevision() })),
-  onDeclareManeuver: (maneuverId, targetId) =>
-    sendCommand(buildCommand("combat_maneuver", { maneuver_id: maneuverId, target_id: targetId }, { expectedRevision: currentRevision() })),
-  onReact: (reactionId) => sendCommand(buildCommand("combat_reaction", { reaction_id: reactionId }, { expectedRevision: currentRevision() })),
+  // Live wave-3 puzzle commands (docs/INFINITE_STACKS_CONTRACTS.md S2):
+  // inspect_object/submit_solution/request_hint round-trip through the real
+  // server. markObjectInspected is an optimistic local UI marker (the wire
+  // never tracks per-object inspection); the object_inspected event that
+  // comes back confirms it (core/store.js).
+  onInspectObject: (objectId) => {
+    const roomId = currentRoomId();
+    if (roomId) store.setState((s) => markObjectInspected(s, roomId, objectId));
+    sendCommand(inspectObjectCommand(objectId, currentRevision()));
+  },
+  onRequestHint: () => sendCommand(requestHintCommand(currentRevision())),
+  onSubmitSolution: (solution) => sendCommand(submitSolutionCommand(solution, currentRevision())),
+  // Clue Share + shared notes (infinite_stacks.md S24.4) are client-side only
+  // this wave -- no server command exists for them (task #10 constraint), so
+  // these mutate the store directly instead of calling sendCommand.
+  onShareClue: (clueId) => {
+    const roomId = currentRoomId();
+    if (roomId) store.setState((s) => shareClue(s, roomId, clueId, currentHeroName()));
+  },
+  onAddNote: (text) => {
+    const roomId = currentRoomId();
+    if (roomId) store.setState((s) => addManualNote(s, roomId, text, currentHeroName()));
+  },
+  onReorderNote: (noteId, direction) => {
+    const roomId = currentRoomId();
+    if (roomId) store.setState((s) => reorderManualNote(s, roomId, noteId, direction));
+  },
+  onLinkNotes: (noteId, otherNoteId) => {
+    const roomId = currentRoomId();
+    if (roomId) store.setState((s) => linkManualNotes(s, roomId, noteId, otherNoteId));
+  },
+  onToggleContradiction: (noteId) => {
+    const roomId = currentRoomId();
+    if (roomId) store.setState((s) => toggleManualNoteContradiction(s, roomId, noteId));
+  },
+  // Wave-3 combat commands (stacks-conflict's 17:15 vocabulary post): no
+  // client-supplied numeric modifiers, just target/attribute/skill(/maneuver).
+  onAttack: (targetId, attribute, skill) => sendCommand(combatAttackCommand(targetId, attribute, skill, currentRevision(), currentEncounterId())),
+  onDeclareManeuver: (maneuver, targetId, attribute, skill) =>
+    sendCommand(combatManeuverCommand(maneuver, targetId, attribute, skill, currentRevision(), currentEncounterId())),
+  onReact: (reaction) => sendCommand(combatReactionCommand(reaction, currentRevision(), currentEncounterId())),
 };
 
 // Exactly one non-map screen is visible at a time, selected by

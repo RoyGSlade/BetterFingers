@@ -80,6 +80,12 @@ class PuzzleRoomState:
     seed: int
     difficulty: int
     objects: tuple[PuzzleObjectView, ...] = ()
+    # The orderable items submit_solution's {solution: [item_id, ...]} refers to,
+    # in a fixed lexicographic-by-item_id order that is provably independent of
+    # the shuffled `solution` order below -- PUBLIC and safe to project as-is
+    # (director-directed fix, 2026-07-19: without item ids on the wire no
+    # client can ever construct a valid submit_solution payload).
+    items: tuple[dict, ...] = ()  # [{"item_id": str, "fallback": str, "accessible": str}, ...]
     object_clue_ids: dict[str, tuple[str, ...]] = field(default_factory=dict)
     clue_text: dict[str, tuple[str, str]] = field(default_factory=dict)  # clue_id -> (fallback, accessible)
     unclaimed_key_clue_ids: list[str] = field(default_factory=list)
@@ -102,6 +108,7 @@ class PuzzleRoomState:
             "seed": self.seed,
             "difficulty": self.difficulty,
             "objects": [o.to_dict() for o in self.objects],
+            "items": [dict(i) for i in self.items],
             "object_clue_ids": {k: list(v) for k, v in sorted(self.object_clue_ids.items())},
             "clue_text": {k: list(v) for k, v in sorted(self.clue_text.items())},
             "unclaimed_key_clue_ids": list(self.unclaimed_key_clue_ids),
@@ -126,6 +133,7 @@ class PuzzleRoomState:
             seed=d["seed"],
             difficulty=d["difficulty"],
             objects=tuple(PuzzleObjectView.from_dict(o) for o in d["objects"]),
+            items=tuple(dict(i) for i in d.get("items", [])),
             object_clue_ids={k: tuple(v) for k, v in d["object_clue_ids"].items()},
             clue_text={k: tuple(v) for k, v in d["clue_text"].items()},
             unclaimed_key_clue_ids=list(d["unclaimed_key_clue_ids"]),
@@ -144,6 +152,72 @@ class PuzzleRoomState:
 
 
 @dataclass
+class ConflictEncounterState:
+    """Runtime state for a Conflict-room encounter (§14-16), wrapping the pure
+    `backend.lan_playground.combat` package's combatant/initiative/threat data
+    as plain JSON-safe dicts -- this dataclass never imports combat/** (the
+    domain layer stays decoupled from that package's types); systems/combat.py
+    is the sole place that (de)serializes these dicts into real combat.models
+    objects to call the pure functions, then writes the results back here.
+
+    `heroes`/`enemies` values are plain dicts with the HeroCombatant/
+    EnemyCombatant fields systems/combat.py needs (hp, life_state, position,
+    statuses, etc). `order` is a list of InitiativeEntry-shaped dicts.
+    `sequencer_seq` preserves the combat package's own monotonic event-id
+    counter across commands/replay so `cevt_<round>_<seq>` ids stay unique.
+    """
+
+    encounter_id: str
+    room_id: str
+    status: str = "active"  # active | victory | party_wiped
+    combat_round: int = 1
+    heroes: dict[str, dict] = field(default_factory=dict)
+    enemies: dict[str, dict] = field(default_factory=dict)
+    order: list[dict] = field(default_factory=list)
+    current_actor_id: str | None = None   # whose turn it is right now; None = round settled, awaiting round-advance
+    reinforcement_waves: list[dict] = field(default_factory=list)
+    turn_budget: dict = field(default_factory=dict)
+    threat_budget: dict = field(default_factory=dict)
+    pending_joiner_hero_ids: list[str] = field(default_factory=list)
+    sequencer_seq: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "encounter_id": self.encounter_id,
+            "room_id": self.room_id,
+            "status": self.status,
+            "combat_round": self.combat_round,
+            "heroes": {k: dict(v) for k, v in sorted(self.heroes.items())},
+            "enemies": {k: dict(v) for k, v in sorted(self.enemies.items())},
+            "order": [dict(e) for e in self.order],
+            "current_actor_id": self.current_actor_id,
+            "reinforcement_waves": [dict(w) for w in self.reinforcement_waves],
+            "turn_budget": dict(self.turn_budget),
+            "threat_budget": dict(self.threat_budget),
+            "pending_joiner_hero_ids": list(self.pending_joiner_hero_ids),
+            "sequencer_seq": self.sequencer_seq,
+        }
+
+    @staticmethod
+    def from_dict(d: dict) -> "ConflictEncounterState":
+        return ConflictEncounterState(
+            encounter_id=d["encounter_id"],
+            room_id=d["room_id"],
+            status=d["status"],
+            combat_round=d["combat_round"],
+            heroes={k: dict(v) for k, v in d["heroes"].items()},
+            enemies={k: dict(v) for k, v in d["enemies"].items()},
+            order=[dict(e) for e in d["order"]],
+            current_actor_id=d["current_actor_id"],
+            reinforcement_waves=[dict(w) for w in d["reinforcement_waves"]],
+            turn_budget=dict(d["turn_budget"]),
+            threat_budget=dict(d["threat_budget"]),
+            pending_joiner_hero_ids=list(d["pending_joiner_hero_ids"]),
+            sequencer_seq=d["sequencer_seq"],
+        )
+
+
+@dataclass
 class RoomState:
     room_id: str
     x: int
@@ -157,6 +231,8 @@ class RoomState:
     is_entrance: bool = False
     is_exit: bool = False
     puzzle: PuzzleRoomState | None = None
+    encounter: ConflictEncounterState | None = None
+    body_item_ids: dict[str, tuple[str, ...]] = field(default_factory=dict)  # §13.6: dead hero's items stay with the body
 
     def to_dict(self) -> dict:
         return {
@@ -172,6 +248,8 @@ class RoomState:
             "is_entrance": self.is_entrance,
             "is_exit": self.is_exit,
             "puzzle": self.puzzle.to_dict() if self.puzzle is not None else None,
+            "encounter": self.encounter.to_dict() if self.encounter is not None else None,
+            "body_item_ids": {k: list(v) for k, v in sorted(self.body_item_ids.items())},
         }
 
     @staticmethod
@@ -189,6 +267,8 @@ class RoomState:
             is_entrance=d["is_entrance"],
             is_exit=d["is_exit"],
             puzzle=PuzzleRoomState.from_dict(d["puzzle"]) if d.get("puzzle") else None,
+            encounter=ConflictEncounterState.from_dict(d["encounter"]) if d.get("encounter") else None,
+            body_item_ids={k: tuple(v) for k, v in d.get("body_item_ids", {}).items()},
         )
 
 
@@ -226,6 +306,16 @@ class MapState:
         )
 
 
+# Mirrors backend.lan_playground.combat.models.LifeState's string values exactly
+# (alive|downed|stable|dead, §16.1) without importing the combat package --
+# domain stores/compares these as plain strings so it stays decoupled from
+# combat/**'s types; systems/combat.py is the only place that maps between them.
+LIFE_STATE_ALIVE = "alive"
+LIFE_STATE_DOWNED = "downed"
+LIFE_STATE_STABLE = "stable"
+LIFE_STATE_DEAD = "dead"
+
+
 @dataclass
 class HeroState:
     hero_id: str
@@ -238,6 +328,23 @@ class HeroState:
     alive: bool = True
     submitted_turn: bool = False
     movement_locked: bool = False   # set True after a breach; cleared at round refresh
+    life_state: str = LIFE_STATE_ALIVE          # §16.1 Downed/Stable/Dead, persists across rooms
+    death_failures: int = 0
+    stabilization_successes: int = 0
+    carried_item_ids: tuple[str, ...] = ()      # §13.6 placeholder pending the heroes-lane inventory system
+
+    def sync_life_state(self, life_state: str) -> None:
+        """Set life_state and derive conscious/alive so existing exploration
+        code (round_complete, legal_action_summary) keeps working unchanged:
+        Downed/Stable heroes are alive but not conscious (cannot take normal
+        exploration actions); Dead heroes are neither."""
+        self.life_state = life_state
+        if life_state == LIFE_STATE_ALIVE:
+            self.alive, self.conscious = True, True
+        elif life_state in (LIFE_STATE_DOWNED, LIFE_STATE_STABLE):
+            self.alive, self.conscious = True, False
+        else:
+            self.alive, self.conscious = False, False
 
     def to_dict(self) -> dict:
         return {
@@ -251,6 +358,10 @@ class HeroState:
             "alive": self.alive,
             "submitted_turn": self.submitted_turn,
             "movement_locked": self.movement_locked,
+            "life_state": self.life_state,
+            "death_failures": self.death_failures,
+            "stabilization_successes": self.stabilization_successes,
+            "carried_item_ids": list(self.carried_item_ids),
         }
 
 
@@ -271,6 +382,12 @@ class RunState:
 
     def living_conscious_hero_ids(self) -> list[str]:
         return [h.hero_id for h in self.heroes.values() if h.alive and h.conscious]
+
+    def total_living_heroes(self) -> int:
+        """§15.1: threat budget uses the total living party (Downed/Stable
+        heroes still count -- only Dead ones don't), never just who is
+        physically present in the room."""
+        return sum(1 for h in self.heroes.values() if h.alive)
 
     def round_complete(self) -> bool:
         living = self.living_conscious_hero_ids()

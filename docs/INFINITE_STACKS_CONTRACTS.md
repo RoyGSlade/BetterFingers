@@ -183,8 +183,9 @@ Exhausting `attempt_limit` wrong guesses force-progresses identically to hint ex
 
 `project(state, viewer)`'s returned dict gains a top-level `"puzzles"` key:
 `{room_id: {instance_id, template_id, difficulty, objects: [{id, role, fallback,
-accessible}], solved, forced, attempts_used, attempt_limit, hints_revealed: [{fallback,
-accessible}], your_private_clues: [{clue_id, fallback, accessible}]}}`.
+accessible}], items: [{item_id, fallback, accessible}], solved, forced, attempts_used,
+attempt_limit, hints_revealed: [{fallback, accessible}], your_private_clues: [{clue_id,
+fallback, accessible}]}}`.
 
 `hints_revealed` and `your_private_clues` are both viewer-filtered by
 `stacks_projections.project_puzzles()`: empty for a spectator (`viewer is None`);
@@ -193,12 +194,51 @@ other hero's fragment. `solution` and `accepted_solutions` are never present in 
 dict at all (stripped before `stacks_engine.py` ever builds the neutral snapshot) --
 they exist only in internal domain state (`PuzzleRoomState`), never in any projection.
 
+`items` (wave-3 addition, director-directed 2026-07-19 17:30) is the orderable-item
+catalog `submit_solution`'s `{solution: [item_id, ...]}` refers to -- PUBLIC (visible
+even to a spectator, unlike `hints_revealed`/`your_private_clues`), since without item
+ids on the wire no client can ever construct a valid solve (clue prose only names items
+by fiction). Always emitted in a fixed lexicographic-by-`item_id` order that is
+independent of the shuffled `solution`/`accepted_solutions` order -- the item list
+itself leaks nothing about the answer. `content.puzzles.ordering_sequence` is the only
+puzzle template this wave; `systems/puzzles.py` builds `items` from `instance.solution`
+(the set of ids, not the order) at instantiation time, same coupling the module
+docstring already documents.
+
 Known open item (per director, 2026-07-19 16:30): stacks-ui's wave-2 fixtures
 (`tests/fixtures/stacks_ui/puzzle_mystery_chamber.json`) were authored before this
 section landed and use a different field vocabulary (`puzzle.objects/private_clue/
 shared_notes/hints`). This section is the authoritative engine projection shape; the
 fixture/selector reconciliation is a follow-up pass at wave close, not a reason to
 reshape this projection.
+
+### 5.3 Conflict-room wire projection (wave 3, stacks-conflict)
+
+`project(state, viewer)` gains a top-level `"conflict"` key, parallel to `"puzzles"`:
+
+```
+{room_id: {
+    encounter_id, status: "active"|"victory"|"party_wiped", combat_round,
+    current_actor_id: combatant_id | null,
+    initiative_order: [combatant_id, ...],      # already alive-filtered ("active order")
+    heroes: {hero_id: {hp, max_hp, life_state, position, reaction_available}},
+    enemies: {instance_id: {name, hp, max_hp, alive, position}},
+    threat_budget: {total_living_heroes, floor_danger, corruption_modifier,
+                    objective_modifier, total},
+}}
+```
+
+No hidden combat state leaks: no `resists`/`weaknesses`/`converts` tables, no
+un-telegraphed enemy intent, no `skills`/`attributes`/`statuses` detail beyond what a
+player needs. Enemy intent and §12.5 check receipts are not persistent snapshot
+fields -- they fold from the per-command `combat_events` list embedded in each
+`conflict_turn_resolved` / `conflict_encounter_started` / `conflict_encounter_ended`
+wire event (raw `backend.lan_playground.combat` event dicts, §1 envelope of
+docs/INFINITE_STACKS_COMBAT.md), the same "project by folding the event log" pattern
+`domain.reducer.project()` already uses for `RunState`. `hero.life_state` is exactly
+`"alive"|"downed"|"stable"|"dead"`; `heroes[]`'s existing `conscious`/`alive` booleans
+stay in sync with it (`HeroState.sync_life_state`) so older client code keeps working
+unchanged.
 
 ## 6. Core state aggregates (wave-1 subset of §22.4)
 

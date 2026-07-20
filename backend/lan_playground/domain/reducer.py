@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..systems import checks, effects, exploration, puzzles, turns
+from ..systems import checks, combat, effects, exploration, puzzles, turns
 from .commands import Command, CommandError, CommandType, ErrorCode
 from .events import Event
 from .rng import StacksRNG
@@ -29,6 +29,16 @@ _VALIDATORS = {
     CommandType.INSPECT_OBJECT: lambda state, hero_id, payload: puzzles.validate_inspect_object(state, hero_id, payload),
     CommandType.SUBMIT_SOLUTION: lambda state, hero_id, payload: puzzles.validate_submit_solution(state, hero_id, payload),
     CommandType.REQUEST_HINT: lambda state, hero_id, payload: puzzles.validate_request_hint(state, hero_id, payload),
+    CommandType.COMBAT_ATTACK: lambda state, hero_id, payload: combat.validate_combat_attack(state, hero_id, payload),
+    CommandType.COMBAT_MANEUVER: lambda state, hero_id, payload: combat.validate_combat_maneuver(state, hero_id, payload),
+    CommandType.COMBAT_REACTION: lambda state, hero_id, payload: combat.validate_combat_reaction(state, hero_id, payload),
+    CommandType.COMBAT_MOVE: lambda state, hero_id, payload: combat.validate_combat_move(state, hero_id, payload),
+    CommandType.COMBAT_QUICK_INTERACTION: lambda state, hero_id, payload: combat.validate_combat_quick_interaction(
+        state, hero_id, payload
+    ),
+    CommandType.COMBAT_STABILIZE: lambda state, hero_id, payload: combat.validate_combat_stabilize(state, hero_id, payload),
+    CommandType.COMBAT_BARRICADE: lambda state, hero_id, payload: combat.validate_combat_barricade(state, hero_id, payload),
+    CommandType.COMBAT_END_TURN: lambda state, hero_id, payload: combat.validate_combat_end_turn(state, hero_id, payload),
 }
 
 _HANDLERS = {
@@ -42,6 +52,14 @@ _HANDLERS = {
     CommandType.INSPECT_OBJECT: puzzles.handle_inspect_object,
     CommandType.SUBMIT_SOLUTION: puzzles.handle_submit_solution,
     CommandType.REQUEST_HINT: puzzles.handle_request_hint,
+    CommandType.COMBAT_ATTACK: combat.handle_combat_attack,
+    CommandType.COMBAT_MANEUVER: combat.handle_combat_maneuver,
+    CommandType.COMBAT_REACTION: combat.handle_combat_reaction,
+    CommandType.COMBAT_MOVE: combat.handle_combat_move,
+    CommandType.COMBAT_QUICK_INTERACTION: combat.handle_combat_quick_interaction,
+    CommandType.COMBAT_STABILIZE: combat.handle_combat_stabilize,
+    CommandType.COMBAT_BARRICADE: combat.handle_combat_barricade,
+    CommandType.COMBAT_END_TURN: combat.handle_combat_end_turn,
 }
 
 EVENT_APPLIERS = {
@@ -50,6 +68,7 @@ EVENT_APPLIERS = {
     **checks.EVENT_APPLIERS,
     **puzzles.EVENT_APPLIERS,
     **effects.EVENT_APPLIERS,
+    **combat.EVENT_APPLIERS,
 }
 
 
@@ -174,7 +193,7 @@ def apply(command: Command, state: RunState, rng: StacksRNG, viewer: str | None 
     for event in action_events:
         new_state = reduce(new_state, event)
 
-    round_events = turns.build_round_advance_events(new_state, command.command_id, next_seq)
+    round_events = turns.build_round_advance_events(new_state, rng, command.command_id, next_seq)
     next_seq += len(round_events)
     for event in round_events:
         new_state = reduce(new_state, event)

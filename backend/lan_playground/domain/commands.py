@@ -16,6 +16,14 @@ class CommandType(str, Enum):
     INSPECT_OBJECT = "inspect_object"
     SUBMIT_SOLUTION = "submit_solution"
     REQUEST_HINT = "request_hint"
+    COMBAT_ATTACK = "combat_attack"
+    COMBAT_MANEUVER = "combat_maneuver"
+    COMBAT_REACTION = "combat_reaction"
+    COMBAT_MOVE = "combat_move"
+    COMBAT_QUICK_INTERACTION = "combat_quick_interaction"
+    COMBAT_STABILIZE = "combat_stabilize"
+    COMBAT_BARRICADE = "combat_barricade"
+    COMBAT_END_TURN = "combat_end_turn"
 
 
 class ErrorCode(str, Enum):

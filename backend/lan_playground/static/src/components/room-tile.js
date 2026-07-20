@@ -79,7 +79,7 @@ export function renderRoomTile(
       const hero = heroesById[heroId];
       const chip = document.createElement("span");
       chip.className = "stacks-tile-hero-chip";
-      chip.textContent = hero ? `${hero.name} (${hero.danger.label})` : heroId;
+      chip.textContent = hero ? `${hero.name} (${hero.danger.label}${hero.inCombat ? ", in combat" : ""})` : heroId;
       heroes.appendChild(chip);
     }
     el.appendChild(heroes);

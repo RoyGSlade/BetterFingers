@@ -1,8 +1,21 @@
 # The Lost Meaning: Infinite Stacks -- core pack.
-# 11 starter cards (>= 8 required). Covers every §13.3 contract field: timing,
-# range/targets, required state, exact base effect OR check+outcome table,
-# combination tags, discard/Exhaust, fallback text, accessible text. Sources:
-# general (5), one per background (4), equipment-granted (2).
+# 24 cards (§23.3 first-playable target). Covers every §13.3 contract field:
+# timing, range/targets, required state, exact base effect OR check+outcome
+# table, combination tags, discard/Exhaust, fallback text, accessible text.
+# Sources: general (5), four per background x 4 backgrounds (16), persona
+# signature (1), equipment-granted (2).
+#
+# Wave-3 note (board task #11, stacks-heroes): heroes/cards.py only allows a
+# deck to be built from cards whose entire effect list compiles to this
+# wave's LIVE §5 ops (reveal_room/grant_check/spend_energy/emit_fact -- see
+# docs/INFINITE_STACKS_CONTRACTS.md §5). Every general/background/persona
+# card below is authored LIVE-only on purpose so any background produces a
+# buildable starting deck this wave. `comma_cut` and `subtext_flash` (both
+# equipment-granted, optional per §13.2's "up to two") are deliberately left
+# using PLANNED combat ops (damage/apply_condition/reveal_tell) -- they are
+# real future combat content, not yet buildable into a deck, and serve as the
+# real-content example `tests/test_stacks_heroes.py` uses for the loud
+# build-time rejection case.
 cards:
   - id: steady_strike
     name: Steady Strike
@@ -35,7 +48,7 @@ cards:
     prose:
       fallback: Take a breath and notice what everyone else is missing.
       accessible: "Card: Read the Room. Quick interaction, affects the current room, targets self. Insight + Read check against DC 11."
-    accessible_text: "Read the Room. Quick interaction. Range: the current room. Target: self. Roll Insight + Read vs DC 11. Strong success reveals two tells, clean success reveals one tell, a costly success records a partial read, a setback grants Disadvantage on the hero's next check."
+    accessible_text: "Read the Room. Quick interaction. Range: the current room. Target: self. Roll Insight + Read vs DC 11. Strong success records a major observed tell, clean success records a minor one, a costly success records a partial read, a setback costs 1 Energy re-focusing."
     timing: quick_interaction
     range: room
     legal_targets: [self]
@@ -45,14 +58,13 @@ cards:
       dc: 11
       outcomes:
         strong_success:
-          - {op: reveal_tell, args: {}}
-          - {op: reveal_tell, args: {}}
+          - {op: emit_fact, args: {fact_id: tell_revealed_major}}
         success:
-          - {op: reveal_tell, args: {}}
+          - {op: emit_fact, args: {fact_id: tell_revealed_minor}}
         cost:
           - {op: emit_fact, args: {fact_id: partial_read}}
         setback:
-          - {op: grant_disadvantage, args: {}}
+          - {op: spend_energy, args: {amount: 1}}
     combination_tags: [information, read]
     end_state: discard
     source: general
@@ -102,6 +114,8 @@ cards:
     end_state: discard
     source: general
 
+  # --- Exiled Court Scribe (4) ---------------------------------------------
+
   - id: blank_contract
     name: Blank Contract
     prose:
@@ -117,44 +131,219 @@ cards:
     end_state: discard
     source: exiled_court_scribe
 
+  - id: sealed_precedent
+    name: Sealed Precedent
+    prose:
+      fallback: Cite a precedent so old that no one in the room can safely contradict it.
+      accessible: "Card: Sealed Precedent. Main action, affects the current room, targets one NPC. Presence + Wordcraft check against DC 11. Exiled Court Scribe background card."
+    accessible_text: "Sealed Precedent. Main action. Range: the current room. Target: one NPC. Roll Presence + Wordcraft vs DC 11. Strong success records the precedent as accepted and reveals what lies past the north connector, clean success records it accepted, a costly success records a partial acceptance, a setback costs 1 Energy re-arguing the point."
+    timing: main_action
+    range: room
+    legal_targets: [npc]
+    check:
+      attribute: presence
+      skill: wordcraft
+      dc: 11
+      outcomes:
+        strong_success:
+          - {op: emit_fact, args: {fact_id: precedent_accepted}}
+          - {op: reveal_room, args: {connector: north}}
+        success:
+          - {op: emit_fact, args: {fact_id: precedent_accepted}}
+        cost:
+          - {op: emit_fact, args: {fact_id: precedent_partial}}
+        setback:
+          - {op: spend_energy, args: {amount: 1}}
+    combination_tags: [contract, wordcraft]
+    end_state: discard
+    source: exiled_court_scribe
+
+  - id: procedural_objection
+    name: Procedural Objection
+    prose:
+      fallback: "\"Objection\" is a complete sentence when it is said with enough conviction."
+      accessible: "Card: Procedural Objection. Reaction, affects the current room, targets one NPC or enemy. Records a formal objection, no roll required. Exiled Court Scribe background card."
+    accessible_text: "Procedural Objection. Reaction. Range: the current room. Target: one NPC or enemy. Records that a formal objection was raised against the target's last statement or action. No roll."
+    timing: reaction
+    range: room
+    legal_targets: [npc, enemy]
+    base_effects:
+      - {op: emit_fact, args: {fact_id: objection_raised}}
+    combination_tags: [contract, reaction]
+    end_state: discard
+    source: exiled_court_scribe
+
+  - id: footnote_citation
+    name: Footnote Citation
+    prose:
+      fallback: Somewhere in the fine print is a clause describing exactly what's through that door.
+      accessible: "Card: Footnote Citation. Quick interaction, self only. Reveals what lies past the north connector, no roll required. Exiled Court Scribe background card. Exhausted after use."
+    accessible_text: "Footnote Citation. Quick interaction. Target: self. Reveals what lies past the north connector. No roll. Exhausted after use, not discarded."
+    timing: quick_interaction
+    range: self
+    legal_targets: [self]
+    base_effects:
+      - {op: reveal_room, args: {connector: north}}
+    combination_tags: [contract, knowledge]
+    end_state: exhaust
+    source: exiled_court_scribe
+
+  # --- Back-Alley Fixer (4) -------------------------------------------------
+
   - id: field_patch
     name: Field Patch
     prose:
       fallback: A quick mend, good enough to keep someone standing.
-      accessible: "Card: Field Patch. Main action, melee range, targets self or an ally. Requires a carried repair patch. Heals 2 HP, no roll required. Back-Alley Fixer background card."
-    accessible_text: "Field Patch. Main action. Melee range. Target: self or one ally. Requires a carried repair patch. Heals 2 HP. No roll. Consumes the card on use."
+      accessible: "Card: Field Patch. Main action, melee range, targets self or an ally. Requires a carried repair patch. Insight + Tinker check against DC 11. Back-Alley Fixer background card."
+    accessible_text: "Field Patch. Main action. Melee range. Target: self or one ally. Requires a carried repair patch. Roll Insight + Tinker vs DC 11. Strong success and clean success both record the wound as properly mended, a costly success records a partial mend, a setback costs 1 Energy fumbling the patch. Exhausted after use, not discarded."
     timing: main_action
     range: melee
     legal_targets: [self, ally]
     required_state: ["tag:has_repair_patch"]
-    base_effects:
-      - {op: heal, args: {amount: 2}}
+    check:
+      attribute: insight
+      skill: tinker
+      dc: 11
+      outcomes:
+        strong_success:
+          - {op: emit_fact, args: {fact_id: wound_mended_well}}
+        success:
+          - {op: emit_fact, args: {fact_id: wound_mended}}
+        cost:
+          - {op: emit_fact, args: {fact_id: wound_mended_partial}}
+        setback:
+          - {op: spend_energy, args: {amount: 1}}
     combination_tags: [support, tinker]
     end_state: exhaust
     source: back_alley_fixer
+
+  - id: quick_bypass
+    name: Quick Bypass
+    prose:
+      fallback: Every lock has a shortcut if you've picked enough of them.
+      accessible: "Card: Quick Bypass. Main action, affects the current room, targets self. Reveals what lies past the north connector, no roll required. Back-Alley Fixer background card."
+    accessible_text: "Quick Bypass. Main action. Range: the current room. Target: self. Reveals what lies past the north connector. No roll."
+    timing: main_action
+    range: room
+    legal_targets: [self]
+    base_effects:
+      - {op: reveal_room, args: {connector: north}}
+    combination_tags: [tinker, exploration]
+    end_state: discard
+    source: back_alley_fixer
+
+  - id: scavenged_shim
+    name: Scavenged Shim
+    prose:
+      fallback: Pocket the loose part before anyone notices it's missing.
+      accessible: "Card: Scavenged Shim. Quick interaction, self only. Records that a component was salvaged, no roll required. Back-Alley Fixer background card."
+    accessible_text: "Scavenged Shim. Quick interaction. Target: self. Records that a spare component was salvaged from the current room. No roll."
+    timing: quick_interaction
+    range: self
+    legal_targets: [self]
+    base_effects:
+      - {op: emit_fact, args: {fact_id: component_salvaged}}
+    combination_tags: [tinker, salvage]
+    end_state: discard
+    source: back_alley_fixer
+
+  - id: grease_the_gears
+    name: Grease the Gears
+    prose:
+      fallback: Quietly fix the mechanism before it has the chance to fail on someone.
+      accessible: "Card: Grease the Gears. Reaction, melee range, targets self or an ally. Records that a mechanism was quietly fixed, no roll required. Back-Alley Fixer background card."
+    accessible_text: "Grease the Gears. Reaction. Melee range. Target: self or one ally. Records that a nearby mechanism was quietly fixed before it failed. No roll."
+    timing: reaction
+    range: melee
+    legal_targets: [self, ally]
+    base_effects:
+      - {op: emit_fact, args: {fact_id: gears_greased}}
+    combination_tags: [tinker, reaction]
+    end_state: discard
+    source: back_alley_fixer
+
+  # --- Retired Monster Hunter (4) -------------------------------------------
 
   - id: trophy_notes
     name: Trophy Notes
     prose:
       fallback: Flip to the page about this exact kind of monster.
-      accessible: "Card: Trophy Notes. Quick interaction, self only. Requires that this enemy has already revealed its intent this fight. Reveals one more tell, no roll required. Retired Monster Hunter background card."
-    accessible_text: "Trophy Notes. Quick interaction. Target: self. Requires that the enemy has already revealed an intent this fight. Reveals one additional tell. No roll."
+      accessible: "Card: Trophy Notes. Quick interaction, self only. Requires that this enemy has already revealed its intent this fight. Records a marked weakness, no roll required. Retired Monster Hunter background card."
+    accessible_text: "Trophy Notes. Quick interaction. Target: self. Requires that the enemy has already revealed an intent this fight. Records that a weakness or false tell was marked. No roll."
     timing: quick_interaction
     range: self
     legal_targets: [self]
     required_state: ["tag:enemy_intent_revealed"]
     base_effects:
-      - {op: reveal_tell, args: {}}
+      - {op: emit_fact, args: {fact_id: weakness_marked}}
     combination_tags: [knowledge, read]
     end_state: discard
     source: retired_monster_hunter
+
+  - id: bestiary_page
+    name: Bestiary Page
+    prose:
+      fallback: Somewhere in these margins is a note about exactly this creature.
+      accessible: "Card: Bestiary Page. Main action, affects the current room, targets self. Insight + Read check against DC 11. Retired Monster Hunter background card."
+    accessible_text: "Bestiary Page. Main action. Range: the current room. Target: self. Roll Insight + Read vs DC 11. Strong success fully identifies the enemy family, clean success identifies it, a costly success only partly identifies it, a setback costs 1 Energy cross-referencing the wrong page first."
+    timing: main_action
+    range: room
+    legal_targets: [self]
+    check:
+      attribute: insight
+      skill: read
+      dc: 11
+      outcomes:
+        strong_success:
+          - {op: emit_fact, args: {fact_id: family_fully_identified}}
+        success:
+          - {op: emit_fact, args: {fact_id: family_identified}}
+        cost:
+          - {op: emit_fact, args: {fact_id: family_partially_identified}}
+        setback:
+          - {op: spend_energy, args: {amount: 1}}
+    combination_tags: [knowledge, read]
+    end_state: discard
+    source: retired_monster_hunter
+
+  - id: veteran_instinct
+    name: Veteran Instinct
+    prose:
+      fallback: An old scar aches right before trouble does, and this time it means something.
+      accessible: "Card: Veteran Instinct. Reaction, self only. Records that a hunting instinct fired, no roll required. Retired Monster Hunter background card."
+    accessible_text: "Veteran Instinct. Reaction. Target: self. Records that a trained instinct warned the hero a beat before danger arrived. No roll."
+    timing: reaction
+    range: self
+    legal_targets: [self]
+    base_effects:
+      - {op: emit_fact, args: {fact_id: instinct_triggered}}
+    combination_tags: [read, reaction]
+    end_state: discard
+    source: retired_monster_hunter
+
+  - id: old_scar
+    name: Old Scar
+    prose:
+      fallback: This one throbs specifically near hidden passages. It has never once been wrong.
+      accessible: "Card: Old Scar. Quick interaction, self only. Reveals what lies past the north connector, no roll required. Retired Monster Hunter background card. Exhausted after use."
+    accessible_text: "Old Scar. Quick interaction. Target: self. Reveals what lies past the north connector. No roll. Exhausted after use, not discarded."
+    timing: quick_interaction
+    range: self
+    legal_targets: [self]
+    base_effects:
+      - {op: reveal_room, args: {connector: north}}
+    combination_tags: [knowledge, exploration]
+    end_state: exhaust
+    source: retired_monster_hunter
+
+  # --- Traveling Charlatan (4) -----------------------------------------------
 
   - id: false_front
     name: False Front
     prose:
       fallback: Present the ordinary thing as though it were dangerous, valuable, or official.
       accessible: "Card: False Front. Main action, affects the current room, targets one NPC. Finesse + Scheme check against DC 11. Traveling Charlatan background card."
-    accessible_text: "False Front. Main action. Range: the current room. Target: one NPC. Roll Finesse + Scheme vs DC 11. Strong success fully establishes the deception, clean success establishes it, a costly success only partly sells it, a setback grants the NPC Advantage on noticing."
+    accessible_text: "False Front. Main action. Range: the current room. Target: one NPC. Roll Finesse + Scheme vs DC 11. Strong success fully establishes the deception, clean success establishes it, a costly success only partly sells it, a setback costs 1 Energy covering the tell."
     timing: main_action
     range: room
     legal_targets: [npc]
@@ -170,10 +359,85 @@ cards:
         cost:
           - {op: emit_fact, args: {fact_id: deception_partial}}
         setback:
-          - {op: grant_disadvantage, args: {}}
+          - {op: spend_energy, args: {amount: 1}}
     combination_tags: [deception, scheme]
     end_state: discard
     source: traveling_charlatan
+
+  - id: sleight_of_hand
+    name: Sleight of Hand
+    prose:
+      fallback: The hand you're watching was never the one doing the work.
+      accessible: "Card: Sleight of Hand. Quick interaction, affects the current room, targets one NPC or enemy. Finesse + Scheme check against DC 11. Traveling Charlatan background card."
+    accessible_text: "Sleight of Hand. Quick interaction. Range: the current room. Target: one NPC or enemy. Roll Finesse + Scheme vs DC 11. Strong success lifts an item cleanly, clean success lifts it, a costly success only partly succeeds, a setback costs 1 Energy recovering from the near-miss."
+    timing: quick_interaction
+    range: room
+    legal_targets: [npc, enemy]
+    check:
+      attribute: finesse
+      skill: scheme
+      dc: 11
+      outcomes:
+        strong_success:
+          - {op: emit_fact, args: {fact_id: item_lifted_clean}}
+        success:
+          - {op: emit_fact, args: {fact_id: item_lifted}}
+        cost:
+          - {op: emit_fact, args: {fact_id: item_lifted_partial}}
+        setback:
+          - {op: spend_energy, args: {amount: 1}}
+    combination_tags: [scheme, deception]
+    end_state: discard
+    source: traveling_charlatan
+
+  - id: false_trail
+    name: False Trail
+    prose:
+      fallback: Leave a set of footprints heading somewhere the party isn't going.
+      accessible: "Card: False Trail. Main action, affects the current room, targets self. Reveals what lies past the north connector, no roll required. Traveling Charlatan background card."
+    accessible_text: "False Trail. Main action. Range: the current room. Target: self. Reveals what lies past the north connector. No roll."
+    timing: main_action
+    range: room
+    legal_targets: [self]
+    base_effects:
+      - {op: reveal_room, args: {connector: north}}
+    combination_tags: [scheme, exploration]
+    end_state: discard
+    source: traveling_charlatan
+
+  - id: concealed_pocket
+    name: Concealed Pocket
+    prose:
+      fallback: A seam sewn just deep enough that a casual search never finds it.
+      accessible: "Card: Concealed Pocket. Quick interaction, self only. Records that an item was concealed, no roll required. Traveling Charlatan background card. Exhausted after use."
+    accessible_text: "Concealed Pocket. Quick interaction. Target: self. Records that an item was tucked into a concealed pocket. No roll. Exhausted after use, not discarded."
+    timing: quick_interaction
+    range: self
+    legal_targets: [self]
+    base_effects:
+      - {op: emit_fact, args: {fact_id: item_concealed}}
+    combination_tags: [scheme, concealment]
+    end_state: exhaust
+    source: traveling_charlatan
+
+  # --- Persona signature (1) -------------------------------------------------
+
+  - id: signature_flourish
+    name: Signature Flourish
+    prose:
+      fallback: One line, delivered exactly the way this hero would say it.
+      accessible: "Card: Signature Flourish. Free speech, affects the current room, targets self. Records that the hero's signature persona moment was declared, no roll required. Persona signature card, granted during character creation regardless of chosen background."
+    accessible_text: "Signature Flourish. Free speech. Range: the current room. Target: self. Records that the hero's signature persona moment was declared. No roll."
+    timing: free_speech
+    range: room
+    legal_targets: [self]
+    base_effects:
+      - {op: emit_fact, args: {fact_id: persona_signature_declared}}
+    combination_tags: [persona, communication]
+    end_state: discard
+    source: persona
+
+  # --- Equipment-granted (2) --------------------------------------------------
 
   - id: comma_cut
     name: Comma Cut

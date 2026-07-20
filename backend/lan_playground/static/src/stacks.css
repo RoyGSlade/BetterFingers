@@ -146,11 +146,18 @@ button:focus-visible,
 .stacks-hero-card-danger--dead {
   color: #ff8a8a;
 }
-.stacks-hero-card-danger--wounded {
+.stacks-hero-card-danger--wounded,
+.stacks-hero-card-danger--stable {
   color: #f0c56a;
 }
 .stacks-hero-card-danger--healthy {
   color: #8fe0a0;
+}
+
+.stacks-hero-card-in-combat {
+  font-size: 0.8rem;
+  color: var(--stacks-accent);
+  margin-top: 0.15rem;
 }
 
 .stacks-energy-pip {
@@ -532,6 +539,54 @@ button.stacks-tile {
 
 .stacks-puzzle-hint-tier.is-used {
   opacity: 0.6;
+}
+
+.stacks-puzzle-clue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.stacks-puzzle-clue {
+  border-bottom: 1px solid var(--stacks-border);
+  padding-bottom: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.stacks-puzzle-clue-status {
+  font-size: 0.8rem;
+  color: var(--stacks-muted);
+}
+
+.stacks-puzzle-object-status {
+  font-size: 0.75rem;
+  color: var(--stacks-muted);
+}
+
+.stacks-puzzle-submission-list {
+  list-style: decimal;
+  margin: 0 0 0.5rem 1.25rem;
+  padding: 0;
+}
+.stacks-puzzle-submission-item {
+  margin-bottom: 0.3rem;
+}
+.stacks-puzzle-submission-item button {
+  background: #2f3340;
+  border: 1px solid var(--stacks-border);
+  border-radius: 0.3rem;
+  padding: 0.15rem 0.5rem;
+  margin-right: 0.3rem;
+  font-size: 0.8rem;
+}
+.stacks-puzzle-submission-hint,
+.stacks-puzzle-attempts {
+  font-size: 0.85rem;
+  color: var(--stacks-muted);
+}
+.stacks-puzzle-submission-add-form {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
 }
 
 .stacks-status-badge {

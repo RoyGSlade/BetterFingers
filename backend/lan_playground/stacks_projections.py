@@ -73,6 +73,7 @@ def project(state: RunState, viewer: str | None) -> dict[str, Any]:
             "max_hp": hero.max_hp,
             "conscious": hero.conscious,
             "alive": hero.alive,
+            "life_state": hero.life_state,
             "ready": hero.ready,
             "connected": hero.connected,
         }

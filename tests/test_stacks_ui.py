@@ -86,9 +86,34 @@ class ModuleShapeTests(unittest.TestCase):
                 self.assertIn("export function %s" % name, SELECTORS_JS)
 
     def test_store_initial_state_has_wave2_fields(self):
-        for field in ("enteredRoom: null", "puzzle: null", "combat: null"):
+        for field in ("enteredRoom: null", "puzzles: {}", "conflicts: {}"):
             with self.subTest(field=field):
                 self.assertIn(field, STORE_JS)
+
+    def test_selectors_read_puzzles_by_room_not_a_singular_slot(self):
+        # Wave 3: state.puzzles is keyed by room_id (the real wire shape),
+        # replacing the wave-2 provisional singular state.puzzle.
+        self.assertIn("state.puzzles[roomId]", SELECTORS_JS)
+        code_lines = [line for line in SELECTORS_JS.splitlines() if not line.strip().startswith("//")]
+        self.assertNotIn("state.puzzle;", "\n".join(code_lines))
+        self.assertNotIn("state.puzzle ", "\n".join(code_lines))
+
+    def test_selectors_hero_danger_tier_covers_downed_stable_dead(self):
+        # infinite_stacks.md S24.1 "hero portraits show ... health danger" +
+        # S16: Downed -> Stable -> (revived) or permanent Dead.
+        for tier in ("downed", "stable", "dead"):
+            with self.subTest(tier=tier):
+                self.assertIn('"%s"' % tier, SELECTORS_JS)
+        self.assertIn("life_state", SELECTORS_JS)
+        self.assertIn("heroInCombat", SELECTORS_JS)
+
+    def test_store_exports_client_local_puzzle_note_actions(self):
+        # Clue Share + shared notes are client-side only this wave (task #10
+        # constraint: no server share command exists) -- these are plain
+        # state -> state functions, not sendCommand wrappers.
+        for fn in ("export function shareClue", "export function addManualNote", "export function reorderManualNote", "export function linkManualNotes", "export function toggleManualNoteContradiction"):
+            with self.subTest(fn=fn):
+                self.assertIn(fn, STORE_JS)
 
     def test_selectors_still_never_touch_the_dom(self):
         # Regression guard: the wave-2 additions to selectors.js are pure
@@ -134,7 +159,6 @@ class WiringTests(unittest.TestCase):
             "onLinkNotes",
             "onToggleContradiction",
             "onRequestHint",
-            "onForceProgress",
             "onSubmitSolution",
             "onAttack",
             "onDeclareManeuver",
@@ -142,6 +166,23 @@ class WiringTests(unittest.TestCase):
         ):
             with self.subTest(handler=handler):
                 self.assertIn(handler, MAIN_JS)
+
+    def test_main_js_puzzle_commands_match_domain_vocabulary(self):
+        # docs/INFINITE_STACKS_CONTRACTS.md S2: inspect_object/submit_solution/
+        # request_hint are the only wave-2 puzzle commands; submit_solution's
+        # payload key is "solution" (an ordered list), never "answer", and
+        # there is no separate force_progress command.
+        self.assertIn("inspectObjectCommand", MAIN_JS)
+        self.assertIn("submitSolutionCommand", MAIN_JS)
+        self.assertIn("requestHintCommand", MAIN_JS)
+        self.assertNotIn("force_progress", MAIN_JS)
+        self.assertNotIn('buildCommand("share_clue"', MAIN_JS)
+
+    def test_commands_js_submit_solution_uses_solution_key(self):
+        commands_js = (SRC_DIR / "core" / "commands.js").read_text(encoding="utf-8")
+        self.assertIn('"submit_solution", { solution }', commands_js)
+        self.assertIn('"inspect_object", { object_id: objectId }', commands_js)
+        self.assertIn('"request_hint", {}', commands_js)
 
     def test_new_screens_never_call_fetch_directly(self):
         # Only main.js is allowed to interleave DOM + network (S22.3).
@@ -194,15 +235,33 @@ class AccessibilityTests(unittest.TestCase):
 
     def test_puzzle_private_clue_share_control_is_deliberate_not_automatic(self):
         source = NEW_SCREEN_SOURCE["puzzle.js"]
-        # Sharing must be its own explicit button, gated on puzzle.privateClue.shared
-        # being false -- never an automatic broadcast.
-        self.assertIn("puzzle.privateClue.shared", source)
+        # Sharing must be its own explicit button, gated on clue.shared being
+        # false -- never an automatic broadcast. A hero can hold multiple
+        # private clues (yourPrivateClues) plus object-discovered clues
+        # (discoveredClues), each with its own independent share control.
+        self.assertIn("clue.shared", source)
+        self.assertIn("puzzle.yourPrivateClues", source)
+        self.assertIn("puzzle.discoveredClues", source)
         self.assertIn("onShareClue", source)
 
-    def test_puzzle_hint_route_and_cost_are_visible(self):
+    def test_puzzle_hint_route_is_visible(self):
         source = NEW_SCREEN_SOURCE["puzzle.js"]
-        self.assertIn("nextHintCost", source)
+        self.assertIn("hintsRevealed", source)
         self.assertIn("onRequestHint", source)
+
+    def test_puzzle_submission_picks_real_item_ids_with_freeform_fallback(self):
+        # Wave-3 close: submit_solution must send canonical wire item_ids when
+        # puzzles[room_id].items is present (real solves are impossible with
+        # prose-only entries), keeping the freeform text path only as the
+        # no-items fallback.
+        source = NEW_SCREEN_SOURCE["puzzle.js"]
+        self.assertIn("stacks-puzzle-submission-picker", source)
+        self.assertIn("stacks-puzzle-submission-item-add", source)
+        self.assertIn("wireItem.itemId", source)
+        self.assertIn("entry.itemId !== null ? entry.itemId : entry.label", source)
+        # Freeform fallback stays for snapshots without an items list.
+        self.assertIn("stacks-puzzle-submission-add-input", source)
+        self.assertIn("itemId: item.item_id", SELECTORS_JS)
 
     def test_combat_enemy_intent_rendered_before_action_selection(self):
         source = NEW_SCREEN_SOURCE["combat.js"]
@@ -258,35 +317,86 @@ class FixtureContractTests(unittest.TestCase):
                     self.assertIn(field, exit_)
 
     def test_puzzle_fixture_has_required_wire_fields(self):
+        # Real StacksEngineAdapter.project() shape, docs/INFINITE_STACKS_CONTRACTS.md
+        # S5.2: snapshot.puzzles[room_id] = {instance_id, template_id,
+        # difficulty, objects, solved, forced, attempts_used, attempt_limit,
+        # hints_revealed, your_private_clues}. No private_clue (singular),
+        # hints.tiers, or submission.slots -- those were the provisional
+        # wave-2 shape this fixture replaces.
         fixture = load_fixture("puzzle_mystery_chamber.json")
-        for field in ("puzzle_id", "template_label", "difficulty", "objects", "private_clue", "shared_notes", "hints", "submission"):
+        for field in (
+            "instance_id",
+            "template_id",
+            "difficulty",
+            "objects",
+            "solved",
+            "forced",
+            "attempts_used",
+            "attempt_limit",
+            "hints_revealed",
+            "your_private_clues",
+            "items",
+        ):
             with self.subTest(field=field):
                 self.assertIn(field, fixture)
-        self.assertIn("shared", fixture["private_clue"])
-        self.assertFalse(fixture["private_clue"]["shared"], "fixture should exercise the un-shared deliberate-Share state")
-        for note in fixture["shared_notes"]:
-            for field in ("id", "text", "author_name", "linked_note_ids", "contradiction"):
-                with self.subTest(note_id=note["id"], field=field):
-                    self.assertIn(field, note)
-        self.assertTrue(any(note["contradiction"] for note in fixture["shared_notes"]), "fixture should exercise a contradiction mark")
-        for tier in fixture["hints"]["tiers"]:
-            for field in ("level", "description", "cost"):
-                with self.subTest(level=tier["level"], field=field):
-                    self.assertIn(field, tier)
+        for object_ in fixture["objects"]:
+            for field in ("id", "role", "fallback", "accessible"):
+                with self.subTest(object_id=object_["id"], field=field):
+                    self.assertIn(field, object_)
+        # Orderable solution items (wave-3 close): canonical wire ids the
+        # submission picker sends in submit_solution, emitted lexicographic-
+        # by-item_id so the projection order can never leak the answer.
+        item_ids = [item["item_id"] for item in fixture["items"]]
+        self.assertGreaterEqual(len(item_ids), 2)
+        self.assertEqual(item_ids, sorted(item_ids), "fixture items must be lexicographic-by-item_id like the real wire")
+        for item in fixture["items"]:
+            for field in ("item_id", "fallback", "accessible"):
+                with self.subTest(item_id=item["item_id"], field=field):
+                    self.assertIn(field, item)
+        for hint in fixture["hints_revealed"]:
+            for field in ("fallback", "accessible"):
+                with self.subTest(field=field):
+                    self.assertIn(field, hint)
+        self.assertGreaterEqual(
+            len(fixture["your_private_clues"]), 2, "fixture should exercise MULTIPLE private clues assigned to one hero (S10.3 #8)"
+        )
+        for clue in fixture["your_private_clues"]:
+            for field in ("clue_id", "fallback", "accessible"):
+                with self.subTest(clue_id=clue["clue_id"], field=field):
+                    self.assertIn(field, clue)
 
     def test_combat_fixture_has_required_wire_fields(self):
+        # Real "conflict" per-room shape, per stacks-conflict's 17:15 wave-3
+        # vocabulary post (board task #9, EARLY DRAFT): no legal_actions or
+        # last_check_receipt on the wire itself -- those are folded
+        # client-side from embedded combat/events.py event dicts
+        # (core/store.js's applyConflictEvent), so this fixture only needs to
+        # cover the projection fields, not the folded scratch.
         fixture = load_fixture("combat_encounter.json")
-        for field in ("encounter_id", "round", "initiative_order", "enemies", "heroes", "legal_actions", "last_check_receipt"):
+        for field in ("encounter_id", "status", "combat_round", "heroes", "enemies", "initiative_order", "current_turn"):
             with self.subTest(field=field):
                 self.assertIn(field, fixture)
-        self.assertTrue(any(enemy.get("intent") for enemy in fixture["enemies"]), "every enemy needs a telegraphed intent")
-        for maneuver in fixture["legal_actions"]["maneuvers"]:
-            self.assertEqual(maneuver["accuracy_modifier"], -4, "S14.4 called maneuvers cost exactly -4 accuracy")
-        receipt = fixture["last_check_receipt"]
-        for field in ("action", "target", "attribute", "skill", "die_result", "modifiers", "target_number", "outcome"):
+        for hero_id, hero in fixture["heroes"].items():
+            for field in ("hp", "max_hp", "life_state", "position", "reaction_available"):
+                with self.subTest(hero_id=hero_id, field=field):
+                    self.assertIn(field, hero)
+        for enemy_id, enemy in fixture["enemies"].items():
+            for field in ("name", "hp", "max_hp", "alive", "position"):
+                with self.subTest(enemy_id=enemy_id, field=field):
+                    self.assertIn(field, enemy)
+        self.assertIn(fixture["current_turn"], fixture["initiative_order"])
+
+    def test_combat_fixture_intent_telegraph_matches_shipped_combat_package_payload(self):
+        # combat/intents.py's telegraph_intent (accepted wave-2 code) emits
+        # intent_id/telegraph_text/accessible_text/counterplay -- the
+        # projection's own last_intent_telegraph fallback should carry the
+        # same field names plus enemy_id so a client can attribute it.
+        fixture = load_fixture("combat_encounter.json")
+        telegraph = fixture["last_intent_telegraph"]
+        for field in ("enemy_id", "intent_id", "telegraph_text", "accessible_text", "counterplay"):
             with self.subTest(field=field):
-                self.assertIn(field, receipt)
-        self.assertGreater(len(receipt["modifiers"]), 0, "S12.5 requires every modifier source to be listed")
+                self.assertIn(field, telegraph)
+        self.assertIn(telegraph["enemy_id"], fixture["enemies"])
 
     def test_cards_fixture_covers_every_s13_3_contract_field(self):
         fixture = load_fixture("cards.json")

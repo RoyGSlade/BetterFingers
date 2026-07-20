@@ -40,15 +40,41 @@ export function selectYouHero(state) {
   return heroId ? state.heroes[heroId] || null : null;
 }
 
-// Danger is a tier with its own label, never a bare color (S25 "no color-only
-// puzzles" / S24.1 "health danger").
+// Danger is a tier with its own label + glyph, never a bare color (S25 "no
+// color-only puzzles" / S24.1 "health danger"). `hero.life_state` is the
+// forward-compatible field name for the combat lane's persisted
+// Downed/Stable/Dead tri-state (docs/INFINITE_STACKS_COMBAT.md's
+// HeroCombatant.life_state vocabulary, ALIVE|DOWNED|STABLE|DEAD) -- as of
+// this wave the live wire projection (stacks_projections.py's heroes_view)
+// only has `conscious`/`alive` booleans and no Stable distinction yet (wave-3
+// board task #9, still in progress), so this falls back to that today and
+// picks up the richer tri-state the moment the domain lane lands it under
+// this field name, with no selector-shape change required.
 export function heroDangerTier(hero) {
-  if (!hero.alive) return { tier: "dead", label: "Dead" };
-  if (!hero.conscious) return { tier: "downed", label: "Downed" };
+  if (hero.life_state) {
+    const lifeState = String(hero.life_state).toLowerCase();
+    if (lifeState === "dead") return { tier: "dead", label: "Dead", glyph: "†" };
+    if (lifeState === "downed") return { tier: "downed", label: "Downed", glyph: "✕" };
+    if (lifeState === "stable") return { tier: "stable", label: "Stable", glyph: "✚" };
+  } else {
+    if (!hero.alive) return { tier: "dead", label: "Dead", glyph: "†" };
+    if (!hero.conscious) return { tier: "downed", label: "Downed", glyph: "✕" };
+  }
   const ratio = hero.max_hp > 0 ? hero.hp / hero.max_hp : 1;
-  if (ratio <= 0.25) return { tier: "critical", label: "Critical" };
-  if (ratio <= 0.5) return { tier: "wounded", label: "Wounded" };
-  return { tier: "healthy", label: "Healthy" };
+  if (ratio <= 0.25) return { tier: "critical", label: "Critical", glyph: "▲" };
+  if (ratio <= 0.5) return { tier: "wounded", label: "Wounded", glyph: "△" };
+  return { tier: "healthy", label: "Healthy", glyph: "●" };
+}
+
+// Whether a hero is a participant in the active combat encounter (S24.1
+// "whether they are in combat"). No live combat projection is wired into any
+// event/snapshot yet (wave-3 board task #9, stacks-conflict, still in
+// progress) so state.combat is always null today and this always returns
+// false in live play -- ready the moment it lands, since state.combat's
+// shape already carries a `heroes` list (tests/fixtures/stacks_ui/combat_encounter.json).
+export function heroInCombat(state, heroId) {
+  if (!state.combat || !heroId) return false;
+  return (state.combat.heroes || []).some((h) => h.id === heroId);
 }
 
 export function selectHeroCards(state) {
@@ -59,6 +85,7 @@ export function selectHeroCards(state) {
       roomId: hero.room_id,
       isYou: hero.hero_id === state.you.heroId,
       danger: heroDangerTier(hero),
+      inCombat: heroInCombat(state, hero.hero_id),
       connected: !!hero.connected,
       ready: !!hero.ready,
       energyPips: energyPips(hero),
@@ -165,12 +192,15 @@ export function selectLastError(state) {
 
 // Which non-map screen (if any) is active. Combat takes precedence over a
 // puzzle in the same room, which takes precedence over a plain entered-room
-// view; state.combat/state.puzzle/state.enteredRoom are mutually-optional,
-// server-populated wire objects (wave 2: fixture-driven, see
-// tests/fixtures/stacks_ui/).
+// view. Both "combat" and "puzzle" are room-keyed as of wave 3 (state.conflicts/
+// state.puzzles, docs/INFINITE_STACKS_CONTRACTS.md S5.2 + stacks-conflict's
+// wave-3 vocabulary post), not singular slots anymore. state.enteredRoom
+// remains a mutually-optional, not-yet-live wire object this wave (see its
+// own selector's comment).
 export function selectActiveScreen(state) {
-  if (state.combat) return "combat";
-  if (state.puzzle) return "puzzle";
+  const you = selectYouHero(state);
+  if (you && state.conflicts[you.room_id]) return "combat";
+  if (you && state.puzzles[you.room_id]) return "puzzle";
   if (state.enteredRoom) return "room";
   return "map";
 }
@@ -208,111 +238,154 @@ export function selectEnteredRoomView(state) {
   };
 }
 
-// Mystery Chamber puzzle view (infinite_stacks.md S10, S24.4). Wire shape is
-// snake_case (state.puzzle); this returns the camelCase plain data
-// screens/puzzle.js renders directly.
+// Mystery Chamber puzzle view (infinite_stacks.md S10, S24.4;
+// docs/INFINITE_STACKS_CONTRACTS.md S5.2 for the wire shape). state.puzzles
+// is keyed by room_id (the REAL StacksEngineAdapter.project() shape, wave 3
+// board task #10) -- this looks up the viewer's current room rather than
+// reading a singular state.puzzle slot. Object roles (anchor/key/
+// contradiction/red_herring) are deliberately never surfaced here: S10.2
+// "the four design roles are never labeled to the player", only each
+// object's own fallback/accessible prose is. Every object's prose is always
+// present on the wire (no separate "inspected before you can see it" gate);
+// `inspected` here is a purely-local "you've already pressed the button"
+// indicator (state.puzzleInspectedObjects) since the wire never tracks that
+// per-object -- inspecting is what claims key-object clue fragments and logs
+// non-key objects' clue text into state.puzzleClues, not what reveals prose.
 export function selectPuzzleView(state) {
-  const puzzle = state.puzzle;
+  const you = selectYouHero(state);
+  const roomId = you ? you.room_id : null;
+  const puzzle = roomId ? state.puzzles[roomId] : null;
   if (!puzzle) return null;
+
+  const inspectedIds = new Set(state.puzzleInspectedObjects[roomId] || []);
+  const sharedIds = new Set(state.sharedClueIds[roomId] || []);
+  const yourPrivateClueIds = new Set((puzzle.your_private_clues || []).map((c) => c.clue_id));
+  const knownClues = state.puzzleClues[roomId] || {};
+
   return {
-    puzzleId: puzzle.puzzle_id,
-    templateLabel: puzzle.template_label,
+    roomId,
+    instanceId: puzzle.instance_id,
+    templateId: puzzle.template_id,
     difficulty: puzzle.difficulty,
+    solved: !!puzzle.solved,
+    forced: !!puzzle.forced,
+    attemptsUsed: puzzle.attempts_used || 0,
+    attemptLimit: typeof puzzle.attempt_limit === "number" ? puzzle.attempt_limit : null,
     objects: (puzzle.objects || []).map((object) => ({
       id: object.id,
-      label: object.label,
-      inspected: !!object.inspected,
-      description: object.description || null,
+      fallback: object.fallback,
+      accessible: object.accessible,
+      inspected: inspectedIds.has(object.id),
     })),
-    privateClue: puzzle.private_clue ? { text: puzzle.private_clue.text, shared: !!puzzle.private_clue.shared } : null,
-    sharedNotes: (puzzle.shared_notes || []).map((note) => ({
+    // Orderable solution items (wire: puzzles[room_id].items, added at wave-3
+    // close -- lexicographic-by-item_id, provably independent of the solution
+    // order). Empty for older snapshots; the submission UI falls back to
+    // freeform text entry in that case.
+    items: (puzzle.items || []).map((item) => ({
+      itemId: item.item_id,
+      fallback: item.fallback,
+      accessible: item.accessible,
+    })),
+    // Key-object clue fragments this hero has personally claimed (S10.3 #8:
+    // "no single hero's view ever contains the full key chain" -- this can
+    // legitimately hold more than one fragment across separate claims).
+    yourPrivateClues: (puzzle.your_private_clues || []).map((clue) => ({
+      clueId: clue.clue_id,
+      fallback: clue.fallback,
+      accessible: clue.accessible,
+      shared: sharedIds.has(clue.clue_id),
+    })),
+    // Clue text learned by inspecting the anchor/contradiction/red_herring
+    // objects -- distinct from yourPrivateClues (the key pool only).
+    discoveredClues: Object.values(knownClues)
+      .filter((clue) => !yourPrivateClueIds.has(clue.clueId))
+      .map((clue) => ({ ...clue, shared: sharedIds.has(clue.clueId) })),
+    // Party-visible shared notes (S24.4: text, ordering, linking,
+    // contradiction marks) -- entirely client-local this wave (state.puzzleManualNotes),
+    // populated by manual adds and by pressing Share on a clue.
+    sharedNotes: (state.puzzleManualNotes[roomId] || []).map((note) => ({
       id: note.id,
       text: note.text,
-      authorName: note.author_name,
-      linkedNoteIds: note.linked_note_ids || [],
+      authorName: note.authorName,
+      linkedNoteIds: note.linkedNoteIds || [],
       contradiction: !!note.contradiction,
     })),
-    hints: {
-      used: puzzle.hints.used,
-      tiers: (puzzle.hints.tiers || []).map((tier) => ({ level: tier.level, description: tier.description, cost: tier.cost })),
-      nextHintCost: puzzle.hints.next_hint_cost || null,
-      forceProgressAvailable: !!puzzle.hints.force_progress_available,
-      forceProgressConsequence: puzzle.hints.force_progress_consequence || null,
-    },
-    submission: {
-      legal: !!puzzle.submission.legal,
-      slots: (puzzle.submission.slots || []).map((slot) => ({
-        id: slot.id,
-        label: slot.label,
-        selectedId: slot.selected_id || null,
-        options: (slot.options || []).map((option) => ({ id: option.id, label: option.label })),
-      })),
-    },
+    hintsRevealed: (puzzle.hints_revealed || []).map((hint) => ({ fallback: hint.fallback, accessible: hint.accessible })),
+    canRequestHint: !puzzle.solved && !puzzle.forced,
+    canSubmit: !puzzle.solved && !puzzle.forced,
   };
 }
 
-// Combat view (infinite_stacks.md S14, S24.3). Wire shape is snake_case
-// (state.combat); this returns the camelCase plain data screens/combat.js
-// renders directly.
+// Combat view (infinite_stacks.md S14, S24.3). Wire shape as of stacks-conflict's
+// 17:15 wave-3 vocabulary post (docs/INFINITE_STACKS_CONTRACTS.md-style,
+// EARLY DRAFT -- confirmed field names, final dict pending stacks_projections.py
+// landing): project() gains a top-level "conflict" key parallel to "puzzles",
+// {room_id: {encounter_id, status, combat_round, heroes: {hero_id:{hp,max_hp,
+// life_state,position,reaction_available}}, enemies: {instance_id:{name,hp,
+// max_hp,alive,position}}, initiative_order:[combatant_id...], current_turn,
+// last_intent_telegraph, threat_budget}}. state.conflicts is keyed by room_id
+// like state.puzzles. There is no legal_actions/last_check_receipt on this
+// projection (unlike the wave-2 fixture guess) -- enemy intent and the S12.5
+// check receipt are folded client-side from the raw combat/events.py event
+// dicts embedded in conflict_turn_resolved's payload.combat_events (see
+// core/store.js's applyConflictEvent), using the CONFIRMED, already-shipped
+// intent_telegraphed/attack_resolved payload shapes from combat/intents.py
+// and combat/actions.py.
 export function selectCombatView(state) {
-  const combat = state.combat;
-  if (!combat) return null;
-  const legalActions = combat.legal_actions || {};
+  const you = selectYouHero(state);
+  const roomId = you ? you.room_id : null;
+  const conflict = roomId ? state.conflicts[roomId] : null;
+  if (!conflict) return null;
+
+  const heroesById = conflict.heroes || {};
+  const enemiesById = conflict.enemies || {};
+  const intents = state.conflictIntents[roomId] || {};
+
+  const combatantName = (id) => {
+    if (heroesById[id]) return (state.heroes[id] && state.heroes[id].name) || id;
+    if (enemiesById[id]) return enemiesById[id].name || id;
+    return id;
+  };
+
   return {
-    encounterId: combat.encounter_id,
-    round: combat.round,
-    initiativeOrder: (combat.initiative_order || []).map((entry) => ({
-      id: entry.id,
-      name: entry.name,
-      initiative: entry.initiative,
-      isCurrentTurn: !!entry.is_current_turn,
-      hasReactionAvailable: !!entry.has_reaction_available,
+    roomId,
+    encounterId: conflict.encounter_id,
+    status: conflict.status,
+    round: conflict.combat_round,
+    currentTurnId: conflict.current_turn || null,
+    isYourTurn: !!you && conflict.current_turn === you.hero_id,
+    initiativeOrder: (conflict.initiative_order || []).map((combatantId) => ({
+      id: combatantId,
+      name: combatantName(combatantId),
+      isCurrentTurn: conflict.current_turn === combatantId,
+      hasReactionAvailable: heroesById[combatantId] ? !!heroesById[combatantId].reaction_available : null,
     })),
-    enemies: (combat.enemies || []).map((enemy) => ({
-      id: enemy.id,
-      name: enemy.name,
-      hp: enemy.hp,
-      maxHp: enemy.max_hp,
-      intent: { label: enemy.intent.label, glyph: enemy.intent.glyph, description: enemy.intent.description },
-      statuses: (enemy.statuses || []).map(mapStatus),
-    })),
-    heroes: (combat.heroes || []).map((hero) => ({
-      id: hero.id,
-      name: hero.name,
+    enemies: Object.entries(enemiesById).map(([id, enemy]) => {
+      // Prefer the event-folded intent map (state.conflictIntents, always
+      // up to date); fall back to the projection's own last_intent_telegraph
+      // (only ever describes one enemy at a time) for the case of a fresh
+      // reconnect snapshot with no missed events yet to fold.
+      const folded = intents[id];
+      const fallback =
+        !folded && conflict.last_intent_telegraph && conflict.last_intent_telegraph.enemy_id === id ? conflict.last_intent_telegraph : null;
+      const intent = folded
+        ? { telegraphText: folded.telegraphText, accessibleText: folded.accessibleText, counterplay: folded.counterplay }
+        : fallback
+          ? { telegraphText: fallback.telegraph_text, accessibleText: fallback.accessible_text, counterplay: fallback.counterplay }
+          : null;
+      return { id, name: enemy.name, hp: enemy.hp, maxHp: enemy.max_hp, alive: !!enemy.alive, position: enemy.position, intent };
+    }),
+    heroes: Object.entries(heroesById).map(([id, hero]) => ({
+      id,
+      name: (state.heroes[id] && state.heroes[id].name) || id,
       hp: hero.hp,
       maxHp: hero.max_hp,
+      lifeState: hero.life_state,
+      danger: heroDangerTier({ ...(state.heroes[id] || {}), life_state: hero.life_state, hp: hero.hp, max_hp: hero.max_hp }),
       reactionAvailable: !!hero.reaction_available,
-      statuses: (hero.statuses || []).map(mapStatus),
+      position: hero.position,
     })),
-    legalActions: {
-      attacks: (legalActions.attacks || []).map((attack) => ({
-        id: attack.id,
-        label: attack.label,
-        targetId: attack.target_id,
-        targetLabel: attack.target_label,
-        expectedEffect: attack.expected_effect,
-      })),
-      maneuvers: (legalActions.maneuvers || []).map((maneuver) => ({
-        id: maneuver.id,
-        label: maneuver.label,
-        targetId: maneuver.target_id,
-        targetLabel: maneuver.target_label,
-        accuracyModifier: maneuver.accuracy_modifier,
-        expectedEffect: maneuver.expected_effect,
-      })),
-      reactions: (legalActions.reactions || []).map((reaction) => ({ id: reaction.id, label: reaction.label, available: !!reaction.available })),
-    },
-    lastCheckReceipt: combat.last_check_receipt
-      ? {
-          action: combat.last_check_receipt.action,
-          target: combat.last_check_receipt.target,
-          attribute: combat.last_check_receipt.attribute,
-          skill: combat.last_check_receipt.skill,
-          dieResult: combat.last_check_receipt.die_result,
-          modifiers: (combat.last_check_receipt.modifiers || []).map((modifier) => ({ source: modifier.source, value: modifier.value })),
-          targetNumber: combat.last_check_receipt.target_number,
-          outcome: combat.last_check_receipt.outcome,
-        }
-      : null,
+    threatBudget: conflict.threat_budget || null,
+    lastCheckReceipt: state.conflictLastCheckReceipt[roomId] || null,
   };
 }

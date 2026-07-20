@@ -78,6 +78,7 @@ class Hero:
     max_hp: int
     conscious: bool
     alive: bool
+    life_state: str = "alive"  # alive|downed|stable|dead (§16.1); conscious/alive stay in sync with it
     ready: bool = False
     connected: bool = False
     # Own-viewer-only field (contract S4: "no player view receives another

@@ -43,6 +43,16 @@ class EventType(str, Enum):
     FACT_EMITTED = "fact_emitted"                          # emit_fact op
     # grant_check op reuses CHECK_RESOLVED above
 
+    # Conflict rooms / combat wiring (infinite_stacks.md §14-16; systems/combat.py).
+    # These wrap the pure backend.lan_playground.combat package's own event
+    # dicts (docs/INFINITE_STACKS_COMBAT.md §1 envelope) as payload data rather
+    # than re-declaring one domain EventType per CombatEventType -- the same
+    # "carry a whole resulting sub-state" pattern MAP_GENERATED already uses.
+    CONFLICT_ENCOUNTER_STARTED = "conflict_encounter_started"
+    CONFLICT_TURN_RESOLVED = "conflict_turn_resolved"
+    CONFLICT_ENCOUNTER_ENDED = "conflict_encounter_ended"
+    JOINED_CONFLICT_ROOM = "joined_conflict_room"
+
 
 @dataclass(frozen=True)
 class Event:

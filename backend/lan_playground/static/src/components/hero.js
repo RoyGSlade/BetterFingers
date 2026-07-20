@@ -22,11 +22,30 @@ export function renderHeroCard(heroCard, { onSelect, selected = false } = {}) {
   name.textContent = heroCard.name + (heroCard.isYou ? " (you)" : "");
   el.appendChild(name);
 
-  // Danger tier: text label always present, never color-only (S24.1/S25).
+  // Danger tier: text label always present, glyph is decorative reinforcement
+  // only, never color-only (S24.1/S25).
   const danger = document.createElement("div");
   danger.className = `stacks-hero-card-danger stacks-hero-card-danger--${heroCard.danger.tier}`;
-  danger.textContent = heroCard.danger.label;
+  const dangerGlyph = document.createElement("span");
+  dangerGlyph.className = "stacks-hero-card-danger-glyph";
+  dangerGlyph.setAttribute("aria-hidden", "true");
+  dangerGlyph.textContent = heroCard.danger.glyph || "";
+  danger.appendChild(dangerGlyph);
+  danger.appendChild(document.createTextNode(` ${heroCard.danger.label}`));
   el.appendChild(danger);
+
+  // Whether this hero is currently a combat participant (S24.1 "whether
+  // they are in combat") -- text label, not color/icon-only.
+  if (heroCard.inCombat) {
+    const combatBadge = document.createElement("div");
+    combatBadge.className = "stacks-hero-card-in-combat";
+    const combatGlyph = document.createElement("span");
+    combatGlyph.setAttribute("aria-hidden", "true");
+    combatGlyph.textContent = "⚔";
+    combatBadge.appendChild(combatGlyph);
+    combatBadge.appendChild(document.createTextNode(" In combat"));
+    el.appendChild(combatBadge);
+  }
 
   const energy = document.createElement("div");
   energy.className = "stacks-hero-card-energy";

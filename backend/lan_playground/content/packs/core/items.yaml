@@ -1,7 +1,11 @@
 # The Lost Meaning: Infinite Stacks -- core pack.
-# 10 items from infinite_stacks.md §13.5 plus the 6 background starting items
-# named in §11.3 (questionable_seal, improvised_tools, repair_patch,
-# battered_buckler, family_notes, counterfeit_charm).
+# 20 items (§23.3 first-playable target): 10 items from infinite_stacks.md
+# §13.5 plus the 6 background starting items named in §11.3
+# (questionable_seal, improvised_tools, repair_patch, battered_buckler,
+# family_notes, counterfeit_charm), plus 4 more §13.4-inspired general items
+# (board task #11, stacks-heroes). Items change options, not just numbers
+# (§13.4) -- unlike cards, item effects are not gated to this wave's LIVE §5
+# ops (heroes/cards.py only gates cards going into a built deck).
 items:
   - id: argumentative_buckler
     name: Argumentative Buckler
@@ -181,3 +185,48 @@ items:
       - op: emit_fact
         args: {fact_id: item_disguised}
     tags: [deception]
+
+  - id: traveler_waystone
+    name: Traveler's Waystone
+    prose:
+      fallback: Tap it against a wall to glimpse what's on the other side.
+      accessible: "Item: Traveler's Waystone. Reveals what lies past the north connector when tapped against a wall."
+    slot_cost: 1
+    use_effects:
+      - op: reveal_room
+        args: {connector: north}
+    tags: [exploration, utility]
+
+  - id: chalk_of_loud_silence
+    name: Chalk of Loud Silence
+    prose:
+      fallback: Marks a spot where nobody is allowed to speak until it's erased.
+      accessible: "Item: Chalk of Loud Silence. Marks the current room as a place where nobody is allowed to speak, recorded until the mark is erased."
+    slot_cost: 1
+    use_effects:
+      - op: emit_fact
+        args: {fact_id: silence_marked}
+    tags: [utility, communication]
+
+  - id: second_opinion_token
+    name: Second Opinion Token
+    prose:
+      fallback: Spend it to ask the room what it thinks you're missing.
+      accessible: "Item: Second Opinion Token. Consumable. Grants Advantage on the hero's next check."
+    slot_cost: 1
+    consumable: true
+    use_effects:
+      - op: grant_advantage
+        args: {}
+    tags: [utility, consumable]
+
+  - id: loophole_rope
+    name: Loophole Rope
+    prose:
+      fallback: A short rope that always seems to reach exactly as far as the rule requires.
+      accessible: "Item: Loophole Rope. Pulls an object, card, or willing ally one position closer."
+    slot_cost: 1
+    use_effects:
+      - op: move_target
+        args: {distance: 1}
+    tags: [utility, mobility]
