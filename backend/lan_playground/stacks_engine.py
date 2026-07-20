@@ -40,7 +40,7 @@ from backend.lan_playground.domain.commands import CommandType as DomainCommandT
 from backend.lan_playground.domain.events import Event as DomainEvent
 from backend.lan_playground.domain.events import EventType as DomainEventType
 from backend.lan_playground.domain.rng import StacksRNG
-from backend.lan_playground.domain.state import ConflictEncounterState
+from backend.lan_playground.domain.state import AVATAR_COLORS, AVATAR_IDS, ConflictEncounterState
 from backend.lan_playground.domain.state import HeroState as DomainHeroState
 from backend.lan_playground.domain.state import RunState as DomainRunState
 from backend.lan_playground.heroes.cards import NonLiveEffectOpError as _NonLiveEffectOpError
@@ -71,6 +71,18 @@ from backend.lan_playground.stacks_protocol import (
 # wave and never emits it here).
 _WIRE_CONNECTOR_STATE = {"none": "none", "door": "undiscovered", "open": "open"}
 _DOMAIN_DELTA = {"north": (0, 1), "south": (0, -1), "east": (1, 0), "west": (-1, 0)}
+
+# Wave-6 addition (board task #21, playtest A5): derived display countdown
+# for the active-effects tray, posted to the collab room 2026-07-20 --
+# until_end_of_turn has effectively "0 more rounds" left (it expires before
+# the round ever advances), until_end_of_round has exactly 1, and
+# until_end_of_encounter isn't a round count at all (None -- client shows
+# "until fight ends").
+_ACTIVE_EFFECT_ROUNDS_REMAINING = {
+    "until_end_of_turn": 0,
+    "until_end_of_round": 1,
+    "until_end_of_encounter": None,
+}
 
 
 @functools.lru_cache(maxsize=1)
@@ -159,6 +171,22 @@ def _item_wire(item: Any) -> dict[str, Any]:
     }
 
 
+def _ability_wire(ability: Any) -> dict[str, Any]:
+    # content.schemas.Ability (stacks-carddesign, packs/core/abilities.yaml,
+    # board task #20). Static authored data only -- the per-hero dynamic part
+    # (charges_remaining -> "available") is merged in from HeroState.abilities
+    # by _neutral_hero_creation_snapshot below, never duplicated here.
+    return {
+        "id": ability.id,
+        "name": ability.name,
+        "fallback": ability.prose.fallback,
+        "accessible": ability.prose.accessible,
+        "trigger": ability.trigger,
+        "frequency": ability.frequency,
+        "source": ability.source,
+    }
+
+
 class StacksEngineAdapter:
     """Isolates every engine call (validate/handle/reduce/project) behind one
     class, delegating to the real domain/systems pipeline. Each ``RunState``
@@ -214,6 +242,14 @@ class StacksEngineAdapter:
             "backgrounds": {bid: _background_wire(b) for bid, b in sorted(pack.backgrounds.items())},
             "cards": {cid: _card_wire(c) for cid, c in sorted(pack.cards.items())},
             "items": {iid: _item_wire(i) for iid, i in sorted(pack.items.items())},
+            # Wave-6 addition (board task #21/#20): empty until
+            # ContentPack.abilities exists (forward-compatible getattr guard,
+            # same pattern used throughout this module for optional fields).
+            "abilities": {aid: _ability_wire(a) for aid, a in sorted(getattr(pack, "abilities", {}).items())},
+            # Wave-6 addition (board task #21, playtest F1): the fixed,
+            # server-validated avatar/color lists the character-builder
+            # picker offers -- create_hero rejects anything outside these.
+            "token_options": {"avatar_ids": list(AVATAR_IDS), "colors": list(AVATAR_COLORS)},
         }
 
     def project(self, state: RunState, viewer: str | None) -> dict[str, Any]:
@@ -262,6 +298,34 @@ class StacksEngineAdapter:
         already uses for `private_clue`. The draw pile's actual order is
         never serialized to anyone, owner included -- only its count."""
 
+        pack_abilities = getattr(_core_pack(), "abilities", {})
+        abilities_wire: list[dict[str, Any]] = []
+        for ability_id, a in sorted(domain_hero.abilities.items()):
+            adef = pack_abilities.get(ability_id)
+            available = a.trigger == "manual" and (a.charges_remaining is None or a.charges_remaining > 0)
+            abilities_wire.append(
+                {
+                    "id": ability_id,
+                    "name": adef.name if adef is not None else ability_id,
+                    "fallback": adef.prose.fallback if adef is not None else ability_id,
+                    "accessible": adef.prose.accessible if adef is not None else ability_id,
+                    "trigger": a.trigger,
+                    "frequency": a.frequency,
+                    "available": available,
+                }
+            )
+        active_effects_wire = [
+            {
+                "id": e.effect_id,
+                "name": e.label,
+                "fallback": e.label,
+                "accessible": e.label,
+                "rounds_remaining": _ACTIVE_EFFECT_ROUNDS_REMAINING.get(e.duration),
+                "source": e.source_id,
+            }
+            for e in domain_hero.active_effects
+        ]
+
         entry: dict[str, Any] = {
             "pending_dice": list(domain_hero.pending_dice) if domain_hero.pending_dice else None,
             # Wave-5 shopwire additions (docs/INFINITE_STACKS_CONTRACTS.md §5.5):
@@ -271,6 +335,15 @@ class StacksEngineAdapter:
             "item_wear": dict(sorted(domain_hero.item_wear.items())),
             "identified_item_ids": list(domain_hero.identified_item_ids),
             "active_condition_ids": list(domain_hero.active_condition_ids),
+            # Wave-6 additions (board task #21, playtest A5/E1/F1): abilities
+            # + active_effects shapes confirmed with stacks-facelift/
+            # stacks-carddesign in the collab room 2026-07-20. avatar_id/color
+            # are set once at create_hero (systems/heroes_wire.py validates
+            # against AVATAR_IDS/AVATAR_COLORS) and PUBLIC like hp/gold.
+            "abilities": abilities_wire,
+            "active_effects": active_effects_wire,
+            "avatar_id": domain_hero.avatar_id,
+            "color": domain_hero.color,
         }
         sheet = domain_hero.sheet
         if sheet is None:

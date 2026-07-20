@@ -89,6 +89,7 @@ export function selectHeroCards(state) {
       connected: !!hero.connected,
       ready: !!hero.ready,
       energyPips: energyPips(hero),
+      token: selectHeroToken(hero),
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -184,6 +185,191 @@ export function selectRoutePreview(state, fromRoomId, toRoomId) {
 
 export function selectLegalActionsSummary(state) {
   return state.legalActions;
+}
+
+// -- Wave-6 playtest response (docs/PLAYTEST_FINDINGS_2026-07-19.md) -------
+
+// Locked defaults (board note 3): move-to-known-room 1 Energy, breach-
+// unexplored 3 Energy. Duplicated by value client-side (same convention as
+// CHARACTER_ATTRIBUTE_NAMES above) since there is no import boundary to the
+// Python package. selectMoveCost/selectBreachCost prefer a real per-target
+// wire cost the moment stacks-abilities lands legalActions.move_costs/
+// breach_costs (posted to room chat as the reconciliation plan); until then
+// every legal move/breach costs the same locked default, so falling back to
+// it is exact, not a guess.
+export const MOVE_ENERGY_COST = 1;
+export const BREACH_ENERGY_COST = 3;
+
+export function selectMoveCost(state, roomId) {
+  const costs = (selectLegalActionsSummary(state) || {}).move_costs;
+  return costs && typeof costs[roomId] === "number" ? costs[roomId] : MOVE_ENERGY_COST;
+}
+
+export function selectBreachCost(state, direction) {
+  const costs = (selectLegalActionsSummary(state) || {}).breach_costs;
+  return costs && typeof costs[direction] === "number" ? costs[direction] : BREACH_ENERGY_COST;
+}
+
+// C1/A3/A4/B2's persistent contextual hint line: one plain-language sentence
+// describing what the player can do right now, driven entirely by state
+// already on hand (never invents information the wire hasn't confirmed).
+export function selectHintText(state) {
+  const you = selectYouHero(state);
+  if (!you) return "Enter an access code and a display name, then host a run or join one.";
+  if (you.sheet == null) {
+    if (you.pending_dice) return "Choose a background, assign your rolled dice to attributes, and pick your cards to finish creating your hero.";
+    return "Roll your attribute dice to begin creating your hero.";
+  }
+  if (state.conflicts[you.room_id]) return "You are in combat -- choose an attack or a called maneuver, and answer any reaction prompt before its timer runs out.";
+  if (state.puzzles[you.room_id]) return "Inspect objects to gather clues, share what you learn with the party, then submit a solution when you're ready.";
+  const legalActions = selectLegalActionsSummary(state) || {};
+  const canMove = (legalActions.can_move_to || []).length > 0;
+  const canBreach = (legalActions.can_breach_directions || []).length > 0;
+  if (canMove && canBreach) {
+    return `You have ${you.energy} Energy -- click an adjacent room to move (${MOVE_ENERGY_COST}) or a fogged edge to breach (${BREACH_ENERGY_COST}).`;
+  }
+  if (canMove) return `You have ${you.energy} Energy -- click an adjacent room to move (${MOVE_ENERGY_COST}).`;
+  if (canBreach) return `You have ${you.energy} Energy -- click a fogged edge to breach (${BREACH_ENERGY_COST}).`;
+  return "No moves available from here right now -- Pass to let the world round advance, or Inspect your current room.";
+}
+
+// F1 tokens: avatar art + a CSS hue-rotate filter class for the hero's
+// chosen color, replacing the name-text-only chips the playtest rejected.
+// hero.avatar_id/hero.color are not on the live wire yet (posted to room
+// chat as this wave's reconciliation plan with stacks-abilities); the
+// fallback below is a PURE deterministic hash of hero_id, never client-side
+// (tests/test_stacks_static.py's randomness ban covers this file), so two
+// clients always render the same hero with the same token without a network
+// round-trip, and swap over to the real fields the moment they land with no
+// shape change here.
+// Palette CONFIRMED by stacks-abilities 04:30 as the landed create_hero
+// contract (server validates against exactly these 8 names) -- not a guess.
+export const AVATAR_COUNT = 6;
+export const TOKEN_COLORS = Object.freeze(["crimson", "azure", "gold", "violet", "emerald", "slate", "coral", "ivory"]);
+
+function stableHash(text) {
+  let hash = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    hash = (hash * 31 + text.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+export function selectHeroToken(hero) {
+  if (!hero || !hero.hero_id) return null;
+  const avatarId = Number.isInteger(hero.avatar_id) && hero.avatar_id >= 1 && hero.avatar_id <= AVATAR_COUNT ? hero.avatar_id : (stableHash(hero.hero_id) % AVATAR_COUNT) + 1;
+  const color = TOKEN_COLORS.includes(hero.color) ? hero.color : TOKEN_COLORS[stableHash(`${hero.hero_id}:color`) % TOKEN_COLORS.length];
+  return {
+    avatarId,
+    avatarSrc: `/src/assets/avatars/avatar-${avatarId}.png`,
+    color,
+    colorClass: `stacks-token-hue-${color}`,
+  };
+}
+
+// D1 abilities list: the hero's background signature ability (real data,
+// already on the wire via content_catalog + hero.signature_charge) plus any
+// forward-compatible hero.abilities the abilities lane adds (fixture-first,
+// posted to room chat: {id, name, fallback, accessible, trigger, frequency,
+// available}) -- empty array, never undefined, when neither source has data
+// yet so callers don't need their own null guard.
+export function selectAbilitiesView(state) {
+  const you = selectYouHero(state);
+  if (!you || !you.sheet) return [];
+  const catalog = state.contentCatalog;
+  const background = catalog ? catalog.backgrounds[you.sheet.background_id] : null;
+  const abilities = [];
+  if (background && background.signature_ability) {
+    const sig = background.signature_ability;
+    const charge = you.signature_charge;
+    abilities.push({
+      id: sig.id,
+      name: sig.name,
+      fallback: sig.fallback,
+      accessible: sig.accessible,
+      frequency: sig.frequency,
+      available: charge ? charge.charges_remaining > 0 : true,
+      chargesRemaining: charge ? charge.charges_remaining : null,
+      maxCharges: charge ? charge.max_charges : null,
+    });
+  }
+  for (const ability of you.abilities || []) {
+    abilities.push({
+      id: ability.id,
+      name: ability.name,
+      fallback: ability.fallback,
+      accessible: ability.accessible,
+      frequency: ability.frequency || ability.trigger,
+      available: ability.available !== false,
+      chargesRemaining: null,
+      maxCharges: null,
+    });
+  }
+  return abilities;
+}
+
+// A5 active-effects tray: combat statuses (hero.statuses, same {id,
+// rounds_remaining} shape status.js's STATUS_DISPLAY already renders) plus
+// forward-compatible hero.active_effects (fixture-first, posted to room
+// chat: {id, name, fallback, accessible, rounds_remaining, source}) for
+// card/ability effects that last a duration -- e.g. "until end of turn".
+// Neither field is on the live wire yet outside a combat encounter, so this
+// returns [] rather than guessing at a shape nothing has confirmed.
+export function selectActiveEffectsView(state) {
+  const you = selectYouHero(state);
+  if (!you) return [];
+  const statuses = (you.statuses || []).map((status) => ({ kind: "status", id: status.id, roundsRemaining: status.rounds_remaining }));
+  const effects = (you.active_effects || []).map((effect) => ({
+    kind: "effect",
+    id: effect.id,
+    name: effect.name,
+    fallback: effect.fallback,
+    accessible: effect.accessible,
+    roundsRemaining: effect.rounds_remaining,
+    source: effect.source,
+  }));
+  return [...statuses, ...effects];
+}
+
+// D1/D2's persistent character panel: HP numbers+bar, attributes, skills,
+// Energy pips, statuses/active effects, abilities, and inventory, merged
+// into one view so the panel never needs more than one selector call.
+export function selectCharacterPanelView(state) {
+  const you = selectYouHero(state);
+  if (!you) return null;
+  return {
+    heroId: you.hero_id,
+    name: you.name,
+    token: selectHeroToken(you),
+    hp: you.hp,
+    maxHp: you.max_hp,
+    danger: heroDangerTier(you),
+    energyPips: energyPips(you),
+    attributes: you.sheet ? you.sheet.attributes : null,
+    skills: you.sheet ? you.sheet.skills : null,
+    abilities: selectAbilitiesView(state),
+    activeEffects: selectActiveEffectsView(state),
+    inventory: selectInventoryView(state),
+  };
+}
+
+// A2/E3 card-face frame kind: CONFIRMED 04:28 by stacks-carddesign as
+// `art_ref` (one of the 3 real asset paths this lane copied in,
+// `src/assets/cards/{charm,scheme,bonk}.png`, classified per-card at
+// authoring time using the exact same rule this heuristic applies) -- prefer
+// their authored value once content/packs/core/{cards,abilities}.yaml lands
+// it, and keep the heuristic as the fallback for any card/ability that
+// doesn't set art_ref yet (or a future pack that never does).
+export function cardFrameKind(card) {
+  if (card.art_ref) {
+    const match = /\/(charm|scheme|bonk)\.png$/.exec(card.art_ref);
+    if (match) return match[1];
+  }
+  const tags = card.tags || [];
+  const targets = card.targets || [];
+  if (targets.includes("enemy") || tags.includes("melee") || tags.includes("bonk")) return "bonk";
+  if (tags.includes("support") || tags.includes("communication") || tags.includes("persona") || tags.includes("wordcraft") || targets.includes("ally")) return "charm";
+  return "scheme";
 }
 
 export function selectLastError(state) {
@@ -295,9 +481,10 @@ function cardView(cardId, catalog) {
       exhaustOnPlay: false,
       accessibleText: cardId,
       generatedDescription: "",
+      frameKind: "scheme",
     };
   }
-  return {
+  const plain = {
     id: card.id,
     name: card.name,
     timing: card.timing,
@@ -311,7 +498,24 @@ function cardView(cardId, catalog) {
     exhaustOnPlay: card.end_state === "exhaust",
     accessibleText: card.accessible_text,
     generatedDescription: card.fallback,
+    art_ref: card.art_ref,
   };
+  return { ...plain, frameKind: cardFrameKind(plain) };
+}
+
+// A3: best-effort "can this be played right now" from data already on the
+// wire (no per-card legal_actions field exists yet) -- a reaction card is
+// only playable while a pending reaction targets you; an enemy/ally-only
+// card is only playable while a legal target actually exists. Anything this
+// can't evaluate (e.g. required_state) defaults to playable rather than
+// guessing it's blocked, since a false "inert" reads worse than a card that
+// turns out to reject on submit.
+function cardPlayableNow(card, { enemiesAlive, alliesHere, reactionAvailableToYou }) {
+  if (card.timing === "reaction") return reactionAvailableToYou;
+  const targets = card.targets || [];
+  if (targets.includes("enemy") && enemiesAlive === 0) return false;
+  if (targets.includes("ally") && !targets.includes("self") && alliesHere === 0) return false;
+  return true;
 }
 
 // Hand/deck view for the viewer's own hero: `hand` is only ever present on
@@ -322,8 +526,21 @@ export function selectHandView(state) {
   const you = selectYouHero(state);
   if (!you || !you.deck) return null;
   const catalog = state.contentCatalog;
+  const roomId = you.room_id;
+  const conflict = roomId ? state.conflicts[roomId] : null;
+  const alliesHere = Object.values(state.heroes).filter((h) => h.room_id === roomId && h.hero_id !== you.hero_id).length;
+  const enemiesAlive = conflict ? Object.values(conflict.enemies || {}).filter((e) => e.alive).length : 0;
+  const combatView = roomId ? selectCombatView(state) : null;
+  const pendingReaction = combatView ? combatView.pendingReaction : null;
+  const reactionAvailableToYou = !!pendingReaction && (pendingReaction.defenderId === you.hero_id || pendingReaction.protectorIds.includes(you.hero_id));
+  const playability = { enemiesAlive, alliesHere, reactionAvailableToYou };
   return {
-    hand: Array.isArray(you.hand) ? you.hand.map((cardId) => cardView(cardId, catalog)) : null,
+    hand: Array.isArray(you.hand)
+      ? you.hand.map((cardId) => {
+          const card = cardView(cardId, catalog);
+          return { ...card, playableNow: cardPlayableNow(card, playability) };
+        })
+      : null,
     deckCount: you.deck.deck_count,
     discardCount: you.deck.discard.length,
     exhaustedCount: you.deck.exhausted.length,

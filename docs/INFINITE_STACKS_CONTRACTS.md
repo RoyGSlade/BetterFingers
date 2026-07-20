@@ -399,6 +399,160 @@ clue_text` for the prose -- PUBLIC to every current hero (unlike
 clues are completely unaffected; sharing only ever adds to this list, never
 removes from `private_clue_assignments`.
 
+### 5.7 Abilities (wave 6, stacks-abilities, board task #21; playtest E1)
+
+`content.schemas.Ability` (stacks-carddesign, `packs/core/abilities.yaml`):
+`{id, name, prose{fallback,accessible}, trigger, frequency, effects, source}`.
+`source` is `"general"` or a background id (same filter as cards: a hero's
+abilities are every `Ability` whose `source in (hero.sheet.background_id,
+"general")`).
+
+`trigger` is one of exactly four values this wave (construction-time
+rejection of anything else, `Ability.__post_init__`):
+
+| trigger | frequency | fires |
+|---|---|---|
+| `manual` | `once_per_floor`\|`once_per_room`\|`once_per_fight` | player-invoked via `use_ability` command, charge-gated |
+| `passive` | `unlimited` | effects dispatch exactly once, automatically, at `hero_created` |
+| `on_room_enter` | `unlimited` | effects dispatch automatically on every breach, for the breaching hero (`systems/exploration.py::handle_breach`) |
+| `on_encounter_start` | `unlimited` | effects dispatch automatically once when the hero's Conflict encounter begins (`systems/combat.py::build_start_encounter_events`) |
+
+Every ability's `effects` must compile only to ops in the published
+executable set -- identical to `effects.LIVE_OPS`: `reveal_room`,
+`spend_energy`, `grant_check`, `emit_fact`, `apply_condition`,
+`remove_condition`. An ability referencing anything else fails content
+validation before it ever reaches the engine (no shelf-ware, same discipline
+`heroes.deck.build_starting_deck`'s LIVE-op gate already enforces for cards).
+
+`HeroState.abilities: dict[ability_id, AbilityState]` (`domain/state.py`)
+generalizes `heroes.backgrounds.SignatureCharge` (still untouched/unrelated --
+`heroes/` stays read-only) into an arbitrary per-hero collection:
+
+```python
+AbilityState:
+    ability_id: str
+    trigger: str
+    frequency: str
+    charges_remaining: int | None   # None for "unlimited" frequency (never depletes)
+    max_charges: int | None
+```
+
+Populated at `create_hero` from every `Ability` the hero's background/general
+pool grants (`systems/heroes_wire.py::_ability_defs_for_background`). New
+`CommandType.USE_ABILITY` (payload `{ability_id, target_hero_id?,
+target_enemy_id?}`) is the `trigger=="manual"` invocation path: validates the
+hero owns the ability, its trigger is `"manual"`, and it has a charge (or is
+unlimited); spends the charge, dispatches its `effects` through the same
+`systems/effects.py::dispatch()` cards use, and leaves a
+`until_end_of_turn` active effect (§5.8) recording the use. New `EventType`
+members: `ability_used`, `ability_charge_refreshed`.
+
+Charge refresh reuses the exact boundaries `heroes.backgrounds.SignatureCharge`
+already refreshes at -- room (`handle_breach`), fight (encounter start), floor
+(`safe_rest`) -- via `systems/heroes_wire.py::_build_ability_refresh_event`.
+**Refresh events carry only the abilities whose scope matches that specific
+boundary (a partial update), never the hero's full abilities dict**: a single
+command can trigger more than one boundary in the same call (breaching into a
+Conflict room refreshes "fight" and "room" scoped abilities together), and
+every refresh builder reads from the same read-only pre-command state
+snapshot -- a full-dict-replacement applier would let a later event's stale
+snapshot silently clobber an earlier event's real update in the same command.
+`apply_ability_charge_refreshed` merges by key for exactly this reason.
+
+### 5.8 Active-effect durations (wave 6, stacks-abilities, board task #21; playtest A5)
+
+A temporary modifier's visible lifetime for the client's active-effects tray:
+
+```python
+ActiveEffectState:            # domain/state.py
+    effect_id: str
+    source_id: str             # the ability/card/item id that caused it
+    label: str                  # plain display string (no separate authored Prose per instance this wave)
+    duration: str                # ACTIVE_EFFECT_DURATIONS: until_end_of_turn | until_end_of_round | until_end_of_encounter
+    applied_world_round: int
+    encounter_id: str | None     # set only for until_end_of_encounter, scopes expiry to THAT encounter
+```
+
+`HeroState.active_effects: tuple[ActiveEffectState, ...]`. Created via
+`systems/effects.py::build_active_effect_event` (event type
+`active_effect_applied`) -- deliberately **not** a content-authorable effect
+op (never routed through `dispatch()`/`_OP_HANDLERS`, so it never appears in
+`effects.LIVE_OPS`/content's `KNOWN_OPS`); callers that already dispatch real
+effect ops build one of these alongside them (this wave's live caller:
+`use_ability`, one `until_end_of_turn` entry per manual ability use).
+
+Expiry is boundary-driven, not polled:
+
+| duration | expires at | applier |
+|---|---|---|
+| `until_end_of_turn` | the owning hero's own `TURN_SUBMITTED` (a `pass`, or combat's `combat_end_turn` reusing the same applier) | `systems/turns.py::apply_turn_submitted` |
+| `until_end_of_round` | every hero's, at `WORLD_ROUND_ADVANCED` (the existing round hook), regardless of consciousness | `systems/turns.py::apply_world_round_advanced` |
+| `until_end_of_encounter` | only for heroes in that specific encounter, the moment `ConflictEncounterState.status` leaves `"active"` (victory/party_wiped) | `systems/combat.py::_apply_conflict_event` |
+
+`systems/abilities.py::expire_boundary(active_effects, boundary=..., encounter_id=...)`
+is the shared pure function all three appliers call.
+
+### 5.9 Avatar + color (wave 6, stacks-abilities, board task #21; playtest F1)
+
+`HeroState.avatar_id: int | None` / `color: str | None`, set once at
+`create_hero` and never changed after. Validated server-side against fixed
+lists (`domain/state.py`) -- **never** a free-form client string:
+
+```python
+AVATAR_IDS = (1, 2, 3, 4, 5, 6)
+AVATAR_COLORS = ("crimson", "azure", "gold", "violet", "emerald", "slate", "coral", "ivory")
+```
+
+`create_hero`'s payload accepts optional `avatar_id`/`color`; anything outside
+these lists is `schema_error`, anything already claimed by another current
+hero in the run is `illegal_action` (every avatar/color stays visually
+distinct). Omitted values auto-assign the first unused entry in list order
+(deterministic, not random). Both are PUBLIC on the wire, same visibility as
+hp/gold. `content_catalog()`'s `token_options.{avatar_ids,colors}` exposes the
+same two lists for the character-builder picker.
+
+### 5.10 Wire projection additions (wave 6, stacks-abilities; confirmed with
+stacks-facelift/stacks-carddesign in the collab room 2026-07-20)
+
+`project(state, viewer)`'s per-hero entry gains (`stacks_engine.py`'s
+`_neutral_hero_creation_snapshot`):
+
+```
+abilities: [{id, name, fallback, accessible, trigger, frequency, available}]
+```
+`name`/`fallback`/`accessible` come from `content_catalog().abilities[id]`
+(content, not run state); `available` is `true` only for `trigger=="manual"`
+abilities with a charge (or unlimited).
+
+```
+active_effects: [{id, name, fallback, accessible, rounds_remaining, source}]
+```
+`name`/`fallback`/`accessible` all equal the effect's plain `label` (no
+separate authored prose per instance this wave). `rounds_remaining` is
+derived for display only (not stored): `until_end_of_turn` -> `0`,
+`until_end_of_round` -> `1`, `until_end_of_encounter` -> `null` ("until fight
+ends").
+
+```
+avatar_id: int | null
+color: str | null
+```
+Both PUBLIC (§5.9), same visibility as hp/gold.
+
+`stacks_projections.py::legal_actions(state, hero_id)` gains, present only
+for entries that are actually legal right now (playtest C1 -- cost shown at
+the point of click):
+
+```
+move_costs: {room_id: energy_cost}       # keyed exactly like can_move_to
+breach_costs: {direction: energy_cost}   # keyed exactly like can_breach_directions
+```
+
+`content_catalog()` gains `abilities: {ability_id: {id, name, fallback,
+accessible, trigger, frequency, source}}` (static authored data, same pattern
+as `backgrounds`/`cards`/`items`) and `token_options: {avatar_ids, colors}`
+(the two fixed lists from §5.9, for the character-builder picker).
+
 ## 6. Core state aggregates (wave-1 subset of §22.4)
 
 Corrected 2026-07-19 to match `backend/lan_playground/domain/state.py` exactly --
@@ -426,6 +580,10 @@ HeroState:
     alive: bool
     submitted_turn: bool           # this hero's §8.2 "passed or submitted" gate flag
     movement_locked: bool          # set True after a breach; cleared at round refresh
+    abilities: dict[ability_id, AbilityState]        # §5.7, wave 6 -- {} until create_hero
+    active_effects: tuple[ActiveEffectState, ...]     # §5.8, wave 6 -- () until any exist
+    avatar_id: int | None                              # §5.9, wave 6 -- set at create_hero
+    color: str | None                                  # §5.9, wave 6 -- set at create_hero
 
 RoomState:
     room_id: str

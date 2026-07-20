@@ -59,6 +59,7 @@ _VALIDATORS = {
     CommandType.SHOP_IDENTIFY: lambda state, hero_id, payload: shops_wire.validate_shop_identify(state, hero_id, payload),
     CommandType.SHOP_TREAT: lambda state, hero_id, payload: shops_wire.validate_shop_treat(state, hero_id, payload),
     CommandType.SHARE_CLUE: lambda state, hero_id, payload: puzzles.validate_share_clue(state, hero_id, payload),
+    CommandType.USE_ABILITY: lambda state, hero_id, payload: heroes_wire.validate_use_ability(state, hero_id, payload),
 }
 
 _HANDLERS = {
@@ -96,6 +97,7 @@ _HANDLERS = {
     CommandType.SHOP_IDENTIFY: shops_wire.handle_shop_identify,
     CommandType.SHOP_TREAT: shops_wire.handle_shop_treat,
     CommandType.SHARE_CLUE: puzzles.handle_share_clue,
+    CommandType.USE_ABILITY: heroes_wire.handle_use_ability,
 }
 
 EVENT_APPLIERS = {

@@ -6,6 +6,11 @@
 # (board task #11, stacks-heroes). Items change options, not just numbers
 # (§13.4) -- unlike cards, item effects are not gated to this wave's LIVE §5
 # ops (heroes/cards.py only gates cards going into a built deck).
+#
+# Wave-6 addition (board task #20, §13.6, playtest E4): `family_notes` is
+# quest knowledge -- a few pages, not equipment -- so it is `knowledge: true`
+# with `slot_cost: 0`; `Item.__post_init__` enforces that pairing (a
+# knowledge item with a nonzero slot cost fails to construct).
 items:
   - id: argumentative_buckler
     name: Argumentative Buckler
@@ -172,8 +177,9 @@ items:
     name: Family Notes
     prose:
       fallback: Hand-written notes on one enemy family's habits and weaknesses.
-      accessible: "Item: Family Notes. Hand-written notes on one enemy family's habits and weaknesses. Starting item for the Retired Monster Hunter background."
-    slot_cost: 1
+      accessible: "Item: Family Notes. Hand-written notes on one enemy family's habits and weaknesses. Quest knowledge -- a few pages, not equipment, so it does not consume a carry slot. Starting item for the Retired Monster Hunter background."
+    slot_cost: 0
+    knowledge: true
     use_effects:
       - op: reveal_tell
         args: {}

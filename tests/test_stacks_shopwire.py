@@ -24,7 +24,7 @@ from backend.lan_playground.systems import effects, shops_wire
 PACK = content_loader.load_core_pack()
 CORE_SHOPS = shop_content_loader.load_core_shops()
 BACKGROUND_IDS = ("exiled_court_scribe", "back_alley_fixer", "retired_monster_hunter", "traveling_charlatan")
-GENERAL_CARD_IDS = ["plain_warning", "read_the_room"]
+GENERAL_CARD_IDS = ["careful_approach", "steady_nerve"]
 PERSONA_CARD_ID = "signature_flourish"
 
 # Seed 2's first breach (after one hero completes character creation) lands

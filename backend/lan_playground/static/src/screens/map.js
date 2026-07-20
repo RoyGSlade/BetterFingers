@@ -13,12 +13,12 @@ import {
   selectRoutePreview,
   selectLegalActionsSummary,
   selectLastError,
-  energyPips,
+  selectMoveCost,
+  selectBreachCost,
 } from "../core/selectors.js";
 import { renderHeroCard } from "../components/hero.js";
 import { renderDie } from "../components/die.js";
 import { renderRoomTile } from "../components/room-tile.js";
-import { renderHeroPanel } from "./hero-panel.js";
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -106,10 +106,12 @@ function renderMapGrid(state, handlers) {
       heroesById,
       isCurrentRoom: !!you && tile.roomId === you.room_id,
       canMoveHere: (legalActions.can_move_to || []).includes(tile.roomId),
-      onMove: handlers.onMove,
+      moveEnergyCost: selectMoveCost(state, tile.roomId),
+      onRequestMove: handlers.onRequestMove,
       isRoutePreview: routeRoomIds.has(tile.roomId),
       legalBreachDirections: legalActions.can_breach_directions || [],
-      onBreach: handlers.onBreach,
+      breachCostFor: (direction) => selectBreachCost(state, direction),
+      onRequestBreach: handlers.onRequestBreach,
       legalObserveDirections: legalActions.can_observe_directions || [],
       onObserve: handlers.onObserve,
     });
@@ -120,27 +122,19 @@ function renderMapGrid(state, handlers) {
   return grid;
 }
 
+// HP/Energy/attributes/skills/abilities/inventory live in the persistent
+// character panel now (screens/character-panel.js, playtest D1/D2) -- this
+// stays a slim room-scoped actions panel (Inspect/Pass + private clue) so
+// nothing is duplicated between the two.
 function renderYouPanel(state, handlers) {
   const you = selectYouHero(state);
   const panel = el("section", "stacks-you-panel");
-  panel.setAttribute("aria-label", "Your hero");
-  panel.appendChild(el("h2", "stacks-panel-heading", "You"));
+  panel.setAttribute("aria-label", "Room actions");
+  panel.appendChild(el("h2", "stacks-panel-heading", "Room actions"));
   if (!you) {
     panel.appendChild(el("p", null, "Not yet joined."));
     return panel;
   }
-
-  const energy = el("div", "stacks-hero-card-energy");
-  energy.setAttribute("role", "img");
-  const pips = energyPips(you);
-  const filled = pips.filter(Boolean).length;
-  energy.setAttribute("aria-label", `Energy ${filled} of ${pips.length}`);
-  for (const isFilled of pips) {
-    const pip = el("span", "stacks-energy-pip" + (isFilled ? " is-filled" : ""), isFilled ? "●" : "○");
-    pip.setAttribute("aria-hidden", "true");
-    energy.appendChild(pip);
-  }
-  panel.appendChild(energy);
 
   const legalActions = selectLegalActionsSummary(state) || {};
   const actions = el("div", "stacks-you-actions");
@@ -213,7 +207,6 @@ export function renderMapScreen(container, state, handlers) {
 
   const sidebar = el("div", "stacks-map-sidebar");
   sidebar.appendChild(renderYouPanel(state, handlers));
-  renderHeroPanel(sidebar, state, handlers);
   sidebar.appendChild(renderDiePanel(state));
   sidebar.appendChild(renderLog(state));
   layout.appendChild(sidebar);

@@ -49,6 +49,27 @@ def test_core_pack_meets_wave1_quotas():
     assert "core_ordering_sequence" in pack.puzzle_templates
 
 
+def test_core_pack_abilities_cover_the_migrated_offender_cards():
+    """Wave-6 (board task #20, playtest §E1): read_the_room/plain_warning
+    (general) and veteran_instinct/trophy_notes (retired_monster_hunter) were
+    filler cards that did nothing mechanically; they moved out of the deck
+    into abilities with real triggers and mechanic effects."""
+
+    pack = load_core_pack()
+    assert len(pack.abilities) >= 4
+    migrated_ids = {"keen_observer", "plain_speaking", "veteran_instinct", "trophy_notes"}
+    assert migrated_ids <= set(pack.abilities)
+    for ability_id in migrated_ids:
+        ability = pack.abilities[ability_id]
+        assert ability.trigger.strip()
+        assert ability.frequency.strip()
+        assert ability.effects
+    # the 5 named offenders are gone from the deck (signature_flourish was
+    # redesigned in place, not migrated -- see cards.yaml's header comment).
+    for offender in ("read_the_room", "plain_warning", "veteran_instinct", "trophy_notes"):
+        assert offender not in pack.cards
+
+
 def test_every_background_has_a_signature_ability_and_valid_bonus():
     pack = load_core_pack()
     assert len(pack.backgrounds) == 4
@@ -66,6 +87,19 @@ def test_every_card_has_full_card_contract_fields():
         assert card.prose.fallback.strip()
         assert card.legal_targets
         assert card.check is not None or card.base_effects
+        assert card.keywords, card.id
+        assert card.art_ref.strip(), card.id
+
+
+def test_every_knowledge_item_has_zero_slot_cost():
+    """§13.6, playtest E4: family_notes is a few pages, not equipment."""
+
+    pack = load_core_pack()
+    assert pack.items["family_notes"].knowledge is True
+    assert pack.items["family_notes"].slot_cost == 0
+    for item in pack.items.values():
+        if item.knowledge:
+            assert item.slot_cost == 0, item.id
 
 
 def test_every_condition_has_one_primary_effect_and_a_treatment():
@@ -137,7 +171,22 @@ def _minimal_pack_files() -> dict[str, Any]:
                     "timing": "main_action",
                     "range": "melee",
                     "legal_targets": ["enemy"],
+                    "keywords": ["Combat"],
+                    "art_ref": "src/assets/cards/bonk.png",
                     "base_effects": [{"op": "emit_fact", "args": {"fact_id": "test_fact"}}],
+                    "source": "general",
+                }
+            ]
+        },
+        "abilities.yaml": {
+            "abilities": [
+                {
+                    "id": "test_ability",
+                    "name": "Test Ability",
+                    "prose": {"fallback": "A test ability.", "accessible": "Ability: test."},
+                    "trigger": "passive",
+                    "frequency": "unlimited",
+                    "effects": [{"op": "emit_fact", "args": {"fact_id": "test_ability_fired"}}],
                     "source": "general",
                 }
             ]
@@ -276,6 +325,87 @@ def test_enemy_without_intent_rejected(tmp_path):
 def test_enemy_intent_missing_counterplay_rejected(tmp_path):
     files = _minimal_pack_files()
     files["enemies.yaml"]["enemies"][0]["intents"][0]["counterplay"] = ""
+    pack_dir = _write_pack(tmp_path, files)
+
+    with pytest.raises(S.ContentError):
+        load_pack(pack_dir, pack_id="fixture")
+
+
+def test_card_missing_keywords_rejected(tmp_path):
+    files = _minimal_pack_files()
+    files["cards.yaml"]["cards"][0]["keywords"] = []
+    pack_dir = _write_pack(tmp_path, files)
+
+    with pytest.raises(S.ContentError):
+        load_pack(pack_dir, pack_id="fixture")
+
+
+def test_card_missing_art_ref_rejected(tmp_path):
+    files = _minimal_pack_files()
+    files["cards.yaml"]["cards"][0]["art_ref"] = ""
+    pack_dir = _write_pack(tmp_path, files)
+
+    with pytest.raises(S.ContentError):
+        load_pack(pack_dir, pack_id="fixture")
+
+
+def test_ability_missing_trigger_rejected(tmp_path):
+    files = _minimal_pack_files()
+    files["abilities.yaml"]["abilities"][0]["trigger"] = ""
+    pack_dir = _write_pack(tmp_path, files)
+
+    with pytest.raises(S.ContentError):
+        load_pack(pack_dir, pack_id="fixture")
+
+
+def test_ability_missing_effects_rejected(tmp_path):
+    files = _minimal_pack_files()
+    files["abilities.yaml"]["abilities"][0]["effects"] = []
+    pack_dir = _write_pack(tmp_path, files)
+
+    with pytest.raises(S.ContentError):
+        load_pack(pack_dir, pack_id="fixture")
+
+
+def test_ability_with_unwired_trigger_rejected(tmp_path):
+    """Director ruling 2026-07-20: an ability whose trigger the engine does
+    not dispatch this wave must fail loudly, not ship as shelf-ware."""
+
+    files = _minimal_pack_files()
+    files["abilities.yaml"]["abilities"][0]["trigger"] = "on_enemy_sighted"
+    pack_dir = _write_pack(tmp_path, files)
+
+    with pytest.raises(S.ContentError):
+        load_pack(pack_dir, pack_id="fixture")
+
+
+def test_ability_with_non_executable_op_rejected(tmp_path):
+    """grant_advantage is a real KNOWN_OPS op (Effect() accepts it) but is
+    not in stacks-abilities' published executable set for abilities -- must
+    still be rejected at the ability layer, same "no shelf-ware" rule."""
+
+    files = _minimal_pack_files()
+    files["abilities.yaml"]["abilities"][0]["effects"] = [{"op": "grant_advantage", "args": {}}]
+    pack_dir = _write_pack(tmp_path, files)
+
+    with pytest.raises(S.ContentError):
+        load_pack(pack_dir, pack_id="fixture")
+
+
+def test_ability_manual_trigger_requires_charge_frequency_rejected(tmp_path):
+    files = _minimal_pack_files()
+    files["abilities.yaml"]["abilities"][0]["trigger"] = "manual"
+    files["abilities.yaml"]["abilities"][0]["frequency"] = "unlimited"
+    pack_dir = _write_pack(tmp_path, files)
+
+    with pytest.raises(S.ContentError):
+        load_pack(pack_dir, pack_id="fixture")
+
+
+def test_knowledge_item_with_nonzero_slot_cost_rejected(tmp_path):
+    files = _minimal_pack_files()
+    files["items.yaml"]["items"][0]["knowledge"] = True
+    files["items.yaml"]["items"][0]["slot_cost"] = 1
     pack_dir = _write_pack(tmp_path, files)
 
     with pytest.raises(S.ContentError):

@@ -86,7 +86,27 @@ export function createInitialState() {
     // variable inside the screen module would be silently wiped by an
     // unrelated update (e.g. an ally moving while this hero is still
     // filling out the form). Living in the store instead survives that.
-    characterDraft: { name: "", backgroundId: null, attributeAssignment: {}, generalCardIds: [] },
+    // Wave-5 draft plus wave-6 token choice (F1): avatarId (1-6) / color (see
+    // core/selectors.js's TOKEN_COLORS) are sent in create_hero's payload
+    // (core/commands.js) alongside the existing fields -- see this wave's
+    // room-chat post to stacks-abilities for the reconciliation plan.
+    characterDraft: { name: "", backgroundId: null, attributeAssignment: {}, generalCardIds: [], avatarId: null, color: null },
+    // Wave-6 playtest response (docs/PLAYTEST_FINDINGS_2026-07-19.md):
+    //   helpOpen: B1/B2's first-run rules overlay, true by default so a new
+    //     player sees it immediately; also reopened by the persistent help
+    //     control (main.js's renderChrome).
+    //   pendingAction: A4/C1's explicit-confirm step. Clicking a map tile,
+    //     a breach edge, or a hand card never fires a command directly
+    //     anymore -- it stages a plain-data description here
+    //     ({kind, label, energyCost, ...command args}) that the confirm bar
+    //     (components/confirm-dialog.js) renders; only its own Confirm
+    //     button calls sendCommand.
+    //   inspectedCardId: A4's "click = inspect" step -- which hand card (if
+    //     any) is currently shown zoomed/expanded. Toggled independently of
+    //     pendingAction so inspecting a card is never itself a commitment.
+    helpOpen: true,
+    pendingAction: null,
+    inspectedCardId: null,
   };
 }
 
@@ -602,4 +622,40 @@ export function setContentCatalog(state, catalog) {
 // client-local scratch action in this module.
 export function updateCharacterDraft(state, patch) {
   return { ...state, characterDraft: { ...state.characterDraft, ...patch } };
+}
+
+// -- Wave-6 playtest response UI-only actions (docs/PLAYTEST_FINDINGS_2026-07-19.md) --
+// None of these round-trip to the server -- they toggle client-local
+// presentation state only (see createInitialState's helpOpen/pendingAction/
+// inspectedCardId comments), same discipline as the puzzle-scratch actions
+// above.
+
+export function openHelp(state) {
+  return { ...state, helpOpen: true };
+}
+
+export function closeHelp(state) {
+  return { ...state, helpOpen: false };
+}
+
+// A4/C1: stages a plain-data description of a not-yet-committed action for
+// the confirm bar to render. Setting a new pendingAction always replaces any
+// prior one outright (never merges) -- there is only ever one confirmation
+// in flight at a time.
+export function setPendingAction(state, action) {
+  return { ...state, pendingAction: action };
+}
+
+export function clearPendingAction(state) {
+  return { ...state, pendingAction: null };
+}
+
+// A4: toggles which hand card (if any) is shown inspected/zoomed. Clicking
+// the same card again closes it; clicking a different card switches to it.
+export function inspectCard(state, cardId) {
+  return { ...state, inspectedCardId: state.inspectedCardId === cardId ? null : cardId };
+}
+
+export function clearInspectedCard(state) {
+  return { ...state, inspectedCardId: null };
 }

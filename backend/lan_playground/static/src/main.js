@@ -19,6 +19,12 @@ import {
   markObjectInspected,
   setContentCatalog,
   updateCharacterDraft,
+  openHelp,
+  closeHelp,
+  setPendingAction,
+  clearPendingAction,
+  inspectCard,
+  clearInspectedCard,
 } from "./core/store.js";
 import {
   moveCommand,
@@ -42,13 +48,18 @@ import {
   dropItemCommand,
   tradeItemCommand,
   recoverBodyLootCommand,
+  useAbilityCommand,
 } from "./core/commands.js";
-import { selectActiveScreen, selectYouHero } from "./core/selectors.js";
+import { selectActiveScreen, selectYouHero, selectMoveCost, selectBreachCost, selectHintText } from "./core/selectors.js";
 import { renderMapScreen } from "./screens/map.js";
 import { renderRoomScreen } from "./screens/room.js";
 import { renderPuzzleScreen } from "./screens/puzzle.js";
 import { renderCombatScreen } from "./screens/combat.js";
 import { renderCharacterBuilderScreen } from "./screens/character-builder.js";
+import { renderCharacterPanel } from "./screens/character-panel.js";
+import { renderHandDock } from "./screens/hero-panel.js";
+import { renderConfirmBar } from "./components/confirm-dialog.js";
+import { renderRulesOverlay, renderHelpButton, renderHintBar } from "./components/rules-overlay.js";
 
 const store = createStore(createInitialState());
 let socket = null;
@@ -59,6 +70,9 @@ const roomScreen = document.getElementById("room-screen");
 const puzzleScreen = document.getElementById("puzzle-screen");
 const combatScreen = document.getElementById("combat-screen");
 const characterBuilderScreen = document.getElementById("character-builder-screen");
+const characterPanel = document.getElementById("character-panel");
+const handDock = document.getElementById("hand-dock");
+const chrome = document.getElementById("stacks-chrome");
 const joinStatus = document.getElementById("join-status");
 
 function setJoinStatus(text) {
@@ -117,9 +131,28 @@ function currentEncounterId() {
   return conflict ? conflict.encounter_id : null;
 }
 
+// Wave-6 playtest response (docs/PLAYTEST_FINDINGS_2026-07-19.md A4/C1): a
+// move/breach/card-play click never calls sendCommand directly anymore --
+// it stages a plain-data pendingAction here, and only the confirm bar's own
+// Confirm button (onConfirmPendingAction below) actually dispatches.
+function heroLabel(heroId) {
+  const hero = store.getState().heroes[heroId];
+  return hero ? hero.name : heroId;
+}
+
 const handlers = {
-  onMove: (toRoomId) => sendCommand(moveCommand(toRoomId, currentRevision())),
-  onBreach: (direction) => sendCommand(breachCommand(direction, currentRevision())),
+  onRequestMove: (toRoomId) => {
+    const cost = selectMoveCost(store.getState(), toRoomId);
+    store.setState((s) =>
+      setPendingAction(s, { kind: "move", toRoomId, energyCost: cost, label: `Move here for ${cost} Energy?`, confirmLabel: "Move" }),
+    );
+  },
+  onRequestBreach: (direction) => {
+    const cost = selectBreachCost(store.getState(), direction);
+    store.setState((s) =>
+      setPendingAction(s, { kind: "breach", direction, energyCost: cost, label: `Breach ${direction} for ${cost} Energy?`, confirmLabel: "Breach" }),
+    );
+  },
   onObserve: (direction) => sendCommand(observeCommand(direction, currentRevision())),
   onInspect: () => sendCommand(inspectCommand(currentRevision())),
   onPass: () => sendCommand(passCommand(currentRevision())),
@@ -183,12 +216,45 @@ const handlers = {
   onCreateHero: (draft) => sendCommand(createHeroCommand(draft, currentRevision())),
   onUpdateCharacterDraft: (patch) => store.setState((s) => updateCharacterDraft(s, patch)),
   onDrawCards: (count) => sendCommand(drawCardsCommand(count, currentRevision())),
-  onPlayCard: (cardId, target) => sendCommand(playCardCommand(cardId, target, currentRevision(), currentEncounterId())),
   onSafeRest: () => sendCommand(safeRestCommand(currentRevision())),
   onPickupItem: (itemInstanceId) => sendCommand(pickupItemCommand(itemInstanceId, currentRevision())),
   onDropItem: (itemId) => sendCommand(dropItemCommand(itemId, currentRevision())),
   onTradeItem: (toHeroId, itemId) => sendCommand(tradeItemCommand(toHeroId, itemId, currentRevision())),
   onRecoverBodyLoot: (deadHeroId, itemIds) => sendCommand(recoverBodyLootCommand(deadHeroId, itemIds, currentRevision())),
+  onUseAbility: (abilityId) => sendCommand(useAbilityCommand(abilityId, currentRevision())),
+
+  // -- Wave-6 playtest response (A1-A5, B1/B2, C1) ------------------------
+  onOpenHelp: () => store.setState((s) => openHelp(s)),
+  onCloseHelp: () => store.setState((s) => closeHelp(s)),
+  // A4: click = inspect only, never plays. Toggles the expanded card.
+  onInspectCard: (cardId) => store.setState((s) => inspectCard(s, cardId)),
+  // A4: the expanded card's own "Play card" button stages a pendingAction
+  // instead of sending play_card directly -- committing still requires the
+  // confirm bar's explicit Confirm press.
+  onRequestPlayCard: (card, target) => {
+    const targetName = target && target.targetHeroId ? heroLabel(target.targetHeroId) : target && target.targetEnemyId ? target.targetEnemyId : null;
+    store.setState((s) =>
+      setPendingAction(s, {
+        kind: "play_card",
+        cardId: card.id,
+        targetHeroId: target ? target.targetHeroId : null,
+        targetEnemyId: target ? target.targetEnemyId : null,
+        label: `Play ${card.name}${targetName ? ` on ${targetName}` : ""}?`,
+        confirmLabel: "Play card",
+      }),
+    );
+  },
+  onConfirmPendingAction: (action) => {
+    store.setState((s) => clearPendingAction(clearInspectedCard(s)));
+    if (action.kind === "move") sendCommand(moveCommand(action.toRoomId, currentRevision()));
+    else if (action.kind === "breach") sendCommand(breachCommand(action.direction, currentRevision()));
+    else if (action.kind === "play_card") {
+      sendCommand(
+        playCardCommand(action.cardId, { targetHeroId: action.targetHeroId, targetEnemyId: action.targetEnemyId }, currentRevision(), currentEncounterId()),
+      );
+    }
+  },
+  onCancelPendingAction: () => store.setState((s) => clearPendingAction(s)),
 };
 
 // Exactly one non-map screen is visible at a time, selected by
@@ -210,6 +276,42 @@ function render(state) {
   else if (activeScreen === "room" && roomScreen) renderRoomScreen(roomScreen, state, handlers);
   else if (activeScreen === "puzzle" && puzzleScreen) renderPuzzleScreen(puzzleScreen, state, handlers);
   else if (activeScreen === "combat" && combatScreen) renderCombatScreen(combatScreen, state, handlers);
+
+  // Wave-6 persistent chrome (playtest D1/D2/A1/B1/B2): rendered on every
+  // screen except character creation itself (no sheet/hand/inventory to
+  // show until a hero exists).
+  const showPersistentPanels = activeScreen !== "character-builder";
+  if (characterPanel) {
+    if (showPersistentPanels) renderCharacterPanel(characterPanel, state, handlers);
+    else {
+      characterPanel.hidden = true;
+      characterPanel.replaceChildren();
+    }
+  }
+  if (handDock) {
+    if (showPersistentPanels) renderHandDock(handDock, state, handlers);
+    else {
+      handDock.hidden = true;
+      handDock.replaceChildren();
+    }
+  }
+  renderChrome(state);
+}
+
+// Help button + persistent hint line (B1/B2) + the first-run rules overlay
+// + the A4/C1 confirm bar -- all rendered into one fixed-position container
+// so they stay visible/above every screen regardless of which is active.
+function renderChrome(state) {
+  if (!chrome) return;
+  chrome.replaceChildren();
+  if (selectYouHero(state)) {
+    chrome.appendChild(renderHelpButton({ onOpen: handlers.onOpenHelp }));
+    chrome.appendChild(renderHintBar(selectHintText(state)));
+  }
+  const overlay = renderRulesOverlay(state.helpOpen, { onClose: handlers.onCloseHelp });
+  if (overlay) chrome.appendChild(overlay);
+  const confirmBar = renderConfirmBar(state.pendingAction, { onConfirm: handlers.onConfirmPendingAction, onCancel: handlers.onCancelPendingAction });
+  if (confirmBar) chrome.appendChild(confirmBar);
 }
 
 function watchReducedMotion() {
@@ -237,6 +339,11 @@ function enterRun({ heroId, roomCode, accessCode, playerToken, revision }) {
   }));
   if (joinPanel) joinPanel.hidden = true;
   if (mapScreen) mapScreen.hidden = false;
+  // Reserves layout room for the fixed character panel/hand dock only once
+  // a run is actually entered (stacks.css scopes their padding under this
+  // class) -- keeps the pre-join screen centered instead of permanently
+  // offset by space for chrome that has nothing to show yet.
+  document.body.classList.add("stacks-in-run");
   openGameSocket({ accessCode, roomCode, playerToken });
   fetchSnapshot({ accessCode, roomCode, playerToken })
     .then((resp) => store.setState((s) => reduceServerMessage(s, { kind: "snapshot", view: resp.view, revision: resp.revision })))

@@ -869,3 +869,555 @@ button.stacks-tile {
   font-size: 0.85rem;
   color: var(--stacks-muted);
 }
+
+/* ============================================================
+   Wave 6: playtest response theme pass + facelift
+   (docs/PLAYTEST_FINDINGS_2026-07-19.md). Same rule as every section
+   above -- every stateful indicator keeps a text label; color/art only
+   reinforces it, and no asset URL is ever set via an inline style
+   attribute (CSP style-src 'self', no 'unsafe-inline') -- always a class.
+   ============================================================ */
+
+/* -- G1 theme pass ------------------------------------------------------ */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 1rem;
+  background: var(--stacks-panel);
+  border-bottom: 1px solid var(--stacks-border);
+}
+.topbar-icon {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.3rem;
+}
+
+.stacks-key-art {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.5rem;
+  margin-bottom: 1rem;
+  border: 1px solid var(--stacks-border);
+}
+
+/* -- F1 player tokens ---------------------------------------------------- */
+
+.stacks-token {
+  display: inline-flex;
+  vertical-align: middle;
+}
+.stacks-token-image {
+  border-radius: 50%;
+  border: 2px solid var(--stacks-border);
+  object-fit: cover;
+  display: block;
+}
+.stacks-token--sm .stacks-token-image { width: 1.75rem; height: 1.75rem; }
+.stacks-token--md .stacks-token-image { width: 3rem; height: 3rem; }
+.stacks-token--lg .stacks-token-image { width: 4rem; height: 4rem; }
+.stacks-token--empty { width: 1.75rem; height: 1.75rem; }
+
+/* Confirmed 8-name palette (stacks-abilities, create_hero contract). Every
+   value is presentational only -- the player's chosen color name is always
+   shown as text somewhere it matters (character-builder's swatch label,
+   hero roster name), never conveyed by hue alone. */
+.stacks-token-hue-crimson { filter: hue-rotate(0deg) saturate(1.4); }
+.stacks-token-hue-azure { filter: hue-rotate(200deg) saturate(1.3); }
+.stacks-token-hue-gold { filter: hue-rotate(45deg) saturate(1.3); }
+.stacks-token-hue-violet { filter: hue-rotate(270deg) saturate(1.3); }
+.stacks-token-hue-emerald { filter: hue-rotate(140deg) saturate(1.3); }
+.stacks-token-hue-slate { filter: hue-rotate(210deg) saturate(0.5) brightness(0.9); }
+.stacks-token-hue-coral { filter: hue-rotate(20deg) saturate(1.5); }
+.stacks-token-hue-ivory { filter: hue-rotate(50deg) saturate(0.3) brightness(1.15); }
+
+.stacks-hero-card-identity {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.stacks-tile-hero-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: #2f3340;
+  border-radius: 0.3rem;
+  padding: 0.1rem 0.3rem 0.1rem 0.1rem;
+}
+
+.stacks-builder-token-fieldset {
+  border: 1px solid var(--stacks-border);
+  border-radius: 0.4rem;
+  margin-bottom: 0.5rem;
+  padding: 0.5rem;
+}
+.stacks-builder-token-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin: 0.25rem 0.5rem 0.25rem 0;
+}
+.stacks-builder-color-swatch {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 0.3rem;
+  border: 1px solid var(--stacks-border);
+  background: var(--stacks-accent);
+}
+
+/* -- B1/B2 onboarding chrome ---------------------------------------------- */
+
+#stacks-chrome {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 20;
+}
+#stacks-chrome > * {
+  pointer-events: auto;
+}
+
+.stacks-help-button {
+  position: fixed;
+  top: 0.75rem;
+  right: 1rem;
+  background: var(--stacks-panel);
+  border: 1px solid var(--stacks-border);
+  border-radius: 0.3rem;
+  padding: 0.4rem 0.75rem;
+  z-index: 21;
+}
+
+.stacks-hint-bar {
+  position: fixed;
+  top: 0.75rem;
+  left: 1rem;
+  right: 6rem;
+  max-width: 40rem;
+  margin: 0;
+  background: var(--stacks-panel);
+  border: 1px solid var(--stacks-border);
+  border-radius: 0.3rem;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.9rem;
+  z-index: 21;
+}
+
+.stacks-rules-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 11, 15, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 30;
+  padding: 1rem;
+}
+.stacks-rules-panel {
+  background: var(--stacks-panel);
+  border: 1px solid var(--stacks-border);
+  border-radius: 0.5rem;
+  padding: 1.5rem;
+  max-width: 36rem;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+.stacks-rules-panel h3 {
+  margin-bottom: 0.15rem;
+}
+.stacks-rules-panel p {
+  margin-top: 0;
+  color: var(--stacks-muted);
+}
+.stacks-rules-close-button {
+  margin-top: 1rem;
+  background: var(--stacks-accent);
+  color: #1c1608;
+  border: none;
+  border-radius: 0.3rem;
+  padding: 0.5rem 1rem;
+  font-weight: 600;
+}
+
+/* -- A4/C1 explicit confirm bar ------------------------------------------- */
+
+.stacks-confirm-bar {
+  position: fixed;
+  bottom: 8rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--stacks-panel);
+  border: 2px solid var(--stacks-accent);
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  max-width: 90vw;
+}
+.stacks-confirm-text {
+  margin: 0;
+  font-weight: 600;
+}
+.stacks-confirm-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.stacks-confirm-button {
+  background: var(--stacks-accent);
+  color: #1c1608;
+  border: none;
+  border-radius: 0.3rem;
+  padding: 0.4rem 0.9rem;
+  font-weight: 600;
+}
+.stacks-confirm-cancel-button {
+  background: transparent;
+  border: 1px solid var(--stacks-border);
+  border-radius: 0.3rem;
+  padding: 0.4rem 0.9rem;
+}
+
+/* -- C1 map tile move cost ------------------------------------------------- */
+
+.stacks-tile-move-cost {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--stacks-accent);
+}
+
+/* -- A1/A2/A3 card anatomy + hand dock ------------------------------------- */
+
+#hand-dock {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(96vw, 64rem);
+  max-height: 40vh;
+  overflow-y: auto;
+  background: var(--stacks-panel);
+  border: 1px solid var(--stacks-border);
+  border-top-left-radius: 0.75rem;
+  border-top-right-radius: 0.75rem;
+  padding: 0.75rem 1rem;
+  z-index: 15;
+}
+
+.stacks-hand-dock-list {
+  display: flex;
+  gap: 0.75rem;
+  overflow-x: auto;
+  padding-bottom: 0.5rem;
+}
+
+.stacks-card {
+  border-radius: 0.6rem;
+  overflow: hidden;
+  border: 2px solid var(--stacks-border);
+  background: #1a1c23;
+  flex: 0 0 12rem;
+}
+.stacks-card.is-playable {
+  border-color: var(--stacks-accent);
+  box-shadow: 0 0 0 1px var(--stacks-accent);
+}
+.stacks-card.is-inert {
+  opacity: 0.55;
+}
+.stacks-card.is-inspected {
+  flex: 0 0 18rem;
+}
+
+.stacks-card-inspect-trigger {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+}
+
+.stacks-card-frame {
+  display: flex;
+  flex-direction: column;
+  padding: 0.5rem;
+}
+
+.stacks-card-title {
+  font-weight: 700;
+  font-size: 0.95rem;
+  padding: 0.2rem 0.3rem;
+  text-align: center;
+  background: #262a35;
+  border-radius: 0.3rem 0.3rem 0 0;
+}
+
+.stacks-card-art {
+  height: 6rem;
+  margin: 0.35rem 0;
+  border-radius: 0.3rem;
+  background-size: cover;
+  background-position: center;
+  border: 1px solid var(--stacks-border);
+}
+.stacks-card-art--charm { background-image: url("/src/assets/cards/charm.png"); }
+.stacks-card-art--scheme { background-image: url("/src/assets/cards/scheme.png"); }
+.stacks-card-art--bonk { background-image: url("/src/assets/cards/bonk.png"); }
+
+.stacks-card-keywords {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.1rem 0.4rem;
+  font-size: 0.75rem;
+  color: var(--stacks-muted);
+  margin: 0.3rem 0;
+}
+
+.stacks-card-description {
+  font-style: italic;
+  font-size: 0.8rem;
+  color: var(--stacks-muted);
+  margin: 0.3rem 0;
+}
+
+.stacks-card-effect {
+  font-size: 0.85rem;
+  margin: 0.3rem 0;
+}
+
+.stacks-card-affordance {
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin: 0.3rem 0 0;
+}
+.stacks-card.is-playable .stacks-card-affordance {
+  color: #8fe0a0;
+}
+.stacks-card.is-inert .stacks-card-affordance {
+  color: var(--stacks-muted);
+}
+
+.stacks-card-play-controls {
+  padding: 0.5rem;
+  border-top: 1px solid var(--stacks-border);
+}
+
+.stacks-hand-play-button {
+  background: var(--stacks-accent);
+  color: #1c1608;
+  border: none;
+  border-radius: 0.3rem;
+  padding: 0.4rem 0.9rem;
+  font-weight: 600;
+  margin-top: 0.4rem;
+}
+.stacks-hand-play-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* -- D1/D2 persistent character panel -------------------------------------- */
+
+#character-panel {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 18rem;
+  overflow-y: auto;
+  background: var(--stacks-panel);
+  border-right: 1px solid var(--stacks-border);
+  padding: 3.5rem 1rem 1rem;
+  z-index: 10;
+}
+
+.stacks-character-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.5rem;
+}
+.stacks-character-name {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.stacks-character-hp-numbers {
+  margin: 0;
+  font-weight: 600;
+}
+.stacks-character-hp-bar {
+  height: 0.6rem;
+  background: #2a2d38;
+  border-radius: 0.3rem;
+  overflow: hidden;
+  margin: 0.25rem 0;
+}
+.stacks-character-hp-fill {
+  height: 100%;
+  background: #8fe0a0;
+}
+.stacks-character-hp-fill--wounded,
+.stacks-character-hp-fill--critical {
+  background: #f0c56a;
+}
+.stacks-character-hp-fill--downed,
+.stacks-character-hp-fill--dead {
+  background: #ff8a8a;
+}
+.stacks-character-danger {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+}
+
+.stacks-character-energy {
+  margin-bottom: 0.75rem;
+}
+
+.stacks-character-attributes,
+.stacks-character-skills,
+.stacks-character-active-effects,
+.stacks-character-abilities,
+.stacks-character-inventory {
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--stacks-border);
+}
+
+.stacks-character-fact-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.1rem 0.5rem;
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.stacks-character-empty {
+  color: var(--stacks-muted);
+  font-size: 0.85rem;
+}
+
+.stacks-ability-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.stacks-ability-item {
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--stacks-border);
+  font-size: 0.85rem;
+}
+.stacks-ability-item:last-child {
+  border-bottom: none;
+}
+.stacks-ability-name {
+  font-weight: 600;
+}
+.stacks-ability-frequency,
+.stacks-ability-availability {
+  color: var(--stacks-muted);
+}
+.stacks-ability-flavor {
+  font-style: italic;
+  color: var(--stacks-muted);
+  margin: 0.15rem 0;
+}
+.stacks-ability-effect {
+  margin: 0.15rem 0;
+}
+.stacks-ability-item.is-unavailable {
+  opacity: 0.6;
+}
+.stacks-ability-use-button {
+  background: var(--stacks-accent);
+  color: #1c1608;
+  border: none;
+  border-radius: 0.3rem;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.8rem;
+  margin-top: 0.2rem;
+}
+
+.stacks-inventory-grid {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0.4rem 0;
+}
+.stacks-inventory-slot {
+  min-height: 2.4rem;
+  border-radius: 0.3rem;
+  border: 1px solid var(--stacks-border);
+  font-size: 0.65rem;
+  padding: 0.2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+.stacks-inventory-slot--filled {
+  background: #2f3340;
+  color: var(--stacks-text);
+}
+.stacks-inventory-slot--continuation {
+  background: #262a35;
+  border-style: dashed;
+}
+.stacks-inventory-slot--empty {
+  background: transparent;
+  border-style: dashed;
+  color: var(--stacks-muted);
+}
+
+/* Width utility classes for the HP bar fill (no inline style -- same CSP
+   reasoning as the map's stacks-col-N/stacks-row-N generated classes). */
+.stacks-fill-0 { width: 0%; }
+.stacks-fill-5 { width: 5%; }
+.stacks-fill-10 { width: 10%; }
+.stacks-fill-15 { width: 15%; }
+.stacks-fill-20 { width: 20%; }
+.stacks-fill-25 { width: 25%; }
+.stacks-fill-30 { width: 30%; }
+.stacks-fill-35 { width: 35%; }
+.stacks-fill-40 { width: 40%; }
+.stacks-fill-45 { width: 45%; }
+.stacks-fill-50 { width: 50%; }
+.stacks-fill-55 { width: 55%; }
+.stacks-fill-60 { width: 60%; }
+.stacks-fill-65 { width: 65%; }
+.stacks-fill-70 { width: 70%; }
+.stacks-fill-75 { width: 75%; }
+.stacks-fill-80 { width: 80%; }
+.stacks-fill-85 { width: 85%; }
+.stacks-fill-90 { width: 90%; }
+.stacks-fill-95 { width: 95%; }
+.stacks-fill-100 { width: 100%; }
+
+/* Layout: leave room for the fixed character panel (left) and hand dock
+   (bottom) so nothing sits underneath them -- only once a run has actually
+   been entered (body.stacks-in-run, set by main.js's enterRun), so the
+   pre-join screen stays centered instead of offset by chrome with nothing
+   to show yet. */
+body.stacks-in-run #main {
+  padding-left: 18rem;
+  padding-bottom: 10rem;
+}
+@media (max-width: 60rem) {
+  #character-panel {
+    position: static;
+    width: auto;
+    height: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--stacks-border);
+    padding: 1rem;
+  }
+  body.stacks-in-run #main {
+    padding-left: 0;
+  }
+}

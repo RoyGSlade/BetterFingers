@@ -89,6 +89,15 @@ class EventType(str, Enum):
     # Server-side clue sharing (wave 5, board task #18; systems/puzzles.py)
     CLUE_SHARED = "clue_shared"
 
+    # Abilities + active-effect durations (wave 6, board task #21;
+    # docs/PLAYTEST_FINDINGS_2026-07-19.md E1/A5; systems/abilities.py,
+    # systems/heroes_wire.py, systems/effects.py). Domain schema posted to the
+    # collab room 2026-07-20.
+    ABILITY_USED = "ability_used"
+    ABILITY_CHARGE_REFRESHED = "ability_charge_refreshed"
+    ACTIVE_EFFECT_APPLIED = "active_effect_applied"
+    ACTIVE_EFFECT_EXPIRED = "active_effect_expired"
+
 
 @dataclass(frozen=True)
 class Event:

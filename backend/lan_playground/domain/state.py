@@ -360,6 +360,99 @@ LIFE_STATE_DOWNED = "downed"
 LIFE_STATE_STABLE = "stable"
 LIFE_STATE_DEAD = "dead"
 
+# Wave-6 playtest-response addition (board task #21, docs/PLAYTEST_FINDINGS_2026-07-19.md
+# E1/A5): generalizes heroes.backgrounds.SignatureCharge (a single once-per-X
+# charge tied only to a background) into an arbitrary per-hero collection of
+# content-authored abilities, keyed by ability_id. heroes/backgrounds.py's
+# SignatureCharge is untouched (heroes/ package stays read-only) -- this is a
+# parallel, domain-owned model that systems/abilities.py builds/refreshes/spends.
+# `trigger`/`frequency` mirror content.schemas.Ability's authoring vocabulary
+# (posted 2026-07-20): trigger is "manual"|"passive"|"on_room_enter"|
+# "on_encounter_start" (only these four are dispatched by the engine this
+# wave); frequency is "unlimited" (no charge tracking -- charges_remaining/
+# max_charges stay None) or "once_per_floor"/"once_per_room"/"once_per_fight"
+# (only ever paired with trigger=="manual", 1 charge per scope, same as
+# SignatureCharge).
+@dataclass(frozen=True)
+class AbilityState:
+    ability_id: str
+    trigger: str
+    frequency: str
+    charges_remaining: int | None = None
+    max_charges: int | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "ability_id": self.ability_id,
+            "trigger": self.trigger,
+            "frequency": self.frequency,
+            "charges_remaining": self.charges_remaining,
+            "max_charges": self.max_charges,
+        }
+
+    @staticmethod
+    def from_dict(d: dict) -> "AbilityState":
+        return AbilityState(
+            ability_id=d["ability_id"],
+            trigger=d["trigger"],
+            frequency=d["frequency"],
+            charges_remaining=d["charges_remaining"],
+            max_charges=d["max_charges"],
+        )
+
+
+# Wave-6 addition (board task #21, A5): a temporary modifier's visible
+# lifetime. `duration` is one of ACTIVE_EFFECT_DURATIONS below; expiry is
+# driven by systems/turns.py's existing round-advance/turn-submitted hooks
+# (until_end_of_turn/until_end_of_round) and systems/combat.py's
+# encounter-ended hook (until_end_of_encounter, scoped to `encounter_id` so a
+# split party's other active encounter is unaffected). `label` is a plain
+# display string (no separate authored Prose per effect instance this wave --
+# see the vocabulary posted to the collab room 2026-07-20).
+ACTIVE_EFFECT_DURATIONS = ("until_end_of_turn", "until_end_of_round", "until_end_of_encounter")
+
+
+@dataclass(frozen=True)
+class ActiveEffectState:
+    effect_id: str
+    source_id: str
+    label: str
+    duration: str
+    applied_world_round: int
+    encounter_id: str | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "effect_id": self.effect_id,
+            "source_id": self.source_id,
+            "label": self.label,
+            "duration": self.duration,
+            "applied_world_round": self.applied_world_round,
+            "encounter_id": self.encounter_id,
+        }
+
+    @staticmethod
+    def from_dict(d: dict) -> "ActiveEffectState":
+        return ActiveEffectState(
+            effect_id=d["effect_id"],
+            source_id=d["source_id"],
+            label=d["label"],
+            duration=d["duration"],
+            applied_world_round=d["applied_world_round"],
+            encounter_id=d.get("encounter_id"),
+        )
+
+
+# Wave-6 addition (board task #21, playtest F1): a validated avatar/color pair
+# chosen at character creation, never a free-form client string. Fixed lists
+# so the server can reject anything else at create_hero; stacks-facelift maps
+# each avatar_id to real art in gameassets/.../avatars and applies the color
+# as a hue/tint, posted to the collab room 2026-07-20.
+AVATAR_IDS: tuple[int, ...] = (1, 2, 3, 4, 5, 6)
+AVATAR_COLORS: tuple[str, ...] = (
+    "crimson", "azure", "gold", "violet", "emerald", "slate", "coral", "ivory",
+)
+
 
 @dataclass
 class HeroState:
@@ -401,6 +494,17 @@ class HeroState:
     # ephemeral to a single fight) -- content.schemas.Condition ids currently
     # afflicting this hero, e.g. from a played card's apply_condition effect.
     active_condition_ids: tuple[str, ...] = ()
+    # Wave-6 additions (board task #21, docs/PLAYTEST_FINDINGS_2026-07-19.md
+    # A5/E1/F1). `abilities` is empty until content.schemas.Ability-sourced
+    # pack data lands (stacks-carddesign, packs/core/abilities.yaml) -- every
+    # pre-wave-6 hero simply never populates it. `active_effects` starts empty
+    # and is mutated only by systems/effects.py's apply_active_effect op and
+    # the turns.py/combat.py boundary-expiry hooks. `avatar_id`/`color` are
+    # set once at create_hero and never change after.
+    abilities: dict[str, AbilityState] = field(default_factory=dict)
+    active_effects: tuple[ActiveEffectState, ...] = ()
+    avatar_id: int | None = None
+    color: str | None = None
 
     def sync_life_state(self, life_state: str) -> None:
         """Set life_state and derive conscious/alive so existing exploration
@@ -440,6 +544,10 @@ class HeroState:
             "item_wear": dict(sorted(self.item_wear.items())),
             "identified_item_ids": list(self.identified_item_ids),
             "active_condition_ids": list(self.active_condition_ids),
+            "abilities": {aid: a.to_dict() for aid, a in sorted(self.abilities.items())},
+            "active_effects": [e.to_dict() for e in self.active_effects],
+            "avatar_id": self.avatar_id,
+            "color": self.color,
         }
 
 

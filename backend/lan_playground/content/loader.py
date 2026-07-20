@@ -115,6 +115,24 @@ def _load_background(raw: Any, *, where: str) -> S.Background:
         raise LoaderError(f"{where}: {exc}") from exc
 
 
+def _load_ability(raw: Any, *, where: str) -> S.Ability:
+    raw = require_keys(
+        raw, {"id", "name", "prose", "trigger", "frequency", "effects", "source"}, where=where
+    )
+    try:
+        return S.Ability(
+            id=raw["id"],
+            name=raw["name"],
+            prose=_prose(raw["prose"], where=where),
+            trigger=raw["trigger"],
+            frequency=raw["frequency"],
+            effects=_effects(raw.get("effects"), where=f"{where}.effects"),
+            source=raw.get("source", "general"),
+        )
+    except S.ContentError as exc:
+        raise LoaderError(f"{where}: {exc}") from exc
+
+
 def _load_check(raw: Any, *, where: str) -> S.CardCheck:
     raw = require_keys(raw, {"attribute", "skill", "dc", "outcomes"}, where=where)
     o_where = f"{where}.outcomes"
@@ -144,6 +162,8 @@ def _load_card(raw: Any, *, where: str) -> S.Card:
         "timing",
         "range",
         "legal_targets",
+        "keywords",
+        "art_ref",
         "required_state",
         "base_effects",
         "check",
@@ -170,6 +190,8 @@ def _load_card(raw: Any, *, where: str) -> S.Card:
             timing=timing,
             range=raw["range"],
             legal_targets=tuple(raw["legal_targets"]),
+            keywords=tuple(raw.get("keywords", [])),
+            art_ref=raw.get("art_ref", ""),
             required_state=tuple(raw.get("required_state", [])),
             base_effects=_effects(raw.get("base_effects"), where=f"{where}.base_effects"),
             check=check,
@@ -199,6 +221,7 @@ def _load_item(raw: Any, *, where: str) -> S.Item:
         "weapon_damage_bonus",
         "weapon_accuracy_bonus",
         "passive_defense_bonus",
+        "knowledge",
     }
     raw = require_keys(raw, allowed, where=where)
     try:
@@ -216,6 +239,7 @@ def _load_item(raw: Any, *, where: str) -> S.Item:
             weapon_damage_bonus=raw.get("weapon_damage_bonus", 0),
             weapon_accuracy_bonus=raw.get("weapon_accuracy_bonus", 0),
             passive_defense_bonus=raw.get("passive_defense_bonus", 0),
+            knowledge=raw.get("knowledge", False),
         )
     except S.ContentError as exc:
         raise LoaderError(f"{where}: {exc}") from exc
@@ -329,6 +353,7 @@ def _load_puzzle_template_meta(raw: Any, *, where: str) -> S.PuzzleTemplateMeta:
 _ITEM_FILES: dict[str, tuple[str, str, Callable[..., Any]]] = {
     "skills": ("skills.yaml", "skills", _load_skill),
     "backgrounds": ("backgrounds.yaml", "backgrounds", _load_background),
+    "abilities": ("abilities.yaml", "abilities", _load_ability),
     "cards": ("cards.yaml", "cards", _load_card),
     "items": ("items.yaml", "items", _load_item),
     "conditions": ("conditions.yaml", "conditions", _load_condition),
@@ -401,6 +426,7 @@ def load_pack(pack_dir: Path, *, pack_id: str) -> S.ContentPack:
         pack_id=pack_id,
         backgrounds=collections["backgrounds"],
         skills=collections["skills"],
+        abilities=collections["abilities"],
         cards=collections["cards"],
         items=collections["items"],
         conditions=collections["conditions"],

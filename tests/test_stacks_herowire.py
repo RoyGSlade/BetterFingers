@@ -23,7 +23,7 @@ from backend.lan_playground.systems import checks, combat_wire, heroes_wire
 
 PACK = content_loader.load_core_pack()
 BACKGROUND_IDS = ("exiled_court_scribe", "back_alley_fixer", "retired_monster_hunter", "traveling_charlatan")
-GENERAL_CARD_IDS = ["plain_warning", "read_the_room"]
+GENERAL_CARD_IDS = ["careful_approach", "steady_nerve"]
 PERSONA_CARD_ID = "signature_flourish"
 
 
@@ -182,12 +182,12 @@ def test_playing_a_no_check_card_dispatches_its_base_effects_visibly():
 def test_playing_a_check_card_rolls_the_heros_real_attributes_and_skills():
     h = Harness(seed=17)
     hero = h.create_hero("hero_a", "retired_monster_hunter")
-    if "read_the_room" not in hero.deck.hand:
+    if "bestiary_page" not in hero.deck.hand:
         h.send("hero_a", CommandType.DRAW_CARDS, {"count": len(hero.deck.deck)})
         hero = h.state.heroes["hero_a"]
-    assert "read_the_room" in hero.deck.hand
+    assert "bestiary_page" in hero.deck.hand
 
-    result = h.send("hero_a", CommandType.PLAY_CARD, {"card_id": "read_the_room"})
+    result = h.send("hero_a", CommandType.PLAY_CARD, {"card_id": "bestiary_page"})
     play_event = next(e for e in result.events if e.type == EventType.CARD_PLAYED)
     receipt = play_event.payload["check_receipt"]
     assert receipt is not None
@@ -208,8 +208,8 @@ def test_playing_a_check_card_rolls_the_heros_real_attributes_and_skills():
         assert EventType.FACT_EMITTED in types
 
     hero = h.state.heroes["hero_a"]
-    assert "read_the_room" not in hero.deck.hand
-    assert "read_the_room" in hero.deck.discard
+    assert "bestiary_page" not in hero.deck.hand
+    assert "bestiary_page" in hero.deck.discard
 
 
 def test_play_card_requires_card_in_hand():

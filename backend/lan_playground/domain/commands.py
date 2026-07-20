@@ -51,6 +51,11 @@ class CommandType(str, Enum):
     # Server-side clue sharing (wave 5, board task #18)
     SHARE_CLUE = "share_clue"
 
+    # Abilities (wave 6, board task #21; docs/PLAYTEST_FINDINGS_2026-07-19.md
+    # E1/A5) -- player-invoked trigger=="manual" abilities. Domain schema
+    # posted to the collab room 2026-07-20.
+    USE_ABILITY = "use_ability"
+
 
 class ErrorCode(str, Enum):
     STALE_REVISION = "stale_revision"

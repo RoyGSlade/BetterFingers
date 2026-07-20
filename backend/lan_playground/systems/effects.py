@@ -22,8 +22,8 @@ from typing import Any, Callable, Sequence
 
 from ..domain.commands import Command
 from ..domain.events import Event, EventType, Visibility, make_event_id
+from ..domain.state import ActiveEffectState, DELTA, Direction, RunState, room_id_for
 from ..domain.rng import StacksRNG
-from ..domain.state import DELTA, Direction, RunState, room_id_for
 from . import checks
 
 
@@ -224,6 +224,62 @@ def dispatch(
     return tuple(events)
 
 
+def build_active_effect_event(
+    command: Command,
+    state: RunState,
+    seq: int,
+    *,
+    actor_hero_id: str,
+    room_id: str | None,
+    source_id: str,
+    label: str,
+    duration: str,
+) -> Event:
+    """Wave-6 addition (board task #21, playtest A5): a temporary modifier's
+    visible lifetime for the active-effects tray. Deliberately NOT a content
+    effect op (never routed through `dispatch()`/`_OP_HANDLERS` -- content
+    cannot author `apply_active_effect` directly this wave, keeping
+    `LIVE_OPS` exactly the 6-op set posted to the collab room 2026-07-20).
+    Callers (systems/heroes_wire.py's use_ability, systems/exploration.py's
+    on_room_enter dispatch, systems/combat.py's on_encounter_start dispatch)
+    build this alongside whatever real effect ops they already dispatch.
+    `duration` is one of domain.state.ACTIVE_EFFECT_DURATIONS. Scoped to the
+    acting hero's currently active encounter (if any) so until_end_of_encounter
+    expiry (systems/combat.py) only ever clears effects tied to THAT encounter."""
+
+    encounter_id = None
+    if room_id is not None and state.map is not None:
+        room = state.map.rooms.get(room_id)
+        if room is not None and room.encounter is not None and room.encounter.status == "active":
+            encounter_id = room.encounter.encounter_id
+    return Event(
+        event_id=make_event_id(state.world_round, seq),
+        run_id=state.run_id,
+        world_round=state.world_round,
+        caused_by=command.command_id,
+        type=EventType.ACTIVE_EFFECT_APPLIED,
+        visibility=Visibility.PUBLIC,
+        actor_hero_id=actor_hero_id,
+        room_id=room_id,
+        payload={
+            "effect_id": f"{command.command_id}:{seq}",
+            "source_id": source_id,
+            "label": label,
+            "duration": duration,
+            "applied_world_round": state.world_round,
+            "encounter_id": encounter_id,
+        },
+    )
+
+
+def apply_active_effect_applied(state: RunState, event: Event) -> RunState:
+    hero = state.heroes.get(event.actor_hero_id)
+    if hero is None:
+        return state
+    hero.active_effects = hero.active_effects + (ActiveEffectState.from_dict(event.payload),)
+    return state
+
+
 def apply_room_revealed_by_effect(state: RunState, event: Event) -> RunState:
     target_room_id = event.payload["room_id"]
     if state.map is not None and target_room_id in state.map.rooms:
@@ -267,4 +323,5 @@ EVENT_APPLIERS = {
     EventType.FACT_EMITTED: apply_fact_emitted,
     EventType.CONDITION_APPLIED: apply_condition_applied,
     EventType.CONDITION_REMOVED: apply_condition_removed,
+    EventType.ACTIVE_EFFECT_APPLIED: apply_active_effect_applied,
 }

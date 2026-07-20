@@ -69,7 +69,7 @@ def background_deck_ids(background_id: str) -> list[str]:
     return sorted(card.id for card in PACK.cards.values() if card.source == background_id)
 
 
-LIVE_GENERAL_CARD_IDS = ["plain_warning", "read_the_room"]
+LIVE_GENERAL_CARD_IDS = ["careful_approach", "steady_nerve"]
 PERSONA_CARD_ID = "signature_flourish"
 
 
@@ -349,7 +349,7 @@ def test_draw_yields_fewer_cards_when_deck_runs_low_without_auto_reshuffling():
 def test_play_card_routes_to_discard_or_exhaust_per_card_definition():
     state = _built_deck("back_alley_fixer")
     state = deck.draw(state, 7)
-    discard_card = "plain_warning"  # end_state: discard
+    discard_card = "careful_approach"  # end_state: discard (general LIVE card)
     exhaust_card = "field_patch"  # end_state: exhaust (back_alley_fixer background card)
     state = deck.play_card(state, discard_card, PACK.cards)
     state = deck.play_card(state, exhaust_card, PACK.cards)
@@ -361,17 +361,17 @@ def test_play_card_routes_to_discard_or_exhaust_per_card_definition():
 def test_play_card_rejects_a_card_not_in_hand():
     state = _built_deck()
     with pytest.raises(deck.DeckError):
-        deck.play_card(state, "plain_warning", PACK.cards)  # never drawn
+        deck.play_card(state, "careful_approach", PACK.cards)  # never drawn
 
 
 def test_safe_rest_reshuffles_discard_into_deck_but_not_exhausted():
     state = _built_deck("back_alley_fixer")
     state = deck.draw(state, 7)
-    state = deck.play_card(state, "plain_warning", PACK.cards)  # -> discard
+    state = deck.play_card(state, "careful_approach", PACK.cards)  # -> discard
     state = deck.play_card(state, "field_patch", PACK.cards)  # -> exhaust
     pre_exhausted = state.exhausted
     state = deck.safe_rest_reshuffle(state, FakeRNG(seed=9))
-    assert "plain_warning" in state.deck
+    assert "careful_approach" in state.deck
     assert state.discard == ()
     assert state.exhausted == pre_exhausted  # untouched by an ordinary safe rest
 
@@ -399,7 +399,7 @@ def test_reaction_cards_in_hand_are_flagged_for_other_turn_play():
     state = _built_deck("retired_monster_hunter")
     state = deck.draw(state, 7)
     reaction_ids = deck.reaction_cards_in_hand(state, PACK.cards)
-    assert "veteran_instinct" in reaction_ids  # retired_monster_hunter's reaction-timed card
+    assert "steady_nerve" in reaction_ids  # general LIVE reaction-timed card, in every built deck
     for card_id in reaction_ids:
         assert PACK.cards[card_id].timing is S.CardTiming.REACTION
 

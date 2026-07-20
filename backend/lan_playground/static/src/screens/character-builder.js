@@ -9,8 +9,9 @@
 // Receives state+handlers and only builds DOM; main.js is the sole place
 // that wires network/store/timers together.
 
-import { selectCharacterBuilderView, selectYouHero, computeDerivedStatsPreview } from "../core/selectors.js";
+import { selectCharacterBuilderView, selectYouHero, computeDerivedStatsPreview, AVATAR_COUNT, TOKEN_COLORS } from "../core/selectors.js";
 import { renderAttributeDie } from "../components/die.js";
+import { renderToken } from "../components/token.js";
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -130,6 +131,11 @@ function renderBackgroundChoice(builder, draft, handlers) {
         `Signature ability (${chosen.signature_ability.frequency.replace(/_/g, " ")}): ${chosen.signature_ability.fallback}`,
       ),
     );
+    // Director's ruling 04:39: any content field where `accessible` carries
+    // mechanics detail beyond `fallback` must render visibly, not aria-only.
+    if (chosen.signature_ability.accessible && chosen.signature_ability.accessible !== chosen.signature_ability.fallback) {
+      details.appendChild(el("p", "stacks-builder-background-signature-detail", chosen.signature_ability.accessible));
+    }
     panel.appendChild(details);
   }
   return panel;
@@ -165,6 +171,75 @@ function renderGeneralCardChoice(builder, draft, handlers) {
     list.appendChild(row);
   }
   panel.appendChild(list);
+  return panel;
+}
+
+// F1: token choice (avatar + color) captured during creation, sent in
+// create_hero's payload as avatar_id/color -- CONFIRMED contract from
+// stacks-abilities 04:30 (server validates + auto-assigns if omitted, so
+// this step is optional, never blocks canSubmit). Every option shows a live
+// preview via components/token.js so the color choice is visible, not just
+// a name in a list.
+function renderTokenChoice(draft, handlers) {
+  const panel = el("section", "stacks-builder-token");
+  panel.setAttribute("aria-label", "Choose your token");
+  panel.appendChild(el("h2", "stacks-panel-heading", "Token"));
+
+  const chosenColor = draft.color || TOKEN_COLORS[0];
+  const chosenAvatar = draft.avatarId || 1;
+
+  const avatarFieldset = document.createElement("fieldset");
+  avatarFieldset.className = "stacks-builder-token-fieldset";
+  const avatarLegend = document.createElement("legend");
+  avatarLegend.textContent = "Avatar";
+  avatarFieldset.appendChild(avatarLegend);
+  for (let avatarId = 1; avatarId <= AVATAR_COUNT; avatarId += 1) {
+    const id = `stacks-builder-avatar-${avatarId}`;
+    const wrap = el("span", "stacks-builder-token-option");
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = "stacks-builder-avatar";
+    input.id = id;
+    input.value = String(avatarId);
+    input.checked = chosenAvatar === avatarId;
+    input.addEventListener("change", () => handlers.onUpdateCharacterDraft({ avatarId }));
+    wrap.appendChild(input);
+    const label = document.createElement("label");
+    label.setAttribute("for", id);
+    label.appendChild(
+      renderToken({ avatarSrc: `/src/assets/avatars/avatar-${avatarId}.png`, colorClass: `stacks-token-hue-${chosenColor}` }, { size: "md" }),
+    );
+    label.appendChild(document.createTextNode(`Avatar ${avatarId}`));
+    wrap.appendChild(label);
+    avatarFieldset.appendChild(wrap);
+  }
+  panel.appendChild(avatarFieldset);
+
+  const colorFieldset = document.createElement("fieldset");
+  colorFieldset.className = "stacks-builder-token-fieldset";
+  const colorLegend = document.createElement("legend");
+  colorLegend.textContent = "Color";
+  colorFieldset.appendChild(colorLegend);
+  for (const color of TOKEN_COLORS) {
+    const id = `stacks-builder-color-${color}`;
+    const wrap = el("span", "stacks-builder-token-option");
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = "stacks-builder-color";
+    input.id = id;
+    input.value = color;
+    input.checked = chosenColor === color;
+    input.addEventListener("change", () => handlers.onUpdateCharacterDraft({ color }));
+    wrap.appendChild(input);
+    const label = document.createElement("label");
+    label.setAttribute("for", id);
+    label.className = `stacks-builder-color-swatch stacks-token-hue-${color}`;
+    label.textContent = color;
+    wrap.appendChild(label);
+    colorFieldset.appendChild(wrap);
+  }
+  panel.appendChild(colorFieldset);
+
   return panel;
 }
 
@@ -257,6 +332,8 @@ function renderSubmit(builder, draft, handlers) {
       ),
       generalCardIds: draft.generalCardIds,
       personaCardId: builder.personaCard.id,
+      avatarId: draft.avatarId || null,
+      color: draft.color || null,
     });
   });
   panel.appendChild(button);
@@ -288,6 +365,7 @@ export function renderCharacterBuilderScreen(container, state, handlers) {
   layout.appendChild(renderAssignmentForm(builder, draft, handlers));
   layout.appendChild(renderBackgroundChoice(builder, draft, handlers));
   layout.appendChild(renderGeneralCardChoice(builder, draft, handlers));
+  layout.appendChild(renderTokenChoice(draft, handlers));
   layout.appendChild(renderNameField(draft, handlers));
   layout.appendChild(renderDerivedPreview(builder, draft));
   layout.appendChild(renderSubmit(builder, draft, handlers));

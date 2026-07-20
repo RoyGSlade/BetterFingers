@@ -1,22 +1,41 @@
 # The Lost Meaning: Infinite Stacks -- core pack.
-# 24 cards (§23.3 first-playable target). Covers every §13.3 contract field:
-# timing, range/targets, required state, exact base effect OR check+outcome
-# table, combination tags, discard/Exhaust, fallback text, accessible text.
-# Sources: general (5), four per background x 4 backgrounds (16), persona
-# signature (1), equipment-granted (2).
+# 24 cards (§23.3 first-playable target). Wave-6 redesign (board task #20,
+# docs/PLAYTEST_FINDINGS_2026-07-19.md §E): the owner's verdict was "a card
+# should only be given when it's earned and should be something actually
+# cool -- not a basic ability like 'I look around'." Five offenders moved OUT
+# of the deck into backend/lan_playground/content/packs/core/abilities.yaml
+# (read_the_room, plain_warning -- general; veteran_instinct, trophy_notes --
+# retired_monster_hunter). `signature_flourish` (the mandatory persona card,
+# §13.2) stayed a card -- deck.build_starting_deck requires exactly one
+# persona signature card for every background, so removing it would break
+# the composition gate -- and was redesigned in place with real mechanics
+# instead (E2's "cut OR redesigned" branch).
 #
-# Wave-3 note (board task #11, stacks-heroes): heroes/cards.py only allows a
-# deck to be built from cards whose entire effect list compiles to this
-# wave's LIVE §5 ops (reveal_room/grant_check/spend_energy/emit_fact -- see
-# docs/INFINITE_STACKS_CONTRACTS.md §5). Every general/background/persona
-# card below is authored LIVE-only on purpose so any background produces a
-# buildable starting deck this wave. `comma_cut` and `subtext_flash` (both
-# equipment-granted, optional per §13.2's "up to two") are deliberately left
-# using PLANNED combat ops (damage/apply_condition/reveal_tell) -- they are
-# real future combat content, not yet buildable into a deck, and serve as the
-# real-content example `tests/test_stacks_heroes.py` uses for the loud
+# Every surviving card now carries: a `keywords` list, an `art_ref` (one of
+# the 3 real frame illustrations stacks-facelift copied to
+# backend/lan_playground/static/src/assets/cards/{charm,scheme,bonk}.png --
+# classified per card: enemy-target/melee/bonk -> bonk, ally/support/
+# communication/persona -> charm, else -> scheme), and a non-empty mechanic
+# with real numbers/targets/durations (§E3). Cards that were pure
+# emit_fact-only flavor (blank_contract, procedural_objection,
+# scavenged_shim, grease_the_gears, concealed_pocket) now also grant a real,
+# numbered follow-up check (`grant_check`, DC 8) so the "no roll" flavor
+# beat still produces a concrete mechanical opportunity.
+#
+# Wave-3 note (board task #11, stacks-heroes), still true: heroes/cards.py
+# only allows a deck to be built from cards whose entire effect list compiles
+# to this wave's LIVE §5 ops (reveal_room/grant_check/spend_energy/emit_fact
+# -- see docs/INFINITE_STACKS_CONTRACTS.md §5). Every general/background/
+# persona card below is authored LIVE-only on purpose so any background
+# produces a buildable starting deck this wave. `comma_cut` and
+# `subtext_flash` (both equipment-granted, optional per §13.2's "up to two")
+# deliberately keep using PLANNED combat ops (damage/apply_condition/
+# reveal_tell) -- real future combat content, not yet buildable into a deck,
+# and the real-content example tests/test_stacks_heroes.py uses for the loud
 # build-time rejection case.
 cards:
+  # --- General (5) -----------------------------------------------------------
+
   - id: steady_strike
     name: Steady Strike
     prose:
@@ -26,6 +45,8 @@ cards:
     timing: main_action
     range: melee
     legal_targets: [enemy]
+    keywords: [Combat, Melee, Bonk]
+    art_ref: src/assets/cards/bonk.png
     check:
       attribute: force
       skill: bonk
@@ -43,32 +64,6 @@ cards:
     end_state: discard
     source: general
 
-  - id: read_the_room
-    name: Read the Room
-    prose:
-      fallback: Take a breath and notice what everyone else is missing.
-      accessible: "Card: Read the Room. Quick interaction, affects the current room, targets self. Insight + Read check against DC 11."
-    accessible_text: "Read the Room. Quick interaction. Range: the current room. Target: self. Roll Insight + Read vs DC 11. Strong success records a major observed tell, clean success records a minor one, a costly success records a partial read, a setback costs 1 Energy re-focusing."
-    timing: quick_interaction
-    range: room
-    legal_targets: [self]
-    check:
-      attribute: insight
-      skill: read
-      dc: 11
-      outcomes:
-        strong_success:
-          - {op: emit_fact, args: {fact_id: tell_revealed_major}}
-        success:
-          - {op: emit_fact, args: {fact_id: tell_revealed_minor}}
-        cost:
-          - {op: emit_fact, args: {fact_id: partial_read}}
-        setback:
-          - {op: spend_energy, args: {amount: 1}}
-    combination_tags: [information, read]
-    end_state: discard
-    source: general
-
   - id: guarded_stance
     name: Guarded Stance
     prose:
@@ -78,6 +73,8 @@ cards:
     timing: reaction
     range: self
     legal_targets: [self]
+    keywords: [Defense, Reaction]
+    art_ref: src/assets/cards/scheme.png
     base_effects:
       - {op: block_damage, args: {amount: 2}}
     combination_tags: [defense]
@@ -93,24 +90,58 @@ cards:
     timing: main_action
     range: room
     legal_targets: [ally]
+    keywords: [Support, Wordcraft]
+    art_ref: src/assets/cards/charm.png
     base_effects:
       - {op: remove_condition, args: {condition_id: frightened}}
     combination_tags: [support, wordcraft]
     end_state: discard
     source: general
 
-  - id: plain_warning
-    name: Plain Warning
+  - id: careful_approach
+    name: Careful Approach
     prose:
-      fallback: A short, unambiguous sentence spoken so everyone in earshot understands it the same way.
-      accessible: "Card: Plain Warning. Free speech, affects the current room, can target an ally or an enemy. Records a warning fact, no roll required."
-    accessible_text: "Plain Warning. Free speech. Range: the current room. Target: one ally or one enemy. Records that a warning was given. No roll."
-    timing: free_speech
+      fallback: Case the room properly before committing to a direction.
+      accessible: "Card: Careful Approach. Main action, affects the current room, targets self. Insight + Read check against DC 11."
+    accessible_text: "Careful Approach. Main action. Range: the current room. Target: self. Roll Insight + Read vs DC 11. Strong success reveals what lies past the north connector and records a thorough scout, clean success reveals the north connector, a costly success records a partial scout and costs 1 Energy, a setback costs 1 Energy re-orienting."
+    timing: main_action
     range: room
-    legal_targets: [ally, enemy]
+    legal_targets: [self]
+    keywords: [Exploration, Scouting]
+    art_ref: src/assets/cards/scheme.png
+    check:
+      attribute: insight
+      skill: read
+      dc: 11
+      outcomes:
+        strong_success:
+          - {op: emit_fact, args: {fact_id: passage_scouted_thoroughly}}
+          - {op: reveal_room, args: {connector: north}}
+        success:
+          - {op: reveal_room, args: {connector: north}}
+        cost:
+          - {op: emit_fact, args: {fact_id: passage_scouted_partial}}
+          - {op: spend_energy, args: {amount: 1}}
+        setback:
+          - {op: spend_energy, args: {amount: 1}}
+    combination_tags: [information, exploration]
+    end_state: discard
+    source: general
+
+  - id: steady_nerve
+    name: Steady Nerve
+    prose:
+      fallback: One slow breath, and the next move is clear again.
+      accessible: "Card: Steady Nerve. Reaction, self only. Grants a free Presence + Wordcraft check against DC 8 to steady yourself, no roll to trigger it."
+    accessible_text: "Steady Nerve. Reaction. Target: self. Grants an immediate free Presence + Wordcraft check against DC 8. No roll to trigger the card itself."
+    timing: reaction
+    range: self
+    legal_targets: [self]
+    keywords: [Reaction, Composure]
+    art_ref: src/assets/cards/scheme.png
     base_effects:
-      - {op: emit_fact, args: {fact_id: warning_given}}
-    combination_tags: [communication]
+      - {op: grant_check, args: {attribute: presence, skill: wordcraft, dc: 8}}
+    combination_tags: [reaction, composure]
     end_state: discard
     source: general
 
@@ -120,13 +151,16 @@ cards:
     name: Blank Contract
     prose:
       fallback: A single clause, left open until it is spoken aloud and marked binding or not.
-      accessible: "Card: Blank Contract. Quick interaction, self only. Records that a phrase has been marked binding or non-binding ahead of being spoken, no roll required. Exiled Court Scribe background card."
-    accessible_text: "Blank Contract. Quick interaction. Target: self. Records that the next spoken phrase has been marked binding or non-binding. No roll."
+      accessible: "Card: Blank Contract. Quick interaction, self only. Marks a phrase binding and grants a free Presence + Wordcraft check against DC 8 to enforce it immediately. Exiled Court Scribe background card."
+    accessible_text: "Blank Contract. Quick interaction. Target: self. Records that the next spoken phrase has been marked binding or non-binding, and grants an immediate free Presence + Wordcraft check against DC 8 to enforce it. No roll to trigger the card itself."
     timing: quick_interaction
     range: self
     legal_targets: [self]
+    keywords: [Contract, Wordcraft]
+    art_ref: src/assets/cards/charm.png
     base_effects:
       - {op: emit_fact, args: {fact_id: binding_clause_marked}}
+      - {op: grant_check, args: {attribute: presence, skill: wordcraft, dc: 8}}
     combination_tags: [contract, wordcraft]
     end_state: discard
     source: exiled_court_scribe
@@ -140,6 +174,8 @@ cards:
     timing: main_action
     range: room
     legal_targets: [npc]
+    keywords: [Contract, Wordcraft]
+    art_ref: src/assets/cards/charm.png
     check:
       attribute: presence
       skill: wordcraft
@@ -162,13 +198,16 @@ cards:
     name: Procedural Objection
     prose:
       fallback: "\"Objection\" is a complete sentence when it is said with enough conviction."
-      accessible: "Card: Procedural Objection. Reaction, affects the current room, targets one NPC or enemy. Records a formal objection, no roll required. Exiled Court Scribe background card."
-    accessible_text: "Procedural Objection. Reaction. Range: the current room. Target: one NPC or enemy. Records that a formal objection was raised against the target's last statement or action. No roll."
+      accessible: "Card: Procedural Objection. Reaction, affects the current room, targets one NPC or enemy. Grants a free Presence + Wordcraft check against DC 11 to make the objection stick. Exiled Court Scribe background card."
+    accessible_text: "Procedural Objection. Reaction. Range: the current room. Target: one NPC or enemy. Records that a formal objection was raised against the target's last statement or action, and grants an immediate free Presence + Wordcraft check against DC 11 to make it stick. No roll to trigger the card itself."
     timing: reaction
     range: room
     legal_targets: [npc, enemy]
+    keywords: [Contract, Reaction]
+    art_ref: src/assets/cards/charm.png
     base_effects:
       - {op: emit_fact, args: {fact_id: objection_raised}}
+      - {op: grant_check, args: {attribute: presence, skill: wordcraft, dc: 11}}
     combination_tags: [contract, reaction]
     end_state: discard
     source: exiled_court_scribe
@@ -182,6 +221,8 @@ cards:
     timing: quick_interaction
     range: self
     legal_targets: [self]
+    keywords: [Contract, Exploration]
+    art_ref: src/assets/cards/scheme.png
     base_effects:
       - {op: reveal_room, args: {connector: north}}
     combination_tags: [contract, knowledge]
@@ -199,6 +240,8 @@ cards:
     timing: main_action
     range: melee
     legal_targets: [self, ally]
+    keywords: [Support, Tinker]
+    art_ref: src/assets/cards/charm.png
     required_state: ["tag:has_repair_patch"]
     check:
       attribute: insight
@@ -226,6 +269,8 @@ cards:
     timing: main_action
     range: room
     legal_targets: [self]
+    keywords: [Tinker, Exploration]
+    art_ref: src/assets/cards/scheme.png
     base_effects:
       - {op: reveal_room, args: {connector: north}}
     combination_tags: [tinker, exploration]
@@ -236,13 +281,16 @@ cards:
     name: Scavenged Shim
     prose:
       fallback: Pocket the loose part before anyone notices it's missing.
-      accessible: "Card: Scavenged Shim. Quick interaction, self only. Records that a component was salvaged, no roll required. Back-Alley Fixer background card."
-    accessible_text: "Scavenged Shim. Quick interaction. Target: self. Records that a spare component was salvaged from the current room. No roll."
+      accessible: "Card: Scavenged Shim. Quick interaction, self only. Salvages a component and grants a free Insight + Tinker check against DC 8 to put it to use immediately. Back-Alley Fixer background card."
+    accessible_text: "Scavenged Shim. Quick interaction. Target: self. Records that a spare component was salvaged from the current room, and grants an immediate free Insight + Tinker check against DC 8 to put it to use. No roll to trigger the card itself."
     timing: quick_interaction
     range: self
     legal_targets: [self]
+    keywords: [Tinker, Salvage]
+    art_ref: src/assets/cards/scheme.png
     base_effects:
       - {op: emit_fact, args: {fact_id: component_salvaged}}
+      - {op: grant_check, args: {attribute: insight, skill: tinker, dc: 8}}
     combination_tags: [tinker, salvage]
     end_state: discard
     source: back_alley_fixer
@@ -251,44 +299,33 @@ cards:
     name: Grease the Gears
     prose:
       fallback: Quietly fix the mechanism before it has the chance to fail on someone.
-      accessible: "Card: Grease the Gears. Reaction, melee range, targets self or an ally. Records that a mechanism was quietly fixed, no roll required. Back-Alley Fixer background card."
-    accessible_text: "Grease the Gears. Reaction. Melee range. Target: self or one ally. Records that a nearby mechanism was quietly fixed before it failed. No roll."
+      accessible: "Card: Grease the Gears. Reaction, melee range, targets self or an ally. Grants a free Insight + Tinker check against DC 8 to keep a nearby mechanism working. Back-Alley Fixer background card."
+    accessible_text: "Grease the Gears. Reaction. Melee range. Target: self or one ally. Records that a nearby mechanism was quietly fixed before it failed, and grants an immediate free Insight + Tinker check against DC 8 to keep it working. No roll to trigger the card itself."
     timing: reaction
     range: melee
     legal_targets: [self, ally]
+    keywords: [Tinker, Reaction]
+    art_ref: src/assets/cards/scheme.png
     base_effects:
       - {op: emit_fact, args: {fact_id: gears_greased}}
+      - {op: grant_check, args: {attribute: insight, skill: tinker, dc: 8}}
     combination_tags: [tinker, reaction]
     end_state: discard
     source: back_alley_fixer
 
   # --- Retired Monster Hunter (4) -------------------------------------------
 
-  - id: trophy_notes
-    name: Trophy Notes
-    prose:
-      fallback: Flip to the page about this exact kind of monster.
-      accessible: "Card: Trophy Notes. Quick interaction, self only. Requires that this enemy has already revealed its intent this fight. Records a marked weakness, no roll required. Retired Monster Hunter background card."
-    accessible_text: "Trophy Notes. Quick interaction. Target: self. Requires that the enemy has already revealed an intent this fight. Records that a weakness or false tell was marked. No roll."
-    timing: quick_interaction
-    range: self
-    legal_targets: [self]
-    required_state: ["tag:enemy_intent_revealed"]
-    base_effects:
-      - {op: emit_fact, args: {fact_id: weakness_marked}}
-    combination_tags: [knowledge, read]
-    end_state: discard
-    source: retired_monster_hunter
-
   - id: bestiary_page
     name: Bestiary Page
     prose:
       fallback: Somewhere in these margins is a note about exactly this creature.
       accessible: "Card: Bestiary Page. Main action, affects the current room, targets self. Insight + Read check against DC 11. Retired Monster Hunter background card."
-    accessible_text: "Bestiary Page. Main action. Range: the current room. Target: self. Roll Insight + Read vs DC 11. Strong success fully identifies the enemy family, clean success identifies it, a costly success only partly identifies it, a setback costs 1 Energy cross-referencing the wrong page first."
+    accessible_text: "Bestiary Page. Main action. Range: the current room. Target: self. Roll Insight + Read vs DC 11. Strong success fully identifies the enemy family and grants a free follow-up Insight + Read check against DC 8 to spot a specific weakness, clean success identifies it, a costly success only partly identifies it and costs 1 Energy, a setback costs 1 Energy cross-referencing the wrong page first."
     timing: main_action
     range: room
     legal_targets: [self]
+    keywords: [Knowledge, Read]
+    art_ref: src/assets/cards/scheme.png
     check:
       attribute: insight
       skill: read
@@ -296,28 +333,15 @@ cards:
       outcomes:
         strong_success:
           - {op: emit_fact, args: {fact_id: family_fully_identified}}
+          - {op: grant_check, args: {attribute: insight, skill: read, dc: 8}}
         success:
           - {op: emit_fact, args: {fact_id: family_identified}}
         cost:
           - {op: emit_fact, args: {fact_id: family_partially_identified}}
+          - {op: spend_energy, args: {amount: 1}}
         setback:
           - {op: spend_energy, args: {amount: 1}}
     combination_tags: [knowledge, read]
-    end_state: discard
-    source: retired_monster_hunter
-
-  - id: veteran_instinct
-    name: Veteran Instinct
-    prose:
-      fallback: An old scar aches right before trouble does, and this time it means something.
-      accessible: "Card: Veteran Instinct. Reaction, self only. Records that a hunting instinct fired, no roll required. Retired Monster Hunter background card."
-    accessible_text: "Veteran Instinct. Reaction. Target: self. Records that a trained instinct warned the hero a beat before danger arrived. No roll."
-    timing: reaction
-    range: self
-    legal_targets: [self]
-    base_effects:
-      - {op: emit_fact, args: {fact_id: instinct_triggered}}
-    combination_tags: [read, reaction]
     end_state: discard
     source: retired_monster_hunter
 
@@ -330,10 +354,60 @@ cards:
     timing: quick_interaction
     range: self
     legal_targets: [self]
+    keywords: [Knowledge, Exploration]
+    art_ref: src/assets/cards/scheme.png
     base_effects:
       - {op: reveal_room, args: {connector: north}}
     combination_tags: [knowledge, exploration]
     end_state: exhaust
+    source: retired_monster_hunter
+
+  - id: marked_for_the_kill
+    name: Marked for the Kill
+    prose:
+      fallback: Once you've seen a monster's tell, its next move is never really a surprise.
+      accessible: "Card: Marked for the Kill. Main action, melee range, targets one enemy. Requires that this enemy has already revealed its intent this fight. Force + Bonk check against DC 11. Retired Monster Hunter background card."
+    accessible_text: "Marked for the Kill. Main action. Melee range. Target: one enemy. Requires the enemy to have already revealed an intent this fight. Roll Force + Bonk vs DC 11. Strong success records the weakness as exploited and grants a free follow-up Force + Bonk check against DC 8, clean success records it exploited, a costly success records a partial exploit and costs 1 Energy, a setback costs 1 Energy overcommitting."
+    timing: main_action
+    range: melee
+    legal_targets: [enemy]
+    keywords: [Combat, Melee, Bonk, Weakness]
+    art_ref: src/assets/cards/bonk.png
+    required_state: ["tag:enemy_intent_revealed"]
+    check:
+      attribute: force
+      skill: bonk
+      dc: 11
+      outcomes:
+        strong_success:
+          - {op: emit_fact, args: {fact_id: weakness_exploited_major}}
+          - {op: grant_check, args: {attribute: force, skill: bonk, dc: 8}}
+        success:
+          - {op: emit_fact, args: {fact_id: weakness_exploited}}
+        cost:
+          - {op: emit_fact, args: {fact_id: weakness_exploited_partial}}
+          - {op: spend_energy, args: {amount: 1}}
+        setback:
+          - {op: spend_energy, args: {amount: 1}}
+    combination_tags: [melee, bonk, called_maneuver]
+    end_state: discard
+    source: retired_monster_hunter
+
+  - id: pack_tactics
+    name: Pack Tactics
+    prose:
+      fallback: Point out exactly what you noticed. Someone else can act on it faster than you can.
+      accessible: "Card: Pack Tactics. Quick interaction, affects the current room, targets one ally. Grants a free Insight + Read check against DC 8, no roll required to trigger it. Retired Monster Hunter background card."
+    accessible_text: "Pack Tactics. Quick interaction. Range: the current room. Target: one ally. Grants the target an immediate free Insight + Read check against DC 8. No roll to trigger the card itself."
+    timing: quick_interaction
+    range: room
+    legal_targets: [ally]
+    keywords: [Support, Knowledge]
+    art_ref: src/assets/cards/charm.png
+    base_effects:
+      - {op: grant_check, args: {attribute: insight, skill: read, dc: 8}}
+    combination_tags: [support, read]
+    end_state: discard
     source: retired_monster_hunter
 
   # --- Traveling Charlatan (4) -----------------------------------------------
@@ -347,6 +421,8 @@ cards:
     timing: main_action
     range: room
     legal_targets: [npc]
+    keywords: [Deception, Scheme]
+    art_ref: src/assets/cards/scheme.png
     check:
       attribute: finesse
       skill: scheme
@@ -373,6 +449,8 @@ cards:
     timing: quick_interaction
     range: room
     legal_targets: [npc, enemy]
+    keywords: [Scheme, Deception]
+    art_ref: src/assets/cards/scheme.png
     check:
       attribute: finesse
       skill: scheme
@@ -399,6 +477,8 @@ cards:
     timing: main_action
     range: room
     legal_targets: [self]
+    keywords: [Scheme, Exploration]
+    art_ref: src/assets/cards/scheme.png
     base_effects:
       - {op: reveal_room, args: {connector: north}}
     combination_tags: [scheme, exploration]
@@ -409,13 +489,16 @@ cards:
     name: Concealed Pocket
     prose:
       fallback: A seam sewn just deep enough that a casual search never finds it.
-      accessible: "Card: Concealed Pocket. Quick interaction, self only. Records that an item was concealed, no roll required. Traveling Charlatan background card. Exhausted after use."
-    accessible_text: "Concealed Pocket. Quick interaction. Target: self. Records that an item was tucked into a concealed pocket. No roll. Exhausted after use, not discarded."
+      accessible: "Card: Concealed Pocket. Quick interaction, self only. Conceals an item and grants a free Finesse + Scheme check against DC 8 to retrieve it unnoticed later. Traveling Charlatan background card. Exhausted after use."
+    accessible_text: "Concealed Pocket. Quick interaction. Target: self. Records that an item was tucked into a concealed pocket, and grants an immediate free Finesse + Scheme check against DC 8 to retrieve it unnoticed later. No roll to trigger the card itself. Exhausted after use, not discarded."
     timing: quick_interaction
     range: self
     legal_targets: [self]
+    keywords: [Scheme, Concealment]
+    art_ref: src/assets/cards/scheme.png
     base_effects:
       - {op: emit_fact, args: {fact_id: item_concealed}}
+      - {op: grant_check, args: {attribute: finesse, skill: scheme, dc: 8}}
     combination_tags: [scheme, concealment]
     end_state: exhaust
     source: traveling_charlatan
@@ -425,14 +508,29 @@ cards:
   - id: signature_flourish
     name: Signature Flourish
     prose:
-      fallback: One line, delivered exactly the way this hero would say it.
-      accessible: "Card: Signature Flourish. Free speech, affects the current room, targets self. Records that the hero's signature persona moment was declared, no roll required. Persona signature card, granted during character creation regardless of chosen background."
-    accessible_text: "Signature Flourish. Free speech. Range: the current room. Target: self. Records that the hero's signature persona moment was declared. No roll."
+      fallback: One line, delivered exactly the way this hero would say it -- and it lands.
+      accessible: "Card: Signature Flourish. Free speech, affects the current room, targets self. Presence + Wordcraft check against DC 11. Persona signature card, granted during character creation regardless of chosen background."
+    accessible_text: "Signature Flourish. Free speech. Range: the current room. Target: self. Roll Presence + Wordcraft vs DC 11. Strong success lands the persona moment fully and grants a free follow-up Presence + Wordcraft check against DC 8, clean success lands it, a costly success lands flat and costs 1 Energy, a setback costs 1 Energy recovering the room's attention."
     timing: free_speech
     range: room
     legal_targets: [self]
-    base_effects:
-      - {op: emit_fact, args: {fact_id: persona_signature_declared}}
+    keywords: [Persona, Signature]
+    art_ref: src/assets/cards/charm.png
+    check:
+      attribute: presence
+      skill: wordcraft
+      dc: 11
+      outcomes:
+        strong_success:
+          - {op: emit_fact, args: {fact_id: persona_signature_landed_big}}
+          - {op: grant_check, args: {attribute: presence, skill: wordcraft, dc: 8}}
+        success:
+          - {op: emit_fact, args: {fact_id: persona_signature_landed}}
+        cost:
+          - {op: emit_fact, args: {fact_id: persona_signature_flat}}
+          - {op: spend_energy, args: {amount: 1}}
+        setback:
+          - {op: spend_energy, args: {amount: 1}}
     combination_tags: [persona, communication]
     end_state: discard
     source: persona
@@ -448,6 +546,8 @@ cards:
     timing: main_action
     range: melee
     legal_targets: [enemy]
+    keywords: [CalledManeuver, Break, Melee]
+    art_ref: src/assets/cards/bonk.png
     required_state: ["tag:comma_blade_equipped"]
     check:
       attribute: finesse
@@ -476,6 +576,8 @@ cards:
     timing: quick_interaction
     range: room
     legal_targets: [self]
+    keywords: [Information, OncePerRoom]
+    art_ref: src/assets/cards/scheme.png
     required_state: ["tag:lantern_of_subtext_equipped"]
     base_effects:
       - {op: reveal_tell, args: {}}

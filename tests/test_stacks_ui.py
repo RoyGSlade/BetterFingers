@@ -39,6 +39,23 @@ DIE_JS = (SRC_DIR / "components" / "die.js").read_text(encoding="utf-8")
 COMMANDS_JS = (SRC_DIR / "core" / "commands.js").read_text(encoding="utf-8")
 API_JS = (SRC_DIR / "core" / "api.js").read_text(encoding="utf-8")
 
+# Wave 6 (board task #19, docs/PLAYTEST_FINDINGS_2026-07-19.md): entirely new
+# component/screen files this wave, plus the existing files that changed
+# significantly (map.js/room-tile.js/hero.js are still covered by
+# test_stacks_static.py's wave-1 lists; hero-panel.js/character-builder.js
+# by Wave5* above -- both re-read fresh from disk, so edits there are
+# already exercised without needing a new list here).
+WAVE6_COMPONENT_FILES = ["token.js", "confirm-dialog.js", "rules-overlay.js"]
+WAVE6_SCREEN_FILES = ["character-panel.js"]
+WAVE6_COMPONENT_SOURCE = {name: (SRC_DIR / "components" / name).read_text(encoding="utf-8") for name in WAVE6_COMPONENT_FILES}
+WAVE6_SCREEN_SOURCE = {name: (SRC_DIR / "screens" / name).read_text(encoding="utf-8") for name in WAVE6_SCREEN_FILES}
+ALL_WAVE6_JS = {**WAVE6_COMPONENT_SOURCE, **WAVE6_SCREEN_SOURCE}
+ROOM_TILE_JS = (SRC_DIR / "components" / "room-tile.js").read_text(encoding="utf-8")
+HERO_JS = (SRC_DIR / "components" / "hero.js").read_text(encoding="utf-8")
+MAP_JS = (SRC_DIR / "screens" / "map.js").read_text(encoding="utf-8")
+HERO_PANEL_JS = WAVE5_SCREEN_SOURCE["hero-panel.js"]
+CHARACTER_BUILDER_JS = WAVE5_SCREEN_SOURCE["character-builder.js"]
+
 
 def load_fixture(name):
     with open(FIXTURES_DIR / name, encoding="utf-8") as handle:
@@ -442,7 +459,12 @@ class FixtureContractTests(unittest.TestCase):
 class Wave5ModuleShapeTests(unittest.TestCase):
     def test_character_builder_and_hero_panel_export_render_functions(self):
         self.assertIn("export function renderCharacterBuilderScreen", WAVE5_SCREEN_SOURCE["character-builder.js"])
-        self.assertIn("export function renderHeroPanel", WAVE5_SCREEN_SOURCE["hero-panel.js"])
+        # Wave 6 (playtest A1/D2): hero-panel.js split renderHeroPanel into
+        # renderHandDock (center-bottom hand dock) and renderInventoryPanel
+        # (mounted inside the persistent character panel) -- see
+        # Wave6ModuleShapeTests below for the full wave-6 contract.
+        self.assertIn("export function renderHandDock", WAVE5_SCREEN_SOURCE["hero-panel.js"])
+        self.assertIn("export function renderInventoryPanel", WAVE5_SCREEN_SOURCE["hero-panel.js"])
 
     def test_die_component_exports_attribute_die_and_never_generates_randomness(self):
         self.assertIn("export function renderAttributeDie", DIE_JS)
@@ -545,7 +567,11 @@ class Wave5WiringTests(unittest.TestCase):
             "onCreateHero",
             "onUpdateCharacterDraft",
             "onDrawCards",
-            "onPlayCard",
+            # Wave 6 (playtest A4): onPlayCard was replaced by the two-step
+            # inspect/confirm flow (onInspectCard stages, onRequestPlayCard
+            # stages a pendingAction, onConfirmPendingAction actually plays)
+            # -- see Wave6WiringTests below.
+            "onRequestPlayCard",
             "onSafeRest",
             "onPickupItem",
             "onDropItem",
@@ -651,6 +677,281 @@ class Wave5FixtureContractTests(unittest.TestCase):
         self.assertIsInstance(fixture["hand"], list)
         self.assertGreater(len(fixture["hand"]), 0)
         self.assertEqual(fixture["deck"]["hand_count"], len(fixture["hand"]))
+
+    def test_hero_sheet_fixture_has_wave6_token_ability_and_effect_fields(self):
+        # Fixture-first per docs/PLAYTEST_FINDINGS_2026-07-19.md task #19 and
+        # the room-chat contract with stacks-abilities (04:30): avatar_id/
+        # color/abilities/active_effects/statuses on the hero wire.
+        fixture = load_fixture("hero_sheet.json")
+        self.assertIn(fixture["avatar_id"], range(1, 7))
+        self.assertIn(fixture["color"], ("crimson", "azure", "gold", "violet", "emerald", "slate", "coral", "ivory"))
+        for ability in fixture["abilities"]:
+            for field in ("id", "name", "fallback", "accessible", "trigger", "frequency", "available"):
+                with self.subTest(ability=ability["id"], field=field):
+                    self.assertIn(field, ability)
+        for effect in fixture["active_effects"]:
+            for field in ("id", "name", "fallback", "accessible", "rounds_remaining", "source"):
+                with self.subTest(effect=effect["id"], field=field):
+                    self.assertIn(field, effect)
+        for status in fixture["statuses"]:
+            for field in ("id", "rounds_remaining"):
+                with self.subTest(status=status["id"], field=field):
+                    self.assertIn(field, status)
+
+
+# ================================================================
+# Wave 6 (board task #19): full client facelift per
+# docs/PLAYTEST_FINDINGS_2026-07-19.md. Item letters (A1-G1) below refer to
+# that document's requirement IDs.
+# ================================================================
+
+
+class Wave6ModuleShapeTests(unittest.TestCase):
+    def test_new_components_and_screens_export_render_functions(self):
+        self.assertIn("export function renderToken", WAVE6_COMPONENT_SOURCE["token.js"])
+        self.assertIn("export function renderConfirmBar", WAVE6_COMPONENT_SOURCE["confirm-dialog.js"])
+        self.assertIn("export function renderRulesOverlay", WAVE6_COMPONENT_SOURCE["rules-overlay.js"])
+        self.assertIn("export function renderHelpButton", WAVE6_COMPONENT_SOURCE["rules-overlay.js"])
+        self.assertIn("export function renderHintBar", WAVE6_COMPONENT_SOURCE["rules-overlay.js"])
+        self.assertIn("export function renderCharacterPanel", WAVE6_SCREEN_SOURCE["character-panel.js"])
+
+    def test_selectors_export_wave6_view_functions(self):
+        for name in (
+            "selectHeroToken",
+            "selectHintText",
+            "selectMoveCost",
+            "selectBreachCost",
+            "selectAbilitiesView",
+            "selectActiveEffectsView",
+            "selectCharacterPanelView",
+            "cardFrameKind",
+        ):
+            with self.subTest(selector=name):
+                self.assertIn("export function %s" % name, SELECTORS_JS)
+        self.assertIn("export const AVATAR_COUNT", SELECTORS_JS)
+        self.assertIn("export const TOKEN_COLORS", SELECTORS_JS)
+
+    def test_token_colors_match_confirmed_create_hero_palette(self):
+        # CONFIRMED contract, stacks-abilities 04:30 -- server validates
+        # create_hero's `color` against exactly these 8 names.
+        for color in ("crimson", "azure", "gold", "violet", "emerald", "slate", "coral", "ivory"):
+            with self.subTest(color=color):
+                self.assertIn('"%s"' % color, SELECTORS_JS)
+
+    def test_store_exports_wave6_ui_actions_and_initial_state(self):
+        for fn in ("export function openHelp", "export function closeHelp", "export function setPendingAction", "export function clearPendingAction", "export function inspectCard", "export function clearInspectedCard"):
+            with self.subTest(fn=fn):
+                self.assertIn(fn, STORE_JS)
+        for field in ("helpOpen: true", "pendingAction: null", "inspectedCardId: null"):
+            with self.subTest(field=field):
+                self.assertIn(field, STORE_JS)
+
+    def test_wave6_modules_do_not_call_network_or_store_apis(self):
+        forbidden_patterns = ["fetch(", "new WebSocket", "createStore(", "setTimeout(", "setInterval("]
+        for name, source in ALL_WAVE6_JS.items():
+            for pattern in forbidden_patterns:
+                with self.subTest(file=name, pattern=pattern):
+                    self.assertNotIn(pattern, source)
+
+    def test_wave6_modules_never_generate_randomness(self):
+        for name, source in ALL_WAVE6_JS.items():
+            with self.subTest(file=name):
+                self.assertNotIn("Math.random", source)
+                self.assertNotIn("crypto.getRandomValues", source)
+
+    def test_wave6_modules_never_set_inline_style_properties(self):
+        for name, source in ALL_WAVE6_JS.items():
+            with self.subTest(file=name):
+                self.assertNotRegex(source, r"\.style\.\w+\s*=", "%s sets an inline style property" % name)
+                self.assertNotIn(".style.cssText", source)
+
+    def test_card_view_computes_frame_kind_preferring_art_ref(self):
+        # A2/E3 + room-chat 04:28 with stacks-carddesign: content-authored
+        # art_ref (one of the 3 real copied asset paths) wins over the
+        # tag/target heuristic once a pack sets it.
+        self.assertIn("card.art_ref", SELECTORS_JS)
+        self.assertIn("charm|scheme|bonk", SELECTORS_JS)
+
+
+class Wave6WiringTests(unittest.TestCase):
+    def test_main_js_imports_wave6_modules(self):
+        self.assertIn('from "./screens/character-panel.js"', MAIN_JS)
+        self.assertIn('from "./components/confirm-dialog.js"', MAIN_JS)
+        self.assertIn('from "./components/rules-overlay.js"', MAIN_JS)
+        self.assertIn("renderHandDock", MAIN_JS)
+
+    def test_main_js_has_wave6_containers(self):
+        for element_id in ("character-panel", "hand-dock", "stacks-chrome"):
+            with self.subTest(element_id=element_id):
+                self.assertIn('getElementById("%s")' % element_id, MAIN_JS)
+
+    def test_main_js_wires_wave6_handlers(self):
+        for handler in (
+            "onOpenHelp",
+            "onCloseHelp",
+            "onInspectCard",
+            "onRequestPlayCard",
+            "onConfirmPendingAction",
+            "onCancelPendingAction",
+            "onRequestMove",
+            "onRequestBreach",
+        ):
+            with self.subTest(handler=handler):
+                self.assertIn(handler, MAIN_JS)
+
+    def test_a4_confirming_a_pending_action_is_the_only_path_that_sends_move_breach_or_play_card(self):
+        # A4/C1: onRequestMove/onRequestBreach/onRequestPlayCard only ever
+        # stage a pendingAction (setPendingAction); moveCommand/breachCommand/
+        # playCardCommand are only ever invoked from onConfirmPendingAction.
+        request_move_body = MAIN_JS.split("onRequestMove:")[1].split("onRequestBreach:")[0]
+        self.assertNotIn("sendCommand(", request_move_body)
+        self.assertIn("setPendingAction", request_move_body)
+        confirm_body = MAIN_JS.split("onConfirmPendingAction:")[1].split("onCancelPendingAction:")[0]
+        self.assertIn("moveCommand", confirm_body)
+        self.assertIn("breachCommand", confirm_body)
+        self.assertIn("playCardCommand", confirm_body)
+
+    def test_html_declares_wave6_containers_hidden_by_default(self):
+        for element_id in ("character-panel", "hand-dock"):
+            with self.subTest(element_id=element_id):
+                self.assertRegex(STACKS_HTML, r'id="%s"[^>]*\bhidden\b' % re.escape(element_id))
+
+    def test_create_hero_command_sends_token_fields(self):
+        self.assertIn("avatar_id: avatarId", COMMANDS_JS)
+        self.assertIn("color: color", COMMANDS_JS)
+
+
+class Wave6AccessibilityTests(unittest.TestCase):
+    def test_a1_hand_dock_is_positioned_center_bottom(self):
+        self.assertIn("#hand-dock {", STACKS_CSS)
+        hand_dock_block = STACKS_CSS.split("#hand-dock {")[1].split("}")[0]
+        self.assertIn("bottom: 0", hand_dock_block)
+        self.assertIn("left: 50%", hand_dock_block)
+        self.assertIn("translateX(-50%)", hand_dock_block)
+
+    def test_a2_card_anatomy_is_title_then_art_then_keywords_then_description_then_effect(self):
+        source = (SRC_DIR / "components" / "card.js").read_text(encoding="utf-8")
+        title_pos = source.index("stacks-card-title")
+        art_pos = source.index("stacks-card-art")
+        keywords_pos = source.index("stacks-card-keywords")
+        description_pos = source.index("stacks-card-description")
+        effect_pos = source.index('effect.className = "stacks-card-effect"')
+        self.assertLess(title_pos, art_pos)
+        self.assertLess(art_pos, keywords_pos)
+        self.assertLess(keywords_pos, description_pos)
+        self.assertLess(description_pos, effect_pos)
+
+    def test_a3_card_shows_playable_vs_inert_as_text_not_color_only(self):
+        source = (SRC_DIR / "components" / "card.js").read_text(encoding="utf-8")
+        self.assertIn("is-playable", source)
+        self.assertIn("is-inert", source)
+        self.assertIn('"Playable now"', source)
+        self.assertIn('"Not playable right now"', source)
+
+    def test_a4_card_click_only_inspects_never_plays(self):
+        source = (SRC_DIR / "components" / "card.js").read_text(encoding="utf-8")
+        self.assertIn("onInspect(card.id)", source)
+        self.assertNotIn("onPlay(", source)
+        # The Play control only appears once a card is inspected/expanded,
+        # and lives in hero-panel.js's renderExpandedPlayControls, not here.
+        self.assertIn("expandedContent", source)
+
+    def test_a4_expanded_play_controls_require_a_target_when_the_card_needs_one(self):
+        source = HERO_PANEL_JS
+        self.assertIn("needsAllyTarget", source)
+        self.assertIn("needsEnemyTarget", source)
+        self.assertIn("missingRequiredTarget", source)
+        self.assertIn("onRequestPlayCard", source)
+
+    def test_a5_active_effects_tray_renders_statuses_and_effects_with_duration_text(self):
+        source = WAVE6_SCREEN_SOURCE["character-panel.js"]
+        self.assertIn("renderActiveEffectsTray", source)
+        self.assertIn("roundsRemaining", source)
+
+    def test_b1_rules_overlay_covers_move_breach_energy_cards_combat_reactions(self):
+        source = WAVE6_COMPONENT_SOURCE["rules-overlay.js"]
+        for topic in ("Moving and breaching", "Energy", "Cards", "Combat", "Reactions"):
+            with self.subTest(topic=topic):
+                self.assertIn(topic, source)
+
+    def test_b2_hint_bar_and_help_button_are_accessible(self):
+        source = WAVE6_COMPONENT_SOURCE["rules-overlay.js"]
+        self.assertIn('role", "status"', source)
+        self.assertIn('aria-live", "polite"', source)
+        self.assertIn("aria-label", source)
+
+    def test_b2_hint_text_is_state_driven_not_static(self):
+        self.assertIn("export function selectHintText", SELECTORS_JS)
+        self.assertIn("you.energy", SELECTORS_JS)
+
+    def test_c1_room_tile_shows_move_and_breach_cost_before_confirm(self):
+        self.assertIn("moveEnergyCost", ROOM_TILE_JS)
+        self.assertIn("breachCostFor", ROOM_TILE_JS)
+        self.assertIn("onRequestMove", ROOM_TILE_JS)
+        self.assertIn("onRequestBreach", ROOM_TILE_JS)
+
+    def test_d1_character_panel_shows_hp_numbers_and_bar_attributes_skills_energy_abilities(self):
+        source = WAVE6_SCREEN_SOURCE["character-panel.js"]
+        self.assertIn("stacks-character-hp-numbers", source)
+        self.assertIn("stacks-character-hp-bar", source)
+        self.assertIn("renderEnergyPips", source)
+        self.assertIn("view.attributes", source)
+        self.assertIn("view.skills", source)
+        self.assertIn("renderAbilities", source)
+
+    def test_d1_character_panel_ability_shows_both_flavor_and_full_rules_text_visibly(self):
+        # Director's ruling 04:39: content authors fallback=flavor,
+        # accessible=full rules text -- both must be visible, not aria-only.
+        source = WAVE6_SCREEN_SOURCE["character-panel.js"]
+        self.assertIn("ability.fallback", source)
+        self.assertIn("ability.accessible", source)
+
+    def test_d2_inventory_is_a_visual_slot_grid(self):
+        source = HERO_PANEL_JS
+        self.assertIn("stacks-inventory-grid", source)
+        self.assertIn("stacks-inventory-slot--filled", source)
+        self.assertIn("stacks-inventory-slot--empty", source)
+
+    def test_f1_room_tiles_and_roster_render_tokens_not_name_only(self):
+        self.assertIn("renderToken(hero.token", ROOM_TILE_JS)
+        self.assertIn("renderToken(heroCard.token", HERO_JS)
+
+    def test_f1_token_never_identifies_a_hero_by_color_alone(self):
+        source = WAVE6_COMPONENT_SOURCE["token.js"]
+        self.assertIn('alt = ""', source)
+        self.assertIn('aria-hidden", "true"', source)
+
+    def test_f1_character_builder_lets_the_player_choose_avatar_and_color(self):
+        self.assertIn("renderTokenChoice", CHARACTER_BUILDER_JS)
+        self.assertIn("AVATAR_COUNT", CHARACTER_BUILDER_JS)
+        self.assertIn("TOKEN_COLORS", CHARACTER_BUILDER_JS)
+
+    def test_g1_join_screen_shows_key_art(self):
+        self.assertIn("stacks-key-art", STACKS_HTML)
+        self.assertIn('src="/src/assets/key-art.jpg"', STACKS_HTML)
+
+
+class Wave6CssContractTests(unittest.TestCase):
+    def test_new_container_ids_have_styling_hooks(self):
+        for selector in ("#character-panel", "#hand-dock", "#stacks-chrome", ".stacks-confirm-bar", ".stacks-rules-overlay", ".stacks-help-button", ".stacks-hint-bar"):
+            with self.subTest(selector=selector):
+                self.assertIn(selector, STACKS_CSS)
+
+    def test_card_art_frame_classes_use_css_background_image_not_inline_style(self):
+        for kind in ("charm", "scheme", "bonk"):
+            with self.subTest(kind=kind):
+                self.assertIn(".stacks-card-art--%s {" % kind, STACKS_CSS)
+                self.assertIn("/src/assets/cards/%s.png" % kind, STACKS_CSS)
+
+    def test_all_eight_token_hue_classes_present(self):
+        for color in ("crimson", "azure", "gold", "violet", "emerald", "slate", "coral", "ivory"):
+            with self.subTest(color=color):
+                self.assertIn(".stacks-token-hue-%s {" % color, STACKS_CSS)
+
+    def test_hp_bar_fill_width_utility_classes_cover_0_to_100(self):
+        for n in (0, 50, 100):
+            with self.subTest(n=n):
+                self.assertIn(".stacks-fill-%d {" % n, STACKS_CSS)
 
 
 if __name__ == "__main__":

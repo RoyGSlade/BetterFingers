@@ -19,6 +19,14 @@ from typing import Any
 
 from backend.lan_playground.stacks_protocol import Event, RunState
 
+# Locked defaults (infinite_stacks.md §8.1); duplicated here rather than
+# imported from systems/turns.py since this module deliberately never imports
+# domain/systems (module docstring above) -- the wire-only stub `Room`/`Hero`
+# shapes already hard-code these same two numbers in can_move_to/
+# can_breach_directions below.
+MOVE_ENERGY_COST = 1
+BREACH_ENERGY_COST = 3
+
 
 def legal_actions(state: RunState, hero_id: str | None) -> dict[str, Any]:
     base: dict[str, Any] = {"revision": state.revision, "world_round": state.world_round}
@@ -27,27 +35,37 @@ def legal_actions(state: RunState, hero_id: str | None) -> dict[str, Any]:
         return base
     hero = state.heroes[hero_id]
     room = state.rooms[hero.room_id]
+    can_move_to = (
+        [
+            c.target_room_id
+            for c in room.connectors.values()
+            if c.state == "open" and c.target_room_id and hero.energy >= MOVE_ENERGY_COST
+        ]
+        if hero.conscious
+        else []
+    )
+    can_breach_directions = (
+        [d for d, c in room.connectors.items() if c.state == "undiscovered" and hero.energy >= BREACH_ENERGY_COST]
+        if hero.conscious
+        else []
+    )
     base.update(
         hero_id=hero_id,
         room_id=hero.room_id,
         energy=hero.energy,
         can_pass=hero.conscious,
         can_inspect=hero.conscious and hero.energy >= 1,
-        can_move_to=[
-            c.target_room_id
-            for c in room.connectors.values()
-            if c.state == "open" and c.target_room_id and hero.energy >= 1
-        ]
-        if hero.conscious
-        else [],
-        can_breach_directions=[
-            d for d, c in room.connectors.items() if c.state == "undiscovered" and hero.energy >= 3
-        ]
-        if hero.conscious
-        else [],
+        can_move_to=can_move_to,
+        can_breach_directions=can_breach_directions,
         can_observe_directions=[d for d, c in room.connectors.items() if c.state == "open" and hero.energy >= 1]
         if hero.conscious
         else [],
+        # Wave-6 additions (board task #21, playtest C1: "Energy cost shown
+        # at the point of click"). Present only for entries that are
+        # actually legal right now (mirrors can_move_to/can_breach_directions
+        # exactly) -- absence means "not legal", not "free".
+        move_costs={rid: MOVE_ENERGY_COST for rid in can_move_to},
+        breach_costs={d: BREACH_ENERGY_COST for d in can_breach_directions},
     )
     return base
 

@@ -276,7 +276,14 @@ def test_unknown_or_planned_op_is_silently_skipped_not_erroring():
 
 def test_live_ops_dispatcher_coverage_matches_content_schemas():
     live_in_schema = {name for name, spec in S.KNOWN_OPS.items() if spec.status is S.OpStatus.LIVE}
-    assert live_in_schema == effects.LIVE_OPS == {"reveal_room", "spend_energy", "grant_check", "emit_fact"}
+    assert live_in_schema == effects.LIVE_OPS == {
+        "reveal_room",
+        "spend_energy",
+        "grant_check",
+        "emit_fact",
+        "apply_condition",
+        "remove_condition",
+    }
 
 
 def test_dispatch_sequences_event_ids_without_collision():

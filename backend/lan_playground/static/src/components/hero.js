@@ -1,9 +1,13 @@
-// Hero roster card (infinite_stacks.md S21.3/S24.1): portrait-equivalent,
-// danger tier, 5-pip Energy display. Takes the plain data selectors.js
-// already computed and returns a DOM node -- never touches the network, the
-// store, or a timer. Other heroes' cards are buttons (route-preview target
-// select, S24.1 "selecting a distant ally previews route length"); your own
-// hero card is a non-interactive status display.
+// Hero roster / party tracker card (infinite_stacks.md S21.3/S24.1; playtest
+// F2 "party tracker is functionally okay but visually poor"): token art (F1)
+// alongside the hero's name, danger tier, and 5-pip Energy display. Takes
+// the plain data selectors.js already computed and returns a DOM node --
+// never touches the network, the store, or a timer. Other heroes' cards are
+// buttons (route-preview target select, S24.1 "selecting a distant ally
+// previews route length"); your own hero card is a non-interactive status
+// display.
+
+import { renderToken } from "./token.js";
 
 export function renderHeroCard(heroCard, { onSelect, selected = false } = {}) {
   const interactive = !heroCard.isYou && typeof onSelect === "function";
@@ -17,10 +21,14 @@ export function renderHeroCard(heroCard, { onSelect, selected = false } = {}) {
     el.addEventListener("click", () => onSelect(heroCard.heroId));
   }
 
-  const name = document.createElement("div");
+  const identity = document.createElement("div");
+  identity.className = "stacks-hero-card-identity";
+  if (heroCard.token) identity.appendChild(renderToken(heroCard.token, { size: "sm" }));
+  const name = document.createElement("span");
   name.className = "stacks-hero-card-name";
   name.textContent = heroCard.name + (heroCard.isYou ? " (you)" : "");
-  el.appendChild(name);
+  identity.appendChild(name);
+  el.appendChild(identity);
 
   // Danger tier: text label always present, glyph is decorative reinforcement
   // only, never color-only (S24.1/S25).

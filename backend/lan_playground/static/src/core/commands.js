@@ -105,7 +105,7 @@ export function rollAttributeDiceCommand(expectedRevision) {
 }
 
 export function createHeroCommand(
-  { name, backgroundId, attributeAssignment, generalCardIds, personaCardId, equipmentCardIds },
+  { name, backgroundId, attributeAssignment, generalCardIds, personaCardId, equipmentCardIds, avatarId, color },
   expectedRevision,
 ) {
   return buildCommand(
@@ -117,6 +117,10 @@ export function createHeroCommand(
       general_card_ids: generalCardIds,
       persona_card_id: personaCardId,
       equipment_card_ids: equipmentCardIds || [],
+      // F1 tokens (playtest): CONFIRMED contract, stacks-abilities 04:30 --
+      // validated + auto-assigned server-side if omitted (null is legal).
+      avatar_id: avatarId || null,
+      color: color || null,
     },
     { expectedRevision },
   );
@@ -152,4 +156,12 @@ export function tradeItemCommand(toHeroId, itemId, expectedRevision) {
 
 export function recoverBodyLootCommand(deadHeroId, itemIds, expectedRevision) {
   return buildCommand("recover_body_loot", { dead_hero_id: deadHeroId, item_ids: itemIds || null }, { expectedRevision });
+}
+
+// D1 abilities panel "Use" control: stacks-abilities' 04:30 post names the
+// command `use_ability`, charge-gated the same way signature charges are.
+// If the server hasn't wired it yet this resolves to an ordinary
+// CommandError, handled the same as any other rejected command.
+export function useAbilityCommand(abilityId, expectedRevision) {
+  return buildCommand("use_ability", { ability_id: abilityId }, { expectedRevision });
 }

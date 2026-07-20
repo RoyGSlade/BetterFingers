@@ -11,6 +11,7 @@ from __future__ import annotations
 from ..domain.commands import Command, CommandError, ErrorCode
 from ..domain.events import Event, EventType, Visibility, make_event_id
 from ..domain.state import RunState
+from . import abilities as ability_systems
 
 ENERGY_COSTS = {
     "move": 1,
@@ -76,6 +77,9 @@ def handle_pass(command: Command, state: RunState, seq: int) -> tuple[Event, ...
 def apply_turn_submitted(state: RunState, event: Event) -> RunState:
     hero = state.heroes[event.actor_hero_id]
     hero.submitted_turn = True
+    # Wave-6 (board task #21, playtest A5): until_end_of_turn active effects
+    # expire the moment their owner's turn ends, not at the next world round.
+    hero.active_effects = ability_systems.expire_boundary(hero.active_effects, boundary="turn")
     return state
 
 
@@ -109,6 +113,11 @@ def apply_world_round_advanced(state: RunState, event: Event) -> RunState:
             hero.energy = hero.max_energy
             hero.submitted_turn = False
             hero.movement_locked = False
+        # Wave-6 (board task #21, playtest A5): until_end_of_round active
+        # effects expire for EVERY hero at the world-round boundary,
+        # regardless of consciousness -- a Downed hero's effects don't
+        # linger past the round they were meant for.
+        hero.active_effects = ability_systems.expire_boundary(hero.active_effects, boundary="round")
     state.world_round = event.payload["next_round"]
     return state
 

@@ -256,6 +256,9 @@ def handle_breach(command: Command, state: RunState, rng: StacksRNG, seq: int) -
     events += heroes_wire.build_room_boundary_refresh_events(
         state, hero_id, target_room_id, seq + len(events), command.command_id
     )
+    # Wave-6 (board task #21, playtest E1): trigger=="on_room_enter"
+    # abilities fire automatically on every breach for the breaching hero.
+    events += heroes_wire.build_room_enter_ability_events(state, hero_id, target_room_id, seq + len(events), command, rng)
     return events
 
 

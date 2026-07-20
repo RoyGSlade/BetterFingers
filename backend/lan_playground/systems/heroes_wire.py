@@ -33,12 +33,13 @@ from ..content import schemas as S
 from ..domain.commands import Command, CommandError, ErrorCode
 from ..domain.events import Event, EventType, Visibility, make_event_id
 from ..domain.rng import StacksRNG
-from ..domain.state import HeroState, RunState
+from ..domain.state import AVATAR_COLORS, AVATAR_IDS, AbilityState, HeroState, RunState
 from ..heroes import backgrounds as heroes_backgrounds
 from ..heroes import cards as heroes_cards
 from ..heroes import creation as heroes_creation
 from ..heroes import deck as heroes_deck
 from ..heroes import inventory as heroes_inventory
+from . import abilities as ability_systems
 from . import checks, effects, turns
 
 _ATTRIBUTE_NAMES = heroes_creation.ATTRIBUTE_NAMES
@@ -47,6 +48,73 @@ _ATTRIBUTE_NAMES = heroes_creation.ATTRIBUTE_NAMES
 @functools.lru_cache(maxsize=1)
 def _core_pack():
     return content_loader.load_core_pack()
+
+
+def _ability_defs_for_background(background_id: str) -> dict[str, Any]:
+    """Every content.schemas.Ability (packs/core/abilities.yaml,
+    stacks-carddesign, board task #20) whose `source` matches this
+    background or is "general" -- same source-filter shape
+    `heroes.deck.build_starting_deck` already uses for cards. Returns {} until
+    the content pack actually has an `abilities` mapping (forward-compatible
+    with whichever wave lands first, same `getattr` guard used elsewhere in
+    this module for optional pack fields)."""
+
+    pack = _core_pack()
+    pack_abilities = getattr(pack, "abilities", {})
+    return {
+        aid: a
+        for aid, a in pack_abilities.items()
+        if getattr(a, "source", "general") in (background_id, "general")
+    }
+
+
+def _ability_defs_for_hero(hero: HeroState) -> dict[str, Any]:
+    if hero.sheet is None:
+        return {}
+    return _ability_defs_for_background(hero.sheet.background_id)
+
+
+def _dispatch_ability_effects(
+    ability_def: Any, command: Command, state: RunState, rng: StacksRNG, seq: int, hero_id: str, room_id: str
+) -> list[Event]:
+    effects_ir = S.compile_effects(list(ability_def.effects))
+    return list(
+        effects.dispatch(effects_ir, command=command, state=state, rng=rng, seq=seq, actor_hero_id=hero_id, room_id=room_id)
+    )
+
+
+def _assign_avatar_and_color(
+    state: RunState, hero_id: str, requested_avatar_id: Any, requested_color: Any
+) -> tuple[int, str]:
+    """Wave-6 addition (board task #21, playtest F1): validated against the
+    fixed AVATAR_IDS/AVATAR_COLORS lists -- never a free-form client string.
+    Auto-assigns the first unused value (deterministic, not random) when the
+    caller omits one, and rejects re-using a value another current hero
+    already holds so every token stays visually distinct."""
+
+    others = [h for h in state.heroes.values() if h.hero_id != hero_id]
+    used_avatars = {h.avatar_id for h in others if h.avatar_id is not None}
+    used_colors = {h.color for h in others if h.color is not None}
+
+    if requested_avatar_id is not None:
+        if requested_avatar_id not in AVATAR_IDS:
+            raise CommandError(ErrorCode.SCHEMA_ERROR, f"avatar_id must be one of {AVATAR_IDS}, got {requested_avatar_id!r}")
+        if requested_avatar_id in used_avatars:
+            raise CommandError(ErrorCode.ILLEGAL_ACTION, f"avatar_id {requested_avatar_id} already in use this run")
+        avatar_id = requested_avatar_id
+    else:
+        avatar_id = next((a for a in AVATAR_IDS if a not in used_avatars), AVATAR_IDS[0])
+
+    if requested_color is not None:
+        if requested_color not in AVATAR_COLORS:
+            raise CommandError(ErrorCode.SCHEMA_ERROR, f"color must be one of {AVATAR_COLORS}, got {requested_color!r}")
+        if requested_color in used_colors:
+            raise CommandError(ErrorCode.ILLEGAL_ACTION, f"color {requested_color} already in use this run")
+        color = requested_color
+    else:
+        color = next((c for c in AVATAR_COLORS if c not in used_colors), AVATAR_COLORS[0])
+
+    return avatar_id, color
 
 
 def _hero(state: RunState, hero_id: str | None) -> HeroState:
@@ -192,22 +260,28 @@ def build_room_boundary_refresh_events(
     receives, so `state.heroes[hero_id].room_id` is still the old room."""
 
     hero = state.heroes.get(hero_id)
-    if hero is None or hero.signature_charge is None or hero.signature_charge.frequency != "once_per_room":
+    if hero is None:
         return ()
-    new_charge = hero.signature_charge.refreshed()
-    return (
-        Event(
-            event_id=make_event_id(state.world_round, seq),
-            run_id=state.run_id,
-            world_round=state.world_round,
-            caused_by=command_id,
-            type=EventType.SIGNATURE_CHARGE_REFRESHED,
-            visibility=Visibility.PUBLIC,
-            actor_hero_id=hero_id,
-            room_id=room_id,
-            payload={"boundary": "room", "signature_charge": _charge_to_dict(new_charge)},
-        ),
-    )
+    events: list[Event] = []
+    if hero.signature_charge is not None and hero.signature_charge.frequency == "once_per_room":
+        new_charge = hero.signature_charge.refreshed()
+        events.append(
+            Event(
+                event_id=make_event_id(state.world_round, seq),
+                run_id=state.run_id,
+                world_round=state.world_round,
+                caused_by=command_id,
+                type=EventType.SIGNATURE_CHARGE_REFRESHED,
+                visibility=Visibility.PUBLIC,
+                actor_hero_id=hero_id,
+                room_id=room_id,
+                payload={"boundary": "room", "signature_charge": _charge_to_dict(new_charge)},
+            )
+        )
+    ability_event = _build_ability_refresh_event(state, hero, "room", room_id, seq + len(events), command_id)
+    if ability_event is not None:
+        events.append(ability_event)
+    return tuple(events)
 
 
 def build_fight_boundary_refresh_events(
@@ -221,22 +295,28 @@ def build_fight_boundary_refresh_events(
     boundaries this wave's board task calls for."""
 
     hero = state.heroes.get(hero_id)
-    if hero is None or hero.signature_charge is None or hero.signature_charge.frequency != "once_per_fight":
+    if hero is None:
         return ()
-    new_charge = hero.signature_charge.refreshed()
-    return (
-        Event(
-            event_id=make_event_id(state.world_round, seq),
-            run_id=state.run_id,
-            world_round=state.world_round,
-            caused_by=command_id,
-            type=EventType.SIGNATURE_CHARGE_REFRESHED,
-            visibility=Visibility.PUBLIC,
-            actor_hero_id=hero_id,
-            room_id=hero.room_id,
-            payload={"boundary": "fight", "signature_charge": _charge_to_dict(new_charge)},
-        ),
-    )
+    events: list[Event] = []
+    if hero.signature_charge is not None and hero.signature_charge.frequency == "once_per_fight":
+        new_charge = hero.signature_charge.refreshed()
+        events.append(
+            Event(
+                event_id=make_event_id(state.world_round, seq),
+                run_id=state.run_id,
+                world_round=state.world_round,
+                caused_by=command_id,
+                type=EventType.SIGNATURE_CHARGE_REFRESHED,
+                visibility=Visibility.PUBLIC,
+                actor_hero_id=hero_id,
+                room_id=hero.room_id,
+                payload={"boundary": "fight", "signature_charge": _charge_to_dict(new_charge)},
+            )
+        )
+    ability_event = _build_ability_refresh_event(state, hero, "fight", hero.room_id, seq + len(events), command_id)
+    if ability_event is not None:
+        events.append(ability_event)
+    return tuple(events)
 
 
 def apply_signature_charge_refreshed(state: RunState, event: Event) -> RunState:
@@ -308,12 +388,28 @@ def validate_create_hero(state: RunState, hero_id: str | None, payload: dict) ->
     if not isinstance(equipment_card_ids, (list, tuple)):
         raise CommandError(ErrorCode.SCHEMA_ERROR, "equipment_card_ids must be a list")
 
-    return pack, background_id, name, assignment, list(general_card_ids), persona_card_id, list(equipment_card_ids)
+    # Wave-6 (board task #21, playtest F1): only these two keys are read from
+    # the payload beyond the wave-4 set above -- any other extra key is
+    # ignored, per director's ruling 2026-07-20 that the landed validator must
+    # explicitly whitelist what it accepts.
+    avatar_id, color = _assign_avatar_and_color(state, hero_id, payload.get("avatar_id"), payload.get("color"))
+
+    return (
+        pack,
+        background_id,
+        name,
+        assignment,
+        list(general_card_ids),
+        persona_card_id,
+        list(equipment_card_ids),
+        avatar_id,
+        color,
+    )
 
 
 def handle_create_hero(command: Command, state: RunState, rng: StacksRNG, seq: int) -> tuple[Event, ...]:
     hero_id = command.hero_id
-    pack, background_id, name, assignment, general_card_ids, persona_card_id, equipment_card_ids = (
+    pack, background_id, name, assignment, general_card_ids, persona_card_id, equipment_card_ids, avatar_id, color = (
         validate_create_hero(state, hero_id, command.payload)
     )
     hero = state.heroes[hero_id]
@@ -358,26 +454,49 @@ def handle_create_hero(command: Command, state: RunState, rng: StacksRNG, seq: i
 
     charge = heroes_backgrounds.initial_signature_charge(background)
 
-    return (
-        Event(
-            event_id=make_event_id(state.world_round, seq),
-            run_id=state.run_id,
-            world_round=state.world_round,
-            caused_by=command.command_id,
-            type=EventType.HERO_CREATED,
-            visibility=Visibility.PUBLIC,
-            actor_hero_id=hero_id,
-            room_id=hero.room_id,
-            payload={
-                "sheet": _sheet_to_dict(sheet),
-                "deck": _deck_to_dict(deck_state),
-                "inventory": _inventory_to_dict(inventory),
-                "signature_charge": _charge_to_dict(charge),
-                "max_hp": sheet.derived.max_hp,
-                "defense": sheet.derived.defense,
-            },
-        ),
+    # Wave-6 (board task #21, playtest E1/A5): every content.schemas.Ability
+    # sourced from this background or "general" (packs/core/abilities.yaml,
+    # stacks-carddesign) starts with a full charge (or no charge tracking at
+    # all for "unlimited" frequency -- see systems/abilities.py).
+    ability_defs = _ability_defs_for_background(background_id)
+    abilities = {aid: ability_systems.initial_ability_state(a) for aid, a in ability_defs.items()}
+
+    hero_created_event = Event(
+        event_id=make_event_id(state.world_round, seq),
+        run_id=state.run_id,
+        world_round=state.world_round,
+        caused_by=command.command_id,
+        type=EventType.HERO_CREATED,
+        visibility=Visibility.PUBLIC,
+        actor_hero_id=hero_id,
+        room_id=hero.room_id,
+        payload={
+            "sheet": _sheet_to_dict(sheet),
+            "deck": _deck_to_dict(deck_state),
+            "inventory": _inventory_to_dict(inventory),
+            "signature_charge": _charge_to_dict(charge),
+            "max_hp": sheet.derived.max_hp,
+            "defense": sheet.derived.defense,
+            "abilities": {aid: a.to_dict() for aid, a in abilities.items()},
+            "avatar_id": avatar_id,
+            "color": color,
+        },
     )
+    events: list[Event] = [hero_created_event]
+
+    # trigger=="passive" abilities (docs posted 2026-07-20) execute their
+    # effects exactly once, automatically, right here -- the only honest
+    # "always on" execution available this wave (see the collab room post for
+    # why: no numeric passive-modifier op is LIVE yet, so a real passive
+    # trait should use apply_condition to leave a persistent, visible status
+    # rather than a one-shot effect that reads as nothing happening).
+    for aid, adef in sorted(ability_defs.items()):
+        if getattr(adef, "trigger", None) == "passive":
+            events.extend(
+                _dispatch_ability_effects(adef, command, state, rng, seq + len(events), hero_id, hero.room_id)
+            )
+
+    return tuple(events)
 
 
 def apply_hero_created(state: RunState, event: Event) -> RunState:
@@ -389,6 +508,9 @@ def apply_hero_created(state: RunState, event: Event) -> RunState:
     hero.pending_dice = None
     hero.max_hp = event.payload["max_hp"]
     hero.hp = event.payload["max_hp"]
+    hero.abilities = {aid: AbilityState.from_dict(d) for aid, d in event.payload.get("abilities", {}).items()}
+    hero.avatar_id = event.payload.get("avatar_id")
+    hero.color = event.payload.get("color")
     _sync_carried_item_ids(hero)
     return state
 
@@ -567,6 +689,9 @@ def handle_safe_rest(command: Command, state: RunState, rng: StacksRNG, seq: int
                 payload={"boundary": "safe_rest", "signature_charge": _charge_to_dict(new_charge)},
             )
         )
+    ability_event = _build_ability_refresh_event(state, hero, "floor", hero.room_id, seq + len(events), command.command_id)
+    if ability_event is not None:
+        events.append(ability_event)
     return tuple(events)
 
 
@@ -864,6 +989,166 @@ def apply_body_loot_recovered(state: RunState, event: Event) -> RunState:
     return state
 
 
+# ---------------------------------------------------------------- use_ability
+
+
+def validate_use_ability(state: RunState, hero_id: str | None, payload: dict) -> AbilityState:
+    hero = _hero(state, hero_id)
+    _require_sheet(hero)
+    ability_id = payload.get("ability_id")
+    ability = hero.abilities.get(ability_id)
+    if ability is None:
+        raise CommandError(ErrorCode.UNKNOWN_TARGET, f"{hero_id} has no ability {ability_id!r}")
+    if ability.trigger != "manual":
+        raise CommandError(ErrorCode.ILLEGAL_ACTION, f"ability {ability_id!r} is not player-invocable (trigger={ability.trigger!r})")
+    if ability.charges_remaining is not None and ability.charges_remaining <= 0:
+        raise CommandError(ErrorCode.ILLEGAL_ACTION, f"ability {ability_id!r} has no charges remaining")
+    return ability
+
+
+def handle_use_ability(command: Command, state: RunState, rng: StacksRNG, seq: int) -> tuple[Event, ...]:
+    hero_id = command.hero_id
+    ability = validate_use_ability(state, hero_id, command.payload)
+    hero = state.heroes[hero_id]
+    ability_def = _ability_defs_for_hero(hero).get(ability.ability_id)
+    new_ability = ability_systems.spend_charge(ability)
+
+    use_event = Event(
+        event_id=make_event_id(state.world_round, seq),
+        run_id=state.run_id,
+        world_round=state.world_round,
+        caused_by=command.command_id,
+        type=EventType.ABILITY_USED,
+        visibility=Visibility.PUBLIC,
+        actor_hero_id=hero_id,
+        room_id=hero.room_id,
+        payload={
+            "ability_id": ability.ability_id,
+            "target_hero_id": command.payload.get("target_hero_id"),
+            "target_enemy_id": command.payload.get("target_enemy_id"),
+            "charges_remaining": new_ability.charges_remaining,
+        },
+    )
+    events: list[Event] = [use_event]
+    if ability_def is not None:
+        events.extend(_dispatch_ability_effects(ability_def, command, state, rng, seq + len(events), hero_id, hero.room_id))
+    # Wave-6 (board task #21, playtest A5): using a manual ability leaves a
+    # visible until_end_of_turn active-effects-tray entry -- the live caller
+    # for systems/effects.py's active-effect mechanism (real, not inert
+    # plumbing: expires for real at this hero's next TURN_SUBMITTED).
+    events.append(
+        effects.build_active_effect_event(
+            command,
+            state,
+            seq + len(events),
+            actor_hero_id=hero_id,
+            room_id=hero.room_id,
+            source_id=ability.ability_id,
+            label=f"Used {ability.ability_id}",
+            duration="until_end_of_turn",
+        )
+    )
+    return tuple(events)
+
+
+def apply_ability_used(state: RunState, event: Event) -> RunState:
+    hero = state.heroes[event.actor_hero_id]
+    ability_id = event.payload["ability_id"]
+    ability = hero.abilities.get(ability_id)
+    if ability is not None:
+        hero.abilities[ability_id] = AbilityState(
+            ability_id=ability.ability_id,
+            trigger=ability.trigger,
+            frequency=ability.frequency,
+            charges_remaining=event.payload["charges_remaining"],
+            max_charges=ability.max_charges,
+        )
+    return state
+
+
+# ---------------------------------------------------------------- ability boundary refresh + auto-triggers
+
+
+def _build_ability_refresh_event(
+    state: RunState, hero: HeroState, boundary: str, room_id: str, seq: int, command_id: str
+) -> Event | None:
+    """Payload carries ONLY the abilities whose scope matches `boundary`
+    (a partial update), never the hero's full abilities dict: a single
+    command can trigger more than one boundary at once (e.g. breaching into
+    a Conflict room refreshes both "fight" and "room" scoped abilities in the
+    same handle() call), and every builder here reads from the same
+    read-only pre-command `state` snapshot (the handle() contract). A
+    full-dict replacement per event would let the second event's stale
+    snapshot silently clobber the first event's real update -- merging by key
+    in the applier keeps each boundary's event strictly additive."""
+
+    if not ability_systems.any_scope_matches(hero.abilities, boundary):
+        return None
+    refreshed_abilities = ability_systems.refresh_boundary(hero.abilities, boundary)
+    changed = {
+        aid: a for aid, a in refreshed_abilities.items() if ability_systems.scope_for_frequency(a.frequency) == boundary
+    }
+    return Event(
+        event_id=make_event_id(state.world_round, seq),
+        run_id=state.run_id,
+        world_round=state.world_round,
+        caused_by=command_id,
+        type=EventType.ABILITY_CHARGE_REFRESHED,
+        visibility=Visibility.PUBLIC,
+        actor_hero_id=hero.hero_id,
+        room_id=room_id,
+        payload={"boundary": boundary, "abilities": {aid: a.to_dict() for aid, a in changed.items()}},
+    )
+
+
+def apply_ability_charge_refreshed(state: RunState, event: Event) -> RunState:
+    hero = state.heroes[event.actor_hero_id]
+    for aid, d in event.payload["abilities"].items():
+        hero.abilities[aid] = AbilityState.from_dict(d)
+    return state
+
+
+def build_room_enter_ability_events(
+    state: RunState, hero_id: str, room_id: str, seq: int, command: Command, rng: StacksRNG
+) -> tuple[Event, ...]:
+    """trigger=="on_room_enter" abilities (docs posted 2026-07-20) fire
+    automatically every breach, for the breaching hero. Called by
+    systems/exploration.py's handle_breach for the room just breached into --
+    `state` is the pre-event snapshot handle() always receives; `rng` is the
+    same shared StacksRNG handle() received (contracts doc §9: no module
+    constructs its own Random instance)."""
+
+    hero = state.heroes.get(hero_id)
+    if hero is None or hero.sheet is None:
+        return ()
+    ability_defs = _ability_defs_for_hero(hero)
+    events: list[Event] = []
+    for aid, adef in sorted(ability_defs.items()):
+        if getattr(adef, "trigger", None) == "on_room_enter" and aid in hero.abilities:
+            events.extend(_dispatch_ability_effects(adef, command, state, rng, seq + len(events), hero_id, room_id))
+    return tuple(events)
+
+
+def build_encounter_start_ability_events(
+    state: RunState, hero_id: str, room_id: str, seq: int, command: Command, rng: StacksRNG
+) -> tuple[Event, ...]:
+    """trigger=="on_encounter_start" abilities fire automatically once when a
+    hero's Conflict encounter begins. Published for systems/combat.py's
+    start-encounter builder to call and fold into its own returned event
+    tuple, the same "post the exact hook you need" pattern
+    build_fight_boundary_refresh_events already established."""
+
+    hero = state.heroes.get(hero_id)
+    if hero is None or hero.sheet is None:
+        return ()
+    ability_defs = _ability_defs_for_hero(hero)
+    events: list[Event] = []
+    for aid, adef in sorted(ability_defs.items()):
+        if getattr(adef, "trigger", None) == "on_encounter_start" and aid in hero.abilities:
+            events.extend(_dispatch_ability_effects(adef, command, state, rng, seq + len(events), hero_id, room_id))
+    return tuple(events)
+
+
 # ---------------------------------------------------------------- legal actions
 
 
@@ -889,6 +1174,11 @@ def legal_action_names(state: RunState, hero_id: str) -> list[str]:
     if hero.inventory is not None and hero.inventory.items:
         actions.append("drop_item")
         actions.append("trade_item")
+    actions.extend(
+        f"use_ability:{aid}"
+        for aid, a in sorted(hero.abilities.items())
+        if a.trigger == "manual" and (a.charges_remaining is None or a.charges_remaining > 0)
+    )
     return actions
 
 
@@ -904,4 +1194,6 @@ EVENT_APPLIERS = {
     EventType.ITEM_DROPPED: apply_item_dropped,
     EventType.ITEM_TRADED: apply_item_traded,
     EventType.BODY_LOOT_RECOVERED: apply_body_loot_recovered,
+    EventType.ABILITY_USED: apply_ability_used,
+    EventType.ABILITY_CHARGE_REFRESHED: apply_ability_charge_refreshed,
 }

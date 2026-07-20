@@ -39,5 +39,31 @@
     "frequency": "once_per_room",
     "charges_remaining": 1,
     "max_charges": 1
-  }
+  },
+  "avatar_id": 3,
+  "color": "azure",
+  "abilities": [
+    {
+      "id": "keen_observer",
+      "name": "Keen Observer",
+      "fallback": "Notices what everyone else walked past.",
+      "accessible": "Keen Observer: on entering a room, roll Insight + Read DC 8. Success records a minor tell for the party.",
+      "trigger": "on_room_enter",
+      "frequency": "unlimited",
+      "available": true
+    }
+  ],
+  "active_effects": [
+    {
+      "id": "field_conversion_charge",
+      "name": "Field Conversion (charged)",
+      "fallback": "A makeshift tool is ready to deploy.",
+      "accessible": "Field Conversion (charged): a one-use tool conversion is ready this room.",
+      "rounds_remaining": null,
+      "source": "signature_ability"
+    }
+  ],
+  "statuses": [
+    { "id": "bleeding", "rounds_remaining": 2 }
+  ]
 }

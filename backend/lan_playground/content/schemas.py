@@ -259,6 +259,86 @@ class Background:
 
 
 # ---------------------------------------------------------------------------
+# Abilities (wave-6 addition, board task #20, playtest §E1) -- background or
+# general capabilities that are NOT cards: passive modifiers or auto-fired
+# triggers, distinct from `Background.signature_ability` (the one flagship,
+# manually-invoked ability every background already had). Content is never
+# allowed to ship "shelf-ware": director ruling 2026-07-20 04:26 requires
+# every ability's effects to use an op the engine actually *executes* for
+# abilities this wave, not merely a `KNOWN_OPS`-legal one. stacks-abilities
+# (engine lane, 04:30) published the executable set -- duplicated here (not
+# imported; abilities dispatch through the same `systems/effects.py::
+# dispatch()` cards use, same "duplicate the values, not the import" choice
+# `heroes.cards.LIVE_EFFECT_OPS` already makes):
+#   - ops: exactly `effects.LIVE_OPS` (reveal_room/spend_energy/grant_check/
+#     emit_fact/apply_condition/remove_condition).
+#   - trigger "manual": frequency must be once_per_floor/once_per_room/
+#     once_per_fight (reuses SignatureAbility's frequency vocab); player-
+#     invoked via a `use_ability` command, charge-gated per scope.
+#   - trigger "passive": frequency must be "unlimited"; effects dispatch
+#     exactly once, automatically, at hero_created.
+#   - trigger "on_room_enter": frequency "unlimited"; fires automatically on
+#     every breach, for the breaching hero.
+#   - trigger "on_encounter_start": frequency "unlimited"; fires
+#     automatically once when a hero's Conflict encounter starts.
+#   - no other trigger is wired this wave (e.g. "on_enemy_intent_revealed",
+#     "on_enemy_sighted") -- authoring against one fails loudly here instead
+#     of shipping an ability that visibly does nothing (§E1/§E2).
+# ---------------------------------------------------------------------------
+
+ABILITY_EXECUTABLE_OPS = frozenset(
+    {"reveal_room", "spend_energy", "grant_check", "emit_fact", "apply_condition", "remove_condition"}
+)
+ABILITY_MANUAL_FREQUENCIES = frozenset({"once_per_floor", "once_per_room", "once_per_fight"})
+ABILITY_AUTO_TRIGGERS = frozenset({"passive", "on_room_enter", "on_encounter_start"})
+
+
+@dataclass(frozen=True)
+class Ability:
+    id: str
+    name: str
+    prose: Prose
+    trigger: str  # "manual" | "passive" | "on_room_enter" | "on_encounter_start"
+    frequency: str  # "unlimited" | "once_per_floor" | "once_per_room" | "once_per_fight"
+    effects: tuple[Effect, ...] = ()
+    source: str = "general"  # "general" or a background id
+
+    def __post_init__(self) -> None:
+        validate_id(self.id, kind="ability")
+        if not self.trigger.strip():
+            raise ContentError(f"ability {self.id!r} must declare a trigger (§E1: what fires it)")
+        if not self.frequency.strip():
+            raise ContentError(f"ability {self.id!r} must declare a frequency (§E1)")
+        if not self.effects:
+            raise ContentError(
+                f"ability {self.id!r} must declare mechanic effects (§E1: real numbers, not shelf-ware)"
+            )
+        if self.trigger == "manual":
+            if self.frequency not in ABILITY_MANUAL_FREQUENCIES:
+                raise ContentError(
+                    f"ability {self.id!r} trigger 'manual' needs frequency in "
+                    f"{sorted(ABILITY_MANUAL_FREQUENCIES)}, got {self.frequency!r}"
+                )
+        elif self.trigger in ABILITY_AUTO_TRIGGERS:
+            if self.frequency != "unlimited":
+                raise ContentError(
+                    f"ability {self.id!r} trigger {self.trigger!r} auto-fires and must declare "
+                    f"frequency 'unlimited', got {self.frequency!r}"
+                )
+        else:
+            raise ContentError(
+                f"ability {self.id!r} trigger {self.trigger!r} is not wired by the engine this wave "
+                f"(executable triggers: {sorted(ABILITY_AUTO_TRIGGERS | {'manual'})}) -- no shelf-ware (§E1/§E2)"
+            )
+        for eff in self.effects:
+            if eff.op not in ABILITY_EXECUTABLE_OPS:
+                raise ContentError(
+                    f"ability {self.id!r} references op {eff.op!r}, which the engine does not execute "
+                    f"for abilities this wave (executable ops: {sorted(ABILITY_EXECUTABLE_OPS)}) -- no shelf-ware"
+                )
+
+
+# ---------------------------------------------------------------------------
 # Cards (§13.2-13.3)
 # ---------------------------------------------------------------------------
 
@@ -310,6 +390,8 @@ class Card:
     timing: CardTiming
     range: str
     legal_targets: tuple[str, ...]
+    keywords: tuple[str, ...] = ()
+    art_ref: str = ""
     required_state: tuple[str, ...] = ()
     base_effects: tuple[Effect, ...] = ()
     check: CardCheck | None = None
@@ -327,6 +409,13 @@ class Card:
             raise ContentError(
                 f"card {self.id!r} must declare an exact base effect or a check+outcome table"
             )
+        if not self.keywords:
+            raise ContentError(
+                f"card {self.id!r} must declare at least one keyword (playtest E3: card face needs "
+                "readable mechanics, keywords are part of that anatomy)"
+            )
+        if not self.art_ref.strip():
+            raise ContentError(f"card {self.id!r} must declare art_ref (playtest A2: card anatomy needs art)")
 
 
 # ---------------------------------------------------------------------------
@@ -355,10 +444,22 @@ class Item:
     weapon_damage_bonus: int = 0
     weapon_accuracy_bonus: int = 0
     passive_defense_bonus: int = 0
+    # Wave-6 addition (board task #20, §13.6 / playtest E4): quest knowledge
+    # ("family_notes"-class items -- a few pages, not equipment) does not
+    # consume an ordinary carry slot. `knowledge` is an explicit schema field
+    # rather than an ordinary tag so the slot_cost invariant below can enforce
+    # it structurally instead of relying on callers to remember a magic tag.
+    knowledge: bool = False
 
     def __post_init__(self) -> None:
         validate_id(self.id, kind="item")
-        if self.slot_cost < 1:
+        if self.knowledge:
+            if self.slot_cost != 0:
+                raise ContentError(
+                    f"item {self.id!r} is tagged knowledge=True but slot_cost is {self.slot_cost} "
+                    "(§13.6: quest knowledge does not consume ordinary carry slots -- must be 0)"
+                )
+        elif self.slot_cost < 1:
             raise ContentError(f"item {self.id!r} slot_cost must be >= 1")
         if not (self.granted_card_ids or self.passive_effects or self.use_effects):
             raise ContentError(
@@ -629,6 +730,7 @@ class ContentPack:
     pack_id: str
     backgrounds: Mapping[str, Background] = field(default_factory=dict)
     skills: Mapping[str, Skill] = field(default_factory=dict)
+    abilities: Mapping[str, Ability] = field(default_factory=dict)
     cards: Mapping[str, Card] = field(default_factory=dict)
     items: Mapping[str, Item] = field(default_factory=dict)
     conditions: Mapping[str, Condition] = field(default_factory=dict)

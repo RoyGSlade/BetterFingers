@@ -58,6 +58,7 @@ from . import heroes_wire
 from ..domain.commands import Command, CommandError, ErrorCode
 from ..domain.events import Event, EventType, Visibility, make_event_id
 from ..domain.state import LIFE_STATE_DEAD, LIFE_STATE_DOWNED, ConflictEncounterState, HeroState, RunState
+from . import abilities as ability_systems
 from . import combat_wire as wire
 
 _ENEMY_ROSTER_ORDER = ("goblin_firestarter", "goblin_bruiser", "punctuation_spider")
@@ -438,6 +439,13 @@ def build_start_encounter_events(
         events.extend(
             heroes_wire.build_fight_boundary_refresh_events(
                 state, breaching_hero_id, seq + len(events), command.command_id
+            )
+        )
+        # Wave-6 (board task #21, playtest E1): trigger=="on_encounter_start"
+        # abilities fire automatically once the fight actually begins.
+        events.extend(
+            heroes_wire.build_encounter_start_ability_events(
+                state, breaching_hero_id, room_id, seq + len(events), command, rng
             )
         )
     return tuple(events)
@@ -1115,6 +1123,17 @@ def handle_resolve_reaction(command: Command, state: RunState, rng, seq: int) ->
 def _apply_conflict_event(state: RunState, event: Event) -> RunState:
     room = state.map.rooms[event.payload["room_id"]]
     room.encounter = ConflictEncounterState.from_dict(event.payload["encounter"])
+    if room.encounter.status != "active":
+        # Wave-6 (board task #21, playtest A5): until_end_of_encounter active
+        # effects expire the moment THIS encounter ends (victory/party_wiped),
+        # not at the next world-round boundary -- scoped to encounter_id so a
+        # split party's other still-active encounter is unaffected.
+        for hid in room.encounter.heroes:
+            hero = state.heroes.get(hid)
+            if hero is not None:
+                hero.active_effects = ability_systems.expire_boundary(
+                    hero.active_effects, boundary="encounter", encounter_id=room.encounter.encounter_id
+                )
     for hid, updates in event.payload["hero_updates"].items():
         hero = state.heroes[hid]
         hero.hp = updates["hp"]

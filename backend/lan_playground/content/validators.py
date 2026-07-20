@@ -66,6 +66,16 @@ def check_unknown_references(pack: S.ContentPack) -> list[Finding]:
                 Finding("unknown_reference", f"card:{card.id}", f"unknown source background {card.source!r}")
             )
 
+    for ability in pack.abilities.values():
+        if ability.source != "general" and ability.source not in pack.backgrounds:
+            findings.append(
+                Finding(
+                    "unknown_reference",
+                    f"ability:{ability.id}",
+                    f"unknown source background {ability.source!r}",
+                )
+            )
+
     for item in pack.items.values():
         for card_id in item.granted_card_ids:
             if card_id not in pack.cards:
@@ -97,6 +107,10 @@ def _iter_all_effects(pack: S.ContentPack) -> Iterable[tuple[str, S.Effect]]:
     for bg in pack.backgrounds.values():
         for eff in bg.signature_ability.effects:
             yield f"background:{bg.id}:signature_ability", eff
+
+    for ability in pack.abilities.values():
+        for eff in ability.effects:
+            yield f"ability:{ability.id}", eff
 
     for card in pack.cards.values():
         for eff in card.base_effects:
@@ -147,6 +161,8 @@ def _iter_all_prose(pack: S.ContentPack) -> Iterable[tuple[str, S.Prose]]:
         yield f"background:{bg.id}:signature_ability", bg.signature_ability.prose
     for skill in pack.skills.values():
         yield f"skill:{skill.id}", skill.prose
+    for ability in pack.abilities.values():
+        yield f"ability:{ability.id}", ability.prose
     for card in pack.cards.values():
         yield f"card:{card.id}", card.prose
     for item in pack.items.values():
@@ -194,6 +210,83 @@ def check_enemy_intents(pack: S.ContentPack) -> list[Finding]:
                 findings.append(
                     Finding("enemy_without_intent", f"enemy:{enemy.id}:intent:{intent.id}", "no counterplay text")
                 )
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# Card anatomy: keywords + art_ref + non-empty mechanics (§23.2 wave-6,
+# board task #20, playtest §A2/§E3)
+# ---------------------------------------------------------------------------
+
+
+def check_card_anatomy_complete(pack: S.ContentPack) -> list[Finding]:
+    """Defense-in-depth: `Card.__post_init__` already rejects a card with no
+    keywords, no art_ref, or neither a check nor base_effects."""
+
+    findings = []
+    for card in pack.cards.values():
+        if not card.keywords:
+            findings.append(Finding("card_missing_keywords", f"card:{card.id}", "no keywords declared"))
+        if not card.art_ref.strip():
+            findings.append(Finding("card_missing_art_ref", f"card:{card.id}", "no art_ref declared"))
+        if card.check is None and not card.base_effects:
+            findings.append(
+                Finding("card_missing_mechanics", f"card:{card.id}", "no base_effects or check declared")
+            )
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# Abilities: trigger + mechanic effects, executable-op/trigger set (§23.2
+# wave-6, board task #20, playtest §E1, director ruling 2026-07-20 04:26)
+# ---------------------------------------------------------------------------
+
+
+def check_abilities_are_executable(pack: S.ContentPack) -> list[Finding]:
+    """Defense-in-depth: `Ability.__post_init__` already rejects a missing
+    trigger/frequency/effects, a trigger the engine doesn't wire this wave,
+    a frequency that doesn't match its trigger, and an effect op the engine
+    won't execute for abilities."""
+
+    findings = []
+    for ability in pack.abilities.values():
+        if not ability.trigger.strip():
+            findings.append(Finding("ability_missing_trigger", f"ability:{ability.id}", "no trigger declared"))
+        if not ability.effects:
+            findings.append(
+                Finding("ability_missing_mechanics", f"ability:{ability.id}", "no mechanic effects declared")
+            )
+        for eff in ability.effects:
+            if eff.op not in S.ABILITY_EXECUTABLE_OPS:
+                findings.append(
+                    Finding(
+                        "ability_op_not_executable",
+                        f"ability:{ability.id}",
+                        f"op {eff.op!r} is not in the engine's executable set {sorted(S.ABILITY_EXECUTABLE_OPS)}",
+                    )
+                )
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# Knowledge items must not consume carry slots (§13.6, playtest E4)
+# ---------------------------------------------------------------------------
+
+
+def check_knowledge_items_zero_slot_cost(pack: S.ContentPack) -> list[Finding]:
+    """Defense-in-depth: `Item.__post_init__` already rejects a knowledge
+    item with a nonzero slot_cost."""
+
+    findings = []
+    for item in pack.items.values():
+        if item.knowledge and item.slot_cost != 0:
+            findings.append(
+                Finding(
+                    "knowledge_item_consumes_slot",
+                    f"item:{item.id}",
+                    f"knowledge item has slot_cost {item.slot_cost}, must be 0 (§13.6)",
+                )
+            )
     return findings
 
 
@@ -313,6 +406,9 @@ ALL_PACK_CHECKS = (
     check_prose_complete,
     check_enemy_intents,
     check_condition_treatments,
+    check_card_anatomy_complete,
+    check_abilities_are_executable,
+    check_knowledge_items_zero_slot_cost,
 )
 
 
