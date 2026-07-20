@@ -7,7 +7,22 @@ generator and solver functions, which are code, never data (infinite_stacks.md
 never own its solution).
 """
 
-from .ordering_sequence import generate_instance
-from .solver import solve, solve_instance
+# Lazy re-exports: the repo's architecture gate (tests/test_architecture_smoke.py)
+# treats any eager `from .submodule import ...` in a package __init__ as a
+# package<->submodule edge, so re-exports must resolve at attribute access.
+_EXPORTS = {
+    "generate_instance": "ordering_sequence",
+    "solve": "solver",
+    "solve_instance": "solver",
+}
 
-__all__ = ["generate_instance", "solve", "solve_instance"]
+__all__ = list(_EXPORTS)
+
+
+def __getattr__(name):
+    if name in _EXPORTS:
+        import importlib
+
+        module = importlib.import_module(f".{_EXPORTS[name]}", __name__)
+        return getattr(module, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

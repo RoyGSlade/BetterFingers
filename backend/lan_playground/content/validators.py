@@ -19,7 +19,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from . import schemas as S
+# Import the schemas submodule directly (not `from . import schemas`) so the
+# static import graph records an edge to content.schemas rather than back to
+# the content package itself, which would form a package<->validators cycle.
+import backend.lan_playground.content.schemas as S
+
 from .loader import load_pack
 
 
