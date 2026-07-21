@@ -15,6 +15,13 @@
   --charm: #ff6fae;
   --scheme: #8b6fe8;
   --bonk: #ff9a3d;
+  --assist: #2f9e58;
+  --reaction: #4f8ff2;
+  --challenge: #d1495b;
+  --protect: #2f9e58;
+  --interpret: #8b6fe8;
+  --clue: #c98a2c;
+  --item: #2fa6a0;
   --win: #2f9e58;
   --lose: #d1495b;
 }
@@ -36,6 +43,13 @@
     --charm: #ff8ec2;
     --scheme: #a684ff;
     --bonk: #ffb066;
+    --assist: #4fce85;
+    --reaction: #7db2ff;
+    --challenge: #ff7d8c;
+    --protect: #4fce85;
+    --interpret: #c3aeff;
+    --clue: #e0aa5c;
+    --item: #5cd6cf;
     --win: #4fce85;
     --lose: #ff7d8c;
   }
@@ -83,7 +97,7 @@ body {
 
 .topbar {
   padding: 1.25rem 1rem 0.5rem;
-  max-width: 60rem;
+  max-width: 62rem;
   margin: 0 auto;
 }
 .topbar-row {
@@ -104,7 +118,7 @@ body {
   margin: 0.25rem 0 0;
   color: var(--muted);
   font-size: 0.9rem;
-  max-width: 40rem;
+  max-width: 42rem;
 }
 
 #fullscreen-toggle {
@@ -114,7 +128,7 @@ body {
 }
 
 main {
-  max-width: 60rem;
+  max-width: 62rem;
   margin: 0 auto;
   padding: 0.5rem 1rem 3rem;
 }
@@ -214,14 +228,16 @@ button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
-.card-choice input:focus-visible + .card-face {
+.card-choice input:focus-visible + .card-face,
+.variant-choice input:focus-visible + .variant-card {
   outline: 3px solid var(--accent);
   outline-offset: 2px;
 }
 
 #copy-code-button,
 #copy-link-button,
-#fullscreen-toggle {
+#fullscreen-toggle,
+#draft-generate-button {
   background: transparent;
   color: var(--fg);
   border-color: var(--border);
@@ -337,29 +353,111 @@ textarea:focus-visible,
   background: var(--win);
   color: #fff;
 }
+.player-tag-spotlight {
+  background: var(--accent-3);
+  color: #2a2540;
+}
 
-/* --- Board --- */
-.board-layout {
+.your-hero-name {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--accent);
+  margin: 0 0 0.15rem;
+}
+
+/* --- Character select --- */
+.move-card-list {
+  list-style: none;
+  margin: 0.5rem 0 1rem;
+  padding: 0;
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(12rem, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 0.6rem;
+}
+.move-card {
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  padding: 0.6rem 0.7rem;
+  background: var(--bg);
+}
+.move-card-name {
+  font-weight: 700;
+  display: block;
+}
+.move-card-school {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.move-card-description {
+  margin: 0.3rem 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.move-card.school-charm { border-left: 4px solid var(--charm); }
+.move-card.school-scheme { border-left: 4px solid var(--scheme); }
+.move-card.school-bonk { border-left: 4px solid var(--bonk); }
+.move-card.is-signature {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.signature-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.signature-choices label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.3rem 0.75rem;
+  background: var(--bg);
+  cursor: pointer;
+}
+.signature-choices input {
+  margin: 0;
+}
+.signature-choices input:checked + span {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+/* --- Round: spotlight + objective --- */
+.spotlight-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.6rem 0.9rem;
+  border-radius: 0.7rem;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  color: var(--accent-fg);
+  font-weight: 700;
+  margin-bottom: 1rem;
+}
+.spotlight-name {
+  font-size: 1.15rem;
+}
+.spotlight-banner.is-you {
+  outline: 3px solid var(--accent-3);
+  outline-offset: 2px;
+}
+
+.objective-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(12rem, 1.4fr);
   gap: 1rem;
   align-items: start;
 }
-#board-canvas {
-  width: 100%;
-  height: auto;
-  border-radius: 0.7rem;
-  border: 1px solid var(--border);
-  display: block;
-  background: #ddc28d url("/art/map.png") center / cover no-repeat;
-}
-.board-side {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
+.objective-description {
+  margin: 0 0 0.5rem;
 }
 .encounter-figure {
-  margin: 0 0 0.5rem;
+  margin: 0;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 0.7rem;
@@ -397,11 +495,55 @@ textarea:focus-visible,
   color: var(--border);
 }
 .roster {
-  max-height: 16rem;
+  max-height: 14rem;
   overflow-y: auto;
 }
 
-/* --- Cards --- */
+/* --- Private clue/hand --- */
+.private-panel {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.private-tag {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  margin-left: 0.4rem;
+}
+
+/* --- Contribution log / declared action --- */
+.contribution-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.contribution-item {
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.7rem;
+  background: var(--bg);
+}
+.contribution-item .stance-tag {
+  font-size: 0.72rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  color: #fff;
+  margin-right: 0.4rem;
+}
+.stance-assist { background: var(--assist); }
+.stance-reaction { background: var(--reaction); }
+.stance-challenge { background: var(--challenge); }
+.stance-protect { background: var(--protect); }
+.stance-interpret { background: var(--interpret); }
+.stance-clue { background: var(--clue); }
+.stance-item { background: var(--item); }
+
+/* --- Cards (shared by character/action/contribution/interpretation) --- */
 .card-fieldset {
   border: none;
   padding: 0;
@@ -432,39 +574,36 @@ textarea:focus-visible,
   flex-direction: column;
   align-items: center;
   gap: 0.35rem;
-  width: 8.25rem;
-  padding: 0.4rem;
+  min-width: 6.5rem;
+  padding: 0.6rem 0.5rem;
   border-radius: 0.8rem;
   border: 2px solid var(--border);
   background: var(--bg);
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
-.card-art {
-  display: block;
-  width: 100%;
-  height: auto;
-  aspect-ratio: 1;
-  object-fit: cover;
-  border-radius: 0.55rem;
-}
-.card-charm .card-art {
-  background: radial-gradient(circle at 50% 42%, #ffd4e8, #8f3f71);
-}
-.card-scheme .card-art {
-  background: radial-gradient(circle at 50% 42%, #d9ceff, #49317f);
-}
-.card-bonk .card-art {
-  background: radial-gradient(circle at 50% 42%, #ffe0ad, #9a5422);
-}
-.card-icon {
-  display: none;
-}
 .card-icon {
   font-size: 1.6rem;
 }
-.card-charm .card-icon { color: var(--charm); }
-.card-scheme .card-icon { color: var(--scheme); }
-.card-bonk .card-icon { color: var(--bonk); }
+.card-charm .card-icon,
+[data-card="charm"] .card-icon { color: var(--charm); }
+.card-scheme .card-icon,
+[data-card="scheme"] .card-icon { color: var(--scheme); }
+.card-bonk .card-icon,
+[data-card="bonk"] .card-icon { color: var(--bonk); }
+[data-stance="assist"] .card-icon { color: var(--assist); }
+[data-stance="reaction"] .card-icon { color: var(--reaction); }
+[data-stance="challenge"] .card-icon { color: var(--challenge); }
+[data-stance="protect"] .card-icon { color: var(--protect); }
+[data-stance="interpret"] .card-icon { color: var(--interpret); }
+[data-stance="clue"] .card-icon { color: var(--clue); }
+[data-stance="item"] .card-icon { color: var(--item); }
+.card-choice.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.card-choice.is-disabled .card-face {
+  filter: grayscale(0.6);
+}
 .card-choice input:checked + .card-face {
   border-color: var(--accent);
   box-shadow: 0 4px 14px -6px var(--accent);
@@ -474,7 +613,94 @@ textarea:focus-visible,
   transform: translateY(-2px);
 }
 
-/* --- Waiting / reveal --- */
+/* --- Variant rewrite comparison --- */
+.variant-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+}
+.variant-choice {
+  position: relative;
+  cursor: pointer;
+}
+.variant-choice input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+}
+.variant-card {
+  display: block;
+  height: 100%;
+  border: 2px solid var(--border);
+  border-radius: 0.7rem;
+  padding: 0.7rem;
+  background: var(--bg);
+}
+.variant-provenance {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  margin-bottom: 0.4rem;
+}
+.variant-provenance.provenance-fallback {
+  background: var(--muted);
+}
+.variant-text {
+  margin: 0;
+  font-size: 0.92rem;
+}
+.variant-choice input:checked + .variant-card {
+  border-color: var(--accent);
+  box-shadow: 0 4px 14px -6px var(--accent);
+}
+
+/* --- Approved message / intent (interpretation phase) --- */
+.approved-message {
+  margin: 0 0 0.4rem;
+  padding: 0.6rem 0.8rem;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-alt);
+  border-radius: 0 0.4rem 0.4rem 0;
+  font-style: italic;
+}
+.approved-intent {
+  margin: 0 0 1rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+/* --- Dice / modifier breakdown --- */
+.breakdown-list {
+  list-style: none;
+  margin: 0 0 0.75rem;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.breakdown-list li {
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.3rem 0.6rem;
+  background: var(--bg);
+  font-size: 0.85rem;
+}
+.breakdown-list .value-positive { color: var(--win); font-weight: 700; }
+.breakdown-list .value-negative { color: var(--lose); font-weight: 700; }
+.round-summary {
+  font-weight: 600;
+  margin: 0 0 0.75rem;
+}
+
+/* --- Waiting / spinner --- */
 .spinner-line {
   display: flex;
   align-items: center;
@@ -493,47 +719,6 @@ textarea:focus-visible,
   to { transform: rotate(360deg); }
 }
 
-.reveal-list {
-  list-style: none;
-  margin: 0 0 1rem;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-}
-.reveal-item {
-  border: 1px solid var(--border);
-  border-radius: 0.6rem;
-  padding: 0.6rem 0.8rem;
-  background: var(--bg);
-}
-.reveal-head {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  flex-wrap: wrap;
-}
-.reveal-card {
-  font-size: 0.8rem;
-  padding: 0.15rem 0.5rem;
-  border-radius: 999px;
-  color: #fff;
-}
-.reveal-card.card-charm { background: var(--charm); }
-.reveal-card.card-scheme { background: var(--scheme); }
-.reveal-card.card-bonk { background: var(--bonk); }
-.reveal-move {
-  margin: 0.4rem 0 0;
-  padding: 0.4rem 0.6rem;
-  border-left: 3px solid var(--accent);
-  background: var(--bg-alt);
-  border-radius: 0 0.4rem 0.4rem 0;
-}
-.round-summary {
-  font-weight: 600;
-  margin: 0 0 0.75rem;
-}
-
 /* --- Finale --- */
 #finale-screen {
   text-align: center;
@@ -541,9 +726,24 @@ textarea:focus-visible,
 #finale-heading {
   font-size: 1.8rem;
 }
+.finale-recap {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.finale-recap li {
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.7rem;
+  background: var(--bg);
+}
 
 footer {
-  max-width: 60rem;
+  max-width: 62rem;
   margin: 0 auto;
   padding: 1rem;
   color: var(--muted);
@@ -552,14 +752,14 @@ footer {
 }
 
 @media (max-width: 40rem) {
-  .board-layout {
+  .objective-layout {
     grid-template-columns: 1fr;
   }
   .card-face {
-    width: 5.25rem;
+    min-width: 4.75rem;
   }
-  .card-art {
-    height: 4.45rem;
+  .variant-list {
+    grid-template-columns: 1fr;
   }
   .encounter-figure {
     display: grid;
@@ -570,6 +770,9 @@ footer {
   }
   .encounter-art {
     height: 7.5rem;
+  }
+  .move-card-list {
+    grid-template-columns: 1fr;
   }
 }
 

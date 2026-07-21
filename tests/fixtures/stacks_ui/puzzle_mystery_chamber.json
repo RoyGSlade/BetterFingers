@@ -1,0 +1,76 @@
+{
+ "description": "A core_ordering_sequence Mystery Chamber instance (infinite_stacks.md S10, S24.4) mid-solve, in the REAL wire shape docs/INFINITE_STACKS_CONTRACTS.md S5.2 defines (StacksEngineAdapter.project()'s puzzles[room_id]): two objects' fallback/accessible prose (always visible -- objects are never gated behind an inspect action, only private-clue claiming is), one hint already revealed, an in-progress attempt, and TWO private clues assigned to this viewer (the key object's clue pool can hand a hero more than one fragment across separate breach/inspect claims). Wire shape for state.puzzles[room_id] (core/selectors.js selectPuzzleView). items[] carries the orderable solution items (wave-3 close: lexicographic-by-item_id on the wire, provably independent of the solution order) that the submission picker builds real submit_solution payloads from.",
+ "instance_id": "puzzle_core_ordering_sequence_9d0b1e22_2",
+ "template_id": "core_ordering_sequence",
+ "difficulty": 2,
+ "objects": [
+  {
+   "id": "obj_anchor",
+   "role": "anchor",
+   "fallback": "A brass-plated index card, clearly labeled.",
+   "accessible": "Object: anchor. A brass-plated index card with a position stamped on it."
+  },
+  {
+   "id": "obj_key",
+   "role": "key",
+   "fallback": "A bundle of index cards tied together with binding thread.",
+   "accessible": "Object: key. A bundle of index cards connected by binding thread, each thread showing which card leads into which."
+  },
+  {
+   "id": "obj_contradiction",
+   "role": "contradiction",
+   "fallback": "A card with a torn, half-legible label.",
+   "accessible": "Object: contradiction. A card with an old, torn label that no longer applies."
+  },
+  {
+   "id": "obj_red_herring",
+   "role": "red_herring",
+   "fallback": "A dusty ledger noting when each card was last reshelved.",
+   "accessible": "Object: red herring. A dusty ledger recording reshelving dates -- true, but not required to solve the puzzle."
+  }
+ ],
+ "solved": false,
+ "forced": false,
+ "attempts_used": 1,
+ "attempt_limit": 3,
+ "hints_revealed": [
+  {
+   "fallback": "Focus on the anchor: the brass-plated card sits at shelf position 1.",
+   "accessible": "Hint 1: the anchor card is at position 1."
+  }
+ ],
+ "your_private_clues": [
+  {
+   "clue_id": "clue_key_0",
+   "fallback": "A binding thread runs from the brass-plated card straight into the torn-label card.",
+   "accessible": "Key clue: the brass-plated card sits immediately before the torn-label card."
+  },
+  {
+   "clue_id": "clue_key_1",
+   "fallback": "A binding thread runs from the torn-label card straight into the dusty ledger's card.",
+   "accessible": "Key clue: the torn-label card sits immediately before the dusty ledger's card."
+  }
+ ],
+ "items": [
+  {
+   "item_id": "card_0",
+   "fallback": "The brass-plated card",
+   "accessible": "Orderable item: the brass-plated card."
+  },
+  {
+   "item_id": "card_1",
+   "fallback": "The torn-label card",
+   "accessible": "Orderable item: the torn-label card."
+  },
+  {
+   "item_id": "card_2",
+   "fallback": "The dusty ledger's card",
+   "accessible": "Orderable item: the dusty ledger's card."
+  },
+  {
+   "item_id": "card_3",
+   "fallback": "The wax-sealed card",
+   "accessible": "Orderable item: the wax-sealed card."
+  }
+ ]
+}

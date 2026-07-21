@@ -1,0 +1,2330 @@
+/* The Lost Meaning: Infinite Stacks -- Ritual Spire theme
+   (assets/designhelp/uioverhaul.zip, "Ritual Spire UI" pass).
+
+   Design system in one breath: void black #0c0a10, panel #14111a, ichor
+   crimson #8f1d2c, gilt #d9a441, bone text #d8d2c8. Parchment lives ONLY on
+   arcanum cards. Type: IM Fell English SC (engraved small-caps headings) +
+   EB Garamond (body) + IM Fell English italic (flavor), all self-hosted
+   (CSP default-src 'self' -- no external font hosts).
+
+   Standing rules carried over from every earlier wave:
+   - every stateful indicator (danger tier, connector state, energy pip,
+     card affordance) keeps a text label in the markup; color here is a
+     reinforcement layer, never the only signal (infinite_stacks.md S24.1/S25);
+   - no inline styles anywhere (CSP style-src 'self', no 'unsafe-inline') --
+     placement/width via the generated utility classes near the bottom;
+   - every animation dies under prefers-reduced-motion (single kill switch
+     at the end of this file). */
+
+/* -- Self-hosted type ----------------------------------------------------- */
+
+@font-face {
+  font-family: "IM Fell English SC";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/src/assets/fonts/im-fell-english-sc-latin.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IM Fell English";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/src/assets/fonts/im-fell-english-latin.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IM Fell English";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/src/assets/fonts/im-fell-english-italic-latin.woff2") format("woff2");
+}
+@font-face {
+  font-family: "EB Garamond";
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+  src: url("/src/assets/fonts/eb-garamond-latin.woff2") format("woff2");
+}
+@font-face {
+  font-family: "EB Garamond";
+  font-style: italic;
+  font-weight: 400 800;
+  font-display: swap;
+  src: url("/src/assets/fonts/eb-garamond-italic-latin.woff2") format("woff2");
+}
+
+/* -- Palette -------------------------------------------------------------- */
+
+:root {
+  color-scheme: dark;
+
+  /* Ritual Spire tokens */
+  --rs-void: #0c0a10;
+  --rs-deep: #100c14;
+  --rs-panel: #14111a;
+  --rs-panel-2: #191521;
+  --rs-panel-3: #241b2e;
+  --rs-well: #0f0c13;
+  --rs-border: #2c2333;
+  --rs-border-strong: #3b2f42;
+  --rs-ichor: #8f1d2c;
+  --rs-ichor-hot: #a32536;
+  --rs-ichor-bright: #c04656;
+  --rs-ichor-border: #421d26;
+  --rs-gilt: #d9a441;
+  --rs-gilt-bright: #eec66f;
+  --rs-bone: #d8d2c8;
+  --rs-bone-bright: #e8ddc2;
+  --rs-parchment: #e8ddc2;
+  --rs-parchment-line: #d3c7a8;
+  --rs-ink: #2a2118;
+  --rs-ink-dark: #14101a;
+  --rs-muted: #8f8698;
+  --rs-faint: #5f5768;
+  --rs-whisper-bg: #1c1526;
+  --rs-whisper-border: #4a3d63;
+  --rs-whisper: #a98fd4;
+  --rs-good: #8fe0a0;
+  --rs-good-border: #4c8f5b;
+  --rs-warn: #f0c56a;
+  --rs-warn-border: #a6663a;
+  --rs-bad: #ff8a8a;
+
+  --rs-font-head: "IM Fell English SC", "EB Garamond", Georgia, serif;
+  --rs-font-body: "EB Garamond", Georgia, "Times New Roman", serif;
+  --rs-font-flavor: "IM Fell English", "EB Garamond", Georgia, serif;
+  --rs-font-mono: ui-monospace, Menlo, Consolas, monospace;
+
+  /* Legacy variable names kept so any straggler rule still resolves. */
+  --stacks-bg: var(--rs-void);
+  --stacks-panel: var(--rs-panel);
+  --stacks-border: var(--rs-border-strong);
+  --stacks-text: var(--rs-bone);
+  --stacks-muted: var(--rs-muted);
+  --stacks-focus: #7cc4ff;
+  --stacks-accent: var(--rs-gilt);
+}
+
+/* -- Motion vocabulary ---------------------------------------------------- */
+
+@keyframes rs-candle {
+  0%, 100% { opacity: 1; }
+  47% { opacity: 0.82; }
+  52% { opacity: 0.95; }
+  61% { opacity: 0.78; }
+}
+@keyframes rs-rune-pulse {
+  from { box-shadow: 0 0 6px rgba(217, 164, 65, 0.15), inset 0 0 0 1px rgba(217, 164, 65, 0.25); }
+  to { box-shadow: 0 0 14px rgba(217, 164, 65, 0.4), inset 0 0 0 1px rgba(217, 164, 65, 0.6); }
+}
+@keyframes rs-hp-pulse {
+  from { filter: brightness(1); }
+  to { filter: brightness(1.25); }
+}
+@keyframes rs-ember {
+  0%, 100% { box-shadow: 0 0 10px rgba(143, 29, 44, 0.25), inset 0 0 8px rgba(143, 29, 44, 0.12); }
+  50% { box-shadow: 0 0 26px rgba(143, 29, 44, 0.55), inset 0 0 14px rgba(143, 29, 44, 0.3); }
+}
+@keyframes rs-ichor-pulse {
+  from { opacity: 0.55; }
+  to { opacity: 1; }
+}
+@keyframes stacks-die-spin {
+  from { transform: rotate(-25deg) scale(0.85); opacity: 0.6; }
+  to { transform: rotate(0deg) scale(1); opacity: 1; }
+}
+/* The Veil: a wall of ichor sweeps across on screen change (~600ms in,
+   ~600ms out via animation halves). Reduced-motion swaps it for a plain
+   200ms fade (see the kill switch at the end). */
+@keyframes rs-veil {
+  0% { transform: translateX(-112%); }
+  40%, 60% { transform: translateX(0); }
+  100% { transform: translateX(112%); }
+}
+@keyframes rs-crossfade {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+/* -- Base ----------------------------------------------------------------- */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(120% 60% at 50% -10%, rgba(143, 29, 44, 0.14), transparent 60%),
+    var(--rs-void);
+  background-attachment: fixed;
+  color: var(--rs-bone);
+  font-family: var(--rs-font-body);
+  font-size: 1.05rem;
+  line-height: 1.45;
+}
+
+.skip-link {
+  position: absolute;
+  left: -999px;
+}
+.skip-link:focus {
+  left: 1rem;
+  top: 1rem;
+  background: var(--rs-panel);
+  border: 1px solid var(--rs-gilt);
+  padding: 0.5rem 1rem;
+  z-index: 40;
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--rs-font-head);
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  color: var(--rs-bone-bright);
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  outline: 3px solid var(--stacks-focus);
+  outline-offset: 2px;
+}
+
+input[type="text"],
+input[type="password"],
+select,
+textarea {
+  background: var(--rs-well);
+  border: 1px solid var(--rs-border-strong);
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+  color: var(--rs-bone-bright);
+  font-family: var(--rs-font-body);
+  font-size: 1rem;
+}
+input[type="text"]:focus,
+input[type="password"]:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--rs-gilt);
+  outline: none;
+  box-shadow: 0 0 12px rgba(217, 164, 65, 0.2);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+/* Engraved small-caps panel headings with a gilt ornament. The glyph is
+   supplied by CSS with empty alternative text so assistive tech skips it. */
+.stacks-panel-heading,
+.stacks-character-heading h3,
+.stacks-room-objects h3,
+.stacks-room-exits h3,
+.stacks-room-occupants h3,
+.stacks-room-corruption-tells h3,
+.stacks-puzzle-objects h3,
+.stacks-puzzle-private-clue h3,
+.stacks-puzzle-shared-notes h3,
+.stacks-puzzle-hints h3,
+.stacks-puzzle-submission h3,
+.stacks-combat-initiative h3,
+.stacks-combat-enemies h3,
+.stacks-combat-heroes h3,
+.stacks-combat-attacks h3,
+.stacks-combat-maneuvers h3,
+.stacks-combat-reactions h3 {
+  margin: 0 0 0.6rem;
+  font-family: var(--rs-font-head);
+  font-weight: 400;
+  font-size: 0.95rem;
+  letter-spacing: 0.14em;
+  color: var(--rs-gilt);
+}
+.stacks-panel-heading::before,
+.stacks-room-objects h3::before,
+.stacks-room-exits h3::before,
+.stacks-room-occupants h3::before,
+.stacks-puzzle-objects h3::before,
+.stacks-puzzle-private-clue h3::before,
+.stacks-puzzle-shared-notes h3::before,
+.stacks-puzzle-hints h3::before,
+.stacks-puzzle-submission h3::before,
+.stacks-combat-initiative h3::before,
+.stacks-combat-heroes h3::before,
+.stacks-combat-attacks h3::before,
+.stacks-combat-maneuvers h3::before,
+.stacks-combat-reactions h3::before {
+  content: "\25C6  " / "";
+  color: var(--rs-gilt);
+}
+.stacks-room-corruption-tells h3,
+.stacks-combat-enemies h3 {
+  color: var(--rs-ichor-bright);
+}
+.stacks-room-corruption-tells h3::before,
+.stacks-combat-enemies h3::before {
+  content: "\2726  " / "";
+  color: var(--rs-ichor);
+}
+
+/* -- Topbar --------------------------------------------------------------- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.6rem 1.25rem;
+  background: linear-gradient(#120e17, var(--rs-void));
+  border-bottom: 1px solid var(--rs-border);
+}
+.topbar-icon {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.3rem;
+  border: 1px solid rgba(217, 164, 65, 0.55);
+  box-shadow: 0 0 10px rgba(217, 164, 65, 0.18);
+}
+.topbar h1 {
+  margin: 0;
+  font-size: 1.25rem;
+  letter-spacing: 0.12em;
+  animation: rs-candle 9s linear infinite;
+}
+.topbar-tagline {
+  margin: 0;
+  font-family: var(--rs-font-flavor);
+  font-style: italic;
+  font-size: 0.85rem;
+  color: var(--rs-muted);
+}
+
+/* -- Join panel: Enter the Spire ------------------------------------------ */
+
+#join-panel {
+  max-width: 28rem;
+  margin: 2.5rem auto;
+  padding: 1.75rem 1.5rem;
+  background: var(--rs-panel);
+  border: 1px solid var(--rs-border-strong);
+  border-radius: 12px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+}
+
+.stacks-key-art {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  border-radius: 10px;
+  margin-bottom: 1.25rem;
+  border: 1px solid var(--rs-border-strong);
+}
+
+#join-heading {
+  text-align: center;
+  margin: 0 0 0.25rem;
+  font-size: 1.7rem;
+  letter-spacing: 0.12em;
+  text-shadow: 0 0 24px rgba(143, 29, 44, 0.6);
+  animation: rs-candle 9s linear infinite;
+}
+#join-heading::before {
+  content: "\2726 \25C6 \2726" / "";
+  display: block;
+  color: var(--rs-gilt);
+  letter-spacing: 0.5em;
+  font-size: 0.7rem;
+  margin-bottom: 0.5rem;
+}
+
+.stacks-join-tagline {
+  margin: 0 0 1rem;
+  text-align: center;
+  font-family: var(--rs-font-flavor);
+  font-style: italic;
+  font-size: 0.95rem;
+  color: var(--rs-muted);
+}
+
+#join-panel label {
+  display: block;
+  margin-top: 0.9rem;
+  font-family: var(--rs-font-head);
+  font-size: 0.8rem;
+  letter-spacing: 0.16em;
+  color: var(--rs-muted);
+}
+#join-panel label .stacks-label-hint {
+  font-family: var(--rs-font-flavor);
+  font-style: italic;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+#join-panel input {
+  width: 100%;
+  margin-top: 0.3rem;
+}
+#access-code-input,
+#room-code-input {
+  font-family: var(--rs-font-mono);
+  letter-spacing: 0.2em;
+}
+
+#join-panel .stacks-join-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  margin-top: 1.4rem;
+}
+
+/* Answer the Summons (join): the ichor-ember button. */
+#join-room-button {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(var(--rs-ichor-hot), var(--rs-ichor));
+  border: 1px solid var(--rs-ichor-bright);
+  border-radius: 9px;
+  color: #f5e9dc;
+  font-family: var(--rs-font-head);
+  font-size: 1.05rem;
+  letter-spacing: 0.14em;
+  padding: 0.85rem;
+  min-height: 48px;
+  animation: rs-ember 4s ease-in-out infinite;
+}
+#join-room-button:hover {
+  filter: brightness(1.2);
+}
+
+/* Kindle a New Run (host): the rune-bordered ghost. */
+#create-room-button {
+  background: rgba(5, 3, 8, 0.4);
+  border: 1px solid var(--rs-border-strong);
+  border-radius: 9px;
+  color: var(--rs-muted);
+  font-family: var(--rs-font-head);
+  font-size: 0.95rem;
+  letter-spacing: 0.14em;
+  padding: 0.8rem;
+  min-height: 46px;
+  transition: all 0.35s;
+}
+#create-room-button:hover {
+  border-color: var(--rs-gilt);
+  color: var(--rs-bone-bright);
+  box-shadow: 0 0 18px rgba(217, 164, 65, 0.2);
+}
+
+#join-status {
+  min-height: 1.2rem;
+  text-align: center;
+  font-family: var(--rs-font-flavor);
+  font-style: italic;
+  color: var(--rs-warn);
+}
+
+.stacks-join-footnote {
+  margin: 1rem 0 0;
+  text-align: center;
+  font-family: var(--rs-font-flavor);
+  font-style: italic;
+  font-size: 0.8rem;
+  color: var(--rs-faint);
+}
+
+/* -- Status bar / errors --------------------------------------------------- */
+
+.stacks-status-bar {
+  display: flex;
+  gap: 1.5rem;
+  padding: 0.5rem 1.25rem;
+  background: linear-gradient(#120e17, var(--rs-void));
+  border-bottom: 1px solid var(--rs-border);
+  flex-wrap: wrap;
+  font-family: var(--rs-font-head);
+  font-size: 0.85rem;
+  letter-spacing: 0.1em;
+  color: var(--rs-muted);
+}
+.stacks-status-round {
+  color: var(--rs-gilt);
+}
+.stacks-status-connection--connected {
+  color: var(--rs-good);
+}
+.stacks-status-connection--disconnected,
+.stacks-status-connection--error {
+  color: var(--rs-bad);
+}
+
+.stacks-error-panel {
+  padding: 0.5rem 1.25rem;
+  background: linear-gradient(#1c1016, var(--rs-panel));
+  border-bottom: 1px solid var(--rs-ichor);
+  color: var(--rs-ichor-bright);
+  font-family: var(--rs-font-flavor);
+  font-style: italic;
+}
+
+/* -- Map layout ------------------------------------------------------------ */
+
+.stacks-map-layout {
+  display: grid;
+  grid-template-columns: 16rem 1fr 18rem;
+  gap: 1rem;
+  padding: 1rem;
+  align-items: start;
+}
+
+.stacks-roster,
+.stacks-you-panel,
+.stacks-die-panel,
+.stacks-log-panel {
+  background: var(--rs-panel);
+  border: 1px solid var(--rs-border-strong);
+  border-radius: 12px;
+  padding: 0.9rem;
+  margin-bottom: 1rem;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.stacks-roster-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.stacks-hero-card {
+  text-align: left;
+  background: var(--rs-panel-2);
+  border: 1px solid var(--rs-border-strong);
+  border-radius: 9px;
+  padding: 0.55rem;
+}
+.stacks-hero-card--you {
+  border-color: var(--rs-gilt);
+}
+.stacks-hero-card.is-selected {
+  outline: 2px solid var(--stacks-focus);
+}
+.stacks-hero-card-name {
+  font-family: var(--rs-font-head);
+  letter-spacing: 0.06em;
+  color: var(--rs-bone-bright);
+}
+.stacks-hero-card-danger--critical,
+.stacks-hero-card-danger--downed,
+.stacks-hero-card-danger--dead {
+  color: var(--rs-bad);
+}
+.stacks-hero-card-danger--wounded,
+.stacks-hero-card-danger--stable {
+  color: var(--rs-warn);
+}
+.stacks-hero-card-danger--healthy {
+  color: var(--rs-good);
+}
+
+.stacks-hero-card-in-combat {
+  font-size: 0.8rem;
+  color: var(--rs-ichor-bright);
+  margin-top: 0.15rem;
+}
+
+.stacks-energy-pip {
+  margin-right: 0.15rem;
+}
+.stacks-energy-pip.is-filled {
+  color: var(--rs-gilt);
+  text-shadow: 0 0 8px rgba(217, 164, 65, 0.5);
+}
+.stacks-energy-pip:not(.is-filled) {
+  color: var(--rs-border-strong);
+}
+
+.stacks-route-preview {
+  font-size: 0.9rem;
+  color: var(--rs-muted);
+  font-style: italic;
+}
+
+.stacks-map-grid {
+  display: grid;
+  gap: 0.5rem;
+}
+
+/* Rooms: unlit fog, lit chambers, your gilt-marked chamber, required rooms
+   sealed in crimson, the route a pale outline. */
+.stacks-tile {
+  border: 1px solid var(--rs-border-strong);
+  border-radius: 9px;
+  padding: 0.55rem;
+  min-height: 5.5rem;
+  text-align: left;
+  background: var(--rs-panel);
+  font-family: var(--rs-font-body);
+}
+.stacks-tile-heading {
+  font-family: var(--rs-font-head);
+  font-size: 0.85rem;
+  letter-spacing: 0.06em;
+  color: var(--rs-bone-bright);
+}
+.stacks-tile--fog {
+  background: repeating-linear-gradient(45deg, #100d14, #100d14 6px, #151019 6px, #151019 12px);
+  border-color: var(--rs-border);
+  color: var(--rs-faint);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-style: italic;
+}
+.stacks-tile.is-current {
+  border-color: var(--rs-gilt);
+  border-width: 2px;
+  background: var(--rs-panel-2);
+  animation: rs-rune-pulse 5s ease-in-out infinite alternate;
+}
+.stacks-tile.is-current .stacks-tile-heading {
+  color: var(--rs-gilt);
+}
+.stacks-tile.is-route-preview {
+  outline: 2px dashed var(--stacks-focus);
+  outline-offset: -3px;
+}
+.stacks-tile.is-required {
+  border-color: var(--rs-ichor);
+  background: linear-gradient(#1c1016, var(--rs-panel));
+}
+.stacks-tile.is-required::after {
+  content: " (required)";
+  font-size: 0.75rem;
+  font-style: italic;
+  color: var(--rs-muted);
+}
+button.stacks-tile {
+  cursor: pointer;
+}
+button.stacks-tile:hover {
+  border-color: var(--rs-gilt);
+}
+
+.stacks-tile-heroes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0.25rem 0;
+  font-size: 0.75rem;
+}
+.stacks-tile-hero-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: var(--rs-panel-3);
+  border: 1px solid var(--rs-border-strong);
+  border-radius: 0.35rem;
+  padding: 0.1rem 0.3rem 0.1rem 0.1rem;
+}
+
+.stacks-tile-connectors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.4rem;
+  font-size: 0.75rem;
+}
+.stacks-connector {
+  border: 1px solid var(--rs-border-strong);
+  border-radius: 0.35rem;
+  padding: 0.1rem 0.35rem;
+  background: transparent;
+  color: inherit;
+}
+.stacks-connector.is-actionable {
+  background: var(--rs-panel-3);
+  cursor: pointer;
+}
+.stacks-connector.is-actionable:hover {
+  border-color: var(--rs-gilt);
+  box-shadow: 0 0 10px rgba(217, 164, 65, 0.25);
+}
+.stacks-connector--open {
+  border-color: var(--rs-good-border);
+  color: var(--rs-good);
+}
+.stacks-connector--locked {
+  border-color: var(--rs-warn-border);
+  color: var(--rs-warn);
+}
+.stacks-connector--undiscovered {
+  border-color: var(--rs-muted);
+  color: var(--rs-muted);
+}
+
+.stacks-tile-move-cost {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--rs-gilt);
+}
+
+/* -- Dice: the casting of bones -------------------------------------------
+   A diamond bone -- the face stays upright while a rotated gilt square is
+   painted behind it, so the markup needs no extra elements. */
+.stacks-die {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.45rem;
+}
+.stacks-die-face {
+  position: relative;
+  width: 3.2rem;
+  height: 3.2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--rs-font-head);
+  font-size: 1.5rem;
+  color: var(--rs-bone-bright);
+}
+.stacks-die-face::before {
+  content: "";
+  position: absolute;
+  inset: 12%;
+  transform: rotate(45deg);
+  background: var(--rs-well);
+  border: 1.5px solid var(--rs-gilt);
+  animation: rs-rune-pulse 4s ease-in-out infinite alternate;
+  z-index: -1;
+}
+.stacks-die-face--idle::before {
+  border-color: var(--rs-border-strong);
+  animation: none;
+}
+.stacks-die-face--idle {
+  color: var(--rs-faint);
+}
+.stacks-die-label {
+  font-family: var(--rs-font-head);
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  color: var(--rs-muted);
+}
+.stacks-die-face--rolling {
+  animation: stacks-die-spin 0.5s ease-out;
+}
+.stacks-die--instant .stacks-die-face {
+  animation: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .stacks-die-face--rolling {
+    animation: none;
+  }
+}
+
+/* -- The Ledger (event log) ------------------------------------------------ */
+
+.stacks-log-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.85rem;
+  font-style: italic;
+  color: var(--rs-muted);
+  max-height: 12rem;
+  overflow-y: auto;
+}
+.stacks-log-list li {
+  border-left: 2px solid var(--rs-border);
+  padding-left: 0.6rem;
+  margin-bottom: 0.35rem;
+}
+.stacks-log-list li:first-child {
+  border-left-color: var(--rs-ichor);
+  color: var(--rs-bone);
+}
+
+.stacks-you-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+}
+
+/* Raised interactive surface -- the standard "stone button". */
+.stacks-action-button {
+  background: var(--rs-panel-3);
+  border: 1px solid var(--rs-border-strong);
+  border-radius: 7px;
+  padding: 0.5rem 0.9rem;
+  font-family: var(--rs-font-head);
+  font-size: 0.85rem;
+  letter-spacing: 0.1em;
+  color: var(--rs-bone-bright);
+  min-height: 44px;
+}
+.stacks-action-button:hover:not(:disabled) {
+  border-color: var(--rs-gilt);
+  box-shadow: 0 0 14px rgba(217, 164, 65, 0.25);
+}
+.stacks-action-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Whisper: a private clue, yours alone. */
+.stacks-private-clue {
+  margin-top: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  background: var(--rs-whisper-bg);
+  border: 1px solid var(--rs-whisper-border);
+  border-radius: 8px;
+  font-style: italic;
+}
+.stacks-private-clue h3,
+.stacks-private-clue .stacks-panel-heading {
+  color: var(--rs-whisper);
+  font-style: normal;
+}
+
+/* Grid placement utility classes (see screens/map.js MAX_GRID_SPAN comment) --
+   generated instead of inline styles so the map works under strict CSP style-src. */
+.stacks-col-1 { grid-column: 1; }
+.stacks-col-2 { grid-column: 2; }
+.stacks-col-3 { grid-column: 3; }
+.stacks-col-4 { grid-column: 4; }
+.stacks-col-5 { grid-column: 5; }
+.stacks-col-6 { grid-column: 6; }
+.stacks-col-7 { grid-column: 7; }
+.stacks-col-8 { grid-column: 8; }
+.stacks-col-9 { grid-column: 9; }
+.stacks-col-10 { grid-column: 10; }
+.stacks-col-11 { grid-column: 11; }
+.stacks-col-12 { grid-column: 12; }
+.stacks-col-13 { grid-column: 13; }
+.stacks-col-14 { grid-column: 14; }
+.stacks-col-15 { grid-column: 15; }
+.stacks-col-16 { grid-column: 16; }
+.stacks-col-17 { grid-column: 17; }
+.stacks-col-18 { grid-column: 18; }
+.stacks-col-19 { grid-column: 19; }
+.stacks-col-20 { grid-column: 20; }
+.stacks-col-21 { grid-column: 21; }
+.stacks-col-22 { grid-column: 22; }
+.stacks-col-23 { grid-column: 23; }
+.stacks-col-24 { grid-column: 24; }
+.stacks-row-1 { grid-row: 1; }
+.stacks-row-2 { grid-row: 2; }
+.stacks-row-3 { grid-row: 3; }
+.stacks-row-4 { grid-row: 4; }
+.stacks-row-5 { grid-row: 5; }
+.stacks-row-6 { grid-row: 6; }
+.stacks-row-7 { grid-row: 7; }
+.stacks-row-8 { grid-row: 8; }
+.stacks-row-9 { grid-row: 9; }
+.stacks-row-10 { grid-row: 10; }
+.stacks-row-11 { grid-row: 11; }
+.stacks-row-12 { grid-row: 12; }
+.stacks-row-13 { grid-row: 13; }
+.stacks-row-14 { grid-row: 14; }
+.stacks-row-15 { grid-row: 15; }
+.stacks-row-16 { grid-row: 16; }
+.stacks-row-17 { grid-row: 17; }
+.stacks-row-18 { grid-row: 18; }
+.stacks-row-19 { grid-row: 19; }
+.stacks-row-20 { grid-row: 20; }
+.stacks-row-21 { grid-row: 21; }
+.stacks-row-22 { grid-row: 22; }
+.stacks-row-23 { grid-row: 23; }
+.stacks-row-24 { grid-row: 24; }
+.stacks-cols-1 { grid-template-columns: repeat(1, minmax(6rem, 1fr)); }
+.stacks-cols-2 { grid-template-columns: repeat(2, minmax(6rem, 1fr)); }
+.stacks-cols-3 { grid-template-columns: repeat(3, minmax(6rem, 1fr)); }
+.stacks-cols-4 { grid-template-columns: repeat(4, minmax(6rem, 1fr)); }
+.stacks-cols-5 { grid-template-columns: repeat(5, minmax(6rem, 1fr)); }
+.stacks-cols-6 { grid-template-columns: repeat(6, minmax(6rem, 1fr)); }
+.stacks-cols-7 { grid-template-columns: repeat(7, minmax(6rem, 1fr)); }
+.stacks-cols-8 { grid-template-columns: repeat(8, minmax(6rem, 1fr)); }
+.stacks-cols-9 { grid-template-columns: repeat(9, minmax(6rem, 1fr)); }
+.stacks-cols-10 { grid-template-columns: repeat(10, minmax(6rem, 1fr)); }
+.stacks-cols-11 { grid-template-columns: repeat(11, minmax(6rem, 1fr)); }
+.stacks-cols-12 { grid-template-columns: repeat(12, minmax(6rem, 1fr)); }
+.stacks-cols-13 { grid-template-columns: repeat(13, minmax(6rem, 1fr)); }
+.stacks-cols-14 { grid-template-columns: repeat(14, minmax(6rem, 1fr)); }
+.stacks-cols-15 { grid-template-columns: repeat(15, minmax(6rem, 1fr)); }
+.stacks-cols-16 { grid-template-columns: repeat(16, minmax(6rem, 1fr)); }
+.stacks-cols-17 { grid-template-columns: repeat(17, minmax(6rem, 1fr)); }
+.stacks-cols-18 { grid-template-columns: repeat(18, minmax(6rem, 1fr)); }
+.stacks-cols-19 { grid-template-columns: repeat(19, minmax(6rem, 1fr)); }
+.stacks-cols-20 { grid-template-columns: repeat(20, minmax(6rem, 1fr)); }
+.stacks-cols-21 { grid-template-columns: repeat(21, minmax(6rem, 1fr)); }
+.stacks-cols-22 { grid-template-columns: repeat(22, minmax(6rem, 1fr)); }
+.stacks-cols-23 { grid-template-columns: repeat(23, minmax(6rem, 1fr)); }
+.stacks-cols-24 { grid-template-columns: repeat(24, minmax(6rem, 1fr)); }
+.stacks-rows-1 { grid-template-rows: repeat(1, auto); }
+.stacks-rows-2 { grid-template-rows: repeat(2, auto); }
+.stacks-rows-3 { grid-template-rows: repeat(3, auto); }
+.stacks-rows-4 { grid-template-rows: repeat(4, auto); }
+.stacks-rows-5 { grid-template-rows: repeat(5, auto); }
+.stacks-rows-6 { grid-template-rows: repeat(6, auto); }
+.stacks-rows-7 { grid-template-rows: repeat(7, auto); }
+.stacks-rows-8 { grid-template-rows: repeat(8, auto); }
+.stacks-rows-9 { grid-template-rows: repeat(9, auto); }
+.stacks-rows-10 { grid-template-rows: repeat(10, auto); }
+.stacks-rows-11 { grid-template-rows: repeat(11, auto); }
+.stacks-rows-12 { grid-template-rows: repeat(12, auto); }
+.stacks-rows-13 { grid-template-rows: repeat(13, auto); }
+.stacks-rows-14 { grid-template-rows: repeat(14, auto); }
+.stacks-rows-15 { grid-template-rows: repeat(15, auto); }
+.stacks-rows-16 { grid-template-rows: repeat(16, auto); }
+.stacks-rows-17 { grid-template-rows: repeat(17, auto); }
+.stacks-rows-18 { grid-template-rows: repeat(18, auto); }
+.stacks-rows-19 { grid-template-rows: repeat(19, auto); }
+.stacks-rows-20 { grid-template-rows: repeat(20, auto); }
+.stacks-rows-21 { grid-template-rows: repeat(21, auto); }
+.stacks-rows-22 { grid-template-rows: repeat(22, auto); }
+.stacks-rows-23 { grid-template-rows: repeat(23, auto); }
+.stacks-rows-24 { grid-template-rows: repeat(24, auto); }
+
+/* -- Room / puzzle / combat screens ---------------------------------------- */
+
+#room-screen,
+#puzzle-screen,
+#combat-screen {
+  padding: 1rem;
+}
+
+.stacks-room-heading,
+.stacks-puzzle-heading {
+  margin-bottom: 1rem;
+}
+.stacks-room-heading h2,
+.stacks-puzzle-heading h2 {
+  margin: 0 0 0.2rem;
+  font-size: 1.4rem;
+}
+.stacks-room-family,
+.stacks-room-subtype,
+.stacks-puzzle-difficulty,
+.stacks-puzzle-status {
+  font-family: var(--rs-font-flavor);
+  font-style: italic;
+  color: var(--rs-muted);
+}
+
+.stacks-room-layout,
+.stacks-puzzle-layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+
+.stacks-room-occupants,
+.stacks-room-objects,
+.stacks-room-exits,
+.stacks-puzzle-objects,
+.stacks-puzzle-private-clue,
+.stacks-puzzle-shared-notes,
+.stacks-puzzle-hints,
+.stacks-puzzle-submission,
+.stacks-combat-initiative,
+.stacks-combat-heroes,
+.stacks-combat-attacks,
+.stacks-combat-maneuvers,
+.stacks-combat-reactions {
+  background: var(--rs-panel);
+  border: 1px solid var(--rs-border-strong);
+  border-radius: 12px;
+  padding: 0.9rem;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+/* Corruption tells + the enemy panel bleed crimson. */
+.stacks-room-corruption-tells {
+  background: linear-gradient(#1c1016, var(--rs-panel));
+  border: 1px solid var(--rs-ichor);
+  border-radius: 12px;
+  padding: 0.9rem;
+  box-shadow: 0 0 24px rgba(143, 29, 44, 0.15);
+}
+.stacks-room-corruption-tells li {
+  font-style: italic;
+  color: var(--rs-bone);
+}
+.stacks-combat-enemies {
+  background: linear-gradient(#1c1016, var(--rs-panel));
+  border: 1px solid var(--rs-ichor);
+  border-radius: 12px;
+  padding: 0.9rem;
+  box-shadow: 0 0 24px rgba(143, 29, 44, 0.18);
+}
+
+.stacks-room-object,
+.stacks-room-exit,
+.stacks-puzzle-object,
+.stacks-combat-attack-button,
+.stacks-combat-maneuver-button,
+.stacks-combat-reaction-button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  width: 100%;
+  text-align: left;
+  background: var(--rs-panel-2);
+  border: 1px solid var(--rs-border-strong);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 0.45rem;
+  min-height: 46px;
+}
+.stacks-room-object:hover:not(:disabled),
+.stacks-room-exit:hover:not(:disabled),
+.stacks-puzzle-object:hover:not(:disabled),
+.stacks-combat-attack-button:hover:not(:disabled),
+.stacks-combat-maneuver-button:hover:not(:disabled),
+.stacks-combat-reaction-button:hover:not(:disabled) {
+  border-color: var(--rs-gilt);
+  box-shadow: 0 0 14px rgba(217, 164, 65, 0.2);
+}
+
+.stacks-room-object.is-inspected,
+.stacks-puzzle-object.is-inspected {
+  border-color: var(--rs-gilt);
+}
+
+.stacks-room-exit:disabled,
+.stacks-combat-attack-button:disabled,
+.stacks-combat-maneuver-button:disabled,
+.stacks-combat-reaction-button:disabled,
+.stacks-puzzle-submit-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.stacks-room-exit-cost,
+.stacks-combat-attack-effect,
+.stacks-combat-maneuver-effect {
+  font-size: 0.85rem;
+  color: var(--rs-muted);
+  font-style: italic;
+}
+
+.stacks-puzzle-note {
+  border-bottom: 1px solid var(--rs-border);
+  padding-bottom: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.stacks-puzzle-note.is-contradiction {
+  border-left: 3px solid var(--rs-ichor-bright);
+  padding-left: 0.5rem;
+}
+
+.stacks-puzzle-note-order button,
+.stacks-puzzle-note-link-button,
+.stacks-puzzle-note-contradiction-button,
+.stacks-puzzle-share-clue-button,
+.stacks-puzzle-add-note-button,
+.stacks-puzzle-request-hint-button,
+.stacks-puzzle-force-progress-button,
+.stacks-puzzle-submit-button {
+  background: var(--rs-panel-3);
+  border: 1px solid var(--rs-border-strong);
+  border-radius: 7px;
+  padding: 0.4rem 0.8rem;
+  margin-right: 0.4rem;
+  color: var(--rs-bone-bright);
+}
+.stacks-puzzle-note-link-button:hover,
+.stacks-puzzle-share-clue-button:hover,
+.stacks-puzzle-add-note-button:hover,
+.stacks-puzzle-request-hint-button:hover,
+.stacks-puzzle-submit-button:hover:not(:disabled) {
+  border-color: var(--rs-gilt);
+}
+
+.stacks-puzzle-hint-tier.is-used {
+  opacity: 0.6;
+}
+
+.stacks-puzzle-clue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.stacks-puzzle-clue {
+  border-bottom: 1px solid var(--rs-border);
+  padding-bottom: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.stacks-puzzle-clue-text {
+  font-style: italic;
+}
+.stacks-puzzle-clue-status {
+  font-size: 0.8rem;
+  color: var(--rs-muted);
+}
+
+.stacks-puzzle-object-status {
+  font-size: 0.78rem;
+  font-family: var(--rs-font-head);
+  letter-spacing: 0.1em;
+  color: var(--rs-muted);
+}
+.stacks-puzzle-object.is-inspected .stacks-puzzle-object-status {
+  color: var(--rs-gilt);
+}
+
+.stacks-puzzle-submission-list {
+  list-style: decimal;
+  margin: 0 0 0.5rem 1.25rem;
+  padding: 0;
+}
+.stacks-puzzle-submission-item {
+  margin-bottom: 0.3rem;
+}
+.stacks-puzzle-submission-item button {
+  background: var(--rs-panel-3);
+  border: 1px solid var(--rs-border-strong);
+  border-radius: 6px;
+  padding: 0.15rem 0.5rem;
+  margin-right: 0.3rem;
+  font-size: 0.8rem;
+}
+.stacks-puzzle-submission-hint,
+.stacks-puzzle-attempts {
+  font-size: 0.85rem;
+  color: var(--rs-muted);
+  font-style: italic;
+}
+.stacks-puzzle-submission-add-form {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.stacks-puzzle-force-progress-consequence {
+  color: var(--rs-warn);
+  font-style: italic;
+}
+
+/* -- Status badges --------------------------------------------------------- */
+
+.stacks-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: var(--rs-whisper-bg);
+  border: 1px solid var(--rs-whisper-border);
+  border-radius: 5px;
+  padding: 0.12rem 0.5rem;
+  margin: 0.15rem 0.25rem 0.15rem 0;
+  font-size: 0.8rem;
+  color: var(--rs-whisper);
+}
+
+/* -- The Reckoning (check receipt) ----------------------------------------- */
+
+.stacks-check-receipt {
+  background: var(--rs-deep);
+  border: 1px solid var(--rs-border);
+  border-radius: 10px;
+  padding: 0.75rem 0.9rem;
+  margin-bottom: 1rem;
+}
+.stacks-check-receipt-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.6rem;
+  margin: 0.4rem 0;
+  font-family: var(--rs-font-mono);
+  font-size: 0.82rem;
+  color: var(--rs-bone);
+}
+.stacks-check-receipt-modifiers {
+  margin: 0.4rem 0;
+  padding-left: 1.25rem;
+  font-family: var(--rs-font-mono);
+  font-size: 0.82rem;
+}
+.stacks-check-receipt-outcome {
+  font-family: var(--rs-font-head);
+  letter-spacing: 0.1em;
+}
+.stacks-check-receipt-outcome--strong,
+.stacks-check-receipt-outcome--clean {
+  color: var(--rs-good);
+}
+.stacks-check-receipt-outcome--cost {
+  color: var(--rs-warn);
+}
+.stacks-check-receipt-outcome--setback {
+  color: var(--rs-bad);
+}
+
+/* -- Combat ---------------------------------------------------------------- */
+
+.stacks-combat-enemy-list,
+.stacks-combat-hero-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 0.5rem;
+}
+.stacks-combat-enemy-card {
+  background: rgba(20, 10, 14, 0.7);
+  border: 1px solid var(--rs-ichor-border);
+  border-radius: 10px;
+  padding: 0.6rem;
+}
+.stacks-combat-enemy-name {
+  font-family: var(--rs-font-head);
+  font-size: 1.05rem;
+  letter-spacing: 0.06em;
+  color: var(--rs-bone-bright);
+}
+.stacks-combat-enemy-hp {
+  font-family: var(--rs-font-mono);
+  font-size: 0.85rem;
+  color: var(--rs-muted);
+}
+.stacks-combat-enemy-intent {
+  border-left: 2px solid var(--rs-ichor-bright);
+  padding-left: 0.6rem;
+  margin-top: 0.5rem;
+}
+.stacks-combat-enemy-intent-label {
+  font-family: var(--rs-font-head);
+  font-size: 0.8rem;
+  letter-spacing: 0.1em;
+  color: var(--rs-ichor-bright);
+}
+.stacks-combat-enemy-intent-glyph {
+  color: var(--rs-ichor-bright);
+}
+.stacks-combat-enemy-counterplay {
+  color: var(--rs-gilt);
+  font-size: 0.85rem;
+}
+
+.stacks-combat-hero-card {
+  background: var(--rs-panel);
+  border: 1px solid var(--rs-border-strong);
+  border-radius: 10px;
+  padding: 0.6rem;
+}
+.stacks-combat-hero-name {
+  font-family: var(--rs-font-head);
+  letter-spacing: 0.06em;
+  color: var(--rs-bone-bright);
+}
+.stacks-combat-hero-danger--healthy { color: var(--rs-good); }
+.stacks-combat-hero-danger--wounded,
+.stacks-combat-hero-danger--stable { color: var(--rs-warn); }
+.stacks-combat-hero-danger--critical,
+.stacks-combat-hero-danger--downed,
+.stacks-combat-hero-danger--dead { color: var(--rs-bad); }
+.stacks-combat-hero-reaction {
+  font-size: 0.8rem;
+  color: var(--rs-muted);
+  font-style: italic;
+}
+
+.stacks-combat-initiative-item {
+  font-family: var(--rs-font-head);
+  font-size: 0.9rem;
+  letter-spacing: 0.06em;
+  padding: 0.2rem 0;
+}
+.stacks-combat-initiative-item.is-current-turn {
+  border-left: 3px solid var(--rs-gilt);
+  padding-left: 0.5rem;
+  color: var(--rs-gilt);
+}
+.stacks-combat-initiative-reaction {
+  font-family: var(--rs-font-body);
+  font-size: 0.8rem;
+  color: var(--rs-muted);
+  font-style: italic;
+}
+
+.stacks-combat-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.stacks-combat-attack-target-name {
+  font-family: var(--rs-font-head);
+  letter-spacing: 0.06em;
+}
+.stacks-combat-attack-target-facts {
+  font-size: 0.8rem;
+  font-family: var(--rs-font-mono);
+  color: var(--rs-muted);
+}
+.stacks-combat-attack-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.stacks-combat-attack-target-button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  width: 100%;
+  text-align: left;
+  background: var(--rs-panel-3);
+  border: 1px solid var(--rs-gilt);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  min-height: 48px;
+}
+.stacks-combat-attack-target-button:hover:not(:disabled) {
+  box-shadow: 0 0 22px rgba(217, 164, 65, 0.35);
+}
+.stacks-combat-attack-target-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  border-color: var(--rs-border-strong);
+}
+
+/* The reaction interrupt: it reaches for you -- respond. */
+.stacks-combat-reactions {
+  background: linear-gradient(var(--rs-panel-3), var(--rs-whisper-bg));
+  border: 2px solid var(--rs-gilt);
+  animation: rs-rune-pulse 2.5s ease-in-out infinite alternate;
+}
+.stacks-combat-reaction-prompt {
+  font-family: var(--rs-font-head);
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  color: var(--rs-gilt);
+}
+.stacks-combat-reaction-timer,
+.stacks-combat-reaction-paused {
+  font-size: 0.85rem;
+  color: var(--rs-muted);
+  font-style: italic;
+}
+.stacks-combat-reactions-list {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.stacks-combat-reaction-button {
+  flex: 1 1 6rem;
+  align-items: center;
+  background: var(--rs-well);
+  min-height: 44px;
+  font-family: var(--rs-font-head);
+  letter-spacing: 0.08em;
+}
+
+/* -- Arcanum cards: parchment lives here only ------------------------------ */
+
+#character-builder-screen {
+  padding: 1rem;
+  max-width: 48rem;
+  margin: 0 auto;
+}
+
+.stacks-builder-layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+
+.stacks-builder-title {
+  text-align: center;
+  font-size: 1.5rem;
+  letter-spacing: 0.12em;
+  margin: 0.5rem 0 1rem;
+}
+
+.stacks-builder-roll,
+.stacks-builder-dice,
+.stacks-builder-assignment,
+.stacks-builder-background,
+.stacks-builder-cards,
+.stacks-builder-name,
+.stacks-builder-preview,
+.stacks-builder-submit {
+  background: var(--rs-panel);
+  border: 1px solid var(--rs-border-strong);
+  border-radius: 10px;
+  padding: 0.9rem;
+}
+
+.stacks-builder-dice-row {
+  display: flex;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.stacks-die--attribute .stacks-die-face {
+  width: 3rem;
+  height: 3rem;
+  font-size: 1.25rem;
+}
+
+.stacks-builder-roll-button {
+  background: var(--rs-panel-3);
+  border: 1px solid var(--rs-gilt);
+  border-radius: 8px;
+  color: var(--rs-bone-bright);
+  font-family: var(--rs-font-head);
+  letter-spacing: 0.12em;
+  padding: 0.7rem 1.2rem;
+  min-height: 46px;
+  animation: rs-rune-pulse 3.5s ease-in-out infinite alternate;
+}
+.stacks-builder-roll-button:hover:not(:disabled) {
+  box-shadow: 0 0 26px rgba(217, 164, 65, 0.5);
+}
+.stacks-builder-roll-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  animation: none;
+}
+
+.stacks-builder-field {
+  margin-bottom: 0.5rem;
+}
+.stacks-builder-field label {
+  display: block;
+  margin-bottom: 0.2rem;
+  font-family: var(--rs-font-head);
+  font-size: 0.8rem;
+  letter-spacing: 0.12em;
+  color: var(--rs-muted);
+}
+.stacks-builder-field select {
+  width: 100%;
+  min-height: 44px;
+}
+
+.stacks-builder-background-fallback {
+  font-family: var(--rs-font-flavor);
+  font-style: italic;
+  color: var(--rs-muted);
+}
+.stacks-builder-background-details {
+  margin-top: 0.5rem;
+  font-size: 0.92rem;
+  color: var(--rs-muted);
+}
+.stacks-builder-background-bonus,
+.stacks-builder-background-skills {
+  display: inline-block;
+  font-size: 0.8rem;
+  color: var(--rs-gilt);
+  border: 1px solid rgba(217, 164, 65, 0.4);
+  border-radius: 5px;
+  padding: 0.1rem 0.5rem;
+  margin: 0.15rem 0.3rem 0.15rem 0;
+}
+.stacks-builder-background-signature {
+  border-left: 2px solid var(--rs-ichor);
+  padding: 0.35rem 0 0.35rem 0.7rem;
+  margin-top: 0.4rem;
+}
+.stacks-builder-background-signature-detail {
+  color: var(--rs-bone);
+}
+
+.stacks-builder-card-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+#stacks-builder-name-input {
+  width: 100%;
+}
+
+.stacks-builder-preview-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.6rem;
+}
+.stacks-builder-preview-facts dt {
+  font-family: var(--rs-font-head);
+  font-size: 0.8rem;
+  letter-spacing: 0.12em;
+  color: var(--rs-muted);
+}
+.stacks-builder-preview-facts dd {
+  margin: 0;
+  color: var(--rs-bone-bright);
+}
+
+.stacks-builder-submit-button {
+  width: 100%;
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(var(--rs-ichor-hot), var(--rs-ichor));
+  border: 1px solid var(--rs-ichor-bright);
+  border-radius: 9px;
+  color: #f5e9dc;
+  font-family: var(--rs-font-head);
+  font-size: 1.05rem;
+  letter-spacing: 0.14em;
+  padding: 0.85rem;
+  min-height: 48px;
+  animation: rs-ember 4s ease-in-out infinite;
+}
+.stacks-builder-submit-button:hover:not(:disabled) {
+  filter: brightness(1.2);
+}
+.stacks-builder-submit-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  animation: none;
+}
+.stacks-builder-submit-hint {
+  color: var(--rs-muted);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.stacks-builder-token-fieldset {
+  border: 1px solid var(--rs-border-strong);
+  border-radius: 8px;
+  margin-bottom: 0.5rem;
+  padding: 0.5rem;
+}
+.stacks-builder-token-fieldset legend {
+  font-family: var(--rs-font-head);
+  font-size: 0.8rem;
+  letter-spacing: 0.12em;
+  color: var(--rs-muted);
+}
+.stacks-builder-token-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin: 0.25rem 0.5rem 0.25rem 0;
+}
+.stacks-builder-color-swatch {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 5px;
+  border: 1px solid var(--rs-border-strong);
+  background: var(--rs-gilt);
+  color: var(--rs-ink-dark);
+}
+
+/* -- Hand dock: your hand falls -------------------------------------------- */
+
+#hand-dock {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(96vw, 64rem);
+  max-height: 40vh;
+  overflow-y: auto;
+  background: linear-gradient(#161220, #120e17);
+  border: 1px solid var(--rs-border-strong);
+  border-bottom: none;
+  border-top-left-radius: 14px;
+  border-top-right-radius: 14px;
+  padding: 0.9rem 1rem;
+  z-index: 15;
+  box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.5);
+}
+#hand-dock::before {
+  content: "";
+  display: block;
+  width: 44px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--rs-border-strong);
+  margin: 0 auto 0.6rem;
+}
+
+.stacks-hand-dock-list {
+  display: flex;
+  gap: 0.75rem;
+  overflow-x: auto;
+  padding-bottom: 0.5rem;
+}
+
+.stacks-hand-panel,
+.stacks-inventory-panel {
+  background: var(--rs-panel);
+  border: 1px solid var(--rs-border-strong);
+  border-radius: 10px;
+  padding: 0.9rem;
+  margin-top: 0.75rem;
+}
+
+.stacks-hand-pile-counts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.5rem;
+  font-size: 0.82rem;
+  font-family: var(--rs-font-mono);
+  color: var(--rs-muted);
+  margin: 0.5rem 0;
+}
+
+.stacks-hand-draw-button,
+.stacks-hand-safe-rest-button {
+  background: var(--rs-panel-3);
+  border: 1px solid var(--rs-border-strong);
+  border-radius: 8px;
+  padding: 0.6rem 0.9rem;
+  margin-right: 0.4rem;
+  margin-top: 0.3rem;
+  font-family: var(--rs-font-head);
+  font-size: 0.85rem;
+  letter-spacing: 0.1em;
+  color: var(--rs-bone-bright);
+  min-height: 44px;
+}
+.stacks-hand-draw-button:hover:not(:disabled),
+.stacks-hand-safe-rest-button:hover:not(:disabled) {
+  border-color: var(--rs-gilt);
+  box-shadow: 0 0 14px rgba(217, 164, 65, 0.2);
+}
+
+/* Cards: dark frame around a parchment face; the ONLY parchment in the UI. */
+.stacks-card {
+  display: block;
+  text-align: left;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--rs-border-strong);
+  background: var(--rs-well);
+  padding: 0.3rem;
+  flex: 0 0 12rem;
+}
+.stacks-card.is-playable {
+  border-color: var(--rs-gilt);
+  box-shadow: 0 0 16px rgba(217, 164, 65, 0.15);
+}
+.stacks-card.is-inert {
+  opacity: 0.7;
+}
+.stacks-card.is-inspected {
+  flex: 0 0 18rem;
+}
+
+.stacks-card-inspect-trigger {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+}
+
+.stacks-card-frame {
+  display: flex;
+  flex-direction: column;
+  padding: 0.55rem;
+  border-radius: 7px;
+  background: var(--rs-parchment);
+  background-image: repeating-linear-gradient(
+    0deg,
+    rgba(42, 33, 24, 0.03),
+    rgba(42, 33, 24, 0.03) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  color: var(--rs-ink);
+}
+
+.stacks-card-title {
+  font-family: var(--rs-font-head);
+  font-weight: 400;
+  font-size: 0.95rem;
+  letter-spacing: 0.06em;
+  padding: 0 0.2rem 0.25rem;
+  text-align: center;
+  background: none;
+  border-bottom: 1px solid var(--rs-ink);
+  border-radius: 0;
+  color: var(--rs-ink);
+}
+
+.stacks-card-art {
+  height: 6rem;
+  margin: 0.4rem 0;
+  border-radius: 4px;
+  background-size: cover;
+  background-position: center;
+  border: 1px solid var(--rs-ink);
+}
+.stacks-card-art--charm { background-image: url("/src/assets/cards/charm.png"); }
+.stacks-card-art--scheme { background-image: url("/src/assets/cards/scheme.png"); }
+.stacks-card-art--bonk { background-image: url("/src/assets/cards/bonk.png"); }
+
+/* School accent: a small engraved school line under the title. */
+.stacks-card--charm .stacks-card-title { border-bottom-color: var(--rs-ichor); }
+.stacks-card--scheme .stacks-card-title { border-bottom-color: var(--rs-whisper-border); }
+.stacks-card--bonk .stacks-card-title { border-bottom-color: var(--rs-warn-border); }
+
+.stacks-card-keywords {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.1rem 0.4rem;
+  font-size: 0.75rem;
+  color: #4c4032;
+  margin: 0.3rem 0;
+}
+.stacks-card-keywords dt {
+  font-family: var(--rs-font-head);
+  letter-spacing: 0.08em;
+}
+.stacks-card-keywords dd {
+  margin: 0;
+}
+
+.stacks-card-tags {
+  list-style: none;
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+  padding: 0;
+  margin: 0.3rem 0;
+}
+.stacks-card-tag {
+  background: rgba(42, 33, 24, 0.12);
+  border: 1px solid rgba(42, 33, 24, 0.35);
+  border-radius: 4px;
+  padding: 0.05rem 0.4rem;
+  font-size: 0.72rem;
+  color: #4c4032;
+}
+
+.stacks-card-description {
+  font-family: var(--rs-font-flavor);
+  font-style: italic;
+  font-size: 0.82rem;
+  color: #4c4032;
+  margin: 0.3rem 0;
+  line-height: 1.35;
+}
+
+.stacks-card-effect {
+  font-size: 0.85rem;
+  margin: 0.3rem 0;
+  color: var(--rs-ink);
+  line-height: 1.35;
+}
+
+.stacks-card-check-table,
+.stacks-card-disposal {
+  font-size: 0.75rem;
+  color: #4c4032;
+  margin: 0.2rem 0;
+}
+
+.stacks-card-affordance {
+  font-family: var(--rs-font-head);
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-align: center;
+  margin: 0.35rem 0 0;
+}
+.stacks-card.is-playable .stacks-card-affordance {
+  color: var(--rs-good-border);
+}
+.stacks-card.is-playable .stacks-card-affordance::before {
+  content: "\25C6 " / "";
+}
+.stacks-card.is-inert .stacks-card-affordance {
+  color: #6b5f4a;
+}
+
+.stacks-card-play-controls {
+  padding: 0.5rem;
+  border-top: 1px solid var(--rs-border-strong);
+}
+.stacks-hand-target-field {
+  margin: 0.3rem 0;
+}
+.stacks-hand-target-field label {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--rs-muted);
+}
+
+.stacks-hand-play-button {
+  background: var(--rs-gilt);
+  color: var(--rs-ink-dark);
+  border: none;
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  font-family: var(--rs-font-head);
+  letter-spacing: 0.1em;
+  margin-top: 0.4rem;
+  min-height: 42px;
+}
+.stacks-hand-play-button:hover:not(:disabled) {
+  background: var(--rs-gilt-bright);
+}
+.stacks-hand-play-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.stacks-card-list {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+/* -- Character panel: the binding, worn -------------------------------------- */
+
+#character-panel {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 18rem;
+  overflow-y: auto;
+  background: var(--rs-panel);
+  border-right: 1px solid var(--rs-border-strong);
+  padding: 3.5rem 1rem 1rem;
+  z-index: 10;
+}
+
+.stacks-character-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.5rem;
+}
+.stacks-character-name {
+  margin: 0;
+  font-size: 1.15rem;
+  letter-spacing: 0.06em;
+}
+
+.stacks-character-hp {
+  margin-bottom: 0.6rem;
+}
+.stacks-character-hp-numbers {
+  margin: 0;
+  font-family: var(--rs-font-mono);
+  font-size: 0.9rem;
+  color: var(--rs-bone-bright);
+}
+.stacks-character-hp-bar {
+  height: 0.65rem;
+  background: var(--rs-well);
+  border: 1px solid var(--rs-border);
+  border-radius: 6px;
+  overflow: hidden;
+  margin: 0.3rem 0;
+}
+.stacks-character-hp-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--rs-good-border), var(--rs-good));
+}
+.stacks-character-hp-fill--wounded,
+.stacks-character-hp-fill--critical {
+  background: linear-gradient(90deg, var(--rs-warn-border), var(--rs-warn));
+  animation: rs-hp-pulse 3s ease-in-out infinite alternate;
+}
+.stacks-character-hp-fill--downed,
+.stacks-character-hp-fill--dead {
+  background: linear-gradient(90deg, var(--rs-ichor), var(--rs-ichor-bright));
+  animation: rs-hp-pulse 2s ease-in-out infinite alternate;
+}
+.stacks-character-danger {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.stacks-character-energy {
+  margin-bottom: 0.75rem;
+}
+
+.stacks-character-attributes,
+.stacks-character-skills,
+.stacks-character-active-effects,
+.stacks-character-abilities,
+.stacks-character-inventory {
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--rs-border);
+}
+
+.stacks-character-fact-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.1rem 0.6rem;
+  font-size: 0.9rem;
+  margin: 0;
+}
+.stacks-character-fact-grid dt {
+  font-family: var(--rs-font-head);
+  font-size: 0.75rem;
+  letter-spacing: 0.12em;
+  color: var(--rs-muted);
+  align-self: baseline;
+}
+.stacks-character-fact-grid dd {
+  margin: 0;
+  color: var(--rs-bone-bright);
+}
+
+.stacks-character-empty {
+  color: var(--rs-faint);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+/* -- Rites & abilities ------------------------------------------------------ */
+
+.stacks-ability-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.stacks-ability-item {
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--rs-border);
+  font-size: 0.88rem;
+}
+.stacks-ability-item:last-child {
+  border-bottom: none;
+}
+.stacks-ability-name {
+  font-family: var(--rs-font-head);
+  letter-spacing: 0.04em;
+  color: var(--rs-bone-bright);
+}
+.stacks-ability-frequency,
+.stacks-ability-availability {
+  color: var(--rs-muted);
+  font-size: 0.8rem;
+}
+.stacks-ability-flavor {
+  font-family: var(--rs-font-flavor);
+  font-style: italic;
+  color: var(--rs-muted);
+  margin: 0.15rem 0;
+}
+.stacks-ability-effect {
+  margin: 0.15rem 0;
+}
+.stacks-ability-item.is-unavailable {
+  opacity: 0.55;
+}
+.stacks-ability-use-button {
+  background: var(--rs-gilt);
+  color: var(--rs-ink-dark);
+  border: none;
+  border-radius: 6px;
+  padding: 0.35rem 0.8rem;
+  font-family: var(--rs-font-head);
+  font-size: 0.78rem;
+  letter-spacing: 0.1em;
+  margin-top: 0.2rem;
+  min-height: 38px;
+}
+.stacks-ability-use-button:hover:not(:disabled) {
+  background: var(--rs-gilt-bright);
+}
+
+/* -- What you carry --------------------------------------------------------- */
+
+.stacks-inventory-grid {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.4rem 0;
+}
+.stacks-inventory-slot {
+  min-height: 2.6rem;
+  border-radius: 6px;
+  border: 1px solid var(--rs-border-strong);
+  font-size: 0.68rem;
+  padding: 0.2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+.stacks-inventory-slot--filled {
+  background: var(--rs-panel-3);
+  color: var(--rs-bone);
+}
+.stacks-inventory-slot--continuation {
+  background: var(--rs-panel-2);
+  border-style: dashed;
+}
+.stacks-inventory-slot--empty {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--rs-border);
+  color: var(--rs-faint);
+}
+
+.stacks-inventory-carried-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.stacks-inventory-carried-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--rs-border);
+}
+.stacks-inventory-item-name {
+  color: var(--rs-bone-bright);
+}
+.stacks-inventory-ground-item,
+.stacks-inventory-body {
+  margin-bottom: 0.3rem;
+}
+
+.stacks-inventory-drop-button,
+.stacks-inventory-trade-button,
+.stacks-inventory-pickup-button,
+.stacks-inventory-recover-button {
+  background: var(--rs-panel-3);
+  border: 1px solid var(--rs-border-strong);
+  border-radius: 6px;
+  padding: 0.35rem 0.7rem;
+  margin-right: 0.4rem;
+  margin-top: 0.3rem;
+  color: var(--rs-bone-bright);
+}
+.stacks-inventory-pickup-button:hover:not(:disabled),
+.stacks-inventory-recover-button:hover:not(:disabled) {
+  border-color: var(--rs-gilt);
+}
+
+/* -- Player tokens ---------------------------------------------------------- */
+
+.stacks-token {
+  display: inline-flex;
+  vertical-align: middle;
+}
+.stacks-token-image {
+  border-radius: 50%;
+  border: 2px solid var(--rs-border-strong);
+  object-fit: cover;
+  display: block;
+}
+.stacks-token--sm .stacks-token-image { width: 1.75rem; height: 1.75rem; }
+.stacks-token--md .stacks-token-image { width: 3rem; height: 3rem; }
+.stacks-token--lg .stacks-token-image { width: 4rem; height: 4rem; }
+.stacks-token--empty { width: 1.75rem; height: 1.75rem; }
+
+/* Confirmed 8-name palette (stacks-abilities, create_hero contract). Every
+   value is presentational only -- the player's chosen color name is always
+   shown as text somewhere it matters (character-builder's swatch label,
+   hero roster name), never conveyed by hue alone. */
+.stacks-token-hue-crimson { filter: hue-rotate(0deg) saturate(1.4); }
+.stacks-token-hue-azure { filter: hue-rotate(200deg) saturate(1.3); }
+.stacks-token-hue-gold { filter: hue-rotate(45deg) saturate(1.3); }
+.stacks-token-hue-violet { filter: hue-rotate(270deg) saturate(1.3); }
+.stacks-token-hue-emerald { filter: hue-rotate(140deg) saturate(1.3); }
+.stacks-token-hue-slate { filter: hue-rotate(210deg) saturate(0.5) brightness(0.9); }
+.stacks-token-hue-coral { filter: hue-rotate(20deg) saturate(1.5); }
+.stacks-token-hue-ivory { filter: hue-rotate(50deg) saturate(0.3) brightness(1.15); }
+
+.stacks-hero-card-identity {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* -- Chrome: help, hint, rules, confirm ------------------------------------- */
+
+#stacks-chrome {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 20;
+}
+#stacks-chrome > * {
+  pointer-events: auto;
+}
+
+.stacks-help-button {
+  position: fixed;
+  top: 0.75rem;
+  right: 1rem;
+  background: var(--rs-panel);
+  border: 1px solid var(--rs-border-strong);
+  border-radius: 7px;
+  padding: 0.45rem 0.85rem;
+  font-family: var(--rs-font-head);
+  font-size: 0.85rem;
+  letter-spacing: 0.1em;
+  color: var(--rs-bone-bright);
+  z-index: 21;
+}
+.stacks-help-button:hover {
+  border-color: var(--rs-gilt);
+  box-shadow: 0 0 14px rgba(217, 164, 65, 0.25);
+}
+
+/* Sits to the right of the fixed 18rem character panel so it never covers
+   the topbar title or the sheet; on narrow screens (static panel) it drops
+   just below the topbar instead. */
+.stacks-hint-bar {
+  position: fixed;
+  top: 0.75rem;
+  left: 19.5rem;
+  right: 6rem;
+  max-width: 40rem;
+  margin: 0;
+  background: rgba(20, 17, 26, 0.92);
+  border: 1px solid var(--rs-border-strong);
+  border-radius: 7px;
+  padding: 0.45rem 0.85rem;
+  font-family: var(--rs-font-flavor);
+  font-style: italic;
+  font-size: 0.9rem;
+  color: var(--rs-bone);
+  z-index: 21;
+}
+
+.stacks-rules-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 6, 9, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 30;
+  padding: 1rem;
+}
+.stacks-rules-panel {
+  background: var(--rs-panel);
+  border: 1px solid rgba(217, 164, 65, 0.35);
+  border-radius: 12px;
+  padding: 1.5rem;
+  max-width: 36rem;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.7);
+}
+.stacks-rules-heading {
+  letter-spacing: 0.12em;
+}
+.stacks-rules-panel h3 {
+  margin-bottom: 0.15rem;
+  color: var(--rs-gilt);
+  font-size: 1rem;
+  letter-spacing: 0.1em;
+}
+.stacks-rules-panel h3::before {
+  content: "\25C6  " / "";
+}
+.stacks-rules-panel p {
+  margin-top: 0;
+  color: var(--rs-muted);
+}
+.stacks-rules-close-button {
+  margin-top: 1rem;
+  background: var(--rs-gilt);
+  color: var(--rs-ink-dark);
+  border: none;
+  border-radius: 7px;
+  padding: 0.55rem 1.1rem;
+  font-family: var(--rs-font-head);
+  letter-spacing: 0.1em;
+  min-height: 44px;
+}
+.stacks-rules-close-button:hover {
+  background: var(--rs-gilt-bright);
+}
+
+.stacks-confirm-bar {
+  position: fixed;
+  bottom: 8rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: linear-gradient(#161220, #120e17);
+  border: 1px solid var(--rs-gilt);
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  max-width: 90vw;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6), 0 0 24px rgba(217, 164, 65, 0.12);
+}
+.stacks-confirm-text {
+  margin: 0;
+  font-family: var(--rs-font-head);
+  font-size: 0.95rem;
+  letter-spacing: 0.08em;
+  color: var(--rs-bone-bright);
+}
+.stacks-confirm-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.stacks-confirm-button {
+  background: linear-gradient(var(--rs-ichor-hot), var(--rs-ichor));
+  border: 1px solid var(--rs-ichor-bright);
+  color: #f5e9dc;
+  border-radius: 7px;
+  padding: 0.5rem 1.1rem;
+  font-family: var(--rs-font-head);
+  letter-spacing: 0.1em;
+  min-height: 44px;
+  box-shadow: 0 0 14px rgba(143, 29, 44, 0.3);
+}
+.stacks-confirm-button:hover {
+  filter: brightness(1.2);
+}
+.stacks-confirm-cancel-button {
+  background: transparent;
+  border: 1px solid var(--rs-border);
+  color: var(--rs-muted);
+  border-radius: 7px;
+  padding: 0.5rem 1rem;
+  font-family: var(--rs-font-head);
+  letter-spacing: 0.1em;
+  min-height: 44px;
+}
+.stacks-confirm-cancel-button:hover {
+  border-color: var(--rs-ichor-bright);
+  color: var(--rs-bone-bright);
+}
+
+/* -- The Veil: screen transition -------------------------------------------
+   main.js drops one of these into #stacks-chrome when the active screen
+   changes and removes it on animationend. Gilt edge for safe rooms, crimson
+   edge when combat wakes. Under reduced motion the sweep is replaced by a
+   short crossfade (see the kill switch below). */
+.stacks-veil {
+  position: fixed;
+  inset: -10% -8%;
+  pointer-events: none;
+  z-index: 35;
+  background: linear-gradient(
+    100deg,
+    transparent 0%,
+    rgba(26, 8, 12, 0.95) 12%,
+    #0a0509 30%,
+    #0a0509 70%,
+    rgba(26, 8, 12, 0.95) 88%,
+    transparent 100%
+  );
+  animation: rs-veil 1.2s cubic-bezier(0.65, 0, 0.35, 1) forwards;
+}
+.stacks-veil::before,
+.stacks-veil::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+}
+.stacks-veil::before {
+  left: 8%;
+  background: linear-gradient(rgba(217, 164, 65, 0), rgba(217, 164, 65, 0.6), rgba(217, 164, 65, 0));
+}
+.stacks-veil::after {
+  right: 8%;
+  background: linear-gradient(rgba(217, 164, 65, 0), rgba(217, 164, 65, 0.6), rgba(217, 164, 65, 0));
+}
+.stacks-veil--combat::before,
+.stacks-veil--combat::after {
+  background: linear-gradient(rgba(143, 29, 44, 0), rgba(143, 29, 44, 0.9), rgba(143, 29, 44, 0));
+}
+
+/* Width utility classes for the HP bar fill (no inline style -- same CSP
+   reasoning as the map's stacks-col-N/stacks-row-N generated classes). */
+.stacks-fill-0 { width: 0%; }
+.stacks-fill-5 { width: 5%; }
+.stacks-fill-10 { width: 10%; }
+.stacks-fill-15 { width: 15%; }
+.stacks-fill-20 { width: 20%; }
+.stacks-fill-25 { width: 25%; }
+.stacks-fill-30 { width: 30%; }
+.stacks-fill-35 { width: 35%; }
+.stacks-fill-40 { width: 40%; }
+.stacks-fill-45 { width: 45%; }
+.stacks-fill-50 { width: 50%; }
+.stacks-fill-55 { width: 55%; }
+.stacks-fill-60 { width: 60%; }
+.stacks-fill-65 { width: 65%; }
+.stacks-fill-70 { width: 70%; }
+.stacks-fill-75 { width: 75%; }
+.stacks-fill-80 { width: 80%; }
+.stacks-fill-85 { width: 85%; }
+.stacks-fill-90 { width: 90%; }
+.stacks-fill-95 { width: 95%; }
+.stacks-fill-100 { width: 100%; }
+
+/* -- Layout ----------------------------------------------------------------- */
+
+body.stacks-in-run #main {
+  padding-left: 18rem;
+  padding-bottom: 10rem;
+}
+@media (max-width: 60rem) {
+  #character-panel {
+    position: static;
+    width: auto;
+    height: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--rs-border-strong);
+    padding: 1rem;
+  }
+  body.stacks-in-run #main {
+    padding-left: 0;
+  }
+  .stacks-hint-bar {
+    top: 4rem;
+    left: 1rem;
+    right: 1rem;
+  }
+}
+
+/* -- Reduced-motion kill switch ---------------------------------------------
+   Every ambient animation above dies here; the veil sweep degrades to a
+   200ms crossfade so screen changes still read as intentional. */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+  }
+  .stacks-veil {
+    background: var(--rs-void);
+    animation: rs-crossfade 0.2s ease-out forwards !important;
+  }
+  .stacks-veil::before,
+  .stacks-veil::after {
+    content: none;
+  }
+}

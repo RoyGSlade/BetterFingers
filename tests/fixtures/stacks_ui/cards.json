@@ -1,0 +1,35 @@
+{
+  "description": "Example card faces exercising every S13.3 contract field (timing, cost, range/targets, required state, effect, check table, tags, discard/Exhaust, accessible text, generated-description fallback). Wire shape for components/card.js's renderCard.",
+  "cards": [
+    {
+      "id": "card_emergency_semicolon",
+      "name": "Emergency Semicolon",
+      "timing": "Main action",
+      "cost": "1 action",
+      "range": "Adjacent",
+      "targets": ["Self", "One adjacent ally"],
+      "requirements": "Both allies must have an unresolved setup effect",
+      "effect": "Combine two weaker allied setup effects into one action.",
+      "checkTable": null,
+      "tags": ["setup", "combine"],
+      "exhaustOnPlay": false,
+      "generatedDescription": "You slam two half-finished plans together and hope the grammar holds.",
+      "accessibleText": "Emergency Semicolon: main action, adjacent self and one ally, combines two weaker allied setup effects into one. Discards on play."
+    },
+    {
+      "id": "card_field_suture",
+      "name": "Field Suture",
+      "timing": "Main action",
+      "cost": "1 action",
+      "range": "Adjacent",
+      "targets": ["One Downed or Bleeding ally"],
+      "requirements": "Carried Field Suture item",
+      "effect": "Stabilize a Downed hero or treat Bleeding.",
+      "checkTable": "Force vs DC 11: success stabilizes fully, failure still removes Bleeding",
+      "tags": ["medicine", "single-use"],
+      "exhaustOnPlay": true,
+      "generatedDescription": "Thread, pressure, and a muttered apology.",
+      "accessibleText": "Field Suture: main action, adjacent Downed or Bleeding ally, Force check DC 11 to stabilize or treat Bleeding. Exhausts on play."
+    }
+  ]
+}
