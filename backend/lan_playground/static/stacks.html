@@ -11,7 +11,10 @@
 <a class="skip-link" href="#main">Skip to main content</a>
 <header class="topbar">
   <img class="topbar-icon" src="/src/assets/icon.png" alt="" aria-hidden="true">
-  <h1>The Lost Meaning: Infinite Stacks</h1>
+  <div>
+    <h1>The Lost Meaning</h1>
+    <p class="topbar-tagline">infinite stacks &middot; the spire is cracked, and it remembers you</p>
+  </div>
 </header>
 
 <main id="main">
@@ -20,20 +23,23 @@
   <section id="join-panel" aria-labelledby="join-heading">
     <img class="stacks-key-art" src="/src/assets/key-art.jpg" alt="Key art: a bureaucratic dragon presiding over a spire of stacked paperwork.">
     <h2 id="join-heading">Enter the Spire</h2>
-    <label for="access-code-input">Access code</label>
+    <p class="stacks-join-tagline">It was sealed for a reason.<br>The reason is leaking out.</p>
+
+    <label for="access-code-input">Seal phrase <span class="stacks-label-hint">&mdash; the access code your keeper gave you</span></label>
     <input id="access-code-input" name="access-code" type="password" autocomplete="off" spellcheck="false">
 
     <label for="display-name-input">Your hero's name</label>
     <input id="display-name-input" name="display-name" type="text" autocomplete="off" spellcheck="false" maxlength="40">
 
-    <label for="room-code-input">Room code (leave blank to host a new run)</label>
+    <label for="room-code-input">Room sigil <span class="stacks-label-hint">&mdash; the room code; leave blank to kindle a new run</span></label>
     <input id="room-code-input" name="room-code" type="text" autocomplete="off" spellcheck="false">
 
     <div class="stacks-join-actions">
-      <button id="create-room-button" type="button">Host a new run</button>
-      <button id="join-room-button" type="button">Join a run</button>
+      <button id="join-room-button" type="button">Answer the Summons</button>
+      <button id="create-room-button" type="button">Kindle a New Run</button>
     </div>
     <p id="join-status" role="status" aria-live="polite"></p>
+    <p class="stacks-join-footnote">local network only &middot; nothing you do here is saved, or forgiven</p>
   </section>
 
   <section id="character-builder-screen" aria-label="Create your hero" hidden></section>

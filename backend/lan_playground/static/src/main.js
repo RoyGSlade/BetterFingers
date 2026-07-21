@@ -257,12 +257,36 @@ const handlers = {
   onCancelPendingAction: () => store.setState((s) => clearPendingAction(s)),
 };
 
+// The Veil (Ritual Spire motion language): a wall of ichor sweeps across the
+// viewport whenever the active screen changes mid-run -- crimson-edged when
+// combat wakes, gilt-edged otherwise. Pure CSS animation (stacks.css
+// .stacks-veil); reduced-motion swaps the sweep for a 200ms crossfade via
+// the stylesheet's kill switch, so nothing here needs a timer. The element
+// lives on document.body, not #stacks-chrome, because renderChrome rebuilds
+// chrome's children on every state change and would cut the sweep short.
+let lastActiveScreen = null;
+
+function spawnVeil(enteringCombat) {
+  const veil = document.createElement("div");
+  veil.className = "stacks-veil" + (enteringCombat ? " stacks-veil--combat" : "");
+  veil.setAttribute("aria-hidden", "true");
+  const remove = () => veil.remove();
+  veil.addEventListener("animationend", remove, { once: true });
+  veil.addEventListener("animationcancel", remove, { once: true });
+  document.body.appendChild(veil);
+}
+
 // Exactly one non-map screen is visible at a time, selected by
 // selectActiveScreen (core/selectors.js) -- character-builder > combat >
 // puzzle > room > map.
 function render(state) {
   if (!mapScreen) return;
   const activeScreen = selectActiveScreen(state);
+
+  if (lastActiveScreen !== null && lastActiveScreen !== activeScreen && state.you.heroId) {
+    spawnVeil(activeScreen === "combat");
+  }
+  lastActiveScreen = activeScreen;
 
   mapScreen.hidden = activeScreen !== "map";
   if (roomScreen) roomScreen.hidden = activeScreen !== "room";

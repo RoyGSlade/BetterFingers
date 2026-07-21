@@ -20,6 +20,12 @@
       "port": 8001
     },
     {
+      "name": "infinite-stacks-preview",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["tools/infinite_stacks.py", "--port", "8861", "--access-code", "previewcode123"],
+      "port": 8861
+    },
+    {
       "name": "foundry-renderer-preview-v2",
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "4520", "--directory", "/tmp/foundry-preview-renderer"],
