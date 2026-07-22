@@ -35,10 +35,16 @@ because conflating them causes rework:
 - **Wave 6 shipped** (commit `ae739f3`, PR #71 per the 07-20 playtest doc):
   playtest-response UI overhaul, cards-vs-abilities redesign, abilities
   engine. A follow-up restyle (`9551b85`, Ritual Spire UI theme) landed on
-  top of it. **`plangamereporting.md` has not been updated past wave 5** —
-  its wave-6 entry is missing. The next wave close-out must backfill it;
-  until then, treat wave-6 shipped claims here as sourced from commit
-  history and the 07-20 playtest doc, not from the progress report.
+  top of it. Its `plangamereporting.md` entry was backfilled at the wave-6A
+  close-out (2026-07-21), sourced from board notes 24–26 and commit history.
+- **Wave 6A shipped 2026-07-21** (branches `wave6a/j12-legal-actions` +
+  `wave6a/join-creation-flow` merged): the §3.1 correctness rows — J12
+  (with its required regression test), J8, the pre-join modal, and the J1
+  join/creation split — are closed with evidence in `plangamereporting.md`.
+  The exit gate holds: a fresh session can join → create a hero → take a
+  first legal map action, proven by `LegalActionsLockoutRegressionTests`,
+  not manual QA. Remaining §3.1 rows (J2/J3, J7, J9, J4–J6, A–G
+  re-confirmation) stay open as polish/coordination work.
 - The §26.4 playtest checkpoint opened at the end of wave 5 is **active but
   not yet satisfied**: two solo owner playtests ran (07-19 against the
   wave-5 build, 07-20 against the wave-6 build) and both ended at a UI

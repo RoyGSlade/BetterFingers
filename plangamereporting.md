@@ -225,6 +225,79 @@ finish a floor.
 
 ---
 
+## Wave 6 — SHIPPED (backfilled 2026-07-21; commit `ae739f3`, PR #71, plus restyle `9551b85`)
+
+Playtest-response wave replacing the previously planned content wave,
+scoped from `docs/PLAYTEST_FINDINGS_2026-07-19.md` (items A1–G1). Entry
+backfilled from board notes 24–26 and commit history per the 2026-07-21
+roadmap's §1 instruction — the wave closed without its report entry.
+
+- **Facelift** (closed task #19, 130 tests + 549 subtests): A1–G1
+  implemented — center-bottom hand with card anatomy + school art,
+  inspect/confirm play flow, active-effects tray, rules overlay + hint
+  line, click-to-move with per-connector costs, character panel with HP
+  numbers + inventory grid, avatar tokens hue-shifted by palette color,
+  key-art theming from the Spellcheck & Sorcery art pack.
+- **Card design** (closed task #20, 1,137 tests): five offender cards
+  removed; abilities.yaml with 4 abilities, all `grant_check`-only
+  against the published executable-op set; construction-time rejection
+  of non-executable triggers; card pool back at 24 with real mechanics,
+  keywords, art refs; knowledge items at slot_cost 0 with validator rule.
+- **Abilities engine** (closed task #21, 98 tests): `use_ability` +
+  auto triggers, effect durations, knowledge-slot exemption,
+  per-connector move/breach costs on the wire, avatar/color validated
+  server-side.
+- Director full verification at wave close: 1,496 passed + 549 subtests
+  (18 suites + architecture gates); old game 243 + 175.
+- **Post-wave:** the 07-20 owner playtest against this build ended on a
+  session-ending bug (J12) — findings in
+  `docs/PLAYTEST_FINDINGS_2026-07-20.md`, response scoped as wave 6A.
+
+## Wave 6A — SHIPPED 2026-07-21 (stop-ship playable spine)
+
+Cleared the correctness rows of the §3.1 stop-ship gate from the
+2026-07-21 roadmap revision. Two worktree-isolated worker lanes plus
+director close-outs; each lane independently re-verified by the
+director before merge.
+
+- **J12 entrance lockout** (branch `wave6a/j12-legal-actions`): root
+  cause was two-sided — `legal_actions` was only ever delivered inside
+  `CommandError` payloads (fixed: `project()` folds a viewer-scoped
+  `legal_actions` summary into every snapshot/reconnect view), and the
+  client's `applyView` never read `view.legal_actions` into
+  `state.legalActions` (fixed in `core/store.js`). Ruled out: hint-line
+  vs buttons divergence (single shared selector, merely unpopulated) and
+  energy gating (30-seed engine check: fresh entrance always yields
+  can_pass/can_inspect + 4 breach directions). Required regression test
+  added: `LegalActionsLockoutRegressionTests` drives the real
+  `store.js`/`selectors.js`/`commands.js` via a Node harness
+  (`tests/stacks_client_check/j12_legal_actions_check.mjs`) against a
+  real transport snapshot and submits the selected command; a companion
+  test fails closed on the pre-fix snapshot shape.
+- **J8 name-input focus loss** (branch `wave6a/join-creation-flow`):
+  `renderCharacterBuilderScreen` rebuilt the input element on every
+  store change; fixed with a stable cached input node plus an in-place
+  submit-section refresh when the input holds focus. Value and focus
+  survive consecutive keystrokes (28 new UI subtests).
+- **Pre-join rules modal:** overlay now gated on `selectYouHero` — never
+  blocks the pre-join CTA; still auto-opens once a hero exists.
+- **J1 join/creation split:** identity removed from the join panel;
+  `host_name`/`display_name` optional with distinct server-assigned
+  placeholders ("Traveler N"); explicit empty string still 422. Director
+  close-out: `_sync_heroes` now prefers the domain `HeroSheet.name` once
+  `create_hero` completes (replay-safe), so a placeholder never outlives
+  character creation — proven from the creator's and a second viewer's
+  snapshots.
+- Director verification on the merged result: **1,697 passed + 722
+  subtests** (all stacks suites + architecture gates + old-game suites),
+  `node --check` clean including the new harness.
+- Debt recorded: `stacks_engine.py` at ~1,400 lines (over the ~500 cap,
+  pre-existing) — split candidate next wave. J2/J3 (attribute/skill/
+  background descriptions, unique power names) deferred to the next
+  6-adjacent pass.
+
+---
+
 ## Key design decisions on record (collab board notes)
 
 1. `infinite_stacks.md` is canonical and supersedes the spotlight-loop
