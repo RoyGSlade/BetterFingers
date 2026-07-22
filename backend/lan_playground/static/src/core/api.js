@@ -18,20 +18,31 @@ async function parseJsonResponse(resp) {
   return data;
 }
 
+// J1 (wavebasedgame.md S3.1): hostName/displayName are optional here --
+// joining/creating a room no longer asks for hero identity (that's the
+// character-builder screen's job). When omitted, host_name/display_name
+// are left out of the request body entirely rather than sent as "": the
+// server (stacks_api.py's CreateRoomRequest/JoinRoomRequest) treats a
+// missing field as "assign a placeholder transport label," which is a
+// server-owned decision, not a client-invented one.
 export async function createRoom({ accessCode, hostName, seed }) {
+  const body = { seed: seed ?? null };
+  if (hostName) body.host_name = hostName;
   const resp = await fetch("/api/stacks/rooms", {
     method: "POST",
     headers: { "Content-Type": "application/json", [ACCESS_CODE_HEADER]: accessCode },
-    body: JSON.stringify({ host_name: hostName, seed: seed ?? null }),
+    body: JSON.stringify(body),
   });
   return parseJsonResponse(resp);
 }
 
 export async function joinRoom({ accessCode, roomCode, displayName }) {
+  const body = {};
+  if (displayName) body.display_name = displayName;
   const resp = await fetch(`/api/stacks/rooms/${encodeURIComponent(roomCode)}/join`, {
     method: "POST",
     headers: { "Content-Type": "application/json", [ACCESS_CODE_HEADER]: accessCode },
-    body: JSON.stringify({ display_name: displayName }),
+    body: JSON.stringify(body),
   });
   return parseJsonResponse(resp);
 }

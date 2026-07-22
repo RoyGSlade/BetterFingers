@@ -722,6 +722,90 @@ class AuthAndPolicyTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 401)
 
 
+class J1JoinWithoutIdentityTests(unittest.TestCase):
+    """wavebasedgame.md S3.1 "J1": joining/creating a room must not require
+    hero identity up front -- that's the character-builder screen's job.
+    host_name/display_name are optional; omitting them still produces a
+    working room/hero with a server-assigned placeholder name."""
+
+    def test_create_room_without_host_name_succeeds(self):
+        client = _client()
+        resp = client.post("/api/stacks/rooms", json={"seed": None}, headers=ACCESS_HEADER)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        body = resp.json()
+        self.assertIn("hero_id", body)
+        self.assertIn("player_token", body)
+
+    def test_join_room_without_display_name_succeeds(self):
+        client = _client()
+        room = _create_room(client)
+        resp = client.post(f"/api/stacks/rooms/{room['room_code']}/join", json={}, headers=ACCESS_HEADER)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        body = resp.json()
+        self.assertIn("hero_id", body)
+        self.assertNotEqual(body["hero_id"], room["hero_id"])
+
+    def test_create_room_without_body_fields_still_gets_a_usable_hero_name(self):
+        # The room manager must assign SOME non-empty display name server-side
+        # (not a client-invented value) so the wire's hero.name field, read by
+        # every viewer's project(), is never blank.
+        client = _client()
+        room = client.post("/api/stacks/rooms", json={}, headers=ACCESS_HEADER).json()
+        view = _snapshot(client, room["room_code"], room["player_token"])
+        name = view["heroes"][room["hero_id"]]["name"]
+        self.assertTrue(name and name.strip())
+
+    def test_placeholder_names_are_distinct_per_hero_in_the_same_room(self):
+        client = _client()
+        room = client.post("/api/stacks/rooms", json={}, headers=ACCESS_HEADER).json()
+        ally = client.post(f"/api/stacks/rooms/{room['room_code']}/join", json={}, headers=ACCESS_HEADER).json()
+        view = _snapshot(client, room["room_code"], room["player_token"])
+        host_name = view["heroes"][room["hero_id"]]["name"]
+        ally_name = view["heroes"][ally["hero_id"]]["name"]
+        self.assertNotEqual(host_name, ally_name)
+
+    def test_explicit_empty_string_name_is_still_rejected(self):
+        # Omitting the field means "assign a placeholder"; an explicit empty
+        # string is a schema error, same as before this wave's change.
+        client = _client()
+        resp = client.post("/api/stacks/rooms", json={"host_name": "", "seed": None}, headers=ACCESS_HEADER)
+        self.assertEqual(resp.status_code, 422)
+
+    def test_explicit_host_name_is_still_honored(self):
+        client = _client()
+        room = _create_room(client, host_name="Named Host")
+        view = _snapshot(client, room["room_code"], room["player_token"])
+        self.assertEqual(view["heroes"][room["hero_id"]]["name"], "Named Host")
+
+    def test_create_hero_chosen_name_replaces_join_placeholder(self):
+        # The J1 split means join assigns a placeholder; the name chosen on
+        # the creation screen (create_hero's validated payload, stored on the
+        # domain HeroSheet) must become the wire hero.name every viewer sees
+        # afterward -- the placeholder may never outlive character creation.
+        client = _client()
+        room = client.post("/api/stacks/rooms", json={}, headers=ACCESS_HEADER).json()
+        code, token, hero_id = room["room_code"], room["player_token"], room["hero_id"]
+        placeholder = _snapshot(client, code, token)["heroes"][hero_id]["name"]
+        self.assertTrue(placeholder and placeholder.strip())
+
+        catalog = _content_catalog(client)
+        _make_hero(client, code, token, "Mirielle the Unbound", catalog, "j1name")
+        view = _snapshot(client, code, token)
+        self.assertEqual(view["heroes"][hero_id]["name"], "Mirielle the Unbound")
+        self.assertNotEqual(view["heroes"][hero_id]["name"], placeholder)
+
+    def test_chosen_name_survives_for_other_viewers_too(self):
+        # Same contract from a second player's viewpoint: project() is
+        # viewer-filtered, but hero display names are public wire state.
+        client = _client()
+        room = client.post("/api/stacks/rooms", json={}, headers=ACCESS_HEADER).json()
+        ally = client.post(f"/api/stacks/rooms/{room['room_code']}/join", json={}, headers=ACCESS_HEADER).json()
+        catalog = _content_catalog(client)
+        _make_hero(client, room["room_code"], room["player_token"], "Mirielle the Unbound", catalog, "j1nm2")
+        ally_view = _snapshot(client, room["room_code"], ally["player_token"])
+        self.assertEqual(ally_view["heroes"][room["hero_id"]]["name"], "Mirielle the Unbound")
+
+
 class _FakeReactionManager:
     """Minimal StacksRoomManager stand-in for ReactionAutoPass unit tests:
     serves scripted project() views and records apply_authoritative calls."""

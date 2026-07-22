@@ -954,5 +954,109 @@ class Wave6CssContractTests(unittest.TestCase):
                 self.assertIn(".stacks-fill-%d {" % n, STACKS_CSS)
 
 
+# ================================================================
+# Wave 6A (wavebasedgame.md S3.1 stop-ship gate): J8 name-input focus loss,
+# the pre-join rules modal blocking "Kindle a New Run", and J1's join/
+# creation split. Static-analysis style, same mold as the rest of this file.
+# ================================================================
+
+
+class Wave6AJ8NameInputFocusTests(unittest.TestCase):
+    """J8: the hero-name field must keep a stable element identity across
+    renders instead of being torn down and rebuilt on every keystroke (which
+    silently drops keyboard focus after exactly one character)."""
+
+    def test_name_input_is_cached_not_recreated_every_render(self):
+        source = CHARACTER_BUILDER_JS
+        # A module-scope cache so the exact same DOM node is reused across
+        # calls to renderCharacterBuilderScreen, instead of a fresh
+        # document.createElement("input") every render.
+        self.assertIn("cachedNameInput", source)
+        self.assertIn('document.createElement("input")', source)
+        # The cached node must be reused (not replaced) when a value hasn't
+        # actually changed, so an unrelated re-render can't steal focus.
+        self.assertIn("if (!cachedNameInput)", source)
+
+    def test_rerender_while_name_input_focused_does_not_rebuild_the_screen(self):
+        # The real fix isn't just node reuse -- container.replaceChildren()
+        # detaches the whole subtree (including whatever has focus) before
+        # any node, cached or not, gets reattached, which still drops focus.
+        # renderCharacterBuilderScreen must special-case a render pass that
+        # fires while the name input itself is focused and refresh only the
+        # parts that can change (canSubmit/hint text) in place, leaving the
+        # focused input untouched in the live DOM.
+        source = CHARACTER_BUILDER_JS
+        self.assertIn("document.activeElement === cachedNameInput", source)
+        self.assertIn("refreshSubmitSectionInPlace", source)
+
+    def test_name_field_listener_writes_through_the_cached_node_not_a_stale_closure(self):
+        source = CHARACTER_BUILDER_JS
+        self.assertIn('cachedNameInput.addEventListener("input"', source)
+        self.assertIn("onUpdateCharacterDraft({ name: cachedNameInput.value })", source)
+
+
+class Wave6APreJoinRulesModalTests(unittest.TestCase):
+    """The rules overlay (rules-overlay.js, reused from wave 6's B1/B2 work)
+    must never gate the pre-join "Kindle a New Run" / "Answer the Summons"
+    CTAs -- onboarding lives in the persistent help overlay, shown only once
+    a hero exists, never as a blocking pre-join dialog."""
+
+    def test_render_chrome_gates_rules_overlay_on_a_hero_existing(self):
+        # Before this fix, renderRulesOverlay(state.helpOpen, ...) was called
+        # unconditionally in renderChrome, and helpOpen defaults to true
+        # (store.js's createInitialState), so the overlay covered the join
+        # screen on first page load, before any hero/room existed.
+        match = re.search(r"function renderChrome\(state\)\s*{.*?\n}\n", MAIN_JS, re.DOTALL)
+        self.assertIsNotNone(match, "renderChrome function not found in main.js")
+        body = match.group(0)
+        overlay_call = body.index("renderRulesOverlay(")
+        guard_call = body.index("selectYouHero(state)")
+        self.assertLess(guard_call, overlay_call, "renderRulesOverlay must be called inside the selectYouHero(state) guard")
+
+    def test_help_open_still_defaults_true_for_the_post_join_first_run_experience(self):
+        # The overlay must still greet a brand-new hero automatically once
+        # join/creation puts them in the run -- only the pre-join gating
+        # changed, not the first-run-onboarding intent itself.
+        self.assertIn("helpOpen: true", STORE_JS)
+
+
+class Wave6AJ1JoinCreationSplitTests(unittest.TestCase):
+    """J1: joining a room must not collect hero identity; that belongs to
+    the character-builder (creation) screen, which already has its own name
+    field."""
+
+    def test_join_panel_has_no_display_name_field(self):
+        self.assertNotIn("display-name-input", STACKS_HTML)
+
+    def test_join_panel_retains_access_code_and_room_code_only(self):
+        self.assertIn('id="access-code-input"', STACKS_HTML)
+        self.assertIn('id="room-code-input"', STACKS_HTML)
+        self.assertIn('id="create-room-button"', STACKS_HTML)
+        self.assertIn('id="join-room-button"', STACKS_HTML)
+
+    def test_main_js_join_panel_wiring_does_not_read_a_display_name_input(self):
+        self.assertNotIn('getElementById("display-name-input")', MAIN_JS)
+
+    def test_main_js_create_and_join_no_longer_require_a_name_before_calling_the_api(self):
+        # Both handlers must still require an access code (join additionally
+        # requires a room code) -- but neither may gate on a display name.
+        match = re.search(r"function wireJoinPanel\(\)\s*{.*?\n}\n", MAIN_JS, re.DOTALL)
+        self.assertIsNotNone(match, "wireJoinPanel function not found in main.js")
+        body = match.group(0)
+        self.assertNotIn("displayNameInput", body)
+        self.assertIn("createRoom({ accessCode, seed: null })", body)
+        self.assertIn("joinRoom({ accessCode, roomCode })", body)
+
+    def test_api_js_host_name_and_display_name_are_optional_on_the_wire(self):
+        source = API_JS
+        self.assertIn("if (hostName) body.host_name = hostName;", source)
+        self.assertIn("if (displayName) body.display_name = displayName;", source)
+
+    def test_character_builder_screen_is_still_the_identity_step(self):
+        # The name field lives on the creation screen, not the join screen.
+        self.assertIn("stacks-builder-name-input", CHARACTER_BUILDER_JS)
+        self.assertIn("Hero name", CHARACTER_BUILDER_JS)
+
+
 if __name__ == "__main__":
     unittest.main()

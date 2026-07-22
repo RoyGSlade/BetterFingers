@@ -88,13 +88,14 @@ class StacksRoomManager:
         self._states: dict[str, RunState] = {}
         self._tokens: dict[str, dict[str, str]] = {}  # room_code -> token -> hero_id
 
-    def create_room(self, host_name: str, seed: int | None) -> tuple[str, RunState, str, str]:
+    def create_room(self, host_name: str | None, seed: int | None) -> tuple[str, RunState, str, str]:
         with self._lock:
             code = generate_room_code()
             while code in self._states:
                 code = generate_room_code()
             state = self._adapter.create_run(seed=seed if seed is not None else random.SystemRandom().randrange(1, 2**31))
-            hero_id = _slug_hero_id(host_name, state)
+            name = host_name or _placeholder_hero_name(state)
+            hero_id = _slug_hero_id(name, state)
             command = Command(
                 command_id=str(uuid.uuid4()),
                 idempotency_key=str(uuid.uuid4()),
@@ -103,7 +104,7 @@ class StacksRoomManager:
                 encounter_id=None,
                 expected_revision=state.revision,
                 type="join_run",
-                payload={"display_name": host_name},
+                payload={"display_name": name},
             )
             self._adapter.apply(state, command)
             token = generate_token()
@@ -111,10 +112,11 @@ class StacksRoomManager:
             self._tokens[code] = {token: hero_id}
             return code, state, hero_id, token
 
-    def join_room(self, code: str, display_name: str) -> tuple[RunState, str, str]:
+    def join_room(self, code: str, display_name: str | None) -> tuple[RunState, str, str]:
         with self._lock:
             state = self._require_state(code)
-            hero_id = _slug_hero_id(display_name, state)
+            name = display_name or _placeholder_hero_name(state)
+            hero_id = _slug_hero_id(name, state)
             command = Command(
                 command_id=str(uuid.uuid4()),
                 idempotency_key=str(uuid.uuid4()),
@@ -123,7 +125,7 @@ class StacksRoomManager:
                 encounter_id=None,
                 expected_revision=state.revision,
                 type="join_run",
-                payload={"display_name": display_name},
+                payload={"display_name": name},
             )
             self._adapter.apply(state, command)
             token = generate_token()
@@ -188,6 +190,18 @@ class StacksRoomManager:
         if state is None:
             raise RunNotFoundError(code)
         return state
+
+
+def _placeholder_hero_name(state: RunState) -> str:
+    # J1 (wavebasedgame.md S3.1): join is minimal now -- no display name is
+    # collected before a hero exists, so the server (not the client) assigns
+    # a placeholder transport label good enough to tell players apart in the
+    # party roster until they finish character creation and pick a real name.
+    # This is a join-time-only stand-in: it is what the wire Hero.name field
+    # carries from join_run onward (see stacks_engine.py's _sync_heroes),
+    # same as any other display_name -- nothing about create_hero's identity
+    # step changes.
+    return f"Traveler {len(state.heroes) + 1}"
 
 
 def _slug_hero_id(display_name: str, state: RunState) -> str:
@@ -336,12 +350,18 @@ class ReactionAutoPass:
 
 
 class CreateRoomRequest(BaseModel):
-    host_name: str = Field(..., min_length=1, max_length=DISPLAY_NAME_MAX_CHARS)
+    # J1 (wavebasedgame.md S3.1): optional -- joining/creating a room no
+    # longer collects hero identity. Omitted means the room manager assigns
+    # a placeholder transport label (_placeholder_hero_name below); the
+    # min_length still applies if the client DOES send a name (e.g. a future
+    # "name your room host" convenience), so an explicit empty string is
+    # still rejected rather than silently treated as "omitted."
+    host_name: str | None = Field(default=None, min_length=1, max_length=DISPLAY_NAME_MAX_CHARS)
     seed: int | None = None
 
 
 class JoinRoomRequest(BaseModel):
-    display_name: str = Field(..., min_length=1, max_length=DISPLAY_NAME_MAX_CHARS)
+    display_name: str | None = Field(default=None, min_length=1, max_length=DISPLAY_NAME_MAX_CHARS)
 
 
 _COMMAND_ERROR_STATUS = {

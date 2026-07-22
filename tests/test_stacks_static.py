@@ -32,7 +32,6 @@ class HtmlContractTests(unittest.TestCase):
         required_ids = [
             "join-panel",
             "access-code-input",
-            "display-name-input",
             "room-code-input",
             "create-room-button",
             "join-room-button",
@@ -42,6 +41,13 @@ class HtmlContractTests(unittest.TestCase):
         for element_id in required_ids:
             with self.subTest(element_id=element_id):
                 self.assertIn('id="%s"' % element_id, STACKS_HTML, "missing required element #%s" % element_id)
+
+    def test_j1_join_screen_does_not_collect_hero_identity(self):
+        # wavebasedgame.md S3.1 "J1": joining must be minimal -- hero
+        # identity (a name) belongs in the character-builder screen's own
+        # name field (stacks-builder-name-input), not the join panel.
+        self.assertNotIn("display-name-input", STACKS_HTML)
+        self.assertNotIn("Your hero's name", STACKS_HTML)
 
     def test_title_names_the_game(self):
         self.assertIn("Infinite Stacks", STACKS_HTML)
