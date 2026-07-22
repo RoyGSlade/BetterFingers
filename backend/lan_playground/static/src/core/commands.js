@@ -165,3 +165,20 @@ export function recoverBodyLootCommand(deadHeroId, itemIds, expectedRevision) {
 export function useAbilityCommand(abilityId, expectedRevision) {
   return buildCommand("use_ability", { ability_id: abilityId }, { expectedRevision });
 }
+
+// Wave-6B part 4 (docs/INFINITE_STACKS_CONTRACTS.md S5.11): interact/converse
+// payloads match the domain vocabulary exactly. `interact` names an object +
+// one of its own declared interaction ids -- never a free-text verb.
+// `converse` never takes a modifier/tier from the client (standing rule #5):
+// `appealObjectiveId` is a ROLEPLAY CHOICE naming which of the NPC's own
+// disclosed objectives the hero is appealing to (or omitted entirely for "no
+// appeal") -- the server derives the actual MotiveAlignment from its own
+// authored NPC data, never trusting a client-supplied strength/tier. A
+// legacy `motive_alignment` field is deliberately never built here at all.
+export function interactCommand(objectId, interactionId, expectedRevision) {
+  return buildCommand("interact", { object_id: objectId, interaction_id: interactionId }, { expectedRevision });
+}
+
+export function converseCommand(npcId, appealObjectiveId, expectedRevision) {
+  return buildCommand("converse", { npc_id: npcId, appeal_objective_id: appealObjectiveId || null }, { expectedRevision });
+}

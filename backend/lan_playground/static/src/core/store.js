@@ -23,6 +23,11 @@ export function createInitialState() {
     legalActions: null,
     lastError: null,
     reducedMotion: false,
+    // Wave-6B part 4: RunState.stair_revealed's client mirror (docs/
+    // INFINITE_STACKS_CONTRACTS.md S5.11) -- folded from the stair_revealed
+    // event; not consumed by any screen yet this part (no stair/floor-exit
+    // UI exists), but kept so a future wave doesn't need a new store field.
+    stairRevealed: false,
     // Wave 2 (infinite_stacks.md S24.3/S24.4): server-populated wire objects
     // consumed via core/selectors.js's selectActiveScreen/selectEnteredRoomView.
     // Reducer wiring for the room-detail events lands with a later wave; wave
@@ -58,6 +63,27 @@ export function createInitialState() {
     sharedClueIds: {},
     puzzleManualNotes: {},
     puzzleInspectedObjects: {},
+    // Wave-6B part 4 (docs/INFINITE_STACKS_CONTRACTS.md S5.11): the REAL
+    // study projection, keyed by room_id, folded in verbatim (snake_case,
+    // matching the wire) from view.study on every snapshot/reconnect and
+    // patched incrementally by the study_* events below. selectStudyView
+    // (core/selectors.js) reads state.studies[<viewer's current room>].
+    studies: {},
+    // Client-local scratch, same "the wire has no dedicated slot for this,
+    // so the browser session keeps its own copy" pattern as puzzleClues
+    // above: the most recent response_artifact_emitted's narration text
+    // (this game's voice -- rendered prominently by screens/study.js) and
+    // the most recent social_check_resolved's full ceremony payload
+    // (rendered by components/converse.js), both keyed by room_id so a
+    // multi-room run never bleeds one room's narration into another's.
+    //   studyLastNarration: room_id -> {narrationFacts, kind, stateDelta}
+    //   studyLastCheckReceipt: room_id -> the raw social_check_resolved
+    //     payload verbatim (snake_case) -- components/converse.js's
+    //     renderConverseCeremony is the one seam that reads this, so a
+    //     future restyle (dice-ui-overhaul) only ever touches that one file.
+    studyLastNarration: {},
+    studyLastCheckReceipt: {},
+    appealDrafts: {},
     // Wave-3 combat projection (board task #9, stacks-conflict, EARLY DRAFT
     // posted 17:15 -- code hasn't landed in stacks_engine.py/stacks_projections.py
     // yet, so no live event populates this today). conflicts is room-keyed,
@@ -198,6 +224,13 @@ function applyView(state, view, revision) {
     // code lands; conflictIntents/conflictLastCheckReceipt are event-derived
     // scratch and intentionally survive a snapshot refresh.
     conflicts: view.conflict || state.conflicts,
+    // Wave-6B part 4 (docs/INFINITE_STACKS_CONTRACTS.md S5.11): view.study is
+    // always present (an empty {} when no room holds a StudyRoomState yet,
+    // per study_projection.project_study's "absent means empty" discipline)
+    // and folded in verbatim on every snapshot/reconnect -- studyLastNarration/
+    // studyLastCheckReceipt are event-derived scratch and intentionally
+    // survive a snapshot refresh, same as conflictIntents/conflictLastCheckReceipt.
+    studies: view.study || {},
     // J12 fix (docs/PLAYTEST_FINDINGS_2026-07-20.md): stacks_engine.py's
     // project() now folds legal_actions() into every snapshot/reconnect view
     // (view.legal_actions), not just CommandError payloads -- see that
@@ -364,6 +397,108 @@ function applyConflictEvent(state, event) {
   };
 }
 
+// -- Wave-6B part 4 study events (docs/INFINITE_STACKS_CONTRACTS.md S5.11) --
+// Folds the study-room domain event vocabulary into state.studies[room_id]
+// incrementally, the same "patch what a snapshot already carries wholesale"
+// discipline applyPuzzleEvent/applyConflictEvent use above. Every event here
+// only carries a partial delta (e.g. object_state_changed's payload has no
+// updated prose/interactions text -- that requires the object's full
+// disclosure-filtered re-projection) -- main.js additionally refetches a full
+// snapshot after every interact/converse command completes specifically so
+// the objects list's prose/legal-interaction set is never stale, per this
+// wave's "state changes re-render from the next snapshot/event" requirement.
+// What IS folded here (ledgers/scalars fully determined by the event's own
+// payload) renders correctly even before that refresh lands.
+
+function patchStudy(state, roomId, patch) {
+  if (!roomId) return state;
+  const existing = state.studies[roomId];
+  if (!existing) return state;
+  return { ...state, studies: { ...state.studies, [roomId]: { ...existing, ...patch(existing) } } };
+}
+
+function appendUniqueTuple(list, value) {
+  if ((list || []).includes(value)) return list || [];
+  return [...(list || []), value];
+}
+
+function applyStudyEvent(state, event) {
+  const roomId = event.room_id;
+  const payload = event.payload;
+
+  if (event.type === "study_room_instantiated") {
+    // A fresh room the client has never seen (objects/npc unknown until the
+    // next snapshot fills them in) -- seed a minimal placeholder so
+    // selectActiveScreen/selectStudyView have a room_id to key off of
+    // immediately, rather than waiting on the snapshot refetch.
+    if (state.studies[roomId]) return state;
+    return {
+      ...state,
+      studies: {
+        ...state.studies,
+        [roomId]: {
+          room_template_id: payload.room_template_id,
+          objects: [],
+          promoted_object_ids: [],
+          promoted_fact_ids: [],
+          npc: null,
+          payoff_triggered: false,
+          resolved: false,
+        },
+      },
+    };
+  }
+  if (event.type === "object_state_changed") {
+    return patchStudy(state, roomId, () => ({}));
+  }
+  if (event.type === "fact_promoted") {
+    // Only ever delivered to the authorized viewer (PRIVATE, one event per
+    // viewer_hero_id) -- if this client received it at all, it IS that
+    // viewer, so no extra viewer check is needed here (same reasoning
+    // hand_dealt/card_drawn's comment above already documents for hero events).
+    return patchStudy(state, roomId, (existing) => ({
+      promoted_object_ids: payload.object_id
+        ? appendUniqueTuple(existing.promoted_object_ids, payload.object_id)
+        : existing.promoted_object_ids,
+      promoted_fact_ids: payload.fact_id
+        ? appendUniqueTuple(existing.promoted_fact_ids, payload.fact_id)
+        : existing.promoted_fact_ids,
+    }));
+  }
+  if (event.type === "response_artifact_emitted") {
+    return {
+      ...state,
+      studyLastNarration: {
+        ...state.studyLastNarration,
+        [roomId]: {
+          kind: payload.kind,
+          narrationFacts: payload.narration_facts || [],
+          stateDelta: payload.state_delta || [],
+        },
+      },
+    };
+  }
+  if (event.type === "social_check_resolved") {
+    return { ...state, studyLastCheckReceipt: { ...state.studyLastCheckReceipt, [roomId]: payload } };
+  }
+  if (event.type === "npc_disposition_changed") {
+    return patchStudy(state, roomId, (existing) => ({
+      npc: existing.npc ? { ...existing.npc, disposition: payload.disposition } : existing.npc,
+    }));
+  }
+  if (event.type === "npc_objective_changed") {
+    return patchStudy(state, roomId, (existing) => ({
+      npc: existing.npc
+        ? { ...existing.npc, objective_states: { ...existing.npc.objective_states, [payload.objective_id]: payload.state } }
+        : existing.npc,
+    }));
+  }
+  if (event.type === "lattice_contribution_registered") {
+    return patchStudy(state, roomId, () => ({ resolved: true }));
+  }
+  return state;
+}
+
 // -- Wave-5 hero events (docs/INFINITE_STACKS_CONTRACTS.md S5.4) -----------
 // Folds attribute_dice_rolled/hero_created/hand_dealt/card_drawn/card_played/
 // deck_reshuffled/signature_charge_refreshed/item_*/body_loot_recovered into
@@ -513,7 +648,9 @@ function applyEvent(state, event) {
   }
   next = applyPuzzleEvent(next, event);
   next = applyConflictEvent(next, event);
+  next = applyStudyEvent(next, event);
   next = applyHeroEvent(next, event);
+  if (event.type === "stair_revealed") next = { ...next, stairRevealed: true };
   return { ...next, log: appendLog(next, describeEvent(event)) };
 }
 
@@ -674,4 +811,14 @@ export function inspectCard(state, cardId) {
 
 export function clearInspectedCard(state) {
   return { ...state, inspectedCardId: null };
+}
+
+// -- Wave-6B part 4: converse appeal picker draft (client-local scratch) ---
+// Which appeal objective (if any) the player has currently selected in the
+// picker before pressing "Converse" -- never sent anywhere until the
+// converse command actually fires (core/commands.js's converseCommand).
+// Room-keyed so switching rooms/NPCs never carries a stale selection over.
+export function setAppealDraft(state, roomId, appealObjectiveId) {
+  if (!roomId) return state;
+  return { ...state, appealDrafts: { ...(state.appealDrafts || {}), [roomId]: appealObjectiveId } };
 }

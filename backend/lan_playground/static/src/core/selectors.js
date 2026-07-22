@@ -391,6 +391,11 @@ export function selectActiveScreen(state) {
   if (you && you.sheet == null) return "character-builder";
   if (you && state.conflicts[you.room_id]) return "combat";
   if (you && state.puzzles[you.room_id]) return "puzzle";
+  // Wave-6B part 4 (docs/INFINITE_STACKS_CONTRACTS.md S5.11): a Study room
+  // takes the same precedence slot a Mystery Chamber puzzle does -- both are
+  // room-keyed "you are inside a special room" projections, mutually
+  // exclusive in practice (a room is instantiated as exactly one family).
+  if (you && state.studies[you.room_id]) return "study";
   if (state.enteredRoom) return "room";
   return "map";
 }
@@ -698,6 +703,71 @@ export function selectPuzzleView(state) {
     hintsRevealed: (puzzle.hints_revealed || []).map((hint) => ({ fallback: hint.fallback, accessible: hint.accessible })),
     canRequestHint: !puzzle.solved && !puzzle.forced,
     canSubmit: !puzzle.solved && !puzzle.forced,
+  };
+}
+
+// -- Study room + converse (docs/INFINITE_STACKS_CONTRACTS.md S5.11, wave-6B
+// part 4) --------------------------------------------------------------
+
+// Study room view: the viewer's current room's disclosure-filtered object
+// list (verb + object, each interaction's own `legal` flag drives
+// disabled/hidden state -- never re-derived client-side), the most recent
+// narration text (this game's voice, screens/study.js gives it a real
+// presentation block), and whether the room's payoff/lattice contribution
+// has resolved (a small status line, not a blocking gate on anything here).
+export function selectStudyView(state) {
+  const you = selectYouHero(state);
+  const roomId = you ? you.room_id : null;
+  const study = roomId ? state.studies[roomId] : null;
+  if (!study) return null;
+
+  return {
+    roomId,
+    roomTemplateId: study.room_template_id,
+    objects: (study.objects || []).map((object) => ({
+      id: object.id,
+      name: object.name,
+      fallback: object.fallback,
+      accessible: object.accessible,
+      interactions: (object.interactions || []).map((interaction) => ({
+        id: interaction.id,
+        verb: interaction.verb,
+        fallback: interaction.fallback,
+        accessible: interaction.accessible,
+        legal: !!interaction.legal,
+      })),
+    })),
+    hasNpc: !!study.npc,
+    resolved: !!study.resolved,
+    payoffTriggered: !!study.payoff_triggered,
+    lastNarration: state.studyLastNarration[roomId] || null,
+  };
+}
+
+// Converse view: the appeal picker's source is EXACTLY study.npc.objectives
+// (disclosure-filtered server-side -- study_projection.py never includes an
+// ENGINE_ONLY-scoped objective for any viewer) plus a synthetic "no appeal"
+// default option every picker always offers. `lastCheckReceipt` is the raw
+// social_check_resolved payload verbatim -- components/converse.js's
+// renderConverseCeremony is the ONE place that reads it, so a future
+// restyle only ever touches that file, never this selector.
+export function selectConverseView(state) {
+  const you = selectYouHero(state);
+  const roomId = you ? you.room_id : null;
+  const study = roomId ? state.studies[roomId] : null;
+  if (!study || !study.npc) return null;
+
+  return {
+    roomId,
+    npcId: study.npc.npc_id,
+    disposition: study.npc.disposition,
+    appealOptions: (study.npc.objectives || []).map((objective) => ({
+      id: objective.id,
+      fallback: objective.fallback,
+      accessible: objective.accessible,
+    })),
+    selectedAppealObjectiveId: (state.appealDrafts || {})[roomId] || null,
+    lastCheckReceipt: state.studyLastCheckReceipt[roomId] || null,
   };
 }
 

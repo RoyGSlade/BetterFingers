@@ -47,6 +47,7 @@ from backend.lan_playground.heroes.cards import NonLiveEffectOpError as _NonLive
 from backend.lan_playground.heroes.cards import compile_card_effect_ops as _compile_card_effect_ops
 from backend.lan_playground.heroes.creation import ATTRIBUTE_NAMES as _HERO_ATTRIBUTE_NAMES
 from backend.lan_playground.shops import content_loader as shop_content_loader
+from backend.lan_playground.study_projection import project_study as _project_study
 from backend.lan_playground.systems import heroes_wire, map_generation
 
 from backend.lan_playground.stacks_projections import events_since as _events_since
@@ -282,6 +283,13 @@ class StacksEngineAdapter:
         base["puzzles"] = _project_puzzles(puzzles_by_room, viewer)
         base["conflict"] = conflict_by_room
         base["shops"] = shops_by_room
+        # Wave-6B part 4 (docs/INFINITE_STACKS_CONTRACTS.md §5.11): the
+        # study projection lives in its own module (study_projection.py) --
+        # this is the minimal hook, mirroring how puzzles/conflict/shops are
+        # each folded in above. See that module for the full disclosure
+        # discipline (viewer-filtered object states, own-viewer-only
+        # promoted ledgers, PUBLIC/PARTY-only NPC objectives).
+        base["study"] = _project_study(domain_state, viewer)
         # J12 fix (docs/PLAYTEST_FINDINGS_2026-07-20.md): legal_actions was
         # previously only ever sent to the client inside a CommandError
         # payload, so a fresh join/reconnect/snapshot carried no legality
@@ -1210,6 +1218,71 @@ class StacksEngineAdapter:
                         },
                     )
                 )
+            # Wave-6B part 4 (docs/INFINITE_STACKS_CONTRACTS.md §5.11): the
+            # study-room domain event vocabulary (wave6b/slice-wiring) had no
+            # wire translation at all until this part -- these events landed
+            # in domain state/replay but were silently dropped by this
+            # allow-list before ever reaching a client. Forwarded verbatim
+            # (payload passthrough), same "domain payload IS the wire
+            # payload" discipline puzzle/shop/combat events already use
+            # above, since study_wire.py/study_interact_wire.py/
+            # study_social_wire.py already build these payloads to the exact
+            # shape docs/INFINITE_STACKS_CONTRACTS.md §5.11 documents.
+            elif de.type == DomainEventType.STUDY_ROOM_INSTANTIATED:
+                events.append(self._wire_event(state, de, "study_room_instantiated", payload=dict(de.payload)))
+            elif de.type == DomainEventType.OBJECT_STATE_CHANGED:
+                events.append(
+                    self._wire_event(state, de, "object_state_changed", visibility="party", payload=dict(de.payload))
+                )
+            elif de.type == DomainEventType.FACT_PROMOTED:
+                # PRIVATE per hero (§5.11: "one event per viewer") -- never
+                # broadcast, mirroring PUZZLE_OBJECT_INSPECTED's
+                # visible_to=de.payload["viewer_hero_id"] pattern above.
+                events.append(
+                    self._wire_event(
+                        state,
+                        de,
+                        "fact_promoted",
+                        visibility="private",
+                        visible_to=de.payload["viewer_hero_id"],
+                        payload=dict(de.payload),
+                    )
+                )
+            elif de.type == DomainEventType.RESPONSE_ARTIFACT_EMITTED:
+                events.append(
+                    self._wire_event(state, de, "response_artifact_emitted", visibility="party", payload=dict(de.payload))
+                )
+            elif de.type == DomainEventType.CONTENT_GAP_LOGGED:
+                # Owner/debug-visible only (director ruling, board notes
+                # 31/32) -- NEVER forwarded to any player-facing client.
+                # Persisted server-side only (RunState.content_gaps, already
+                # applied by study_wire.apply_content_gap_logged); this
+                # module deliberately produces no wire Event for it at all.
+                continue
+            elif de.type == DomainEventType.SOCIAL_CHECK_RESOLVED:
+                events.append(
+                    self._wire_event(state, de, "social_check_resolved", visibility="party", payload=dict(de.payload))
+                )
+            elif de.type == DomainEventType.NPC_DISPOSITION_CHANGED:
+                events.append(
+                    self._wire_event(state, de, "npc_disposition_changed", visibility="party", payload=dict(de.payload))
+                )
+            elif de.type == DomainEventType.NPC_OBJECTIVE_CHANGED:
+                events.append(
+                    self._wire_event(state, de, "npc_objective_changed", visibility="party", payload=dict(de.payload))
+                )
+            elif de.type == DomainEventType.LATTICE_CONTRIBUTION_REGISTERED:
+                events.append(
+                    self._wire_event(
+                        state, de, "lattice_contribution_registered", visibility="party", payload=dict(de.payload)
+                    )
+                )
+            elif de.type == DomainEventType.LATTICE_RECIPE_SATISFIED:
+                events.append(
+                    self._wire_event(state, de, "lattice_recipe_satisfied", visibility="party", payload=dict(de.payload))
+                )
+            elif de.type == DomainEventType.STAIR_REVEALED:
+                events.append(self._wire_event(state, de, "stair_revealed", payload=dict(de.payload)))
         return events
 
     def _translate_hero_created(self, state: RunState, de: DomainEvent) -> list[Event]:
