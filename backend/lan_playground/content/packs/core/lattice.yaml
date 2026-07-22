@@ -1,0 +1,14 @@
+# The Lost Meaning: Infinite Stacks -- wave 6B vertical slice (board note #30).
+#
+# One minimal, one-room-satisfiable floor recipe for testing (§2.1 locked
+# decision 1): gothic_living_study alone contributes truth:2, memory:1
+# (study.yaml's lattice_contribution), which exactly satisfies this recipe.
+# This is deliberately NOT a room counter -- it is a component-threshold
+# recipe that a future wiring wave can check against real resolved-room
+# contributions instead of a bare count.
+lattice_recipes:
+  - id: recipe_test_floor_study_only
+    floor_id: floor_test_gothic_study
+    thresholds:
+      truth: 2
+      memory: 1

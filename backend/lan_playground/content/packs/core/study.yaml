@@ -1,0 +1,512 @@
+# The Lost Meaning: Infinite Stacks -- wave 6B vertical slice (board note #30).
+#
+# One immaculate Gothic Living Study room, authored backward from its payoff
+# interaction (wavebasedgame.md §29 mitigation / §3.3): a displaced rug hides
+# a secret floor compartment. The generation order was: pick the payoff
+# (rug -> compartment -> contents), then place the rest of the room's
+# furniture/set dressing around it so the room reads as intentional.
+#
+# Archetype "study" corresponds to infinite_stacks.md §7.2 d8=3 (Study room
+# family, §9.3): "reconstruct a damaged page... awaken the author, reader,
+# or subject of a book" -- both books below carry real structured facts
+# (§18.3) a player can read, and one book's provenance ties directly to the
+# NPC bound to this room (content/packs/core/npcs.yaml: elara_vance).
+rooms:
+  - id: gothic_living_study
+    archetype: study
+    purpose: "A private study where a Spire-born archivist still keeps her nightly rounds, unaware how long she has been dead."
+    layout: "A close, rectangular room: a cold hearth on the north wall, a writing desk facing the door, two reading chairs before the hearth, a floor-to-ceiling bookshelf on the east wall, and a heavy rug covering the desk-side floorboards."
+    atmosphere: "Dust hangs undisturbed in shafts of grey light; the air smells of cold ash and old paper."
+    condition: "damaged"
+    cleanliness: "dusty"
+    persistent: true
+
+    objects:
+      # --- The payoff object: the rug and what it hides -------------------
+      - id: study_rug
+        version: 1
+        name: "Faded Reading Rug"
+        initial_state: rug_undisturbed
+        states:
+          - id: rug_undisturbed
+            visibility: free
+            prose:
+              fallback: "A heavy, faded rug lies flat before the hearth, one corner curled up as if kicked aside in a hurry."
+              accessible: "Object: reading rug. State: undisturbed, but one corner is visibly curled -- an inconsistency worth investigating."
+          - id: rug_displaced
+            visibility: free
+            prose:
+              fallback: "The rug is thrown back against the hearth, exposing a rectangle of floorboards cut cleanly from the rest."
+              accessible: "Object: reading rug. State: displaced, revealing a cut floorboard panel beneath."
+        interactions:
+          - id: rug_look
+            verb: look
+            legal_states: [rug_undisturbed, rug_displaced]
+            prose:
+              fallback: "The curled corner doesn't match the rest of the rug's wear pattern -- something moved it recently."
+              accessible: "Looking at the rug in either state reveals the curled-corner inconsistency."
+            effects:
+              - {op: emit_fact, args: {fact_id: fact_rug_curled_corner_noticed}}
+          - id: rug_move
+            verb: move
+            legal_states: [rug_undisturbed]
+            prose:
+              fallback: "You pull the rug fully back. Beneath it, a rectangle of floorboard has been cut and re-fitted -- a hidden panel."
+              accessible: "Moving the rug while undisturbed transitions it to displaced and reveals the hidden floor compartment."
+            state_transition_id: rug_reveal_compartment
+            reveals_state: rug_displaced
+            repeatable: false
+            effects:
+              - {op: emit_fact, args: {fact_id: fact_hidden_compartment_found}}
+
+        transitions:
+          - id: rug_reveal_compartment
+            from_state: rug_undisturbed
+            to_state: rug_displaced
+            trigger: rug_move
+            effects:
+              - {op: emit_fact, args: {fact_id: fact_hidden_compartment_found}}
+
+      - id: hidden_compartment
+        version: 1
+        name: "Floor Compartment"
+        initial_state: compartment_hidden
+        states:
+          - id: compartment_hidden
+            visibility: hidden
+            prose:
+              fallback: "There is nothing unusual about this stretch of floor."
+              accessible: "Object: floor compartment. State: hidden -- not narratable until the rug is moved."
+          - id: compartment_closed
+            visibility: noticed
+            prose:
+              fallback: "A small brass ring is set flush into the cut floor panel."
+              accessible: "Object: floor compartment. State: closed, now noticed once the rug has been moved."
+          - id: compartment_open
+            visibility: noticed
+            prose:
+              fallback: "The panel lifts on a hidden hinge, revealing a shallow strongbox built into the joists."
+              accessible: "Object: floor compartment. State: open, contents visible."
+        interactions:
+          - id: compartment_inspect
+            verb: inspect
+            legal_states: [compartment_closed, compartment_open]
+            prose:
+              fallback: "Brass fittings, recently oiled -- this compartment has been opened more than once."
+              accessible: "Inspecting the compartment in either non-hidden state reveals it has been used recently."
+            effects:
+              - {op: emit_fact, args: {fact_id: fact_compartment_recently_used}}
+          - id: compartment_open_action
+            verb: open
+            legal_states: [compartment_closed]
+            prose:
+              fallback: "You lift the panel by its brass ring. Inside: a bundle of letters tied with cord, and a small locked diary."
+              accessible: "Opening the compartment while closed transitions it to open and reveals its contents."
+            state_transition_id: compartment_open_transition
+            reveals_state: compartment_open
+            repeatable: false
+            effects:
+              - {op: emit_fact, args: {fact_id: fact_compartment_contents_revealed}}
+              - {op: grant_check, args: {attribute: insight, skill: read, dc: 10}}
+        transitions:
+          - id: compartment_open_transition
+            from_state: compartment_closed
+            to_state: compartment_open
+            trigger: compartment_open_action
+            effects:
+              - {op: emit_fact, args: {fact_id: fact_compartment_contents_revealed}}
+
+      # --- Furniture / set dressing with real secondary interactions ------
+      - id: study_fireplace
+        version: 1
+        name: "Cold Hearth"
+        initial_state: fireplace_cold
+        states:
+          - id: fireplace_cold
+            visibility: free
+            prose:
+              fallback: "The hearth has been cold for a long time; a few unburned logs remain stacked beside it."
+              accessible: "Object: fireplace. State: cold, unlit, with unburned logs stacked beside it."
+          - id: fireplace_lit
+            visibility: free
+            prose:
+              fallback: "The hearth crackles back to life, throwing warm light across the room and driving the chill out."
+              accessible: "Object: fireplace. State: lit."
+        interactions:
+          - id: fireplace_search
+            verb: search
+            legal_states: [fireplace_cold, fireplace_lit]
+            prose:
+              fallback: "Raking through the cold ash, you find a half-burned scrap of paper -- someone tried to destroy something here."
+              accessible: "Searching the fireplace in either state reveals a half-burned scrap of paper."
+            effects:
+              - {op: emit_fact, args: {fact_id: fact_half_burned_scrap_found}}
+          - id: fireplace_light
+            verb: light
+            legal_states: [fireplace_cold]
+            prose:
+              fallback: "You strike a light and the logs catch, filling the study with warmth."
+              accessible: "Lighting the fireplace while cold transitions it to lit."
+            state_transition_id: fireplace_light_transition
+            effects:
+              - {op: emit_fact, args: {fact_id: fact_fireplace_lit}}
+          - id: fireplace_extinguish
+            verb: extinguish
+            legal_states: [fireplace_lit]
+            prose:
+              fallback: "You smother the flames; the study returns to its cold hush."
+              accessible: "Extinguishing the fireplace while lit transitions it back to cold."
+            state_transition_id: fireplace_extinguish_transition
+            effects:
+              - {op: emit_fact, args: {fact_id: fact_fireplace_extinguished}}
+          - id: fireplace_warm_hands
+            verb: use
+            legal_states: [fireplace_lit]
+            prose:
+              fallback: "Standing before the lit hearth, the warm draft settles the dust in the air and clears your stinging eyes."
+              accessible: "Using the lit fireplace to warm up clears the Confused condition from the dust hazard."
+            effects:
+              - {op: remove_condition, args: {condition_id: confused}}
+        transitions:
+          - id: fireplace_light_transition
+            from_state: fireplace_cold
+            to_state: fireplace_lit
+            trigger: fireplace_light
+            effects:
+              - {op: emit_fact, args: {fact_id: fact_fireplace_lit}}
+          - id: fireplace_extinguish_transition
+            from_state: fireplace_lit
+            to_state: fireplace_cold
+            trigger: fireplace_extinguish
+            effects:
+              - {op: emit_fact, args: {fact_id: fact_fireplace_extinguished}}
+
+      - id: study_desk
+        version: 1
+        name: "Writing Desk"
+        initial_state: desk_closed
+        states:
+          - id: desk_closed
+            visibility: free
+            prose:
+              fallback: "A heavy writing desk faces the door, its drawers shut, an inkwell dry beside a stack of blank paper."
+              accessible: "Object: writing desk. State: closed drawers."
+          - id: desk_open
+            visibility: free
+            prose:
+              fallback: "The desk drawers stand open, revealing correspondence sorted by a hand that clearly cared about order."
+              accessible: "Object: writing desk. State: drawers open."
+        interactions:
+          - id: desk_search
+            verb: search
+            legal_states: [desk_open]
+            prose:
+              fallback: "Sorted correspondence, all addressed to 'E.V.' -- someone who signed every letter the same careful way."
+              accessible: "Searching the desk while open reveals correspondence addressed to E.V."
+            effects:
+              - {op: emit_fact, args: {fact_id: fact_desk_correspondence_found}}
+          - id: desk_open_action
+            verb: open
+            legal_states: [desk_closed]
+            prose:
+              fallback: "The top drawer sticks, then gives way all at once."
+              accessible: "Opening the desk while closed transitions it to open."
+            state_transition_id: desk_open_transition
+            effects:
+              - {op: emit_fact, args: {fact_id: fact_desk_opened}}
+        transitions:
+          - id: desk_open_transition
+            from_state: desk_closed
+            to_state: desk_open
+            trigger: desk_open_action
+            effects:
+              - {op: emit_fact, args: {fact_id: fact_desk_opened}}
+
+      - id: study_chairs
+        version: 1
+        name: "Reading Chairs"
+        initial_state: chairs_upright
+        states:
+          - id: chairs_upright
+            visibility: free
+            prose:
+              fallback: "Two high-backed chairs sit angled toward the hearth, as if mid-conversation."
+              accessible: "Object: reading chairs. State: upright, angled toward the hearth."
+        interactions:
+          - id: chairs_sit
+            verb: sit
+            legal_states: [chairs_upright]
+            prose:
+              fallback: "Settling into the near chair, you notice its cushion has been recently flattened -- someone sat here often, and recently."
+              accessible: "Sitting in the chairs reveals recent, frequent use."
+            effects:
+              - {op: emit_fact, args: {fact_id: fact_chair_recently_used}}
+          - id: chairs_inspect
+            verb: inspect
+            legal_states: [chairs_upright]
+            prose:
+              fallback: "A second cushion, untouched, still bears the shape of someone who stopped visiting."
+              accessible: "Inspecting the chairs reveals one cushion is undisturbed, hinting at an absent second occupant."
+            effects:
+              - {op: emit_fact, args: {fact_id: fact_second_chair_undisturbed}}
+
+      - id: study_decor
+        version: 1
+        name: "Portrait of a Young Woman"
+        initial_state: portrait_hung
+        states:
+          - id: portrait_hung
+            visibility: free
+            prose:
+              fallback: "A small portrait hangs crookedly beside the bookshelf: a young woman, pen in hand, smiling at whoever painted her."
+              accessible: "Object: portrait. State: hung, slightly crooked."
+        interactions:
+          - id: portrait_look
+            verb: look
+            legal_states: [portrait_hung]
+            prose:
+              fallback: "The plaque beneath reads: 'Elara Vance, Keeper of the Third Stack.'"
+              accessible: "Looking at the portrait reveals the plaque naming Elara Vance, Keeper of the Third Stack."
+            effects:
+              - {op: emit_fact, args: {fact_id: fact_portrait_names_elara}}
+          - id: portrait_move
+            verb: move
+            legal_states: [portrait_hung]
+            prose:
+              fallback: "Straightening the frame, you find nothing behind it but a clean square of unfaded wallpaper -- it has hung here a very long time."
+              accessible: "Moving the portrait reveals nothing hidden behind it, only a long-undisturbed wall."
+            effects:
+              - {op: emit_fact, args: {fact_id: fact_portrait_nothing_behind}}
+
+      - id: study_bookshelf
+        version: 1
+        name: "Bookshelf"
+        initial_state: bookshelf_intact
+        states:
+          - id: bookshelf_intact
+            visibility: free
+            prose:
+              fallback: "A floor-to-ceiling bookshelf, mostly full, with one gap where a volume was pulled and never returned."
+              accessible: "Object: bookshelf. State: intact, with one visible gap."
+        interactions:
+          - id: bookshelf_search
+            verb: search
+            legal_states: [bookshelf_intact]
+            prose:
+              fallback: "Behind the gap, wedged flat against the shelf's back panel, is a slim personal ledger."
+              accessible: "Searching the bookshelf reveals a slim personal ledger hidden behind the gap."
+            effects:
+              - {op: emit_fact, args: {fact_id: fact_ledger_found_behind_gap}}
+          - id: bookshelf_read_field_manual
+            verb: read
+            legal_states: [bookshelf_intact]
+            prose:
+              fallback: "You pull down the Field Manual and read a chapter at random."
+              accessible: "Reading the shelved Field Manual (see book content)."
+            effects:
+              - {op: emit_fact, args: {fact_id: fact_field_manual_read}}
+          - id: bookshelf_search_thorough
+            verb: search
+            legal_states: [bookshelf_intact]
+            prose:
+              fallback: "Pulling every shelf away from the wall costs precious time, but behind the last one is a narrow service passage leading north out of the study."
+              accessible: "A thorough search of the bookshelf spends extra Exploration Energy and reveals a service passage to the north."
+            effects:
+              - {op: spend_energy, args: {amount: 1}}
+              - {op: reveal_room, args: {connector: north}}
+              - {op: emit_fact, args: {fact_id: fact_service_passage_found}}
+        book: null
+
+      - id: study_field_manual
+        version: 1
+        name: "Field Manual: Binding Loose Pages"
+        initial_state: manual_shelved
+        states:
+          - id: manual_shelved
+            visibility: free
+            prose:
+              fallback: "A well-worn Field Manual on page-binding technique, spine cracked from heavy use."
+              accessible: "Object: Field Manual. State: shelved."
+        interactions:
+          - id: manual_read
+            verb: read
+            legal_states: [manual_shelved]
+            prose:
+              fallback: "The manual explains, in dry technical prose, how a loose Knowledge Fragment is bound into an existing book."
+              accessible: "Reading the Field Manual reveals its structured facts about binding loose pages."
+            effects:
+              - {op: emit_fact, args: {fact_id: fact_manual_binding_technique_learned}}
+        book:
+          id: book_field_manual_binding
+          title: "On the Binding of Loose Pages"
+          facts:
+            - fact_id: fact_binding_requires_verified_source
+              statement: "A loose Knowledge Fragment may only be bound into a book once its source event is verified against at least one independent witness."
+              is_reliable: true
+              source: "author: unnamed Third-Stack archivist, cross-referenced against Spire binding-hall records"
+            - fact_id: fact_binding_technique_ink
+              statement: "Binding ink is mixed from lamp-black and pressed stack-moss; this recipe unlocks the bindery's basic repair recipe."
+              is_reliable: true
+              source: "author: unnamed Third-Stack archivist"
+
+      - id: study_diary
+        version: 1
+        name: "Locked Diary"
+        initial_state: diary_locked
+        states:
+          - id: diary_locked
+            visibility: hidden
+            prose:
+              fallback: "A small diary, its clasp locked, sits among the compartment's contents."
+              accessible: "Object: diary. State: locked -- not narratable until the compartment is opened."
+          - id: diary_read
+            visibility: noticed
+            prose:
+              fallback: "The diary lies open, its final entries legible."
+              accessible: "Object: diary. State: read."
+        interactions:
+          - id: diary_read_action
+            verb: read
+            legal_states: [diary_locked, diary_read]
+            prose:
+              fallback: "The clasp gives way easily -- it was never truly locked, only stuck with age. The final entry is dated the night the Spire's corruption reached the Third Stack."
+              accessible: "Reading the diary (in either state) reveals its structured facts, including an explicitly unreliable final entry."
+            state_transition_id: diary_open_transition
+            effects:
+              - {op: emit_fact, args: {fact_id: fact_diary_final_entry_read}}
+        transitions:
+          - id: diary_open_transition
+            from_state: diary_locked
+            to_state: diary_read
+            trigger: diary_read_action
+            effects:
+              - {op: emit_fact, args: {fact_id: fact_diary_final_entry_read}}
+        book:
+          id: book_elara_diary
+          title: "Elara Vance's Diary"
+          facts:
+            - fact_id: fact_elara_hid_the_letters
+              statement: "Elara Vance hid her sister's letters in the floor compartment the week before the corruption reached the Third Stack."
+              is_reliable: true
+              source: "author: Elara Vance, first-person diary entry"
+            - fact_id: fact_diary_claims_sister_escaped
+              statement: "The diary's final entry claims Elara's sister escaped the Spire safely and is living in the lower city."
+              is_reliable: false
+              source: "unreliable narrator: Elara Vance's final entry, written while feverish and corruption-addled -- explicitly authored as a false hope, contradicted by fact_elara_sister_died_in_spire"
+
+    visible_facts:
+      - fact_id: fact_room_is_a_study
+        viewer_scope: public
+        prose:
+          fallback: "This is a private study: hearth, desk, chairs, bookshelf, and a heavy rug before the fire."
+          accessible: "Room archetype: Study."
+
+    subtle_inconsistencies:
+      - fact_id: fact_rug_curled_corner_noticed
+        viewer_scope: public
+        prose:
+          fallback: "The rug's curled corner doesn't match its overall wear pattern."
+          accessible: "Inconsistency: the rug shows recent disturbance inconsistent with the room's otherwise undisturbed dust."
+
+    secrets:
+      - id: secret_hidden_compartment
+        fact_id: fact_hidden_compartment_found
+        viewer_scope: party
+        revealed_by_interaction_id: rug_move
+        prose:
+          fallback: "A compartment is cut into the floor beneath the rug."
+          accessible: "Secret: hidden floor compartment, revealed only once the rug is moved."
+      - id: secret_elara_is_dead
+        fact_id: fact_elara_is_actually_dead
+        viewer_scope: engine_only
+        revealed_by_interaction_id: null
+        prose:
+          fallback: "Elara Vance has been dead for years; what walks this study is a lingering, unaware remnant."
+          accessible: "Secret: Elara's true state, engine-only until a future wiring wave decides how/when to disclose it."
+
+    clue_graph:
+      - clue_id: fact_rug_curled_corner_noticed
+        source_object_id: study_rug
+        source_interaction_id: rug_look
+        requires_clue_ids: []
+      - clue_id: fact_hidden_compartment_found
+        source_object_id: study_rug
+        source_interaction_id: rug_move
+        requires_clue_ids: [fact_rug_curled_corner_noticed]
+      - clue_id: fact_compartment_contents_revealed
+        source_object_id: hidden_compartment
+        source_interaction_id: compartment_open_action
+        requires_clue_ids: [fact_hidden_compartment_found]
+      - clue_id: fact_diary_final_entry_read
+        source_object_id: study_diary
+        source_interaction_id: diary_read_action
+        requires_clue_ids: [fact_compartment_contents_revealed]
+
+    npc_ids: [elara_vance]
+
+    subobjectives:
+      - id: subobjective_find_the_compartment
+        prose:
+          fallback: "Find what the displaced rug is hiding."
+          accessible: "Subobjective: investigate the rug's disturbance and open the hidden compartment."
+        reward_fact_id: fact_compartment_contents_revealed
+      - id: subobjective_learn_elaras_fate
+        prose:
+          fallback: "Piece together what really happened to Elara Vance."
+          accessible: "Subobjective: cross-reference the diary, correspondence, and portrait to learn Elara's true fate."
+        reward_fact_id: fact_elara_hid_the_letters
+
+    hazards:
+      - id: hazard_stack_dust_confusion
+        trigger: "searching the bookshelf thoroughly without first lighting the fireplace to settle the dust"
+        effects:
+          - {op: apply_condition, args: {condition_id: confused}}
+        prose:
+          fallback: "Decades of undisturbed dust billow into your eyes; for a moment nothing in the room looks quite where you left it."
+          accessible: "Hazard: a thorough bookshelf search without first lighting the fireplace risks Confused."
+
+    encounter_hooks:
+      - id: hook_elara_social
+        kind: social
+        trigger: "a hero speaks to or approaches elara_vance"
+
+    lattice_contribution:
+      truth: 2
+      memory: 1
+
+    payoff_interaction:
+      object_id: study_rug
+      interaction_id: rug_move
+      description: "Noticing the rug's curled corner, then moving it, reveals the hidden floor compartment -- the room's whole reason for existing."
+
+    narration_facts:
+      - fact_id: fact_room_is_a_study
+        viewer_scope: public
+        prose:
+          fallback: "This is a private study: hearth, desk, chairs, bookshelf, and a heavy rug before the fire."
+          accessible: "Room archetype: Study."
+      - fact_id: fact_rug_curled_corner_noticed
+        viewer_scope: public
+        prose:
+          fallback: "The rug's curled corner doesn't match its overall wear pattern."
+          accessible: "Inconsistency: the rug shows recent disturbance."
+      - fact_id: fact_hidden_compartment_found
+        viewer_scope: party
+        prose:
+          fallback: "A compartment is cut into the floor beneath the rug."
+          accessible: "Fact: hidden floor compartment found."
+      - fact_id: fact_compartment_contents_revealed
+        viewer_scope: party
+        prose:
+          fallback: "The compartment holds a bundle of letters and a locked diary."
+          accessible: "Fact: compartment contents revealed -- letters and a diary."
+      - fact_id: fact_portrait_names_elara
+        viewer_scope: public
+        prose:
+          fallback: "The portrait's plaque names Elara Vance, Keeper of the Third Stack."
+          accessible: "Fact: portrait identifies Elara Vance."
+      - fact_id: fact_diary_final_entry_read
+        viewer_scope: party
+        prose:
+          fallback: "The diary's final entry is legible, though its claims about Elara's sister are suspect."
+          accessible: "Fact: diary final entry read (see book content for reliability flags)."
