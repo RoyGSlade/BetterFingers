@@ -325,15 +325,27 @@ function render(state) {
 // Help button + persistent hint line (B1/B2) + the first-run rules overlay
 // + the A4/C1 confirm bar -- all rendered into one fixed-position container
 // so they stay visible/above every screen regardless of which is active.
+//
+// Wave-6A fix (wavebasedgame.md S3.1 "pre-join rules modal"): helpOpen
+// defaults to true (store.js's createInitialState) so the overlay still
+// greets a player the first time they actually have a hero to onboard --
+// but rendering it unconditionally meant it ALSO covered the pre-join
+// "Enter the Spire" screen on first page load, before selectYouHero(state)
+// is even truthy, blocking the "Kindle a New Run" CTA underneath it. The
+// help button and hint bar were already correctly gated on selectYouHero;
+// the overlay itself was the one piece of chrome that wasn't. Same gate,
+// applied consistently: no hero yet means nothing in #stacks-chrome renders
+// except the confirm bar (which has its own pendingAction-is-null guard and
+// can't fire before a hero exists anyway).
 function renderChrome(state) {
   if (!chrome) return;
   chrome.replaceChildren();
   if (selectYouHero(state)) {
     chrome.appendChild(renderHelpButton({ onOpen: handlers.onOpenHelp }));
     chrome.appendChild(renderHintBar(selectHintText(state)));
+    const overlay = renderRulesOverlay(state.helpOpen, { onClose: handlers.onCloseHelp });
+    if (overlay) chrome.appendChild(overlay);
   }
-  const overlay = renderRulesOverlay(state.helpOpen, { onClose: handlers.onCloseHelp });
-  if (overlay) chrome.appendChild(overlay);
   const confirmBar = renderConfirmBar(state.pendingAction, { onConfirm: handlers.onConfirmPendingAction, onCancel: handlers.onCancelPendingAction });
   if (confirmBar) chrome.appendChild(confirmBar);
 }
@@ -379,9 +391,17 @@ function enterRun({ heroId, roomCode, accessCode, playerToken, revision }) {
     .catch(() => {});
 }
 
+// J1 (playtest 07-20): joining used to ask for the hero's name up front,
+// conflating "get into the run" with "decide who you are" -- identity
+// belongs in the creation flow (character-builder.js), which already asks
+// for a name plus background/attributes/cards/token. Join is now minimal
+// (access code, plus a room code to join an existing run); host_name/
+// display_name are OPTIONAL on the wire (stacks_api.py's CreateRoomRequest/
+// JoinRoomRequest) and the server assigns a placeholder transport label
+// when omitted (StacksRoomManager) -- no client-invented identity value
+// crosses the wire, so this stays "client renders, server owns truth."
 function wireJoinPanel() {
   const accessCodeInput = document.getElementById("access-code-input");
-  const displayNameInput = document.getElementById("display-name-input");
   const roomCodeInput = document.getElementById("room-code-input");
   const createButton = document.getElementById("create-room-button");
   const joinButton = document.getElementById("join-room-button");
@@ -389,13 +409,12 @@ function wireJoinPanel() {
   if (createButton) {
     createButton.addEventListener("click", () => {
       const accessCode = accessCodeInput ? accessCodeInput.value.trim() : "";
-      const hostName = displayNameInput ? displayNameInput.value.trim() : "";
-      if (!accessCode || !hostName) {
-        setJoinStatus("Enter an access code and a display name first.");
+      if (!accessCode) {
+        setJoinStatus("Enter an access code first.");
         return;
       }
       setJoinStatus("Creating room...");
-      createRoom({ accessCode, hostName, seed: null })
+      createRoom({ accessCode, seed: null })
         .then((resp) =>
           enterRun({
             heroId: resp.hero_id,
@@ -412,14 +431,13 @@ function wireJoinPanel() {
   if (joinButton) {
     joinButton.addEventListener("click", () => {
       const accessCode = accessCodeInput ? accessCodeInput.value.trim() : "";
-      const displayName = displayNameInput ? displayNameInput.value.trim() : "";
       const roomCode = roomCodeInput ? roomCodeInput.value.trim() : "";
-      if (!accessCode || !displayName || !roomCode) {
-        setJoinStatus("Enter an access code, display name, and room code first.");
+      if (!accessCode || !roomCode) {
+        setJoinStatus("Enter an access code and a room code first.");
         return;
       }
       setJoinStatus("Joining room...");
-      joinRoom({ accessCode, roomCode, displayName })
+      joinRoom({ accessCode, roomCode })
         .then((resp) =>
           enterRun({
             heroId: resp.hero_id,

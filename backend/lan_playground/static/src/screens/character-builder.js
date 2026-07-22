@@ -243,6 +243,23 @@ function renderTokenChoice(draft, handlers) {
   return panel;
 }
 
+// J8 (playtest 07-20): renderCharacterBuilderScreen rebuilds this whole
+// screen's DOM subtree on every store change (main.js's render() fires on
+// ANY state update, not just this hero's own edits -- see store.js's
+// characterDraft comment). A fresh document.createElement("input") on every
+// pass replaces the live element the browser had focus on, dropping
+// keyboard focus after exactly one keystroke -- the name field's own
+// "input" listener calls onUpdateCharacterDraft, which triggers exactly
+// this re-render. The element must keep a stable identity across renders,
+// not just a stable value; re-focusing after the fact would be a hack that
+// fights the symptom instead of the cause. This module builds the field
+// once and hands the same live node back on every subsequent call, only
+// ever writing .value when it actually differs (so a remote update, e.g.
+// another hero's draft never touches this one -- draft is per-viewer -- or
+// a reconnect snapshot, can't clobber an in-progress keystroke or steal the
+// caret).
+let cachedNameInput = null;
+
 function renderNameField(draft, handlers) {
   const panel = el("section", "stacks-builder-name");
   panel.setAttribute("aria-label", "Name your hero");
@@ -250,14 +267,46 @@ function renderNameField(draft, handlers) {
   label.setAttribute("for", "stacks-builder-name-input");
   label.textContent = "Hero name";
   panel.appendChild(label);
-  const input = document.createElement("input");
-  input.id = "stacks-builder-name-input";
-  input.type = "text";
-  input.maxLength = 40;
-  input.value = draft.name;
-  input.addEventListener("input", () => handlers.onUpdateCharacterDraft({ name: input.value }));
-  panel.appendChild(input);
+
+  if (!cachedNameInput) {
+    cachedNameInput = document.createElement("input");
+    cachedNameInput.id = "stacks-builder-name-input";
+    cachedNameInput.type = "text";
+    cachedNameInput.maxLength = 40;
+    cachedNameInput.addEventListener("input", () => handlers.onUpdateCharacterDraft({ name: cachedNameInput.value }));
+  }
+  if (cachedNameInput.value !== draft.name) cachedNameInput.value = draft.name;
+  panel.appendChild(cachedNameInput);
   return panel;
+}
+
+// Every fresh visit to the character-builder screen (a new hero, a page
+// reload) must start from a clean cached node rather than resurrecting a
+// detached input from a previous hero -- called from
+// renderCharacterBuilderScreen's early-return paths and whenever `you` goes
+// away (see below).
+export function resetCachedNameInput() {
+  cachedNameInput = null;
+}
+
+// The real root cause isn't just "a new <input> node" -- it's that
+// container.replaceChildren() below detaches EVERY node in the screen,
+// including whatever currently has focus, before any node (cached or not)
+// gets reattached. Detaching a focused element from the document blurs it
+// immediately; reattaching the same node object afterward does not restore
+// focus. So the fix has two parts: (1) the cached node above gives the
+// input a stable identity across renders, and (2) this guard skips the
+// teardown/rebuild entirely for any render pass triggered while the name
+// input itself has focus, since typing a name changes nothing else on this
+// screen except the submit section's enabled/disabled state and hint text
+// (see renderSubmit) -- so only that section needs to be refreshed in
+// place, leaving the focused input untouched in the live DOM the whole
+// time.
+function refreshSubmitSectionInPlace(container, builder, draft, handlers) {
+  const existing = container.querySelector(".stacks-builder-submit");
+  if (!existing) return false;
+  existing.replaceWith(renderSubmit(builder, draft, handlers));
+  return true;
 }
 
 // §11.1 derived-stat preview: max HP, Defense, Initiative modifier, and
@@ -342,8 +391,21 @@ function renderSubmit(builder, draft, handlers) {
 
 export function renderCharacterBuilderScreen(container, state, handlers) {
   const you = selectYouHero(state);
+
+  if (
+    document.activeElement === cachedNameInput &&
+    container.contains(cachedNameInput) &&
+    you &&
+    refreshSubmitSectionInPlace(container, selectCharacterBuilderView(state), state.characterDraft, handlers)
+  ) {
+    return;
+  }
+
   container.replaceChildren();
-  if (!you) return;
+  if (!you) {
+    resetCachedNameInput();
+    return;
+  }
 
   const heading = el("header", "stacks-builder-heading");
   heading.appendChild(el("h1", "stacks-builder-title", "Create your hero"));
@@ -351,6 +413,7 @@ export function renderCharacterBuilderScreen(container, state, handlers) {
 
   const builder = selectCharacterBuilderView(state);
   if (!builder.pendingDice) {
+    resetCachedNameInput();
     container.appendChild(renderRollStage(handlers));
     return;
   }
