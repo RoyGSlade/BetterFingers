@@ -777,6 +777,34 @@ class J1JoinWithoutIdentityTests(unittest.TestCase):
         view = _snapshot(client, room["room_code"], room["player_token"])
         self.assertEqual(view["heroes"][room["hero_id"]]["name"], "Named Host")
 
+    def test_create_hero_chosen_name_replaces_join_placeholder(self):
+        # The J1 split means join assigns a placeholder; the name chosen on
+        # the creation screen (create_hero's validated payload, stored on the
+        # domain HeroSheet) must become the wire hero.name every viewer sees
+        # afterward -- the placeholder may never outlive character creation.
+        client = _client()
+        room = client.post("/api/stacks/rooms", json={}, headers=ACCESS_HEADER).json()
+        code, token, hero_id = room["room_code"], room["player_token"], room["hero_id"]
+        placeholder = _snapshot(client, code, token)["heroes"][hero_id]["name"]
+        self.assertTrue(placeholder and placeholder.strip())
+
+        catalog = _content_catalog(client)
+        _make_hero(client, code, token, "Mirielle the Unbound", catalog, "j1name")
+        view = _snapshot(client, code, token)
+        self.assertEqual(view["heroes"][hero_id]["name"], "Mirielle the Unbound")
+        self.assertNotEqual(view["heroes"][hero_id]["name"], placeholder)
+
+    def test_chosen_name_survives_for_other_viewers_too(self):
+        # Same contract from a second player's viewpoint: project() is
+        # viewer-filtered, but hero display names are public wire state.
+        client = _client()
+        room = client.post("/api/stacks/rooms", json={}, headers=ACCESS_HEADER).json()
+        ally = client.post(f"/api/stacks/rooms/{room['room_code']}/join", json={}, headers=ACCESS_HEADER).json()
+        catalog = _content_catalog(client)
+        _make_hero(client, room["room_code"], room["player_token"], "Mirielle the Unbound", catalog, "j1nm2")
+        ally_view = _snapshot(client, room["room_code"], ally["player_token"])
+        self.assertEqual(ally_view["heroes"][room["hero_id"]]["name"], "Mirielle the Unbound")
+
 
 class _FakeReactionManager:
     """Minimal StacksRoomManager stand-in for ReactionAutoPass unit tests:

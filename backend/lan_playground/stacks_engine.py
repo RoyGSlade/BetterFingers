@@ -664,11 +664,21 @@ class StacksEngineAdapter:
         return {"direction": direction}
 
     # -- domain state -> wire state sync (mechanical fields only; wire-only
-    # fields like Hero.name/ready/connected/private_clue and Room.secrets are
-    # adapter-owned and preserved across syncs) -----------------------------
+    # fields like Hero.ready/connected/private_clue and Room.secrets are
+    # adapter-owned and preserved across syncs). Hero.name starts as the
+    # join-time value in self._names (a J1 server-assigned placeholder when
+    # the client omitted identity) and is superseded by the domain sheet's
+    # chosen name once create_hero completes -- identity belongs to the
+    # creation step, so the sheet is authoritative from then on and, being
+    # domain state, survives event replay without adapter help. ------------
 
     def _sync_heroes(self, state: RunState, domain_state: DomainRunState) -> None:
         for hero_id, dh in domain_state.heroes.items():
+            sheet_name = ""
+            if dh.sheet is not None:
+                sheet_name = (dh.sheet.name or "").strip()[:DISPLAY_NAME_MAX_CHARS]
+            if sheet_name:
+                self._names[(state.run_id, hero_id)] = sheet_name
             wh = state.heroes.get(hero_id)
             if wh is None:
                 state.heroes[hero_id] = Hero(
@@ -684,6 +694,8 @@ class StacksEngineAdapter:
                     life_state=dh.life_state,
                 )
             else:
+                if sheet_name:
+                    wh.name = sheet_name
                 wh.room_id = dh.room_id
                 wh.energy = dh.energy
                 wh.max_energy = dh.max_energy
