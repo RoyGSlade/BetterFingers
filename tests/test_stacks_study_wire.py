@@ -298,6 +298,78 @@ def test_converse_disposition_or_objective_change_persists_on_npc_state():
         assert study.npc_objective_states
 
 
+# --------------------------------------------------------------------------- appeal mechanism (director review fix)
+
+
+def _converse_check_payload(payload_extra: dict) -> dict:
+    """Run the identical scenario (same seed, same command sequence) up to a
+    single converse whose payload carries `payload_extra`, and return the
+    SOCIAL_CHECK_RESOLVED payload. Because the RNG stream is identical
+    across runs, any difference between two calls' returned payloads is
+    attributable solely to the payload difference."""
+    h = Harness(seed=STUDY_SEED)
+    h.create_hero("hero_a")
+    h.breach_into_study("hero_a")
+    study, npc_id = _study_and_npc(h, "hero_a")
+    result = h.send("hero_a", CommandType.CONVERSE, {"npc_id": npc_id, **payload_extra})
+    return next(e for e in result.events if e.type == EventType.SOCIAL_CHECK_RESOLVED).payload
+
+
+def test_client_claimed_motive_alignment_field_is_ignored():
+    """Standing rule #5: no client-supplied modifiers, ever. A payload
+    claiming the old `motive_alignment` field (up to +4 if honored) must
+    produce the exact same check result as sending no field at all."""
+    claimed = _converse_check_payload({"motive_alignment": "strongly_aligned"})
+    baseline = _converse_check_payload({})
+    assert claimed == baseline
+    assert claimed["motive_alignment"] == "neutral"
+    assert claimed["modifier"] == baseline["modifier"]
+
+
+def test_appeal_to_disclosed_main_objective_improves_modifier():
+    """Appealing to one of Elara's PARTY-scoped (i.e. openly disclosed by
+    authored viewer_scope) main objectives is a roleplay choice the engine
+    honors by deriving STRONGLY_ALIGNED at the bottom of the tier's range
+    (+2 -- no primary/most-valued marker exists in her authored data, so
+    nothing can justify the tier's upper values)."""
+    baseline = _converse_check_payload({})
+    appealed = _converse_check_payload({"appeal_objective_id": "objective_protect_the_letters"})
+
+    assert appealed["motive_alignment"] == "strongly_aligned"
+    assert appealed["appeal_objective_id"] == "objective_protect_the_letters"
+    assert appealed["appeal_recognized"] is True
+    assert appealed["modifier"] > baseline["modifier"]
+    assert appealed["modifier"] - baseline["modifier"] == 2  # bottom of the +2..+4 tier, capped
+
+
+def test_appeal_to_undisclosed_hidden_objective_grants_nothing():
+    """Elara's hidden objective is ENGINE_ONLY-scoped -- never disclosed to
+    any player viewer. Appealing to it grants nothing: you cannot leverage
+    what you don't know."""
+    baseline = _converse_check_payload({})
+    appealed = _converse_check_payload({"appeal_objective_id": "objective_hidden_avoid_confronting_death"})
+
+    assert appealed["motive_alignment"] == "neutral"
+    assert appealed["appeal_recognized"] is False
+    assert appealed["modifier"] == baseline["modifier"]
+
+
+def test_unknown_appeal_id_degrades_to_neutral_never_an_error():
+    """A garbage appeal id is NOT an error dead-end (§2.3 always-a-response):
+    the converse still resolves (neutral motive) and still emits its
+    response artifact."""
+    h = Harness(seed=STUDY_SEED)
+    h.create_hero("hero_a")
+    h.breach_into_study("hero_a")
+    study, npc_id = _study_and_npc(h, "hero_a")
+
+    result = h.send("hero_a", CommandType.CONVERSE, {"npc_id": npc_id, "appeal_objective_id": "gibberish_objective_xyz"})
+    check_event = next(e for e in result.events if e.type == EventType.SOCIAL_CHECK_RESOLVED)
+    assert check_event.payload["motive_alignment"] == "neutral"
+    assert check_event.payload["appeal_recognized"] is False
+    assert any(e.type == EventType.RESPONSE_ARTIFACT_EMITTED for e in result.events)
+
+
 # --------------------------------------------------------------------------- full E2E loop (exit gate)
 
 
@@ -314,7 +386,14 @@ def _run_full_e2e_scenario(seed: int = STUDY_SEED):
     h.refresh_energy()
 
     study = h.state.map.rooms[room_id].study
-    h.send("hero_a", CommandType.CONVERSE, {"npc_id": study.npc_id})
+    # Converse WITH an appeal to a disclosed main objective, so the
+    # seed-determinism and replay exit-gate tests below also prove the
+    # appeal-derived motive path is fully deterministic/replayable.
+    h.send(
+        "hero_a",
+        CommandType.CONVERSE,
+        {"npc_id": study.npc_id, "appeal_objective_id": "objective_protect_the_letters"},
+    )
     return h
 
 

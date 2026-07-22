@@ -11,8 +11,11 @@ Director rulings honored here (board notes 31/32):
     (this module never calls `brain.degrees.outcome_for_margin` -- `checks.
     perform_check` already IS the authoritative resolution).
   - The ±5 contextual modifier's inputs are evidence/motive enums derived
-    from game state only (`_hero_evidence_tier`/`_hero_motive_alignment`
-    below), never free text.
+    from game state only (`_hero_evidence_tier`/`_derive_motive_alignment`
+    below) -- never free text and never a caller-claimed tier (standing rule
+    #5: no client-supplied modifiers; the client may only name an objective
+    it is APPEALING to, and the engine derives the alignment from the NPC's
+    own authored objective data).
   - `RichOutcomeKind` selection within an eligible margin bucket is a
     seeded-deterministic pick from NPC-authored data (`_pick_rich_outcome`).
   - NPC stats reuse the hero attribute vocabulary; DCs are engine-computed
@@ -28,8 +31,6 @@ from ..domain.rng import StacksRNG
 from ..domain.state import HeroState, RoomState, RunState, StudyRoomState
 from . import checks, turns
 from .study_wire import _fact_promoted_event, _npc_template, _response_artifact_events, _study_room
-
-_MOTIVE_TIERS = {t.value: t for t in brain_degrees.MotiveAlignment}
 
 # The concrete in-world evidence signal this slice recognizes (director
 # ruling: the +/-5 modifier derives ONLY from evidence/motive enums present in
@@ -65,14 +66,48 @@ def _hero_evidence_tier(study: StudyRoomState, hero_id: str) -> brain_degrees.Ev
     return brain_degrees.EvidenceTier.NONE
 
 
-def _hero_motive_alignment(payload: dict) -> brain_degrees.MotiveAlignment:
-    """Motive alignment is declared by the caller as one of the authored
-    enum values (matched against NPC objective content elsewhere) -- this
-    slice accepts the caller's declared alignment only if it names a real
-    `MotiveAlignment` member, defaulting to NEUTRAL otherwise (never free
-    text read as a signal)."""
-    raw = payload.get("motive_alignment")
-    return _MOTIVE_TIERS.get(raw, brain_degrees.MotiveAlignment.NEUTRAL)
+def _derive_motive_alignment(npc, payload: dict) -> tuple[brain_degrees.MotiveAlignment, str | None, bool]:
+    """ENGINE-derived motive alignment (director review fix, standing rule #5:
+    no client-supplied modifiers, ever -- server derives or verifies). The
+    caller may only make a roleplay choice: optionally naming an NPC
+    objective id they are APPEALING to (`appeal_objective_id`). It is never
+    a tier; the engine derives the `MotiveAlignment` enum entirely from the
+    NPC's own authored objective data:
+
+      - appeal names one of the NPC's authored MAIN objectives whose
+        existence is disclosed by its own authored `viewer_scope`
+        (PARTY/PUBLIC -- Elara's three mains are all PARTY-scoped, i.e.
+        openly what she cares about) -> STRONGLY_ALIGNED, but always at the
+        BOTTOM of that tier's range (nudge 0 -> +2): the objective schema
+        has no primary/most-valued marker in Elara's authored data, so
+        nothing can justify the tier's upper values (director instruction:
+        cap when no such marker exists).
+      - appeal names the hidden objective (ENGINE_ONLY scope, never
+        disclosed) -> NEUTRAL: you cannot leverage what you don't know.
+      - no appeal, or an unknown/garbage appeal id -> NEUTRAL, never an
+        error dead-end (§2.3 always-a-response: the converse still resolves
+        and still emits its response artifact).
+
+    The negative tiers (THREATENS_STATED_FEAR / CONTRADICTS_OBJECTIVE)
+    require id-keyed boundary/fear authoring that Elara's content does not
+    have (her `boundaries`/`fears` are prose strings with no ids an appeal
+    could reference), so they are not derivable from an appeal this part --
+    the general rule is documented in docs/INFINITE_STACKS_CONTRACTS.md
+    §5.11. Any legacy `motive_alignment` payload field is IGNORED entirely.
+
+    Returns (alignment, appeal_objective_id, appeal_recognized)."""
+    appeal_id = payload.get("appeal_objective_id")
+    if not appeal_id or not isinstance(appeal_id, str):
+        return brain_degrees.MotiveAlignment.NEUTRAL, None, False
+    for objective in npc.objectives:
+        if objective.id != appeal_id:
+            continue
+        if objective.kind.value == "main" and objective.viewer_scope.value in ("party", "public"):
+            return brain_degrees.MotiveAlignment.STRONGLY_ALIGNED, appeal_id, True
+        # Hidden/engine-only objective: its value has never been disclosed
+        # to any player viewer, so appealing to it grants nothing.
+        return brain_degrees.MotiveAlignment.NEUTRAL, appeal_id, False
+    return brain_degrees.MotiveAlignment.NEUTRAL, appeal_id, False
 
 
 def _pick_rich_outcome(npc, outcome: brain_degrees.SocialOutcome, rng: StacksRNG) -> str | None:
@@ -124,7 +159,7 @@ def handle_converse(command: Command, state: RunState, rng: StacksRNG, seq: int)
     events: list[Event] = [energy_event]
 
     evidence = _hero_evidence_tier(study, hero_id)
-    motive = _hero_motive_alignment(command.payload)
+    motive, appeal_objective_id, appeal_recognized = _derive_motive_alignment(npc, command.payload)
     modifier_inputs = brain_degrees.SocialModifierInputs(evidence=evidence, motive=motive)
 
     npc_resolve = npc.stats.get("resolve", 0)
@@ -155,7 +190,9 @@ def handle_converse(command: Command, state: RunState, rng: StacksRNG, seq: int)
             "dc": dc,
             "modifier": modifier,
             "evidence_tier": evidence.value,
-            "motive_alignment": motive.value,
+            "motive_alignment": motive.value,  # engine-DERIVED (never client-claimed)
+            "appeal_objective_id": appeal_objective_id,
+            "appeal_recognized": appeal_recognized,
             "die_rolls": list(check_result.die_rolls),
             "total": check_result.total,
             "margin": check_result.margin,

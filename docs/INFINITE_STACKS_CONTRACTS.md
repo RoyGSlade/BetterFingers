@@ -635,15 +635,31 @@ nonexistent object id is a hard `UNKNOWN_TARGET` `CommandError` (a schema-level
 rejection, distinct from the understood-but-unsupported response path, which
 requires a real target).
 
-**`converse` command** (payload `{npc_id, motive_alignment?}`). Evidence is
-**never** taken from the payload (never a caller-claimed tier): the ±5
-contextual modifier's evidence half is derived server-side from whether
+**`converse` command** (payload `{npc_id, appeal_objective_id?}`). **NEITHER
+modifier input is ever taken from the payload as a tier** (standing rule #5:
+no client-supplied numeric modifiers, ever; server derives or verifies --
+reaffirmed by director review of this part). The ±5 contextual modifier's
+evidence half is derived server-side from whether
 `systems.study_social_wire.EVIDENCE_FACT_ID`
 (`fact_compartment_contents_revealed`) has already been promoted for the
 acting hero's own viewer id (`StudyRoomState.promoted_fact_ids`) -- i.e.
 whether this specific hero personally opened the compartment (or was told by
-an earlier promotion). `motive_alignment`, if present, must name a real
-`brain.degrees.MotiveAlignment` value or is ignored (defaults `NEUTRAL`).
+an earlier promotion).
+
+The motive half is derived server-side from the optional
+`appeal_objective_id` -- a ROLEPLAY CHOICE (which NPC objective the hero
+appeals to), never a tier -- matched by the engine against the NPC's own
+authored objective data (`_derive_motive_alignment`). General rule:
+
+| appeal | derived MotiveAlignment |
+|---|---|
+| names an authored MAIN objective disclosed by its own `viewer_scope` (PARTY/PUBLIC) | `STRONGLY_ALIGNED`, always at the BOTTOM of the tier's range (+2): the objective schema has no primary/most-valued marker, so nothing can justify the tier's upper values -- when a future content revision adds such a marker, the marked objective may use the full +2..+4 range |
+| names the hidden objective without it having been disclosed to this hero (Elara's is `ENGINE_ONLY`, never disclosed) | `NEUTRAL` -- you cannot leverage what you don't know |
+| omitted, or an unknown/garbage id | `NEUTRAL`, never an error dead-end (§2.3 always-a-response: the converse still resolves and still emits its response artifact) |
+| contradicts a stated boundary/fear per authored data | negative tier (`THREATENS_STATED_FEAR`/`CONTRADICTS_OBJECTIVE`) -- **not derivable this part**: Elara's `boundaries`/`fears` are prose strings with no ids an appeal could reference; implementing this row requires id-keyed boundary/fear authoring in a future content revision |
+
+A legacy `motive_alignment` payload field is IGNORED entirely (locked in by
+`tests/test_stacks_study_wire.py::test_client_claimed_motive_alignment_field_is_ignored`).
 DC comes from `brain.degrees.compute_social_dc` (NPC `stats.resolve`);
 **real check resolution always calls `systems.checks.perform_check` /
 `outcome_for_margin`** (director ruling) -- `brain.degrees.outcome_for_margin`
@@ -652,11 +668,14 @@ is never invoked at the wiring seam, only inside `brain/`'s own tests.
 (`brain.degrees.ELIGIBLE_RICH_OUTCOMES`) is a seeded-deterministic pick from
 NPC-authored data (which kinds this NPC's own lies/tells/objectives make
 possible), never a model/engine "choice" beyond the RNG draw. New
-`EventType.SOCIAL_CHECK_RESOLVED` payload:
+`EventType.SOCIAL_CHECK_RESOLVED` payload (`motive_alignment` here is the
+engine-DERIVED value, `appeal_recognized` records whether the appeal named a
+disclosed real objective):
 
 ```
-{npc_id, dc, modifier, evidence_tier, motive_alignment, die_rolls, total,
- margin, outcome, eligible_rich_outcomes, rich_outcome}
+{npc_id, dc, modifier, evidence_tier, motive_alignment, appeal_objective_id,
+ appeal_recognized, die_rolls, total, margin, outcome,
+ eligible_rich_outcomes, rich_outcome}
 ```
 
 A `disposition_change`/`objective_change` rich outcome additionally fires
@@ -693,7 +712,7 @@ progression. Mechanics text (the event payloads above) is never
 model-derived, per §20.2.
 
 **New `CommandType` members:** `interact` (`{object_id, interaction_id}`),
-`converse` (`{npc_id, motive_alignment?}`). **New `EventType` members:**
+`converse` (`{npc_id, appeal_objective_id?}`). **New `EventType` members:**
 `study_room_instantiated`, `object_state_changed`, `fact_promoted`,
 `response_artifact_emitted`, `content_gap_logged`, `social_check_resolved`,
 `npc_disposition_changed`, `npc_objective_changed`,

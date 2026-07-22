@@ -60,14 +60,17 @@ class CommandType(str, Enum):
     # INFINITE_STACKS_STUDY_SLICE.md, wavebasedgame.md §3.2-3.6): object/NPC
     # interaction commands realizing the revised core loop. `interact`
     # payload: {object_id: str, interaction_id: str}. `converse` payload:
-    # {npc_id: str, motive_alignment: str | None} -- evidence is NEVER taken
-    # from the payload (never a caller-claimed tier): it is derived
-    # server-side from whether `systems.study_social_wire.EVIDENCE_FACT_ID`
-    # has already been promoted for the acting hero's own viewer id
-    # (StudyRoomState.promoted_fact_ids). `motive_alignment`, if present,
-    # must name a real brain.degrees.MotiveAlignment value or it is ignored
-    # (director ruling: contextual modifier inputs are evidence/motive enums
-    # derived from game state only, never free text).
+    # {npc_id: str, appeal_objective_id: str | None} -- NEITHER modifier
+    # input is ever taken from the payload as a tier (standing rule #5: no
+    # client-supplied modifiers, ever). Evidence is derived server-side from
+    # whether `systems.study_social_wire.EVIDENCE_FACT_ID` has already been
+    # promoted for the acting hero's own viewer id (StudyRoomState.
+    # promoted_fact_ids). Motive is derived server-side from the optional
+    # `appeal_objective_id` (a roleplay choice naming which NPC objective the
+    # hero appeals to) matched against the NPC's own authored objective data
+    # -- see systems/study_social_wire.py::_derive_motive_alignment. An
+    # unknown/garbage appeal id degrades to NEUTRAL, never an error. Any
+    # legacy `motive_alignment` payload field is ignored entirely.
     INTERACT = "interact"
     CONVERSE = "converse"
 
