@@ -16,7 +16,11 @@ tests/test_stacks_api.py's pattern.
 
 from __future__ import annotations
 
+import json
+import shutil
+import subprocess
 import unittest
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -28,6 +32,16 @@ ACCESS_CODE = "test-stacks-e2e-access-code"
 ALLOWED_HOSTS = {"testserver"}
 ALLOWED_ORIGINS: set[str] = set()
 ACCESS_HEADER = {"X-Access-Code": ACCESS_CODE}
+
+# J12 (docs/PLAYTEST_FINDINGS_2026-07-20.md, wavebasedgame.md S3.1) regression
+# check: tests/stacks_client_check/j12_legal_actions_check.mjs imports the
+# REAL client modules (core/store.js's reduceServerMessage/applyView,
+# core/selectors.js's selectLegalActionsSummary/selectHintText, core/
+# commands.js's command builders) and runs them against a real engine
+# snapshot -- see that file's header comment for why no DOM is needed for
+# this check (screens/map.js only reads the same selector this proves is
+# populated; it never independently computes legality).
+J12_CHECK_SCRIPT = Path(__file__).resolve().parent / "stacks_client_check" / "j12_legal_actions_check.mjs"
 
 
 def _client() -> TestClient:
@@ -279,6 +293,124 @@ class ReconnectAndPrivacyTests(unittest.TestCase):
         self.assertNotIn("private_clue_assigned", missed_types)
         for event in first["missed_events"]:
             self.assertNotIn("clue", event["payload"])
+
+
+class LegalActionsLockoutRegressionTests(unittest.TestCase):
+    """J12 (P0 session-ending bug): from a fresh entrance room the real
+    client's own reducer/selector code must expose at least one legal
+    Move/Breach/Inspect/Pass action, and that action must be genuinely
+    executable through the real transport -- not merely present in the
+    projection. Covers both halves of the playtest report's suspects: the
+    legal-actions projection itself (verified directly here against the real
+    engine) and the client wiring (verified by shelling out to Node against
+    the actual store.js/selectors.js/commands.js modules, not a Python
+    reimplementation of their logic).
+    """
+
+    def setUp(self):
+        if shutil.which("node") is None:
+            self.skipTest("node is not available on PATH")
+
+    def _run_js_check(self, payload: dict) -> dict:
+        result = subprocess.run(
+            ["node", str(J12_CHECK_SCRIPT)],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        try:
+            parsed = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            self.fail(f"j12_legal_actions_check.mjs produced non-JSON stdout (exit {result.returncode}):\n{result.stdout}\n{result.stderr}")
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"j12_legal_actions_check.mjs reported failure: {parsed.get('reason')}\nfull output: {parsed}\nstderr: {result.stderr}",
+        )
+        self.assertTrue(parsed.get("ok"))
+        return parsed
+
+    def test_fresh_entrance_room_has_a_legal_action_via_real_client_code_path(self):
+        # join -> create hero, exactly like a fresh player, against the real
+        # engine over the real REST transport (mirrors GoldenFloorSliceTests
+        # above, but stops right after join -- the entrance room, turn one,
+        # before any move/breach has happened, which is exactly the state
+        # J12's playtest report reproduced from).
+        client = _client()
+        room = _create_room(client, "Host", seed=7)
+        code, token, hero_id, revision = room["room_code"], room["player_token"], room["hero_id"], room["revision"]
+
+        snapshot_resp = client.get(f"/api/stacks/rooms/{code}/snapshot", headers={**ACCESS_HEADER, **_token_header(token)})
+        self.assertEqual(snapshot_resp.status_code, 200, snapshot_resp.text)
+        snapshot_body = snapshot_resp.json()
+
+        # Server-side projection sanity (backend/lan_playground/
+        # stacks_projections.py's legal_actions, folded into project() by
+        # the salvaged commit): fails loudly here, not just in the JS check,
+        # if a future change ever regresses the projection itself.
+        view = snapshot_body["view"]
+        self.assertIn("legal_actions", view, "snapshot view is missing legal_actions -- J12 projection regression")
+        legal = view["legal_actions"]
+        self.assertEqual(legal["hero_id"], hero_id)
+        any_legal_server_side = bool(legal["can_pass"] or legal["can_inspect"] or legal["can_move_to"] or legal["can_breach_directions"])
+        self.assertTrue(any_legal_server_side, f"no legal action in server projection for a fresh entrance room: {legal}")
+
+        # Real client code path: reduceServerMessage(snapshot) -> the exact
+        # store state screens/map.js and selectHintText read from.
+        snapshot_message = {"kind": "snapshot", "view": view, "revision": snapshot_body["revision"]}
+        js_result = self._run_js_check({"heroId": hero_id, "snapshotMessage": snapshot_message})
+        self.assertEqual(js_result["heroId"], hero_id)
+        command = js_result["command"]
+        self.assertIn(command["type"], {"move", "breach", "inspect", "pass"})
+
+        # Prove the client-selected action is genuinely executable, not just
+        # legal-looking: submit the exact envelope the real command builder
+        # produced through the real transport and confirm the server accepts
+        # it (never a CommandError).
+        submit_body = {
+            "command_id": command["command_id"],
+            "idempotency_key": command["idempotency_key"],
+            "expected_revision": revision,
+            "type": command["type"],
+            "payload": command["payload"],
+        }
+        submit_resp = client.post(
+            f"/api/stacks/rooms/{code}/commands",
+            json=submit_body,
+            headers={**ACCESS_HEADER, **_token_header(token)},
+        )
+        self.assertEqual(
+            submit_resp.status_code,
+            200,
+            f"client-selected legal action {command['type']!r} was rejected by the real engine: {submit_resp.text}",
+        )
+        self.assertGreater(submit_resp.json()["revision"], revision)
+
+    def test_regression_guard_empty_legal_actions_fails_the_js_check(self):
+        # Proves the harness script itself actually fails closed: feed it a
+        # snapshot with no legal_actions field at all (exactly what a
+        # pre-fix snapshot looked like before the salvaged commit folded
+        # legal_actions() into project()) and confirm it reports failure
+        # rather than silently passing.
+        client = _client()
+        room = _create_room(client, "Host", seed=7)
+        code, token, hero_id = room["room_code"], room["player_token"], room["hero_id"]
+        snapshot_resp = client.get(f"/api/stacks/rooms/{code}/snapshot", headers={**ACCESS_HEADER, **_token_header(token)})
+        view = dict(snapshot_resp.json()["view"])
+        view.pop("legal_actions", None)
+        broken_snapshot_message = {"kind": "snapshot", "view": view, "revision": view["revision"]}
+
+        result = subprocess.run(
+            ["node", str(J12_CHECK_SCRIPT)],
+            input=json.dumps({"heroId": hero_id, "snapshotMessage": broken_snapshot_message}),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertNotEqual(result.returncode, 0, "harness must fail when legal_actions is absent from the snapshot (the J12 regression shape)")
+        parsed = json.loads(result.stdout)
+        self.assertFalse(parsed["ok"])
 
 
 class DeterministicReplayTests(unittest.TestCase):

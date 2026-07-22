@@ -198,6 +198,22 @@ function applyView(state, view, revision) {
     // code lands; conflictIntents/conflictLastCheckReceipt are event-derived
     // scratch and intentionally survive a snapshot refresh.
     conflicts: view.conflict || state.conflicts,
+    // J12 fix (docs/PLAYTEST_FINDINGS_2026-07-20.md): stacks_engine.py's
+    // project() now folds legal_actions() into every snapshot/reconnect view
+    // (view.legal_actions), not just CommandError payloads -- see that
+    // module's comment. Before this, state.legalActions stayed at its
+    // `null` initial value from the moment of join/reconnect until the
+    // player somehow triggered an illegal-action error first, which the
+    // disabled map buttons made impossible: a fresh entrance-room player was
+    // permanently locked out of Move/Breach/Inspect/Pass, and the hint line
+    // (selectHintText, core/selectors.js) fell to its "No moves available"
+    // branch because it reads this exact same state.legalActions field, not
+    // a different one -- so wiring the value in here fixes both the buttons
+    // and the hint line from the single source they already share. A
+    // command_error's legal_actions (reduceServerMessage's "command_error"
+    // case) still overwrites this afterward with the freshest post-rejection
+    // legality, same as before.
+    legalActions: view.legal_actions !== undefined ? view.legal_actions : state.legalActions,
   };
 }
 
