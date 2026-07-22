@@ -282,6 +282,19 @@ class StacksEngineAdapter:
         base["puzzles"] = _project_puzzles(puzzles_by_room, viewer)
         base["conflict"] = conflict_by_room
         base["shops"] = shops_by_room
+        # J12 fix (docs/PLAYTEST_FINDINGS_2026-07-20.md): legal_actions was
+        # previously only ever sent to the client inside a CommandError
+        # payload, so a fresh join/reconnect/snapshot carried no legality
+        # summary at all -- the map screen's buttons (and the hint line,
+        # which reads the exact same client-side field) defaulted to fully
+        # locked out until the player somehow triggered an illegal-action
+        # error first, which the disabled buttons made impossible. project()
+        # is the one function every delivery path (REST snapshot, WS
+        # reconnect_summary) already funnels through, so folding the same
+        # legal_actions() summary in here means every viewer of every
+        # snapshot always gets a live, correct legality view -- no separate
+        # round trip, no reliance on a prior error.
+        base["legal_actions"] = self.legal_actions(state, viewer)
         return base
 
     @staticmethod
