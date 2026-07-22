@@ -12,7 +12,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..systems import checks, combat, effects, exploration, heroes_wire, puzzles, shops_wire, turns
+from ..systems import (
+    checks,
+    combat,
+    effects,
+    exploration,
+    heroes_wire,
+    puzzles,
+    shops_wire,
+    study_interact_wire,
+    study_social_wire,
+    study_wire,
+    turns,
+)
 from .commands import Command, CommandError, CommandType, ErrorCode
 from .events import Event
 from .rng import StacksRNG
@@ -60,6 +72,8 @@ _VALIDATORS = {
     CommandType.SHOP_TREAT: lambda state, hero_id, payload: shops_wire.validate_shop_treat(state, hero_id, payload),
     CommandType.SHARE_CLUE: lambda state, hero_id, payload: puzzles.validate_share_clue(state, hero_id, payload),
     CommandType.USE_ABILITY: lambda state, hero_id, payload: heroes_wire.validate_use_ability(state, hero_id, payload),
+    CommandType.INTERACT: lambda state, hero_id, payload: study_interact_wire.validate_interact(state, hero_id, payload),
+    CommandType.CONVERSE: lambda state, hero_id, payload: study_social_wire.validate_converse(state, hero_id, payload),
 }
 
 _HANDLERS = {
@@ -98,6 +112,8 @@ _HANDLERS = {
     CommandType.SHOP_TREAT: shops_wire.handle_shop_treat,
     CommandType.SHARE_CLUE: puzzles.handle_share_clue,
     CommandType.USE_ABILITY: heroes_wire.handle_use_ability,
+    CommandType.INTERACT: study_interact_wire.handle_interact,
+    CommandType.CONVERSE: study_social_wire.handle_converse,
 }
 
 EVENT_APPLIERS = {
@@ -109,6 +125,9 @@ EVENT_APPLIERS = {
     **combat.EVENT_APPLIERS,
     **heroes_wire.EVENT_APPLIERS,
     **shops_wire.EVENT_APPLIERS,
+    **study_wire.EVENT_APPLIERS,
+    **study_interact_wire.EVENT_APPLIERS,
+    **study_social_wire.EVENT_APPLIERS,
 }
 
 

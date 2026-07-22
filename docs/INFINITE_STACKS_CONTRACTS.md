@@ -553,6 +553,204 @@ accessible, trigger, frequency, source}}` (static authored data, same pattern
 as `backgrounds`/`cards`/`items`) and `token_options: {avatar_ids, colors}`
 (the two fixed lists from §5.9, for the character-builder picker).
 
+### 5.11 Study-room domain wiring (wave6b/slice-wiring, docs/
+INFINITE_STACKS_STUDY_SLICE.md, docs/INFINITE_STACKS_BRAIN.md,
+wavebasedgame.md §3.2-3.6)
+
+Wires the pure `content.rooms`/`content.npcs`/`content.lattice` (wave 6B lane
+B) and `brain.*` (wave 6B lane A) packages into the domain reducer, realizing
+§3.2's revised core loop over the authored Gothic Living Study vertical
+slice. Split across three modules to stay under the ~500-line convention:
+`systems/study_wire.py` (content loading, room instantiation, disclosure
+promotion primitives, lattice/stair reveal, legal actions),
+`systems/study_interact_wire.py` (the `interact` command), and
+`systems/study_social_wire.py` (the `converse` command / social degree
+check). All three register into `domain/reducer.py`'s `_VALIDATORS`/
+`_HANDLERS`/`EVENT_APPLIERS` exactly like every prior wave's `*_wire.py`.
+`stacks_engine.py` (already over the module-line cap) is untouched --
+client/UX wiring for this content is explicitly a following part.
+
+**Room instantiation.** Breaching a `study` room (d8 == 3,
+`systems/exploration.py::handle_breach` calls
+`study_wire.build_instantiate_events` exactly like `puzzles.py`/
+`shops_wire.py`'s own room-family hooks) draws one seeded RNG choice among
+`content.study_loader.load_study_pack().rooms` (today exactly one: the
+authored `gothic_living_study`) and stores runtime state on `RoomState.study`
+(new field, a `StudyRoomState`), same pattern as `RoomState.puzzle`/`.shop`/
+`.encounter`. New `EventType.STUDY_ROOM_INSTANTIATED`, payload
+`{room_id, room_template_id, npc_id}`.
+
+```python
+StudyRoomState:                              # domain/state.py
+    room_template_id: str
+    npc_id: str | None
+    object_state_ids: dict[object_id, state_id]                 # live current state per RoomObject
+    promoted_object_ids: dict[hero_id, tuple[object_id, ...]]    # per-viewer disclosure ledger
+    promoted_fact_ids: dict[hero_id, tuple[fact_id, ...]]        # per-viewer disclosure ledger
+    fired_interaction_ids: dict[object_id, tuple[interaction_id, ...]]  # one-shot tracking
+    npc_disposition: str
+    npc_objective_states: dict[objective_id, "active"|"changed"]
+    npc_disclosed_atom_ids: dict[hero_id, tuple[atom_id, ...]]
+    payoff_triggered: bool
+    resolved: bool                            # lattice_contribution registered for this room
+```
+
+**`interact` command** (payload `{object_id, interaction_id}`). Validates
+against the object's `ObjectInteraction` (must exist, legal in the object's
+current state, respects `repeatable=false` one-shot tracking) -> immediate
+triggers evaluated via `brain.triggers.evaluate_triggers` BEFORE any check
+(this slice's authored content has no `ImmediateTrigger` data yet, so the
+seam runs over an empty tuple -- exercised, not a no-op by omission) ->
+`state_transition_id` (if any) fires an `OBJECT_STATE_CHANGED` event ->
+whatever the interaction reveals is promoted per-viewer for every hero
+currently in the room (`FACT_PROMOTED`, `Visibility.PRIVATE`, one event per
+viewer) -> the interaction's `effects` compile through the existing LIVE op
+executor (`systems/effects.py::dispatch`) -> a `RESPONSE_ARTIFACT_EMITTED`
+event always closes the command (§2.3 always-a-response). New `EventType`
+members: `object_state_changed` (`{object_id, from_state, to_state,
+interaction_id}`, `interaction_id: null` for a payoff-cascade promotion --
+see below), `fact_promoted` (`{viewer_hero_id, object_id, fact_id}`, exactly
+one of `object_id`/`fact_id` set), `response_artifact_emitted` (the
+`brain.response.ResponseArtifact.to_dict()` payload verbatim).
+
+**Payoff-cascade promotion.** Content declares the room's `payoff_interaction`
+narratively promoting a *different* object (e.g. moving the rug promotes
+`hidden_compartment` from `hidden` to `noticed`) but has no dedicated
+cross-object field for it. The wiring layer infers this generically and
+deterministically, never guessing beyond declared data: firing the room's own
+`payoff_interaction` promotes every OTHER object currently sitting in a
+HIDDEN-visibility state to its first declared NOTICED-visibility state, in
+object-declaration order.
+
+**Zero-intent/unsupported path** (task requirement, §2.3). An `interact` on a
+real object naming an interaction id the object doesn't declare never raises
+a bare error -- it always produces `RESPONSE_ARTIFACT_EMITTED` (kind
+`unsupported`) plus `CONTENT_GAP_LOGGED` (`brain.response.ContentGapRecord.
+to_dict()` payload). **Per director ruling (board notes 31/32),
+`ContentGapRecord` persists as a domain EVENT; the event log is persistence
+until wave 8.** `RunState.content_gaps: tuple[dict, ...]` mirrors every
+`content_gap_logged` event's payload as a plain ledger -- owner/debug-visible
+only, **never** included in any player-facing projection. A genuinely
+nonexistent object id is a hard `UNKNOWN_TARGET` `CommandError` (a schema-level
+rejection, distinct from the understood-but-unsupported response path, which
+requires a real target).
+
+**`converse` command** (payload `{npc_id, appeal_objective_id?}`). **NEITHER
+modifier input is ever taken from the payload as a tier** (standing rule #5:
+no client-supplied numeric modifiers, ever; server derives or verifies --
+reaffirmed by director review of this part). The ±5 contextual modifier's
+evidence half is derived server-side from whether
+`systems.study_social_wire.EVIDENCE_FACT_ID`
+(`fact_compartment_contents_revealed`) has already been promoted for the
+acting hero's own viewer id (`StudyRoomState.promoted_fact_ids`) -- i.e.
+whether this specific hero personally opened the compartment (or was told by
+an earlier promotion).
+
+The motive half is derived server-side from the optional
+`appeal_objective_id` -- a ROLEPLAY CHOICE (which NPC objective the hero
+appeals to), never a tier -- matched by the engine against the NPC's own
+authored objective data (`_derive_motive_alignment`). General rule:
+
+| appeal | derived MotiveAlignment |
+|---|---|
+| names an authored MAIN objective disclosed by its own `viewer_scope` (PARTY/PUBLIC) | `STRONGLY_ALIGNED`, always at the BOTTOM of the tier's range (+2): the objective schema has no primary/most-valued marker, so nothing can justify the tier's upper values -- when a future content revision adds such a marker, the marked objective may use the full +2..+4 range |
+| names the hidden objective without it having been disclosed to this hero (Elara's is `ENGINE_ONLY`, never disclosed) | `NEUTRAL` -- you cannot leverage what you don't know |
+| omitted, or an unknown/garbage id | `NEUTRAL`, never an error dead-end (§2.3 always-a-response: the converse still resolves and still emits its response artifact) |
+| contradicts a stated boundary/fear per authored data | negative tier (`THREATENS_STATED_FEAR`/`CONTRADICTS_OBJECTIVE`) -- **not derivable this part**: Elara's `boundaries`/`fears` are prose strings with no ids an appeal could reference; implementing this row requires id-keyed boundary/fear authoring in a future content revision |
+
+A legacy `motive_alignment` payload field is IGNORED entirely (locked in by
+`tests/test_stacks_study_wire.py::test_client_claimed_motive_alignment_field_is_ignored`).
+DC comes from `brain.degrees.compute_social_dc` (NPC `stats.resolve`);
+**real check resolution always calls `systems.checks.perform_check` /
+`outcome_for_margin`** (director ruling) -- `brain.degrees.outcome_for_margin`
+is never invoked at the wiring seam, only inside `brain/`'s own tests.
+`RichOutcomeKind` selection within the eligible margin bucket
+(`brain.degrees.ELIGIBLE_RICH_OUTCOMES`) is a seeded-deterministic pick from
+NPC-authored data (which kinds this NPC's own lies/tells/objectives make
+possible), never a model/engine "choice" beyond the RNG draw. New
+`EventType.SOCIAL_CHECK_RESOLVED` payload (`motive_alignment` here is the
+engine-DERIVED value, `appeal_recognized` records whether the appeal named a
+disclosed real objective):
+
+```
+{npc_id, dc, modifier, evidence_tier, motive_alignment, appeal_objective_id,
+ appeal_recognized, die_rolls, total, margin, outcome,
+ eligible_rich_outcomes, rich_outcome}
+```
+
+A `disposition_change`/`objective_change` rich outcome additionally fires
+`EventType.NPC_DISPOSITION_CHANGED` (`{npc_id, disposition}`) or
+`EventType.NPC_OBJECTIVE_CHANGED` (`{npc_id, objective_id, state}`),
+persisted on `StudyRoomState.npc_disposition`/`npc_objective_states`. A
+`strong_success`/`clean_success` outcome discloses every remaining FREE-layer
+`KnowledgeAtom` for that NPC to the acting hero only (via `FACT_PROMOTED`,
+`fact_id: "npc_atom:<atom_id>"`) -- GATED atoms are never disclosed at this
+wiring seam.
+
+**Lattice + stair reveal.** A room "resolves" for lattice purposes once its
+declared `payoff_interaction` has actually fired -- never merely on room
+entry (§2.1 locked decision 1, **not** reintroduced as a room-count gate).
+New `EventType.LATTICE_CONTRIBUTION_REGISTERED` (`{room_id, amounts}`,
+persisted on `RunState.resolved_lattice_contributions[room_id]` and
+`StudyRoomState.resolved`). The first Study room instantiated on a floor
+assigns `RunState.floor_lattice_recipe_id` (this slice's authored
+`recipe_test_floor_study_only`); once `content.lattice.LatticeRecipe.
+is_satisfied()` over every registered contribution returns true, new
+`EventType.LATTICE_RECIPE_SATISFIED` (`{recipe_id}`) and
+`EventType.STAIR_REVEALED` (`{recipe_id, floor_id}`, `RunState.
+stair_revealed = True`) both fire in the same command's event batch.
+
+**Narration seam (provider seam + fallback, no model integration this
+part).** Every resolution above builds its resolved facts/state-delta first,
+then would hand a `brain.packets.build_narrator_packet`/
+`build_npc_performer_packet` to a pluggable provider interface -- this part
+wires the mechanics end of that seam (disclosure-filtered facts computed and
+persisted BEFORE any packet is built) but does not yet call a real provider;
+`brain.fallback.resolve_fallback` is the deterministic authored path every
+role always has, so a model timeout/absence can never block state
+progression. Mechanics text (the event payloads above) is never
+model-derived, per §20.2.
+
+**New `CommandType` members:** `interact` (`{object_id, interaction_id}`),
+`converse` (`{npc_id, appeal_objective_id?}`). **New `EventType` members:**
+`study_room_instantiated`, `object_state_changed`, `fact_promoted`,
+`response_artifact_emitted`, `content_gap_logged`, `social_check_resolved`,
+`npc_disposition_changed`, `npc_objective_changed`,
+`lattice_contribution_registered`, `lattice_recipe_satisfied`,
+`stair_revealed`. **New `RunState` fields:**
+`resolved_lattice_contributions: dict[room_id, dict[component, int]]`,
+`floor_lattice_recipe_id: str | None`, `stair_revealed: bool`,
+`content_gaps: tuple[dict, ...]`. **New Energy costs**
+(`systems/turns.py::ENERGY_COSTS`): `interact` (1, same as `inspect`),
+`converse` (2, same as `major_skill_interaction`, since it may resolve a d20
+social check).
+
+**Wire projection requirement (not yet built -- the following client/UX
+part's file):** `project(state, viewer)` should gain a top-level `"study"`
+key per room, exposing only what's been promoted for that specific viewer --
+`object_state_ids` filtered to `promoted_object_ids[viewer]` union any
+`ObjectVisibility.FREE` state, `npc_disposition`/`npc_objective_states`
+filtered by the NPC content's own `ViewerScope`, and NEVER
+`RunState.content_gaps` or any `ENGINE_ONLY`-scoped secret (`RoomTemplate.
+secrets` with `viewer_scope: engine_only`, e.g. `secret_elara_is_dead`).
+Field names anticipate the client's selectors: `promoted_object_ids`/
+`promoted_fact_ids` read the same way `PuzzleRoomState.private_clue_
+assignments` already does for `your_private_clues`.
+
+**Exit-gate tests** (`tests/test_stacks_study_wire.py`, driving
+`domain.reducer.apply()` directly, same Harness pattern as
+`test_stacks_shopwire.py`): full join -> create hero -> reach the study ->
+inspect/move the rug -> open the compartment -> converse with Elara
+influenced by the compartment fact as evidence -> lattice recipe satisfied ->
+stair revealed, proven seed-deterministic (same seed twice -> identical event
+logs); cross-player disclosure privacy (a fact/object promoted for one viewer
+never appears in another viewer's `StudyRoomState` ledger or any
+`FACT_PROMOTED` event's `viewer_hero_id`, proven both with a hero never in
+the room and with two heroes genuinely sharing the room); a gibberish/
+unsupported interaction always yields a response + content-gap event, never a
+bare error or silence; full event-log replay reproduces an identical
+`state_hash()`.
+
 ## 6. Core state aggregates (wave-1 subset of §22.4)
 
 Corrected 2026-07-19 to match `backend/lan_playground/domain/state.py` exactly --
@@ -647,6 +845,13 @@ subtype selection.
 | 6 | shop |
 | 7 | social_encounter |
 | 8 | anomaly |
+
+`mystery_chamber` (§5.1), `shop` (§5.5), and, as of wave6b/slice-wiring,
+`study` (§5.11) each instantiate real authored content on breach via their
+own `systems/*_wire.py::build_instantiate_events` hook, called from
+`systems/exploration.py::handle_breach`. `conflict` similarly instantiates a
+real encounter (`systems/combat.py`). `passage`/`wild_place`/
+`social_encounter`/`anomaly` have no dedicated wiring yet.
 
 ## 9. Determinism / RNG contract
 
