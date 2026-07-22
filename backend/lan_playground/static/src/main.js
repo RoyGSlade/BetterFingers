@@ -25,6 +25,7 @@ import {
   clearPendingAction,
   inspectCard,
   clearInspectedCard,
+  setAppealDraft,
 } from "./core/store.js";
 import {
   moveCommand,
@@ -49,11 +50,14 @@ import {
   tradeItemCommand,
   recoverBodyLootCommand,
   useAbilityCommand,
+  interactCommand,
+  converseCommand,
 } from "./core/commands.js";
 import { selectActiveScreen, selectYouHero, selectMoveCost, selectBreachCost, selectHintText } from "./core/selectors.js";
 import { renderMapScreen } from "./screens/map.js";
 import { renderRoomScreen } from "./screens/room.js";
 import { renderPuzzleScreen } from "./screens/puzzle.js";
+import { renderStudyScreen } from "./screens/study.js";
 import { renderCombatScreen } from "./screens/combat.js";
 import { renderCharacterBuilderScreen } from "./screens/character-builder.js";
 import { renderCharacterPanel } from "./screens/character-panel.js";
@@ -68,6 +72,7 @@ const joinPanel = document.getElementById("join-panel");
 const mapScreen = document.getElementById("map-screen");
 const roomScreen = document.getElementById("room-screen");
 const puzzleScreen = document.getElementById("puzzle-screen");
+const studyScreen = document.getElementById("study-screen");
 const combatScreen = document.getElementById("combat-screen");
 const characterBuilderScreen = document.getElementById("character-builder-screen");
 const characterPanel = document.getElementById("character-panel");
@@ -109,6 +114,50 @@ function sendCommand(command) {
 
 function currentRevision() {
   return store.getState().revision;
+}
+
+// Wave-6B part 4: object_state_changed's wire payload ({object_id,
+// from_state, to_state, interaction_id}) has no updated prose/legal-
+// interaction data -- only a full re-projection (study_projection.py) can
+// rebuild an object's disclosure-filtered fallback/accessible text and
+// which of its interactions are newly (il)legal. core/store.js's
+// applyStudyEvent already folds every ledger/scalar field it CAN derive
+// from the event stream alone (so a WS-connected second viewer sees partial
+// updates immediately); this refetch is what guarantees the ACTING client's
+// objects list itself never goes stale after interact/converse, per this
+// wave's "state changes re-render from the next snapshot/event" requirement.
+function refreshSnapshotForStudy() {
+  const you = store.getState().you;
+  if (!you.roomCode) return;
+  fetchSnapshot({ accessCode: you.accessCode, roomCode: you.roomCode, playerToken: you.playerToken })
+    .then((resp) => store.setState((s) => reduceServerMessage(s, { kind: "snapshot", view: resp.view, revision: resp.revision })))
+    .catch(() => {});
+}
+
+// interact/converse always follow up with a snapshot refetch (see
+// refreshSnapshotForStudy's comment) regardless of transport: over REST,
+// once the command's own response has already been folded in; over WS, the
+// broadcast event(s) normally arrive first, but the fetch is scheduled
+// right after sending either way so the objects list is never left stale
+// waiting on a slow/lost broadcast.
+function sendStudyCommand(command) {
+  const you = store.getState().you;
+  const sentOverSocket = socket ? socket.sendCommand(command) : false;
+  if (sentOverSocket) {
+    refreshSnapshotForStudy();
+    return;
+  }
+  submitCommandOverRest({
+    accessCode: you.accessCode,
+    roomCode: you.roomCode,
+    playerToken: you.playerToken,
+    command,
+  })
+    .then((resp) => {
+      applyRestResult(resp);
+      refreshSnapshotForStudy();
+    })
+    .catch(applyRestError);
 }
 
 // The room the puzzle/notes actions below apply to: the viewer's own current
@@ -223,6 +272,11 @@ const handlers = {
   onRecoverBodyLoot: (deadHeroId, itemIds) => sendCommand(recoverBodyLootCommand(deadHeroId, itemIds, currentRevision())),
   onUseAbility: (abilityId) => sendCommand(useAbilityCommand(abilityId, currentRevision())),
 
+  // -- Wave-6B part 4 study/converse (docs/INFINITE_STACKS_CONTRACTS.md S5.11) --
+  onInteract: (objectId, interactionId) => sendStudyCommand(interactCommand(objectId, interactionId, currentRevision())),
+  onSelectAppeal: (roomId, appealObjectiveId) => store.setState((s) => setAppealDraft(s, roomId, appealObjectiveId)),
+  onConverse: (npcId, appealObjectiveId) => sendStudyCommand(converseCommand(npcId, appealObjectiveId, currentRevision())),
+
   // -- Wave-6 playtest response (A1-A5, B1/B2, C1) ------------------------
   onOpenHelp: () => store.setState((s) => openHelp(s)),
   onCloseHelp: () => store.setState((s) => closeHelp(s)),
@@ -291,6 +345,7 @@ function render(state) {
   mapScreen.hidden = activeScreen !== "map";
   if (roomScreen) roomScreen.hidden = activeScreen !== "room";
   if (puzzleScreen) puzzleScreen.hidden = activeScreen !== "puzzle";
+  if (studyScreen) studyScreen.hidden = activeScreen !== "study";
   if (combatScreen) combatScreen.hidden = activeScreen !== "combat";
   if (characterBuilderScreen) characterBuilderScreen.hidden = activeScreen !== "character-builder";
 
@@ -299,6 +354,7 @@ function render(state) {
   } else if (activeScreen === "map") renderMapScreen(mapScreen, state, handlers);
   else if (activeScreen === "room" && roomScreen) renderRoomScreen(roomScreen, state, handlers);
   else if (activeScreen === "puzzle" && puzzleScreen) renderPuzzleScreen(puzzleScreen, state, handlers);
+  else if (activeScreen === "study" && studyScreen) renderStudyScreen(studyScreen, state, handlers);
   else if (activeScreen === "combat" && combatScreen) renderCombatScreen(combatScreen, state, handlers);
 
   // Wave-6 persistent chrome (playtest D1/D2/A1/B1/B2): rendered on every

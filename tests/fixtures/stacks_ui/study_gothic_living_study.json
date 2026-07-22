@@ -1,0 +1,1118 @@
+{
+  "description": "REAL wire capture (tests/stacks_client_check harness input) for the wave-6B part 4 Study/Converse client, captured from the actual engine via FastAPI TestClient driving join -> create_hero -> breach into the seed-6 gothic_living_study room (docs/INFINITE_STACKS_CONTRACTS.md S5.11), exactly the way tests/fixtures/stacks_ui/puzzle_mystery_chamber.json was captured for wave 3. `heroId` is the acting hero's own id; `snapshotMessage` is the {kind:'snapshot', view, revision} shape reduceServerMessage consumes directly. `beforeInteractSnapshotMessage` is the SAME room before any object interaction (baseline object list, empty promoted ledgers). `socialCheckResolvedEvent` is one real social_check_resolved event payload verbatim (from a converse call appealing to Elara's disclosed objective_protect_the_letters), for the ceremony-renders-the-event-payload-verbatim test. `otherHeroId` is a second hero who joined but never entered the study room, for the appeal-picker/objects privacy test (their own snapshot never carries this room's promoted ledger contents).",
+  "heroId": "hero_host",
+  "otherHeroId": "hero_second",
+  "roomId": "room_1_0",
+  "beforeInteractSnapshotMessage": {
+    "kind": "snapshot",
+    "view": {
+      "run_id": "run_e980871f",
+      "revision": 8,
+      "world_round": 1,
+      "required_rooms": 6,
+      "maximum_rooms": 9,
+      "heroes": {
+        "hero_host": {
+          "hero_id": "hero_host",
+          "name": "Host Hero",
+          "room_id": "room_1_0",
+          "energy": 2,
+          "max_energy": 5,
+          "hp": 10,
+          "max_hp": 10,
+          "conscious": true,
+          "alive": true,
+          "life_state": "alive",
+          "ready": false,
+          "connected": false,
+          "private_clue": null,
+          "pending_dice": null,
+          "gold": 20,
+          "item_wear": {},
+          "identified_item_ids": [],
+          "active_condition_ids": [],
+          "abilities": [
+            {
+              "id": "keen_observer",
+              "name": "Keen Observer",
+              "fallback": "You don't have to think about reading a room anymore. You just do it.",
+              "accessible": "Ability: Keen Observer. Trigger: the instant you breach into a new room, before you spend a card, action, or Energy on anything else. Effect: you get a free Insight + Read check against DC 11. Why it's good: a clean success on that check hands you one concrete, actionable detail about the room -- a hidden exit, an odd object, a discrepancy worth acting on -- every single room, for free, all game.",
+              "trigger": "on_room_enter",
+              "frequency": "unlimited",
+              "available": false
+            },
+            {
+              "id": "plain_speaking",
+              "name": "Plain Speaking",
+              "fallback": "One short, unambiguous sentence, aimed so everyone in earshot understands it the same way.",
+              "accessible": "Ability: Plain Speaking. Trigger: manually invoked, once per room, no card or action spent. Effect: you get a free Presence + Wordcraft check against DC 8. Why it's good: it's a low-DC check on demand -- when a room's social read is close, this is a guaranteed extra roll to make sure your warning actually lands, at zero resource cost.",
+              "trigger": "manual",
+              "frequency": "once_per_room",
+              "available": true
+            }
+          ],
+          "active_effects": [],
+          "avatar_id": 1,
+          "color": "crimson",
+          "sheet": {
+            "hero_id": "hero_host",
+            "name": "Host Hero",
+            "background_id": "exiled_court_scribe",
+            "dice": [
+              1,
+              2,
+              1,
+              3
+            ],
+            "attributes": {
+              "force": 1,
+              "finesse": 2,
+              "insight": 1,
+              "presence": 4
+            },
+            "skills": {
+              "wordcraft": 1,
+              "read": 1
+            },
+            "starting_item_ids": [
+              "questionable_seal"
+            ],
+            "derived": {
+              "max_hp": 10,
+              "defense": 12,
+              "initiative_modifier": 2,
+              "carry_slots": 5
+            }
+          },
+          "deck": {
+            "card_ids": [
+              "blank_contract",
+              "careful_approach",
+              "footnote_citation",
+              "procedural_objection",
+              "sealed_precedent",
+              "signature_flourish",
+              "steady_nerve"
+            ],
+            "deck_count": 3,
+            "hand_count": 4,
+            "discard": [],
+            "exhausted": []
+          },
+          "hand": [
+            "signature_flourish",
+            "blank_contract",
+            "careful_approach",
+            "sealed_precedent"
+          ],
+          "inventory": {
+            "carry_slots": 5,
+            "items": [
+              "questionable_seal"
+            ]
+          },
+          "signature_charge": {
+            "ability_id": "binding_mark",
+            "frequency": "once_per_floor",
+            "charges_remaining": 1,
+            "max_charges": 1
+          }
+        },
+        "hero_second": {
+          "hero_id": "hero_second",
+          "name": "Guest Hero",
+          "room_id": "room_1_0",
+          "energy": 4,
+          "max_energy": 5,
+          "hp": 12,
+          "max_hp": 12,
+          "conscious": true,
+          "alive": true,
+          "life_state": "alive",
+          "ready": false,
+          "connected": false,
+          "pending_dice": null,
+          "gold": 20,
+          "item_wear": {},
+          "identified_item_ids": [],
+          "active_condition_ids": [],
+          "abilities": [
+            {
+              "id": "keen_observer",
+              "name": "Keen Observer",
+              "fallback": "You don't have to think about reading a room anymore. You just do it.",
+              "accessible": "Ability: Keen Observer. Trigger: the instant you breach into a new room, before you spend a card, action, or Energy on anything else. Effect: you get a free Insight + Read check against DC 11. Why it's good: a clean success on that check hands you one concrete, actionable detail about the room -- a hidden exit, an odd object, a discrepancy worth acting on -- every single room, for free, all game.",
+              "trigger": "on_room_enter",
+              "frequency": "unlimited",
+              "available": false
+            },
+            {
+              "id": "plain_speaking",
+              "name": "Plain Speaking",
+              "fallback": "One short, unambiguous sentence, aimed so everyone in earshot understands it the same way.",
+              "accessible": "Ability: Plain Speaking. Trigger: manually invoked, once per room, no card or action spent. Effect: you get a free Presence + Wordcraft check against DC 8. Why it's good: it's a low-DC check on demand -- when a room's social read is close, this is a guaranteed extra roll to make sure your warning actually lands, at zero resource cost.",
+              "trigger": "manual",
+              "frequency": "once_per_room",
+              "available": true
+            }
+          ],
+          "active_effects": [],
+          "avatar_id": 2,
+          "color": "azure",
+          "sheet": {
+            "hero_id": "hero_second",
+            "name": "Guest Hero",
+            "background_id": "exiled_court_scribe",
+            "dice": [
+              2,
+              1,
+              3,
+              3
+            ],
+            "attributes": {
+              "force": 2,
+              "finesse": 1,
+              "insight": 3,
+              "presence": 4
+            },
+            "skills": {
+              "wordcraft": 1,
+              "read": 1
+            },
+            "starting_item_ids": [
+              "questionable_seal"
+            ],
+            "derived": {
+              "max_hp": 12,
+              "defense": 11,
+              "initiative_modifier": 1,
+              "carry_slots": 6
+            }
+          },
+          "deck": {
+            "card_ids": [
+              "blank_contract",
+              "careful_approach",
+              "footnote_citation",
+              "procedural_objection",
+              "sealed_precedent",
+              "signature_flourish",
+              "steady_nerve"
+            ],
+            "deck_count": 3,
+            "hand_count": 4,
+            "discard": [],
+            "exhausted": []
+          },
+          "inventory": {
+            "carry_slots": 6,
+            "items": [
+              "questionable_seal"
+            ]
+          },
+          "signature_charge": {
+            "ability_id": "binding_mark",
+            "frequency": "once_per_floor",
+            "charges_remaining": 1,
+            "max_charges": 1
+          }
+        }
+      },
+      "rooms": {
+        "room_0_0": {
+          "room_id": "room_0_0",
+          "x": 0,
+          "y": 0,
+          "family": null,
+          "subtype": null,
+          "discovered": true,
+          "entered": true,
+          "required": false,
+          "connectors": {
+            "east": {
+              "state": "open",
+              "target_room_id": "room_1_0"
+            },
+            "north": {
+              "state": "undiscovered",
+              "target_room_id": null
+            },
+            "south": {
+              "state": "undiscovered",
+              "target_room_id": null
+            },
+            "west": {
+              "state": "undiscovered",
+              "target_room_id": null
+            }
+          },
+          "ground_items": {},
+          "item_claims": {},
+          "body_item_ids": {}
+        },
+        "room_1_0": {
+          "room_id": "room_1_0",
+          "x": 1,
+          "y": 0,
+          "family": "study",
+          "subtype": "enemy_research",
+          "discovered": true,
+          "entered": true,
+          "required": true,
+          "connectors": {
+            "north": {
+              "state": "undiscovered",
+              "target_room_id": null
+            },
+            "south": {
+              "state": "undiscovered",
+              "target_room_id": null
+            },
+            "west": {
+              "state": "open",
+              "target_room_id": "room_0_0"
+            },
+            "east": {
+              "state": "none",
+              "target_room_id": null
+            }
+          },
+          "ground_items": {},
+          "item_claims": {},
+          "body_item_ids": {}
+        }
+      },
+      "viewer": "hero_host",
+      "puzzles": {},
+      "conflict": {},
+      "shops": {},
+      "study": {
+        "room_1_0": {
+          "room_template_id": "gothic_living_study",
+          "objects": [
+            {
+              "id": "study_rug",
+              "name": "Faded Reading Rug",
+              "state_id": "rug_undisturbed",
+              "fallback": "A heavy, faded rug lies flat before the hearth, one corner curled up as if kicked aside in a hurry.",
+              "accessible": "Object: reading rug. State: undisturbed, but one corner is visibly curled -- an inconsistency worth investigating.",
+              "interactions": [
+                {
+                  "id": "rug_look",
+                  "verb": "look",
+                  "fallback": "The curled corner doesn't match the rest of the rug's wear pattern -- something moved it recently.",
+                  "accessible": "Looking at the rug in either state reveals the curled-corner inconsistency.",
+                  "legal": true
+                },
+                {
+                  "id": "rug_move",
+                  "verb": "move",
+                  "fallback": "You pull the rug fully back. Beneath it, a rectangle of floorboard has been cut and re-fitted -- a hidden panel.",
+                  "accessible": "Moving the rug while undisturbed transitions it to displaced and reveals the hidden floor compartment.",
+                  "legal": true
+                }
+              ]
+            },
+            {
+              "id": "study_fireplace",
+              "name": "Cold Hearth",
+              "state_id": "fireplace_cold",
+              "fallback": "The hearth has been cold for a long time; a few unburned logs remain stacked beside it.",
+              "accessible": "Object: fireplace. State: cold, unlit, with unburned logs stacked beside it.",
+              "interactions": [
+                {
+                  "id": "fireplace_search",
+                  "verb": "search",
+                  "fallback": "Raking through the cold ash, you find a half-burned scrap of paper -- someone tried to destroy something here.",
+                  "accessible": "Searching the fireplace in either state reveals a half-burned scrap of paper.",
+                  "legal": true
+                },
+                {
+                  "id": "fireplace_light",
+                  "verb": "light",
+                  "fallback": "You strike a light and the logs catch, filling the study with warmth.",
+                  "accessible": "Lighting the fireplace while cold transitions it to lit.",
+                  "legal": true
+                },
+                {
+                  "id": "fireplace_extinguish",
+                  "verb": "extinguish",
+                  "fallback": "You smother the flames; the study returns to its cold hush.",
+                  "accessible": "Extinguishing the fireplace while lit transitions it back to cold.",
+                  "legal": false
+                },
+                {
+                  "id": "fireplace_warm_hands",
+                  "verb": "use",
+                  "fallback": "Standing before the lit hearth, the warm draft settles the dust in the air and clears your stinging eyes.",
+                  "accessible": "Using the lit fireplace to warm up clears the Confused condition from the dust hazard.",
+                  "legal": false
+                }
+              ]
+            },
+            {
+              "id": "study_desk",
+              "name": "Writing Desk",
+              "state_id": "desk_closed",
+              "fallback": "A heavy writing desk faces the door, its drawers shut, an inkwell dry beside a stack of blank paper.",
+              "accessible": "Object: writing desk. State: closed drawers.",
+              "interactions": [
+                {
+                  "id": "desk_search",
+                  "verb": "search",
+                  "fallback": "Sorted correspondence, all addressed to 'E.V.' -- someone who signed every letter the same careful way.",
+                  "accessible": "Searching the desk while open reveals correspondence addressed to E.V.",
+                  "legal": false
+                },
+                {
+                  "id": "desk_open_action",
+                  "verb": "open",
+                  "fallback": "The top drawer sticks, then gives way all at once.",
+                  "accessible": "Opening the desk while closed transitions it to open.",
+                  "legal": true
+                }
+              ]
+            },
+            {
+              "id": "study_chairs",
+              "name": "Reading Chairs",
+              "state_id": "chairs_upright",
+              "fallback": "Two high-backed chairs sit angled toward the hearth, as if mid-conversation.",
+              "accessible": "Object: reading chairs. State: upright, angled toward the hearth.",
+              "interactions": [
+                {
+                  "id": "chairs_sit",
+                  "verb": "sit",
+                  "fallback": "Settling into the near chair, you notice its cushion has been recently flattened -- someone sat here often, and recently.",
+                  "accessible": "Sitting in the chairs reveals recent, frequent use.",
+                  "legal": true
+                },
+                {
+                  "id": "chairs_inspect",
+                  "verb": "inspect",
+                  "fallback": "A second cushion, untouched, still bears the shape of someone who stopped visiting.",
+                  "accessible": "Inspecting the chairs reveals one cushion is undisturbed, hinting at an absent second occupant.",
+                  "legal": true
+                }
+              ]
+            },
+            {
+              "id": "study_decor",
+              "name": "Portrait of a Young Woman",
+              "state_id": "portrait_hung",
+              "fallback": "A small portrait hangs crookedly beside the bookshelf: a young woman, pen in hand, smiling at whoever painted her.",
+              "accessible": "Object: portrait. State: hung, slightly crooked.",
+              "interactions": [
+                {
+                  "id": "portrait_look",
+                  "verb": "look",
+                  "fallback": "The plaque beneath reads: 'Elara Vance, Keeper of the Third Stack.'",
+                  "accessible": "Looking at the portrait reveals the plaque naming Elara Vance, Keeper of the Third Stack.",
+                  "legal": true
+                },
+                {
+                  "id": "portrait_move",
+                  "verb": "move",
+                  "fallback": "Straightening the frame, you find nothing behind it but a clean square of unfaded wallpaper -- it has hung here a very long time.",
+                  "accessible": "Moving the portrait reveals nothing hidden behind it, only a long-undisturbed wall.",
+                  "legal": true
+                }
+              ]
+            },
+            {
+              "id": "study_bookshelf",
+              "name": "Bookshelf",
+              "state_id": "bookshelf_intact",
+              "fallback": "A floor-to-ceiling bookshelf, mostly full, with one gap where a volume was pulled and never returned.",
+              "accessible": "Object: bookshelf. State: intact, with one visible gap.",
+              "interactions": [
+                {
+                  "id": "bookshelf_search",
+                  "verb": "search",
+                  "fallback": "Behind the gap, wedged flat against the shelf's back panel, is a slim personal ledger.",
+                  "accessible": "Searching the bookshelf reveals a slim personal ledger hidden behind the gap.",
+                  "legal": true
+                },
+                {
+                  "id": "bookshelf_read_field_manual",
+                  "verb": "read",
+                  "fallback": "You pull down the Field Manual and read a chapter at random.",
+                  "accessible": "Reading the shelved Field Manual (see book content).",
+                  "legal": true
+                },
+                {
+                  "id": "bookshelf_search_thorough",
+                  "verb": "search",
+                  "fallback": "Pulling every shelf away from the wall costs precious time, but behind the last one is a narrow service passage leading north out of the study.",
+                  "accessible": "A thorough search of the bookshelf spends extra Exploration Energy and reveals a service passage to the north.",
+                  "legal": true
+                }
+              ]
+            },
+            {
+              "id": "study_field_manual",
+              "name": "Field Manual: Binding Loose Pages",
+              "state_id": "manual_shelved",
+              "fallback": "A well-worn Field Manual on page-binding technique, spine cracked from heavy use.",
+              "accessible": "Object: Field Manual. State: shelved.",
+              "interactions": [
+                {
+                  "id": "manual_read",
+                  "verb": "read",
+                  "fallback": "The manual explains, in dry technical prose, how a loose Knowledge Fragment is bound into an existing book.",
+                  "accessible": "Reading the Field Manual reveals its structured facts about binding loose pages.",
+                  "legal": true
+                }
+              ]
+            }
+          ],
+          "promoted_object_ids": [],
+          "promoted_fact_ids": [],
+          "npc": {
+            "npc_id": "elara_vance",
+            "disposition": "wary, cooperative if addressed properly",
+            "objectives": [
+              {
+                "id": "objective_protect_the_letters",
+                "kind": "main",
+                "fallback": "Keep her sister's letters from being taken by anyone she doesn't trust.",
+                "accessible": "Main objective: protect the hidden letters."
+              },
+              {
+                "id": "objective_maintain_the_study",
+                "kind": "main",
+                "fallback": "Keep the study in order, as if inspection could happen any day.",
+                "accessible": "Main objective: maintain the study's order."
+              },
+              {
+                "id": "objective_be_addressed_properly",
+                "kind": "main",
+                "fallback": "Be recognized and addressed as Keeper, not dismissed as a ghost or a remnant.",
+                "accessible": "Main objective: be addressed by her title."
+              }
+            ],
+            "objective_states": {}
+          },
+          "payoff_triggered": false,
+          "resolved": false
+        }
+      },
+      "legal_actions": {
+        "revision": 8,
+        "world_round": 1,
+        "hero_id": "hero_host",
+        "room_id": "room_1_0",
+        "energy": 2,
+        "can_pass": true,
+        "can_inspect": true,
+        "can_move_to": [
+          "room_0_0"
+        ],
+        "can_breach_directions": [],
+        "can_observe_directions": [
+          "west"
+        ],
+        "move_costs": {
+          "room_0_0": 1
+        },
+        "breach_costs": {}
+      }
+    },
+    "revision": 8
+  },
+  "snapshotMessage": {
+    "kind": "snapshot",
+    "view": {
+      "run_id": "run_e980871f",
+      "revision": 14,
+      "world_round": 2,
+      "required_rooms": 6,
+      "maximum_rooms": 9,
+      "heroes": {
+        "hero_host": {
+          "hero_id": "hero_host",
+          "name": "Host Hero",
+          "room_id": "room_1_0",
+          "energy": 2,
+          "max_energy": 5,
+          "hp": 10,
+          "max_hp": 10,
+          "conscious": true,
+          "alive": true,
+          "life_state": "alive",
+          "ready": false,
+          "connected": false,
+          "private_clue": null,
+          "pending_dice": null,
+          "gold": 20,
+          "item_wear": {},
+          "identified_item_ids": [],
+          "active_condition_ids": [],
+          "abilities": [
+            {
+              "id": "keen_observer",
+              "name": "Keen Observer",
+              "fallback": "You don't have to think about reading a room anymore. You just do it.",
+              "accessible": "Ability: Keen Observer. Trigger: the instant you breach into a new room, before you spend a card, action, or Energy on anything else. Effect: you get a free Insight + Read check against DC 11. Why it's good: a clean success on that check hands you one concrete, actionable detail about the room -- a hidden exit, an odd object, a discrepancy worth acting on -- every single room, for free, all game.",
+              "trigger": "on_room_enter",
+              "frequency": "unlimited",
+              "available": false
+            },
+            {
+              "id": "plain_speaking",
+              "name": "Plain Speaking",
+              "fallback": "One short, unambiguous sentence, aimed so everyone in earshot understands it the same way.",
+              "accessible": "Ability: Plain Speaking. Trigger: manually invoked, once per room, no card or action spent. Effect: you get a free Presence + Wordcraft check against DC 8. Why it's good: it's a low-DC check on demand -- when a room's social read is close, this is a guaranteed extra roll to make sure your warning actually lands, at zero resource cost.",
+              "trigger": "manual",
+              "frequency": "once_per_room",
+              "available": true
+            }
+          ],
+          "active_effects": [],
+          "avatar_id": 1,
+          "color": "crimson",
+          "sheet": {
+            "hero_id": "hero_host",
+            "name": "Host Hero",
+            "background_id": "exiled_court_scribe",
+            "dice": [
+              1,
+              2,
+              1,
+              3
+            ],
+            "attributes": {
+              "force": 1,
+              "finesse": 2,
+              "insight": 1,
+              "presence": 4
+            },
+            "skills": {
+              "wordcraft": 1,
+              "read": 1
+            },
+            "starting_item_ids": [
+              "questionable_seal"
+            ],
+            "derived": {
+              "max_hp": 10,
+              "defense": 12,
+              "initiative_modifier": 2,
+              "carry_slots": 5
+            }
+          },
+          "deck": {
+            "card_ids": [
+              "blank_contract",
+              "careful_approach",
+              "footnote_citation",
+              "procedural_objection",
+              "sealed_precedent",
+              "signature_flourish",
+              "steady_nerve"
+            ],
+            "deck_count": 3,
+            "hand_count": 4,
+            "discard": [],
+            "exhausted": []
+          },
+          "hand": [
+            "signature_flourish",
+            "blank_contract",
+            "careful_approach",
+            "sealed_precedent"
+          ],
+          "inventory": {
+            "carry_slots": 5,
+            "items": [
+              "questionable_seal"
+            ]
+          },
+          "signature_charge": {
+            "ability_id": "binding_mark",
+            "frequency": "once_per_floor",
+            "charges_remaining": 1,
+            "max_charges": 1
+          }
+        },
+        "hero_second": {
+          "hero_id": "hero_second",
+          "name": "Guest Hero",
+          "room_id": "room_1_0",
+          "energy": 5,
+          "max_energy": 5,
+          "hp": 12,
+          "max_hp": 12,
+          "conscious": true,
+          "alive": true,
+          "life_state": "alive",
+          "ready": false,
+          "connected": false,
+          "pending_dice": null,
+          "gold": 20,
+          "item_wear": {},
+          "identified_item_ids": [],
+          "active_condition_ids": [],
+          "abilities": [
+            {
+              "id": "keen_observer",
+              "name": "Keen Observer",
+              "fallback": "You don't have to think about reading a room anymore. You just do it.",
+              "accessible": "Ability: Keen Observer. Trigger: the instant you breach into a new room, before you spend a card, action, or Energy on anything else. Effect: you get a free Insight + Read check against DC 11. Why it's good: a clean success on that check hands you one concrete, actionable detail about the room -- a hidden exit, an odd object, a discrepancy worth acting on -- every single room, for free, all game.",
+              "trigger": "on_room_enter",
+              "frequency": "unlimited",
+              "available": false
+            },
+            {
+              "id": "plain_speaking",
+              "name": "Plain Speaking",
+              "fallback": "One short, unambiguous sentence, aimed so everyone in earshot understands it the same way.",
+              "accessible": "Ability: Plain Speaking. Trigger: manually invoked, once per room, no card or action spent. Effect: you get a free Presence + Wordcraft check against DC 8. Why it's good: it's a low-DC check on demand -- when a room's social read is close, this is a guaranteed extra roll to make sure your warning actually lands, at zero resource cost.",
+              "trigger": "manual",
+              "frequency": "once_per_room",
+              "available": true
+            }
+          ],
+          "active_effects": [],
+          "avatar_id": 2,
+          "color": "azure",
+          "sheet": {
+            "hero_id": "hero_second",
+            "name": "Guest Hero",
+            "background_id": "exiled_court_scribe",
+            "dice": [
+              2,
+              1,
+              3,
+              3
+            ],
+            "attributes": {
+              "force": 2,
+              "finesse": 1,
+              "insight": 3,
+              "presence": 4
+            },
+            "skills": {
+              "wordcraft": 1,
+              "read": 1
+            },
+            "starting_item_ids": [
+              "questionable_seal"
+            ],
+            "derived": {
+              "max_hp": 12,
+              "defense": 11,
+              "initiative_modifier": 1,
+              "carry_slots": 6
+            }
+          },
+          "deck": {
+            "card_ids": [
+              "blank_contract",
+              "careful_approach",
+              "footnote_citation",
+              "procedural_objection",
+              "sealed_precedent",
+              "signature_flourish",
+              "steady_nerve"
+            ],
+            "deck_count": 3,
+            "hand_count": 4,
+            "discard": [],
+            "exhausted": []
+          },
+          "inventory": {
+            "carry_slots": 6,
+            "items": [
+              "questionable_seal"
+            ]
+          },
+          "signature_charge": {
+            "ability_id": "binding_mark",
+            "frequency": "once_per_floor",
+            "charges_remaining": 1,
+            "max_charges": 1
+          }
+        }
+      },
+      "rooms": {
+        "room_0_0": {
+          "room_id": "room_0_0",
+          "x": 0,
+          "y": 0,
+          "family": null,
+          "subtype": null,
+          "discovered": true,
+          "entered": true,
+          "required": false,
+          "connectors": {
+            "east": {
+              "state": "open",
+              "target_room_id": "room_1_0"
+            },
+            "north": {
+              "state": "undiscovered",
+              "target_room_id": null
+            },
+            "south": {
+              "state": "undiscovered",
+              "target_room_id": null
+            },
+            "west": {
+              "state": "undiscovered",
+              "target_room_id": null
+            }
+          },
+          "ground_items": {},
+          "item_claims": {},
+          "body_item_ids": {}
+        },
+        "room_1_0": {
+          "room_id": "room_1_0",
+          "x": 1,
+          "y": 0,
+          "family": "study",
+          "subtype": "enemy_research",
+          "discovered": true,
+          "entered": true,
+          "required": true,
+          "connectors": {
+            "north": {
+              "state": "undiscovered",
+              "target_room_id": null
+            },
+            "south": {
+              "state": "undiscovered",
+              "target_room_id": null
+            },
+            "west": {
+              "state": "open",
+              "target_room_id": "room_0_0"
+            },
+            "east": {
+              "state": "none",
+              "target_room_id": null
+            }
+          },
+          "ground_items": {},
+          "item_claims": {},
+          "body_item_ids": {}
+        }
+      },
+      "viewer": "hero_host",
+      "puzzles": {},
+      "conflict": {},
+      "shops": {},
+      "study": {
+        "room_1_0": {
+          "room_template_id": "gothic_living_study",
+          "objects": [
+            {
+              "id": "study_rug",
+              "name": "Faded Reading Rug",
+              "state_id": "rug_displaced",
+              "fallback": "The rug is thrown back against the hearth, exposing a rectangle of floorboards cut cleanly from the rest.",
+              "accessible": "Object: reading rug. State: displaced, revealing a cut floorboard panel beneath.",
+              "interactions": [
+                {
+                  "id": "rug_look",
+                  "verb": "look",
+                  "fallback": "The curled corner doesn't match the rest of the rug's wear pattern -- something moved it recently.",
+                  "accessible": "Looking at the rug in either state reveals the curled-corner inconsistency.",
+                  "legal": true
+                },
+                {
+                  "id": "rug_move",
+                  "verb": "move",
+                  "fallback": "You pull the rug fully back. Beneath it, a rectangle of floorboard has been cut and re-fitted -- a hidden panel.",
+                  "accessible": "Moving the rug while undisturbed transitions it to displaced and reveals the hidden floor compartment.",
+                  "legal": false
+                }
+              ]
+            },
+            {
+              "id": "hidden_compartment",
+              "name": "Floor Compartment",
+              "state_id": "compartment_open",
+              "fallback": "The panel lifts on a hidden hinge, revealing a shallow strongbox built into the joists.",
+              "accessible": "Object: floor compartment. State: open, contents visible.",
+              "interactions": [
+                {
+                  "id": "compartment_inspect",
+                  "verb": "inspect",
+                  "fallback": "Brass fittings, recently oiled -- this compartment has been opened more than once.",
+                  "accessible": "Inspecting the compartment in either non-hidden state reveals it has been used recently.",
+                  "legal": true
+                },
+                {
+                  "id": "compartment_open_action",
+                  "verb": "open",
+                  "fallback": "You lift the panel by its brass ring. Inside: a bundle of letters tied with cord, and a small locked diary.",
+                  "accessible": "Opening the compartment while closed transitions it to open and reveals its contents.",
+                  "legal": false
+                }
+              ]
+            },
+            {
+              "id": "study_fireplace",
+              "name": "Cold Hearth",
+              "state_id": "fireplace_cold",
+              "fallback": "The hearth has been cold for a long time; a few unburned logs remain stacked beside it.",
+              "accessible": "Object: fireplace. State: cold, unlit, with unburned logs stacked beside it.",
+              "interactions": [
+                {
+                  "id": "fireplace_search",
+                  "verb": "search",
+                  "fallback": "Raking through the cold ash, you find a half-burned scrap of paper -- someone tried to destroy something here.",
+                  "accessible": "Searching the fireplace in either state reveals a half-burned scrap of paper.",
+                  "legal": true
+                },
+                {
+                  "id": "fireplace_light",
+                  "verb": "light",
+                  "fallback": "You strike a light and the logs catch, filling the study with warmth.",
+                  "accessible": "Lighting the fireplace while cold transitions it to lit.",
+                  "legal": true
+                },
+                {
+                  "id": "fireplace_extinguish",
+                  "verb": "extinguish",
+                  "fallback": "You smother the flames; the study returns to its cold hush.",
+                  "accessible": "Extinguishing the fireplace while lit transitions it back to cold.",
+                  "legal": false
+                },
+                {
+                  "id": "fireplace_warm_hands",
+                  "verb": "use",
+                  "fallback": "Standing before the lit hearth, the warm draft settles the dust in the air and clears your stinging eyes.",
+                  "accessible": "Using the lit fireplace to warm up clears the Confused condition from the dust hazard.",
+                  "legal": false
+                }
+              ]
+            },
+            {
+              "id": "study_desk",
+              "name": "Writing Desk",
+              "state_id": "desk_closed",
+              "fallback": "A heavy writing desk faces the door, its drawers shut, an inkwell dry beside a stack of blank paper.",
+              "accessible": "Object: writing desk. State: closed drawers.",
+              "interactions": [
+                {
+                  "id": "desk_search",
+                  "verb": "search",
+                  "fallback": "Sorted correspondence, all addressed to 'E.V.' -- someone who signed every letter the same careful way.",
+                  "accessible": "Searching the desk while open reveals correspondence addressed to E.V.",
+                  "legal": false
+                },
+                {
+                  "id": "desk_open_action",
+                  "verb": "open",
+                  "fallback": "The top drawer sticks, then gives way all at once.",
+                  "accessible": "Opening the desk while closed transitions it to open.",
+                  "legal": true
+                }
+              ]
+            },
+            {
+              "id": "study_chairs",
+              "name": "Reading Chairs",
+              "state_id": "chairs_upright",
+              "fallback": "Two high-backed chairs sit angled toward the hearth, as if mid-conversation.",
+              "accessible": "Object: reading chairs. State: upright, angled toward the hearth.",
+              "interactions": [
+                {
+                  "id": "chairs_sit",
+                  "verb": "sit",
+                  "fallback": "Settling into the near chair, you notice its cushion has been recently flattened -- someone sat here often, and recently.",
+                  "accessible": "Sitting in the chairs reveals recent, frequent use.",
+                  "legal": true
+                },
+                {
+                  "id": "chairs_inspect",
+                  "verb": "inspect",
+                  "fallback": "A second cushion, untouched, still bears the shape of someone who stopped visiting.",
+                  "accessible": "Inspecting the chairs reveals one cushion is undisturbed, hinting at an absent second occupant.",
+                  "legal": true
+                }
+              ]
+            },
+            {
+              "id": "study_decor",
+              "name": "Portrait of a Young Woman",
+              "state_id": "portrait_hung",
+              "fallback": "A small portrait hangs crookedly beside the bookshelf: a young woman, pen in hand, smiling at whoever painted her.",
+              "accessible": "Object: portrait. State: hung, slightly crooked.",
+              "interactions": [
+                {
+                  "id": "portrait_look",
+                  "verb": "look",
+                  "fallback": "The plaque beneath reads: 'Elara Vance, Keeper of the Third Stack.'",
+                  "accessible": "Looking at the portrait reveals the plaque naming Elara Vance, Keeper of the Third Stack.",
+                  "legal": true
+                },
+                {
+                  "id": "portrait_move",
+                  "verb": "move",
+                  "fallback": "Straightening the frame, you find nothing behind it but a clean square of unfaded wallpaper -- it has hung here a very long time.",
+                  "accessible": "Moving the portrait reveals nothing hidden behind it, only a long-undisturbed wall.",
+                  "legal": true
+                }
+              ]
+            },
+            {
+              "id": "study_bookshelf",
+              "name": "Bookshelf",
+              "state_id": "bookshelf_intact",
+              "fallback": "A floor-to-ceiling bookshelf, mostly full, with one gap where a volume was pulled and never returned.",
+              "accessible": "Object: bookshelf. State: intact, with one visible gap.",
+              "interactions": [
+                {
+                  "id": "bookshelf_search",
+                  "verb": "search",
+                  "fallback": "Behind the gap, wedged flat against the shelf's back panel, is a slim personal ledger.",
+                  "accessible": "Searching the bookshelf reveals a slim personal ledger hidden behind the gap.",
+                  "legal": true
+                },
+                {
+                  "id": "bookshelf_read_field_manual",
+                  "verb": "read",
+                  "fallback": "You pull down the Field Manual and read a chapter at random.",
+                  "accessible": "Reading the shelved Field Manual (see book content).",
+                  "legal": true
+                },
+                {
+                  "id": "bookshelf_search_thorough",
+                  "verb": "search",
+                  "fallback": "Pulling every shelf away from the wall costs precious time, but behind the last one is a narrow service passage leading north out of the study.",
+                  "accessible": "A thorough search of the bookshelf spends extra Exploration Energy and reveals a service passage to the north.",
+                  "legal": true
+                }
+              ]
+            },
+            {
+              "id": "study_field_manual",
+              "name": "Field Manual: Binding Loose Pages",
+              "state_id": "manual_shelved",
+              "fallback": "A well-worn Field Manual on page-binding technique, spine cracked from heavy use.",
+              "accessible": "Object: Field Manual. State: shelved.",
+              "interactions": [
+                {
+                  "id": "manual_read",
+                  "verb": "read",
+                  "fallback": "The manual explains, in dry technical prose, how a loose Knowledge Fragment is bound into an existing book.",
+                  "accessible": "Reading the Field Manual reveals its structured facts about binding loose pages.",
+                  "legal": true
+                }
+              ]
+            },
+            {
+              "id": "study_diary",
+              "name": "Locked Diary",
+              "state_id": "diary_read",
+              "fallback": "The diary lies open, its final entries legible.",
+              "accessible": "Object: diary. State: read.",
+              "interactions": [
+                {
+                  "id": "diary_read_action",
+                  "verb": "read",
+                  "fallback": "The clasp gives way easily -- it was never truly locked, only stuck with age. The final entry is dated the night the Spire's corruption reached the Third Stack.",
+                  "accessible": "Reading the diary (in either state) reveals its structured facts, including an explicitly unreliable final entry.",
+                  "legal": true
+                }
+              ]
+            }
+          ],
+          "promoted_object_ids": [
+            "study_rug",
+            "hidden_compartment",
+            "study_diary"
+          ],
+          "promoted_fact_ids": [
+            "fact_rug_curled_corner_noticed",
+            "fact_hidden_compartment_found",
+            "fact_compartment_contents_revealed"
+          ],
+          "npc": {
+            "npc_id": "elara_vance",
+            "disposition": "wary, cooperative if addressed properly",
+            "objectives": [
+              {
+                "id": "objective_protect_the_letters",
+                "kind": "main",
+                "fallback": "Keep her sister's letters from being taken by anyone she doesn't trust.",
+                "accessible": "Main objective: protect the hidden letters."
+              },
+              {
+                "id": "objective_maintain_the_study",
+                "kind": "main",
+                "fallback": "Keep the study in order, as if inspection could happen any day.",
+                "accessible": "Main objective: maintain the study's order."
+              },
+              {
+                "id": "objective_be_addressed_properly",
+                "kind": "main",
+                "fallback": "Be recognized and addressed as Keeper, not dismissed as a ghost or a remnant.",
+                "accessible": "Main objective: be addressed by her title."
+              }
+            ],
+            "objective_states": {}
+          },
+          "payoff_triggered": true,
+          "resolved": true
+        }
+      },
+      "legal_actions": {
+        "revision": 14,
+        "world_round": 2,
+        "hero_id": "hero_host",
+        "room_id": "room_1_0",
+        "energy": 2,
+        "can_pass": true,
+        "can_inspect": true,
+        "can_move_to": [
+          "room_0_0"
+        ],
+        "can_breach_directions": [],
+        "can_observe_directions": [
+          "west"
+        ],
+        "move_costs": {
+          "room_0_0": 1
+        },
+        "breach_costs": {}
+      }
+    },
+    "revision": 14
+  },
+  "socialCheckResolvedEvent": {
+    "event_id": "evt_2_0044",
+    "run_id": "run_e980871f",
+    "world_round": 2,
+    "caused_by": "cmd-converse-13",
+    "actor_hero_id": "hero_host",
+    "room_id": "room_1_0",
+    "type": "social_check_resolved",
+    "visibility": "party",
+    "payload": {
+      "npc_id": "elara_vance",
+      "dc": 23,
+      "modifier": 4,
+      "evidence_tier": "verifiable",
+      "motive_alignment": "strongly_aligned",
+      "appeal_objective_id": "objective_protect_the_letters",
+      "appeal_recognized": true,
+      "die_rolls": [
+        2
+      ],
+      "total": 7,
+      "margin": -16,
+      "outcome": "setback",
+      "eligible_rich_outcomes": [
+        "lie",
+        "new_danger",
+        "objective_change"
+      ],
+      "rich_outcome": "lie"
+    }
+  }
+}

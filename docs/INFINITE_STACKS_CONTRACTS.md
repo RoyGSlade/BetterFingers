@@ -725,31 +725,121 @@ model-derived, per §20.2.
 `converse` (2, same as `major_skill_interaction`, since it may resolve a d20
 social check).
 
-**Wire projection requirement (not yet built -- the following client/UX
-part's file):** `project(state, viewer)` should gain a top-level `"study"`
-key per room, exposing only what's been promoted for that specific viewer --
-`object_state_ids` filtered to `promoted_object_ids[viewer]` union any
-`ObjectVisibility.FREE` state, `npc_disposition`/`npc_objective_states`
-filtered by the NPC content's own `ViewerScope`, and NEVER
-`RunState.content_gaps` or any `ENGINE_ONLY`-scoped secret (`RoomTemplate.
-secrets` with `viewer_scope: engine_only`, e.g. `secret_elara_is_dead`).
-Field names anticipate the client's selectors: `promoted_object_ids`/
-`promoted_fact_ids` read the same way `PuzzleRoomState.private_clue_
-assignments` already does for `your_private_clues`.
+**Wire projection -- LIVE as of wave-6B part 4 (`study_projection.py`,
+`project_study(domain_state, viewer)`).** `stacks_engine.py.project()` folds
+in a top-level `"study"` key (`base["study"] = _project_study(domain_state,
+viewer)`) via a two-line hook -- the real logic lives in the new module
+(`stacks_engine.py` is over the line cap and stays untouched beyond that
+hook + the `_translate_events` wire-vocabulary cases below). Shape, one entry
+per room currently holding a `StudyRoomState`:
 
-**Exit-gate tests** (`tests/test_stacks_study_wire.py`, driving
-`domain.reducer.apply()` directly, same Harness pattern as
-`test_stacks_shopwire.py`): full join -> create hero -> reach the study ->
-inspect/move the rug -> open the compartment -> converse with Elara
-influenced by the compartment fact as evidence -> lattice recipe satisfied ->
-stair revealed, proven seed-deterministic (same seed twice -> identical event
-logs); cross-player disclosure privacy (a fact/object promoted for one viewer
-never appears in another viewer's `StudyRoomState` ledger or any
-`FACT_PROMOTED` event's `viewer_hero_id`, proven both with a hero never in
-the room and with two heroes genuinely sharing the room); a gibberish/
-unsupported interaction always yields a response + content-gap event, never a
-bare error or silence; full event-log replay reproduces an identical
-`state_hash()`.
+```
+{room_id: {
+  room_template_id: str,
+  objects: [{
+    id, name, state_id, fallback, accessible,
+    interactions: [{id, verb, fallback, accessible, legal: bool}, ...],
+  }, ...],
+  promoted_object_ids: [object_id, ...],   # THIS viewer's own ledger only
+  promoted_fact_ids: [fact_id, ...],       # THIS viewer's own ledger only
+  npc: {
+    npc_id, disposition,
+    objectives: [{id, kind, fallback, accessible}, ...],  # PUBLIC/PARTY only
+    objective_states: {objective_id: "active"|"changed"},
+  } | null,
+  payoff_triggered: bool,
+  resolved: bool,
+}}
+```
+
+Disclosure discipline (enforced by construction, not convention):
+- An object is entirely **absent** from `objects` until its own id has been
+  promoted for this viewer (`StudyRoomState.promoted_object_ids`, keyed by
+  OBJECT id per `study_wire._promote_object_state`'s signature, not a state
+  id) OR its current state's `visibility` is already `FREE`. Once visible at
+  all, the object's TRUE current state renders -- never an earlier
+  placeholder -- since promotion always accompanies the transition that put
+  it there.
+- `promoted_object_ids`/`promoted_fact_ids` are this viewer's own entry only
+  (`[]` for `viewer=None` or a hero absent from the ledger), the same
+  "your own key only" rule `PuzzleRoomState.private_clue_assignments`/
+  `your_private_clues` already uses.
+- `npc.objectives` includes only `ViewerScope.PUBLIC`/`PARTY`-scoped
+  objectives -- an `ENGINE_ONLY` hidden objective (e.g. Elara's "avoid
+  confronting her own death") is never present for ANY viewer, not even
+  redacted. This is deliberately the EXACT set a legitimate `converse`
+  `appeal_objective_id` may name, so the client's appeal picker is built from
+  this list and nothing else.
+- `RunState.content_gaps` and any `RoomTemplate.secrets` with
+  `viewer_scope: engine_only` are never read by this module at all -- there
+  is no code path here that could leak them.
+- Absence (no domain map yet, or a room with no `StudyRoomState`) is `{}`,
+  never an error, matching `project_puzzles`'s discipline.
+
+**Wire event translation -- also newly LIVE this part.** `stacks_engine.py`'s
+`_translate_events()` allow-list had NO cases for any of the 11 study
+`EventType` members until this part (a real gap found while building this
+projection: the events landed in domain state/replay but were silently
+dropped before ever reaching a client). Now forwarded (payload passthrough,
+since `study_wire.py`/`study_interact_wire.py`/`study_social_wire.py` already
+build these payloads to this section's documented shape): `study_room_
+instantiated`, `object_state_changed` (party), `fact_promoted` (private,
+`visible_to` = the event's own `viewer_hero_id`), `response_artifact_
+emitted` (party), `social_check_resolved` (party), `npc_disposition_changed`
+(party), `npc_objective_changed` (party), `lattice_contribution_registered`
+(party), `lattice_recipe_satisfied` (party), `stair_revealed` (public).
+`content_gap_logged` is deliberately the one exception: forwarded to
+**no wire event at all** (owner/debug-visible only, director ruling --
+already persisted server-side via `RunState.content_gaps`).
+
+**Client (docs/-referenced, `backend/lan_playground/static/src/`):**
+`screens/study.js` (object list + legal interactions + the narration
+presentation block) and `components/converse.js` (appeal picker + the
+converse ceremony) are the new screen/component; `core/store.js` gains
+`state.studies` (room-keyed, folded from `view.study` verbatim, patched
+incrementally by the study event vocabulary above) plus
+`studyLastNarration`/`studyLastCheckReceipt` scratch; `core/selectors.js`
+gains `selectStudyView`/`selectConverseView`; `core/commands.js` gains
+`interactCommand`/`converseCommand`. **Ceremony seam for the
+dice-ui-overhaul session:** `components/converse.js`'s
+`renderConverseCeremony(receipt)` is the ONE function that turns a raw
+`social_check_resolved` payload into DOM -- it reads nothing from the store
+and computes nothing (every field is the wire payload verbatim, reusing
+`components/check-receipt.js`'s existing factual-receipt contract for the
+shared shape). Restyling the ceremony means replacing that one function's
+body; `screens/study.js`/`main.js` never need to change.
+
+**Exit-gate tests:**
+- `tests/test_stacks_study_wire.py` (driving `domain.reducer.apply()`
+  directly, same Harness pattern as `test_stacks_shopwire.py`): full join ->
+  create hero -> reach the study -> inspect/move the rug -> open the
+  compartment -> converse with Elara influenced by the compartment fact as
+  evidence -> lattice recipe satisfied -> stair revealed, proven
+  seed-deterministic (same seed twice -> identical event logs); cross-player
+  disclosure privacy at the domain-state ledger layer; a gibberish/
+  unsupported interaction always yields a response + content-gap event,
+  never a bare error or silence; full event-log replay reproduces an
+  identical `state_hash()`.
+- `tests/test_study_projection_privacy.py` (wave-6B part 4, new): the same
+  privacy properties proven one layer up, through the REAL
+  `project_study(domain_state, viewer)` path -- a hero never in the room, a
+  hero genuinely sharing the room, and a spectator (`viewer=None`) each get
+  correctly-scoped `promoted_object_ids`/`promoted_fact_ids`/`objects`/
+  `npc.objectives`; the `ENGINE_ONLY` hidden objective is absent for every
+  viewer; `content_gaps` never appears in any projection; absence never
+  raises.
+- `tests/test_stacks_study_ui.py` + `tests/stacks_client_check/
+  study_check.mjs` (wave-6B part 4, new, same node-harness pattern as
+  `j12_legal_actions_check.mjs`): runs the REAL client modules against a REAL
+  wire fixture (`tests/fixtures/stacks_ui/study_gothic_living_study.json`,
+  captured from the actual engine over the real transport) -- the study
+  screen resolves as the active screen and its object list is projection-
+  driven, the interact/converse commands are built by the real command
+  builders (never a client-claimed `motive_alignment`), the appeal picker's
+  option set is asserted identical to the real projection's `npc.
+  objectives` (and never contains the `ENGINE_ONLY` hidden objective), and
+  the ceremony's rendered fields are asserted byte-identical to the raw
+  `social_check_resolved` wire payload.
 
 ## 6. Core state aggregates (wave-1 subset of §22.4)
 

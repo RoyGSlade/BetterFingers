@@ -1178,6 +1178,128 @@ button.stacks-tile:hover {
   color: var(--rs-bad);
 }
 
+/* -- Study room + converse (wave-6B part 4) -------------------------------- */
+
+#study-screen {
+  padding: 1rem;
+}
+.stacks-study-heading {
+  margin-bottom: 1rem;
+}
+.stacks-study-heading h1 {
+  margin: 0 0 0.2rem;
+  font-size: 1.4rem;
+}
+.stacks-study-status {
+  font-family: var(--rs-font-flavor);
+  font-style: italic;
+  color: var(--rs-muted);
+}
+.stacks-study-layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+
+/* The narration block is the game's voice -- given real presentation
+   weight (larger type, a distinct panel), not a console/log line. */
+.stacks-study-narration {
+  grid-column: 1 / -1;
+  background: linear-gradient(var(--rs-deep), var(--rs-panel));
+  border: 1px solid var(--rs-border-strong);
+  border-radius: 12px;
+  padding: 1rem 1.2rem;
+  box-shadow: 0 0 24px rgba(0, 0, 0, 0.2);
+}
+.stacks-study-narration-text {
+  font-family: var(--rs-font-flavor);
+  font-size: 1.05rem;
+  line-height: 1.5;
+  color: var(--rs-bone);
+  margin: 0.3rem 0;
+}
+.stacks-study-narration-empty {
+  font-style: italic;
+  color: var(--rs-muted);
+}
+.stacks-study-narration-unsupported {
+  color: var(--rs-warn);
+}
+
+.stacks-study-objects,
+.stacks-converse-panel {
+  background: var(--rs-panel);
+  border: 1px solid var(--rs-border-strong);
+  border-radius: 12px;
+  padding: 0.9rem;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+.stacks-study-objects-list {
+  display: grid;
+  gap: 0.75rem;
+}
+.stacks-study-object {
+  border: 1px solid var(--rs-border);
+  border-radius: 10px;
+  padding: 0.6rem 0.75rem;
+}
+.stacks-study-object-name {
+  margin: 0 0 0.2rem;
+  font-family: var(--rs-font-head);
+  font-size: 1rem;
+}
+.stacks-study-object-text {
+  margin: 0 0 0.5rem;
+  color: var(--rs-bone);
+}
+.stacks-study-object-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.stacks-study-interaction-button {
+  text-transform: capitalize;
+}
+
+.stacks-converse-disposition {
+  font-family: var(--rs-font-flavor);
+  font-style: italic;
+  color: var(--rs-muted);
+}
+.stacks-converse-appeal-list {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0.5rem 0;
+}
+.stacks-converse-appeal-option {
+  text-align: left;
+  border: 1px solid var(--rs-border);
+  border-radius: 8px;
+  padding: 0.5rem 0.7rem;
+}
+.stacks-converse-appeal-option.is-selected {
+  border-color: var(--rs-gilt);
+  box-shadow: 0 0 0 1px var(--rs-gilt) inset;
+}
+.stacks-converse-ceremony {
+  margin-top: 1rem;
+}
+.stacks-converse-breakdown {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.6rem;
+  margin: 0.4rem 0;
+  font-family: var(--rs-font-mono);
+  font-size: 0.82rem;
+  color: var(--rs-bone);
+}
+.stacks-converse-rich-outcome {
+  font-family: var(--rs-font-flavor);
+  font-style: italic;
+  color: var(--rs-gilt);
+}
+
 /* -- Combat ---------------------------------------------------------------- */
 
 .stacks-combat-enemy-list,
