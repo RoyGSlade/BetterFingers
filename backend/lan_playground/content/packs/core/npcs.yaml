@@ -1,0 +1,121 @@
+# The Lost Meaning: Infinite Stacks -- wave 6B vertical slice (board note #30).
+#
+# One connected NPC bound to gothic_living_study (study.yaml): Elara Vance,
+# a Living-Book-class remnant who does not know she is dead. Per
+# wavebasedgame.md §3.4: archetype pool, provenance-backed knowledge (every
+# atom below records who could know it and how), free vs gated disclosure,
+# at least one lie with a matching tell, three main objectives + one hidden
+# objective, and triggers/emotional-physical state.
+npcs:
+  - id: elara_vance
+    archetype_pool: [spire_born, living_book_character]
+    age: "appears late 30s (has not aged since the corruption reached the Third Stack)"
+    sex_gender_presentation: "woman"
+    visual_traits:
+      - "ink-stained fingers"
+      - "a Keeper's grey stole, moth-worn at the hem"
+      - "eyes that focus a half-second too late, as if catching up to the room"
+    persona_voice:
+      fallback: "Precise, warm, a little too formal -- she talks like someone still expecting an inspection."
+      accessible: "Persona: precise and warm but overly formal register; speaks as though still on duty."
+    stats:
+      resolve: 12
+      insight: 14
+      presence: 11
+    boundaries:
+      - "will not discuss her own death or the word 'corruption' directly"
+      - "will not hand over the diary without a reason she finds convincing"
+    preferences:
+      - "being addressed by her title, 'Keeper'"
+      - "orderly, returned books"
+    fears:
+      - "being forgotten entirely"
+      - "the truth that she is already dead"
+
+    knowledge:
+      - id: atom_elara_keeper_title
+        statement: "Elara Vance is the Keeper of the Third Stack."
+        is_true: true
+        disclosure: free
+        provenance:
+          - knower_id: elara_vance
+            method: "self-knowledge"
+          - knower_id: anyone_in_room
+            method: "witnessed: the portrait plaque names her"
+      - id: atom_elara_hid_letters
+        statement: "Elara hid her sister's letters in the study's floor compartment."
+        is_true: true
+        disclosure: free
+        provenance:
+          - knower_id: elara_vance
+            method: "self-knowledge"
+      - id: atom_elara_sister_died_in_spire
+        statement: "Elara's sister did not escape -- she died in the Spire during the same corruption event that killed Elara."
+        is_true: true
+        disclosure: gated
+        provenance:
+          - knower_id: elara_vance
+            method: "self-knowledge, suppressed -- she avoids the memory"
+          - knower_id: "npc:archive_registrar"
+            method: "told_by:spire_records"
+      - id: atom_elara_believes_sister_escaped
+        statement: "Elara insists her sister escaped the Spire and is safe in the lower city."
+        is_true: false
+        disclosure: free
+        provenance:
+          - knower_id: elara_vance
+            method: "self-deception -- she genuinely believes this, it is not a conscious con"
+
+    lies: [atom_elara_believes_sister_escaped]
+
+    tells:
+      - id: tell_elara_avoids_death_topic
+        hints_at_atom_id: atom_elara_believes_sister_escaped
+        prose:
+          fallback: "Whenever the subject turns to what actually happened that night, she straightens the same stack of papers over and over."
+          accessible: "Tell: repetitive paper-straightening whenever pressed about the night of the corruption."
+
+    inventory:
+      - item_id: family_notes
+        quantity: 1
+        viewer_scope: owner
+
+    relationships: []
+
+    objectives:
+      - id: objective_protect_the_letters
+        kind: main
+        viewer_scope: party
+        prose:
+          fallback: "Keep her sister's letters from being taken by anyone she doesn't trust."
+          accessible: "Main objective: protect the hidden letters."
+      - id: objective_maintain_the_study
+        kind: main
+        viewer_scope: party
+        prose:
+          fallback: "Keep the study in order, as if inspection could happen any day."
+          accessible: "Main objective: maintain the study's order."
+      - id: objective_be_addressed_properly
+        kind: main
+        viewer_scope: party
+        prose:
+          fallback: "Be recognized and addressed as Keeper, not dismissed as a ghost or a remnant."
+          accessible: "Main objective: be addressed by her title."
+      - id: objective_hidden_avoid_confronting_death
+        kind: hidden
+        viewer_scope: engine_only
+        prose:
+          fallback: "Avoid any line of conversation that would force her to recognize she is dead."
+          accessible: "Hidden objective: avoid confronting her own death."
+
+    triggers:
+      - id: trigger_diary_shown
+        condition: "a player shows or references the diary's final entry directly to Elara"
+        effect_description: "Her disposition shifts toward distressed; she may reveal atom_elara_sister_died_in_spire if pressed further, or end the encounter if not handled carefully."
+      - id: trigger_addressed_as_keeper
+        condition: "a player addresses her as 'Keeper'"
+        effect_description: "Her disposition improves toward warm/cooperative."
+
+    state:
+      disposition: "wary, cooperative if addressed properly"
+      physical_state: "unharmed (does not register as injured -- see engine-only secret in study.yaml)"

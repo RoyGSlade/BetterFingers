@@ -18,6 +18,13 @@ _EXPORTS = {
     "ValidationError": "validators",
     "validate_pack": "validators",
     "validate_pack_dir": "validators",
+    # wave 6B: room/object/NPC/Meaning Lattice content (rooms.py, npcs.py,
+    # lattice.py) plus their strict-YAML loader/validator pair (room_loader.py,
+    # npc_loader.py, study_common.py, study_loader.py, study_validators.py).
+    "load_study_pack": "study_loader",
+    "StudyContentPack": "study_loader",
+    "validate_study_pack": "study_validators",
+    "validate_study_pack_strict": "study_validators",
 }
 
 __all__ = list(_EXPORTS)
