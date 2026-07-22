@@ -45,6 +45,16 @@ because conflating them causes rework:
   first legal map action, proven by `LegalActionsLockoutRegressionTests`,
   not manual QA. Remaining §3.1 rows (J2/J3, J7, J9, J4–J6, A–G
   re-confirmation) stay open as polish/coordination work.
+- **Wave 6B shipped 2026-07-21** (four reviewed parts: `brain/` package,
+  study content schemas + authored Gothic Living Study, domain wiring
+  with `interact`/`converse`, viewer-filtered projection + client
+  screens). The §3.2 loop is live end to end on the slice: object
+  interactions, per-viewer disclosure, the appeal-based social check
+  with engine-derived modifiers, lattice-recipe stair reveal, and
+  narration through the deterministic-fallback provider seam. Evidence
+  and the two review-caught defects (client-claimed motive tier; 11
+  event types without wire translation) are in `plangamereporting.md`.
+  Owner playtest of the slice is the natural next checkpoint.
 - The §26.4 playtest checkpoint opened at the end of wave 5 is **active but
   not yet satisfied**: two solo owner playtests ran (07-19 against the
   wave-5 build, 07-20 against the wave-6 build) and both ended at a UI

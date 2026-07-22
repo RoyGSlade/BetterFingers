@@ -298,6 +298,64 @@ director before merge.
 
 ---
 
+## Wave 6B — SHIPPED 2026-07-21 (Gothic Living Study vertical slice)
+
+The earliest full-stack proof of the §3.2 loop: engine truth + narrated
+presentation working together, pulled forward of the old wave-9 plan per
+the 2026-07-21 owner lock. Four reviewed parts, each independently
+re-verified by the director before merge.
+
+- **Part 1 — `brain/` package** (branch `wave6b/intents-package`, 65
+  tests): bounded per-call packets for the four model roles with no
+  memory field anywhere; Interpreter contract (0–3 intents, confidence
+  1–100 explicitly interpretation-confidence); defensive parsing proven
+  never-raises across a 500-sample garbage sweep; handler registry with
+  scoped overrides; always-a-response artifacts + ContentGapRecord;
+  immediate-trigger shapes; social-degree DC/±5 modifier from
+  evidence/motive ENUMS only (accessibility guarantee is structural —
+  no free-text input exists); deterministic fallback per role.
+- **Part 2 — study content** (branch `wave6b/study-content`, 43 tests):
+  room/object/NPC/lattice schemas as data — versioned object instances
+  with flavor-only interactions rejected at construction, NPC templates
+  with enforced 3-main+1-hidden objectives, provenance-backed knowledge
+  atoms, disclosure-leak guard, explicit unreliable-narrator flagging,
+  Meaning Lattice recipes (never a room counter). Authored slice: the
+  Gothic Living Study (displaced rug → hidden compartment payoff),
+  Elara Vance, two provenance-backed books, lattice truth:2/memory:1.
+- **Part 3 — domain wiring** (branch `wave6b/slice-wiring`, 20 tests):
+  `interact`/`converse` commands, 11 new event types, study rooms
+  instantiate on d8=3 breach, LIVE-op effects, per-viewer disclosure
+  promotion, lattice stair reveal, `content_gap_logged` (owner-only),
+  narration seam on deterministic fallback (model can never block).
+  **Director review caught and required a fix:** the social check's
+  motive tier was client-claimed (worth up to +4); reworked as the
+  appeal mechanism — the caller names an objective to appeal to, the
+  ENGINE derives alignment from authored data + that hero's disclosure
+  state, proven by a byte-identical-result test against the old claimed
+  field. Exit gates all present: rug→compartment→letter→Elara E2E,
+  cross-player privacy at the wiring seam, zero-intent/unsupported
+  always-a-response, replay state-hash fidelity, seed determinism.
+- **Part 4 — projection + client** (branch `wave6b/slice-client`, 13
+  tests + 15 subtests): viewer-filtered `study` projection block
+  (`study_projection.py`), study-room screen with object interactions
+  and response-artifact narration, converse UI with appeal picker built
+  only from projection data, check ceremony as pure server-result
+  presentation behind a single replaceable seam (for dice-ui-overhaul).
+  **Found and fixed a real integration gap:** none of part 3's 11 event
+  types had wire translations — domain state mutated but clients saw
+  nothing. Projection-level privacy suite (7 tests) proves ledger
+  isolation, no hidden objective on any wire, no content gaps projected.
+- Director verification on the final merged surface: **1,838 passed +
+  737 subtests** (all suites + architecture gates + old game),
+  `node --check` clean.
+- Debt: `stacks_engine.py` grew to ~1,460 lines (translation cases) —
+  split is now scheduled work, not just a note. Real model provider
+  integration is a pluggable seam defaulting to authored fallback;
+  wiring an actual model call remains flagged future work. Books have
+  no dedicated projection field yet (prose-only via interactions).
+
+---
+
 ## Key design decisions on record (collab board notes)
 
 1. `infinite_stacks.md` is canonical and supersedes the spotlight-loop
