@@ -166,6 +166,70 @@ class PuzzleRoomState:
 
 
 @dataclass
+class StudyRoomState:
+    """Runtime state for a wave-6B Study-family room instantiated from
+    `content.rooms.RoomTemplate`/`content.npcs.NPCTemplate` (wave6b/slice-wiring,
+    docs/INFINITE_STACKS_STUDY_SLICE.md, wavebasedgame.md §3.2-3.4). Mirrors
+    `PuzzleRoomState`'s discipline: reconstructible from (room_template_id,
+    npc_ids) alone, `to_dict()`/`from_dict()` for `RunState.state_hash()`
+    replay fidelity, and per-hero private ledgers for disclosure.
+
+    `object_state_ids` is the live current-state id per `RoomObject.id`
+    (starts at each object's authored `initial_state`, advances only via a
+    real `StateTransition`). `promoted_object_ids`/`promoted_fact_ids` are
+    PER-VIEWER (keyed by hero_id) records of which HIDDEN/NOTICED object
+    states or narration facts have been promoted to that viewer's visible
+    set -- the disclosure-filter seam §19.4/§20.2 requires: a fact promoted
+    for one viewer must never leak into another viewer's projection or
+    narration packet. `npc_disclosed_atom_ids` is the same idea for NPC
+    `KnowledgeAtom`s (mirrors `PuzzleRoomState.private_clue_assignments`).
+    """
+
+    room_template_id: str
+    npc_id: str | None = None
+    object_state_ids: dict[str, str] = field(default_factory=dict)
+    promoted_object_ids: dict[str, tuple[str, ...]] = field(default_factory=dict)  # hero_id -> object_ids noticed/free
+    promoted_fact_ids: dict[str, tuple[str, ...]] = field(default_factory=dict)    # hero_id -> fact_ids disclosed
+    fired_interaction_ids: dict[str, tuple[str, ...]] = field(default_factory=dict)  # object_id -> interaction_ids used (one-shot tracking)
+    npc_disposition: str = ""
+    npc_objective_states: dict[str, str] = field(default_factory=dict)  # objective_id -> "active"|"changed"
+    npc_disclosed_atom_ids: dict[str, tuple[str, ...]] = field(default_factory=dict)  # hero_id -> atom_ids
+    payoff_triggered: bool = False
+    resolved: bool = False  # lattice_contribution registered for this room
+
+    def to_dict(self) -> dict:
+        return {
+            "room_template_id": self.room_template_id,
+            "npc_id": self.npc_id,
+            "object_state_ids": dict(sorted(self.object_state_ids.items())),
+            "promoted_object_ids": {k: list(v) for k, v in sorted(self.promoted_object_ids.items())},
+            "promoted_fact_ids": {k: list(v) for k, v in sorted(self.promoted_fact_ids.items())},
+            "fired_interaction_ids": {k: list(v) for k, v in sorted(self.fired_interaction_ids.items())},
+            "npc_disposition": self.npc_disposition,
+            "npc_objective_states": dict(sorted(self.npc_objective_states.items())),
+            "npc_disclosed_atom_ids": {k: list(v) for k, v in sorted(self.npc_disclosed_atom_ids.items())},
+            "payoff_triggered": self.payoff_triggered,
+            "resolved": self.resolved,
+        }
+
+    @staticmethod
+    def from_dict(d: dict) -> "StudyRoomState":
+        return StudyRoomState(
+            room_template_id=d["room_template_id"],
+            npc_id=d.get("npc_id"),
+            object_state_ids=dict(d.get("object_state_ids", {})),
+            promoted_object_ids={k: tuple(v) for k, v in d.get("promoted_object_ids", {}).items()},
+            promoted_fact_ids={k: tuple(v) for k, v in d.get("promoted_fact_ids", {}).items()},
+            fired_interaction_ids={k: tuple(v) for k, v in d.get("fired_interaction_ids", {}).items()},
+            npc_disposition=d.get("npc_disposition", ""),
+            npc_objective_states=dict(d.get("npc_objective_states", {})),
+            npc_disclosed_atom_ids={k: tuple(v) for k, v in d.get("npc_disclosed_atom_ids", {}).items()},
+            payoff_triggered=d.get("payoff_triggered", False),
+            resolved=d.get("resolved", False),
+        )
+
+
+@dataclass
 class ConflictEncounterState:
     """Runtime state for a Conflict-room encounter (§14-16), wrapping the pure
     `backend.lan_playground.combat` package's combatant/initiative/threat data
@@ -254,6 +318,7 @@ class RoomState:
     is_exit: bool = False
     puzzle: PuzzleRoomState | None = None
     encounter: ConflictEncounterState | None = None
+    study: StudyRoomState | None = None
     body_item_ids: dict[str, tuple[str, ...]] = field(default_factory=dict)  # §13.6: dead hero's items stay with the body
     # Wave-4 herowire additions (board task #13, §13.6): items lying in the
     # room available for pickup (item_instance_id -> item_id) and the
@@ -283,6 +348,7 @@ class RoomState:
             "is_exit": self.is_exit,
             "puzzle": self.puzzle.to_dict() if self.puzzle is not None else None,
             "encounter": self.encounter.to_dict() if self.encounter is not None else None,
+            "study": self.study.to_dict() if self.study is not None else None,
             "body_item_ids": {k: list(v) for k, v in sorted(self.body_item_ids.items())},
             "ground_items": dict(sorted(self.ground_items.items())),
             "item_claims": dict(sorted(self.item_claims.items())),
@@ -310,6 +376,7 @@ class RoomState:
             is_exit=d["is_exit"],
             puzzle=PuzzleRoomState.from_dict(d["puzzle"]) if d.get("puzzle") else None,
             encounter=ConflictEncounterState.from_dict(d["encounter"]) if d.get("encounter") else None,
+            study=StudyRoomState.from_dict(d["study"]) if d.get("study") else None,
             body_item_ids={k: tuple(v) for k, v in d.get("body_item_ids", {}).items()},
             ground_items=dict(d.get("ground_items", {})),
             item_claims=dict(d.get("item_claims", {})),
@@ -567,6 +634,22 @@ class RunState:
     # private clues stay exactly where they already lived (PuzzleRoomState.
     # private_clue_assignments), never duplicated here.
     party_shared_clues: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # wave6b/slice-wiring additions (docs/INFINITE_STACKS_STUDY_SLICE.md,
+    # wavebasedgame.md §2.1/§3.2): resolved-room Meaning Lattice contributions
+    # (room_id -> {component_value: amount}), the floor's assigned recipe id
+    # (None until a Study-family room is first instantiated this floor), and
+    # whether the recipe's stair/objective reveal has already fired -- NOT a
+    # room-count gate (§2.1 locked decision 1); satisfaction is always
+    # re-derived from `resolved_lattice_contributions` via
+    # `content.lattice.LatticeRecipe.is_satisfied`.
+    resolved_lattice_contributions: dict[str, dict[str, int]] = field(default_factory=dict)
+    floor_lattice_recipe_id: str | None = None
+    stair_revealed: bool = False
+    # ContentGapRecord persistence (director ruling, board note 31/32): the
+    # event log IS persistence until wave 8, so every `content_gap_logged`
+    # event's payload is also mirrored here as a plain, JSON-safe ledger --
+    # owner/debug-visible only, NEVER included in a player-facing projection.
+    content_gaps: tuple[dict, ...] = field(default_factory=tuple)
 
     @staticmethod
     def initial(run_id: str, seed: int, chapter_floor_index: int = 0) -> "RunState":
@@ -605,6 +688,12 @@ class RunState:
             "map": self.map.to_dict() if self.map else None,
             "facts": list(self.facts),
             "party_shared_clues": {k: list(v) for k, v in sorted(self.party_shared_clues.items())},
+            "resolved_lattice_contributions": {
+                rid: dict(sorted(amounts.items())) for rid, amounts in sorted(self.resolved_lattice_contributions.items())
+            },
+            "floor_lattice_recipe_id": self.floor_lattice_recipe_id,
+            "stair_revealed": self.stair_revealed,
+            "content_gaps": [dict(g) for g in self.content_gaps],
         }
 
     def state_hash(self) -> str:

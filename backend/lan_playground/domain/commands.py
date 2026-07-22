@@ -56,6 +56,21 @@ class CommandType(str, Enum):
     # posted to the collab room 2026-07-20.
     USE_ABILITY = "use_ability"
 
+    # Study-room domain wiring (wave6b/slice-wiring, docs/
+    # INFINITE_STACKS_STUDY_SLICE.md, wavebasedgame.md §3.2-3.6): object/NPC
+    # interaction commands realizing the revised core loop. `interact`
+    # payload: {object_id: str, interaction_id: str}. `converse` payload:
+    # {npc_id: str, motive_alignment: str | None} -- evidence is NEVER taken
+    # from the payload (never a caller-claimed tier): it is derived
+    # server-side from whether `systems.study_social_wire.EVIDENCE_FACT_ID`
+    # has already been promoted for the acting hero's own viewer id
+    # (StudyRoomState.promoted_fact_ids). `motive_alignment`, if present,
+    # must name a real brain.degrees.MotiveAlignment value or it is ignored
+    # (director ruling: contextual modifier inputs are evidence/motive enums
+    # derived from game state only, never free text).
+    INTERACT = "interact"
+    CONVERSE = "converse"
+
 
 class ErrorCode(str, Enum):
     STALE_REVISION = "stale_revision"

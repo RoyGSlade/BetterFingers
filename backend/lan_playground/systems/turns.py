@@ -23,6 +23,12 @@ ENERGY_COSTS = {
     "shop_action": 1,
     "assist": 1,
     "pass": 0,
+    # wave6b/slice-wiring (docs/INFINITE_STACKS_STUDY_SLICE.md): a single
+    # object interaction costs the same as "inspect" (a minor exploration
+    # action); a social approach/converse turn costs the same as a major
+    # skill interaction since it may resolve a d20 social check.
+    "interact": 1,
+    "converse": 2,
 }
 
 STARTING_ENERGY = 5

@@ -98,6 +98,23 @@ class EventType(str, Enum):
     ACTIVE_EFFECT_APPLIED = "active_effect_applied"
     ACTIVE_EFFECT_EXPIRED = "active_effect_expired"
 
+    # Study-room domain wiring (wave6b/slice-wiring, docs/
+    # INFINITE_STACKS_STUDY_SLICE.md; systems/study_wire.py). Realizes
+    # wavebasedgame.md §3.2's revised core loop over the Gothic Living Study
+    # vertical slice: room/object/NPC content becomes real, event-sourced
+    # domain state.
+    STUDY_ROOM_INSTANTIATED = "study_room_instantiated"      # breach d8==3 (study) seeds a RoomTemplate+NPCTemplate
+    OBJECT_STATE_CHANGED = "object_state_changed"            # a StateTransition fired
+    FACT_PROMOTED = "fact_promoted"                            # a narration/object fact promoted for one viewer
+    RESPONSE_ARTIFACT_EMITTED = "response_artifact_emitted"   # brain.response.ResponseArtifact, always-a-response (§2.3)
+    CONTENT_GAP_LOGGED = "content_gap_logged"                 # ContentGapRecord persisted (director ruling, board note 31/32)
+    SOCIAL_CHECK_RESOLVED = "social_check_resolved"           # brain.degrees.resolve_social_check + systems.checks resolution
+    NPC_DISPOSITION_CHANGED = "npc_disposition_changed"
+    NPC_OBJECTIVE_CHANGED = "npc_objective_changed"
+    LATTICE_CONTRIBUTION_REGISTERED = "lattice_contribution_registered"  # a room resolved -> its LatticeContribution counted
+    LATTICE_RECIPE_SATISFIED = "lattice_recipe_satisfied"
+    STAIR_REVEALED = "stair_revealed"
+
 
 @dataclass(frozen=True)
 class Event:
