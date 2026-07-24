@@ -148,6 +148,9 @@ export function createSignalDeskShellFeature({ elements } = {}) {
     applyWorkspaceVisibility();
     applyHeader();
     applyContextCollapsed();
+    // Stamp the active workspace so per-workspace styling (e.g. Talk's blue H1)
+    // can key off it without extra JS.
+    els.shellRoot?.setAttribute?.('data-workspace', state.active);
   }
 
   /** Switch the visible workspace. No-op (but still re-renders) on an unknown id. */

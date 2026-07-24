@@ -320,6 +320,12 @@
   margin: 0 0 4px;
 }
 
+/* Talk's H1 is tinted blue in mockup 01; Library/Studio keep white. Keyed on
+   the shell's active-workspace stamp (set by the router / preview). */
+.sd-shell[data-workspace="talk"] .sd-header__title {
+  color: var(--sd-blue);
+}
+
 .sd-header__subtitle {
   font-size: var(--sd-font-subtitle);
   color: var(--sd-text-secondary);
@@ -328,7 +334,7 @@
 
 .sd-header__breadcrumb {
   font-size: var(--sd-font-sm);
-  color: var(--sd-blue);
+  color: var(--sd-text-secondary);
   margin: var(--sd-space-8) 0 0;
 }
 
