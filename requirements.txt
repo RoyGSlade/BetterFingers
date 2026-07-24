@@ -1,17 +1,21 @@
-# requirements.txt — unpinned, cross-platform runtime manifest.
+# requirements.txt — NON-AUTHORITATIVE compatibility export. Read this first.
 #
-# This mirrors requirements.in and stays intentionally unpinned so a single
-# file installs on Linux, Windows, and macOS (the Windows-only deps carry
-# environment markers). It remains the install target for the packaging and
-# e2e workflows (build-installer.yml, e2e-screenshots.yml).
+# This file is a human-readable, unpinned, cross-platform export for people
+# skimming dependencies (the Windows-only deps carry environment markers so a
+# single file installs on Linux, Windows, and macOS). It is NOT what CI or
+# release builds install from and it is not the source of truth for versions.
 #
-# For reproducible, hash-verified installs, prefer the generated lock for your
-# platform instead:
-#     Linux    pip install --require-hashes -r requirements-linux.lock
-#     Windows  pip install --require-hashes -r requirements-win.lock   (see file)
-# Edit requirements.in (the source of truth) and regenerate the locks with
-# pip-compile; keep this file in sync with it. Dev/test deps live in
-# requirements-dev.in / requirements-dev.lock.
+# The authoritative, hash-pinned dependency sets actually consumed by CI and
+# builds are:
+#     requirements-win.lock         Windows runtime (pip install --require-hashes -r ...)
+#     requirements-linux.lock       Linux runtime, GPU/CUDA torch
+#     requirements-linux-cpu.lock   Linux runtime, CPU-only torch (GPU-less CI runners)
+#     requirements-dev.lock / requirements-dev-win.lock   Dev/test deps, per platform
+#
+# This mirrors requirements.in (the human-maintained source of truth for
+# ranges). Edit requirements.in and regenerate the locks with pip-compile;
+# keep this file in sync with it — do not hand-edit versions here expecting
+# them to affect what actually gets installed by CI/release tooling.
 
 # ---- Core ----
 Pillow                      # Image processing (tray icon, overlays)
