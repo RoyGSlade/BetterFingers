@@ -53,11 +53,17 @@ export const SIGNAL_CORE_STATE_ALIASES = {
 // in this module's state table). `baseAmplitude` is the synthetic
 // "breathing" level used when no external amplitude is supplied;
 // `activeBoost` raises the fraction of "active" (bright) tech-ring segments.
-// Per SPEC 4/7: listening & recording read as "cyan-green active".
+// Director QA correction (against mockups 01/04): the concentric tech rings are
+// a cohesive CYAN/TEAL HUD in every capture state — green belongs ONLY to the
+// small "● LISTENING" status dot (a DOM element), never the rings. The prior
+// table ran green into the rings (recording primary=green), which read like a
+// loading spinner. listening/recording now stay cyan-dominant; their energy
+// comes from higher amplitude + more active(bright) segments, not a hue shift.
+// ready keeps a brief green success tint; transcribing amber; error red.
 export const SIGNAL_CORE_STATE_TOKENS = {
   idle: { primaryToken: 'cyan', secondaryToken: 'teal', baseAmplitude: 0.05, activeBoost: 0 },
-  listening: { primaryToken: 'cyan', secondaryToken: 'green', baseAmplitude: 0.18, activeBoost: 0.15 },
-  recording: { primaryToken: 'green', secondaryToken: 'cyan', baseAmplitude: 0.32, activeBoost: 0.3 },
+  listening: { primaryToken: 'cyan', secondaryToken: 'teal', baseAmplitude: 0.18, activeBoost: 0.15 },
+  recording: { primaryToken: 'cyan', secondaryToken: 'teal', baseAmplitude: 0.32, activeBoost: 0.35 },
   transcribing: { primaryToken: 'amber', secondaryToken: 'cyan', baseAmplitude: 0.24, activeBoost: 0.1 },
   ready: { primaryToken: 'green', secondaryToken: 'teal', baseAmplitude: 0.2, activeBoost: 0.05 },
   error: { primaryToken: 'red', secondaryToken: 'amber', baseAmplitude: 0.28, activeBoost: 0.2 },

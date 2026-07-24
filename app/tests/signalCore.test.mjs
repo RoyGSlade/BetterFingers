@@ -46,16 +46,18 @@ test('resolveSignalCoreState: unknown/missing input falls back to idle', () => {
   assert.equal(resolveSignalCoreState(''), 'idle');
 });
 
-test('stateToColorTokens: state -> color mapping, listening/recording read cyan-green active', () => {
+test('stateToColorTokens: listening/recording rings stay cyan/teal (green is only the status dot)', () => {
+  // Director QA correction vs mockups 01/04: the concentric rings are a cohesive
+  // cyan/teal HUD in every capture state; green does NOT belong in the rings.
   const listening = stateToColorTokens('listening');
   assert.equal(listening.state, 'listening');
   assert.equal(listening.primaryToken, 'cyan');
-  assert.equal(listening.secondaryToken, 'green');
+  assert.equal(listening.secondaryToken, 'teal');
 
   const recording = stateToColorTokens('recording');
   assert.equal(recording.state, 'recording');
-  assert.equal(recording.primaryToken, 'green');
-  assert.equal(recording.secondaryToken, 'cyan');
+  assert.equal(recording.primaryToken, 'cyan');
+  assert.equal(recording.secondaryToken, 'teal');
 
   const error = stateToColorTokens('error');
   assert.equal(error.primaryToken, 'red');
