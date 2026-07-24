@@ -66,6 +66,7 @@ import { createPersonasFeature } from './features/personas.js';
 import { createRuntimeFeature } from './features/runtime.js';
 import { createVoiceStudioFeature } from './features/voiceStudio.js';
 import { initMessageRescueDraft } from './features/messageRescueDraft.js';
+import { createFirstRunFeature } from './features/firstRun.js';
 
 // --- Composition root ---
 // main.js owns every DOM element lookup and wires them, in file order, to the
@@ -196,6 +197,35 @@ const voiceCloningBadgeEl = document.getElementById('voiceCloningBadge');
 const voiceCloningStatusEl = document.getElementById('voiceCloningStatus');
 const voiceCloningHintEl = document.getElementById('voiceCloningHint');
 const provisionVoiceCloningButton = document.getElementById('provisionVoiceCloningButton');
+
+// First-run "get set up" checklist (W8) -- see features/firstRun.js header
+// comment for why this is an in-page Dashboard panel rather than a modal.
+const firstRunPanelEl = document.getElementById('firstRunPanel');
+const firstRunOverallBadgeEl = document.getElementById('firstRunOverallBadge');
+const firstRunDiskWarningEl = document.getElementById('firstRunDiskWarning');
+const firstRunDiskWarningMessageEl = document.getElementById('firstRunDiskWarningMessage');
+const firstRunRuntimeBadgeEl = document.getElementById('firstRunRuntimeBadge');
+const firstRunRuntimeDetailEl = document.getElementById('firstRunRuntimeDetail');
+const firstRunLlmBadgeEl = document.getElementById('firstRunLlmBadge');
+const firstRunLlmDetailEl = document.getElementById('firstRunLlmDetail');
+const firstRunWhisperBadgeEl = document.getElementById('firstRunWhisperBadge');
+const firstRunWhisperDetailEl = document.getElementById('firstRunWhisperDetail');
+const firstRunDownloadLlmButton = document.getElementById('firstRunDownloadLlmButton');
+const firstRunLlmProgressEl = document.getElementById('firstRunLlmProgress');
+const firstRunLlmProgressLabelEl = document.getElementById('firstRunLlmProgressLabel');
+const firstRunLlmProgressPercentEl = document.getElementById('firstRunLlmProgressPercent');
+const firstRunLlmProgressFillEl = document.getElementById('firstRunLlmProgressFill');
+const firstRunLlmProgressBytesEl = document.getElementById('firstRunLlmProgressBytes');
+const firstRunDownloadWhisperButton = document.getElementById('firstRunDownloadWhisperButton');
+const firstRunWhisperProgressEl = document.getElementById('firstRunWhisperProgress');
+const firstRunWhisperProgressLabelEl = document.getElementById('firstRunWhisperProgressLabel');
+const firstRunWhisperProgressPercentEl = document.getElementById('firstRunWhisperProgressPercent');
+const firstRunWhisperProgressFillEl = document.getElementById('firstRunWhisperProgressFill');
+const firstRunWhisperProgressBytesEl = document.getElementById('firstRunWhisperProgressBytes');
+const firstRunMessageEl = document.getElementById('firstRunMessage');
+const firstRunRefreshButton = document.getElementById('firstRunRefreshButton');
+const firstRunContinueButton = document.getElementById('firstRunContinueButton');
+const firstRunDismissButton = document.getElementById('firstRunDismissButton');
 
 const wizardStepProgress = document.getElementById('wizardStepProgress');
 const wizardPrevButton = document.getElementById('wizardPrevButton');
@@ -398,6 +428,57 @@ function gatherVoiceStudioSettings() {
   return voiceStudio.gatherVoiceStudioSettings();
 }
 
+// First-run "get set up" panel (W8). Its own refreshStatus() does independent
+// GET /health, /runtime/status, /models/llm, /models/whisper fetches (each
+// wrapped so one failing endpoint never blanks the others), so it doesn't
+// depend on runtime's health/model state -- only on refreshModels()/
+// refreshRuntime() (hoisted `function` declarations further down this file)
+// to keep the Models tab and dashboard badges in sync after a download it
+// triggers, and on activateTab()/tabButtonModels for the "set up manually"
+// dismiss path.
+const firstRun = createFirstRunFeature({
+  elements: {
+    panelEl: firstRunPanelEl,
+    overallBadgeEl: firstRunOverallBadgeEl,
+    diskWarningEl: firstRunDiskWarningEl,
+    diskWarningMessageEl: firstRunDiskWarningMessageEl,
+    runtimeBadgeEl: firstRunRuntimeBadgeEl,
+    runtimeDetailEl: firstRunRuntimeDetailEl,
+    llmBadgeEl: firstRunLlmBadgeEl,
+    llmDetailEl: firstRunLlmDetailEl,
+    whisperBadgeEl: firstRunWhisperBadgeEl,
+    whisperDetailEl: firstRunWhisperDetailEl,
+    downloadLlmButton: firstRunDownloadLlmButton,
+    llmProgress: {
+      container: firstRunLlmProgressEl,
+      label: firstRunLlmProgressLabelEl,
+      percent: firstRunLlmProgressPercentEl,
+      fill: firstRunLlmProgressFillEl,
+      bytes: firstRunLlmProgressBytesEl,
+    },
+    downloadWhisperButton: firstRunDownloadWhisperButton,
+    whisperProgress: {
+      container: firstRunWhisperProgressEl,
+      label: firstRunWhisperProgressLabelEl,
+      percent: firstRunWhisperProgressPercentEl,
+      fill: firstRunWhisperProgressFillEl,
+      bytes: firstRunWhisperProgressBytesEl,
+    },
+    messageEl: firstRunMessageEl,
+    refreshButton: firstRunRefreshButton,
+    continueButton: firstRunContinueButton,
+    dismissButton: firstRunDismissButton,
+  },
+  ui: { setMessage, showToast },
+  hooks: {
+    afterModelsChanged: () => Promise.all([refreshModels(), refreshRuntime()]),
+    goToModelsTab: () => {
+      const modelsTabButton = document.getElementById('tabButtonModels');
+      if (modelsTabButton) activateTab(modelsTabButton);
+    },
+  },
+});
+
 // Step 5: hooks below are every refresh*/render* function bootstrap()'s
 // loadInitialData() fans out to (see runtime.js), most defined further down
 // this file (hoisted, like the drafts feature's ui hooks above).
@@ -429,6 +510,11 @@ const runtime = createRuntimeFeature({
       personas.initFoundry();
       initSettingsPanel();
       initOnboarding();
+      // Runs last: an in-page panel (not a modal), so it's simply hidden
+      // behind the onboarding overlay's backdrop while that's still showing
+      // on a brand-new install -- no explicit ordering/coordination needed
+      // beyond "after the models/runtime data this checklist reads exists".
+      firstRun.init().catch(() => {});
     },
   },
 });

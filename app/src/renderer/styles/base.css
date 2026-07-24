@@ -844,6 +844,21 @@ h1 {
   display: none !important;
 }
 
+/* Disk-space gate (W3) surfaced via a distinct, non-dismissable-looking red
+   tone -- a hard blocking error, not just an advisory heads-up. */
+.warning-banner[data-tone='danger'] {
+  background: rgba(255, 124, 135, 0.12);
+  border-color: rgba(255, 124, 135, 0.32);
+  color: var(--danger);
+}
+
+/* ==========================================
+   First-run "get set up" checklist (W8)
+   ========================================== */
+.first-run-spacer {
+  flex: 1;
+}
+
 .doctor-cards-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
