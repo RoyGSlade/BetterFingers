@@ -165,13 +165,17 @@ class CheckAndDownloadResourcesDiskGateTests(unittest.TestCase):
 
     def test_proceeds_to_download_when_disk_is_sufficient(self):
         one_gb = 1024 ** 3
-        # Real, executable stand-in server binary so validate_llama_server_runtime
-        # succeeds for real (same trick used elsewhere in the suite, e.g.
-        # test_model_manager_status.py's test_gemma4_updates_old_managed_runtime).
-        server_path = os.path.join(self._tmp.name, mm.get_server_filename())
+        # A present, already-valid server runtime short-circuits the platform-
+        # specific runtime download+extract (Windows .zip vs Linux .tar.gz), so
+        # this test exercises ONLY the model-download disk gate and stays
+        # cross-platform. (The prior version created a `#!/bin/sh` stub and
+        # relied on get_server_filename() matching the patched get_server_path;
+        # on Windows the stub can't execute and the names diverge (.exe), so the
+        # runtime path ran and unzipped the 20-byte model stub -> BadZipFile.)
+        server_path = mm.get_server_path()
+        os.makedirs(os.path.dirname(server_path), exist_ok=True)
         with open(server_path, "w", encoding="utf-8") as fh:
-            fh.write("#!/bin/sh\necho 'version: 9999'\n")
-        os.chmod(server_path, 0o755)
+            fh.write("stub")
 
         def fake_download_file(url, dest_path, *args, **kwargs):
             # Tiny stand-in file; BETTERFINGERS_ALLOW_TINY_MODELS makes
@@ -182,9 +186,13 @@ class CheckAndDownloadResourcesDiskGateTests(unittest.TestCase):
 
         with patch.dict(os.environ, {"BETTERFINGERS_ALLOW_TINY_MODELS": "1"}), patch.object(
             mm.shutil, "disk_usage", return_value=_fake_disk_usage(100 * one_gb, 100 * one_gb)
+        ), patch(
+            "model_manager.validate_llama_server_runtime",
+            return_value={"ok": True, "build": 999999},
         ), patch("model_manager.download_file", side_effect=fake_download_file) as download_file:
             result = mm.check_and_download_resources(model_id=self.model_id)
 
+        # Only the model is downloaded; the present+valid server skips runtime install.
         download_file.assert_called_once()
         self.assertTrue(result["ok"], result.get("message"))
 
