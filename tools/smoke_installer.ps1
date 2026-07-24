@@ -44,7 +44,7 @@ function Stop-AppAndVerify {
 function Assert-NoRunningBetterFingers {
     $running = Get-Process -Name "BetterFingers" -ErrorAction SilentlyContinue
     if ($running) {
-        throw "BetterFingers process still running (PID $($running.Id -join ', ')) — uninstall must not proceed with a live process, or teardown was incomplete"
+        throw "BetterFingers process still running (PID $($running.Id -join ', ')) - uninstall must not proceed with a live process, or teardown was incomplete"
     }
 }
 
@@ -76,7 +76,7 @@ if ($PreviousInstallerPath -ne "") {
     $upgradedVersion = (Get-Item $exePath).VersionInfo.FileVersion
     Write-Host "Post-upgrade version: $upgradedVersion"
     if ($upgradedVersion -eq $previousVersion) {
-        throw "Upgrade did not change the installed version (still $upgradedVersion) — installer may have no-opped instead of upgrading"
+        throw "Upgrade did not change the installed version (still $upgradedVersion) - installer may have no-opped instead of upgrading"
     }
 }
 
@@ -99,7 +99,7 @@ if (Test-Path $exePath) {
     throw "Uninstall smoke failed: executable still present at $exePath"
 }
 
-# Directory itself should be gone or empty — a leftover-but-empty install dir
+# Directory itself should be gone or empty - a leftover-but-empty install dir
 # is the one thing NSIS may legitimately leave (e.g. user data mixed in);
 # treat any leftover *files* as a failure, but tolerate an absent or empty dir.
 if (Test-Path $installDir) {
