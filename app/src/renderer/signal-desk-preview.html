@@ -1348,9 +1348,545 @@
         </div>
       </div>
     </section>
-    <section class="sd-workspace sd-workspace--placeholder" id="workspace-settings" data-workspace="settings" hidden>
-      <strong>Settings</strong>
-      <span>All profile settings land here in a later phase.</span>
+    <section class="sd-workspace" id="workspace-settings" data-workspace="settings" hidden>
+      <div class="sd-set-search-row">
+        <div class="sd-set-search">
+          <svg class="sd-set-search__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.5" y2="16.5"></line></svg>
+          <input type="search" class="sd-set-search__input" id="sdSetSearchInput" placeholder="Search settings&hellip;" />
+        </div>
+      </div>
+      <p class="sd-set-search-header hidden" id="sdSetSearchHeader">Showing settings that match your search, across every section.</p>
+      <p class="sd-set-empty-state hidden" id="sdSetEmptyState">No settings match your search.</p>
+
+      <div class="sd-set-shell">
+        <nav class="sd-set-nav" aria-label="Settings sections" role="tablist">
+          <button type="button" class="sd-set-nav__item is-active" id="sdSetNavProfile" data-set-nav="profile" aria-current="page">Profile</button>
+          <button type="button" class="sd-set-nav__item" id="sdSetNavRecording" data-set-nav="recording" aria-current="false">Recording</button>
+          <button type="button" class="sd-set-nav__item" id="sdSetNavReview" data-set-nav="review" aria-current="false">Review &amp; Drafts</button>
+          <button type="button" class="sd-set-nav__item" id="sdSetNavAiCleanup" data-set-nav="aicleanup" aria-current="false">AI Cleanup</button>
+          <button type="button" class="sd-set-nav__item" id="sdSetNavNotifications" data-set-nav="notifications" aria-current="false">Notifications</button>
+          <button type="button" class="sd-set-nav__item" id="sdSetNavAppearance" data-set-nav="appearance" aria-current="false">Appearance</button>
+          <button type="button" class="sd-set-nav__item" id="sdSetNavPrivacy" data-set-nav="privacy" aria-current="false">Privacy</button>
+        </nav>
+
+        <div class="sd-set-content">
+
+          <!-- ============================== PROFILE (inventory §7.0/§7.1) ============================== -->
+          <section class="sd-set-section" id="sdSetSectionProfile" data-search-section>
+            <p class="sd-set-section__intro">Switch, create, rename, duplicate, export/import, and delete configuration profiles.</p>
+
+            <div class="sd-set-group" data-search-group>
+              <div class="sd-set-group__header"><span class="sd-set-group__title">Active Profile</span></div>
+              <div class="sd-set-row" data-search-row data-search-label="Active Profile switch between different configuration presets">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Active Profile</span>
+                  <span class="sd-set-row__label-hint">Switch between different configuration presets.</span>
+                </div>
+                <div class="sd-set-row__control">
+                  <select class="sd-set-select sd-set-input--wide" id="sdSetProfileSelect"></select>
+                </div>
+              </div>
+            </div>
+
+            <div class="sd-set-group" data-search-group>
+              <div class="sd-set-group__header"><span class="sd-set-group__title">Profile Operations</span></div>
+              <p class="sd-set-group__desc">Create new, duplicate, rename, delete, import, or export profiles.</p>
+              <div class="sd-set-profile-actions" data-search-row data-search-label="profile operations create rename duplicate export import delete">
+                <input type="text" class="sd-set-input sd-set-input--wide" id="sdSetNewProfileName" placeholder="Profile name / action target" />
+                <div class="sd-actions-row">
+                  <button type="button" class="sd-btn" id="sdSetActivateProfileButton">Activate</button>
+                  <button type="button" class="sd-btn" id="sdSetCreateProfileButton">Create New</button>
+                  <button type="button" class="sd-btn" id="sdSetRenameProfileButton">Rename Profile</button>
+                  <button type="button" class="sd-btn" id="sdSetDuplicateProfileButton">Duplicate Profile</button>
+                </div>
+                <div class="sd-actions-row">
+                  <button type="button" class="sd-btn" id="sdSetExportProfileButton">Export Profile</button>
+                  <label class="sd-set-import-label">
+                    Import Profile
+                    <input type="file" id="sdSetImportProfileFile" accept=".json" />
+                  </label>
+                  <button type="button" class="sd-btn sd-action-btn--danger" id="sdSetDeleteProfileButton">Delete Profile</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- ============================== RECORDING (inventory §7.2) ============================== -->
+          <section class="sd-set-section" id="sdSetSectionRecording" data-search-section hidden>
+            <p class="sd-set-section__intro">Recording mode, auto-stop on silence, voice commands, and the no-audio gate.</p>
+
+            <div class="sd-set-group" data-search-group>
+              <div class="sd-set-group__header"><span class="sd-set-group__title">Recording Behavior</span></div>
+
+              <div class="sd-set-row" data-search-row data-search-label="record mode toggle push to talk">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Record Mode</span>
+                  <span class="sd-set-row__label-hint">Toggle (press to start/stop) or Push-To-Talk (hold to record).</span>
+                </div>
+                <div class="sd-set-row__control">
+                  <select class="sd-set-select" id="sdSetRecordingMode">
+                    <option value="toggle">toggle</option>
+                    <option value="ptt">push-to-talk</option>
+                  </select>
+                  <span class="sd-set-row__label-hint" id="sdSetPttAvailabilityNote"></span>
+                </div>
+              </div>
+
+              <div class="sd-set-row" data-search-row data-search-label="auto-stop on silence hands-free wake-word">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Auto-stop on silence</span>
+                  <span class="sd-set-row__label-hint">Automatically stop recording after you go quiet. Off by default.</span>
+                </div>
+                <div class="sd-set-row__control">
+                  <input type="checkbox" class="sd-set-checkbox" id="sdSetAutoStopSilence" />
+                </div>
+              </div>
+
+              <div class="sd-set-row" data-search-row data-search-label="auto-stop silence duration ms">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Silence duration (ms)</span>
+                  <span class="sd-set-row__label-hint">How long you must be quiet before auto-stop triggers.</span>
+                </div>
+                <div class="sd-set-row__control">
+                  <input type="number" class="sd-set-input sd-set-input--number" id="sdSetAutoStopSilenceMs" min="250" max="5000" step="50" />
+                </div>
+              </div>
+              <span class="sd-set-field-error" id="sdSetAutoStopSilenceMsError"></span>
+
+              <div class="sd-set-row" data-search-row data-search-label="auto-stop minimum recording ms">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Minimum recording (ms)</span>
+                  <span class="sd-set-row__label-hint">Never auto-stop before this much has been recorded.</span>
+                </div>
+                <div class="sd-set-row__control">
+                  <input type="number" class="sd-set-input sd-set-input--number" id="sdSetAutoStopMinMs" min="0" max="10000" step="50" />
+                </div>
+              </div>
+              <span class="sd-set-field-error" id="sdSetAutoStopMinMsError"></span>
+
+              <div class="sd-set-row" data-search-row data-search-label="voice commands">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Voice commands</span>
+                  <span class="sd-set-row__label-hint">Recognize spoken commands (e.g. "scratch that") during capture.</span>
+                </div>
+                <div class="sd-set-row__control">
+                  <input type="checkbox" class="sd-set-checkbox" id="sdSetVoiceCommands" />
+                </div>
+              </div>
+            </div>
+
+            <div class="sd-set-group" data-search-group>
+              <div class="sd-set-group__header"><span class="sd-set-group__title">No-Audio Gate</span></div>
+              <p class="sd-set-group__desc">Discards recordings that never really had speech in them.</p>
+
+              <div class="sd-set-row" data-search-row data-search-label="no audio minimum duration seconds">
+                <div class="sd-set-row__label"><span class="sd-set-row__label-text">Min duration (s)</span></div>
+                <div class="sd-set-row__control">
+                  <input type="number" class="sd-set-input sd-set-input--number" id="sdSetNoAudioDuration" min="0" max="30" step="0.05" />
+                </div>
+              </div>
+              <span class="sd-set-field-error" id="sdSetNoAudioDurationError"></span>
+
+              <div class="sd-set-row" data-search-row data-search-label="no audio minimum rms">
+                <div class="sd-set-row__label"><span class="sd-set-row__label-text">Min RMS</span></div>
+                <div class="sd-set-row__control">
+                  <input type="number" class="sd-set-input sd-set-input--number" id="sdSetNoAudioRms" min="0" max="1" step="0.001" />
+                </div>
+              </div>
+              <span class="sd-set-field-error" id="sdSetNoAudioRmsError"></span>
+
+              <div class="sd-set-row" data-search-row data-search-label="no audio minimum peak">
+                <div class="sd-set-row__label"><span class="sd-set-row__label-text">Min Peak</span></div>
+                <div class="sd-set-row__control">
+                  <input type="number" class="sd-set-input sd-set-input--number" id="sdSetNoAudioPeak" min="0" max="1" step="0.001" />
+                </div>
+              </div>
+              <span class="sd-set-field-error" id="sdSetNoAudioPeakError"></span>
+            </div>
+          </section>
+
+          <!-- ============================== REVIEW & DRAFTS (inventory §7.4) ============================== -->
+          <section class="sd-set-section" id="sdSetSectionReview" data-search-section hidden>
+            <p class="sd-set-section__intro">How drafts are sent, confidence gating, auto-submit, and clipboard/draft history behavior.</p>
+
+            <div class="sd-set-group" data-search-group>
+              <div class="sd-set-group__header"><span class="sd-set-group__title">Sending</span></div>
+              <div class="sd-set-row" data-search-row data-search-label="send mode review first auto send">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Send Mode</span>
+                  <span class="sd-set-row__label-hint">Review First displays drafts for acceptance. Auto Send pastes immediately.</span>
+                </div>
+                <div class="sd-set-row__control">
+                  <select class="sd-set-select" id="sdSetSendMode">
+                    <option value="review_first">review first</option>
+                    <option value="auto_send">auto send</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div class="sd-set-group" data-search-group>
+              <div class="sd-set-group__header"><span class="sd-set-group__title">Confidence Gate</span></div>
+
+              <div class="sd-set-row" data-search-row data-search-label="confidence force review below threshold">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Force review on low confidence</span>
+                  <span class="sd-set-row__label-hint">Never auto-send a draft below the threshold, regardless of Send Mode.</span>
+                </div>
+                <div class="sd-set-row__control">
+                  <input type="checkbox" class="sd-set-checkbox" id="sdSetConfidenceForceReview" />
+                </div>
+              </div>
+
+              <div class="sd-set-row" data-search-row data-search-label="confidence force review below">
+                <div class="sd-set-row__label"><span class="sd-set-row__label-text">Force-review below</span></div>
+                <div class="sd-set-row__control">
+                  <input type="number" class="sd-set-input sd-set-input--number" id="sdSetConfidenceForceReviewBelow" min="0" max="1" step="0.05" />
+                </div>
+              </div>
+              <span class="sd-set-field-error" id="sdSetConfidenceForceReviewBelowError"></span>
+
+              <div class="sd-set-row" data-search-row data-search-label="confidence auto send above">
+                <div class="sd-set-row__label"><span class="sd-set-row__label-text">Auto-send above</span></div>
+                <div class="sd-set-row__control">
+                  <input type="number" class="sd-set-input sd-set-input--number" id="sdSetConfidenceAutoSendAbove" min="0" max="1" step="0.05" />
+                </div>
+              </div>
+              <span class="sd-set-field-error" id="sdSetConfidenceAutoSendAboveError"></span>
+            </div>
+
+            <div class="sd-set-group" data-search-group>
+              <div class="sd-set-group__header"><span class="sd-set-group__title">Draft Behavior</span></div>
+
+              <div class="sd-set-row" data-search-row data-search-label="auto submit">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Auto submit</span>
+                  <span class="sd-set-row__label-hint">Press Enter/submit automatically after pasting.</span>
+                </div>
+                <div class="sd-set-row__control">
+                  <input type="checkbox" class="sd-set-checkbox" id="sdSetAutoSubmit" />
+                </div>
+              </div>
+
+              <div class="sd-set-row" data-search-row data-search-label="instant typing">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Instant typing</span>
+                  <span class="sd-set-row__label-hint">Type character-by-character instead of a single paste. Disabled on Wayland.</span>
+                </div>
+                <div class="sd-set-row__control">
+                  <input type="checkbox" class="sd-set-checkbox" id="sdSetInstantTyping" />
+                </div>
+              </div>
+
+              <div class="sd-set-row" data-search-row data-search-label="restore clipboard after paste">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Restore clipboard after paste</span>
+                  <span class="sd-set-row__label-hint">Put back whatever was on your clipboard before we used it.</span>
+                </div>
+                <div class="sd-set-row__control">
+                  <input type="checkbox" class="sd-set-checkbox" id="sdSetRestoreClipboard" />
+                </div>
+              </div>
+
+              <div class="sd-set-row" data-search-row data-search-label="draft history limit">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Draft history limit</span>
+                  <span class="sd-set-row__label-hint">How many past drafts Library keeps around.</span>
+                </div>
+                <div class="sd-set-row__control">
+                  <input type="number" class="sd-set-input sd-set-input--number" id="sdSetDraftHistoryLimit" min="10" max="500" />
+                </div>
+              </div>
+              <span class="sd-set-field-error" id="sdSetDraftHistoryLimitError"></span>
+            </div>
+          </section>
+
+          <!-- ============================== AI CLEANUP (inventory §7.5 numeric knobs; wizard/Foundry live in Studio) ============================== -->
+          <section class="sd-set-section" id="sdSetSectionAiCleanup" data-search-section hidden>
+            <p class="sd-set-section__intro">Active persona and the numeric tuning knobs for LLM cleanup and chunking. The persona wizard and Persona Foundry live in Studio.</p>
+
+            <div class="sd-set-group" data-search-group>
+              <div class="sd-set-group__header"><span class="sd-set-group__title">Active Persona</span></div>
+              <div class="sd-set-row" data-search-row data-search-label="cleanup preset active persona">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Cleanup Preset</span>
+                  <span class="sd-set-row__label-hint">Currently selected active LLM personality.</span>
+                </div>
+                <div class="sd-set-row__control">
+                  <select class="sd-set-select sd-set-input--wide" id="sdSetCurrentPreset"></select>
+                </div>
+              </div>
+            </div>
+
+            <div class="sd-set-group" data-search-group>
+              <div class="sd-set-group__header"><span class="sd-set-group__title">Cleanup Tuning</span></div>
+
+              <div class="sd-set-row" data-search-row data-search-label="max completion tokens">
+                <div class="sd-set-row__label"><span class="sd-set-row__label-text">Max completion tokens</span></div>
+                <div class="sd-set-row__control">
+                  <input type="number" class="sd-set-input sd-set-input--number" id="sdSetMaxCompletionTokens" min="512" max="4096" />
+                </div>
+              </div>
+              <span class="sd-set-field-error" id="sdSetMaxCompletionTokensError"></span>
+
+              <div class="sd-set-row" data-search-row data-search-label="long draft warning words">
+                <div class="sd-set-row__label"><span class="sd-set-row__label-text">Long draft warning (words)</span></div>
+                <div class="sd-set-row__control">
+                  <input type="number" class="sd-set-input sd-set-input--number" id="sdSetLongDraftWarningWords" min="300" max="10000" />
+                </div>
+              </div>
+              <span class="sd-set-field-error" id="sdSetLongDraftWarningWordsError"></span>
+
+              <div class="sd-set-row" data-search-row data-search-label="llm chunk size">
+                <div class="sd-set-row__label"><span class="sd-set-row__label-text">LLM chunk size</span></div>
+                <div class="sd-set-row__control">
+                  <input type="number" class="sd-set-input sd-set-input--number" id="sdSetLlmChunkSize" min="50" max="5000" />
+                </div>
+              </div>
+              <span class="sd-set-field-error" id="sdSetLlmChunkSizeError"></span>
+
+              <div class="sd-set-row" data-search-row data-search-label="whisper chunk size">
+                <div class="sd-set-row__label"><span class="sd-set-row__label-text">Whisper chunk size</span></div>
+                <div class="sd-set-row__control">
+                  <input type="number" class="sd-set-input sd-set-input--number" id="sdSetWhisperChunkSize" min="50" max="5000" />
+                </div>
+              </div>
+              <span class="sd-set-field-error" id="sdSetWhisperChunkSizeError"></span>
+
+              <div class="sd-set-row" data-search-row data-search-label="long recording stitch pass">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Long-recording stitch pass</span>
+                  <span class="sd-set-row__label-hint">Extra cleanup pass that stitches long, chunked recordings back together.</span>
+                </div>
+                <div class="sd-set-row__control">
+                  <input type="checkbox" class="sd-set-checkbox" id="sdSetStitchPass" />
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- ============================== NOTIFICATIONS & STATUS (inventory §7.10) ============================== -->
+          <section class="sd-set-section" id="sdSetSectionNotifications" data-search-section hidden>
+            <p class="sd-set-section__intro">Status indicator, notification overlay, and preview overlay toggles.</p>
+
+            <div class="sd-set-group" data-search-group>
+              <div class="sd-set-group__header"><span class="sd-set-group__title">Status &amp; Overlays</span></div>
+
+              <div class="sd-set-row" data-search-row data-search-label="status indicator overlay">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Status indicator</span>
+                  <span class="sd-set-row__label-hint">Floating recording/processing orb overlay.</span>
+                </div>
+                <div class="sd-set-row__control">
+                  <input type="checkbox" class="sd-set-checkbox" id="sdSetStatusIndicator" />
+                </div>
+              </div>
+
+              <div class="sd-set-row" data-search-row data-search-label="notification overlay">
+                <div class="sd-set-row__label"><span class="sd-set-row__label-text">Notification overlay</span></div>
+                <div class="sd-set-row__control">
+                  <input type="checkbox" class="sd-set-checkbox" id="sdSetNotificationOverlay" />
+                </div>
+              </div>
+
+              <div class="sd-set-row" data-search-row data-search-label="preview overlay">
+                <div class="sd-set-row__label"><span class="sd-set-row__label-text">Preview overlay</span></div>
+                <div class="sd-set-row__control">
+                  <input type="checkbox" class="sd-set-checkbox" id="sdSetPreviewOverlay" />
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- ============================== APPEARANCE (inventory §7.11) ============================== -->
+          <section class="sd-set-section" id="sdSetSectionAppearance" data-search-section hidden>
+            <p class="sd-set-section__intro">Theme, accent, density, font size, high contrast, and the floating overlay look. Applies live, client-side.</p>
+
+            <div class="sd-set-group" data-search-group>
+              <div class="sd-set-group__header"><span class="sd-set-group__title">Theme Customizations</span></div>
+
+              <div class="sd-set-row" data-search-row data-search-label="theme mode system dark light">
+                <div class="sd-set-row__label"><span class="sd-set-row__label-text">Theme Mode</span></div>
+                <div class="sd-set-row__control">
+                  <select class="sd-set-select" id="sdSetTheme">
+                    <option value="system">System Preference</option>
+                    <option value="dark">Dark Theme</option>
+                    <option value="light">Light Theme</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="sd-set-row" data-search-row data-search-label="accent palette color">
+                <div class="sd-set-row__label"><span class="sd-set-row__label-text">Accent Palette</span></div>
+                <div class="sd-set-row__control">
+                  <select class="sd-set-select" id="sdSetAccentColor">
+                    <option value="teal">Teal (default)</option>
+                    <option value="purple">Vibrant Purple</option>
+                    <option value="blue">Sleek Blue</option>
+                    <option value="gold">Warm Gold</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="sd-set-row" data-search-row data-search-label="layout density comfortable compact">
+                <div class="sd-set-row__label"><span class="sd-set-row__label-text">Layout Density</span></div>
+                <div class="sd-set-row__control">
+                  <select class="sd-set-select" id="sdSetDensity">
+                    <option value="comfortable">Comfortable</option>
+                    <option value="compact">Compact</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="sd-set-row" data-search-row data-search-label="text scaling font size">
+                <div class="sd-set-row__label"><span class="sd-set-row__label-text">Text Scaling</span></div>
+                <div class="sd-set-row__control">
+                  <select class="sd-set-select" id="sdSetFontSize">
+                    <option value="small">Small</option>
+                    <option value="medium">Medium</option>
+                    <option value="large">Large</option>
+                    <option value="huge">Extra Large</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="sd-set-row" data-search-row data-search-label="high contrast mode accessibility">
+                <div class="sd-set-row__label"><span class="sd-set-row__label-text">High Contrast Mode</span></div>
+                <div class="sd-set-row__control">
+                  <input type="checkbox" class="sd-set-checkbox" id="sdSetHighContrast" />
+                </div>
+              </div>
+            </div>
+
+            <div class="sd-set-group" id="sdSetOverlayAppearanceGroup" data-search-group>
+              <div class="sd-set-group__header"><span class="sd-set-group__title">Floating Overlay</span></div>
+              <p class="sd-set-group__desc">The Signal Core ring that appears while you dictate. These apply live.</p>
+
+              <div class="sd-set-row" data-search-row data-search-label="overlay size">
+                <div class="sd-set-row__label"><span class="sd-set-row__label-text">Size</span></div>
+                <div class="sd-set-row__control">
+                  <select class="sd-set-select" id="sdSetOverlaySize">
+                    <option value="small">Small</option>
+                    <option value="medium">Medium</option>
+                    <option value="large">Large</option>
+                    <option value="xlarge">Extra large</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="sd-set-row" data-search-row data-search-label="overlay placement position">
+                <div class="sd-set-row__label"><span class="sd-set-row__label-text">Placement</span></div>
+                <div class="sd-set-row__control">
+                  <select class="sd-set-select" id="sdSetOverlayPlacement">
+                    <option value="top-left">Top left</option>
+                    <option value="top">Top center</option>
+                    <option value="top-right">Top right</option>
+                    <option value="left">Middle left</option>
+                    <option value="center">Center</option>
+                    <option value="right">Middle right</option>
+                    <option value="bottom-left">Bottom left</option>
+                    <option value="bottom">Bottom center</option>
+                    <option value="bottom-right">Bottom right</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="sd-set-row" data-search-row data-search-label="overlay transparency opacity">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Transparency</span>
+                  <span class="sd-set-row__label-hint">Lower = more see-through.</span>
+                </div>
+                <div class="sd-set-row__control">
+                  <input type="range" class="sd-set-range" id="sdSetOverlayOpacity" min="0.15" max="1" step="0.05" value="1" />
+                  <span class="sd-set-range-value" id="sdSetOverlayOpacityValue">100%</span>
+                </div>
+              </div>
+
+              <div class="sd-set-row" data-search-row data-search-label="overlay vibrancy glow">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Vibrancy</span>
+                  <span class="sd-set-row__label-hint">Glow and intensity of the ring.</span>
+                </div>
+                <div class="sd-set-row__control">
+                  <input type="range" class="sd-set-range" id="sdSetOverlayVibrancy" min="0.3" max="2" step="0.1" value="1" />
+                  <span class="sd-set-range-value" id="sdSetOverlayVibrancyValue">100%</span>
+                </div>
+              </div>
+
+              <div class="sd-set-row" data-search-row data-search-label="overlay status label position">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Status label</span>
+                  <span class="sd-set-row__label-hint">Where the "Recording…" text sits — or hide it.</span>
+                </div>
+                <div class="sd-set-row__control">
+                  <select class="sd-set-select" id="sdSetOverlayLabelPos">
+                    <option value="hidden">Hidden</option>
+                    <option value="below">Below the ring</option>
+                    <option value="above">Above the ring</option>
+                    <option value="center">Across the center</option>
+                    <option value="beside">Beside the ring</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="sd-set-row" data-search-row data-search-label="overlay always show on">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Always show</span>
+                  <span class="sd-set-row__label-hint">Keep the ring on screen at all times, not just while dictating.</span>
+                </div>
+                <div class="sd-set-row__control">
+                  <input type="checkbox" class="sd-set-checkbox" id="sdSetOverlayAlwaysOn" />
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- ============================== PRIVACY (inventory §7.14) ============================== -->
+          <section class="sd-set-section" id="sdSetSectionPrivacy" data-search-section hidden>
+            <p class="sd-set-section__intro">What touches the network, what is stored on this device, and wiping your data. BetterFingers runs offline.</p>
+
+            <div class="sd-set-group" data-search-group>
+              <div class="sd-set-group__header"><span class="sd-set-group__title">Network activity</span></div>
+              <div class="sd-set-detail-list" id="sdSetPrivacyNetworkList"><span class="empty-state">Loading&hellip;</span></div>
+            </div>
+
+            <div class="sd-set-group" data-search-group>
+              <div class="sd-set-group__header"><span class="sd-set-group__title">Your data on this device</span></div>
+              <div class="sd-set-detail-list" id="sdSetPrivacyDataList"><span class="empty-state">Loading&hellip;</span></div>
+            </div>
+
+            <div class="sd-set-group" data-search-group>
+              <div class="sd-set-group__header"><span class="sd-set-group__title">Wake-word listener</span></div>
+              <p class="sd-set-group__desc" id="sdSetPrivacyWakeListenerStatus">Loading&hellip;</p>
+            </div>
+
+            <div class="sd-set-group" data-search-group>
+              <div class="sd-set-group__header"><span class="sd-set-group__title">Wipe my data</span></div>
+              <p class="sd-set-group__desc">Permanently deletes your drafts, transcription history, and any recordings held in memory. Models and profiles are kept.</p>
+              <div class="sd-set-row" data-search-row data-search-label="also delete cloned voices">
+                <div class="sd-set-row__label"><span class="sd-set-row__label-text">Also delete my cloned voices</span></div>
+                <div class="sd-set-row__control">
+                  <input type="checkbox" class="sd-set-checkbox" id="sdSetPrivacyWipeVoices" />
+                </div>
+              </div>
+              <div class="sd-actions-row">
+                <button type="button" class="sd-btn sd-action-btn--danger" id="sdSetPrivacyWipeButton">Wipe my data&hellip;</button>
+              </div>
+              <span class="sd-set-message" id="sdSetPrivacyMessage" role="status" aria-live="polite"></span>
+            </div>
+          </section>
+
+        </div>
+      </div>
+
+      <!-- ============================== Sticky Save/Discard bar (§7.0) ============================== -->
+      <div class="sd-set-savebar hidden" id="sdSetSaveBar">
+        <span class="sd-set-message" id="sdSetProfileMessage" role="status" aria-live="polite"></span>
+        <div class="sd-set-savebar__actions">
+          <button type="button" class="sd-btn" id="sdSetDiscardButton">Discard</button>
+          <button type="button" class="sd-btn sd-btn--primary" id="sdSetSaveButton">Save Settings</button>
+        </div>
+      </div>
     </section>
   </div>
 
@@ -2221,6 +2757,88 @@
   //   window.__utilitiesWorkspace.goToSection('diagnostics');
   //   window.__utilitiesWorkspace.refreshAll(); // real backend calls (fail gracefully with no bridge)
   window.__utilitiesWorkspace = utilitiesWorkspace;
+</script>
+
+<!--
+  Phase 5b: mount the REAL Settings workspace adapter for director QA -- same
+  file:// CORS caveat as the module scripts above (silently no-ops under a
+  plain file:// open; works over http://). Settings is not pixel-mocked by
+  the director (SPEC 8), so there is no static-markup fallback to preserve
+  here the way Library/Studio have -- the markup above already IS the real
+  adapter's target, seeded with representative mock profile/privacy data so
+  every group renders populated rather than blank for QA screenshots.
+-->
+<script type="module">
+  import { createSettingsWorkspaceFeature, collectSettingsElements } from './features/settingsWorkspace.js';
+
+  const elements = collectSettingsElements(document);
+  const settingsWorkspace = createSettingsWorkspaceFeature({ elements, hooks: {} });
+  settingsWorkspace.init();
+
+  // --- Profile list + a representative settings object (mirrors the shape
+  // fetchProfile()/saveProfile() really exchange) -----------------------------
+  settingsWorkspace.setProfilesList(['Default', 'Work', 'Streaming'], 'Default');
+  settingsWorkspace.setPersonaOptions(['Natural', 'Direct', 'Warm', 'Professional', 'Playful'], 'Natural');
+  settingsWorkspace.renderSettings({
+    recording_mode: 'toggle',
+    auto_stop_after_silence_enabled: false,
+    auto_stop_silence_ms: 1200,
+    auto_stop_min_recording_ms: 500,
+    voice_commands_enabled: true,
+    no_audio_min_duration_sec: 0.3,
+    no_audio_min_rms: 0.01,
+    no_audio_min_peak: 0.05,
+    send_mode: 'review_first',
+    confidence_force_review_enabled: true,
+    confidence_force_review_below: 0.6,
+    confidence_auto_send_above: 0.9,
+    auto_submit: false,
+    instant_typing: false,
+    restore_clipboard_after_paste: true,
+    draft_history_limit: 100,
+    current_preset: 'Natural',
+    max_completion_tokens: 1024,
+    long_draft_warning_words: 1200,
+    llm_chunk_size: 800,
+    whisper_chunk_size: 800,
+    long_recording_stitch_pass_enabled: false,
+    status_indicator_enabled: true,
+    notification_overlay_enabled: true,
+    preview_overlay_enabled: true,
+  });
+
+  // --- Privacy report (mirrors fetchPrivacy()'s real shape) ------------------
+  settingsWorkspace.renderPrivacyReport({
+    network_touchpoints: [
+      { name: 'Discord webhook', direction: 'outbound', hosts: ['discord.com'], purpose: 'Sends your refined message when Destination = Discord.' },
+      { name: 'Local backend', direction: 'on-device', hosts: [], purpose: 'Whisper/LLM/TTS run entirely on this machine.' },
+    ],
+    data_locations: [
+      { name: 'Draft history', bytes: 245000, path: '~/.betterfingers/drafts.db' },
+      { name: 'Recordings (temp)', bytes: 1830000, path: '~/.betterfingers/recordings/' },
+    ],
+    wake_listener: { active: false, note: 'Enable it from Utilities → Speech Input.' },
+  });
+
+  // --- section sub-nav: wire both the left rail AND the context panel's
+  // "Jump to" chips (mirrors Utilities' syncUtilContext pattern) -------------
+  function syncSetContext(sectionId) {
+    // Settings has no dedicated context-panel content yet (SPEC 8 doesn't mock
+    // one) -- reserved for a future phase; the section router itself is fully
+    // real regardless.
+    void sectionId;
+  }
+  document.querySelectorAll('[data-set-nav]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const state = settingsWorkspace.goToSection(btn.dataset.setNav);
+      syncSetContext(state.active);
+    });
+  });
+
+  // Debug handle for director/manual QA from devtools, e.g.:
+  //   window.__settingsWorkspace.goToSection('privacy');
+  //   window.__settingsWorkspace.refreshAll(); // real backend calls (fail gracefully with no bridge)
+  window.__settingsWorkspace = settingsWorkspace;
 </script>
 
 </body>
