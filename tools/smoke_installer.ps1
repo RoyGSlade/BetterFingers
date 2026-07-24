@@ -15,7 +15,9 @@ if (-not (Test-Path $InstallerPath)) {
 
 $installDir = Join-Path $env:LOCALAPPDATA "Programs\BetterFingers"
 $exePath = Join-Path $installDir "BetterFingers.exe"
-$uninstallerPath = Join-Path $installDir "Uninstall.exe"
+# The uninstaller name is resolved dynamically after install: electron-builder's
+# NSIS names it "Uninstall <ProductName>.exe" (e.g. "Uninstall BetterFingers.exe"),
+# not a fixed "Uninstall.exe", so a hardcoded name breaks the smoke test.
 $uninstallRegKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\BetterFingers"
 
 function Start-AppAndWait {
@@ -85,11 +87,13 @@ $proc = Start-AppAndWait -Path $exePath
 Stop-AppAndVerify -Proc $proc
 Assert-NoRunningBetterFingers
 
-if (-not (Test-Path $uninstallerPath)) {
-    throw "Uninstaller not found: $uninstallerPath"
+$uninstaller = Get-ChildItem -Path $installDir -Filter "Uninstall*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $uninstaller) {
+    throw "Uninstaller not found in ${installDir} (looked for Uninstall*.exe)"
 }
+$uninstallerPath = $uninstaller.FullName
 
-Write-Host "Running silent uninstall smoke test..."
+Write-Host "Running silent uninstall smoke test: $uninstallerPath"
 Start-Process -FilePath $uninstallerPath -ArgumentList "/S" -Wait -NoNewWindow
 Start-Sleep -Seconds 2
 
