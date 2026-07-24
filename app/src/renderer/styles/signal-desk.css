@@ -4138,3 +4138,496 @@
   align-items: center;
   gap: var(--sd-space-12);
 }
+
+/* ==========================================================================
+   OVERLAYS (SPEC 7, Phase 6) -- the two floating standalone windows:
+   overlay.html (the compact Signal Core capture ring) and review-overlay.html
+   (the Review Deck). Both link this stylesheet directly (they are NOT part
+   of the index.html bundle -- see electron.vite.config.js's separate
+   `overlay` / `reviewOverlay` renderer entries) and add only their own
+   window-mechanics CSS locally (transparent body, -webkit-app-region drag,
+   label-position flex variants) since that plumbing is unique to each
+   frameless window and isn't reused elsewhere. Everything token-driven and
+   potentially shareable lives here, next to the other workspaces' sections.
+   ========================================================================== */
+
+/* --- Capture overlay (overlay.html): compact Signal Core ring + label ----
+   Real estate is set by windows.js's OVERLAY_SIZE_PX (46-150px ring + up to
+   ~176px for a beside label) -- NOT the ~520px Talk hero ring -- so this is
+   deliberately minimal: the ring itself (drawn by signalCore.js) plus one
+   small glass status pill. Mockup 04's larger capture-overlay composition
+   (timer readout, Stop/Close buttons, destination chip, persona dropdown)
+   does not fit this window's actual pixel budget; see the phase report for
+   the flag on this constraint. */
+
+.sd-capture-ring {
+  display: block;
+  flex-shrink: 0;
+}
+
+/* The idle-state default text doubles as SPEC 7's "Press Alt + Space to
+   capture" global hint pill -- presentation-only (see overlay.html), shown
+   here since there is no separate always-on-top hint window. */
+.sd-capture-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 8px;
+  border-radius: 999px;
+  background: rgba(15, 21, 29, 0.72);
+  border: 1px solid var(--sd-border);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  font-family: var(--sd-font-family);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--sd-text-secondary);
+  white-space: nowrap;
+  box-shadow: var(--sd-shadow-card);
+}
+
+.sd-capture-label.hidden {
+  display: none;
+}
+
+.sd-capture-label::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 6px currentColor;
+  flex-shrink: 0;
+}
+
+/* Ring-state -> label color (dot + text share currentColor). Kept to the
+   same idle/listening/recording/transcribing/ready/error vocabulary
+   signalCore.js resolves to -- see lib/overlayStatus.mjs. */
+.sd-capture-label[data-ring-state="idle"] { color: var(--sd-text-muted); }
+.sd-capture-label[data-ring-state="listening"],
+.sd-capture-label[data-ring-state="recording"],
+.sd-capture-label[data-ring-state="ready"] { color: var(--sd-green); }
+.sd-capture-label[data-ring-state="transcribing"],
+.sd-capture-label[data-ring-state="stitching"],
+.sd-capture-label[data-ring-state="warning"] { color: var(--sd-amber); }
+.sd-capture-label[data-ring-state="error"] { color: var(--sd-red); }
+
+/* --- Review Deck (review-overlay.html) -------------------------------------
+   Window is a fixed, OPAQUE 560x520 (min 420x360) BrowserWindow (windows.js
+   createReviewWindow()) -- not transparent, so unlike the capture overlay the
+   whole window IS the card; no outer glass/shadow wrapper is needed, the
+   shell just fills it edge-to-edge. */
+
+.sd-review-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: linear-gradient(160deg, rgba(34, 211, 238, 0.05), transparent 40%), var(--sd-bg-base);
+  color: var(--sd-text-primary);
+  overflow: hidden;
+}
+
+.sd-review-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sd-space-12);
+  padding: var(--sd-space-16) var(--sd-space-20) var(--sd-space-12);
+  border-bottom: 1px solid var(--sd-border);
+  -webkit-app-region: drag;
+  flex-shrink: 0;
+}
+
+.sd-review-header__titles {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* Repurposes the required `h1` landmark (CURRENT_UI_INVENTORY.md 12.2) as
+   SPEC 7's "✨ REVIEW DECK" eyebrow -- one semantic heading serving both
+   roles rather than two redundant labels. */
+.sd-review-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: var(--sd-font-label);
+  font-weight: 700;
+  letter-spacing: var(--sd-label-letter-spacing);
+  text-transform: uppercase;
+  color: var(--sd-cyan);
+}
+
+.sd-review-status {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+}
+
+.sd-review-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sd-review-header__right {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+}
+
+.sd-review-close {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid var(--sd-border);
+  background: var(--sd-surface-raised);
+  color: var(--sd-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  font-family: inherit;
+}
+
+.sd-review-close:hover {
+  border-color: var(--sd-border-hover);
+  color: var(--sd-text-primary);
+}
+
+/* Status badge -- restyle of the existing 12-state .status-badge/.state-*
+   selectors (class names driven by review-overlay.html's setOverlayState(),
+   UNCHANGED -- only the color values move to --sd-* tokens). Grouped into
+   the same three semantic tiers the original accent/warning/danger palette
+   used: positive (rewritten/accepted/sent/speaking), caution
+   (rewriting/copied/interrupted/confirm), danger (declined/error/stopped). */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--sd-radius-chip);
+  font-size: var(--sd-font-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.state-pending { background: var(--sd-surface-inset); color: var(--sd-text-muted); border-color: var(--sd-border); }
+.state-rewriting { background: rgba(245, 158, 11, 0.14); color: var(--sd-amber); border-color: rgba(245, 158, 11, 0.3); }
+.state-rewritten { background: rgba(34, 197, 94, 0.14); color: var(--sd-green); border-color: rgba(34, 197, 94, 0.3); }
+.state-speaking { background: rgba(34, 197, 94, 0.2); color: var(--sd-green); border-color: rgba(34, 197, 94, 0.4); animation: sd-review-pulse 1.5s infinite; }
+.state-accepted { background: rgba(34, 197, 94, 0.14); color: var(--sd-green); border-color: rgba(34, 197, 94, 0.3); }
+.state-sent { background: rgba(34, 197, 94, 0.22); color: var(--sd-green-bright); border-color: rgba(34, 197, 94, 0.4); }
+.state-copied { background: rgba(245, 158, 11, 0.16); color: var(--sd-amber); border-color: rgba(245, 158, 11, 0.3); }
+.state-declined { background: rgba(239, 68, 68, 0.14); color: var(--sd-red); border-color: rgba(239, 68, 68, 0.3); }
+.state-error { background: rgba(239, 68, 68, 0.2); color: var(--sd-red); border-color: rgba(239, 68, 68, 0.4); }
+.state-interrupted { background: rgba(245, 158, 11, 0.18); color: var(--sd-amber); border-color: rgba(245, 158, 11, 0.35); }
+.state-stopped { background: rgba(239, 68, 68, 0.16); color: var(--sd-red); border-color: rgba(239, 68, 68, 0.3); }
+.state-confirm { background: rgba(245, 158, 11, 0.18); color: var(--sd-amber); border-color: rgba(245, 158, 11, 0.35); animation: sd-review-pulse 1.5s infinite; }
+
+@keyframes sd-review-pulse {
+  0% { opacity: 0.6; }
+  50% { opacity: 1; }
+  100% { opacity: 0.6; }
+}
+
+.tts-backend-badge {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+  border: 1px solid var(--sd-border);
+  padding: 3px 8px;
+  border-radius: var(--sd-radius-chip);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tts-backend-badge.success { color: var(--sd-green); border-color: rgba(34, 197, 94, .35); }
+.tts-backend-badge.warning { color: var(--sd-amber); border-color: rgba(245, 158, 11, .35); }
+.tts-backend-badge.danger { color: var(--sd-red); border-color: rgba(239, 68, 68, .35); }
+
+.command-badge {
+  background: rgba(34, 211, 238, 0.14);
+  color: var(--sd-cyan);
+  border-color: rgba(34, 211, 238, .3);
+}
+
+.sd-review-main {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sd-space-20);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-16);
+}
+
+/* The "hero refined text" is a live-EDITABLE textarea (#finalText,
+   CURRENT_UI_INVENTORY.md 12.2) -- unlike Talk's read-only hero, the review
+   flow lets the user tweak text before accepting. Styled to read as SPEC 7's
+   big light hero type while remaining a real, editable <textarea>. Font size
+   is scaled down from the spec's 44-48px to fit the fixed 560x520 window
+   without the hero swallowing the rest of the card -- director-tunable. */
+.sd-review-hero-textarea {
+  width: 100%;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--sd-text-primary);
+  font-family: inherit;
+  font-size: 26px;
+  font-weight: var(--sd-font-hero-weight);
+  line-height: 1.25;
+  min-height: 84px;
+  padding: 0;
+}
+
+.sd-review-hero-textarea::placeholder {
+  color: var(--sd-text-muted);
+}
+
+.draft-summary {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+  text-align: right;
+}
+
+.sd-review-raw-section {
+  border-top: 1px solid var(--sd-border);
+  padding-top: var(--sd-space-12);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-8);
+}
+
+.sd-review-raw-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--sd-space-8);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--sd-cyan);
+  font-size: var(--sd-font-label);
+  letter-spacing: var(--sd-label-letter-spacing);
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.sd-review-raw-toggle__chevron {
+  color: var(--sd-cyan);
+  font-size: 10px;
+  transition: transform 120ms ease;
+}
+
+.sd-review-raw-section.is-collapsed .sd-review-raw-toggle__chevron {
+  transform: rotate(180deg);
+}
+
+.sd-review-raw-body {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sd-space-16);
+}
+
+.sd-review-raw-section.is-collapsed .sd-review-raw-body {
+  display: none;
+}
+
+.raw {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+  font-style: italic;
+  line-height: 1.5;
+  max-height: 4.5em;
+  overflow-y: auto;
+}
+
+/* Mini "waveform player" next to the raw transcript (SPEC 7: "00:12 ▶").
+   The duration is REAL data (draft.metadata.duration_seconds -- the same
+   field features/drafts.js's formatDraftMetadata() and the Library
+   workspace's waveform-thumbnail duration already read); the waveform glyph
+   and ▶ button are decorative only -- no raw-audio playback endpoint exists
+   yet (only TTS-of-the-final-text via #readButton does), so the play button
+   intentionally has no click handler. Flagged for the director: a real
+   scrub/playback control would need a new backend audio route. */
+.sd-review-audio-player {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+  padding: 6px 10px;
+  border-radius: var(--sd-radius-pill);
+  background: var(--sd-surface-inset);
+  border: 1px solid var(--sd-border);
+  flex-shrink: 0;
+}
+
+.sd-review-audio-player__wave {
+  width: 72px;
+  height: 18px;
+  color: var(--sd-cyan);
+}
+
+.sd-review-audio-player__wave svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.sd-review-audio-player__duration {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-secondary);
+  white-space: nowrap;
+}
+
+.sd-review-audio-player__play {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--sd-border-hover);
+  background: transparent;
+  color: var(--sd-text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.sd-review-audio-player__play svg {
+  width: 9px;
+  height: 9px;
+}
+
+/* Three-cell meta strip: DESTINATION / PERSONA / CONFIDENCE (SPEC 7). */
+.sd-review-meta-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sd-space-16);
+  border-top: 1px solid var(--sd-border);
+  padding-top: var(--sd-space-12);
+}
+
+.sd-review-meta-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sd-review-meta-cell__label {
+  font-size: var(--sd-font-label);
+  letter-spacing: var(--sd-label-letter-spacing);
+  text-transform: uppercase;
+  color: var(--sd-text-muted);
+}
+
+.sd-review-meta-cell__value {
+  font-size: var(--sd-font-body);
+  color: var(--sd-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sd-review-meta-cell__sub {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sd-review-meta-cell--confidence .sd-review-meta-cell__value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--sd-confidence-color, var(--sd-confidence-high));
+}
+
+.instruction-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--sd-space-8);
+}
+
+.instruction-row.hidden {
+  display: none;
+}
+
+.instruction-row textarea {
+  min-height: 54px;
+}
+
+.sd-review-select {
+  appearance: none;
+  padding: var(--sd-space-8) 22px var(--sd-space-8) var(--sd-space-12);
+  border-radius: var(--sd-radius-pill);
+  border: 1px solid var(--sd-border);
+  background: var(--sd-surface-raised) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%2394A3B8' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 8px center;
+  color: var(--sd-text-secondary);
+  font-family: inherit;
+  font-size: var(--sd-font-sm);
+  cursor: pointer;
+}
+
+.sd-review-select option {
+  color: #000;
+}
+
+.sd-review-footer {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-8);
+  padding: var(--sd-space-12) var(--sd-space-20) var(--sd-space-16);
+  border-top: 1px solid var(--sd-border);
+  background: var(--sd-surface);
+}
+
+.sd-review-cancel-btn {
+  color: var(--sd-red);
+  border-color: rgba(239, 68, 68, .3);
+}
+
+.sd-review-cancel-btn:hover {
+  background: rgba(239, 68, 68, .12);
+  border-color: var(--sd-red);
+  color: var(--sd-red);
+}
+
+/* Speaking-state look for #readButton (was inline style.borderColor/
+   backgroundColor in the original script; now a class so the color comes
+   from a token). Kept red/danger-toned like the original since "Stop" is
+   semantically a stop/danger action. */
+.sd-btn.is-speaking {
+  border-color: rgba(239, 68, 68, .5);
+  background: rgba(239, 68, 68, .13);
+  color: var(--sd-text-primary);
+}
+
+.message {
+  min-height: 18px;
+  font-size: var(--sd-font-sm);
+  line-height: 1.35;
+  color: var(--sd-text-muted);
+}
+
+.message[data-tone="success"] { color: var(--sd-green); }
+.message[data-tone="warning"] { color: var(--sd-amber); }
+.message[data-tone="danger"] { color: var(--sd-red); }

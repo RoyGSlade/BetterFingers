@@ -5,69 +5,30 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* http://localhost:* ws://localhost:*; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>BetterFingers Review</title>
+    <!-- Signal Desk design tokens + shared component classes (SPEC 2/7). See
+         styles/signal-desk.css's "OVERLAYS" section for .sd-review-*, plus
+         reused generics (.sd-badge, .sd-btn, .sd-btn-split, .sd-chip,
+         .sd-confidence-bar, .sd-advanced, .sd-header__pill, .sd-actions-row)
+         defined in the Talk/Library/Studio sections. -->
+    <link rel="stylesheet" href="./styles/signal-desk.css" />
     <style>
-      :root {
-        color-scheme: dark;
-        --bg: #0b111d;
-        --panel: #111a29;
-        --panel-soft: #162234;
-        --text: #f2f7ff;
-        --muted: #a8b4c7;
-        --border: rgba(168, 180, 199, 0.18);
-        --accent: #66f2c1;
-        --warning: #f6c15f;
-        --danger: #ff7c87;
-      }
-
       * {
         box-sizing: border-box;
       }
 
+      html, body {
+        margin: 0;
+        height: 100%;
+      }
+
       body {
-        margin: 0;
-        min-height: 100vh;
-        background:
-          linear-gradient(140deg, rgba(102, 242, 193, 0.08), transparent 34%),
-          var(--bg);
-        color: var(--text);
-        font-family: ui-sans-serif, "Segoe UI", system-ui, sans-serif;
+        background: var(--sd-bg-base);
         overflow: hidden;
-      }
-
-      .shell {
-        display: grid;
-        grid-template-rows: auto 1fr auto;
-        height: 100vh;
-        border: 1px solid var(--border);
-      }
-
-      header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 12px 14px;
-        background: rgba(17, 26, 41, 0.94);
-        border-bottom: 1px solid var(--border);
-        -webkit-app-region: drag;
-      }
-
-      h1 {
-        margin: 0;
-        font-size: 0.92rem;
-        letter-spacing: 0;
-      }
-
-      .status {
-        color: var(--muted);
-        font-size: 0.78rem;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
       }
 
       button,
-      textarea {
+      textarea,
+      select {
         font: inherit;
       }
 
@@ -75,245 +36,117 @@
       select {
         -webkit-app-region: no-drag;
       }
-
-      .icon-button {
-        width: 30px;
-        height: 30px;
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        background: rgba(255, 255, 255, 0.04);
-        color: var(--text);
-        cursor: pointer;
-      }
-
-      main {
-        display: grid;
-        gap: 10px;
-        min-height: 0;
-        padding: 12px;
-      }
-
-      .text-stack {
-        display: grid;
-        grid-template-rows: minmax(56px, 0.36fr) minmax(130px, 1fr);
-        gap: 10px;
-        min-height: 0;
-      }
-
-      .raw,
-      textarea {
-        width: 100%;
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        background: rgba(255, 255, 255, 0.045);
-        color: var(--text);
-      }
-
-      .raw {
-        padding: 10px;
-        color: var(--muted);
-        line-height: 1.38;
-        overflow: auto;
-        font-size: 0.86rem;
-      }
-
-      textarea {
-        min-height: 0;
-        resize: none;
-        padding: 11px;
-        line-height: 1.45;
-        outline: none;
-      }
-
-      .draft-summary {
-        padding: 2px 11px 0;
-        color: var(--muted);
-        font-size: 0.72rem;
-        text-align: right;
-      }
-
-      textarea:focus {
-        border-color: rgba(102, 242, 193, 0.55);
-      }
-
-      .instruction-row {
-        display: grid;
-        grid-template-columns: 1fr auto;
-        gap: 8px;
-      }
-
-      .instruction-row.hidden {
-        display: none;
-      }
-
-      .instruction-row textarea {
-        min-height: 54px;
-      }
-
-      footer {
-        display: grid;
-        gap: 8px;
-        padding: 10px 12px 12px;
-        border-top: 1px solid var(--border);
-        background: rgba(17, 26, 41, 0.82);
-      }
-
-      .actions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-      }
-
-      .button {
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        background: rgba(255, 255, 255, 0.05);
-        color: var(--text);
-        padding: 9px 11px;
-        cursor: pointer;
-      }
-
-      .button.primary {
-        border-color: rgba(102, 242, 193, 0.5);
-        background: rgba(102, 242, 193, 0.13);
-      }
-
-      .rewrite-preset {
-        appearance: none;
-        padding-right: 22px;
-      }
-      .rewrite-preset option {
-        color: #000;
-      }
-
-      .button.warning {
-        border-color: rgba(246, 193, 95, 0.42);
-      }
-
-      .button.danger {
-        border-color: rgba(255, 124, 135, 0.42);
-      }
-
-      .button:disabled {
-        cursor: wait;
-        opacity: 0.62;
-      }
-
-      .message {
-        min-height: 18px;
-        color: var(--muted);
-        font-size: 0.82rem;
-        line-height: 1.35;
-      }
-
-      .message[data-tone="success"] {
-        color: var(--accent);
-      }
-
-      .message[data-tone="warning"] {
-        color: var(--warning);
-      }
-
-      .message[data-tone="danger"] {
-        color: var(--danger);
-      }
-
-      .status-badge {
-        display: inline-block;
-        padding: 3px 6px;
-        border-radius: 4px;
-        font-size: 0.72rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-      }
-      .state-pending { background: rgba(168, 180, 199, 0.15); color: var(--muted); }
-      .state-rewriting { background: rgba(246, 193, 95, 0.15); color: var(--warning); }
-      .state-rewritten { background: rgba(102, 242, 193, 0.15); color: var(--accent); }
-      .state-speaking { background: rgba(102, 242, 193, 0.25); color: var(--accent); animation: pulse 1.5s infinite; }
-      .state-accepted { background: rgba(102, 242, 193, 0.15); color: var(--accent); }
-      .state-sent { background: rgba(102, 242, 193, 0.3); color: var(--accent); }
-      .state-copied { background: rgba(246, 193, 95, 0.2); color: var(--warning); }
-      .state-declined { background: rgba(255, 124, 135, 0.15); color: var(--danger); }
-      .state-error { background: rgba(255, 124, 135, 0.25); color: var(--danger); }
-      .state-interrupted { background: rgba(246, 193, 95, 0.22); color: var(--warning); }
-      .state-stopped { background: rgba(255, 124, 135, 0.2); color: var(--danger); }
-      .state-confirm { background: rgba(246, 193, 95, 0.22); color: var(--warning); animation: pulse 1.5s infinite; }
-
-      .command-badge {
-        background: rgba(102, 242, 193, 0.18);
-        color: var(--accent);
-      }
-
-      .tts-backend-badge {
-        font-size: 0.72rem;
-        color: var(--muted);
-        border: 1px solid var(--border);
-        padding: 2px 6px;
-        border-radius: 4px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-      }
-      .tts-backend-badge.success {
-        color: var(--accent);
-        border-color: rgba(102, 242, 193, 0.4);
-      }
-      .tts-backend-badge.danger {
-        color: var(--danger);
-        border-color: rgba(255, 124, 135, 0.4);
-      }
-      .tts-backend-badge.warning {
-        color: var(--warning, #ffc86b);
-        border-color: rgba(255, 200, 107, 0.4);
-      }
-
-      @keyframes pulse {
-        0% { opacity: 0.6; }
-        50% { opacity: 1; }
-        100% { opacity: 0.6; }
-      }
     </style>
   </head>
   <body>
-    <div class="shell">
-      <header>
-        <div>
-          <h1>Review Draft</h1>
-          <div id="status" class="status" style="display:none;">Waiting for draft</div>
-          <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
+    <div class="sd-review-shell">
+      <header class="sd-review-header">
+        <div class="sd-review-header__titles">
+          <h1 class="sd-review-eyebrow"><span aria-hidden="true">✨</span> Review Deck</h1>
+          <div id="status" class="sd-review-status" style="display:none;">Waiting for draft</div>
+          <div class="sd-review-meta-row">
             <span id="statusBadge" class="status-badge state-pending">Draft Pending</span>
             <span id="ttsBackendBadge" class="tts-backend-badge">TTS: Loading...</span>
             <span id="commandBadge" class="status-badge command-badge" style="display:none;"></span>
           </div>
         </div>
-        <button id="closeButton" class="icon-button" type="button" title="Close">X</button>
+        <div class="sd-review-header__right">
+          <span class="sd-header__pill" aria-hidden="true">
+            <span class="sd-header__pill-dot"></span>
+            Signal Core
+          </span>
+          <button id="closeButton" class="sd-review-close" type="button" title="Close">✕</button>
+        </div>
       </header>
 
-      <main>
-        <div class="text-stack">
-          <div id="rawText" class="raw">No transcript yet.</div>
-          <textarea id="finalText" spellcheck="true" placeholder="Cleaned output will appear here."></textarea>
+      <main class="sd-review-main">
+        <div>
+          <textarea
+            id="finalText"
+            class="sd-review-hero-textarea"
+            spellcheck="true"
+            rows="2"
+            placeholder="Cleaned output will appear here."
+          ></textarea>
           <div id="draftSummary" class="draft-summary" aria-live="polite"></div>
         </div>
-        <div id="instructionRow" class="instruction-row hidden">
-          <textarea id="instructionText" placeholder="Record or type what you want changed."></textarea>
-          <button id="runInstructionButton" class="button warning" type="button">Rewrite</button>
+
+        <div id="rawSection" class="sd-review-raw-section">
+          <button id="rawToggleButton" class="sd-review-raw-toggle" type="button" aria-expanded="true" aria-controls="rawBody">
+            <span>Raw Transcript</span>
+            <span class="sd-review-raw-toggle__chevron" aria-hidden="true">▲</span>
+          </button>
+          <div id="rawBody" class="sd-review-raw-body">
+            <p id="rawText" class="raw">No transcript yet.</p>
+            <div class="sd-review-audio-player" aria-hidden="true" title="Original recording (playback not yet available)">
+              <span class="sd-review-audio-player__wave">
+                <svg viewBox="0 0 72 18" preserveAspectRatio="none">
+                  <path d="M1 9h2M6 5h2v8H6zM11 7h2v4h-2zM16 3h2v12h-2zM21 8h2v2h-2zM26 5h2v8h-2zM31 2h2v14h-2zM36 7h2v4h-2zM41 4h2v10h-2zM46 8h2v2h-2zM51 6h2v6h-2zM56 3h2v12h-2zM61 8h2v2h-2zM66 5h2v8h-2z" fill="currentColor"/>
+                </svg>
+              </span>
+              <span id="rawDuration" class="sd-review-audio-player__duration">00:00</span>
+              <span class="sd-review-audio-player__play">
+                <svg viewBox="0 0 10 10"><path d="M1 0.5l8 4.5-8 4.5z" fill="currentColor"/></svg>
+              </span>
+            </div>
+          </div>
         </div>
+
+        <div class="sd-review-meta-strip">
+          <div class="sd-review-meta-cell">
+            <span class="sd-review-meta-cell__label">Destination</span>
+            <span id="reviewDestinationValue" class="sd-review-meta-cell__value">Discord</span>
+            <span id="reviewDestinationSub" class="sd-review-meta-cell__sub">#general</span>
+          </div>
+          <div class="sd-review-meta-cell">
+            <span class="sd-review-meta-cell__label">Persona</span>
+            <span id="reviewPersonaValue" class="sd-review-meta-cell__value">Natural</span>
+            <span id="reviewPersonaSub" class="sd-review-meta-cell__sub">Conversational, clear, friendly</span>
+          </div>
+          <div class="sd-review-meta-cell sd-review-meta-cell--confidence">
+            <span class="sd-review-meta-cell__label">Confidence</span>
+            <span id="reviewConfidenceValue" class="sd-review-meta-cell__value">—</span>
+            <div class="sd-confidence-bar"><div id="reviewConfidenceBarFill" class="sd-confidence-bar__fill" style="width: 0%;"></div></div>
+          </div>
+        </div>
+
+        <!-- `open` by default: review-overlay.spec.js asserts #instructButton
+             (inside this disclosure) is visible unconditionally, so this must
+             not start collapsed -- see CURRENT_UI_INVENTORY.md §12.2's
+             "instruct row" preservation requirement. -->
+        <details class="sd-advanced" open>
+          <summary>
+            <span>Revise options</span>
+            <span class="sd-advanced__chevron" aria-hidden="true">▾</span>
+          </summary>
+          <div class="sd-advanced__body">
+            <div class="sd-review-secondary-row" style="display:flex; align-items:center; gap: var(--sd-space-8); flex-wrap: wrap;">
+              <select id="rewritePreset" class="sd-review-select" aria-label="Rewrite style">
+                <option value="clearer">Clearer</option>
+                <option value="shorter">Shorter</option>
+                <option value="tone">Tone</option>
+              </select>
+              <button id="instructButton" class="sd-btn" type="button">Instruct</button>
+            </div>
+            <div id="instructionRow" class="instruction-row hidden">
+              <textarea id="instructionText" placeholder="Record or type what you want changed."></textarea>
+              <button id="runInstructionButton" class="sd-btn" type="button">Rewrite</button>
+            </div>
+          </div>
+        </details>
       </main>
 
-      <footer>
-        <div class="actions">
-          <button id="acceptButton" class="button primary" type="button">Accept</button>
-          <select id="rewritePreset" class="button rewrite-preset" aria-label="Rewrite style">
-            <option value="clearer">Clearer</option>
-            <option value="shorter">Shorter</option>
-            <option value="tone">Tone</option>
-          </select>
-          <button id="changeButton" class="button" type="button">Rewrite</button>
-          <button id="instructButton" class="button" type="button">Instruct</button>
-          <button id="readButton" class="button" type="button">Read</button>
-          <button id="cancelButton" class="button danger" type="button">Cancel</button>
+      <footer class="sd-review-footer">
+        <div class="sd-actions-row">
+          <button id="readButton" class="sd-btn" type="button">Read</button>
+          <button id="changeButton" class="sd-btn" type="button">Revise</button>
+          <button id="cancelButton" class="sd-btn sd-review-cancel-btn" type="button">Cancel</button>
+          <div class="sd-btn-split">
+            <button id="acceptButton" class="sd-btn sd-btn--primary" type="button">
+              <span aria-hidden="true">➤</span> Insert Message
+            </button>
+            <button id="acceptChevronButton" class="sd-btn-split__chevron" type="button" aria-label="Insert Message" tabindex="-1">▾</button>
+          </div>
         </div>
         <div id="message" class="message" role="status" aria-live="polite"></div>
       </footer>
@@ -332,6 +165,19 @@
          forbids inline script execution. Runs after the module above in
          document order, so window.__formatDraftSummary is already set. -->
     <script type="module">
+      import {
+        mapDraftStatusToOverlayState,
+        overlayStateLabelFor,
+        overlayStateDefaultTone,
+        reviewReasonText,
+        defaultSendActionFor,
+        formatClockDuration,
+      } from './lib/reviewOverlayStatus.mjs';
+      // Reuses the SAME confidence->band/percent/CSS-var pure helpers the
+      // Talk workspace's Refined Message card uses (SPEC 2's "color encodes
+      // STATUS" rule), rather than re-deriving the mapping here.
+      import { mapConfidenceBand, formatConfidencePercent, confidenceBandToCssVar } from './features/talkWorkspace.js';
+
       // Phase 3c: no token/origin in the renderer — backend calls go through
       // the main-process proxy. BACKEND_ORIGIN is only used to build/strip the
       // request path; the real origin lives in main.
@@ -341,9 +187,18 @@
       }
       const statusEl = document.getElementById('status');
       const rawTextEl = document.getElementById('rawText');
+      const rawSectionEl = document.getElementById('rawSection');
+      const rawToggleButton = document.getElementById('rawToggleButton');
+      const rawDurationEl = document.getElementById('rawDuration');
       const finalTextEl = document.getElementById('finalText');
       const draftSummaryEl = document.getElementById('draftSummary');
       const messageEl = document.getElementById('message');
+      const reviewDestinationValueEl = document.getElementById('reviewDestinationValue');
+      const reviewDestinationSubEl = document.getElementById('reviewDestinationSub');
+      const reviewPersonaValueEl = document.getElementById('reviewPersonaValue');
+      const reviewPersonaSubEl = document.getElementById('reviewPersonaSub');
+      const reviewConfidenceValueEl = document.getElementById('reviewConfidenceValue');
+      const reviewConfidenceBarFillEl = document.getElementById('reviewConfidenceBarFill');
 
       // Draft word/length summary (Phase 8). Computed live from the textarea so
       // the count stays accurate while the user edits. Falls back to a bare word
@@ -363,6 +218,7 @@
       const instructionRow = document.getElementById('instructionRow');
       const instructionTextEl = document.getElementById('instructionText');
       const acceptButton = document.getElementById('acceptButton');
+      const acceptChevronButton = document.getElementById('acceptChevronButton');
       const changeButton = document.getElementById('changeButton');
       const rewritePresetEl = document.getElementById('rewritePreset');
       const instructButton = document.getElementById('instructButton');
@@ -388,50 +244,23 @@
         currentState = state;
         const statusBadge = document.getElementById('statusBadge');
         if (!statusBadge) return;
-        
+
         statusBadge.className = `status-badge state-${state}`;
-        
-        const labels = {
-          'pending': 'Draft Pending',
-          'rewriting': 'Rewriting',
-          'rewritten': 'Rewritten',
-          'speaking': 'Speaking',
-          'accepted': 'Accepted',
-          'sent': 'Sent',
-          'copied': 'Copied Fallback',
-          'declined': 'Declined',
-          'error': 'Error',
-          'interrupted': 'Send Interrupted',
-          'stopped': 'Stopped',
-          'confirm': 'Confirm?'
-        };
-        
-        statusBadge.textContent = labels[state] || state;
-        
-        // Update Read button text and styling based on speaking state
+        statusBadge.textContent = overlayStateLabelFor(state);
+
+        // Update Read button text/styling based on speaking state. Text stays
+        // literally "Read"/"Stop" (not "Listen") -- review-overlay.spec.js
+        // asserts on those exact words.
         if (state === 'speaking') {
           readButton.textContent = 'Stop';
-          readButton.style.borderColor = 'rgba(255, 124, 135, 0.5)';
-          readButton.style.backgroundColor = 'rgba(255, 124, 135, 0.13)';
+          readButton.classList.add('is-speaking');
         } else {
           readButton.textContent = 'Read';
-          readButton.style.borderColor = '';
-          readButton.style.backgroundColor = '';
+          readButton.classList.remove('is-speaking');
         }
-        
+
         if (customMessage) {
-          let messageTone = tone;
-          if (!messageTone) {
-            if (state === 'error' || state === 'stopped') {
-              messageTone = 'danger';
-            } else if (state === 'rewriting' || state === 'interrupted') {
-              messageTone = 'warning';
-            } else if (state === 'sent' || state === 'rewritten' || state === 'accepted' || state === 'copied') {
-              messageTone = 'success';
-            } else {
-              messageTone = '';
-            }
-          }
+          const messageTone = tone || overlayStateDefaultTone(state);
           setMessage(customMessage, messageTone);
         }
       }
@@ -444,7 +273,6 @@
           if (status.ok) {
             ttsBadge.textContent = `TTS: ${status.backend}`;
             ttsBadge.className = 'tts-backend-badge success';
-            ttsBadge.style.borderColor = 'rgba(102, 242, 193, 0.4)';
             ttsBadge.title = status.message || '';
           } else {
             // TTS (read-aloud) is an optional feature — an unavailable backend is
@@ -453,7 +281,6 @@
             const hardError = Boolean(status.libsndfile_missing);
             ttsBadge.textContent = `TTS: ${status.backend}`;
             ttsBadge.className = `tts-backend-badge ${hardError ? 'danger' : 'warning'}`;
-            ttsBadge.style.borderColor = hardError ? 'rgba(255, 124, 135, 0.4)' : 'rgba(255, 200, 107, 0.4)';
             ttsBadge.title = status.message || '';
             if (hardError) {
               setOverlayState('error', status.message);
@@ -462,7 +289,6 @@
         } catch (error) {
           ttsBadge.textContent = 'TTS: unavailable';
           ttsBadge.className = 'tts-backend-badge warning';
-          ttsBadge.style.borderColor = 'rgba(255, 200, 107, 0.4)';
           ttsBadge.title = `Failed to fetch TTS status: ${error.message}`;
         }
       }
@@ -543,15 +369,45 @@
       }
 
       function defaultSendAction() {
-        if (!outputSettings?.capabilities?.supports_input_injection) {
-          return 'copy_only';
-        }
-        return outputSettings?.send_mode === 'auto_send' ? 'open_chat_then_send' : 'paste';
+        return defaultSendActionFor(outputSettings);
       }
 
       async function refreshOutputSettings() {
         outputSettings = await fetchJson(`${BACKEND_ORIGIN}/runtime/output-settings`, {}, 4000);
         return outputSettings;
+      }
+
+      // DESTINATION / PERSONA / CONFIDENCE meta strip (SPEC 7). Confidence is
+      // real data (draft.confidence.score, same field Talk's Refined Message
+      // card reads). Persona/destination fields don't exist on draft objects
+      // yet (see talkWorkspace.js's identical TODO(phase-integration) note) --
+      // forward-compat field probe; when absent, the placeholder already in
+      // the markup is left alone rather than blanked.
+      function renderMetaStrip(draft) {
+        const personaName = draft?.persona_name || draft?.persona?.name;
+        if (personaName && reviewPersonaValueEl) reviewPersonaValueEl.textContent = personaName;
+        const personaDesc = draft?.persona_description || draft?.persona?.description;
+        if (personaDesc && reviewPersonaSubEl) reviewPersonaSubEl.textContent = personaDesc;
+
+        const destinationName = draft?.destination_name || draft?.destination?.name;
+        if (destinationName && reviewDestinationValueEl) reviewDestinationValueEl.textContent = destinationName;
+        const destinationSub = draft?.destination_channel || draft?.destination?.channel;
+        if (destinationSub && reviewDestinationSubEl) reviewDestinationSubEl.textContent = destinationSub;
+
+        const score = draft?.confidence?.score;
+        const pct = formatConfidencePercent(score);
+        const band = pct === null ? null : mapConfidenceBand(score, draft?.status);
+        if (reviewConfidenceValueEl) reviewConfidenceValueEl.textContent = pct === null ? '—' : `${pct}%`;
+        if (reviewConfidenceBarFillEl) {
+          reviewConfidenceBarFillEl.style.width = pct === null ? '0%' : `${pct}%`;
+          const cssVar = confidenceBandToCssVar(band || 'high');
+          reviewConfidenceBarFillEl.style.setProperty('--sd-confidence-color', cssVar);
+          reviewConfidenceValueEl?.style?.setProperty('--sd-confidence-color', cssVar);
+        }
+
+        if (rawDurationEl) {
+          rawDurationEl.textContent = formatClockDuration(draft?.metadata?.duration_seconds);
+        }
       }
 
       function renderDraft(draft) {
@@ -561,23 +417,14 @@
         rawTextEl.textContent = draft?.raw_text || 'No transcript yet.';
         finalTextEl.value = draft?.final_text || '';
         updateDraftSummary();
+        renderMetaStrip(draft);
 
-        const stateMap = {
-          'pending': 'pending',
-          'accepted': 'accepted',
-          'declined': 'declined',
-          'sent': 'sent',
-          'send_error': 'error',
-          'send_interrupted': 'interrupted',
-          'error': 'error'
-        };
-
-        let targetState = stateMap[status] || 'pending';
+        let targetState = mapDraftStatusToOverlayState(status);
         if (targetState === 'sent' && draft?.send_result?.fallback) {
           targetState = 'copied';
         }
         setOverlayState(targetState);
-        
+
         if (draft?.error) {
           setMessage(draft.error, 'danger');
         } else {
@@ -601,19 +448,6 @@
         }
       }
 
-      // Confidence-gated send policy (Phase 12): friendly text for why an
-      // auto-send was withheld and the draft must be sent manually.
-      function reviewReasonText(reason) {
-        switch (reason) {
-          case 'low_confidence': return 'low confidence';
-          case 'confidence_missing': return 'confidence unknown';
-          case 'confidence_moderate': return 'confidence not high enough';
-          case 'long_draft': return 'long draft';
-          case 'audio_gate': return 'audio check';
-          default: return '';
-        }
-      }
-
       async function acceptDraft() {
         if (!currentDraft?.id) return;
         stopTtsIfSpeaking();
@@ -630,7 +464,7 @@
             const action = defaultSendAction();
             const sentDraft = await sendDraftTyped(currentDraft.id, action, 120000);
             renderDraft(sentDraft);
-            
+
             const isFallback = Boolean(sentDraft.send_result?.fallback);
             if (sentDraft.send_result?.ok) {
               setOverlayState(isFallback ? 'copied' : 'sent', sentDraft.send_result?.message || 'Sent.');
@@ -706,15 +540,15 @@
           await saveEdit();
           const voiceId = outputSettings?.review_tts_voice_hint || 'standard_female';
           const speed = parseFloat(outputSettings?.review_tts_speed || '1.0');
-          
+
           setOverlayState('speaking', 'Speaking...');
-          
+
           const result = await postJson(`${BACKEND_ORIGIN}/drafts/${currentDraft.id}/tts`, {
             text: finalTextEl.value,
             voice_id: voiceId,
             speed: speed
           }, 120000);
-          
+
           if (result?.ok === false) {
             setOverlayState('error', result?.message || 'Read failed.');
           }
@@ -763,6 +597,11 @@
       });
 
       acceptButton.addEventListener('click', acceptDraft);
+      // Decorative split-button chevron (SPEC 7's "Insert Message" green
+      // split-button) -- no send-variant picker exists yet (unlike Talk's
+      // Send/Insert/Copy segmented control), so the chevron just re-triggers
+      // the same accept action rather than being a dead click target.
+      acceptChevronButton.addEventListener('click', acceptDraft);
       changeButton.addEventListener('click', () => rewriteDraft(rewritePresetEl?.value || 'clearer'));
       instructButton.addEventListener('click', () => {
         instructionRow.classList.toggle('hidden');
@@ -793,6 +632,15 @@
       closeButton.addEventListener('click', () => {
         stopTtsIfSpeaking();
         window.betterFingersReview?.hide?.();
+      });
+
+      // Raw Transcript collapse toggle (SPEC 7: "RAW TRANSCRIPT (collapsible
+      // ▲)") -- presentation-only progressive disclosure; #rawText's content
+      // and update logic are unchanged, this only shows/hides it. Starts
+      // expanded (matching the original always-visible behavior).
+      rawToggleButton.addEventListener('click', () => {
+        const collapsed = rawSectionEl.classList.toggle('is-collapsed');
+        rawToggleButton.setAttribute('aria-expanded', String(!collapsed));
       });
 
       // Escape dismisses the review overlay (non-destructive: hides, doesn't decline).
