@@ -1,9 +1,10 @@
 """On Linux/macOS the `keyboard` library requires root ("You must be root to
-use this library on linux") and must never be invoked. This covers the two
+use this library on linux") and must never be invoked. This covers the
 paths that used to call into it on non-Windows: the Ctrl+V paste hotkey
-(_send_paste_hotkey, reached via the paste fallback _paste_raw) and streaming
-delta typing (type_live_delta) -- plus _paste_raw's own except-block fallback,
-which used to be the exact source of the observed
+(_send_paste_hotkey, reached via the paste fallback _paste_raw), streaming
+delta typing (type_live_delta), and single-key presses (_press_key, used by
+open_chat/close_chat/auto-submit's Enter) -- plus _paste_raw's own
+except-block fallback, which used to be the exact source of the observed
 "Fallback typing failed: You must be root to use this library on linux." log
 line right after "Paste injection failed (...); falling back to instant type."
 
@@ -87,6 +88,97 @@ class SendPasteHotkeyLinuxTests(unittest.TestCase):
             inj._send_paste_hotkey()  # must not raise
         keyboard_mock.press_and_release.assert_not_called()
         self.assertTrue(any("clipboard" in m.lower() for m in logs.output))
+
+
+class PressKeyLinuxTests(unittest.TestCase):
+    """_press_key on non-Windows must route through the external tool, never
+    `keyboard.press_and_release`."""
+
+    def setUp(self):
+        p = patch.object(injector_mod, "IS_WINDOWS", False)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_xdotool_sends_key_via_tool(self):
+        inj = _make_injector("xdotool")
+        with patch("injector._run_type_tool", return_value=True) as run_tool, patch.object(
+            injector_mod, "keyboard"
+        ) as keyboard_mock:
+            inj._press_key("enter")
+        run_tool.assert_called_once()
+        (argv,) = run_tool.call_args.args
+        self.assertEqual(argv, ["xdotool", "key", "--clearmodifiers", "Return"])
+        keyboard_mock.press_and_release.assert_not_called()
+
+    def test_wtype_sends_key_via_tool(self):
+        inj = _make_injector("wtype")
+        with patch("injector._run_type_tool", return_value=True) as run_tool, patch.object(
+            injector_mod, "keyboard"
+        ) as keyboard_mock:
+            inj._press_key("esc")
+        (argv,) = run_tool.call_args.args
+        self.assertEqual(argv, ["wtype", "-k", "Escape"])
+        keyboard_mock.press_and_release.assert_not_called()
+
+    def test_wtype_sends_modifier_combo_via_hold_release_flags(self):
+        inj = _make_injector("wtype")
+        with patch("injector._run_type_tool", return_value=True) as run_tool, patch.object(
+            injector_mod, "keyboard"
+        ) as keyboard_mock:
+            inj._press_key("ctrl+alt+r")
+        (argv,) = run_tool.call_args.args
+        self.assertEqual(argv, ["wtype", "-M", "ctrl", "-M", "alt", "-k", "r", "-m", "alt", "-m", "ctrl"])
+        keyboard_mock.press_and_release.assert_not_called()
+
+    def test_ydotool_sends_key_via_keycodes(self):
+        inj = _make_injector("ydotool")
+        with patch("injector._run_type_tool", return_value=True) as run_tool, patch.object(
+            injector_mod, "keyboard"
+        ) as keyboard_mock:
+            inj._press_key("f10")
+        (argv,) = run_tool.call_args.args
+        self.assertEqual(argv, ["ydotool", "key", "68:1", "68:0"])
+        keyboard_mock.press_and_release.assert_not_called()
+
+    def test_ydotool_unmapped_key_degrades_without_keyboard(self):
+        inj = _make_injector("ydotool")
+        with patch("injector._run_type_tool") as run_tool, patch.object(
+            injector_mod, "keyboard"
+        ) as keyboard_mock, self.assertLogs(level="WARNING") as logs:
+            inj._press_key("f13")  # not in the modest ydotool keycode table
+        run_tool.assert_not_called()
+        keyboard_mock.press_and_release.assert_not_called()
+        self.assertTrue(any("input-injection tool" in m.lower() for m in logs.output))
+
+    def test_no_tool_available_degrades_without_keyboard(self):
+        inj = _make_injector("paste")
+        with patch.object(injector_mod, "keyboard") as keyboard_mock, self.assertLogs(
+            level="WARNING"
+        ) as logs:
+            inj._press_key("enter")  # must not raise
+        keyboard_mock.press_and_release.assert_not_called()
+        self.assertTrue(any("input-injection tool" in m.lower() for m in logs.output))
+
+    def test_tool_failure_degrades_honestly_without_keyboard(self):
+        inj = _make_injector("xdotool")
+        with patch("injector._run_type_tool", return_value=False), patch.object(
+            injector_mod, "keyboard"
+        ) as keyboard_mock, self.assertLogs(level="WARNING") as logs:
+            inj._press_key("enter")  # must not raise
+        keyboard_mock.press_and_release.assert_not_called()
+        self.assertTrue(any("input-injection tool" in m.lower() for m in logs.output))
+
+
+class PressKeyWindowsTests(unittest.TestCase):
+    def test_windows_still_uses_pydirectinput_press(self):
+        with patch.object(injector_mod, "IS_WINDOWS", True):
+            inj = _make_injector("pydirectinput")
+            with patch.object(injector_mod, "keyboard") as keyboard_mock, patch.object(
+                injector_mod, "pydirectinput"
+            ) as pdi_mock:
+                inj._press_key("enter")
+            pdi_mock.press.assert_called_once_with("enter")
+            keyboard_mock.press_and_release.assert_not_called()
 
 
 class TypeLiveDeltaTests(unittest.TestCase):
