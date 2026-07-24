@@ -1287,3 +1287,747 @@
   background: var(--sd-green-bright);
   border-color: var(--sd-green-bright);
 }
+
+/* ==========================================================================
+   LIBRARY workspace components (SPEC 5)
+   Phase 3: features/libraryWorkspace.js binds this markup to fetchDrafts /
+   searchHistory / fetchRecordings (+retranscribe/delete/clear) and the
+   drafts.js action set. See docs/ui/CURRENT_UI_INVENTORY.md 6.3/6.4/6.6/6.7/9
+   for the preservation targets this workspace must surface (mapped in that
+   file's header comment).
+   ========================================================================== */
+
+/* --- Search bar + filter-sliders button ------------------------------------ */
+
+.sd-library-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-12);
+}
+
+.sd-library-search {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.sd-library-search__icon {
+  position: absolute;
+  left: var(--sd-space-16);
+  width: 18px;
+  height: 18px;
+  color: var(--sd-text-muted);
+  pointer-events: none;
+}
+
+.sd-library-search__input {
+  width: 100%;
+  padding: 12px var(--sd-space-16) 12px 44px;
+  border-radius: var(--sd-radius-pill);
+  border: 1px solid var(--sd-border);
+  background: var(--sd-surface-raised);
+  color: var(--sd-text-primary);
+  font-family: inherit;
+  font-size: var(--sd-font-body);
+}
+
+.sd-library-search__input::placeholder {
+  color: var(--sd-text-muted);
+}
+
+.sd-library-search__input:focus {
+  outline: none;
+  border-color: var(--sd-border-hover);
+}
+
+.sd-library-filter-btn {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--sd-radius-pill);
+  border: 1px solid var(--sd-border);
+  background: var(--sd-surface-raised);
+  color: var(--sd-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.sd-library-filter-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.sd-library-filter-btn:hover {
+  border-color: var(--sd-border-hover);
+  color: var(--sd-text-primary);
+}
+
+/* --- Filter chip row -------------------------------------------------------- */
+
+.sd-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sd-space-8);
+}
+
+.sd-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: var(--sd-radius-pill);
+  border: 1px solid var(--sd-border);
+  background: var(--sd-surface-raised);
+  color: var(--sd-text-secondary);
+  font-size: var(--sd-font-sm);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.sd-filter-chip svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sd-filter-chip:hover {
+  border-color: var(--sd-border-hover);
+  color: var(--sd-text-primary);
+}
+
+/* "All" active = solid blue fill (SPEC 5). Other chips toggle the same
+   active look when selected, except --recoverable which carries its amber
+   tint at rest (see below) per the mockup. */
+.sd-filter-chip.is-active {
+  background: var(--sd-blue);
+  border-color: var(--sd-blue);
+  color: #0A1120;
+  font-weight: 600;
+}
+
+.sd-filter-chip--sent svg {
+  color: var(--sd-green);
+}
+
+/* "Recoverable" is the one filter chip that's amber-tinted at rest in the
+   mockup (not just on hover/active) -- it visually pre-announces the
+   semantic color of what it filters for. */
+.sd-filter-chip--recoverable {
+  border-color: rgba(245, 158, 11, 0.4);
+  color: var(--sd-amber);
+}
+
+.sd-filter-chip--recoverable svg {
+  color: var(--sd-amber);
+}
+
+.sd-filter-chip--recoverable.is-active {
+  background: rgba(245, 158, 11, 0.18);
+  border-color: var(--sd-amber);
+  color: var(--sd-amber);
+}
+
+.sd-filter-chip--dropdown {
+  color: var(--sd-text-primary);
+}
+
+.sd-filter-chip__chevron {
+  color: var(--sd-text-muted);
+  font-size: 10px;
+}
+
+/* --- Timeline (day-grouped list, left gutter + connecting line) ------------ */
+
+.sd-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-20);
+}
+
+.sd-timeline__day-label {
+  font-size: var(--sd-font-label);
+  letter-spacing: var(--sd-label-letter-spacing);
+  text-transform: uppercase;
+  color: var(--sd-text-muted);
+  margin: 0 0 var(--sd-space-12) 80px;
+}
+
+.sd-timeline__rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.sd-timeline__row {
+  display: flex;
+  gap: var(--sd-space-16);
+  padding-bottom: var(--sd-space-16);
+}
+
+.sd-timeline__gutter {
+  position: relative;
+  width: 64px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sd-space-8);
+  padding-top: 2px;
+}
+
+.sd-timeline__time {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-secondary);
+  white-space: nowrap;
+  text-align: center;
+}
+
+.sd-timeline__glyph {
+  position: relative;
+  z-index: 1;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--sd-surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--sd-text-muted);
+}
+
+.sd-timeline__glyph svg {
+  width: 16px;
+  height: 16px;
+}
+
+.sd-timeline__glyph--pin {
+  color: var(--sd-amber);
+}
+
+.sd-timeline__glyph--sent {
+  color: var(--sd-blue-light);
+}
+
+.sd-timeline__glyph--warn {
+  color: var(--sd-amber);
+}
+
+.sd-timeline__glyph--draft {
+  color: var(--sd-text-muted);
+}
+
+.sd-timeline__glyph--draft svg {
+  fill: none;
+}
+
+/* Connecting line: a single hairline running from just under one row's
+   glyph down into the next row's, so the whole day's rows read as one
+   thread (SPEC 5, "connected by a faint vertical line"). Hidden on the
+   last row of each day group. */
+.sd-timeline__row:not(:last-child) .sd-timeline__gutter::after {
+  content: '';
+  position: absolute;
+  top: 30px;
+  bottom: calc(var(--sd-space-16) * -1 + 2px);
+  left: 50%;
+  width: 1px;
+  background: var(--sd-border-hover);
+}
+
+/* --- Message card ------------------------------------------------------------ */
+
+.sd-message-card {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sd-space-24);
+  background: var(--sd-surface);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-card);
+  padding: var(--sd-space-16) var(--sd-space-20);
+  box-shadow: var(--sd-shadow-card);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  color: inherit;
+}
+
+.sd-message-card:hover {
+  border-color: var(--sd-border-hover);
+}
+
+.sd-message-card.is-selected {
+  border-width: var(--sd-border-selected-width);
+  border-color: var(--sd-blue);
+  box-shadow: var(--sd-shadow-selected);
+}
+
+.sd-message-card__main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-8);
+  min-width: 0;
+  flex: 1;
+}
+
+.sd-message-card__title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--sd-text-primary);
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sd-message-card__pipeline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-muted);
+}
+
+.sd-message-card__pipeline-stage {
+  color: var(--sd-blue-light);
+}
+
+.sd-message-card__pipeline-status {
+  font-weight: 600;
+}
+
+.sd-message-card__pipeline[data-status="sent"] .sd-message-card__pipeline-status {
+  color: var(--sd-green);
+}
+
+.sd-message-card__pipeline[data-status="recoverable"] .sd-message-card__pipeline-status,
+.sd-message-card__pipeline[data-status="failed"] .sd-message-card__pipeline-status {
+  color: var(--sd-amber);
+}
+
+.sd-message-card__pipeline[data-status="unsent"] .sd-message-card__pipeline-status,
+.sd-message-card__pipeline[data-status="draft"] .sd-message-card__pipeline-status {
+  color: var(--sd-text-secondary);
+  font-weight: 500;
+}
+
+.sd-message-card__chips {
+  display: flex;
+  gap: var(--sd-space-8);
+  flex-wrap: wrap;
+}
+
+/* Library's persona chip reads as the same "select blue" link color for
+   every persona in the mockup (unlike Studio's persona-tinted waveform
+   signatures) -- see libraryWorkspace.js header note on this deliberate
+   deviation from the SPEC 2 persona-color table. */
+.sd-chip--persona {
+  color: var(--sd-blue-light);
+  border-color: rgba(59, 130, 246, 0.3);
+}
+
+.sd-chip--destination-discord {
+  color: #A5B4FC;
+  border-color: rgba(88, 101, 242, 0.4);
+  background: rgba(88, 101, 242, 0.12);
+}
+
+.sd-message-card__meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--sd-space-8);
+  flex-shrink: 0;
+}
+
+.sd-message-card__confidence {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  width: 140px;
+}
+
+.sd-message-card__confidence-label {
+  font-size: var(--sd-font-label);
+  letter-spacing: var(--sd-label-letter-spacing);
+  text-transform: uppercase;
+  color: var(--sd-text-muted);
+}
+
+.sd-message-card__confidence-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--sd-confidence-color, var(--sd-confidence-high));
+}
+
+.sd-message-card__waveform {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+  padding-left: var(--sd-space-16);
+  border-left: 1px solid var(--sd-border);
+  color: var(--sd-confidence-color, var(--sd-confidence-high));
+}
+
+.sd-message-card__waveform svg {
+  width: 120px;
+  height: 26px;
+  display: block;
+}
+
+.sd-message-card__duration {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+  white-space: nowrap;
+}
+
+.sd-message-card__status {
+  font-size: var(--sd-font-xs);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.sd-message-card__status--sent {
+  color: var(--sd-green);
+}
+
+.sd-message-card__status--failed {
+  color: var(--sd-amber);
+}
+
+.sd-message-card__status--draft {
+  color: var(--sd-text-muted);
+}
+
+/* --- Library footer (item count + Load more) -------------------------------- */
+
+.sd-library-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: var(--sd-space-8);
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-muted);
+}
+
+.sd-library-footer__load-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  color: var(--sd-text-secondary);
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+}
+
+.sd-library-footer__load-more:hover {
+  color: var(--sd-text-primary);
+}
+
+/* ==========================================================================
+   LIBRARY context panel content ("SELECTED ITEM", SPEC 5)
+   Shares .sd-context__section / .sd-dropdown / .sd-help with the Talk panel;
+   the shell only shows one .sd-context__content block at a time, keyed off
+   .sd-shell[data-workspace] (see the [data-context-for] rule below plus the
+   preview page's inline goTo()).
+   ========================================================================== */
+
+.sd-context__content[data-context-for] {
+  display: none;
+  flex-direction: column;
+  gap: var(--sd-space-24);
+}
+
+.sd-context__content[data-context-for].is-active-context {
+  display: flex;
+}
+
+.sd-selected-item__header {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sd-selected-item__pin-btn {
+  background: none;
+  border: none;
+  color: var(--sd-text-muted);
+  cursor: pointer;
+  padding: var(--sd-space-4);
+  display: flex;
+}
+
+.sd-selected-item__pin-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.sd-selected-item__pin-btn:hover,
+.sd-selected-item__pin-btn[aria-pressed="true"] {
+  color: var(--sd-amber);
+}
+
+.sd-transcript-box {
+  background: var(--sd-surface-inset);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-card);
+  padding: var(--sd-space-12);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-8);
+}
+
+.sd-transcript-box p {
+  margin: 0;
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+  line-height: 1.5;
+}
+
+.sd-transcript-box--refined p {
+  color: var(--sd-text-primary);
+}
+
+.sd-transcript-box__meta {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+}
+
+.sd-transcript-box__meta strong {
+  color: var(--sd-green);
+  font-weight: 600;
+}
+
+.sd-status-card {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-12);
+  padding: var(--sd-space-12);
+  border-radius: var(--sd-radius-pill);
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.sd-status-card__icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(34, 197, 94, 0.16);
+  color: var(--sd-green);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.sd-status-card__icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sd-status-card__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sd-status-card__title {
+  color: var(--sd-green);
+  font-weight: 600;
+  font-size: var(--sd-font-body);
+}
+
+.sd-status-card__time {
+  color: var(--sd-text-muted);
+  font-size: var(--sd-font-xs);
+}
+
+.sd-status-card--failed {
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.sd-status-card--failed .sd-status-card__icon {
+  background: rgba(245, 158, 11, 0.16);
+  color: var(--sd-amber);
+}
+
+.sd-status-card--failed .sd-status-card__title {
+  color: var(--sd-amber);
+}
+
+.sd-status-card--draft {
+  background: var(--sd-surface-raised);
+  border-color: var(--sd-border);
+}
+
+.sd-status-card--draft .sd-status-card__icon {
+  background: var(--sd-surface-inset);
+  color: var(--sd-text-secondary);
+}
+
+.sd-status-card--draft .sd-status-card__title {
+  color: var(--sd-text-secondary);
+}
+
+.sd-audio-player {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-12);
+  padding: var(--sd-space-8) var(--sd-space-12);
+  border-radius: var(--sd-radius-pill);
+  background: var(--sd-surface-inset);
+  border: 1px solid var(--sd-border);
+}
+
+.sd-audio-player__icon {
+  width: 16px;
+  height: 16px;
+  color: var(--sd-cyan);
+  flex-shrink: 0;
+}
+
+.sd-audio-player__duration {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-secondary);
+  flex-shrink: 0;
+}
+
+.sd-audio-player__wave {
+  flex: 1;
+  min-width: 0;
+  height: 20px;
+  color: var(--sd-cyan);
+}
+
+.sd-audio-player__wave svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.sd-audio-player__play {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--sd-border-hover);
+  background: transparent;
+  color: var(--sd-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.sd-audio-player__play svg {
+  width: 13px;
+  height: 13px;
+}
+
+.sd-audio-player__play:hover {
+  color: var(--sd-text-primary);
+  border-color: var(--sd-cyan);
+}
+
+.sd-actions-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sd-space-8);
+}
+
+.sd-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: var(--sd-space-8);
+  border-radius: var(--sd-radius-pill);
+  border: 1px solid var(--sd-border);
+  background: var(--sd-surface-raised);
+  color: var(--sd-text-secondary);
+  font-size: var(--sd-font-sm);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.sd-action-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.sd-action-btn:hover {
+  border-color: var(--sd-border-hover);
+  color: var(--sd-text-primary);
+}
+
+.sd-action-btn[aria-pressed="true"] {
+  color: var(--sd-amber);
+  border-color: rgba(245, 158, 11, 0.4);
+}
+
+.sd-action-btn--danger {
+  grid-column: 1 / -1;
+  margin-top: var(--sd-space-4);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: var(--sd-red);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.sd-action-btn--danger:hover {
+  background: rgba(239, 68, 68, 0.16);
+  border-color: var(--sd-red);
+}
+
+.sd-restore-resend {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sd-space-8);
+}
+
+.sd-restore-resend__btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: var(--sd-space-8);
+  border-radius: var(--sd-radius-pill);
+  font-size: var(--sd-font-sm);
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.sd-restore-resend__btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sd-restore-resend__btn--restore {
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: var(--sd-amber);
+}
+
+.sd-restore-resend__btn--restore:hover {
+  background: rgba(245, 158, 11, 0.2);
+}
+
+.sd-restore-resend__btn--resend {
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.4);
+  color: var(--sd-green);
+}
+
+.sd-restore-resend__btn--resend:hover {
+  background: rgba(34, 197, 94, 0.2);
+}
