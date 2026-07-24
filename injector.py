@@ -31,15 +31,18 @@ else:
 from utils import load_profile
 
 
-def _run_type_tool(argv, text) -> bool:
+def _run_type_tool(argv, text=None) -> bool:
     """Shell out to an external typing tool (xdotool/wtype/ydotool).
 
     Returns True on success, False if the tool is missing or exits non-zero so
-    the caller can fall back to clipboard paste.
+    the caller can fall back to clipboard paste. `text` is appended as the
+    final argv element when given (typing tools take the payload last); omit
+    it for a fixed-argument command like a hotkey press.
     """
+    full_argv = argv + [text] if text is not None else argv
     try:
         result = subprocess.run(
-            argv + [text],
+            full_argv,
             check=False,
             capture_output=True,
             timeout=30,
@@ -47,17 +50,17 @@ def _run_type_tool(argv, text) -> bool:
         if result.returncode != 0:
             logging.debug(
                 "Type tool %s exited %s: %s",
-                argv[0],
+                full_argv[0],
                 result.returncode,
                 (result.stderr or b"").decode("utf-8", "replace").strip(),
             )
             return False
         return True
     except FileNotFoundError:
-        logging.debug("Type tool not found: %s", argv[0])
+        logging.debug("Type tool not found: %s", full_argv[0])
         return False
     except Exception as exc:
-        logging.debug("Type tool %s failed: %s", argv[0], exc)
+        logging.debug("Type tool %s failed: %s", full_argv[0], exc)
         return False
 
 
@@ -176,6 +179,9 @@ class InputInjector:
             self._paste_raw(text)
             return
 
+        # Windows-only below this point: the `if not IS_WINDOWS` block above
+        # always returns, so this `keyboard.write` is never reached on
+        # Linux/macOS (where `keyboard` requires root and would raise).
         is_instant = bool(self.config.get("instant_typing", False))
 
         if is_instant:
@@ -221,10 +227,21 @@ class InputInjector:
     def type_live_delta(self, delta_text: str):
         if not delta_text:
             return
-        try:
-            keyboard.write(delta_text, delay=0)
-        except Exception as exc:
-            logging.debug(f"Live delta injection failed: {exc}")
+        if IS_WINDOWS:
+            try:
+                keyboard.write(delta_text, delay=0)
+            except Exception as exc:
+                logging.debug(f"Live delta injection failed: {exc}")
+            return
+        # `keyboard` requires root on Linux/macOS, so it can't be used here.
+        # Route the delta through the detected external tool instead; there's
+        # no clipboard-paste equivalent for a streaming delta, so if no tool
+        # is available we just drop it (debug-logged) rather than crash.
+        if not self._type_via_external_tool(delta_text):
+            logging.debug(
+                f"Live delta injection unavailable (no external tool for "
+                f"method '{self.injection_method}'); dropping delta."
+            )
 
     def _send_paste_hotkey(self):
         """Send Ctrl+V using the platform-appropriate mechanism."""
@@ -233,9 +250,35 @@ class InputInjector:
             pydirectinput.press("v")
             pydirectinput.keyUp("ctrl")
             return
-        # On Linux/macOS pydirectinput is stubbed; use the `keyboard` library
-        # which drives the OS input layer directly.
-        keyboard.press_and_release("ctrl+v")
+        # `keyboard` requires root on Linux ("You must be root to use this
+        # library on linux") so, unlike Windows, it can never be used here.
+        # Route Ctrl+V through the detected external tool instead.
+        if not self._send_paste_via_tool():
+            # No tool available (or it failed): _paste_raw already copied the
+            # text to the clipboard via pyperclip before calling us, so the
+            # honest fallback is telling the user to paste it themselves
+            # rather than silently doing nothing.
+            logging.warning(
+                "No input-injection tool available to send Ctrl+V; the "
+                "dictated text is on the clipboard — press Ctrl+V to paste it."
+            )
+
+    def _send_paste_via_tool(self) -> bool:
+        """Send Ctrl+V via the detected external tool. Returns True on success.
+
+        Mirrors `_type_via_external_tool`'s dispatch, but for a single hotkey
+        rather than a text payload — this is what replaces
+        `keyboard.press_and_release("ctrl+v")`, which requires root on Linux.
+        """
+        method = self.injection_method
+        if method == "xdotool":
+            return _run_type_tool(["xdotool", "key", "--clearmodifiers", "ctrl+v"])
+        if method == "wtype":
+            return _run_type_tool(["wtype", "-M", "ctrl", "v", "-m", "ctrl"])
+        if method == "ydotool":
+            # ctrl (keycode 29) down, v (keycode 47) down+up, ctrl up.
+            return _run_type_tool(["ydotool", "key", "29:1", "47:1", "47:0", "29:0"])
+        return False
 
     def _press_key(self, key: str):
         """Press a single key (e.g. enter/esc/chat-open) cross-platform."""
@@ -266,13 +309,34 @@ class InputInjector:
             self._send_paste_hotkey()
         except Exception as exc:
             logging.error(f"Paste injection failed ({exc}); falling back to instant type.")
+            self._fallback_type_after_paste_failure(text)
+            return
+        if restore and prior_clipboard is not None:
+            clipboard_capture.schedule_text_clipboard_restore(prior_clipboard, text)
+
+    def _fallback_type_after_paste_failure(self, text: str):
+        """Last-resort typing when the paste path itself raised an exception.
+
+        Windows keeps using `keyboard.write` here — unchanged behavior. On
+        Linux/macOS `keyboard` requires root (this is what used to produce
+        "Fallback typing failed: You must be root to use this library on
+        linux" right after the paste-hotkey failure above), so route through
+        the detected external tool instead. If none is available, the text is
+        still sitting on the clipboard from the `pyperclip.copy` above, so log
+        a clear hint instead of raising the same root-permission error again.
+        """
+        if IS_WINDOWS:
             try:
                 keyboard.write(text, delay=0)
             except Exception as fallback_exc:
                 logging.error(f"Fallback typing failed: {fallback_exc}")
             return
-        if restore and prior_clipboard is not None:
-            clipboard_capture.schedule_text_clipboard_restore(prior_clipboard, text)
+        if self._type_via_external_tool(text):
+            return
+        logging.warning(
+            "Fallback typing unavailable; the text is on the clipboard — "
+            "press Ctrl+V to paste it manually."
+        )
 
     def paste_text(self, text: str):
         text = self._compose_output_text(text)
