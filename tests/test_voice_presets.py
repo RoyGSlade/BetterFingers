@@ -157,6 +157,102 @@ class VoicePresetsTests(unittest.TestCase):
         leftovers = [f for f in os.listdir(directory) if f != os.path.basename(self._path())]
         self.assertEqual(leftovers, [])
 
+    # --- Default preset ---
+
+    def test_no_default_by_default(self):
+        voice_presets.save_preset("Warm Assistant", base="af_heart")
+        self.assertIsNone(voice_presets.get_default_preset())
+
+    def test_set_default_then_get_round_trips(self):
+        voice_presets.save_preset("Warm Assistant", base="af_heart")
+        self.assertTrue(voice_presets.set_default_preset("Warm Assistant"))
+        self.assertEqual(voice_presets.get_default_preset(), "Warm Assistant")
+
+    def test_set_default_unknown_name_returns_false(self):
+        voice_presets.save_preset("Warm Assistant", base="af_heart")
+        self.assertFalse(voice_presets.set_default_preset("does not exist"))
+        self.assertIsNone(voice_presets.get_default_preset())
+
+    def test_set_default_is_case_insensitive_but_returns_stored_casing(self):
+        voice_presets.save_preset("Warm Assistant", base="af_heart")
+        self.assertTrue(voice_presets.set_default_preset("warm assistant"))
+        # The resolved default reflects the preset's own stored casing, not
+        # whatever casing the caller passed to set_default_preset.
+        self.assertEqual(voice_presets.get_default_preset(), "Warm Assistant")
+
+    def test_clear_default_unsets_it(self):
+        voice_presets.save_preset("Warm Assistant", base="af_heart")
+        voice_presets.set_default_preset("Warm Assistant")
+        voice_presets.clear_default_preset()
+        self.assertIsNone(voice_presets.get_default_preset())
+
+    def test_clear_default_when_unset_is_a_noop(self):
+        voice_presets.save_preset("Warm Assistant", base="af_heart")
+        voice_presets.clear_default_preset()  # must not raise
+        self.assertIsNone(voice_presets.get_default_preset())
+
+    def test_dangling_default_reads_as_none(self):
+        # Hand-edited store pointing at a preset that doesn't exist -- must
+        # not raise or resolve to a bogus name.
+        path = self._path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "schema_version": voice_presets._SCHEMA_VERSION,
+                    "presets": [{"name": "Warm Assistant", "base": "af_heart"}],
+                    "default": "Ghost Preset",
+                },
+                handle,
+            )
+        self.assertIsNone(voice_presets.get_default_preset())
+        # The dangling name is left alone on disk (get_default_preset is a
+        # pure read) -- get_presets still returns the real preset normally.
+        self.assertEqual(len(voice_presets.get_presets()), 1)
+
+    def test_delete_preset_clears_matching_default(self):
+        voice_presets.save_preset("Warm Assistant", base="af_heart")
+        voice_presets.save_preset("Crisp Editor", base="am_puck")
+        voice_presets.set_default_preset("Warm Assistant")
+        voice_presets.delete_preset("warm assistant")
+        self.assertIsNone(voice_presets.get_default_preset())
+        self.assertEqual([p["name"] for p in voice_presets.get_presets()], ["Crisp Editor"])
+
+    def test_delete_preset_leaves_unrelated_default_untouched(self):
+        voice_presets.save_preset("Warm Assistant", base="af_heart")
+        voice_presets.save_preset("Crisp Editor", base="am_puck")
+        voice_presets.set_default_preset("Crisp Editor")
+        voice_presets.delete_preset("warm assistant")
+        self.assertEqual(voice_presets.get_default_preset(), "Crisp Editor")
+
+    def test_save_preset_does_not_disturb_existing_default(self):
+        # Saving/updating an unrelated preset must not clobber the default
+        # pointer -- a naive _save(presets) that always writes default=None
+        # would silently unset the user's choice on every unrelated edit.
+        voice_presets.save_preset("Warm Assistant", base="af_heart")
+        voice_presets.set_default_preset("Warm Assistant")
+        voice_presets.save_preset("Crisp Editor", base="am_puck")
+        self.assertEqual(voice_presets.get_default_preset(), "Warm Assistant")
+        voice_presets.save_preset("Warm Assistant", speed=1.2)  # update, not delete
+        self.assertEqual(voice_presets.get_default_preset(), "Warm Assistant")
+
+    def test_default_key_persists_on_disk(self):
+        voice_presets.save_preset("Warm Assistant", base="af_heart")
+        voice_presets.set_default_preset("Warm Assistant")
+        with open(self._path(), "r", encoding="utf-8") as handle:
+            on_disk = json.load(handle)
+        self.assertEqual(on_disk.get("default"), "Warm Assistant")
+
+    def test_legacy_store_without_default_key_loads_with_no_default(self):
+        path = self._path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"presets": [{"name": "Legacy", "base": "af_heart"}]}, handle)
+        self.assertIsNone(voice_presets.get_default_preset())
+        # And it's still fully functional afterwards.
+        self.assertTrue(voice_presets.set_default_preset("Legacy"))
+        self.assertEqual(voice_presets.get_default_preset(), "Legacy")
+
     def test_future_schema_version_is_never_touched(self):
         path = self._path()
         os.makedirs(os.path.dirname(path), exist_ok=True)

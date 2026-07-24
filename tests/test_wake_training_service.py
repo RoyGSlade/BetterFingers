@@ -112,6 +112,108 @@ class TrainPhraseModelTests(unittest.TestCase):
         self.assertFalse(result["ok"])
 
 
+class _FakeEngine:
+    """Minimal ReviewTTSEngine stand-in: ensure_loaded returns a canned status,
+    _generate_kokoro_audio returns a fixed clip."""
+
+    def __init__(self, status, audio=None, sample_rate=24000):
+        self._status = status
+        self._audio = audio
+        self._sample_rate = sample_rate
+        self.load_calls = 0
+        self.gen_calls = 0
+
+    def ensure_loaded(self, voice_hint="english"):
+        self.load_calls += 1
+        return self._status
+
+    def _generate_kokoro_audio(self, text, speed, voice):
+        self.gen_calls += 1
+        if self._audio is None:
+            return None
+        return (self._audio, self._sample_rate)
+
+
+_READY = {"ok": True, "backend": "kokoro", "fallback": False, "message": ""}
+
+
+class PreflightTrainingTests(unittest.TestCase):
+    """The preflight must return the EXACT blocker before any background work."""
+
+    def _all_backbones(self, status):
+        return patch.object(wake_models, "backbone_status", return_value=status)
+
+    def test_backbone_not_downloaded_blocks(self):
+        with self._all_backbones({"downloaded": False, "verified": False, "loadable": False, "error": "missing"}):
+            result = wts.preflight_training(_FakeEngine(_READY))
+        self.assertFalse(result["ok"])
+        self.assertIn("not", result["message"].lower())
+        self.assertIn("download", result["message"].lower())
+
+    def test_backbone_unverified_blocks_with_reason(self):
+        with self._all_backbones({"downloaded": True, "verified": False, "loadable": False, "error": "digest_mismatch"}):
+            result = wts.preflight_training(_FakeEngine(_READY))
+        self.assertFalse(result["ok"])
+        self.assertIn("digest_mismatch", result["message"])
+
+    def test_backbone_unloadable_blocks_with_reason(self):
+        with self._all_backbones({"downloaded": True, "verified": True, "loadable": False, "error": "onnx boom"}):
+            result = wts.preflight_training(_FakeEngine(_READY))
+        self.assertFalse(result["ok"])
+        self.assertIn("onnx boom", result["message"])
+
+    def test_missing_engine_blocks(self):
+        with self._all_backbones({"downloaded": True, "verified": True, "loadable": True, "error": None}):
+            result = wts.preflight_training(None)
+        self.assertFalse(result["ok"])
+        self.assertIn("tts", result["message"].lower())
+
+    def test_kokoro_not_loaded_blocks_with_its_message(self):
+        status = {"ok": False, "backend": "none", "fallback": False, "message": "Not enough RAM to load the TTS model."}
+        with self._all_backbones({"downloaded": True, "verified": True, "loadable": True, "error": None}):
+            result = wts.preflight_training(_FakeEngine(status))
+        self.assertFalse(result["ok"])
+        self.assertIn("RAM", result["message"])
+
+    def test_sapi_fallback_backend_blocks(self):
+        status = {"ok": True, "backend": "sapi", "fallback": True, "message": "Using Windows SAPI fallback."}
+        with self._all_backbones({"downloaded": True, "verified": True, "loadable": True, "error": None}):
+            result = wts.preflight_training(_FakeEngine(status))
+        self.assertFalse(result["ok"])
+        self.assertIn("kokoro", result["message"].lower())
+
+    def test_all_ready_passes(self):
+        with self._all_backbones({"downloaded": True, "verified": True, "loadable": True, "error": None}):
+            result = wts.preflight_training(_FakeEngine(_READY))
+        self.assertTrue(result["ok"])
+
+
+class KokoroSynthesizeHonestyTests(unittest.TestCase):
+    """kokoro_synthesize must not silently 'succeed' when Kokoro isn't loaded."""
+
+    def test_returns_audio_when_kokoro_ready(self):
+        engine = _FakeEngine(_READY, audio=np.ones(2400, dtype=np.float32), sample_rate=24000)
+        out = wts.kokoro_synthesize(engine)("hey fingers", "af_heart", 1.0)
+        self.assertIsNotNone(out)
+        self.assertGreater(out.size, 0)
+        self.assertEqual(engine.gen_calls, 1)
+
+    def test_does_not_generate_when_load_not_ok(self):
+        status = {"ok": False, "backend": "none", "fallback": False, "message": "boom"}
+        engine = _FakeEngine(status, audio=np.ones(2400, dtype=np.float32))
+        out = wts.kokoro_synthesize(engine)("hey fingers", "af_heart", 1.0)
+        self.assertIsNone(out)
+        # Never even attempted generation on a failed load.
+        self.assertEqual(engine.gen_calls, 0)
+
+    def test_does_not_generate_on_sapi_fallback(self):
+        status = {"ok": True, "backend": "sapi", "fallback": True, "message": "fallback"}
+        engine = _FakeEngine(status, audio=np.ones(2400, dtype=np.float32))
+        out = wts.kokoro_synthesize(engine)("hey fingers", "af_heart", 1.0)
+        self.assertIsNone(out)
+        self.assertEqual(engine.gen_calls, 0)
+
+
 class ResampleTests(unittest.TestCase):
     def test_passthrough_at_16k(self):
         audio = np.ones(1000, dtype=np.float32)

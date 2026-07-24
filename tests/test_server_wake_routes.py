@@ -174,6 +174,43 @@ class WakeRoutesTests(unittest.TestCase):
             r = client.post("/wake/models/not_a_real_model/download")
         self.assertEqual(r.status_code, 400)
 
+    def test_failed_download_is_preserved_in_state(self):
+        # A failing download must leave a queryable record (status=failed +
+        # error), not vanish the instant the thread exits.
+        routes_wake._download_jobs.pop("melspectrogram", None)
+        with patch("wake_models.download_wake_model", side_effect=RuntimeError("network down")):
+            with self._client() as client:
+                r = client.post("/wake/models/melspectrogram/download")
+                self.assertTrue(r.json()["background"])
+                # Poll until the thread finishes and writes its terminal state.
+                deadline = time.time() + 3.0
+                state = None
+                while time.time() < deadline:
+                    state = client.get("/wake/models/melspectrogram/download-state").json()
+                    if not state["active"]:
+                        break
+                    time.sleep(0.02)
+        self.assertFalse(state["active"])
+        self.assertFalse(state["downloaded"])
+        self.assertEqual(state["error"], "network down")
+        with routes_wake._download_jobs_lock:
+            job = routes_wake._download_jobs.get("melspectrogram")
+        self.assertIsNotNone(job)  # not deleted on failure
+        self.assertEqual(job["status"], "failed")
+
+    def test_download_state_reports_truthful_downloaded(self):
+        # download-state's "downloaded" reflects loadability, not mere presence.
+        with patch(
+            "wake_models.backbone_status",
+            return_value={"downloaded": True, "verified": False, "loadable": False, "error": "digest_mismatch"},
+        ):
+            with self._client() as client:
+                state = client.get("/wake/models/melspectrogram/download-state").json()
+        self.assertFalse(state["downloaded"])
+        self.assertTrue(state["present"])
+        self.assertFalse(state["verified"])
+        self.assertEqual(state["error"], "digest_mismatch")
+
     def test_import_model_route_round_trip(self):
         with self._client() as client:
             r = client.post(
@@ -254,6 +291,8 @@ class WakeRoutesTests(unittest.TestCase):
         fake = {"ok": True, "verdict": "reliable", "threshold": 0.5,
                 "model_id": "trained_123", "n_pos": 40, "n_neg": 80}
         with patch.object(server, "ensure_tts_initialized", return_value=object()), patch(
+            "wake_training_service.preflight_training", return_value={"ok": True}
+        ), patch(
             "wake_training_service.train_phrase_model", return_value=fake
         ) as train:
             with self._client() as client:
@@ -264,6 +303,60 @@ class WakeRoutesTests(unittest.TestCase):
         self.assertEqual(body["result"]["model_id"], "trained_123")
         # The phrase reached the trainer (via the background thread).
         self.assertEqual(train.call_args.args[0], "hey fingers")
+
+    def test_train_preflight_failure_returns_reason_without_starting(self):
+        # A failed preflight returns the exact reason immediately and never
+        # flips training into the running state.
+        with patch.object(server, "ensure_tts_initialized", return_value=object()), patch(
+            "wake_training_service.preflight_training",
+            return_value={"ok": False, "message": "Wake backbone not ready: melspectrogram is not downloaded."},
+        ), patch("wake_training_service.train_phrase_model") as train:
+            with self._client() as client:
+                r = client.post("/wake/train", json={"phrase": "hey fingers"})
+        body = r.json()
+        self.assertFalse(body["ok"])
+        self.assertIn("backbone", body["message"].lower())
+        train.assert_not_called()
+        self.assertEqual(routes_wake._training_state["status"], "idle")
+
+    def test_train_threads_user_recordings_to_trainer(self):
+        import base64
+        import io
+        import wave
+
+        import numpy as np
+
+        def _wav_b64(samples):
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as handle:
+                handle.setnchannels(1)
+                handle.setsampwidth(2)
+                handle.setframerate(16000)
+                handle.writeframes((np.asarray(samples) * 32767).astype("<i2").tobytes())
+            return base64.b64encode(buf.getvalue()).decode("ascii")
+
+        positive = _wav_b64(np.ones(1600, dtype=np.float32) * 0.5)
+        fake = {"ok": True, "verdict": "reliable", "model_id": "trained_9"}
+        with patch.object(server, "ensure_tts_initialized", return_value=object()), patch(
+            "wake_training_service.preflight_training", return_value={"ok": True}
+        ), patch("wake_training_service.train_phrase_model", return_value=fake) as train:
+            with self._client() as client:
+                start = client.post(
+                    "/wake/train", json={"phrase": "hey fingers", "positive_clips": [positive]}
+                )
+                self.assertTrue(start.json()["started"])
+                self._await_training_done(client)
+        clips = train.call_args.kwargs["user_positive_clips"]
+        self.assertIsNotNone(clips)
+        self.assertEqual(len(clips), 1)
+        self.assertEqual(int(clips[0].shape[0]), 1600)
+
+    def test_train_bad_recording_is_400(self):
+        with self._client() as client:
+            r = client.post(
+                "/wake/train", json={"phrase": "hey fingers", "positive_clips": ["not-a-wav!!"]}
+            )
+        self.assertEqual(r.status_code, 400)
 
     def test_train_empty_phrase_400(self):
         with self._client() as client:
@@ -281,6 +374,8 @@ class WakeRoutesTests(unittest.TestCase):
     def test_train_failure_surfaces_in_status(self):
         fail = {"ok": False, "message": "Wake backbone not ready."}
         with patch.object(server, "ensure_tts_initialized", return_value=object()), patch(
+            "wake_training_service.preflight_training", return_value={"ok": True}
+        ), patch(
             "wake_training_service.train_phrase_model", return_value=fail
         ):
             with self._client() as client:

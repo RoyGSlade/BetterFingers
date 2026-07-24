@@ -32,8 +32,20 @@ _lock = threading.Lock()
 _listener = None  # wake_word.WakeListener, once enabled
 _status_reason = "disabled"
 
+# Each entry is a state dict, NOT a bare Thread, so a failed download leaves a
+# durable, queryable record instead of vanishing into the server log the moment
+# the thread exits. Shape:
+#   {"thread": Thread|None, "status": "running"|"complete"|"failed",
+#    "error": str|None, "verified": bool}
+# The thread is retained only to answer is_alive(); it is never removed on
+# failure (only replaced when a fresh download for the same id is started).
 _download_jobs = {}
 _download_jobs_lock = threading.Lock()
+
+
+def _download_job_active(job):
+    thread = job.get("thread") if job else None
+    return bool(thread and thread.is_alive())
 
 
 def _profile_config():
@@ -90,6 +102,12 @@ class WakeTestRequest(BaseModel):
 class WakeTrainRequest(BaseModel):
     phrase: str
     voices: Optional[list] = None
+    # The user's own recordings of the phrase (positive) and of other speech
+    # (negative), as base64-encoded 16-bit PCM WAV. These are the anchor of a
+    # good model; Kokoro synthetics only augment them. Optional so a
+    # Kokoro-only run still works, but the UI is expected to supply several.
+    positive_clips: Optional[list] = None
+    negative_clips: Optional[list] = None
 
 
 # Wake-phrase training runs in a background thread (synthetic-sample generation
@@ -203,22 +221,37 @@ def wake_model_download(model_id: str):
 
     with _download_jobs_lock:
         job = _download_jobs.get(model_id)
-        if job and job.is_alive():
+        if _download_job_active(job):
             return {"ok": True, "model_id": model_id, "background": True, "already_running": True}
 
         def run_download():
+            error = None
             try:
                 wake_models.download_wake_model(model_id)
             except Exception as exc:
+                # The phrase is user-agnostic (a model id + failure), so it is
+                # safe to log; keep the detail for the state record too.
                 logging.error(f"Background wake model download failed for {model_id}: {exc}")
-            finally:
-                with _download_jobs_lock:
-                    current = _download_jobs.get(model_id)
-                    if current is threading.current_thread():
-                        _download_jobs.pop(model_id, None)
+                error = str(exc)
+            with _download_jobs_lock:
+                current = _download_jobs.get(model_id)
+                # Only the job we own writes its own terminal state (a newer
+                # download started for the same id supersedes us).
+                if current is not None and current.get("thread") is threading.current_thread():
+                    if error is None:
+                        current["status"] = "complete"
+                        current["error"] = None
+                        # Confirm the just-downloaded file is truthfully usable,
+                        # not merely present (download_wake_model already checks
+                        # the sha, but loadability is what "verified" promises).
+                        current["verified"] = wake_models.backbone_status(model_id).get("loadable", False)
+                    else:
+                        current["status"] = "failed"
+                        current["error"] = error
+                        current["verified"] = False
 
         thread = threading.Thread(target=run_download, name=f"wake-download-{model_id}", daemon=True)
-        _download_jobs[model_id] = thread
+        _download_jobs[model_id] = {"thread": thread, "status": "running", "error": None, "verified": False}
         thread.start()
 
     return {"ok": True, "model_id": model_id, "background": True}
@@ -230,11 +263,31 @@ async def wake_model_download_state(model_id: str):
 
     with _download_jobs_lock:
         job = _download_jobs.get(model_id)
-        active = bool(job and job.is_alive())
-    downloaded = (
-        wake_models.is_backbone_model_downloaded(model_id) if model_id in wake_models.AVAILABLE_WAKE_MODELS else False
-    )
-    return {"model_id": model_id, "active": active, "downloaded": downloaded}
+        active = _download_job_active(job)
+        # A failed download's record survives its thread, so the UI can show
+        # WHY the file isn't there instead of silently reverting to "Download".
+        last_error = job.get("error") if (job and not active) else None
+        last_status = job.get("status") if job else None
+
+    if model_id in wake_models.AVAILABLE_WAKE_MODELS:
+        status = wake_models.backbone_status(model_id)
+    else:
+        status = {"downloaded": False, "verified": False, "loadable": False, "error": "unknown_model"}
+
+    return {
+        "model_id": model_id,
+        "active": active,
+        # "downloaded" now means truthfully present-and-loadable, not just an
+        # existing file (a corrupt/unloadable file reports downloaded=False).
+        "downloaded": bool(status["loadable"]),
+        "present": bool(status["downloaded"]),
+        "verified": bool(status["verified"]),
+        "loadable": bool(status["loadable"]),
+        # Prefer the download job's recorded failure (the root cause, e.g.
+        # "network down") over the status probe's symptom ("missing").
+        "error": last_error or status["error"],
+        "last_status": last_status,
+    }
 
 
 @router.post("/wake/models/import")
@@ -310,18 +363,87 @@ async def wake_test(request: WakeTestRequest = None):
     }
 
 
+def _decode_wav_clips(clips):
+    """Decode a list of base64-encoded 16-bit PCM WAV strings into float32 mono
+    16 kHz clips (the shape wake_training_data expects). Returns None for an
+    empty input; raises ValueError with an actionable reason on a bad clip so
+    the route can answer 400 rather than corrupting the training set."""
+    if not clips:
+        return None
+
+    import base64
+    import io
+    import wave
+
+    import numpy as np
+
+    import wake_training_service
+
+    decoded = []
+    for index, item in enumerate(clips):
+        try:
+            raw = base64.b64decode(item, validate=True) if isinstance(item, str) else bytes(item)
+            with wave.open(io.BytesIO(raw), "rb") as handle:
+                sample_rate = handle.getframerate()
+                channels = handle.getnchannels()
+                sample_width = handle.getsampwidth()
+                frames = handle.readframes(handle.getnframes())
+        except Exception as exc:
+            raise ValueError(f"clip {index} is not a readable WAV: {exc}")
+        if sample_width != 2:
+            raise ValueError(f"clip {index}: expected 16-bit PCM, got sample_width={sample_width}")
+        audio = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+        if channels > 1:
+            audio = audio.reshape(-1, channels).mean(axis=1)
+        audio = wake_training_service._resample_to_16k(audio, int(sample_rate or 16000))
+        if audio.size:
+            decoded.append(audio)
+    return decoded or None
+
+
 @router.post("/wake/train")
 async def wake_train(request: WakeTrainRequest):
-    """Kick off a background wake-phrase training run: synthesize the phrase with
-    the app's Kokoro voices (+ decoy negatives), train a NumPy classifier head on
-    the shared Apache-2.0 backbone, calibrate a threshold + reliability verdict,
-    and register the result as a selectable trained classifier. The phrase itself
-    is user content, so it is never written to the server log."""
+    """Kick off a background wake-phrase training run: mix the user's own
+    recordings (the anchor) with Kokoro-synthesized renderings of the phrase (+
+    decoy negatives), train a NumPy classifier head on the shared Apache-2.0
+    backbone, calibrate a threshold + reliability verdict, and register the
+    result as a selectable trained classifier. The phrase itself is user
+    content, so it is never written to the server log.
+
+    Readiness is verified up front (backbones loadable + Kokoro actually
+    loaded): the exact blocker is returned immediately, before the background
+    thread spends up to a minute synthesizing audio that would otherwise fail
+    with a generic empty-class error."""
+    import server
+    import wake_training_service
+
     phrase = (request.phrase or "").strip()
     if not phrase:
         raise HTTPException(status_code=400, detail="Enter a wake phrase to train.")
 
+    # Cheap guard first: don't load Kokoro just to reject a concurrent run.
     with _training_lock:
+        if _training_state["status"] == "running":
+            return {"ok": False, "already_running": True,
+                    "message": "A training run is already in progress."}
+
+    # Decode recordings (cheap, and a bad payload should 400 regardless of
+    # engine state).
+    try:
+        user_positive_clips = _decode_wav_clips(request.positive_clips)
+        user_negative_clips = _decode_wav_clips(request.negative_clips)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Bad recording: {exc}")
+
+    # Preflight in a threadpool (Kokoro's load can be slow -- don't block the
+    # event loop). Returns the exact failure NOW instead of a minute from now.
+    engine = await run_in_threadpool(server.ensure_tts_initialized)
+    preflight = await run_in_threadpool(wake_training_service.preflight_training, engine)
+    if not preflight["ok"]:
+        return {"ok": False, "message": preflight["message"]}
+
+    with _training_lock:
+        # Re-check under the lock: a run could have started during preflight.
         if _training_state["status"] == "running":
             return {"ok": False, "already_running": True,
                     "message": "A training run is already in progress."}
@@ -331,18 +453,17 @@ async def wake_train(request: WakeTrainRequest):
     voices = request.voices
 
     def _run():
-        import server
-        import wake_training_service
-
         def progress(payload):
             with _training_lock:
                 _training_state["percent"] = int(payload.get("percent", 0))
                 _training_state["message"] = str(payload.get("message", ""))
 
         try:
-            engine = server.ensure_tts_initialized()
             result = wake_training_service.train_phrase_model(
-                phrase, engine=engine, voices=voices, progress=progress,
+                phrase, engine=engine, voices=voices,
+                user_positive_clips=user_positive_clips,
+                user_negative_clips=user_negative_clips,
+                progress=progress,
             )
         except Exception:
             logging.exception("Wake-phrase training crashed")

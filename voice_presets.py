@@ -8,6 +8,16 @@ versioning) comes from store_migration.py (DESIGN §9.5, Tier-3 M4 B2) — same
 guarantees as personas/profiles instead of a hand-rolled copy. Existing
 on-disk files with no schema_version key are treated as v1 (implicit,
 zero-disruption for current users); no migrations are registered yet.
+
+The store also carries one extra top-level key, "default": <name|None> — the
+preset a user has designated to apply automatically to ordinary read-aloud
+(no explicit preset_name in the request; see server.py's
+_resolve_voice_and_modulation). It lives in the SAME json file/schema_version
+as "presets" rather than a separate store so there is exactly one place that
+can go corrupt/quarantine and one atomic write per change. Stores written
+before this key existed simply lack it — load_versioned_store hands back
+whatever dict was on disk, and `.get("default")` on a dict missing the key is
+None, so old stores load with "no default set" for free.
 """
 import json
 import logging
@@ -44,7 +54,7 @@ def _presets_path():
 
 
 def _default_store():
-    return {"presets": []}
+    return {"presets": [], "default": None}
 
 
 def _coerce_blend(value):
@@ -92,8 +102,17 @@ def _normalize(entry):
     return result
 
 
-def get_presets():
-    """List of fully-defaulted preset dicts, in save order."""
+def _load_data():
+    """(presets, raw_default) straight off disk under the store discipline.
+
+    presets: fully-defaulted/deduped preset dicts, in save order (same as
+    get_presets()). raw_default: whatever the store's "default" key holds,
+    trimmed to a non-empty string or None — NOT validated against presets
+    (a stale/dangling name is returned as-is; get_default_preset() is the
+    layer that resolves that). Kept internal since callers need the raw
+    value (e.g. delete_preset comparing against the name being removed)
+    rather than the resolved one.
+    """
     path = _presets_path()
     with _lock:
         data, _report = load_versioned_store(
@@ -101,7 +120,7 @@ def get_presets():
         )
 
     presets_field = data.get("presets", []) if isinstance(data, dict) else []
-    result = []
+    presets = []
     seen = set()
     for item in presets_field or []:
         normalized = _normalize(item)
@@ -111,16 +130,28 @@ def get_presets():
         if key in seen:
             continue
         seen.add(key)
-        result.append(normalized)
-    return result
+        presets.append(normalized)
+
+    raw_default = data.get("default") if isinstance(data, dict) else None
+    raw_default = str(raw_default).strip() if raw_default else None
+    return presets, raw_default
 
 
-def _save(presets):
+def get_presets():
+    """List of fully-defaulted preset dicts, in save order."""
+    presets, _raw_default = _load_data()
+    return presets
+
+
+def _save(presets, default):
     with _lock:
         try:
             write_atomic(
                 _presets_path(),
-                json.dumps({"presets": presets, "schema_version": _SCHEMA_VERSION}, indent=2),
+                json.dumps(
+                    {"presets": presets, "schema_version": _SCHEMA_VERSION, "default": default},
+                    indent=2,
+                ),
             )
         except OSError as exc:
             logging.warning(f"Failed to save voice presets: {exc}")
@@ -134,27 +165,81 @@ def save_preset(name, **fields):
     if not name:
         return get_presets()
 
-    existing = get_presets()
-    prior = next((p for p in existing if p["name"].lower() == name.lower()), None)
-    base_entry = dict(prior) if prior else {"name": name, **_DEFAULTS}
-    base_entry["name"] = name
-    for key in _DEFAULTS:
-        if key in fields and fields[key] is not None:
-            base_entry[key] = fields[key]
-    base_entry["updated_at"] = time.time()
-    if prior is None:
-        base_entry["created_at"] = base_entry["updated_at"]
+    with _lock:
+        existing, raw_default = _load_data()
+        prior = next((p for p in existing if p["name"].lower() == name.lower()), None)
+        base_entry = dict(prior) if prior else {"name": name, **_DEFAULTS}
+        base_entry["name"] = name
+        for key in _DEFAULTS:
+            if key in fields and fields[key] is not None:
+                base_entry[key] = fields[key]
+        base_entry["updated_at"] = time.time()
+        if prior is None:
+            base_entry["created_at"] = base_entry["updated_at"]
 
-    normalized = _normalize(base_entry)
-    presets = [p for p in existing if p["name"].lower() != name.lower()]
-    presets.append(normalized)
-    _save(presets)
-    return presets
+        normalized = _normalize(base_entry)
+        presets = [p for p in existing if p["name"].lower() != name.lower()]
+        presets.append(normalized)
+        # The default pointer is untouched by an unrelated save — carry the
+        # on-disk value straight through instead of dropping it (a raw
+        # `_save(presets, None)` here would silently clear the user's choice
+        # every time they touch any preset).
+        _save(presets, raw_default)
+        return presets
 
 
 def delete_preset(name):
-    """Remove a preset by name (case-insensitive). Returns the remaining list."""
+    """Remove a preset by name (case-insensitive). Returns the remaining list.
+
+    If the deleted preset was the default, the default is cleared too — a
+    dangling pointer would otherwise resolve invisibly to "no default" via
+    get_default_preset()'s validation, without ever telling the user their
+    choice was quietly unset.
+    """
     key = str(name or "").strip().lower()
-    presets = [p for p in get_presets() if p["name"].lower() != key]
-    _save(presets)
-    return presets
+    with _lock:
+        presets, raw_default = _load_data()
+        remaining = [p for p in presets if p["name"].lower() != key]
+        new_default = None if (raw_default and raw_default.lower() == key) else raw_default
+        _save(remaining, new_default)
+        return remaining
+
+
+def get_default_preset():
+    """Name of the default preset, in its stored casing — or None if unset,
+    or if it names a preset that no longer exists (dangling; e.g. the store
+    was hand-edited, or a preset was removed by some path other than
+    delete_preset). Never writes — a dangling reference is reported as None
+    here but left on disk for delete_preset/set_default_preset to reconcile
+    on their next write, keeping this a pure read."""
+    presets, raw_default = _load_data()
+    if not raw_default:
+        return None
+    for preset in presets:
+        if preset["name"].lower() == raw_default.lower():
+            return preset["name"]
+    return None
+
+
+def set_default_preset(name):
+    """Mark an existing preset (case-insensitive match) as the default.
+    Returns True on success; False if no preset with that name exists (the
+    caller — routes_user_config.py — turns that into a 404) without writing
+    anything."""
+    key = str(name or "").strip().lower()
+    if not key:
+        return False
+    with _lock:
+        presets, _raw_default = _load_data()
+        match = next((p for p in presets if p["name"].lower() == key), None)
+        if match is None:
+            return False
+        _save(presets, match["name"])
+        return True
+
+
+def clear_default_preset():
+    """Unset the default preset, if any. Idempotent; never errors."""
+    with _lock:
+        presets, _raw_default = _load_data()
+        _save(presets, None)

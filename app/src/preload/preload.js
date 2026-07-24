@@ -62,6 +62,7 @@ contextBridge.exposeInMainWorld('betterFingers', api);
 contextBridge.exposeInMainWorld('betterFingersOverlay', {
   onStatusUpdate: (callback) => ipcRenderer.on('overlay:update', (_event, status) => callback(status)),
   onAppearance: (callback) => ipcRenderer.on('overlay:appearance', (_event, appearance) => callback(appearance)),
+  setIgnoreMouseEvents: (ignore) => ipcRenderer.invoke('overlay:set-ignore-mouse-events', ignore),
 });
 
 contextBridge.exposeInMainWorld('betterFingersReview', {

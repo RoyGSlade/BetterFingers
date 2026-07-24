@@ -138,6 +138,14 @@ class ReviewTTSEngine:
         # lease factory above. None-safe: unset means "no admission control".
         self._admission_fn = None      # (estimated_mb, model_id) -> AdmissionResult dict
         self._load_reporter = None     # (model_id, estimated_mb) -> None
+        # Guards the one-time hot-upgrade attempt in speak() (native -> onnx
+        # when a blend is requested): once a real load attempt has failed
+        # (e.g. kokoro-onnx isn't installed, or the model download failed),
+        # every subsequent blended utterance would otherwise re-probe the
+        # same doomed load. Sticky for this engine's lifetime; a full
+        # unload()/reload cycle is the only reset (matches how _backend
+        # itself only resets on unload).
+        self._onnx_upgrade_failed = False
 
     def set_runtime_lease_factory(self, factory):
         """Install the runtime-lease context-manager factory (see __init__)."""
@@ -156,6 +164,28 @@ class ReviewTTSEngine:
     def backend(self) -> str:
         with self._lock:
             return self._backend
+
+    def _capabilities_locked(self) -> Dict[str, object]:
+        """Same shape as get_capabilities(), for call sites (e.g. speak())
+        that already hold self._lock. self._lock is an RLock so re-entering
+        it would be harmless, but this avoids the pointless double-acquire
+        on the hot path."""
+        return {
+            "backend": self._backend,
+            "runtime": self._kokoro_runtime,
+            # Blending only ever runs on kokoro-onnx (see _resolve_voice_spec) —
+            # mirror that exact gate here so this never claims capability the
+            # synthesis path can't actually deliver.
+            "blend_capable": self._kokoro_runtime == "onnx" and self._kokoro_onnx is not None,
+        }
+
+    def get_capabilities(self) -> Dict[str, object]:
+        """Cheap, thread-safe snapshot of what the currently loaded backend
+        can do. No loading side effects: this is a pure read of engine
+        state, so /runtime/tts-status (or any poller) can call it freely
+        without triggering or blocking on a model load."""
+        with self._lock:
+            return self._capabilities_locked()
 
     @classmethod
     def default_voice_hints(cls):
@@ -306,6 +336,65 @@ class ReviewTTSEngine:
                 "message": self._status_message,
             }
 
+    def _maybe_upgrade_to_onnx_for_blend(self, voice_hint: str) -> None:
+        """One-time attempt to hot-swap from the native Kokoro pipeline onto
+        the ONNX backend when a caller asked for a voice blend.
+
+        Blending only ever runs on kokoro-onnx (_resolve_voice_spec drops it
+        otherwise), so a user on the native runtime who touches a blend
+        slider used to get silence-on-the-feature with zero feedback. Rather
+        than accept that, try loading kokoro-onnx right here, under the
+        engine lock (the caller, speak(), already holds it) so no other
+        thread observes a half-switched backend.
+
+        Must be called only while holding self._lock. No-op unless we're
+        currently on the native runtime: already-ONNX has nothing to
+        upgrade, and non-Kokoro backends (sapi/none) have no native
+        pipeline to upgrade *from* — those just fall through to the
+        blend-dropped warning in speak() untouched.
+        """
+        if self._kokoro_runtime != "native":
+            return
+        if self._onnx_upgrade_failed:
+            # Already tried and failed once this session (e.g. kokoro-onnx
+            # isn't installed, or the model download failed) — retrying on
+            # every single blended utterance would just repeat the same
+            # doomed network/import work forever.
+            return
+
+        ok, msg = self._load_kokoro_onnx_backend(
+            voice_hint=voice_hint,
+            prefer_gpu=self._prefer_gpu,
+            quantization=getattr(self, "_kokoro_quantization", "fp32"),
+        )
+        if ok:
+            # _load_kokoro_onnx_backend already set _kokoro_pipeline=None,
+            # _kokoro_onnx=<engine>, _kokoro_runtime="onnx" internally; mirror
+            # that into the coarse _backend/_status_message fields so
+            # backend()/get_capabilities() (and /runtime/tts-status) agree
+            # with what will actually run for this and future utterances.
+            self._backend = "kokoro_onnx"
+            self._loaded = True
+            self._fallback = False
+            self._status_message = msg
+            logging.info(
+                "Hot-upgraded TTS backend from native Kokoro to kokoro-onnx to honor a voice blend request: %s",
+                msg,
+            )
+        else:
+            # _load_kokoro_onnx_backend's failure path only clears
+            # self._kokoro_onnx; it never touches self._kokoro_pipeline or
+            # self._kokoro_runtime, so the native backend is left exactly as
+            # capable as it was before this attempt — this utterance (and
+            # future non-blend ones) still plays normally, just without the
+            # blend.
+            self._onnx_upgrade_failed = True
+            logging.warning(
+                "Voice blend requested but hot-upgrade to kokoro-onnx failed (%s); "
+                "continuing on the native backend with the blend dropped, and will not retry the upgrade again this session.",
+                msg,
+            )
+
     def speak(
         self,
         text: str,
@@ -341,10 +430,23 @@ class ReviewTTSEngine:
                     "message": f"{clone_status['reason']}. {clone_status['setup_hint']}",
                 }
 
+        warnings = []
         with self._lock:
             status = self.ensure_loaded(voice_hint=voice_hint)
             if not status.get("ok", False):
                 return status
+
+            # A blend can only ever be honored on kokoro-onnx (see
+            # _resolve_voice_spec); rather than let a native-backend user
+            # move blend sliders and hear no change with zero feedback, try
+            # once to hot-swap onto ONNX. Non-blend requests never pay for
+            # this — the whole block is skipped when blend is falsy.
+            if blend:
+                self._maybe_upgrade_to_onnx_for_blend(voice_hint=voice_hint)
+                if not self._capabilities_locked()["blend_capable"]:
+                    warnings.append(
+                        "Voice blending requires the ONNX voice engine; the blend was ignored."
+                    )
 
             self.stop_current()
             # 1a. Normalize written forms to speech (currency, %, abbreviations…).
@@ -380,14 +482,24 @@ class ReviewTTSEngine:
                 self._clear_queue()
                 self._queue.put_nowait(payload)
 
-        return {
+            # Read backend/fallback fresh (not from `status`) so a successful
+            # hot-upgrade above is reflected here — a blended request that
+            # just flipped native -> kokoro_onnx must report the backend it
+            # will actually run on, not the one it loaded with.
+            final_backend = self._backend
+            final_fallback = self._fallback
+
+        result = {
             "ok": True,
             "queued": True,
             "job_id": job.id,
-            "backend": status.get("backend", "none"),
-            "fallback": bool(status.get("fallback", False)),
+            "backend": final_backend,
+            "fallback": bool(final_fallback),
             "message": "Speech queued.",
         }
+        if warnings:
+            result["warnings"] = warnings
+        return result
 
     def stop_current(self):
         # Stop possible Kokoro playback stream
@@ -929,9 +1041,13 @@ class ReviewTTSEngine:
         ready to hand straight to kokoro-onnx's `create(voice=...)`.
 
         Never raises: unknown blend voices are dropped (logged) and blending
-        silently falls back to the base voice alone when the ONNX voices
-        table isn't available (e.g. the native/SAPI backends don't support
-        raw tensor voices).
+        falls back to the base voice alone when the ONNX voices table isn't
+        available (e.g. the native/SAPI backends don't support raw tensor
+        voices) — logged at warning level (not returned as an error) since
+        speak() is the one that surfaces this honestly to the caller, via
+        the "warnings" entry in its returned status dict, after first trying
+        a hot-upgrade onto the ONNX backend (see
+        _maybe_upgrade_to_onnx_for_blend).
         """
         base_voice = self._resolve_kokoro_voice(base)
         blend = blend or {}
@@ -939,7 +1055,13 @@ class ReviewTTSEngine:
             return base_voice
 
         if self._kokoro_runtime != "onnx" or self._kokoro_onnx is None:
-            logging.info(
+            # Was logging.info: a dropped blend is a user-visible feature
+            # gap (they moved sliders, heard no change), not routine chatter
+            # — surface it at warning level so it shows up without deliberately
+            # cranking log verbosity. speak() also mirrors this into the
+            # returned status dict's "warnings" list; this log line remains
+            # for callers that bypass speak() and invoke resolution directly.
+            logging.warning(
                 "Voice blending requested but only supported on the ONNX backend; using base voice %r.",
                 base_voice,
             )

@@ -138,6 +138,17 @@
 
       // Appearance pushed by the main process on load and whenever settings change.
       window.betterFingersOverlay?.onAppearance?.((a) => applyAppearance(a));
+
+      // The window is click-through by default (see windows.js) so it never
+      // steals clicks meant for whatever's underneath it. While the cursor is
+      // over the visible ring/label, temporarily make the window hit-testable
+      // again so it can still be dragged to reposition.
+      wrap.addEventListener('mouseenter', () => {
+        window.betterFingersOverlay?.setIgnoreMouseEvents?.(false);
+      });
+      wrap.addEventListener('mouseleave', () => {
+        window.betterFingersOverlay?.setIgnoreMouseEvents?.(true);
+      });
     </script>
   </body>
 </html>
