@@ -1,0 +1,1184 @@
+/* ==========================================================================
+   Signal Desk — design tokens + app shell (Phase 1: foundation)
+   Source of truth: docs/ui/SIGNAL_DESK_SPEC.md sections 2 and 3.
+
+   Additive, standalone stylesheet. Not linked from index.html yet (that
+   happens in a later phase) -- today it is only consumed by
+   signal-desk-preview.html. All custom properties are namespaced `--sd-*`
+   so this file can eventually sit alongside styles/base.css (which uses
+   unprefixed `--bg`/`--text`/etc.) without collisions.
+   ========================================================================== */
+
+:root {
+  /* --- Color (SPEC 2, "Color") ------------------------------------------ */
+  --sd-bg-base: #0A0E14;
+  --sd-bg-gradient-top: #0B1017;
+  --sd-bg-gradient-bottom: #080B10;
+
+  --sd-surface: #0F151D;
+  --sd-surface-raised: #131A23;
+  --sd-surface-inset: #0C1219;
+
+  --sd-border: #1C2733;
+  --sd-border-hover: #26333F;
+
+  --sd-text-primary: #E8EEF4;
+  --sd-text-secondary: #94A3B8;
+  --sd-text-muted: #5B6B7C;
+
+  /* Section labels: uppercase, tracked -- color reuses --sd-text-muted. */
+  --sd-label-color: #5B6B7C;
+  --sd-label-font-size: 11px;
+  --sd-label-letter-spacing: 0.12em;
+
+  /* Accents (semantic) */
+  --sd-cyan: #22D3EE;         /* Signal cyan -- brand, Signal Core, active nav glow */
+  --sd-teal: #2DD4BF;         /* secondary teal */
+  --sd-green: #22C55E;        /* Ready/Sent green */
+  --sd-green-bright: #34D399;
+  --sd-blue: #3B82F6;         /* Select blue -- selected card border, links, toggles */
+  --sd-blue-light: #60A5FA;
+  --sd-amber: #F59E0B;        /* Warn amber */
+  --sd-red: #EF4444;          /* Danger red */
+
+  /* Persona signature colors (SPEC 2) */
+  --sd-persona-natural: #22D3EE;
+  --sd-persona-direct: #22C55E;
+  --sd-persona-warm: #F59E0B;
+  --sd-persona-professional: #A855F7;
+  --sd-persona-playful: #EC4899;
+
+  /* Confidence scale -- color encodes STATUS more than raw number:
+     sent+high = green, draft/unsent = blue (even at 70-84), recoverable/low
+     trends amber -> red. Four discrete tokens cover the spec's four bands. */
+  --sd-confidence-high: #22C55E;   /* >=85, or sent regardless of exact % */
+  --sd-confidence-draft: #3B82F6;  /* 70-84 unsent/draft items */
+  --sd-confidence-mid: #F59E0B;    /* 60-69 */
+  --sd-confidence-low: #EF4444;    /* <60 */
+
+  /* --- Typography (SPEC 2, "Typography") --------------------------------- */
+  --sd-font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  --sd-font-hero: 46px;     /* Refined-message hero: spec range 44-48px, centered */
+  --sd-font-hero-weight: 300;
+  --sd-font-hero-line-height: 1.15;
+
+  --sd-font-h1: 30px;       /* Workspace H1 ("TALK"/"LIBRARY"/"STUDIO") */
+  --sd-font-h1-weight: 600;
+
+  --sd-font-subtitle: 14px;
+  --sd-font-body: 14px;
+  --sd-font-sm: 13px;       /* small/meta upper end of spec's 12-13px range */
+  --sd-font-xs: 12px;       /* small/meta lower end of spec's 12-13px range */
+  --sd-font-label: var(--sd-label-font-size);
+
+  /* --- Spacing scale (SPEC 2) -------------------------------------------- */
+  --sd-space-4: 4px;
+  --sd-space-8: 8px;
+  --sd-space-12: 12px;
+  --sd-space-16: 16px;
+  --sd-space-20: 20px;
+  --sd-space-24: 24px;
+  --sd-space-32: 32px;
+
+  /* --- Radius (SPEC 2) ----------------------------------------------------
+     Numeric tokens plus semantic aliases matching the spec's own wording:
+     "cards 14px, buttons/pills 10px, small chips 8px, the big message card
+     16px". */
+  --sd-radius-8: 8px;
+  --sd-radius-10: 10px;
+  --sd-radius-14: 14px;
+  --sd-radius-16: 16px;
+
+  --sd-radius-card: var(--sd-radius-14);
+  --sd-radius-pill: var(--sd-radius-10);
+  --sd-radius-chip: var(--sd-radius-8);
+  --sd-radius-hero-card: var(--sd-radius-16); /* Refined Message card */
+
+  /* --- Elevation (SPEC 2) -------------------------------------------------
+     Card elevation and selected-card glow are given as exact shadow
+     recipes -- copied verbatim. The active-nav cyan glow is not given an
+     exact value in the spec ("cyan glow" only); it reuses the selected-card
+     glow's exact opacity/blur formula with the hue swapped to the already-
+     defined Signal cyan, rather than inventing new numbers. */
+  --sd-shadow-card: 0 1px 0 rgba(255, 255, 255, 0.02) inset, 0 8px 24px rgba(0, 0, 0, 0.35);
+  --sd-shadow-selected: 0 0 0 1px rgba(59, 130, 246, .4), 0 0 24px rgba(59, 130, 246, .12);
+  --sd-shadow-nav-glow: 0 0 0 1px rgba(34, 211, 238, .4), 0 0 24px rgba(34, 211, 238, .18);
+  --sd-border-selected-width: 1.5px;
+}
+
+/* ==========================================================================
+   App shell (SPEC 3)
+   Grid: [nav 96px] [center 1fr] [context 320px], full-width bottom status bar.
+   ========================================================================== */
+
+.sd-shell,
+.sd-shell * {
+  box-sizing: border-box;
+}
+
+.sd-shell {
+  --sd-context-width: 320px;
+  --sd-context-collapsed-width: 56px; /* thin rail width; not specified exactly by SPEC 3c */
+
+  display: grid;
+  grid-template-columns: 96px 1fr var(--sd-context-width);
+  grid-template-rows: 1fr 64px;
+  grid-template-areas:
+    "nav center context"
+    "statusbar statusbar statusbar";
+  min-height: 100vh;
+  background: var(--sd-bg-base);
+  color: var(--sd-text-primary);
+  font-family: var(--sd-font-family);
+  font-size: var(--sd-font-body);
+  line-height: 1.4;
+}
+
+.sd-shell.is-context-collapsed {
+  grid-template-columns: 96px 1fr var(--sd-context-collapsed-width);
+}
+
+/* --- 3a. Left nav rail --------------------------------------------------- */
+
+.sd-nav {
+  grid-area: nav;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sd-space-24) 0 var(--sd-space-16);
+  background: var(--sd-surface);
+  border-right: 1px solid var(--sd-border);
+}
+
+.sd-nav__top {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sd-space-32);
+  width: 100%;
+}
+
+.sd-nav__wordmark-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  text-align: center;
+  padding: 0 var(--sd-space-8);
+}
+
+.sd-nav__wordmark {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--sd-text-primary);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.sd-nav__wordmark strong {
+  font-weight: 700;
+}
+
+.sd-nav__kicker {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: var(--sd-label-letter-spacing);
+  color: var(--sd-text-muted);
+  text-transform: uppercase;
+}
+
+.sd-nav__primary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sd-space-12);
+}
+
+.sd-nav__button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sd-space-8);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--sd-text-muted);
+}
+
+.sd-nav__button-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: var(--sd-radius-card);
+  border: 1px solid transparent;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+  transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease, color 120ms ease;
+}
+
+.sd-nav__button-icon svg {
+  width: 24px;
+  height: 24px;
+  display: block;
+}
+
+.sd-nav__button-label {
+  font-size: var(--sd-font-xs);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.sd-nav__button:hover .sd-nav__button-icon {
+  background: var(--sd-surface-raised);
+  border-color: var(--sd-border-hover);
+  color: var(--sd-text-secondary);
+}
+
+.sd-nav__button.is-active .sd-nav__button-icon {
+  background: rgba(34, 211, 238, 0.12);
+  border-color: rgba(34, 211, 238, 0.5);
+  box-shadow: var(--sd-shadow-nav-glow);
+  color: var(--sd-cyan);
+}
+
+.sd-nav__button.is-active .sd-nav__button-label {
+  color: var(--sd-cyan);
+  font-weight: 600;
+}
+
+.sd-nav__divider {
+  width: 40px;
+  height: 1px;
+  background: var(--sd-border);
+  margin: var(--sd-space-4) 0;
+}
+
+.sd-nav__version {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+  padding: 0 var(--sd-space-12);
+}
+
+.sd-nav__version-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: linear-gradient(135deg, var(--sd-cyan), var(--sd-blue));
+}
+
+.sd-nav__version-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.sd-nav__version-name {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-secondary);
+  white-space: nowrap;
+}
+
+.sd-nav__version-num {
+  font-size: 10px;
+  color: var(--sd-text-muted);
+  white-space: nowrap;
+}
+
+/* --- 3b. Center header ---------------------------------------------------- */
+
+.sd-center {
+  grid-area: center;
+  overflow-y: auto;
+  padding: var(--sd-space-24) var(--sd-space-32);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-24);
+  background: linear-gradient(180deg, var(--sd-bg-gradient-top), var(--sd-bg-gradient-bottom));
+}
+
+.sd-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sd-space-16);
+}
+
+.sd-header__title {
+  font-size: var(--sd-font-h1);
+  font-weight: var(--sd-font-h1-weight);
+  letter-spacing: -0.01em;
+  color: var(--sd-text-primary);
+  margin: 0 0 4px;
+}
+
+.sd-header__subtitle {
+  font-size: var(--sd-font-subtitle);
+  color: var(--sd-text-secondary);
+  margin: 0;
+}
+
+.sd-header__breadcrumb {
+  font-size: var(--sd-font-sm);
+  color: var(--sd-blue);
+  margin: var(--sd-space-8) 0 0;
+}
+
+.sd-header__breadcrumb[hidden] {
+  display: none;
+}
+
+.sd-header__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--sd-surface-raised);
+  border: 1px solid var(--sd-border);
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.sd-header__pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sd-green);
+  box-shadow: 0 0 6px rgba(34, 197, 94, .6);
+  flex-shrink: 0;
+}
+
+/* --- Workspace containers (router targets) -------------------------------- */
+
+.sd-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-24);
+}
+
+.sd-workspace[hidden] {
+  display: none;
+}
+
+.sd-workspace--placeholder {
+  align-items: center;
+  justify-content: center;
+  min-height: 320px;
+  border: 1px dashed var(--sd-border);
+  border-radius: var(--sd-radius-card);
+  color: var(--sd-text-muted);
+  font-size: var(--sd-font-body);
+  text-align: center;
+  gap: var(--sd-space-8);
+}
+
+.sd-workspace--placeholder strong {
+  color: var(--sd-text-secondary);
+  font-weight: 600;
+  letter-spacing: var(--sd-label-letter-spacing);
+  text-transform: uppercase;
+  font-size: var(--sd-font-label);
+}
+
+/* --- 3c. Right context panel ----------------------------------------------- */
+
+.sd-context {
+  grid-area: context;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--sd-surface);
+  border-left: 1px solid var(--sd-border);
+}
+
+.sd-context__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sd-space-20) var(--sd-space-20) var(--sd-space-12);
+}
+
+.sd-context__header-label {
+  font-size: var(--sd-font-label);
+  letter-spacing: var(--sd-label-letter-spacing);
+  text-transform: uppercase;
+  color: var(--sd-text-muted);
+}
+
+.sd-context__collapse-btn {
+  background: none;
+  border: none;
+  color: var(--sd-text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: var(--sd-space-4);
+}
+
+.sd-context__collapse-btn:hover {
+  color: var(--sd-text-secondary);
+}
+
+.sd-context__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 var(--sd-space-20) var(--sd-space-20);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-24);
+}
+
+.sd-context__hide-btn {
+  margin: 0 var(--sd-space-20) var(--sd-space-20);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sd-space-8);
+  background: none;
+  border: 1px solid var(--sd-border);
+  color: var(--sd-text-secondary);
+  border-radius: var(--sd-radius-pill);
+  padding: var(--sd-space-8) var(--sd-space-12);
+  font-size: var(--sd-font-sm);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.sd-context__hide-btn:hover {
+  border-color: var(--sd-border-hover);
+  color: var(--sd-text-primary);
+}
+
+.sd-context.is-collapsed .sd-context__body,
+.sd-context.is-collapsed .sd-context__hide-btn,
+.sd-context.is-collapsed .sd-context__header-label {
+  display: none;
+}
+
+.sd-context.is-collapsed .sd-context__header {
+  justify-content: center;
+  padding: var(--sd-space-20) 0;
+}
+
+.sd-context.is-collapsed .sd-context__collapse-btn {
+  transform: scaleX(-1); /* « becomes » to hint "expand" */
+}
+
+.sd-context__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-8);
+}
+
+.sd-context__section-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--sd-font-label);
+  letter-spacing: var(--sd-label-letter-spacing);
+  text-transform: uppercase;
+  color: var(--sd-text-muted);
+}
+
+.sd-context__section-label .sd-context__value {
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--sd-text-secondary);
+  font-size: var(--sd-font-sm);
+}
+
+.sd-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid var(--sd-border-hover);
+  color: var(--sd-text-muted);
+  font-size: 10px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+/* --- Dropdown row (Persona / Destination / Paired Voice, etc.) ------------- */
+
+.sd-dropdown {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-12);
+  padding: var(--sd-space-8) var(--sd-space-12);
+  border-radius: var(--sd-radius-pill);
+  border: 1px solid var(--sd-border);
+  background: var(--sd-surface-raised);
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  color: inherit;
+}
+
+.sd-dropdown:hover {
+  border-color: var(--sd-border-hover);
+}
+
+.sd-dropdown__icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--sd-radius-chip);
+  background: var(--sd-surface-inset);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--sd-cyan);
+}
+
+.sd-dropdown__icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.sd-dropdown__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.sd-dropdown__name {
+  font-size: var(--sd-font-body);
+  color: var(--sd-text-primary);
+}
+
+.sd-dropdown__desc {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sd-dropdown__chevron {
+  color: var(--sd-text-muted);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+/* --- Segmented control (Delivery: Send / Insert / Copy) -------------------- */
+
+.sd-segmented {
+  display: flex;
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-pill);
+  overflow: hidden;
+}
+
+.sd-segmented__option {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: var(--sd-space-8) var(--sd-space-8);
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-secondary);
+  background: var(--sd-surface-raised);
+  border: none;
+  border-right: 1px solid var(--sd-border);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.sd-segmented__option:last-child {
+  border-right: none;
+}
+
+.sd-segmented__option svg {
+  width: 16px;
+  height: 16px;
+}
+
+.sd-segmented__option.is-active {
+  background: rgba(34, 211, 238, 0.1);
+  color: var(--sd-cyan);
+}
+
+/* --- Confidence slider row -------------------------------------------------- */
+
+.sd-slider-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-4);
+}
+
+.sd-slider {
+  width: 100%;
+  accent-color: var(--sd-cyan);
+  height: 4px;
+}
+
+.sd-slider-row__scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+}
+
+/* --- Processing mode card ---------------------------------------------------- */
+
+.sd-mode-card {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-12);
+  padding: var(--sd-space-12);
+  border-radius: var(--sd-radius-pill);
+  border: 1px solid var(--sd-border);
+  background: var(--sd-surface-raised);
+}
+
+.sd-mode-card__icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--sd-radius-chip);
+  background: var(--sd-surface-inset);
+  color: var(--sd-green);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.sd-mode-card__icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.sd-mode-card__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.sd-mode-card__title {
+  font-size: var(--sd-font-body);
+  color: var(--sd-text-primary);
+}
+
+.sd-mode-card__desc {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+}
+
+.sd-mode-card__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--sd-green);
+  box-shadow: 0 0 6px rgba(34, 197, 94, .6);
+  flex-shrink: 0;
+}
+
+/* --- Advanced disclosure ------------------------------------------------------ */
+
+.sd-advanced {
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-pill);
+  background: var(--sd-surface-raised);
+  padding: var(--sd-space-12);
+}
+
+.sd-advanced summary {
+  cursor: pointer;
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sd-advanced summary::-webkit-details-marker {
+  display: none;
+}
+
+.sd-advanced__chevron {
+  color: var(--sd-text-muted);
+  font-size: 10px;
+  transition: transform 120ms ease;
+}
+
+.sd-advanced[open] .sd-advanced__chevron {
+  transform: rotate(180deg);
+}
+
+.sd-advanced__body {
+  padding-top: var(--sd-space-12);
+  margin-top: var(--sd-space-12);
+  border-top: 1px solid var(--sd-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-8);
+  color: var(--sd-text-muted);
+  font-size: var(--sd-font-xs);
+}
+
+/* --- 3d. Bottom status bar --------------------------------------------------- */
+
+.sd-statusbar {
+  grid-area: statusbar;
+  display: flex;
+  align-items: stretch;
+  height: 64px;
+  background: var(--sd-surface);
+  border-top: 1px solid var(--sd-border);
+}
+
+.sd-statusbar__cell {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-12);
+  padding: 0 var(--sd-space-20);
+  border-right: 1px solid var(--sd-border);
+}
+
+.sd-statusbar__cell:last-child {
+  border-right: none;
+  margin-left: auto;
+}
+
+.sd-statusbar__icon {
+  width: 22px;
+  height: 22px;
+  color: var(--sd-text-muted);
+  flex-shrink: 0;
+}
+
+.sd-statusbar__icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.sd-statusbar__text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sd-statusbar__label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--sd-font-label);
+  letter-spacing: var(--sd-label-letter-spacing);
+  text-transform: uppercase;
+  color: var(--sd-text-muted);
+}
+
+.sd-statusbar__value {
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-primary);
+}
+
+.sd-statusbar__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sd-green);
+  box-shadow: 0 0 6px rgba(34, 197, 94, .6);
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.sd-statusbar__dot.is-warn {
+  background: var(--sd-amber);
+  box-shadow: 0 0 6px rgba(245, 158, 11, .6);
+}
+
+.sd-statusbar__dot.is-bad {
+  background: var(--sd-red);
+  box-shadow: 0 0 6px rgba(239, 68, 68, .6);
+}
+
+.sd-statusbar__mini-viz {
+  width: 40px;
+  height: 18px;
+  color: var(--sd-cyan);
+  flex-shrink: 0;
+}
+
+.sd-statusbar__mini-viz svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.sd-statusbar__overflow-btn {
+  background: none;
+  border: none;
+  color: var(--sd-text-muted);
+  cursor: pointer;
+  font-size: 18px;
+  padding: var(--sd-space-4) var(--sd-space-8);
+  font-family: inherit;
+}
+
+.sd-statusbar__overflow-btn:hover {
+  color: var(--sd-text-secondary);
+}
+
+/* ==========================================================================
+   TALK workspace components (SPEC 4)
+   Included here (rather than as a separate stylesheet) because Phase 2
+   ("Talk wired to the live pipeline") reuses this same markup/CSS behind
+   real feature logic -- only the Phase-1 QA preview page consumes it today.
+   ========================================================================== */
+
+.sd-signal-core-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--sd-space-32) 0;
+}
+
+.sd-signal-core-status {
+  position: absolute;
+  top: var(--sd-space-20);
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+  font-size: var(--sd-font-sm);
+}
+
+.sd-signal-core-status__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sd-green);
+  box-shadow: 0 0 6px rgba(34, 197, 94, .6);
+  flex-shrink: 0;
+}
+
+.sd-signal-core-status__label {
+  color: var(--sd-green);
+  font-weight: 600;
+  letter-spacing: var(--sd-label-letter-spacing);
+  text-transform: uppercase;
+  font-size: var(--sd-font-label);
+}
+
+.sd-signal-core-status__detail {
+  display: block;
+  color: var(--sd-text-muted);
+  font-size: var(--sd-font-xs);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  margin-top: 2px;
+}
+
+.sd-signal-core-meter {
+  position: absolute;
+  top: var(--sd-space-20);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sd-space-8);
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+}
+
+.sd-signal-core-meter__bar {
+  width: 4px;
+  height: 120px;
+  border-radius: 2px;
+  background: var(--sd-surface-inset);
+  border: 1px solid var(--sd-border);
+}
+
+.sd-signal-core-ring {
+  position: relative;
+  width: 260px;
+  height: 260px;
+  border-radius: 50%;
+  border: 2px solid rgba(34, 211, 238, 0.28);
+  box-shadow: 0 0 48px rgba(34, 211, 238, 0.14);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sd-signal-core-ring::before,
+.sd-signal-core-ring::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  border: 1px solid rgba(34, 211, 238, 0.35);
+}
+
+.sd-signal-core-ring::before {
+  inset: 18px;
+}
+
+.sd-signal-core-ring::after {
+  inset: 36px;
+  border-color: rgba(34, 211, 238, 0.5);
+}
+
+.sd-signal-core-ring__waveform {
+  width: 70%;
+  height: 40px;
+  color: var(--sd-cyan);
+}
+
+.sd-signal-core-ring__waveform svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.sd-signal-core-hint {
+  margin-top: var(--sd-space-16);
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-muted);
+  text-align: center;
+  line-height: 1.6;
+}
+
+.sd-signal-core-hint strong {
+  color: var(--sd-text-secondary);
+  font-weight: 600;
+}
+
+/* --- Refined Message card --------------------------------------------------- */
+
+.sd-refined-card {
+  background: var(--sd-surface-raised);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-hero-card);
+  padding: var(--sd-space-24);
+  box-shadow: var(--sd-shadow-card);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-20);
+}
+
+.sd-refined-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sd-refined-card__eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--sd-font-label);
+  letter-spacing: var(--sd-label-letter-spacing);
+  text-transform: uppercase;
+  color: var(--sd-text-muted);
+}
+
+.sd-refined-card__eyebrow-icon {
+  color: var(--sd-cyan);
+}
+
+.sd-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--sd-radius-chip);
+  font-size: var(--sd-font-xs);
+  font-weight: 600;
+}
+
+.sd-badge--ready {
+  background: rgba(34, 197, 94, 0.14);
+  color: var(--sd-green);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.sd-refined-card__hero {
+  font-size: var(--sd-font-hero);
+  font-weight: var(--sd-font-hero-weight);
+  line-height: var(--sd-font-hero-line-height);
+  color: var(--sd-text-primary);
+  margin: 0;
+}
+
+.sd-meta-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--sd-space-16);
+  padding-top: var(--sd-space-16);
+  border-top: 1px solid var(--sd-border);
+}
+
+.sd-meta-cell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-8);
+  min-width: 0;
+}
+
+.sd-meta-cell__label {
+  font-size: var(--sd-font-label);
+  letter-spacing: var(--sd-label-letter-spacing);
+  text-transform: uppercase;
+  color: var(--sd-text-muted);
+}
+
+.sd-meta-cell__raw {
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.sd-meta-cell__confidence-value {
+  font-size: var(--sd-font-body);
+  font-weight: 600;
+  color: var(--sd-confidence-high);
+}
+
+.sd-confidence-bar {
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--sd-surface-inset);
+  overflow: hidden;
+}
+
+.sd-confidence-bar__fill {
+  height: 100%;
+  background: var(--sd-confidence-high);
+  border-radius: 2px;
+}
+
+.sd-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--sd-radius-chip);
+  background: var(--sd-surface-inset);
+  border: 1px solid var(--sd-border);
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+  width: fit-content;
+}
+
+.sd-chip svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sd-chip--persona-natural {
+  color: var(--sd-persona-natural);
+  border-color: rgba(34, 211, 238, 0.3);
+}
+
+.sd-chip--destination {
+  color: var(--sd-blue-light);
+  border-color: rgba(59, 130, 246, 0.3);
+}
+
+/* --- Action row -------------------------------------------------------------- */
+
+.sd-actions-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-12);
+}
+
+.sd-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+  padding: var(--sd-space-8) var(--sd-space-16);
+  border-radius: var(--sd-radius-pill);
+  font-size: var(--sd-font-sm);
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--sd-border);
+  background: var(--sd-surface-raised);
+  color: var(--sd-text-secondary);
+  font-family: inherit;
+}
+
+.sd-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.sd-btn:hover {
+  border-color: var(--sd-border-hover);
+  color: var(--sd-text-primary);
+}
+
+.sd-btn--primary {
+  background: var(--sd-green);
+  border-color: var(--sd-green);
+  color: #08130D;
+  font-weight: 600;
+  margin-left: auto;
+}
+
+.sd-btn--primary:hover {
+  background: var(--sd-green-bright);
+  border-color: var(--sd-green-bright);
+  color: #08130D;
+}
+
+.sd-btn-split {
+  display: inline-flex;
+  align-items: stretch;
+  margin-left: auto;
+  border-radius: var(--sd-radius-pill);
+  overflow: hidden;
+}
+
+.sd-btn-split .sd-btn--primary {
+  margin-left: 0;
+  border-radius: 0;
+}
+
+.sd-btn-split__chevron {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 var(--sd-space-12);
+  background: var(--sd-green);
+  border: 1px solid var(--sd-green);
+  border-left: 1px solid rgba(8, 19, 13, 0.25);
+  color: #08130D;
+  cursor: pointer;
+}
+
+.sd-btn-split__chevron:hover {
+  background: var(--sd-green-bright);
+  border-color: var(--sd-green-bright);
+}
