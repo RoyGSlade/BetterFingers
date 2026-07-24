@@ -307,6 +307,28 @@ def _sanitize_profile_values(config, defaults):
         minimum=0,
         maximum=10000,
     )
+    cfg["streaming_transcription_enabled"] = _coerce_bool(
+        cfg.get("streaming_transcription_enabled", d["streaming_transcription_enabled"]),
+        d["streaming_transcription_enabled"],
+    )
+    cfg["streaming_batch_min_seconds"] = _coerce_float(
+        cfg.get("streaming_batch_min_seconds", d["streaming_batch_min_seconds"]),
+        d["streaming_batch_min_seconds"],
+        minimum=0.5,
+        maximum=60.0,
+    )
+    cfg["streaming_batch_max_seconds"] = _coerce_float(
+        cfg.get("streaming_batch_max_seconds", d["streaming_batch_max_seconds"]),
+        d["streaming_batch_max_seconds"],
+        minimum=2.0,
+        maximum=120.0,
+    )
+    cfg["streaming_batch_silence_ms"] = _coerce_int(
+        cfg.get("streaming_batch_silence_ms", d["streaming_batch_silence_ms"]),
+        d["streaming_batch_silence_ms"],
+        minimum=100,
+        maximum=5000,
+    )
     cfg["chat_close_action"] = _coerce_choice(
         cfg.get("chat_close_action", d["chat_close_action"]),
         d["chat_close_action"],
@@ -777,6 +799,14 @@ def _profile_defaults():
         "auto_stop_after_silence_enabled": False,
         "auto_stop_silence_ms": 900,
         "auto_stop_min_recording_ms": 700,
+        # Streaming batch transcription: Whisper transcribes silence-bounded
+        # batches WHILE recording (so stop→draft only drains the tail), and a
+        # recording that finishes while the pipeline is busy is held in a queue
+        # instead of being rejected. Silence uses the no-audio gate thresholds.
+        "streaming_transcription_enabled": True,
+        "streaming_batch_min_seconds": 3.0,
+        "streaming_batch_max_seconds": 12.0,
+        "streaming_batch_silence_ms": 600,
         "output_token_limit": 1100,  # legacy alias for max_completion_tokens
         "max_completion_tokens": 1600,
         "long_draft_warning_words": 1200,

@@ -64,10 +64,18 @@ import {
   fetchVoicePresets,
   saveVoicePreset,
   deleteVoicePreset,
+  setDefaultVoicePreset,
+  clearDefaultVoicePreset,
+  speakPreset,
+  fetchCloneStatus,
+  fetchTtsStatus,
+  stopTts,
   cloneVoice,
   provisionVoiceCloning,
   lintPersona,
   testPersona,
+  refinePersonaPrompt,
+  draftPersonaFromDescription,
   savePersona,
   deletePersona,
   startFoundryInterview,
@@ -214,6 +222,20 @@ const wizardLintWarnings = document.getElementById('wizardLintWarnings');
 const wizardTestSample = document.getElementById('wizardTestSample');
 const wizardTestButton = document.getElementById('wizardTestButton');
 const wizardTestResult = document.getElementById('wizardTestResult');
+const wizardRefinePromptButton = document.getElementById('wizardRefinePromptButton');
+const wizardRefineStatus = document.getElementById('wizardRefineStatus');
+const wizardRefinePanel = document.getElementById('wizardRefinePanel');
+const wizardRefineUnderstood = document.getElementById('wizardRefineUnderstood');
+const wizardRefineAmbiguities = document.getElementById('wizardRefineAmbiguities');
+const wizardRefinedPrompt = document.getElementById('wizardRefinedPrompt');
+const wizardApplyRefinedButton = document.getElementById('wizardApplyRefinedButton');
+const wizardDismissRefinedButton = document.getElementById('wizardDismissRefinedButton');
+const wizardRefinePromptBlock = document.getElementById('wizardRefinePromptBlock');
+const wizardRefineActions = document.getElementById('wizardRefineActions');
+const wizardDescribeInput = document.getElementById('wizardDescribeInput');
+const wizardDescribeButton = document.getElementById('wizardDescribeButton');
+const wizardDescribeStatus = document.getElementById('wizardDescribeStatus');
+const wizardAdvanced = document.getElementById('wizardAdvanced');
 
 let loadedPersonas = {};
 
@@ -643,6 +665,18 @@ function renderVoiceCloningPanel(cloning) {
       voiceCloningHintEl.hidden = isRoutine;
     }
   }
+}
+
+// The one and only provisioning path (POST /tts/clone/provision) — both the
+// Models tab's "Install voice cloning" button and the TTS/Read-Aloud
+// section's clone-status affordance call this instead of each doing their
+// own POST, so there is never a second implementation to keep in sync.
+async function installVoiceCloning() {
+  return runModelAction(provisionVoiceCloningButton, 'Install voice cloning', async () => {
+    const result = await provisionVoiceCloning();
+    renderVoiceCloningPanel(result?.cloning);
+    return result;
+  });
 }
 
 function renderModelPanels() {
@@ -1650,9 +1684,22 @@ async function refreshPersonasAndVoices() {
     const voicesData = await fetchTtsVoices();
     renderVoiceCloningPanel(voicesData.cloning);
     const voiceSelect = settingEls.review_tts_voice_hint;
+    // Cloned voices can exist without a working clone runtime (samples are
+    // validated/stored independent of synthesis support) — label them
+    // honestly rather than letting them look identical to a ready voice.
+    let cloneRuntimeAvailable = true;
+    try {
+      const cloneStatus = await fetchCloneStatus();
+      cloneRuntimeAvailable = cloneStatus?.available !== false;
+    } catch (_error) {
+      cloneRuntimeAvailable = true; // don't mislabel every cloned voice on a transient status-check failure
+    }
     voiceOptionsCache = [
       ...(Array.isArray(voicesData.defaults) ? voicesData.defaults : []),
-      ...(Array.isArray(voicesData.cloned) ? voicesData.cloned.map((v) => ({ id: v.id, name: `${v.name} (Cloned)` })) : []),
+      ...(Array.isArray(voicesData.cloned) ? voicesData.cloned.map((v) => ({
+        id: v.id,
+        name: cloneRuntimeAvailable ? `${v.name} (Cloned)` : `${v.name} (Cloned) — needs cloning runtime`,
+      })) : []),
     ];
     if (voiceSelect) {
       const currentSelected = voiceSelect.value;
@@ -1678,6 +1725,32 @@ async function refreshPersonasAndVoices() {
 let voiceOptionsCache = [];
 let voiceBlendLayers = []; // [{ voiceId, weight }]
 let loadedVoicePresets = [];
+let defaultVoicePresetName = null; // name of the preset backend resolves as the app's read-aloud voice, or null
+
+const DEFAULT_VOICE_AUDITION_TEXT = 'This is a test of the BetterFingers text to speech voice synthesis.';
+const LIVE_PREVIEW_TEXT = "Here's how this voice sounds.";
+
+// Live preview: debounced re-audition after any Voice Studio control change.
+// A generation counter (not just the timer handle) guards against a stale
+// in-flight request clobbering the UI after a newer tweak superseded it.
+let livePreviewTimer = null;
+let livePreviewGeneration = 0;
+
+// A <select> populated only from voiceOptionsCache silently drops the
+// selection if `id` isn't one of the known voices (a cloned voice, or any
+// voice not currently listed) — `select.value = id` becomes a no-op and the
+// control snaps back to whatever option happened to be first. Make sure the
+// id always has a real, selectable option first.
+function ensureVoiceOptionExists(selectEl, id, cache) {
+  if (!selectEl || !id) return;
+  const alreadyPresent = Array.from(selectEl.options).some((opt) => opt.value === id);
+  if (alreadyPresent) return;
+  const known = (cache || []).find((v) => v.id === id);
+  const option = document.createElement('option');
+  option.value = id;
+  option.textContent = known ? known.name : id;
+  selectEl.appendChild(option);
+}
 
 const VOICE_BLEND_QUICK_PRESETS = {
   softer: { blend: { bf_emma: 0.25 }, energy: 0.35, warmth: 0.3 },
@@ -1755,9 +1828,15 @@ function renderVoiceBlendRows() {
       option.textContent = voice.name;
       select.appendChild(option);
     }
+    // The layer's saved voice may not be in the current cache (e.g. a cloned
+    // voice loaded from a preset before refreshPersonasAndVoices ran) — give
+    // it a real option so it renders as selected instead of snapping to the
+    // first voice in the list.
+    ensureVoiceOptionExists(select, layer.voiceId, voiceOptionsCache);
     select.value = layer.voiceId;
     select.addEventListener('change', () => {
       voiceBlendLayers[index].voiceId = select.value;
+      scheduleLivePreview();
     });
 
     const weightInput = document.createElement('input');
@@ -1774,6 +1853,7 @@ function renderVoiceBlendRows() {
     weightInput.addEventListener('input', () => {
       voiceBlendLayers[index].weight = parseFloat(weightInput.value);
       weightLabel.textContent = voiceBlendLayers[index].weight.toFixed(2);
+      scheduleLivePreview();
     });
 
     const removeButton = document.createElement('button');
@@ -1783,6 +1863,7 @@ function renderVoiceBlendRows() {
     removeButton.addEventListener('click', () => {
       voiceBlendLayers.splice(index, 1);
       renderVoiceBlendRows();
+      scheduleLivePreview();
     });
 
     row.appendChild(select);
@@ -1815,6 +1896,11 @@ function gatherVoiceStudioSettings() {
 function applyVoicePreset(preset) {
   if (!preset) return;
   if (settingEls.review_tts_voice_hint && preset.base) {
+    // preset.base may be a voice not currently in the <select> (a cloned
+    // voice, or any voice not currently listed) — without this, the value
+    // assignment below silently no-ops and the user auditions the wrong
+    // (whatever-was-already-selected) voice.
+    ensureVoiceOptionExists(settingEls.review_tts_voice_hint, preset.base, voiceOptionsCache);
     settingEls.review_tts_voice_hint.value = preset.base;
   }
   if (settingEls.review_tts_speed && preset.speed !== undefined) {
@@ -1828,6 +1914,7 @@ function applyVoicePreset(preset) {
 async function refreshVoicePresets() {
   const data = await fetchVoicePresets();
   loadedVoicePresets = Array.isArray(data.presets) ? data.presets : [];
+  defaultVoicePresetName = data.default || null;
   renderVoicePresetSelect();
   renderVoicePresetList();
 }
@@ -1852,6 +1939,33 @@ function renderVoicePresetList() {
   const container = document.getElementById('voicePresetList');
   if (!container) return;
   container.innerHTML = '';
+
+  if (defaultVoicePresetName) {
+    const defaultRow = document.createElement('div');
+    defaultRow.className = 'setting-row voice-preset-row';
+    const defaultInfo = document.createElement('span');
+    defaultInfo.className = 'setting-desc';
+    defaultInfo.textContent = `Default read-aloud voice: ${defaultVoicePresetName}`;
+    const clearDefaultButton = document.createElement('button');
+    clearDefaultButton.type = 'button';
+    clearDefaultButton.className = 'secondary-button';
+    clearDefaultButton.textContent = 'Clear default';
+    clearDefaultButton.addEventListener('click', async () => {
+      clearDefaultButton.disabled = true;
+      try {
+        await clearDefaultVoicePreset();
+        setMessage(profileMessageEl, 'Cleared the default read-aloud voice.', 'success');
+        await refreshVoicePresets();
+      } catch (error) {
+        setMessage(profileMessageEl, `Failed to clear default voice: ${error.message}`, 'danger');
+        clearDefaultButton.disabled = false;
+      }
+    });
+    defaultRow.appendChild(defaultInfo);
+    defaultRow.appendChild(clearDefaultButton);
+    container.appendChild(defaultRow);
+  }
+
   if (loadedVoicePresets.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'setting-desc';
@@ -1868,6 +1982,14 @@ function renderVoicePresetList() {
     const label = document.createElement('span');
     label.className = 'status-label';
     label.textContent = preset.name;
+    if (defaultVoicePresetName && preset.name === defaultVoicePresetName) {
+      const badge = document.createElement('span');
+      badge.className = 'model-badge';
+      badge.dataset.tone = 'success';
+      badge.textContent = 'Default';
+      label.appendChild(document.createTextNode(' '));
+      label.appendChild(badge);
+    }
     const desc = document.createElement('span');
     desc.className = 'setting-desc';
     const blendKeys = Object.keys(preset.blend || {});
@@ -1886,6 +2008,51 @@ function renderVoicePresetList() {
       if (select) select.value = preset.name;
       applyVoicePreset(preset);
     });
+
+    const readButton = document.createElement('button');
+    readButton.type = 'button';
+    readButton.className = 'secondary-button';
+    readButton.textContent = 'Read';
+    readButton.addEventListener('click', async () => {
+      const previewText = document.getElementById('voicePreviewText')?.value?.trim();
+      const text = previewText || DEFAULT_VOICE_AUDITION_TEXT;
+      readButton.disabled = true;
+      readButton.textContent = 'Reading...';
+      try {
+        // Auditions the preset exactly as saved (backend resolves base/blend/
+        // modulation by name) — not the live slider state.
+        const res = await speakPreset(text, preset.name);
+        if (res && res.ok === false) {
+          setMessage(profileMessageEl, `"${preset.name}" failed: ${res.message || res.error || 'Unknown error'}`, 'danger');
+        } else if (Array.isArray(res?.warnings) && res.warnings.length) {
+          setMessage(profileMessageEl, `Playing "${preset.name}" — ${res.warnings.join(' ')}`, 'warning');
+        } else {
+          setMessage(profileMessageEl, `Playing "${preset.name}".`, 'success');
+        }
+      } catch (error) {
+        setMessage(profileMessageEl, `"${preset.name}" failed: ${error.message}`, 'danger');
+      } finally {
+        readButton.disabled = false;
+        readButton.textContent = 'Read';
+      }
+    });
+
+    const useDefaultButton = document.createElement('button');
+    useDefaultButton.type = 'button';
+    useDefaultButton.className = 'secondary-button';
+    useDefaultButton.textContent = 'Use as my voice';
+    useDefaultButton.addEventListener('click', async () => {
+      useDefaultButton.disabled = true;
+      try {
+        await setDefaultVoicePreset(preset.name);
+        setMessage(profileMessageEl, `"${preset.name}" is now your default read-aloud voice.`, 'success');
+        await refreshVoicePresets();
+      } catch (error) {
+        setMessage(profileMessageEl, `Failed to set default voice: ${error.message}`, 'danger');
+        useDefaultButton.disabled = false;
+      }
+    });
+
     const deleteButton = document.createElement('button');
     deleteButton.type = 'button';
     deleteButton.className = 'secondary-button';
@@ -1899,6 +2066,8 @@ function renderVoicePresetList() {
       }
     });
     controls.appendChild(applyButton);
+    controls.appendChild(readButton);
+    controls.appendChild(useDefaultButton);
     controls.appendChild(deleteButton);
 
     row.appendChild(info);
@@ -1907,24 +2076,138 @@ function renderVoicePresetList() {
   }
 }
 
+// Debounces a re-audition 600ms after any Voice Studio control changes, when
+// the "Live preview" toggle is on. `livePreviewGeneration` (bumped on every
+// call) supersedes stale in-flight requests: a tweak made while a preview is
+// still speaking cancels the pending timer (normal debounce), and if a
+// request is already past the debounce and in flight, the newer generation's
+// result/stopTts simply wins — the older call's `then` branches see their
+// generation is no longer current and drop their result on the floor instead
+// of clobbering the UI.
+function scheduleLivePreview() {
+  const toggle = document.getElementById('voiceLivePreview');
+  if (!toggle?.checked) return;
+  clearTimeout(livePreviewTimer);
+  livePreviewTimer = setTimeout(runLivePreview, 600);
+}
+
+async function runLivePreview() {
+  const toggle = document.getElementById('voiceLivePreview');
+  if (!toggle?.checked) return;
+  const myGeneration = ++livePreviewGeneration;
+
+  // Best-effort: interrupt whatever's currently playing before starting the
+  // next preview. A failure here (nothing was playing, backend hiccup) should
+  // never block the new preview from starting.
+  try {
+    await stopTts();
+  } catch (_error) {
+    // ignore — best-effort stop
+  }
+  if (myGeneration !== livePreviewGeneration || !toggle?.checked) return; // superseded while stopping
+
+  const previewText = document.getElementById('voicePreviewText')?.value?.trim();
+  const text = previewText || LIVE_PREVIEW_TEXT;
+  const settings = gatherVoiceStudioSettings();
+  try {
+    const res = await speakTts(text, settings.base, settings.speed, settings.pitch, {
+      blend: settings.blend,
+      energy: settings.energy,
+      warmth: settings.warmth,
+      brightness: settings.brightness,
+      pause_style: settings.pause_style,
+    });
+    if (myGeneration !== livePreviewGeneration) return; // a newer preview superseded this one
+    if (res && res.ok === false) {
+      setMessage(profileMessageEl, `Live preview failed: ${res.message || res.error || 'Unknown error'}`, 'danger');
+    } else if (Array.isArray(res?.warnings) && res.warnings.length) {
+      setMessage(profileMessageEl, `Live preview: ${res.warnings.join(' ')}`, 'warning');
+    }
+  } catch (error) {
+    if (myGeneration !== livePreviewGeneration) return;
+    setMessage(profileMessageEl, `Live preview failed: ${error.message}`, 'danger');
+  }
+}
+
+// Called when the TTS/Read-Aloud settings section opens. Blending is only
+// meaningful on the ONNX Kokoro backend — on any other backend the blend
+// weights are silently dropped server-side, so tell the user before they
+// spend time tuning a blend that won't apply.
+async function refreshVoiceBlendCapabilityNote() {
+  const noteEl = document.getElementById('voiceBlendBackendNote');
+  if (!noteEl) return;
+  try {
+    const status = await fetchTtsStatus();
+    const capabilities = status?.capabilities;
+    const shouldWarn = capabilities?.blend_capable === false
+      || (capabilities?.blend_capable === undefined && status?.raw_backend !== 'kokoro_onnx');
+    noteEl.hidden = !shouldWarn;
+  } catch (_error) {
+    // Don't block the section on a status-fetch failure — just skip the note.
+    noteEl.hidden = true;
+  }
+}
+
+// Called when the TTS/Read-Aloud settings section opens. Surfaces the actual
+// runtime clone capability (can it synthesize?) separate from the sample
+// upload/validation flow above, which works regardless.
+async function refreshCloneStatusNote() {
+  const noteEl = document.getElementById('voiceCloneStatusNote');
+  const installButton = document.getElementById('voiceCloneInstallButton');
+  if (!noteEl) return;
+  try {
+    const status = await fetchCloneStatus();
+    if (status?.available) {
+      noteEl.textContent = 'Voice cloning ready.';
+      delete noteEl.dataset.tone;
+      if (installButton) installButton.hidden = true;
+    } else {
+      const reason = status?.reason ? String(status.reason) : 'Voice cloning is not available yet.';
+      const hint = status?.setup_hint ? ` ${status.setup_hint}` : '';
+      noteEl.textContent = `${reason}${hint}`;
+      noteEl.dataset.tone = 'warning';
+      if (installButton) installButton.hidden = false;
+    }
+  } catch (error) {
+    noteEl.textContent = `Couldn't check voice cloning status: ${error.message}`;
+    noteEl.dataset.tone = 'danger';
+    if (installButton) installButton.hidden = true;
+  }
+}
+
 function initVoiceStudio() {
   renderVoiceBlendRows();
   updateModulationLabels();
 
   ['voicePitch', 'voiceEnergy', 'voiceWarmth', 'voiceBrightness'].forEach((id) => {
-    document.getElementById(id)?.addEventListener('input', updateModulationLabels);
+    const el = document.getElementById(id);
+    el?.addEventListener('input', updateModulationLabels);
+    el?.addEventListener('input', scheduleLivePreview);
   });
+
+  document.getElementById('voicePauseStyle')?.addEventListener('change', scheduleLivePreview);
+  settingEls.review_tts_voice_hint?.addEventListener('change', scheduleLivePreview);
+  settingEls.review_tts_speed?.addEventListener('input', scheduleLivePreview);
 
   document.getElementById('addVoiceLayerButton')?.addEventListener('click', () => {
     if (voiceBlendLayers.length >= 2) return; // base + 2 extra = 3-way blend cap
     const fallbackVoice = voiceOptionsCache[0]?.id || 'af_bella';
     voiceBlendLayers.push({ voiceId: fallbackVoice, weight: 0.3 });
     renderVoiceBlendRows();
+    scheduleLivePreview();
   });
 
   document.getElementById('resetVoiceBlendButton')?.addEventListener('click', () => {
     voiceBlendLayers = [];
     renderVoiceBlendRows();
+    scheduleLivePreview();
+  });
+
+  document.getElementById('voiceCloneInstallButton')?.addEventListener('click', async () => {
+    // Reuses the exact same provisioning path as the Models tab's "Install
+    // voice cloning" button (installVoiceCloning) — no second POST/flow here.
+    await installVoiceCloning();
+    await refreshCloneStatusNote();
   });
 
   document.getElementById('voicePresetSelect')?.addEventListener('change', (event) => {
@@ -2639,14 +2922,17 @@ function initWizard() {
     if (!wizardFewShotList) return;
     const row = document.createElement('div');
     row.className = 'few-shot-row flex-align-center-gap8 mt-12';
-    const rawInput = document.createElement('input');
-    rawInput.className = 'settings-input few-shot-raw';
-    rawInput.type = 'text';
+    // Textareas, not <input>: model-generated examples for structured personas
+    // (bug reports, lists) are multi-line, and an <input> silently flattens
+    // the newlines out of the example the LLM will imitate.
+    const rawInput = document.createElement('textarea');
+    rawInput.className = 'settings-input few-shot-raw textarea-small';
+    rawInput.rows = 2;
     rawInput.placeholder = 'example input';
     rawInput.value = raw;
-    const outInput = document.createElement('input');
-    outInput.className = 'settings-input few-shot-out';
-    outInput.type = 'text';
+    const outInput = document.createElement('textarea');
+    outInput.className = 'settings-input few-shot-out textarea-small';
+    outInput.rows = 2;
     outInput.placeholder = 'desired output';
     outInput.value = out;
     const removeBtn = document.createElement('button');
@@ -2785,6 +3071,135 @@ function initWizard() {
   wizardRegeneratePromptButton?.addEventListener('click', () => {
     editingExistingPersona = false;
     generatePromptPreview();
+  });
+
+  // --- AI helper: the downloaded local model refines the draft prompt and
+  // reports what it understood + where it guessed, so a dictated description
+  // can't get saved while secretly ambiguous.
+  function renderRefineList(listEl, items, emptyText) {
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    const entries = Array.isArray(items) && items.length ? items : [emptyText];
+    for (const item of entries) {
+      const li = document.createElement('li');
+      li.textContent = item;
+      listEl.appendChild(li);
+    }
+  }
+
+  function hideRefinePanel() {
+    wizardRefinePanel?.classList.add('hidden');
+    if (wizardRefineStatus) wizardRefineStatus.textContent = '';
+  }
+
+  wizardRefinePromptButton?.addEventListener('click', async () => {
+    const draft = wizardPromptPreview?.value?.trim()
+      || (wizardRole?.value === 'custom' ? wizardCustomRole?.value?.trim() : '');
+    if (!draft) {
+      if (wizardRefineStatus) wizardRefineStatus.textContent = 'Write or generate a draft prompt first.';
+      return;
+    }
+    // Send the wizard's tone/rule selections so the model folds them in.
+    const toneVal = wizardTone?.value === 'custom'
+      ? (wizardCustomTone?.value?.trim() || '') : (wizardTone?.value || '');
+    const rules = [];
+    if (wizardRuleLength?.checked) rules.push('match output length to input');
+    if (wizardRuleSanitize?.checked) rules.push('sanitize profanity/hostile language');
+
+    wizardRefinePromptButton.disabled = true;
+    hideRefinePanel();
+    if (wizardRefineStatus) wizardRefineStatus.textContent = 'Asking your local model… (this uses the LLM you have downloaded)';
+    try {
+      const result = await refinePersonaPrompt({ prompt: draft, tone: toneVal || null, rules: rules.length ? rules : null });
+      renderRefineList(wizardRefineUnderstood, result?.understood, 'The model reported nothing explicit — read the refined prompt carefully.');
+      renderRefineList(wizardRefineAmbiguities, result?.ambiguities, 'Nothing — it found your description clear.');
+      if (wizardRefinedPrompt) wizardRefinedPrompt.value = result?.refined_prompt || '';
+      // The from-scratch flow hides these panel parts; the refine flow needs them.
+      wizardRefinePromptBlock?.classList.remove('hidden');
+      wizardRefineActions?.classList.remove('hidden');
+      wizardRefinePanel?.classList.remove('hidden');
+      if (wizardRefineStatus) {
+        const warnings = Array.isArray(result?.lint_warnings) ? result.lint_warnings : [];
+        wizardRefineStatus.textContent = warnings.length
+          ? `Review the model's reading below. Lint: ${warnings.join(' ')}`
+          : "Review the model's reading below — if the guesses look wrong, fix your draft and run it again.";
+      }
+    } catch (err) {
+      if (wizardRefineStatus) wizardRefineStatus.textContent = `Persona helper failed: ${err.message}`;
+    } finally {
+      wizardRefinePromptButton.disabled = false;
+    }
+  });
+
+  wizardApplyRefinedButton?.addEventListener('click', () => {
+    const refined = wizardRefinedPrompt?.value?.trim();
+    if (refined && wizardPromptPreview) {
+      wizardPromptPreview.value = refined;
+      setMessage(wizardMessage, 'Refined prompt applied. Save the persona to keep it.', 'info');
+    }
+    hideRefinePanel();
+  });
+
+  wizardDismissRefinedButton?.addEventListener('click', hideRefinePanel);
+
+  // --- From-scratch mode: describe the persona in plain words and the local
+  // model designs the whole thing (name, prompt, settings, few-shot examples),
+  // then lands on the review step showing what it understood. Nothing is
+  // saved until the user hits Save Persona.
+  wizardDescribeButton?.addEventListener('click', async () => {
+    const description = wizardDescribeInput?.value?.trim();
+    if (!description) {
+      if (wizardDescribeStatus) wizardDescribeStatus.textContent = 'Describe the persona first — a couple of sentences is plenty.';
+      return;
+    }
+    wizardDescribeButton.disabled = true;
+    if (wizardDescribeStatus) wizardDescribeStatus.textContent = 'Your local model is designing the persona… (typically 10–30s)';
+    try {
+      const result = await draftPersonaFromDescription(description);
+
+      // Fill every wizard field the model proposed; the user reviews on step 4.
+      let name = result?.name || '';
+      if (name && BUILTIN_PERSONAS.has(name)) name = `${name} (mine)`;
+      if (name && wizardPersonaName) wizardPersonaName.value = name;
+      if (wizardPromptPreview) wizardPromptPreview.value = result?.prompt || '';
+      if (wizardTemperature) {
+        wizardTemperature.value = (result?.temperature === null || result?.temperature === undefined)
+          ? '' : String(result.temperature);
+      }
+      if (wizardOutputPolicy && result?.output_policy) wizardOutputPolicy.value = result.output_policy;
+      if (wizardSafetyMode && result?.safety_mode) wizardSafetyMode.value = result.safety_mode;
+      renderFewShotRows(result?.few_shot);
+
+      // Keep the generated prompt: entering step 4 must not regenerate from
+      // the wizard's template selections over it.
+      editingExistingPersona = true;
+
+      renderRefineList(wizardRefineUnderstood, result?.understood, 'The model reported nothing explicit — read the prompt carefully.');
+      renderRefineList(wizardRefineAmbiguities, result?.ambiguities, 'Nothing — it found your description clear.');
+      // Prompt already applied — hide the refine panel's apply flow.
+      wizardRefinePromptBlock?.classList.add('hidden');
+      wizardRefineActions?.classList.add('hidden');
+      wizardRefinePanel?.classList.remove('hidden');
+
+      showStep(4);
+      if (wizardDescribeStatus) wizardDescribeStatus.textContent = '';
+      const warnings = Array.isArray(result?.lint_warnings) ? result.lint_warnings : [];
+      if (wizardRefineStatus) {
+        wizardRefineStatus.textContent = warnings.length
+          ? `Persona built — review the model's reading below, then save. Lint: ${warnings.join(' ')}`
+          : "Persona built from your description — review what the model understood (and its guesses) below, tweak anything, then save.";
+      }
+      const examples = Array.isArray(result?.few_shot) ? result.few_shot.length : 0;
+      if (examples && wizardAdvanced && !wizardAdvanced.open) {
+        // The generated few-shot examples live in Advanced — open it so they
+        // are visible for review rather than silently attached.
+        wizardAdvanced.open = true;
+      }
+    } catch (err) {
+      if (wizardDescribeStatus) wizardDescribeStatus.textContent = `Persona builder failed: ${err.message}`;
+    } finally {
+      wizardDescribeButton.disabled = false;
+    }
   });
 
   wizardAddFewShotButton?.addEventListener('click', () => addFewShotRow());
@@ -2992,6 +3407,9 @@ async function refreshModels() {
   fillSelect(whisperModelSelectEl, whisperPayload.supported ?? [], whisperPayload.selected_model_size);
 
   renderModelPanels();
+  // Wake engine backbones live in this tab too now — keep them in sync with
+  // every Models refresh (non-blocking; its own error handling renders inline).
+  refreshWakeModels().catch(() => {});
   return { llmPayload, whisperPayload };
 }
 
@@ -4582,9 +5000,15 @@ function renderWakeBackboneList(models) {
   const el = document.getElementById('wakeBackboneList');
   if (!el) return;
   const backbones = (models || []).filter((m) => m.kind === 'backbone');
+  const badge = document.getElementById('wakeEngineBadge');
   if (!backbones.length) {
     el.innerHTML = '<span class="empty-state">No wake engine components listed.</span>';
+    if (badge) badge.textContent = '—';
     return;
+  }
+  if (badge) {
+    const ready = backbones.filter((m) => m.downloaded).length;
+    badge.textContent = ready === backbones.length ? 'Installed' : `${ready}/${backbones.length} installed`;
   }
   el.innerHTML = backbones
     .map(
@@ -4677,11 +5101,60 @@ async function handleWakeImport(file) {
   }
 }
 
+// Truthful backbone readiness (loadable, not just present) for the two wake
+// engine models. Returns the list of backbones that still need installing.
+async function getMissingWakeBackbones() {
+  const payload = await fetchWakeModels();
+  const backbones = (payload?.models || []).filter((m) => m.kind === 'backbone');
+  const checked = await Promise.all(
+    backbones.map(async (m) => {
+      try {
+        const state = await fetchWakeModelDownloadState(m.id);
+        return { ...m, ready: !!state.downloaded };
+      } catch {
+        return { ...m, ready: false };
+      }
+    }),
+  );
+  return checked.filter((m) => !m.ready);
+}
+
+// Enabling wake word requires the engine backbones. If they're missing, offer
+// to jump to the Models tab (same install flow as every other model) instead
+// of failing with an opaque "unavailable".
+async function ensureWakeBackbonesOrPromptModels() {
+  let missing;
+  try {
+    missing = await getMissingWakeBackbones();
+  } catch {
+    return true; // don't block enable on a readiness-probe hiccup
+  }
+  if (!missing.length) return true;
+  const names = missing.map((m) => m.name).join(', ');
+  const goToModels = window.confirm(
+    `Wake word needs these engine models installed first:\n\n${names}\n\n`
+      + 'Click OK to open the Models tab and install them, or Cancel to stay here.',
+  );
+  if (goToModels) {
+    const modelsTabButton = document.getElementById('tabButtonModels');
+    if (modelsTabButton) activateTab(modelsTabButton, { focus: true });
+    refreshModels().catch(() => {});
+  }
+  return false;
+}
+
 async function handleWakeToggle(checked) {
   const enabledEl = document.getElementById('settingWakeWordEnabled');
   if (enabledEl) enabledEl.disabled = true;
   try {
     if (checked) {
+      // Gate on the engine backbones first: prompt to install via the Models
+      // tab rather than letting enable fail with a cryptic reason.
+      const ready = await ensureWakeBackbonesOrPromptModels();
+      if (!ready) {
+        if (enabledEl) enabledEl.checked = false;
+        return;
+      }
       const sensitivityEl = settingEls.wake_word_sensitivity;
       const cooldownEl = settingEls.wake_word_cooldown_s;
       const modelEl = settingEls.wake_word_model;
@@ -4867,6 +5340,9 @@ function initSettingsPanel() {
       } else if (sectionName === 'voice-control') {
         refreshWakeStatus().catch(() => {});
         refreshWakeModels().catch(() => {});
+      } else if (sectionName === 'tts-readaloud') {
+        refreshVoiceBlendCapabilityNote().catch(() => {});
+        refreshCloneStatusNote().catch(() => {});
       }
 
       settingsSections.forEach((section) => {
@@ -4959,7 +5435,7 @@ function initSettingsPanel() {
   const testTtsButton = document.getElementById('testTtsButton');
   testTtsButton?.addEventListener('click', async () => {
     const previewText = document.getElementById('voicePreviewText')?.value?.trim();
-    const text = previewText || "This is a test of the BetterFingers text to speech voice synthesis.";
+    const text = previewText || DEFAULT_VOICE_AUDITION_TEXT;
     const settings = gatherVoiceStudioSettings();
 
     testTtsButton.disabled = true;
@@ -5536,11 +6012,7 @@ provisionVoiceCloningButton?.addEventListener('click', () => {
   // runModelAction sets modelMessage from result.message (ok=false → danger),
   // so the honest "not published yet" / platform-unsupported message surfaces
   // cleanly. The response carries fresh `cloning` availability → re-render.
-  runModelAction(provisionVoiceCloningButton, 'Install voice cloning', async () => {
-    const result = await provisionVoiceCloning();
-    renderVoiceCloningPanel(result?.cloning);
-    return result;
-  });
+  installVoiceCloning();
 });
 
 saveDraftEditButton?.addEventListener('click', async () => {

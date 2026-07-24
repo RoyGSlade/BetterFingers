@@ -707,6 +707,15 @@
                         <textarea id="wizardCustomRole" class="settings-input textarea-small" placeholder="e.g. You are an expert copywriter. Rewrite user text to be extremely persuasive..."></textarea>
                       </label>
                     </div>
+                    <div class="mt-12">
+                      <span class="status-label">Or start from scratch with your model</span>
+                      <p class="setting-desc">Describe the persona you want in your own words — dictate it if you like. Your downloaded model designs the whole persona (prompt, settings, examples) and shows you what it understood before anything is saved.</p>
+                      <textarea id="wizardDescribeInput" class="settings-input textarea-small" placeholder="e.g. I want it to keep my voice but tighten everything up, a little poetic, and if I'm angry it should stay angry..."></textarea>
+                      <div class="action-row mt-12">
+                        <button id="wizardDescribeButton" class="secondary-button" type="button">✨ Build it with your model</button>
+                      </div>
+                      <div id="wizardDescribeStatus" class="warmup-message" role="status" aria-live="polite"></div>
+                    </div>
                   </div>
 
                   <div id="wizardStep2" class="wizard-step hidden">
@@ -751,6 +760,22 @@
                       </label>
                       <div class="action-row">
                         <button id="wizardRegeneratePromptButton" class="secondary-button" type="button">Regenerate from wizard</button>
+                        <button id="wizardRefinePromptButton" class="secondary-button" type="button">✨ Clean up with your model</button>
+                      </div>
+                      <div id="wizardRefineStatus" class="warmup-message" role="status" aria-live="polite"></div>
+                      <div id="wizardRefinePanel" class="hidden">
+                        <span class="status-label">What your model understood</span>
+                        <ul id="wizardRefineUnderstood" class="setting-desc"></ul>
+                        <span class="status-label">Where it had to guess</span>
+                        <ul id="wizardRefineAmbiguities" class="setting-desc"></ul>
+                        <label id="wizardRefinePromptBlock">
+                          <span class="status-label">Refined prompt</span>
+                          <textarea id="wizardRefinedPrompt" class="settings-input textarea-medium"></textarea>
+                        </label>
+                        <div id="wizardRefineActions" class="action-row mt-12">
+                          <button id="wizardApplyRefinedButton" class="secondary-button" type="button">Use refined prompt</button>
+                          <button id="wizardDismissRefinedButton" class="secondary-button" type="button">Keep mine</button>
+                        </div>
                       </div>
                     </div>
                     <details id="wizardAdvanced" class="mt-12">
@@ -982,8 +1007,11 @@
 
               <div class="setting-group">
                 <h3>Wake Engine Components</h3>
-                <p class="setting-desc">Shared feature-extraction models (melspectrogram + embedding), Apache-2.0. Downloaded once, on demand.</p>
-                <div id="wakeBackboneList" class="flex-column-gap10"></div>
+                <p class="setting-desc">
+                  The shared feature-extraction models (melspectrogram + embedding, Apache-2.0) are
+                  managed in the <strong>Models</strong> tab, alongside the LLM and Whisper models.
+                  Install them there before enabling wake word or building a phrase.
+                </p>
               </div>
 
               <div class="setting-group" id="wakeTrainingGroup">
@@ -991,7 +1019,7 @@
                 <p class="setting-desc">
                   Train your own wake phrase on-device. Your phrase is synthesized across the app's
                   voices (plus decoy phrases as negatives) to train a small classifier — no cloud, no
-                  extra downloads. Needs the Wake Engine Components above installed first.
+                  extra downloads. Needs the Wake Engine Components (Models tab) installed first.
                 </p>
                 <div class="setting-row">
                   <div class="setting-info">
@@ -1115,6 +1143,19 @@
                     <button id="testTtsButton" class="secondary-button settings-btn" type="button">Audition Voice / Test TTS API</button>
                   </div>
                 </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="status-label" for="voiceLivePreview">Live preview</label>
+                    <span class="setting-desc">When on, re-speaks a short phrase about 600ms after you tweak any voice control below — blend, modulation, base voice, or speed.</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="custom-switch-label">
+                      <input id="voiceLivePreview" type="checkbox" />
+                      <span class="custom-switch-slider"></span>
+                    </label>
+                  </div>
+                </div>
               </div>
 
               <div class="setting-group">
@@ -1145,6 +1186,10 @@
                 <p class="setting-desc">Mix in up to two extra voices. Weights auto-normalize on the backend — set relative amounts, no math required.</p>
 
                 <div id="voiceBlendRows" class="voice-blend-rows"></div>
+
+                <div class="warning-banner inline-warning" id="voiceBlendBackendNote" hidden>
+                  <strong>Heads up:</strong> Voice blending needs the ONNX voice engine — blends will be ignored on the current backend.
+                </div>
 
                 <div class="action-row mt-12">
                   <button id="addVoiceLayerButton" class="secondary-button" type="button">+ Add voice layer</button>
@@ -1213,6 +1258,11 @@
                 <h3>Voice Cloning (Advanced)</h3>
                 <div class="warning-banner inline-warning" style="margin-bottom: 14px;">
                   <strong>Consent required.</strong> Only clone a voice you own or have explicit permission to use. No cloning engine is installed yet — samples are validated and saved as a clone source for when one is added; they are not synthesized from today.
+                </div>
+
+                <div id="voiceCloneStatusNote" class="setting-desc mt-12"></div>
+                <div class="action-row mt-12">
+                  <button id="voiceCloneInstallButton" class="secondary-button" type="button" hidden>Install voice cloning</button>
                 </div>
 
                 <div class="setting-row">
@@ -1750,6 +1800,17 @@
                 <button id="unloadSttButton" class="secondary-button" type="button">Unload</button>
               </div>
             </section>
+          </div>
+
+          <div class="model-panel model-panel-compact" aria-labelledby="wakeEngineHeading">
+            <div class="model-panel-header">
+              <div>
+                <h3 id="wakeEngineHeading">Wake Word Engine</h3>
+                <p>Shared feature-extraction models (melspectrogram + embedding), Apache-2.0. Required for hands-free wake-word activation and for building your own wake phrase. Downloaded once, on demand.</p>
+              </div>
+              <span id="wakeEngineBadge" class="model-badge">—</span>
+            </div>
+            <div id="wakeBackboneList" class="flex-column-gap10"></div>
           </div>
 
           <div class="model-panel model-panel-compact">

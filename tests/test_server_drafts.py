@@ -320,13 +320,26 @@ class ServerDraftTests(unittest.TestCase):
         self.assertNotIn("long_recording_detected", names)
         self.assertNotIn("chunking_progress", names)
 
-    def test_on_recording_complete_processes_recording_in_background_worker(self):
-        with patch.object(server.threading, "Thread", ImmediateThread), patch.object(
-            server, "Transcriber", DummyTranscriber
-        ), patch.object(server, "get_engine", return_value=DummyEngine()), patch.object(
-            server, "broadcast_status_threadsafe"
-        ):
+    def test_on_recording_complete_processes_recording_via_dispatcher(self):
+        # on_recording_complete now hands the recording to the held-queue
+        # dispatcher (a real thread by design — see _ensure_recording_dispatcher)
+        # and returns immediately, so the draft lands asynchronously. The wait
+        # runs INSIDE the patch context and holds until the pipeline's terminal
+        # "idle" broadcast — exiting on the draft alone would let the tail of
+        # the pipeline race the patch teardown (and the next test).
+        import threading as _threading
+
+        pipeline_idle = _threading.Event()
+
+        def _observe(status, data=None):
+            if status == "idle":
+                pipeline_idle.set()
+
+        with patch.object(server, "Transcriber", DummyTranscriber), patch.object(
+            server, "get_engine", return_value=DummyEngine()
+        ), patch.object(server, "broadcast_status_threadsafe", side_effect=_observe):
             server.on_recording_complete(DummyRecordingResult())
+            self.assertTrue(pipeline_idle.wait(timeout=10.0))
 
         self.assertEqual(len(server.draft_queue), 1)
         self.assertEqual(server.draft_queue[0]["final_text"], "True Janitor: raw transcript")

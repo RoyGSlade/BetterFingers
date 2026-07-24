@@ -1,5 +1,6 @@
 import hmac
 import os
+import queue
 import re
 import sys
 import shutil
@@ -22,6 +23,7 @@ from llm_engine import LLMEngine, get_engine, get_engine_if_initialized, resolve
 from log_redaction import redact_exc, redact_user_text
 from store_migration import get_degraded_events
 from transcriber import Transcriber
+from streaming_transcriber import BatchCutter, StreamingTranscriptionSession
 from hotkey_manager import HotkeyManager
 from audio_gate import should_block_for_no_audio
 from user_profile_manager import profile_manager
@@ -266,6 +268,19 @@ LLMEngine.set_load_reporter(lambda mid, est: model_runtime.note_loaded("llm", mi
 # recovery saves, sends, TTS, retranscription) refuses, so the wipe operates on
 # a quiescent system and nothing regrows behind it.
 privacy_wipe_in_progress = threading.Event()
+# Held-recording queue: a recording that finishes while the pipeline is busy
+# waits here (FIFO) instead of being rejected, so back-to-back dictations never
+# interrupt the user. One dispatcher thread drains it; each item optionally
+# carries the recording's StreamingTranscriptionSession whose finalize() yields
+# the already-streamed transcript. The drop generation lets a privacy wipe
+# invalidate items already dequeued but not yet processed.
+MAX_PENDING_RECORDINGS = 12
+_pending_recordings = queue.Queue()
+_recording_dispatcher_lock = threading.Lock()
+_recording_dispatcher_thread = None
+_pending_drop_generation = 0
+_active_stream_session = None
+_stream_session_lock = threading.Lock()
 # Coordinates draft sends against the privacy wipe's output-drain step: a send
 # registers begin_send/end_send around its injection+persist, and the wipe
 # drains (cancel + wait for zero active sends + exclusive lease) before it is
@@ -792,6 +807,74 @@ def _broadcast_watchdog_timeout():
     )
 
 
+def _broadcast_partial_transcript(text, batch_count):
+    """Streaming STT progress: lets the UI show live text while recording."""
+    broadcast_status_threadsafe(
+        "stt_partial", {"text": text, "batches": batch_count}
+    )
+
+
+def _begin_stream_session():
+    """Create the streaming transcription session for a recording that is
+    about to start. Failure here is never fatal — the pipeline's classic
+    full-audio pass still runs when no streamed transcript arrives."""
+    global _active_stream_session
+    try:
+        config = get_active_recording_config()
+        if not bool(config.get("streaming_transcription_enabled", True)):
+            return
+        trans = ensure_transcriber_initialized(preload=False)
+        dict_terms = dictionary.get_terms()
+        hotwords = dictionary.hotwords_string(dict_terms)
+
+        def _transcribe(audio):
+            # Same lease discipline as the pipeline's STT stage: a Whisper
+            # unload/reload can't free the model mid-batch.
+            with model_runtime.read_lease("stt"):
+                return trans.transcribe_with_confidence(audio, hotwords=hotwords)
+
+        cutter = BatchCutter(
+            sample_rate=16000,
+            min_batch_seconds=float(config.get("streaming_batch_min_seconds", 3.0)),
+            max_batch_seconds=float(config.get("streaming_batch_max_seconds", 12.0)),
+            silence_ms=int(config.get("streaming_batch_silence_ms", 600)),
+            rms_threshold=float(config.get("no_audio_min_rms", 0.003)),
+            peak_threshold=float(config.get("no_audio_min_peak", 0.015)),
+        )
+        session = StreamingTranscriptionSession(
+            _transcribe,
+            sample_rate=16000,
+            cutter=cutter,
+            on_partial=_broadcast_partial_transcript,
+        )
+        with _stream_session_lock:
+            _active_stream_session = session
+    except Exception as exc:
+        logging.warning(f"Streaming transcription unavailable for this recording: {redact_exc(exc)}")
+
+
+def _detach_stream_session():
+    """Take ownership of the active session (recording just stopped)."""
+    global _active_stream_session
+    with _stream_session_lock:
+        session = _active_stream_session
+        _active_stream_session = None
+    return session
+
+
+def _on_recorder_chunk(chunk, sample_rate):
+    """Recorder chunk callback: UI amplitude + feed the streaming session.
+    Runs on the recorder's chunk-worker thread; both halves are O(chunk)."""
+    _broadcast_recording_amplitude(chunk, sample_rate)
+    with _stream_session_lock:
+        session = _active_stream_session
+    if session is not None:
+        try:
+            session.feed(chunk, sample_rate)
+        except Exception as exc:
+            logging.debug(f"Streaming session feed failed: {exc}")
+
+
 def start_hotkey_manager():
     global hotkey_manager, hotkey_manager_started, hotkey_recorder
 
@@ -807,7 +890,7 @@ def start_hotkey_manager():
     from recorder import AudioRecorder
 
     recorder = AudioRecorder()
-    recorder.set_chunk_callback(_broadcast_recording_amplitude)
+    recorder.set_chunk_callback(_on_recorder_chunk)
     manager = HotkeyManager(
         recorder=recorder,
         on_recording_complete_callback=on_recording_complete,
@@ -815,7 +898,10 @@ def start_hotkey_manager():
         on_force_stop_callback=emergency_stop_runtime,
         on_manual_send_callback=handle_primary_action,
         on_review_tts_callback=handle_review_tts_shortcut,
-        is_busy_callback=lambda: is_processing_draft,
+        # Recording is never blocked by draft processing anymore — a finished
+        # recording is held in _pending_recordings and processed in order. The
+        # only true blocker is a privacy wipe, which must stay quiescent.
+        is_busy_callback=lambda: privacy_wipe_in_progress.is_set(),
         on_watchdog_timeout_callback=_broadcast_watchdog_timeout,
     )
     try:
@@ -1570,7 +1656,21 @@ class _StatusHeartbeat:
         self._thread = None
 
 
-def process_recording_result(recording_result):
+def process_recording_result(
+    recording_result,
+    streamed_text=None,
+    streamed_confidence=None,
+    streamed_stt_ms=None,
+    wait_for_gate=False,
+):
+    """Run one recording through STT → post-passes → LLM cleanup → draft.
+
+    ``streamed_text`` (from a StreamingTranscriptionSession) skips the
+    full-audio Whisper pass — the transcript was already built while the user
+    was still talking. ``wait_for_gate`` is the held-queue dispatcher's mode:
+    block until the running pipeline finishes instead of rejecting, so
+    back-to-back recordings are processed in order rather than bounced.
+    """
     global is_processing_draft, _active_dictation_job_id
     # A privacy wipe must operate on a quiescent system: never start (or
     # recover-save) a recording while one is running, or it would regrow data
@@ -1586,7 +1686,14 @@ def process_recording_result(recording_result):
     # must not clear the running job's cancellation event, overwrite its
     # active id, or share the STT/LLM instances — so it persists its audio to
     # the recovery bin and bows out (callers surface 409 / a busy status).
-    if not dictation_coordinator.try_begin():
+    # The dispatcher instead waits its turn (bounded, so a wedged pipeline
+    # degrades to the recovery-save path rather than deadlocking the queue).
+    admitted = (
+        dictation_coordinator.begin(timeout=600.0)
+        if wait_for_gate
+        else dictation_coordinator.try_begin()
+    )
+    if not admitted:
         logging.warning("Dictation pipeline busy; rejecting competing invocation.")
         # Re-check the wipe flag: it may have been set after the top guard.
         # A rejected recording must not seed the recovery bin during a wipe.
@@ -1605,6 +1712,17 @@ def process_recording_result(recording_result):
         broadcast_status_threadsafe(
             "dictation_busy",
             {"message": "A dictation is already processing; recording saved to recovery."},
+        )
+        return None
+    # Re-check the wipe AFTER admission: a wipe may have begun while this
+    # caller was blocked in begin() (or between try_begin and here). Running
+    # the pipeline now would save/create data behind the wipe's back.
+    if privacy_wipe_in_progress.is_set():
+        dictation_coordinator.finish()
+        logging.info("Dropping recording: a privacy wipe began while awaiting the pipeline gate.")
+        broadcast_status_threadsafe(
+            "dictation_busy",
+            {"message": "A privacy wipe is in progress; this recording was discarded."},
         )
         return None
     # Admission is won. From here the gate MUST be released on every exit.
@@ -1655,26 +1773,35 @@ def process_recording_result(recording_result):
     try:
         check_cancelled()
         broadcast_status_threadsafe("transcribing")
-        trans = ensure_transcriber_initialized(preload=False)
         audio_data = getattr(recording_result, "audio_data", recording_result)
         # Personal dictionary (C1): bias the ASR toward the user's terms.
         dict_terms = dictionary.get_terms()
-        hotwords = dictionary.hotwords_string(dict_terms)
         _stt_start = time.perf_counter()
         confidence = {"score": None, "avg_logprob": None, "no_speech_prob": None}
-        if hasattr(audio_data, "size") and audio_data.size <= 0:
-            raw_text = ""
-        elif audio_data is None:
-            raw_text = ""
+        if streamed_text is not None and str(streamed_text).strip():
+            # The transcript was already built batch-by-batch while the user
+            # was still talking; the only STT cost paid here was draining the
+            # tail (streamed_stt_ms, measured by the dispatcher).
+            raw_text = str(streamed_text)
+            if isinstance(streamed_confidence, dict) and streamed_confidence:
+                confidence = streamed_confidence
+            stt_ms = streamed_stt_ms
         else:
-            # STT read lease: a Whisper reload/unload cannot free the model
-            # mid-transcription (it will 409 or wait for this to finish).
-            with model_runtime.read_lease("stt"):
-                if hasattr(trans, "transcribe_with_confidence"):
-                    raw_text, confidence = trans.transcribe_with_confidence(audio_data, hotwords=hotwords)
-                else:
-                    raw_text = trans.transcribe(audio_data)
-        stt_ms = (time.perf_counter() - _stt_start) * 1000.0
+            trans = ensure_transcriber_initialized(preload=False)
+            hotwords = dictionary.hotwords_string(dict_terms)
+            if hasattr(audio_data, "size") and audio_data.size <= 0:
+                raw_text = ""
+            elif audio_data is None:
+                raw_text = ""
+            else:
+                # STT read lease: a Whisper reload/unload cannot free the model
+                # mid-transcription (it will 409 or wait for this to finish).
+                with model_runtime.read_lease("stt"):
+                    if hasattr(trans, "transcribe_with_confidence"):
+                        raw_text, confidence = trans.transcribe_with_confidence(audio_data, hotwords=hotwords)
+                    else:
+                        raw_text = trans.transcribe(audio_data)
+            stt_ms = (time.perf_counter() - _stt_start) * 1000.0
 
         _post_start = time.perf_counter()
         # Post-ASR correction snaps near-miss tokens back to dictionary terms.
@@ -1932,6 +2059,7 @@ loop = None
 
 def on_recording_start():
     broadcast_status_threadsafe("recording_started")
+    _begin_stream_session()
 
 def on_recording_complete(recording_result):
     try:
@@ -1940,14 +2068,120 @@ def on_recording_complete(recording_result):
         size = len(recording_result) if recording_result is not None else 0
     logging.info(f"CALLBACK: Recording Complete ({size} samples)")
     broadcast_status_threadsafe("recording_complete", {"sample_count": size})
+    # Hand off to the dispatcher and return immediately: the hotkey thread is
+    # free to start the next recording right away — the user is never blocked
+    # on transcription or the LLM.
+    _enqueue_recording(recording_result, _detach_stream_session())
 
-    def _worker():
+
+def _ensure_recording_dispatcher():
+    global _recording_dispatcher_thread
+    with _recording_dispatcher_lock:
+        if _recording_dispatcher_thread is not None and _recording_dispatcher_thread.is_alive():
+            return
+        # _REAL_THREAD_CLS, not threading.Thread: the dispatcher loop is
+        # infinite by design, so a test's ImmediateThread patch must never run
+        # it synchronously (same rationale as _StatusHeartbeat).
+        _recording_dispatcher_thread = _REAL_THREAD_CLS(
+            target=_recording_dispatcher_loop,
+            daemon=True,
+            name="betterfingers-recording-dispatcher",
+        )
+        _recording_dispatcher_thread.start()
+
+
+def _enqueue_recording(recording_result, stream_session=None):
+    """Hold a finished recording for in-order processing (never reject)."""
+    _ensure_recording_dispatcher()
+    depth = _pending_recordings.qsize()
+    if depth >= MAX_PENDING_RECORDINGS:
+        # Safety valve against unbounded RAM growth if the pipeline wedges:
+        # persist to the recovery bin exactly like the old rejection path.
+        if stream_session is not None:
+            stream_session.abort()
+        if not privacy_wipe_in_progress.is_set():
+            try:
+                recordings.save_recording(
+                    recording_result,
+                    rec_id=recordings.new_rec_id(),
+                    metadata={
+                        "stop_reason": getattr(recording_result, "stop_reason", "manual"),
+                        "rejected_reason": "queue_full",
+                    },
+                )
+            except Exception as exc:
+                logging.debug(f"Could not persist overflow recording: {exc}")
+        broadcast_status_threadsafe(
+            "dictation_busy",
+            {"message": "Too many recordings are waiting; this one was saved to recovery."},
+        )
+        return
+    _pending_recordings.put((recording_result, stream_session, _pending_drop_generation))
+    if depth > 0 or dictation_coordinator.is_busy():
+        broadcast_status_threadsafe("dictation_queued", {"position": depth + 1})
+
+
+def _drop_pending_recordings():
+    """Privacy wipe: discard every held recording and poison items already
+    dequeued but not yet processed (generation bump). Returns the drop count."""
+    global _pending_drop_generation
+    _pending_drop_generation += 1
+    dropped = 0
+    while True:
         try:
-            process_recording_result(recording_result)
-        except Exception as exc:
-            logging.error(f"Recording worker failed: {redact_exc(exc)}")
+            item = _pending_recordings.get_nowait()
+        except queue.Empty:
+            break
+        if item is None:
+            continue
+        _, session, _ = item
+        if session is not None:
+            session.abort()
+        dropped += 1
+    active = _detach_stream_session()
+    if active is not None:
+        active.abort()
+    return dropped
 
-    threading.Thread(target=_worker, daemon=True, name="betterfingers-recording-worker").start()
+
+def _recording_dispatcher_loop():
+    while True:
+        item = _pending_recordings.get()
+        if item is None:
+            continue
+        recording_result, session, generation = item
+        try:
+            if generation != _pending_drop_generation or privacy_wipe_in_progress.is_set():
+                # Invalidated by a privacy wipe after being queued/dequeued.
+                if session is not None:
+                    session.abort()
+                logging.info("Dropping held recording: invalidated by privacy wipe.")
+                continue
+            streamed_text = None
+            streamed_conf = None
+            streamed_stt_ms = None
+            if session is not None:
+                _drain_start = time.perf_counter()
+                fin = session.finalize()
+                if fin.get("ok") and str(fin.get("text") or "").strip():
+                    streamed_text = fin["text"]
+                    streamed_conf = fin.get("confidence")
+                    # The user-visible STT cost of this recording is just the
+                    # tail drain — the batches ran during recording.
+                    streamed_stt_ms = (time.perf_counter() - _drain_start) * 1000.0
+                    logging.info(
+                        f"Streaming STT covered {fin.get('batches', 0)} batches; "
+                        f"drain took {streamed_stt_ms:.0f}ms."
+                    )
+            process_recording_result(
+                recording_result,
+                streamed_text=streamed_text,
+                streamed_confidence=streamed_conf,
+                streamed_stt_ms=streamed_stt_ms,
+                wait_for_gate=True,
+            )
+        except Exception as exc:
+            logging.error(f"Recording dispatcher failed: {redact_exc(exc)}")
 
 @app.on_event("startup")
 async def startup_event():
@@ -2698,6 +2932,58 @@ async def test_persona_route(request: PersonaTestRequest):
     return {"result": result}
 
 
+class PersonaRefineRequest(BaseModel):
+    prompt: str
+    tone: Optional[str] = None
+    rules: Optional[list] = None
+
+
+@app.post("/personas/refine")
+async def refine_persona_route(request: PersonaRefineRequest):
+    """Wizard co-pilot: the downloaded local model rewrites the user's rough
+    persona description into a clear prompt and reports what it understood and
+    where it had to guess, so a dictated description doesn't get saved while
+    secretly ambiguous."""
+    draft = str(request.prompt or "").strip()
+    if not draft:
+        raise HTTPException(status_code=400, detail="A draft persona description is required.")
+    engine = get_selected_llm_engine()
+    try:
+        result = await run_in_threadpool(
+            engine.refine_persona_prompt,
+            draft,
+            request.tone,
+            request.rules,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Persona refine failed: {exc}")
+    if not result.get("ok"):
+        raise HTTPException(status_code=503, detail=result.get("message", "Persona helper unavailable."))
+    return result
+
+
+class PersonaDraftRequest(BaseModel):
+    description: str
+
+
+@app.post("/personas/draft")
+async def draft_persona_route(request: PersonaDraftRequest):
+    """Wizard from-scratch mode: the local model designs a complete persona
+    (name, prompt, settings, few-shot examples) from a plain-language
+    description. Returned for review in the wizard, never saved directly."""
+    description = str(request.description or "").strip()
+    if not description:
+        raise HTTPException(status_code=400, detail="A persona description is required.")
+    engine = get_selected_llm_engine()
+    try:
+        result = await run_in_threadpool(engine.draft_persona_from_description, description)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Persona draft failed: {exc}")
+    if not result.get("ok"):
+        raise HTTPException(status_code=503, detail=result.get("message", "Persona helper unavailable."))
+    return result
+
+
 @app.delete("/personas/{name}")
 async def delete_persona_route(name: str):
     from llm_engine import delete_persona
@@ -3306,6 +3592,10 @@ def _perform_privacy_wipe(wipe_voices: bool):
         # 1. Drain the recorder: stop it and confirm it actually stopped.
         cleared["recorder_stopped"] = _drain_recorder()
 
+        # 1b. Discard held recordings (and their streaming transcripts): a
+        #     queued item processed after the wipe would regrow erased data.
+        cleared["pending_recordings_dropped"] = _drop_pending_recordings()
+
         # 2. Cancel the active dictation and acquire the pipeline gate. If the
         #    pipeline will not quiesce, ABORT rather than delete under a live
         #    job — releasing the flag so the system keeps working.
@@ -3407,6 +3697,7 @@ def _perform_privacy_wipe(wipe_voices: bool):
         postconditions = {
             "recorder_stopped": cleared["recorder_stopped"],
             "recording_callback_drained": cleared["recording_callback_drained"],
+            "pending_queue_empty": _pending_recordings.empty(),
             "pipeline_quiesced": gate_held,
             "output_injector_idle": cleared["output_injector_idle"],
             "draft_queue_empty": len(draft_queue) == 0,
@@ -3829,9 +4120,19 @@ def _resolve_voice_and_modulation(request, config):
     voice (if request.persona is given and the persona has a deliberate
     voice identity — see below), which is either its referenced preset
     (persona.voice.preset) or its own inline fields, never a blend of both
-    -> profile defaults, into (voice_id, speed, blend, modulation) ready for
-    engine.speak(). Shared by both /tts/speak and /drafts/{id}/tts so the
-    fallback chain lives in one place.
+    -> the user's designated DEFAULT preset (Voice Studio "make default";
+    see voice_presets.get_default_preset()) -> profile defaults, into
+    (voice_id, speed, blend, modulation) ready for engine.speak(). Shared by
+    both /tts/speak and /drafts/{id}/tts so the fallback chain lives in one
+    place.
+
+    The default preset sits BELOW the persona/request-preset layers and
+    ABOVE profile config: it's the "otherwise use what I picked in Voice
+    Studio" layer for ordinary read-aloud, which previously had no saved
+    preset ever applied to it at all (a preset only took effect when a
+    caller passed preset_name explicitly, which the app never does for
+    plain read-aloud) — but an explicit ask (preset_name/persona) still
+    wins outright, same as it always has.
 
     A persona only contributes voice defaults when it has an actual voice
     identity — persona.voice.base or persona.voice.preset non-empty.
@@ -3879,6 +4180,18 @@ def _resolve_voice_and_modulation(request, config):
                 layers.append(persona_preset)
             else:
                 layers.append({k: v for k, v in persona_voice.items() if k not in ("preset", "stability")})
+
+    # Lowest-priority preset layer: the user's Voice Studio default, so a
+    # saved preset actually reaches ordinary read-aloud instead of only ever
+    # applying when a caller explicitly passes preset_name (which neither
+    # /tts/speak nor /drafts/{id}/tts do on their own). get_default_preset()
+    # already validates the name still exists (returns None if dangling), so
+    # no re-check is needed here.
+    default_preset_name = voice_presets.get_default_preset()
+    if default_preset_name:
+        default_preset = _find_voice_preset(default_preset_name, get_presets_cached())
+        if default_preset is not None:
+            layers.append(default_preset)
 
     def pick(request_val, field, config_key=None, fallback=None):
         if request_val is not None:
@@ -4448,7 +4761,7 @@ async def get_tts_status():
 
     status = await run_in_threadpool(engine.ensure_loaded)
     backend_val = engine.backend()
-    
+
     backend_name = "unavailable"
     if backend_val == "kokoro":
         backend_name = "Kokoro"
@@ -4456,12 +4769,21 @@ async def get_tts_status():
         backend_name = "ONNX"
     elif backend_val == "sapi":
         backend_name = "SAPI fallback"
-        
+
     msg = engine._status_message
     if libsndfile_missing:
         msg = f"Linux system package dependency failure: libsndfile1 is missing ({libsndfile_error}). Run 'sudo apt-get install libsndfile1' to resolve."
         backend_name = "unavailable"
-        
+
+    # get_capabilities() is a newer, optional addition to ReviewTTSEngine
+    # (backend/runtime/blend_capable snapshot for the UI to gate blend
+    # controls on). Guard with getattr rather than assuming it exists so
+    # this route works the same whether or not that method has landed yet.
+    capabilities = None
+    get_capabilities = getattr(engine, "get_capabilities", None)
+    if callable(get_capabilities):
+        capabilities = get_capabilities()
+
     return {
         "ok": engine.is_loaded() and not libsndfile_missing,
         "backend": backend_name,
@@ -4469,7 +4791,8 @@ async def get_tts_status():
         "fallback": engine._fallback,
         "message": msg,
         "libsndfile_missing": libsndfile_missing,
-        "libsndfile_error": libsndfile_error if libsndfile_missing else None
+        "libsndfile_error": libsndfile_error if libsndfile_missing else None,
+        "capabilities": capabilities,
     }
 
 @app.post("/tts/clone")
@@ -4581,6 +4904,27 @@ async def list_voices():
     import voice_clone_engine
     return {"defaults": defaults, "cloned": cloned,
             "cloning": voice_clone_engine.availability()}
+
+
+@app.get("/tts/clone/status")
+async def get_voice_clone_status():
+    """Cloning-runtime status for the models/settings UI: whether cloned-voice
+    synthesis can run right now, why not if it can't, and whether the optional
+    side-runtime has already been provisioned. availability() does real
+    imports (torch/kanade_tokenizer) as its check, so — like every other
+    availability-probing route here — it runs in a threadpool rather than
+    blocking the event loop.
+    """
+    import voice_clone_engine
+    status = await run_in_threadpool(voice_clone_engine.availability)
+    return {
+        "ok": True,
+        "available": status["available"],
+        "reason": status["reason"],
+        "setup_hint": status["setup_hint"],
+        "mechanism": status["mechanism"],
+        "provisioned": voice_clone_engine.is_clone_runtime_provisioned(),
+    }
 
 
 @app.post("/tts/clone/provision")

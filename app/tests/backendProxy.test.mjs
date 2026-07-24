@@ -20,6 +20,8 @@ test('accepts known backend routes with the right method', () => {
     ['POST', '/drafts/1/accept'],
     ['POST', '/models/llm/select'],
     ['POST', '/personas/lint'],
+    ['POST', '/personas/refine'],
+    ['POST', '/personas/draft'],
     ['POST', '/recordings/abc/retranscribe'],
     ['DELETE', '/recordings/abc'],
     ['DELETE', '/macros/hello'],

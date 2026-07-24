@@ -426,6 +426,39 @@ async function deleteVoicePreset(name, timeoutMs = 5000) {
   return deleteJson(`${VOICE_PRESETS_URL}/${encodeURIComponent(name)}`, timeoutMs);
 }
 
+// Auditions a saved preset exactly as saved — the backend resolves base/blend/
+// modulation from the preset by name, so the request carries nothing else
+// that could override it (unlike speakTts, which always sends voice_id/speed/
+// pitch and would win over a preset on the server).
+async function speakPreset(text, presetName, timeoutMs = 120000) {
+  return postJson(`${BACKEND_ORIGIN}/tts/speak`, { text, preset_name: presetName }, timeoutMs);
+}
+
+async function setDefaultVoicePreset(name, timeoutMs = 5000) {
+  return postJson(`${VOICE_PRESETS_URL}/${encodeURIComponent(name)}/make-default`, {}, timeoutMs);
+}
+
+async function clearDefaultVoicePreset(timeoutMs = 5000) {
+  // Flat path, NOT /voice-presets/default: that nested form is structurally
+  // identical to DELETE /voice-presets/{name} with name="default", so the
+  // backend gives "clear the default pointer" its own collision-free route
+  // (see routes_user_config.py) — a preset literally named "default" stays
+  // deletable via the parameterized route.
+  return deleteJson(`${BACKEND_ORIGIN}/voice-presets-default`, timeoutMs);
+}
+
+async function fetchCloneStatus(timeoutMs = 2500) {
+  return fetchJson(`${BACKEND_ORIGIN}/tts/clone/status`, timeoutMs);
+}
+
+async function fetchTtsStatus(timeoutMs = 2500) {
+  return fetchJson(`${BACKEND_ORIGIN}/runtime/tts-status`, timeoutMs);
+}
+
+async function stopTts(timeoutMs = 5000) {
+  return postJson(`${BACKEND_ORIGIN}/tts/stop`, {}, timeoutMs);
+}
+
 async function deleteVoice(voiceId, timeoutMs = 10000, { confirmed = false } = {}) {
   return typedRequest('deleteVoice', `${TTS_VOICES_URL}/${voiceId}`, timeoutMs, String(voiceId), {
     confirm: confirmed === true,
@@ -541,6 +574,14 @@ async function lintPersona(fields = {}, timeoutMs = 5000) {
 
 async function testPersona(fields = {}, timeoutMs = 120000) {
   return postJson(`${PERSONAS_URL}/test`, fields, timeoutMs);
+}
+
+async function refinePersonaPrompt(fields = {}, timeoutMs = 120000) {
+  return postJson(`${PERSONAS_URL}/refine`, fields, timeoutMs);
+}
+
+async function draftPersonaFromDescription(description, timeoutMs = 180000) {
+  return postJson(`${PERSONAS_URL}/draft`, { description }, timeoutMs);
 }
 
 async function getPersonaV2(name, timeoutMs = 2500) {
@@ -704,6 +745,12 @@ export {
   fetchVoicePresets,
   saveVoicePreset,
   deleteVoicePreset,
+  setDefaultVoicePreset,
+  clearDefaultVoicePreset,
+  speakPreset,
+  fetchCloneStatus,
+  fetchTtsStatus,
+  stopTts,
   cloneVoice,
   fetchWakeStatus,
   fetchWakeModels,
@@ -719,6 +766,8 @@ export {
   deleteVoice,
   lintPersona,
   testPersona,
+  refinePersonaPrompt,
+  draftPersonaFromDescription,
   savePersona,
   deletePersona,
   startFoundryInterview,

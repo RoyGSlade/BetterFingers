@@ -63,11 +63,28 @@ class DictationCoordinator:
         """
         if not self._gate.acquire(blocking=False):
             return False
+        self._claim()
+        return True
+
+    def begin(self, timeout=None):
+        """Blocking variant of try_begin for the held-recording dispatcher:
+        wait (up to ``timeout`` seconds, forever when None) for the running
+        pipeline to finish instead of rejecting. Returns True once this caller
+        owns the gate; same clear-cancel semantics as try_begin."""
+        if timeout is None:
+            acquired = self._gate.acquire()
+        else:
+            acquired = self._gate.acquire(timeout=max(0.0, float(timeout)))
+        if not acquired:
+            return False
+        self._claim()
+        return True
+
+    def _claim(self):
         with self._state_lock:
             self._token_seq += 1
             self._holder_token = self._token_seq
         self.cancellation_event.clear()
-        return True
 
     def set_active_job(self, job_id):
         with self._state_lock:
