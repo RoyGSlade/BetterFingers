@@ -250,11 +250,245 @@
       </div>
     </section>
 
-    <!-- ---------- placeholder containers (phase 1 scope) ---------- -->
-    <section class="sd-workspace sd-workspace--placeholder" id="workspace-library" data-workspace="library" hidden>
-      <strong>Library</strong>
-      <span>History, recordings, and Message Rescue land here in a later phase.</span>
+    <!-- ---------- LIBRARY workspace (populated, SPEC 5) ----------
+         Static markup below is a director-QA fixture: 5 mock cards spanning
+         every status/confidence color the mock shows (94% green sent, 88%
+         green sent, 61% amber recoverable/failed, 91% green sent, 72% blue
+         unsent/draft). features/libraryWorkspace.js's module script further
+         down re-renders this SAME content from equivalent item objects via
+         createLibraryWorkspaceFeature() when it can load (see the file://
+         CORS note on Phase 2's script) -- this static version is the
+         guaranteed-visible fallback either way, mirroring Talk's ring. -->
+    <section class="sd-workspace" id="workspace-library" data-workspace="library" hidden>
+
+      <div class="sd-library-toolbar">
+        <div class="sd-library-search">
+          <svg class="sd-library-search__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.5" y2="16.5"></line></svg>
+          <input type="search" class="sd-library-search__input" id="sdLibrarySearchInput" placeholder="Search messages, personas, or destinations&hellip;" />
+        </div>
+        <button type="button" class="sd-library-filter-btn" id="sdLibraryFilterButton" aria-label="Filter options">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"></line><circle cx="9" cy="6" r="2" fill="var(--sd-surface-raised)"></circle><line x1="4" y1="12" x2="20" y2="12"></line><circle cx="15" cy="12" r="2" fill="var(--sd-surface-raised)"></circle><line x1="4" y1="18" x2="20" y2="18"></line><circle cx="7" cy="18" r="2" fill="var(--sd-surface-raised)"></circle></svg>
+        </button>
+      </div>
+
+      <div class="sd-filter-chips" role="group" aria-label="Filters" id="sdLibraryFilterChips">
+        <button type="button" class="sd-filter-chip is-active" data-filter="all" id="sdFilterAll">All</button>
+        <button type="button" class="sd-filter-chip" data-filter="pinned" id="sdFilterPinned">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4h6l1 5-3 2v6l-1 3-1-3v-6l-3-2z"></path></svg>
+          Pinned
+        </button>
+        <button type="button" class="sd-filter-chip" data-filter="unsent" id="sdFilterUnsent">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8"></circle><line x1="6.3" y1="17.7" x2="17.7" y2="6.3"></line></svg>
+          Unsent
+        </button>
+        <button type="button" class="sd-filter-chip sd-filter-chip--recoverable" data-filter="recoverable" id="sdFilterRecoverable">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="8"></circle><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"></circle></svg>
+          Recoverable
+        </button>
+        <button type="button" class="sd-filter-chip sd-filter-chip--sent" data-filter="sent" id="sdFilterSent">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4,12 9,17 20,6"></polyline></svg>
+          Sent
+        </button>
+        <button type="button" class="sd-filter-chip sd-filter-chip--dropdown" id="sdFilterPersona">Persona <span class="sd-filter-chip__chevron" aria-hidden="true">&#9662;</span></button>
+        <button type="button" class="sd-filter-chip sd-filter-chip--dropdown" id="sdFilterDestination">Destination <span class="sd-filter-chip__chevron" aria-hidden="true">&#9662;</span></button>
+        <button type="button" class="sd-filter-chip sd-filter-chip--dropdown" id="sdFilterDate">Date <span class="sd-filter-chip__chevron" aria-hidden="true">&#9662;</span></button>
+      </div>
+
+      <div class="sd-timeline" id="sdLibraryTimeline">
+
+        <div class="sd-timeline__day">
+          <div class="sd-timeline__day-label">Today</div>
+          <div class="sd-timeline__rows">
+
+            <div class="sd-timeline__row">
+              <div class="sd-timeline__gutter">
+                <span class="sd-timeline__time">10:32 AM</span>
+                <span class="sd-timeline__glyph sd-timeline__glyph--pin" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M9 4h6l1 5-3 2v6l-1 3-1-3v-6l-3-2z"></path></svg>
+                </span>
+              </div>
+              <button type="button" class="sd-message-card is-selected" data-item-id="1">
+                <div class="sd-message-card__main">
+                  <p class="sd-message-card__title">I should be there around six&hellip;</p>
+                  <div class="sd-message-card__pipeline" data-status="sent"><span class="sd-message-card__pipeline-stage">Raw</span> &rarr; <span class="sd-message-card__pipeline-stage">Refined</span> &rarr; <span class="sd-message-card__pipeline-status">Sent</span></div>
+                  <div class="sd-message-card__chips">
+                    <span class="sd-chip sd-chip--persona">Natural</span>
+                    <span class="sd-chip sd-chip--destination-discord">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="16" height="11" rx="4"></rect><circle cx="9" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="15" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle><path d="M8 7 9 4h6l1 3"></path></svg>
+                      Discord #general
+                    </span>
+                  </div>
+                </div>
+                <div class="sd-message-card__meta" style="--sd-confidence-color: var(--sd-green);">
+                  <div class="sd-message-card__confidence">
+                    <span class="sd-message-card__confidence-label">Confidence</span>
+                    <span class="sd-message-card__confidence-value">94%</span>
+                    <span class="sd-confidence-bar"><span class="sd-confidence-bar__fill" style="width:94%;"></span></span>
+                  </div>
+                  <div class="sd-message-card__waveform">
+                    <svg viewBox="0 0 200 26" preserveAspectRatio="none"><polyline fill="none" stroke="currentColor" stroke-width="1.5" points="0,13 6,13 10,4 14,22 18,6 22,20 26,3 30,24 34,11 38,15 42,2 46,25 50,10 54,16 58,5 62,21 66,13 70,13 74,1 78,25 82,12 86,15 90,6 94,20 98,10 102,16 106,13 110,13 114,6 118,20 122,13 126,13 130,13"></polyline></svg>
+                    <span class="sd-message-card__duration">0:06</span>
+                  </div>
+                  <div class="sd-message-card__status sd-message-card__status--sent">Sent &bull; Today, 10:33 AM</div>
+                </div>
+              </button>
+            </div>
+
+            <div class="sd-timeline__row">
+              <div class="sd-timeline__gutter">
+                <span class="sd-timeline__time">9:47 AM</span>
+                <span class="sd-timeline__glyph sd-timeline__glyph--sent" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="20" x2="20" y2="4"></line><polygon points="20,4 12,4 20,12"></polygon></svg>
+                </span>
+              </div>
+              <button type="button" class="sd-message-card" data-item-id="2">
+                <div class="sd-message-card__main">
+                  <p class="sd-message-card__title">Can we push the meeting back?</p>
+                  <div class="sd-message-card__pipeline" data-status="sent"><span class="sd-message-card__pipeline-stage">Raw</span> &rarr; <span class="sd-message-card__pipeline-stage">Refined</span> &rarr; <span class="sd-message-card__pipeline-status">Sent</span></div>
+                  <div class="sd-message-card__chips">
+                    <span class="sd-chip sd-chip--persona">Professional</span>
+                    <span class="sd-chip sd-chip--destination">
+                      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2" fill="#36C5F0"></rect><rect x="14" y="3" width="7" height="7" rx="2" fill="#2EB67D"></rect><rect x="3" y="14" width="7" height="7" rx="2" fill="#ECB22E"></rect><rect x="14" y="14" width="7" height="7" rx="2" fill="#E01E5A"></rect></svg>
+                      Slack #team-ops
+                    </span>
+                  </div>
+                </div>
+                <div class="sd-message-card__meta" style="--sd-confidence-color: var(--sd-green);">
+                  <div class="sd-message-card__confidence">
+                    <span class="sd-message-card__confidence-label">Confidence</span>
+                    <span class="sd-message-card__confidence-value">88%</span>
+                    <span class="sd-confidence-bar"><span class="sd-confidence-bar__fill" style="width:88%;"></span></span>
+                  </div>
+                  <div class="sd-message-card__waveform">
+                    <svg viewBox="0 0 200 26" preserveAspectRatio="none"><polyline fill="none" stroke="currentColor" stroke-width="1.5" points="0,13 6,13 10,5 14,21 18,7 22,19 26,4 30,23 34,12 38,16 42,3 46,24 50,11 54,17 58,13 62,13"></polyline></svg>
+                    <span class="sd-message-card__duration">0:05</span>
+                  </div>
+                  <div class="sd-message-card__status sd-message-card__status--sent">Sent &bull; Today, 9:48 AM</div>
+                </div>
+              </button>
+            </div>
+
+            <div class="sd-timeline__row">
+              <div class="sd-timeline__gutter">
+                <span class="sd-timeline__time">8:15 AM</span>
+                <span class="sd-timeline__glyph sd-timeline__glyph--warn" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20z"></path><line x1="12" y1="10" x2="12" y2="14"></line><circle cx="12" cy="17" r="0.6" fill="currentColor" stroke="none"></circle></svg>
+                </span>
+              </div>
+              <button type="button" class="sd-message-card" data-item-id="3">
+                <div class="sd-message-card__main">
+                  <p class="sd-message-card__title">I wasn&rsquo;t trying to be rude&hellip;</p>
+                  <div class="sd-message-card__pipeline" data-status="recoverable"><span class="sd-message-card__pipeline-stage">Raw</span> &rarr; <span class="sd-message-card__pipeline-stage">Refined</span> &rarr; <span class="sd-message-card__pipeline-status">Recoverable</span></div>
+                  <div class="sd-message-card__chips">
+                    <span class="sd-chip sd-chip--persona">Natural</span>
+                    <span class="sd-chip sd-chip--destination-discord">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="16" height="11" rx="4"></rect><circle cx="9" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="15" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle><path d="M8 7 9 4h6l1 3"></path></svg>
+                      Discord #general
+                    </span>
+                  </div>
+                </div>
+                <div class="sd-message-card__meta" style="--sd-confidence-color: var(--sd-amber);">
+                  <div class="sd-message-card__confidence">
+                    <span class="sd-message-card__confidence-label">Confidence</span>
+                    <span class="sd-message-card__confidence-value">61%</span>
+                    <span class="sd-confidence-bar"><span class="sd-confidence-bar__fill" style="width:61%;"></span></span>
+                  </div>
+                  <div class="sd-message-card__waveform">
+                    <svg viewBox="0 0 200 26" preserveAspectRatio="none"><polyline fill="none" stroke="currentColor" stroke-width="1.5" points="0,13 6,13 10,6 14,20 18,8 22,18 26,5 30,22 34,12 38,15 42,4 46,23 50,11 54,16 58,6 62,20 66,13 70,13 74,3 78,22 82,12"></polyline></svg>
+                    <span class="sd-message-card__duration">0:07</span>
+                  </div>
+                  <div class="sd-message-card__status sd-message-card__status--failed">&bull; Failed to send &bull;</div>
+                </div>
+              </button>
+            </div>
+
+          </div>
+        </div>
+
+        <div class="sd-timeline__day">
+          <div class="sd-timeline__day-label">Yesterday</div>
+          <div class="sd-timeline__rows">
+
+            <div class="sd-timeline__row">
+              <div class="sd-timeline__gutter">
+                <span class="sd-timeline__time">Yesterday<br />4:22 PM</span>
+                <span class="sd-timeline__glyph sd-timeline__glyph--sent" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="20" x2="20" y2="4"></line><polygon points="20,4 12,4 20,12"></polygon></svg>
+                </span>
+              </div>
+              <button type="button" class="sd-message-card" data-item-id="4">
+                <div class="sd-message-card__main">
+                  <p class="sd-message-card__title">Thanks for jumping on this.</p>
+                  <div class="sd-message-card__pipeline" data-status="sent"><span class="sd-message-card__pipeline-stage">Raw</span> &rarr; <span class="sd-message-card__pipeline-stage">Refined</span> &rarr; <span class="sd-message-card__pipeline-status">Sent</span></div>
+                  <div class="sd-message-card__chips">
+                    <span class="sd-chip sd-chip--persona">Professional</span>
+                    <span class="sd-chip sd-chip--destination">
+                      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"></rect><path d="M4 6l8 6 8-6" fill="none" stroke="#EF4444" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                      Email
+                    </span>
+                  </div>
+                </div>
+                <div class="sd-message-card__meta" style="--sd-confidence-color: var(--sd-green);">
+                  <div class="sd-message-card__confidence">
+                    <span class="sd-message-card__confidence-label">Confidence</span>
+                    <span class="sd-message-card__confidence-value">91%</span>
+                    <span class="sd-confidence-bar"><span class="sd-confidence-bar__fill" style="width:91%;"></span></span>
+                  </div>
+                  <div class="sd-message-card__waveform">
+                    <svg viewBox="0 0 200 26" preserveAspectRatio="none"><polyline fill="none" stroke="currentColor" stroke-width="1.5" points="0,13 6,13 10,5 14,21 18,7 22,19 26,4 30,23 34,12 38,16 42,13 46,13"></polyline></svg>
+                    <span class="sd-message-card__duration">0:04</span>
+                  </div>
+                  <div class="sd-message-card__status sd-message-card__status--sent">Sent &bull; Yesterday, 4:22 PM</div>
+                </div>
+              </button>
+            </div>
+
+            <div class="sd-timeline__row">
+              <div class="sd-timeline__gutter">
+                <span class="sd-timeline__time">Yesterday<br />11:08 AM</span>
+                <span class="sd-timeline__glyph sd-timeline__glyph--draft" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="7"></circle></svg>
+                </span>
+              </div>
+              <button type="button" class="sd-message-card" data-item-id="5">
+                <div class="sd-message-card__main">
+                  <p class="sd-message-card__title">I have a few ideas to share&hellip;</p>
+                  <div class="sd-message-card__pipeline" data-status="unsent"><span class="sd-message-card__pipeline-stage">Raw</span> &rarr; <span class="sd-message-card__pipeline-stage">Refined</span> &rarr; <span class="sd-message-card__pipeline-status">Unsent</span></div>
+                  <div class="sd-message-card__chips">
+                    <span class="sd-chip sd-chip--persona">Creative</span>
+                    <span class="sd-chip sd-chip--destination">
+                      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2" fill="#36C5F0"></rect><rect x="14" y="3" width="7" height="7" rx="2" fill="#2EB67D"></rect><rect x="3" y="14" width="7" height="7" rx="2" fill="#ECB22E"></rect><rect x="14" y="14" width="7" height="7" rx="2" fill="#E01E5A"></rect></svg>
+                      Slack #product
+                    </span>
+                  </div>
+                </div>
+                <div class="sd-message-card__meta" style="--sd-confidence-color: var(--sd-blue);">
+                  <div class="sd-message-card__confidence">
+                    <span class="sd-message-card__confidence-label">Confidence</span>
+                    <span class="sd-message-card__confidence-value">72%</span>
+                    <span class="sd-confidence-bar"><span class="sd-confidence-bar__fill" style="width:72%;"></span></span>
+                  </div>
+                  <div class="sd-message-card__waveform">
+                    <svg viewBox="0 0 200 26" preserveAspectRatio="none"><polyline fill="none" stroke="currentColor" stroke-width="1.5" points="0,13 6,13 10,6 14,20 18,8 22,18 26,13 30,13 34,7 38,19 42,13 46,13"></polyline></svg>
+                    <span class="sd-message-card__duration">0:06</span>
+                  </div>
+                  <div class="sd-message-card__status sd-message-card__status--draft">&bull; Unsent &bull; Draft</div>
+                </div>
+              </button>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+
+      <div class="sd-library-footer">
+        <span class="sd-library-footer__count" id="sdLibraryItemsCount">1&ndash;6 of 128 items</span>
+        <button type="button" class="sd-library-footer__load-more" id="sdLibraryLoadMoreButton">Load more <span aria-hidden="true">&#9662;</span></button>
+      </div>
+
     </section>
+
     <section class="sd-workspace sd-workspace--placeholder" id="workspace-studio" data-workspace="studio" hidden>
       <strong>Studio</strong>
       <span>Personas, foundry, and voice studio land here in a later phase.</span>
@@ -277,6 +511,11 @@
     </div>
 
     <div class="sd-context__body">
+      <!-- Talk's context content (SPEC 4). Only ONE .sd-context__content block
+           is shown at a time -- see the inline script's goTo(), which toggles
+           .is-active-context based on the shell's active workspace, mirroring
+           how [data-workspace] already keys the header title tint. -->
+      <div class="sd-context__content is-active-context" data-context-for="talk">
       <div class="sd-context__section">
         <span class="sd-context__section-label">Persona <span class="sd-help" aria-hidden="true">?</span></span>
         <button type="button" class="sd-dropdown">
@@ -354,6 +593,136 @@
           <span>Model residency, long-recording stitching, and chunk-size overrides land here in a later phase.</span>
         </div>
       </details>
+      </div><!-- /data-context-for="talk" -->
+
+      <!-- ---------- LIBRARY context content: "SELECTED ITEM" (SPEC 5) ---------- -->
+      <div class="sd-context__content" data-context-for="library" hidden>
+
+        <div class="sd-context__section sd-selected-item__header">
+          <span class="sd-context__section-label">Selected Item</span>
+          <button type="button" class="sd-selected-item__pin-btn" id="sdSelectedItemPinButton" aria-label="Pin this item" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4h6l1 5-3 2v6l-1 3-1-3v-6l-3-2z"></path></svg>
+          </button>
+        </div>
+
+        <div class="sd-context__section">
+          <span class="sd-context__section-label">
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--sd-cyan)" stroke-width="1.8" stroke-linecap="round" aria-hidden="true" width="14" height="14"><line x1="4" y1="10" x2="4" y2="14"></line><line x1="8" y1="6" x2="8" y2="18"></line><line x1="12" y1="3" x2="12" y2="21"></line><line x1="16" y1="7" x2="16" y2="17"></line></svg>
+            Raw Transcript
+          </span>
+          <div class="sd-transcript-box" id="sdSelectedRawTranscript">
+            <p id="sdSelectedRawTranscriptText">I should be there around six i&rsquo;ll message you when i&rsquo;m leaving</p>
+            <span class="sd-transcript-box__meta" id="sdSelectedRawMeta">0:06 &middot; Today, 10:32 AM</span>
+          </div>
+        </div>
+
+        <div class="sd-context__section">
+          <span class="sd-context__section-label">
+            <span aria-hidden="true" style="color: var(--sd-cyan);">&#10022;</span>
+            Refined Message
+          </span>
+          <div class="sd-transcript-box sd-transcript-box--refined" id="sdSelectedRefinedMessage">
+            <p id="sdSelectedRefinedMessageText">I should be there around six. I&rsquo;ll message you when I&rsquo;m leaving.</p>
+            <span class="sd-transcript-box__meta" id="sdSelectedRefinedMeta">0:06 &middot; Confidence <strong>94%</strong></span>
+          </div>
+        </div>
+
+        <div class="sd-context__section">
+          <span class="sd-context__section-label">Status</span>
+          <div class="sd-status-card" id="sdSelectedStatusCard">
+            <span class="sd-status-card__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4,12 9,17 20,6"></polyline></svg>
+            </span>
+            <span class="sd-status-card__text">
+              <span class="sd-status-card__title" id="sdSelectedStatusTitle">Sent successfully</span>
+              <span class="sd-status-card__time" id="sdSelectedStatusTime">Today, 10:33 AM</span>
+            </span>
+          </div>
+        </div>
+
+        <div class="sd-context__section">
+          <span class="sd-context__section-label">Persona</span>
+          <button type="button" class="sd-dropdown" id="sdSelectedPersonaDropdown">
+            <span class="sd-dropdown__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="10" x2="4" y2="14"></line><line x1="8" y1="6" x2="8" y2="18"></line><line x1="12" y1="3" x2="12" y2="21"></line><line x1="16" y1="7" x2="16" y2="17"></line><line x1="20" y1="9" x2="20" y2="15"></line></svg>
+            </span>
+            <span class="sd-dropdown__text">
+              <span class="sd-dropdown__name" id="sdSelectedPersonaName">Natural</span>
+            </span>
+            <span class="sd-dropdown__chevron" aria-hidden="true">&#9662;</span>
+          </button>
+        </div>
+
+        <div class="sd-context__section">
+          <span class="sd-context__section-label">Destination</span>
+          <button type="button" class="sd-dropdown" id="sdSelectedDestinationDropdown">
+            <span class="sd-dropdown__icon" aria-hidden="true" style="background: rgba(88,101,242,0.16); color: #8C9EFF;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="11" rx="4"></rect><circle cx="9" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="15" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle><path d="M8 7 9 4h6l1 3"></path></svg>
+            </span>
+            <span class="sd-dropdown__text">
+              <span class="sd-dropdown__name" id="sdSelectedDestinationName">Discord #general</span>
+            </span>
+            <span class="sd-dropdown__chevron" aria-hidden="true">&#9662;</span>
+          </button>
+        </div>
+
+        <div class="sd-context__section">
+          <span class="sd-context__section-label">Audio</span>
+          <div class="sd-audio-player" id="sdSelectedAudioPlayer">
+            <span class="sd-audio-player__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="10" x2="4" y2="14"></line><line x1="8" y1="6" x2="8" y2="18"></line><line x1="12" y1="3" x2="12" y2="21"></line><line x1="16" y1="7" x2="16" y2="17"></line></svg>
+            </span>
+            <span class="sd-audio-player__duration" id="sdSelectedAudioDuration">0:06</span>
+            <span class="sd-audio-player__wave" aria-hidden="true">
+              <svg viewBox="0 0 200 24" preserveAspectRatio="none"><polyline fill="none" stroke="currentColor" stroke-width="1.5" points="0,12 6,12 10,4 14,20 18,6 22,18 26,3 30,21 34,10 38,14 42,2 46,22 50,9 54,15 58,5 62,19 66,12 70,12 74,1 78,23 82,11 86,14 90,6 94,18 98,9 102,15 106,12 110,12 114,6 118,18 122,12 126,12 130,12" /></svg>
+            </span>
+            <button type="button" class="sd-audio-player__play" id="sdSelectedAudioPlayButton" aria-label="Play audio">
+              <svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><polygon points="6,4 20,12 6,20"></polygon></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="sd-context__section">
+          <span class="sd-context__section-label">Actions</span>
+          <div class="sd-actions-grid">
+            <button type="button" class="sd-action-btn" id="sdSelectedReopenButton">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12a8 8 0 1 1 2.6 5.9"></path><polyline points="4,17 4,12 9,12"></polyline></svg>
+              Reopen
+            </button>
+            <button type="button" class="sd-action-btn" id="sdSelectedListenButton">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6,4 20,12 6,20"></polygon></svg>
+              Listen
+            </button>
+            <button type="button" class="sd-action-btn" id="sdSelectedDuplicateButton">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M4 16V4h12"></path></svg>
+              Duplicate
+            </button>
+            <button type="button" class="sd-action-btn" id="sdSelectedPinActionButton" aria-pressed="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4h6l1 5-3 2v6l-1 3-1-3v-6l-3-2z"></path></svg>
+              Pin
+            </button>
+          </div>
+          <button type="button" class="sd-action-btn sd-action-btn--danger" id="sdSelectedDeleteButton">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"></path><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"></path></svg>
+            Delete
+          </button>
+        </div>
+
+        <div class="sd-context__section">
+          <span class="sd-context__section-label">Restore / Resend</span>
+          <div class="sd-restore-resend">
+            <button type="button" class="sd-restore-resend__btn sd-restore-resend__btn--restore" id="sdSelectedRestoreButton">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12a8 8 0 1 1 2.6 5.9"></path><polyline points="4,17 4,12 9,12"></polyline></svg>
+              Restore
+            </button>
+            <button type="button" class="sd-restore-resend__btn sd-restore-resend__btn--resend" id="sdSelectedResendButton">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="20" x2="20" y2="4"></line><polygon points="20,4 12,4 20,12"></polygon></svg>
+              Resend
+            </button>
+          </div>
+        </div>
+
+      </div><!-- /data-context-for="library" -->
     </div>
 
     <button type="button" class="sd-context__hide-btn" id="sdContextHideBtn">
@@ -474,6 +843,17 @@
         if (section) section.hidden = workspaceId !== id;
       });
 
+      // Swap the right context panel's content to match the active
+      // workspace (SPEC 3c: contents are workspace-specific). Only Talk and
+      // Library have a .sd-context__content block so far -- Studio/
+      // Utilities/Settings simply show neither (matches their placeholder
+      // workspace containers) until those phases add their own.
+      Array.prototype.slice.call(document.querySelectorAll('.sd-context__content[data-context-for]')).forEach(function (contentEl) {
+        var isActive = contentEl.getAttribute('data-context-for') === id;
+        contentEl.classList.toggle('is-active-context', isActive);
+        contentEl.hidden = !isActive;
+      });
+
       headerTitle.textContent = meta.title;
       headerSubtitle.textContent = meta.subtitle;
       headerPill.textContent = meta.pill;
@@ -523,6 +903,92 @@
   //   window.__signalCore.renderOnce(); // paint one frame on demand
   window.__talkWorkspace = talkWorkspace;
   window.__signalCore = talkWorkspace.getSignalCore();
+</script>
+
+<!--
+  Phase 3: mount the REAL Library workspace adapter for director QA -- same
+  file:// CORS caveat as Phase 2's module script above (silently no-ops under
+  a plain file:// open; works over http://). MOCK_ITEMS below mirrors the 5
+  static cards already hard-coded into #workspace-library exactly (same
+  text/status/confidence/persona/destination/duration), so mounting the
+  adapter re-renders visually equivalent content from real data rather than
+  replacing it with something new -- if the module fails to load, the static
+  markup above stays exactly as the director already sees it either way.
+  Timestamps are computed relative to "now" (not hard-coded) so the Today/
+  Yesterday day-grouping is always correct whenever this page is opened.
+-->
+<script type="module">
+  import { createLibraryWorkspaceFeature, collectLibraryElements, mapLibraryConfidenceBand } from './features/libraryWorkspace.js';
+
+  function at(daysAgo, hh, mm) {
+    const d = new Date();
+    d.setDate(d.getDate() - daysAgo);
+    d.setHours(hh, mm, 0, 0);
+    return d.getTime();
+  }
+
+  function withBand(score, status, rest) {
+    return { confidencePct: score, confidenceBand: mapLibraryConfidenceBand(score / 100, status), ...rest };
+  }
+
+  const MOCK_ITEMS = [
+    {
+      id: 'draft-1', sourceType: 'draft', pinned: true, status: 'sent',
+      preview: 'I should be there around six…',
+      rawText: 'i should be there around six i’ll message you when i’m leaving',
+      refinedText: 'I should be there around six. I’ll message you when I’m leaving.',
+      persona: 'Natural', destination: 'Discord #general', durationSeconds: 6,
+      timestamp: at(0, 10, 32), sentAtTimestamp: at(0, 10, 33),
+      ...withBand(94, 'sent'),
+    },
+    {
+      id: 'draft-2', sourceType: 'draft', pinned: false, status: 'sent',
+      preview: 'Can we push the meeting back?',
+      rawText: 'can we push the meeting back',
+      refinedText: 'Can we push the meeting back?',
+      persona: 'Professional', destination: 'Slack #team-ops', durationSeconds: 5,
+      timestamp: at(0, 9, 47), sentAtTimestamp: at(0, 9, 48),
+      ...withBand(88, 'sent'),
+    },
+    {
+      id: 'draft-3', sourceType: 'draft', pinned: false, status: 'recoverable',
+      preview: 'I wasn’t trying to be rude…',
+      rawText: 'i wasnt trying to be rude i just meant',
+      refinedText: 'I wasn’t trying to be rude — I just meant...',
+      persona: 'Natural', destination: 'Discord #general', durationSeconds: 7,
+      timestamp: at(0, 8, 15), sentAtTimestamp: null,
+      ...withBand(61, 'recoverable'),
+    },
+    {
+      id: 'draft-4', sourceType: 'draft', pinned: false, status: 'sent',
+      preview: 'Thanks for jumping on this.',
+      rawText: 'thanks for jumping on this',
+      refinedText: 'Thanks for jumping on this.',
+      persona: 'Professional', destination: 'Email', durationSeconds: 4,
+      timestamp: at(1, 16, 22), sentAtTimestamp: at(1, 16, 22),
+      ...withBand(91, 'sent'),
+    },
+    {
+      id: 'draft-5', sourceType: 'draft', pinned: false, status: 'unsent',
+      preview: 'I have a few ideas to share…',
+      rawText: 'i have a few ideas to share about the roadmap',
+      refinedText: 'I have a few ideas to share about the roadmap.',
+      persona: 'Creative', destination: 'Slack #product', durationSeconds: 6,
+      timestamp: at(1, 11, 8), sentAtTimestamp: null,
+      ...withBand(72, 'unsent'),
+    },
+  ];
+
+  const elements = collectLibraryElements(document);
+  const libraryWorkspace = createLibraryWorkspaceFeature({ elements, hooks: {} });
+  libraryWorkspace.setItems(MOCK_ITEMS);
+  libraryWorkspace.selectItem('draft-1');
+  libraryWorkspace.init();
+
+  // Debug handle for director/manual QA from devtools, e.g.:
+  //   window.__libraryWorkspace.setChipFilter('recoverable');
+  //   window.__libraryWorkspace.selectItem('draft-3');
+  window.__libraryWorkspace = libraryWorkspace;
 </script>
 
 </body>
