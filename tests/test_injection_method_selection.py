@@ -132,6 +132,123 @@ class CapabilitiesFieldTests(unittest.TestCase):
         self.assertEqual(caps["supports_typing"], expected_typing)
 
 
+class RequiredInjectionToolTests(unittest.TestCase):
+    def test_typing_methods_map_to_their_binary(self):
+        self.assertEqual(platform_capabilities.required_injection_tool("xdotool"), "xdotool")
+        self.assertEqual(platform_capabilities.required_injection_tool("wtype"), "wtype")
+        self.assertEqual(platform_capabilities.required_injection_tool("ydotool"), "ydotool")
+
+    def test_non_typing_methods_need_no_external_tool(self):
+        self.assertIsNone(platform_capabilities.required_injection_tool("paste"))
+        self.assertIsNone(platform_capabilities.required_injection_tool("none"))
+        self.assertIsNone(platform_capabilities.required_injection_tool("pydirectinput"))
+
+
+class InjectionHintExplicitMethodTests(unittest.TestCase):
+    """injection_hint() must stay honest for a caller-supplied method, not just
+    the cached startup-time global (used by get_injection_status())."""
+
+    def test_explicit_none_on_wayland_names_wl_clipboard(self):
+        with patch.object(platform_capabilities, "is_linux", True), patch.object(
+            platform_capabilities, "is_wayland", True
+        ):
+            self.assertIn("wl-clipboard", platform_capabilities.injection_hint("none"))
+
+    def test_explicit_none_on_x11_names_xclip(self):
+        with patch.object(platform_capabilities, "is_linux", True), patch.object(
+            platform_capabilities, "is_wayland", False
+        ):
+            self.assertIn("xclip", platform_capabilities.injection_hint("none"))
+
+    def test_explicit_working_method_has_no_hint(self):
+        self.assertEqual(platform_capabilities.injection_hint("wtype"), "")
+        self.assertEqual(platform_capabilities.injection_hint("paste"), "")
+
+    def test_default_still_uses_cached_global(self):
+        with patch.object(platform_capabilities, "injection_method", "none"), patch.object(
+            platform_capabilities, "is_linux", True
+        ), patch.object(platform_capabilities, "is_wayland", False):
+            self.assertIn("xclip", platform_capabilities.injection_hint())
+
+
+class InjectionStatusTests(unittest.TestCase):
+    """get_injection_status() must be a live (non-cached) re-check: no keys
+    typed, no clipboard touched -- just shutil.which() PATH lookups -- so
+    /doctor can honestly reflect a tool installed/removed after startup."""
+
+    def _status(self, *, windows=False, linux=True, wayland=False, x11=True, tools=()):
+        session = "wayland" if wayland else ("x11" if x11 else "")
+        with patch.object(platform_capabilities, "is_windows", windows), patch.object(
+            platform_capabilities, "is_linux", linux
+        ), patch.object(platform_capabilities, "is_macos", False), patch.object(
+            platform_capabilities, "is_wayland", wayland
+        ), patch.object(platform_capabilities, "is_x11", x11), patch.object(
+            platform_capabilities, "session_type", session
+        ), patch("platform_capabilities.shutil.which", _which_map(tools)):
+            return platform_capabilities.get_injection_status()
+
+    def test_wayland_missing_everything_is_honestly_none(self):
+        # No wtype/ydotool/xdotool AND no wl-copy/xclip/xsel -- the true
+        # "silent failure" case the doctor route must surface.
+        status = self._status(wayland=True, x11=False, tools=[])
+        self.assertEqual(status["method"], "none")
+        self.assertIsNone(status["required_tool"])
+        self.assertFalse(status["tool_available"])
+        self.assertEqual(status["clipboard_backend"], "")
+        self.assertFalse(status["supports_typing"])
+        self.assertFalse(status["supports_input_injection"])
+        self.assertIn("wl-clipboard", status["hint"])
+
+    def test_wayland_with_wtype_is_fully_available(self):
+        status = self._status(wayland=True, x11=False, tools=["wtype"])
+        self.assertEqual(status["method"], "wtype")
+        self.assertEqual(status["required_tool"], "wtype")
+        self.assertTrue(status["tool_available"])
+        self.assertTrue(status["supports_typing"])
+        self.assertEqual(status["hint"], "")
+
+    def test_wayland_no_typing_tool_but_clipboard_present_is_paste(self):
+        # wl-copy present, no wtype/ydotool: real typing is unavailable but
+        # the universal clipboard-paste fallback honestly reports as working.
+        status = self._status(wayland=True, x11=False, tools=["wl-copy"])
+        self.assertEqual(status["method"], "paste")
+        self.assertIsNone(status["required_tool"])
+        self.assertTrue(status["tool_available"])
+        self.assertEqual(status["clipboard_backend"], "wl-copy")
+        self.assertFalse(status["supports_typing"])
+        self.assertTrue(status["supports_input_injection"])
+        self.assertEqual(status["hint"], "")
+
+    def test_linux_x11_missing_xdotool_and_clipboard_tool_is_none(self):
+        status = self._status(wayland=False, x11=True, tools=[])
+        self.assertEqual(status["method"], "none")
+        self.assertFalse(status["tool_available"])
+        self.assertIn("xclip", status["hint"])
+
+    def test_status_reports_session_type_fields(self):
+        status = self._status(wayland=True, x11=False, tools=["wtype"])
+        self.assertEqual(status["session_type"], "wayland")
+        self.assertTrue(status["is_wayland"])
+        self.assertFalse(status["is_x11"])
+
+    def test_windows_reports_pydirectinput_available(self):
+        status = self._status(windows=True, linux=False, x11=False, tools=[])
+        self.assertEqual(status["method"], "pydirectinput")
+        self.assertIsNone(status["required_tool"])
+        self.assertTrue(status["tool_available"])
+
+    def test_status_is_recomputed_live_not_cached(self):
+        # Simulate a tool being installed *after* the stale module-level
+        # globals were computed at import: the cached `injection_method`
+        # stays "none", but a fresh get_injection_status() call picks it up.
+        with patch.object(platform_capabilities, "injection_method", "none"), patch.object(
+            platform_capabilities, "clipboard_backend", ""
+        ), patch.object(platform_capabilities, "supports_basic_clipboard", False):
+            status = self._status(wayland=True, x11=False, tools=["wtype"])
+        self.assertEqual(status["method"], "wtype")
+        self.assertNotEqual(status["method"], platform_capabilities.injection_method)
+
+
 class TypeTextRoutingTests(unittest.TestCase):
     @patch("injector.load_profile", return_value={})
     def test_type_text_uses_external_tool_on_linux(self, _load_profile):

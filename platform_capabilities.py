@@ -42,14 +42,24 @@ def _detect_clipboard_backend():
     return ""
 
 
-def detect_injection_method():
+def detect_injection_method(clipboard_available=None):
     """Pick the best available text-injection backend for this platform.
 
     Returns one of: "pydirectinput" | "xdotool" | "wtype" | "ydotool" | "paste".
     Clipboard-paste ("paste") is the guaranteed universal fallback and is always
     available wherever the clipboard works. "none" is only returned when even the
     clipboard is unavailable.
+
+    `clipboard_available` overrides the cached `supports_basic_clipboard` check
+    for the paste-vs-none decision below; defaults to that module-level global
+    (computed once at import) so existing callers are unaffected. A fresh,
+    non-cached re-check (see `get_injection_status`) passes in a just-detected
+    value instead, so e.g. a clipboard tool installed after startup is
+    reflected immediately rather than only after a restart.
     """
+    if clipboard_available is None:
+        clipboard_available = supports_basic_clipboard
+
     if is_windows:
         # pydirectinput drives the Windows path; if for some reason it's missing,
         # paste still works.
@@ -69,7 +79,7 @@ def detect_injection_method():
             if shutil.which("xdotool"):
                 return "xdotool"
     # macOS and any Linux without a typing tool fall back to clipboard paste.
-    if supports_basic_clipboard:
+    if clipboard_available:
         return "paste"
     return "none"
 
@@ -92,14 +102,74 @@ supports_typing = injection_method not in ("paste", "none")
 supports_input_injection = injection_method != "none"
 
 
-def injection_hint():
-    """User-facing guidance when injection is unavailable, else ""."""
-    if injection_method != "none":
+def injection_hint(method=None):
+    """User-facing guidance when injection is unavailable, else "".
+
+    Defaults to the cached startup-time `injection_method`. Callers doing a
+    fresh check (see `get_injection_status` below) can pass a just-detected
+    method instead, so the hint reflects the tool situation right now rather
+    than whatever was true when this module was first imported.
+    """
+    if method is None:
+        method = injection_method
+    if method != "none":
         return ""
     if is_linux:
         tool = "wl-clipboard" if is_wayland else "xclip (or xsel)"
         return f"Text injection is unavailable: install {tool} to enable clipboard paste."
     return "Text injection is unavailable on this system."
+
+
+# CLI binary each Linux typing method shells out to (see injector.py's
+# _type_via_external_tool / _send_paste_via_tool). Windows' pydirectinput and
+# the universal "paste"/"none" fallbacks need no separate external tool here
+# -- "paste"'s dependency is the clipboard backend, already surfaced via
+# `clipboard_backend` / `_detect_clipboard_backend()`.
+_INJECTION_METHOD_TOOL = {
+    "xdotool": "xdotool",
+    "wtype": "wtype",
+    "ydotool": "ydotool",
+}
+
+
+def required_injection_tool(method):
+    """CLI binary `method` depends on, or None if it needs no external tool."""
+    return _INJECTION_METHOD_TOOL.get(method)
+
+
+def get_injection_status():
+    """Live (non-cached) snapshot of the injection situation, for diagnostics.
+
+    `injection_method` / `clipboard_backend` above are computed once at import
+    time so the running InputInjector's choice is stable for the process's
+    lifetime. This instead re-runs the same shutil.which() PATH lookups on
+    every call -- no keys are typed, no clipboard is touched, no cursor moves,
+    nothing is injected -- so a status route (e.g. /doctor) can honestly
+    report a tool that was installed or removed after startup, rather than
+    silently repeating a stale verdict.
+    """
+    live_clipboard_backend = _detect_clipboard_backend()
+    live_method = detect_injection_method(clipboard_available=bool(live_clipboard_backend))
+    tool = required_injection_tool(live_method)
+    if tool is not None:
+        tool_available = bool(shutil.which(tool))
+    else:
+        # paste/pydirectinput need no separate typing tool; "none" means even
+        # clipboard-paste isn't available, so report that honestly instead of
+        # defaulting to True.
+        tool_available = live_method != "none"
+    return {
+        "method": live_method,
+        "required_tool": tool,
+        "tool_available": tool_available,
+        "clipboard_backend": live_clipboard_backend,
+        "supports_typing": live_method not in ("paste", "none"),
+        "supports_input_injection": live_method != "none",
+        "session_type": session_type or "unknown",
+        "is_wayland": is_wayland,
+        "is_x11": is_x11,
+        "hint": injection_hint(live_method),
+    }
 
 
 def get_capabilities():
