@@ -315,6 +315,13 @@ class Transcriber:
         self.model = None
         self.model_size = "base.en"
         self.prefer_gpu = True
+        # Honest device-selection state (set in _load_model() right after the
+        # WhisperModel that actually loaded is constructed): what the model is
+        # ACTUALLY running on, as opposed to self.prefer_gpu which is only the
+        # user's preference. None while unloaded.
+        self.active_device = None          # "cuda" | "cpu" | None
+        self.active_compute_type = None    # "float16" | "int8" | None
+        self.device_fallback_reason = None  # short string, or None if no fallback happened
         self.download_root = HF_HUB_CACHE
         os.makedirs(self.download_root, exist_ok=True)
 
@@ -365,6 +372,11 @@ class Transcriber:
 
             if size_changed or gpu_pref_changed:
                 self.model = None
+                # Stale device info would misreport status until the next
+                # ensure_loaded() actually reloads the model.
+                self.active_device = None
+                self.active_compute_type = None
+                self.device_fallback_reason = None
 
         if preload is None:
             preload = self.model is not None
@@ -381,6 +393,11 @@ class Transcriber:
             "local_files_only": local_files_only,
         }
 
+        # Why we ended up on CPU despite prefer_gpu being True, if that happens.
+        # Stays None when prefer_gpu is False (CPU was never a "fallback") or
+        # when CUDA loads successfully.
+        fallback_reason = None
+
         if self.prefer_gpu:
             try:
                 device = "cuda"
@@ -396,6 +413,9 @@ class Transcriber:
                     **base_kwargs,
                 )
                 logging.info("Whisper model loaded successfully on CUDA.")
+                self.active_device = device
+                self.active_compute_type = compute_type
+                self.device_fallback_reason = None
                 return model
             except Exception as exc:
                 if local_files_only:
@@ -414,9 +434,13 @@ class Transcriber:
                             local_files_only=False,
                         )
                         logging.info("Whisper model loaded successfully on CUDA after cache refresh.")
+                        self.active_device = device
+                        self.active_compute_type = compute_type
+                        self.device_fallback_reason = None
                         return model
                     except Exception as retry_exc:
                         exc = retry_exc
+                fallback_reason = "CUDA initialization failed"
                 logging.warning(f"CUDA initialization failed ({exc}). Falling back to CPU.")
 
         device = "cpu"
@@ -447,6 +471,9 @@ class Transcriber:
             else:
                 raise
         logging.info("Whisper model loaded successfully on CPU.")
+        self.active_device = device
+        self.active_compute_type = compute_type
+        self.device_fallback_reason = fallback_reason
         return model
 
     def _is_model_cached(self, model_size):
@@ -502,6 +529,11 @@ class Transcriber:
             except Exception as exc:
                 logging.error(f"Failed to load Whisper model: {exc}")
                 self.model = None
+                # Nothing loaded -- don't let a stale device from a previous
+                # successful load misreport status as still-accelerated.
+                self.active_device = None
+                self.active_compute_type = None
+                self.device_fallback_reason = None
                 self._last_error = str(exc)
                 return False
 
@@ -517,6 +549,9 @@ class Transcriber:
     def unload(self):
         with self._model_lock:
             self.model = None
+            self.active_device = None
+            self.active_compute_type = None
+            self.device_fallback_reason = None
         logging.info("Whisper model unloaded.")
 
     def transcribe(self, audio_array, hotwords=None):
