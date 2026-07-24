@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+import platform_capabilities
 import server
 
 
@@ -197,6 +198,72 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
         warnings = response.json()["store_warnings"]
         self.assertEqual(len(warnings), 1)
         self.assertEqual(warnings[0]["action"], "quarantined")
+
+    def test_doctor_reports_injection_status_wayland_missing_everything(self):
+        """A Wayland user with no wtype/ydotool/xdotool and no wl-copy/xclip
+        must see method="none" and an actionable hint -- not a silent gap."""
+        with patch("sys.platform", "linux"), patch.object(
+            platform_capabilities, "is_linux", True
+        ), patch.object(platform_capabilities, "is_windows", False), patch.object(
+            platform_capabilities, "is_wayland", True
+        ), patch.object(platform_capabilities, "is_x11", False), patch.object(
+            platform_capabilities, "session_type", "wayland"
+        ), patch("platform_capabilities.shutil.which", return_value=None):
+            with TestClient(server.app) as client:
+                response = client.get("/doctor")
+
+        self.assertEqual(response.status_code, 200)
+        injection = response.json()["injection"]
+        self.assertEqual(injection["method"], "none")
+        self.assertIsNone(injection["required_tool"])
+        self.assertFalse(injection["tool_available"])
+        self.assertFalse(injection["supports_typing"])
+        self.assertFalse(injection["supports_input_injection"])
+        self.assertEqual(injection["session_type"], "wayland")
+        self.assertTrue(injection["is_wayland"])
+        self.assertFalse(injection["is_x11"])
+        self.assertIn("wl-clipboard", injection["hint"])
+
+    def test_doctor_reports_injection_status_wayland_with_wtype(self):
+        with patch("sys.platform", "linux"), patch.object(
+            platform_capabilities, "is_linux", True
+        ), patch.object(platform_capabilities, "is_windows", False), patch.object(
+            platform_capabilities, "is_wayland", True
+        ), patch.object(platform_capabilities, "is_x11", False), patch(
+            "platform_capabilities.shutil.which", side_effect=lambda name: "/usr/bin/wtype" if name == "wtype" else None
+        ):
+            with TestClient(server.app) as client:
+                response = client.get("/doctor")
+
+        self.assertEqual(response.status_code, 200)
+        injection = response.json()["injection"]
+        self.assertEqual(injection["method"], "wtype")
+        self.assertEqual(injection["required_tool"], "wtype")
+        self.assertTrue(injection["tool_available"])
+        self.assertTrue(injection["supports_typing"])
+        self.assertEqual(injection["hint"], "")
+
+    def test_doctor_injection_status_is_not_the_intrusive_probe(self):
+        """/doctor must never type/paste/move anything -- confirm the route
+        only reports platform_capabilities.get_injection_status(), not
+        tools/injection_probe.py's InputInjector.type_text battery."""
+        with TestClient(server.app) as client:
+            response = client.get("/doctor")
+        self.assertEqual(response.status_code, 200)
+        injection = response.json()["injection"]
+        for key in (
+            "method",
+            "required_tool",
+            "tool_available",
+            "clipboard_backend",
+            "supports_typing",
+            "supports_input_injection",
+            "session_type",
+            "is_wayland",
+            "is_x11",
+            "hint",
+        ):
+            self.assertIn(key, injection)
 
     def test_doctor_reports_llm_runtime_link_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
