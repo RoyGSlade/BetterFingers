@@ -855,6 +855,14 @@
    real feature logic -- only the Phase-1 QA preview page consumes it today.
    ========================================================================== */
 
+/* --- Signal Core ring (Phase 2: real canvas mount, ~520px per SPEC 4) ----
+   The ring itself (concentric segmented arcs + centered waveform + dust
+   field) is drawn by signalCore.js on a <canvas class="sd-signal-core-canvas">
+   that JS mounts inside .sd-signal-core-ring. Everything in THIS file for
+   the ring is either the circular mount box itself or the DOM elements the
+   spec calls out as overlays (LISTENING label, dB meter, center hint) --
+   none of those three are drawn on the canvas. */
+
 .sd-signal-core-wrap {
   position: relative;
   display: flex;
@@ -865,12 +873,13 @@
 
 .sd-signal-core-status {
   position: absolute;
-  top: var(--sd-space-20);
-  left: 0;
+  top: var(--sd-space-32);
+  left: var(--sd-space-8);
   display: flex;
   align-items: center;
   gap: var(--sd-space-8);
   font-size: var(--sd-font-sm);
+  z-index: 2;
 }
 
 .sd-signal-core-status__dot {
@@ -902,36 +911,68 @@
 
 .sd-signal-core-meter {
   position: absolute;
-  top: var(--sd-space-20);
-  right: 0;
+  top: var(--sd-space-32);
+  right: var(--sd-space-8);
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: var(--sd-space-8);
   font-size: var(--sd-font-xs);
   color: var(--sd-text-muted);
+  z-index: 2;
 }
 
+/* Vertical dB meter: tick marks via a repeating-linear-gradient layered over
+   a green-gradient fill (SPEC 4: "vertical level meter... tick marks (green
+   gradient)"). Exact dB scale/thresholds aren't specified -- --sd-meter-level
+   (0-100%, set from JS as live amplitude becomes available) positions the
+   marker dot; it defaults to 55% here only as a placeholder matching the
+   mockup's "-18 dB" sample reading, flagged for the director to confirm the
+   real dB->% mapping once wired to live mic data. */
 .sd-signal-core-meter__bar {
+  position: relative;
   width: 4px;
-  height: 120px;
+  height: 130px;
   border-radius: 2px;
-  background: var(--sd-surface-inset);
   border: 1px solid var(--sd-border);
+  background:
+    repeating-linear-gradient(to bottom, rgba(8, 14, 12, 0.55) 0 2px, transparent 2px 7px),
+    linear-gradient(to top, var(--sd-green), var(--sd-teal) 55%, var(--sd-surface-inset) 100%);
+  --sd-meter-level: 55%;
+}
+
+.sd-signal-core-meter__level {
+  position: absolute;
+  left: 50%;
+  bottom: var(--sd-meter-level, 55%);
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--sd-green-bright);
+  box-shadow: 0 0 6px rgba(52, 211, 153, .8);
+  transform: translate(-50%, 50%);
 }
 
 .sd-signal-core-ring {
   position: relative;
-  width: 260px;
-  height: 260px;
+  width: 520px;
+  max-width: 100%;
+  /* aspect-ratio (not a fixed height) keeps the ring circular even when a
+     narrow viewport/context-panel forces width below 520px -- a plain
+     height:520px would ignore that width constraint and yield a squashed
+     canvas (caught while verifying signalCore.js's canvas mount sizing). */
+  aspect-ratio: 1 / 1;
   border-radius: 50%;
-  border: 2px solid rgba(34, 211, 238, 0.28);
-  box-shadow: 0 0 48px rgba(34, 211, 238, 0.14);
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
+/* Fallback static rings -- visible until/unless signalCore.js mounts its
+   canvas (e.g. a JS error, or a plain file:// preview load where ES module
+   imports can't fetch; see signal-desk-preview.html's header comment). Once
+   the canvas mounts, .sd-signal-core-ring--js-mounted hides these so the
+   canvas is the only thing drawing the ring. */
 .sd-signal-core-ring::before,
 .sd-signal-core-ring::after {
   content: '';
@@ -941,15 +982,39 @@
 }
 
 .sd-signal-core-ring::before {
-  inset: 18px;
+  inset: 0;
+  border: 2px solid rgba(34, 211, 238, 0.24);
+  box-shadow: 0 0 64px rgba(34, 211, 238, 0.12);
 }
 
 .sd-signal-core-ring::after {
-  inset: 36px;
-  border-color: rgba(34, 211, 238, 0.5);
+  inset: 90px;
+  border-color: rgba(34, 211, 238, 0.45);
+}
+
+.sd-signal-core-ring--js-mounted::before,
+.sd-signal-core-ring--js-mounted::after {
+  display: none;
+}
+
+/* Full-size layer signalCore.js's <canvas> is appended into (see
+   createSignalCore({ container })) -- fills the whole ring, unlike the
+   small centered static waveform placeholder below. */
+.sd-signal-core-canvas-mount {
+  position: absolute;
+  inset: 0;
+}
+
+.sd-signal-core-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 .sd-signal-core-ring__waveform {
+  position: relative;
   width: 70%;
   height: 40px;
   color: var(--sd-cyan);
@@ -961,12 +1026,26 @@
   display: block;
 }
 
+.sd-signal-core-ring--js-mounted .sd-signal-core-ring__waveform {
+  display: none;
+}
+
+/* Center hint: layered OVER the ring (SPEC 4), not stacked below it --
+   positioned a little south of center so it clears the waveform line, same
+   as the mockup. */
 .sd-signal-core-hint {
-  margin-top: var(--sd-space-16);
+  position: absolute;
+  left: 50%;
+  top: 62%;
+  transform: translate(-50%, 0);
+  width: max-content;
+  max-width: 80%;
   font-size: var(--sd-font-sm);
   color: var(--sd-text-muted);
   text-align: center;
   line-height: 1.6;
+  z-index: 2;
+  pointer-events: none;
 }
 
 .sd-signal-core-hint strong {
@@ -1023,6 +1102,22 @@
   border: 1px solid rgba(34, 197, 94, 0.3);
 }
 
+/* Non-ready draft states (talkWorkspace.js's renderRefinedCard): SPEC 4 only
+   mocks the "READY" badge -- these two variants are my extrapolation for
+   pending/processing and blocked/error drafts so the badge never lies about
+   status; director may want different copy/color. */
+.sd-badge--pending {
+  background: rgba(245, 158, 11, 0.14);
+  color: var(--sd-amber);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.sd-badge--error {
+  background: rgba(239, 68, 68, 0.14);
+  color: var(--sd-red);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
 .sd-refined-card__hero {
   font-size: var(--sd-font-hero);
   font-weight: var(--sd-font-hero-weight);
@@ -1064,10 +1159,14 @@
   -webkit-box-orient: vertical;
 }
 
+/* Confidence color encodes STATUS more than raw number (SPEC 2): talkWorkspace.js
+   sets --sd-confidence-color per draft (see mapConfidenceBand()); the
+   var(...) fallback keeps the static/QA-preview markup looking right with no
+   JS at all. */
 .sd-meta-cell__confidence-value {
   font-size: var(--sd-font-body);
   font-weight: 600;
-  color: var(--sd-confidence-high);
+  color: var(--sd-confidence-color, var(--sd-confidence-high));
 }
 
 .sd-confidence-bar {
@@ -1080,7 +1179,7 @@
 
 .sd-confidence-bar__fill {
   height: 100%;
-  background: var(--sd-confidence-high);
+  background: var(--sd-confidence-color, var(--sd-confidence-high));
   border-radius: 2px;
 }
 
