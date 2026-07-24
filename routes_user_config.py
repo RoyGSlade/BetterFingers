@@ -90,7 +90,11 @@ class VoicePresetRequest(BaseModel):
 
 @router.get("/voice-presets")
 async def get_voice_presets_endpoint():
-    return {"ok": True, "presets": voice_presets.get_presets()}
+    return {
+        "ok": True,
+        "presets": voice_presets.get_presets(),
+        "default": voice_presets.get_default_preset(),
+    }
 
 
 @router.post("/voice-presets")
@@ -103,6 +107,31 @@ async def save_voice_preset_endpoint(request: VoicePresetRequest):
         if value is not None
     }
     return {"ok": True, "presets": voice_presets.save_preset(request.name, **fields)}
+
+
+@router.post("/voice-presets/{name}/make-default")
+async def make_default_voice_preset_endpoint(name: str):
+    """Mark an existing preset as the one ordinary read-aloud falls back to
+    when no preset_name/persona is explicit in the request (see server.py's
+    _resolve_voice_and_modulation). 404 on an unknown name rather than
+    silently no-op'ing, since a client-side typo here would otherwise look
+    like it worked."""
+    if not voice_presets.set_default_preset(name):
+        raise HTTPException(status_code=404, detail=f"No voice preset named {name!r}.")
+    return {"ok": True, "default": voice_presets.get_default_preset()}
+
+
+# Deliberately NOT "/voice-presets/default": that path is indistinguishable
+# from DELETE /voice-presets/{name} with name="default", and Starlette
+# resolves path collisions by registration order — whichever route is added
+# first would permanently shadow the other. A user is free to name a preset
+# "default", and it must stay deletable via the route below regardless of
+# registration order, so "clear the default pointer" gets its own, structurally
+# distinct path (a different segment count/shape, not a nested literal) instead.
+@router.delete("/voice-presets-default")
+async def clear_default_voice_preset_endpoint():
+    voice_presets.clear_default_preset()
+    return {"ok": True, "default": None}
 
 
 @router.delete("/voice-presets/{name}")

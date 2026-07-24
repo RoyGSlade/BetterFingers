@@ -307,6 +307,13 @@ function createOverlayWindow() {
 
   hardenWindowNavigation(overlayWindow);
 
+  // Click-through by default: the overlay is a status indicator that floats over
+  // whatever the user is working in, so it must never eat clicks meant for the
+  // window underneath it. `forward: true` still delivers mousemove to the
+  // renderer so it can detect when the cursor is over the visible ring and
+  // temporarily re-enable hit-testing (see overlay.html) to allow dragging.
+  overlayWindow.setIgnoreMouseEvents(true, { forward: true });
+
   if (process.env.ELECTRON_RENDERER_URL) {
     overlayWindow.loadURL(`${process.env.ELECTRON_RENDERER_URL}/overlay.html`);
   } else {

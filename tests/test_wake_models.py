@@ -109,6 +109,73 @@ class VerifyWakeModelFileTests(_IsolatedWakeModelsDirMixin, unittest.TestCase):
         self.assertTrue(os.path.exists(path))
 
 
+class BackboneStatusTests(_IsolatedWakeModelsDirMixin, unittest.TestCase):
+    """backbone_status must be truthful: "downloaded" alone is never enough --
+    it distinguishes present / verified / loadable so a corrupt or unloadable
+    file is never reported as ready."""
+
+    def _write(self, model_id, data: bytes):
+        path = wm.get_wake_model_path(model_id)
+        with open(path, "wb") as handle:
+            handle.write(data)
+        return path
+
+    def test_missing_file_is_not_downloaded(self):
+        status = wm.backbone_status("melspectrogram")
+        self.assertEqual(
+            status, {"downloaded": False, "verified": False, "loadable": False, "error": "missing"}
+        )
+
+    def test_present_but_corrupt_is_downloaded_not_verified(self):
+        self._write("melspectrogram", b"tampered bytes")
+        status = wm.backbone_status("melspectrogram")
+        self.assertTrue(status["downloaded"])
+        self.assertFalse(status["verified"])
+        self.assertFalse(status["loadable"])
+        self.assertEqual(status["error"], "digest_mismatch")
+
+    def test_corrupt_probe_does_not_quarantine(self):
+        # A status probe is side-effect free: a bad file stays put (the load
+        # path, not the probe, is what quarantines).
+        path = self._write("melspectrogram", b"tampered bytes")
+        wm.backbone_status("melspectrogram")
+        self.assertTrue(os.path.exists(path))
+
+    def test_verified_but_unloadable_is_not_loadable(self):
+        payload = b"real backbone bytes " * 100
+        import hashlib
+
+        digest = hashlib.sha256(payload).hexdigest()
+        info = dict(wm.AVAILABLE_WAKE_MODELS["melspectrogram"])
+        info["sha256"] = digest
+        self._write("melspectrogram", payload)
+        with patch.dict(wm.AVAILABLE_WAKE_MODELS, {"melspectrogram": info}), patch(
+            "wake_models.build_onnx_session",
+            side_effect=wm.WakeEngineUnavailable("onnxruntime not available"),
+        ):
+            status = wm.backbone_status("melspectrogram")
+        self.assertTrue(status["downloaded"])
+        self.assertTrue(status["verified"])
+        self.assertFalse(status["loadable"])
+        self.assertIn("onnxruntime", status["error"])
+
+    def test_verified_and_loadable_is_fully_ready(self):
+        payload = b"real backbone bytes " * 100
+        import hashlib
+
+        digest = hashlib.sha256(payload).hexdigest()
+        info = dict(wm.AVAILABLE_WAKE_MODELS["melspectrogram"])
+        info["sha256"] = digest
+        self._write("melspectrogram", payload)
+        with patch.dict(wm.AVAILABLE_WAKE_MODELS, {"melspectrogram": info}), patch(
+            "wake_models.build_onnx_session", return_value=object()
+        ):
+            status = wm.backbone_status("melspectrogram")
+        self.assertEqual(
+            status, {"downloaded": True, "verified": True, "loadable": True, "error": None}
+        )
+
+
 class ImportWakeModelTests(_IsolatedWakeModelsDirMixin, unittest.TestCase):
     def _make_source(self, data=b"tiny classifier bytes"):
         fd, path = tempfile.mkstemp(dir=self._tmp.name, suffix=".onnx")

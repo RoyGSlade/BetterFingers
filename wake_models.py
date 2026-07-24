@@ -158,6 +158,39 @@ def verify_wake_model_file(model_id, quarantine=True):
     return result
 
 
+def backbone_status(model_id):
+    """Truthful readiness of one backbone model: not just "does the file exist"
+    but "is it present, does it still hash correctly, and does onnxruntime
+    actually load it". The download-state route and the training preflight both
+    read this so the UI never reports a corrupt/unloadable file as "downloaded".
+
+    Returns ``{downloaded, verified, loadable, error}`` where ``error`` is
+    ``None`` on full success and otherwise a short machine-readable reason
+    ("missing", "digest_mismatch", or the ONNX load failure text).
+    Verification here never quarantines: a status probe must be side-effect
+    free (the caller decides whether to re-download), unlike the load path
+    which does quarantine a tampered file.
+    """
+    if not is_backbone_model_downloaded(model_id):
+        return {"downloaded": False, "verified": False, "loadable": False, "error": "missing"}
+
+    verification = verify_wake_model_file(model_id, quarantine=False)
+    if not verification["ok"]:
+        return {
+            "downloaded": True,
+            "verified": False,
+            "loadable": False,
+            "error": verification["reason"],
+        }
+
+    try:
+        session = build_onnx_session(get_wake_model_path(model_id))
+        del session
+        return {"downloaded": True, "verified": True, "loadable": True, "error": None}
+    except WakeEngineUnavailable as exc:
+        return {"downloaded": True, "verified": True, "loadable": False, "error": str(exc)}
+
+
 # --- User-imported classifiers ------------------------------------------------
 # The catalog ships zero wake-phrase classifiers (license gate). A user may
 # import their own .onnx classifier; we record it as origin="user-imported",

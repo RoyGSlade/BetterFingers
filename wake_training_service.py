@@ -52,7 +52,20 @@ def kokoro_synthesize(engine):
     never aborts the whole set."""
     def _fn(text, voice, speed):
         try:
-            engine.ensure_loaded(voice_hint=voice)
+            status = engine.ensure_loaded(voice_hint=voice)
+            # ensure_loaded returning a non-ok status (or a SAPI fallback) means
+            # Kokoro is NOT producing audio -- previously the result was ignored
+            # and _generate_kokoro_audio was called anyway, silently yielding
+            # None per voice until the whole training set came up empty a minute
+            # later. Fail this render explicitly instead so the caller's empty-
+            # class error carries the real reason.
+            if not status.get("ok"):
+                raise RuntimeError(status.get("message") or "Kokoro failed to load.")
+            if status.get("backend") not in {"kokoro", "kokoro_onnx"}:
+                raise RuntimeError(
+                    f"Wake training requires Kokoro; active backend is "
+                    f"{status.get('backend', 'unknown')}."
+                )
             result = engine._generate_kokoro_audio(text, float(speed), voice)
         except Exception as exc:
             logging.debug("wake-train synth failed (%s @ %s): %s", voice, speed, exc)
@@ -62,6 +75,45 @@ def kokoro_synthesize(engine):
         audio, sample_rate = result
         return _resample_to_16k(audio, int(sample_rate or TARGET_SAMPLE_RATE))
     return _fn
+
+
+def preflight_training(engine):
+    """Fail fast with the EXACT reason a training run can't succeed, before the
+    background thread spends up to a minute synthesizing audio that would only
+    resolve to a generic "no positive windows" error.
+
+    Checks, in order: both Apache-2.0 backbones present + verified + actually
+    loadable by onnxruntime; a TTS engine exists; Kokoro loads (ok=True); and
+    the active backend really is Kokoro (not the SAPI fallback, which cannot
+    produce the training audio). Returns ``{"ok": True}`` or
+    ``{"ok": False, "message": <actionable reason>}`` — never raises.
+    """
+    for backbone_id in ("melspectrogram", "embedding_model"):
+        status = wake_models.backbone_status(backbone_id)
+        if not status["downloaded"]:
+            return {"ok": False, "message": f"Wake backbone not ready: {backbone_id} is not "
+                                            f"downloaded. Download the feature-extractor models first."}
+        if not status["verified"]:
+            return {"ok": False, "message": f"Wake backbone not ready: {backbone_id} failed "
+                                            f"verification ({status['error']}). Re-download it."}
+        if not status["loadable"]:
+            return {"ok": False, "message": f"Wake backbone not ready: {backbone_id} could not be "
+                                            f"loaded ({status['error']})."}
+
+    if engine is None:
+        return {"ok": False, "message": "TTS engine unavailable for synthetic samples."}
+
+    try:
+        status = engine.ensure_loaded()
+    except Exception as exc:
+        return {"ok": False, "message": f"TTS engine failed to load: {exc}"}
+    if not status.get("ok"):
+        return {"ok": False, "message": status.get("message") or "TTS (Kokoro) failed to load."}
+    if status.get("backend") not in {"kokoro", "kokoro_onnx"}:
+        return {"ok": False, "message": f"Wake training requires Kokoro; the active TTS backend is "
+                                        f"{status.get('backend', 'unknown')} and cannot generate "
+                                        f"training audio."}
+    return {"ok": True}
 
 
 def train_phrase_model(

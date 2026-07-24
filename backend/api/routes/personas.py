@@ -172,6 +172,68 @@ async def test_persona_route(request: PersonaTestRequest):
     return {"result": result}
 
 
+class PersonaRefineRequest(BaseModel):
+    prompt: str
+    tone: Optional[str] = None
+    rules: Optional[list] = None
+
+
+@router.post("/personas/refine")
+async def refine_persona_route(request: PersonaRefineRequest):
+    """Wizard co-pilot: the downloaded local model rewrites the user's rough
+    persona description into a clear prompt and reports what it understood and
+    where it had to guess, so a dictated description doesn't get saved while
+    secretly ambiguous."""
+    draft = str(request.prompt or "").strip()
+    if not draft:
+        raise HTTPException(status_code=400, detail="A draft persona description is required.")
+    import server
+    engine = server.get_selected_llm_engine()
+    try:
+        result = await run_in_threadpool(
+            engine.refine_persona_prompt,
+            draft,
+            request.tone,
+            request.rules,
+        )
+    except Exception:
+        logger.exception("Persona refine failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Persona refine failed. Check the application logs for details.",
+        )
+    if not result.get("ok"):
+        raise HTTPException(status_code=503, detail=result.get("message", "Persona helper unavailable."))
+    return result
+
+
+class PersonaDraftRequest(BaseModel):
+    description: str
+
+
+@router.post("/personas/draft")
+async def draft_persona_route(request: PersonaDraftRequest):
+    """Wizard from-scratch mode: the local model designs a complete persona
+    (name, prompt, settings, few-shot examples) from a plain-language
+    description. Returned for review in the wizard, never saved directly."""
+    description = str(request.description or "").strip()
+    if not description:
+        raise HTTPException(status_code=400, detail="A persona description is required.")
+    import server
+    engine = server.get_selected_llm_engine()
+    try:
+        result = await run_in_threadpool(engine.draft_persona_from_description, description)
+    except Exception:
+        logger.exception("Persona draft failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Persona draft failed. Check the application logs for details.",
+        )
+    if not result.get("ok"):
+        raise HTTPException(status_code=503, detail=result.get("message", "Persona helper unavailable."))
+    return result
+
+
 @router.delete("/personas/{name}")
 async def delete_persona_route(name: str):
     ok, msg = persona_service.delete_persona(name)

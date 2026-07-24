@@ -10,6 +10,8 @@ import {
   getPersonaV2,
   lintPersona,
   testPersona,
+  refinePersonaPrompt,
+  draftPersonaFromDescription,
   savePersona,
   deletePersona,
   startFoundryInterview,
@@ -622,14 +624,17 @@ export function createPersonasFeature({ elements, ui, hooks }) {
       if (!els.wizardFewShotList) return;
       const row = document.createElement('div');
       row.className = 'few-shot-row flex-align-center-gap8 mt-12';
-      const rawInput = document.createElement('input');
-      rawInput.className = 'settings-input few-shot-raw';
-      rawInput.type = 'text';
+      // Textareas, not <input>: model-generated examples for structured
+      // personas (bug reports, lists) are multi-line, and an <input> silently
+      // flattens the newlines out of the example the LLM will imitate.
+      const rawInput = document.createElement('textarea');
+      rawInput.className = 'settings-input few-shot-raw textarea-small';
+      rawInput.rows = 2;
       rawInput.placeholder = 'example input';
       rawInput.value = raw;
-      const outInput = document.createElement('input');
-      outInput.className = 'settings-input few-shot-out';
-      outInput.type = 'text';
+      const outInput = document.createElement('textarea');
+      outInput.className = 'settings-input few-shot-out textarea-small';
+      outInput.rows = 2;
       outInput.placeholder = 'desired output';
       outInput.value = out;
       const removeBtn = document.createElement('button');
@@ -770,6 +775,134 @@ export function createPersonasFeature({ elements, ui, hooks }) {
     els.wizardRegeneratePromptButton?.addEventListener('click', () => {
       editingExistingPersona = false;
       generatePromptPreview();
+    });
+
+    // --- AI helper: the downloaded local model refines the draft prompt (or
+    // designs a whole persona from a plain-language description) and reports
+    // what it understood + where it guessed, so a dictated description can't
+    // get saved while secretly ambiguous.
+    function renderRefineList(listEl, items, emptyText) {
+      if (!listEl) return;
+      listEl.innerHTML = '';
+      const entries = Array.isArray(items) && items.length ? items : [emptyText];
+      for (const item of entries) {
+        const li = document.createElement('li');
+        li.textContent = item;
+        listEl.appendChild(li);
+      }
+    }
+
+    function hideRefinePanel() {
+      els.wizardRefinePanel?.classList.add('hidden');
+      if (els.wizardRefineStatus) els.wizardRefineStatus.textContent = '';
+    }
+
+    els.wizardRefinePromptButton?.addEventListener('click', async () => {
+      const draft = els.wizardPromptPreview?.value?.trim()
+        || (els.wizardRole?.value === 'custom' ? els.wizardCustomRole?.value?.trim() : '');
+      if (!draft) {
+        if (els.wizardRefineStatus) els.wizardRefineStatus.textContent = 'Write or generate a draft prompt first.';
+        return;
+      }
+      const toneVal = els.wizardTone?.value === 'custom'
+        ? (els.wizardCustomTone?.value?.trim() || '') : (els.wizardTone?.value || '');
+      const rules = [];
+      if (els.wizardRuleLength?.checked) rules.push('match output length to input');
+      if (els.wizardRuleSanitize?.checked) rules.push('sanitize profanity/hostile language');
+
+      els.wizardRefinePromptButton.disabled = true;
+      hideRefinePanel();
+      if (els.wizardRefineStatus) els.wizardRefineStatus.textContent = 'Asking your local model… (this uses the LLM you have downloaded)';
+      try {
+        const result = await refinePersonaPrompt({ prompt: draft, tone: toneVal || null, rules: rules.length ? rules : null });
+        renderRefineList(els.wizardRefineUnderstood, result?.understood, 'The model reported nothing explicit — read the refined prompt carefully.');
+        renderRefineList(els.wizardRefineAmbiguities, result?.ambiguities, 'Nothing — it found your description clear.');
+        if (els.wizardRefinedPrompt) els.wizardRefinedPrompt.value = result?.refined_prompt || '';
+        // The from-scratch flow hides these panel parts; the refine flow needs them.
+        els.wizardRefinePromptBlock?.classList.remove('hidden');
+        els.wizardRefineActions?.classList.remove('hidden');
+        els.wizardRefinePanel?.classList.remove('hidden');
+        if (els.wizardRefineStatus) {
+          const warnings = Array.isArray(result?.lint_warnings) ? result.lint_warnings : [];
+          els.wizardRefineStatus.textContent = warnings.length
+            ? `Review the model's reading below. Lint: ${warnings.join(' ')}`
+            : "Review the model's reading below — if the guesses look wrong, fix your draft and run it again.";
+        }
+      } catch (err) {
+        if (els.wizardRefineStatus) els.wizardRefineStatus.textContent = `Persona helper failed: ${err.message}`;
+      } finally {
+        els.wizardRefinePromptButton.disabled = false;
+      }
+    });
+
+    els.wizardApplyRefinedButton?.addEventListener('click', () => {
+      const refined = els.wizardRefinedPrompt?.value?.trim();
+      if (refined && els.wizardPromptPreview) {
+        els.wizardPromptPreview.value = refined;
+        setMessage(els.wizardMessage, 'Refined prompt applied. Save the persona to keep it.', 'info');
+      }
+      hideRefinePanel();
+    });
+
+    els.wizardDismissRefinedButton?.addEventListener('click', hideRefinePanel);
+
+    // --- From-scratch mode: describe the persona in plain words and the local
+    // model designs the whole thing (name, prompt, settings, few-shot
+    // examples), then lands on the review step showing what it understood.
+    // Nothing is saved until the user hits Save Persona.
+    els.wizardDescribeButton?.addEventListener('click', async () => {
+      const description = els.wizardDescribeInput?.value?.trim();
+      if (!description) {
+        if (els.wizardDescribeStatus) els.wizardDescribeStatus.textContent = 'Describe the persona first — a couple of sentences is plenty.';
+        return;
+      }
+      els.wizardDescribeButton.disabled = true;
+      if (els.wizardDescribeStatus) els.wizardDescribeStatus.textContent = 'Your local model is designing the persona… (typically 10–30s)';
+      try {
+        const result = await draftPersonaFromDescription(description);
+
+        let name = result?.name || '';
+        if (name && BUILTIN_PERSONAS.has(name)) name = `${name} (mine)`;
+        if (name && els.wizardPersonaName) els.wizardPersonaName.value = name;
+        if (els.wizardPromptPreview) els.wizardPromptPreview.value = result?.prompt || '';
+        if (els.wizardTemperature) {
+          els.wizardTemperature.value = (result?.temperature === null || result?.temperature === undefined)
+            ? '' : String(result.temperature);
+        }
+        if (els.wizardOutputPolicy && result?.output_policy) els.wizardOutputPolicy.value = result.output_policy;
+        if (els.wizardSafetyMode && result?.safety_mode) els.wizardSafetyMode.value = result.safety_mode;
+        renderFewShotRows(result?.few_shot);
+
+        // Keep the generated prompt: entering step 4 must not regenerate from
+        // the wizard's template selections over it.
+        editingExistingPersona = true;
+
+        renderRefineList(els.wizardRefineUnderstood, result?.understood, 'The model reported nothing explicit — read the prompt carefully.');
+        renderRefineList(els.wizardRefineAmbiguities, result?.ambiguities, 'Nothing — it found your description clear.');
+        // Prompt already applied — hide the refine panel's apply flow.
+        els.wizardRefinePromptBlock?.classList.add('hidden');
+        els.wizardRefineActions?.classList.add('hidden');
+        els.wizardRefinePanel?.classList.remove('hidden');
+
+        showStep(4);
+        if (els.wizardDescribeStatus) els.wizardDescribeStatus.textContent = '';
+        const warnings = Array.isArray(result?.lint_warnings) ? result.lint_warnings : [];
+        if (els.wizardRefineStatus) {
+          els.wizardRefineStatus.textContent = warnings.length
+            ? `Persona built — review the model's reading below, then save. Lint: ${warnings.join(' ')}`
+            : "Persona built from your description — review what the model understood (and its guesses) below, tweak anything, then save.";
+        }
+        const examples = Array.isArray(result?.few_shot) ? result.few_shot.length : 0;
+        if (examples && els.wizardAdvanced && !els.wizardAdvanced.open) {
+          // The generated few-shot examples live in Advanced — open it so they
+          // are visible for review rather than silently attached.
+          els.wizardAdvanced.open = true;
+        }
+      } catch (err) {
+        if (els.wizardDescribeStatus) els.wizardDescribeStatus.textContent = `Persona builder failed: ${err.message}`;
+      } finally {
+        els.wizardDescribeButton.disabled = false;
+      }
     });
 
     els.wizardAddFewShotButton?.addEventListener('click', () => addFewShotRow());

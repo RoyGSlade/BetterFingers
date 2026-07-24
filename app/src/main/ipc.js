@@ -332,6 +332,17 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthT
     return true;
   });
 
+  handleTrusted('overlay:set-ignore-mouse-events', (_event, ignore) => {
+    const { getOverlayWindow } = require('./windows');
+    const overlay = getOverlayWindow();
+    if (!overlay || overlay.isDestroyed()) return false;
+    // Keep `forward: true` on the click-through side so hover detection in the
+    // renderer keeps working even while the overlay is passing clicks through.
+    const shouldIgnore = Boolean(ignore);
+    overlay.setIgnoreMouseEvents(shouldIgnore, shouldIgnore ? { forward: true } : undefined);
+    return true;
+  });
+
   handleTrusted('overlay:get-appearance', () => {
     const { getOverlayAppearance } = require('./windows');
     return getOverlayAppearance();

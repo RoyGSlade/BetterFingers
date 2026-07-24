@@ -231,6 +231,20 @@ const wizardLintWarnings = document.getElementById('wizardLintWarnings');
 const wizardTestSample = document.getElementById('wizardTestSample');
 const wizardTestButton = document.getElementById('wizardTestButton');
 const wizardTestResult = document.getElementById('wizardTestResult');
+const wizardRefinePromptButton = document.getElementById('wizardRefinePromptButton');
+const wizardRefineStatus = document.getElementById('wizardRefineStatus');
+const wizardRefinePanel = document.getElementById('wizardRefinePanel');
+const wizardRefineUnderstood = document.getElementById('wizardRefineUnderstood');
+const wizardRefineAmbiguities = document.getElementById('wizardRefineAmbiguities');
+const wizardRefinedPrompt = document.getElementById('wizardRefinedPrompt');
+const wizardApplyRefinedButton = document.getElementById('wizardApplyRefinedButton');
+const wizardDismissRefinedButton = document.getElementById('wizardDismissRefinedButton');
+const wizardRefinePromptBlock = document.getElementById('wizardRefinePromptBlock');
+const wizardRefineActions = document.getElementById('wizardRefineActions');
+const wizardDescribeInput = document.getElementById('wizardDescribeInput');
+const wizardDescribeButton = document.getElementById('wizardDescribeButton');
+const wizardDescribeStatus = document.getElementById('wizardDescribeStatus');
+const wizardAdvanced = document.getElementById('wizardAdvanced');
 
 let loadedPersonas = {};
 
@@ -349,6 +363,12 @@ const personas = createPersonasFeature({
     wizardOutputPolicy, wizardSafetyMode, wizardMaxCompletionTokens, wizardChunkSize,
     wizardFewShotList, wizardAddFewShotButton, wizardLintButton, wizardLintWarnings,
     wizardTestSample, wizardTestButton, wizardTestResult,
+    // AI helper (refine + from-scratch draft) panel elements
+    wizardRefinePromptButton, wizardRefineStatus, wizardRefinePanel,
+    wizardRefineUnderstood, wizardRefineAmbiguities, wizardRefinedPrompt,
+    wizardApplyRefinedButton, wizardDismissRefinedButton,
+    wizardRefinePromptBlock, wizardRefineActions,
+    wizardDescribeInput, wizardDescribeButton, wizardDescribeStatus, wizardAdvanced,
     currentPresetSelect: settingEls.current_preset,
   },
   ui: { setMessage, showToast },
@@ -775,6 +795,18 @@ function renderVoiceCloningPanel(cloning) {
       voiceCloningHintEl.hidden = isRoutine;
     }
   }
+}
+
+// The one and only provisioning path (POST /tts/clone/provision) — both the
+// Models tab's "Install voice cloning" button and the TTS/Read-Aloud
+// section's clone-status affordance call this instead of each doing their
+// own POST, so there is never a second implementation to keep in sync.
+async function installVoiceCloning() {
+  return runModelAction(provisionVoiceCloningButton, 'Install voice cloning', async () => {
+    const result = await provisionVoiceCloning();
+    renderVoiceCloningPanel(result?.cloning);
+    return result;
+  });
 }
 
 function renderModelPanels() {
@@ -1440,6 +1472,9 @@ async function refreshModels() {
   fillSelect(whisperModelSelectEl, whisperPayload.supported ?? [], whisperPayload.selected_model_size);
 
   renderModelPanels();
+  // Wake engine backbones live in this tab too now — keep them in sync with
+  // every Models refresh (non-blocking; its own error handling renders inline).
+  refreshWakeModels().catch(() => {});
   return { llmPayload, whisperPayload };
 }
 
@@ -2752,9 +2787,15 @@ function renderWakeBackboneList(models) {
   const el = document.getElementById('wakeBackboneList');
   if (!el) return;
   const backbones = (models || []).filter((m) => m.kind === 'backbone');
+  const badge = document.getElementById('wakeEngineBadge');
   if (!backbones.length) {
     el.innerHTML = '<span class="empty-state">No wake engine components listed.</span>';
+    if (badge) badge.textContent = '—';
     return;
+  }
+  if (badge) {
+    const ready = backbones.filter((m) => m.downloaded).length;
+    badge.textContent = ready === backbones.length ? 'Installed' : `${ready}/${backbones.length} installed`;
   }
   el.innerHTML = backbones
     .map(
@@ -2847,11 +2888,60 @@ async function handleWakeImport(file) {
   }
 }
 
+// Truthful backbone readiness (loadable, not just present) for the two wake
+// engine models. Returns the list of backbones that still need installing.
+async function getMissingWakeBackbones() {
+  const payload = await fetchWakeModels();
+  const backbones = (payload?.models || []).filter((m) => m.kind === 'backbone');
+  const checked = await Promise.all(
+    backbones.map(async (m) => {
+      try {
+        const state = await fetchWakeModelDownloadState(m.id);
+        return { ...m, ready: !!state.downloaded };
+      } catch {
+        return { ...m, ready: false };
+      }
+    }),
+  );
+  return checked.filter((m) => !m.ready);
+}
+
+// Enabling wake word requires the engine backbones. If they're missing, offer
+// to jump to the Models tab (same install flow as every other model) instead
+// of failing with an opaque "unavailable".
+async function ensureWakeBackbonesOrPromptModels() {
+  let missing;
+  try {
+    missing = await getMissingWakeBackbones();
+  } catch {
+    return true; // don't block enable on a readiness-probe hiccup
+  }
+  if (!missing.length) return true;
+  const names = missing.map((m) => m.name).join(', ');
+  const goToModels = window.confirm(
+    `Wake word needs these engine models installed first:\n\n${names}\n\n`
+      + 'Click OK to open the Models tab and install them, or Cancel to stay here.',
+  );
+  if (goToModels) {
+    const modelsTabButton = document.getElementById('tabButtonModels');
+    if (modelsTabButton) activateTab(modelsTabButton, { focus: true });
+    refreshModels().catch(() => {});
+  }
+  return false;
+}
+
 async function handleWakeToggle(checked) {
   const enabledEl = document.getElementById('settingWakeWordEnabled');
   if (enabledEl) enabledEl.disabled = true;
   try {
     if (checked) {
+      // Gate on the engine backbones first: prompt to install via the Models
+      // tab rather than letting enable fail with a cryptic reason.
+      const ready = await ensureWakeBackbonesOrPromptModels();
+      if (!ready) {
+        if (enabledEl) enabledEl.checked = false;
+        return;
+      }
       const sensitivityEl = settingEls.wake_word_sensitivity;
       const cooldownEl = settingEls.wake_word_cooldown_s;
       const modelEl = settingEls.wake_word_model;
@@ -3037,6 +3127,9 @@ function initSettingsPanel() {
       } else if (sectionName === 'voice-control') {
         refreshWakeStatus().catch(() => {});
         refreshWakeModels().catch(() => {});
+      } else if (sectionName === 'tts-readaloud') {
+        refreshVoiceBlendCapabilityNote().catch(() => {});
+        refreshCloneStatusNote().catch(() => {});
       }
 
       settingsSections.forEach((section) => {
@@ -3674,11 +3767,7 @@ provisionVoiceCloningButton?.addEventListener('click', () => {
   // runModelAction sets modelMessage from result.message (ok=false → danger),
   // so the honest "not published yet" / platform-unsupported message surfaces
   // cleanly. The response carries fresh `cloning` availability → re-render.
-  runModelAction(provisionVoiceCloningButton, 'Install voice cloning', async () => {
-    const result = await provisionVoiceCloning();
-    renderVoiceCloningPanel(result?.cloning);
-    return result;
-  });
+  installVoiceCloning();
 });
 
 saveDraftEditButton?.addEventListener('click', () => drafts.handleSaveDraftEditClick());
