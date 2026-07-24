@@ -2354,11 +2354,19 @@ async def run_doctor(refresh_audio: bool = False):
             pass
 
     # STT details
+    # device/compute_type/device_fallback_reason reflect what the model ACTUALLY
+    # loaded with (set in transcriber._load_model()), not just the user's
+    # prefer_gpu setting -- e.g. on Windows without cuDNN, CUDA init fails and
+    # this honestly reports device="cpu" instead of implying GPU acceleration.
+    stt_fallback_reason = getattr(transcriber, "device_fallback_reason", None) if transcriber else None
     stt_info = {
         "initialized": transcriber is not None,
         "loaded": bool(getattr(transcriber, "model", None)) if transcriber else False,
         "model_size": getattr(transcriber, "model_size", None) if transcriber else None,
-        "device": getattr(transcriber, "device", None) if transcriber else None,
+        "device": getattr(transcriber, "active_device", None) if transcriber else None,
+        "compute_type": getattr(transcriber, "active_compute_type", None) if transcriber else None,
+        "device_fallback_reason": stt_fallback_reason,
+        "using_cpu_fallback": bool(stt_fallback_reason),
     }
 
     # LLM details
