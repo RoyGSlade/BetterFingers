@@ -128,6 +128,8 @@ RUNTIME_ARTIFACT_SHA256 = {
         "c954d7a206b40ad57023fe09bc50c26f2c1af6ddd767e524c91a9a5674e0f1fe",
     "cudart-llama-bin-win-cuda-12.4-x64.zip":
         "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
+    "llama-b9548-bin-win-vulkan-x64.zip":
+        "ecc031e41eb46025e2303fc5412339042b7a9c5881d6c53f91bebeef33f6cabd",
     "llama-b9548-bin-ubuntu-vulkan-x64.tar.gz":
         "5ea8c3b051312e12c649d2214b1a7fdfd773b82f9724141771d22cdfe544f0aa",
 }
@@ -137,18 +139,118 @@ def runtime_artifact_sha256(url):
     return RUNTIME_ARTIFACT_SHA256.get(str(url or "").rsplit("/", 1)[-1])
 
 
+# Named llama.cpp b9548 runtime archives (single source of truth per URL).
+# Windows ships two vendor archives — CUDA (NVIDIA) and Vulkan (AMD/Intel, plus
+# a CPU fallback baked in) — and the one to install is chosen at provision time
+# by :func:`resolve_runtime_spec`. Linux uses the vendor-neutral Vulkan build.
+_LLAMA_RELEASE = "https://github.com/ggml-org/llama.cpp/releases/download/b9548"
+WIN_CUDA_BIN_URL = f"{_LLAMA_RELEASE}/llama-b9548-bin-win-cuda-12.4-x64.zip"
+WIN_CUDA_LIB_URL = f"{_LLAMA_RELEASE}/cudart-llama-bin-win-cuda-12.4-x64.zip"
+WIN_VULKAN_BIN_URL = f"{_LLAMA_RELEASE}/llama-b9548-bin-win-vulkan-x64.zip"
+LINUX_VULKAN_BIN_URL = f"{_LLAMA_RELEASE}/llama-b9548-bin-ubuntu-vulkan-x64.tar.gz"
+
+WIN_CUDA_ARCHIVE_NAME = "server-cuda-bin.zip"
+WIN_CUDA_LIB_ARCHIVE_NAME = "cuda-libs.zip"
+WIN_VULKAN_ARCHIVE_NAME = "server-win-vulkan-bin.zip"
+LINUX_VULKAN_ARCHIVE_NAME = "server-ubuntu-vulkan-bin.tar.gz"
+
 if sys.platform == "win32":
+    # Module-level defaults describe the CUDA spec for back-compat; the actual
+    # per-machine choice is made by resolve_runtime_spec() at install time.
     SERVER_FILENAME = "llama-server.exe"
-    SERVER_ARCHIVE_NAME = "server-cuda-bin.zip"
-    CUDA_ARCHIVE_NAME = "cuda-libs.zip"
-    SERVER_BIN_URL = "https://github.com/ggml-org/llama.cpp/releases/download/b9548/llama-b9548-bin-win-cuda-12.4-x64.zip"
-    CUDA_LIB_URL = "https://github.com/ggml-org/llama.cpp/releases/download/b9548/cudart-llama-bin-win-cuda-12.4-x64.zip"
+    SERVER_ARCHIVE_NAME = WIN_CUDA_ARCHIVE_NAME
+    CUDA_ARCHIVE_NAME = WIN_CUDA_LIB_ARCHIVE_NAME
+    SERVER_BIN_URL = WIN_CUDA_BIN_URL
+    CUDA_LIB_URL = WIN_CUDA_LIB_URL
 else:
     SERVER_FILENAME = "llama-server"
-    SERVER_ARCHIVE_NAME = "server-ubuntu-vulkan-bin.tar.gz"
+    SERVER_ARCHIVE_NAME = LINUX_VULKAN_ARCHIVE_NAME
     CUDA_ARCHIVE_NAME = None
-    SERVER_BIN_URL = "https://github.com/ggml-org/llama.cpp/releases/download/b9548/llama-b9548-bin-ubuntu-vulkan-x64.tar.gz"
+    SERVER_BIN_URL = LINUX_VULKAN_BIN_URL
     CUDA_LIB_URL = None
+
+
+def _runtime_backend_override():
+    """Operator override for runtime selection: ``cuda`` | ``vulkan`` | ``cpu``.
+    Lets a tester force either Windows backend without swapping hardware (e.g.
+    validate the Vulkan path on an NVIDIA box, or vice-versa)."""
+    return (os.getenv("BETTERFINGERS_LLAMA_RUNTIME", "") or "").strip().lower()
+
+
+def _windows_has_nvidia_gpu():
+    """True when an NVIDIA GPU + driver is present (``nvidia-smi`` enumerates a
+    GPU). Deterministic and cheap, and — unlike hardware_report's Vulkan probe —
+    it never touches the (possibly not-yet-installed) llama-server binary, so it
+    is safe to call during provisioning."""
+    exe = shutil.which("nvidia-smi")
+    if not exe:
+        return False
+    try:
+        result = subprocess.run([exe, "-L"], capture_output=True, text=True, timeout=8)
+    except Exception:
+        return False
+    return result.returncode == 0 and "GPU 0" in (result.stdout or "")
+
+
+def _select_runtime_spec(platform_name, prefer_cuda):
+    """Pure mapping from (platform, prefer_cuda) → the archive spec to install.
+
+    Split out from :func:`resolve_runtime_spec` so the selection table is
+    unit-testable without patching ``sys.platform`` or shelling out to
+    nvidia-smi. Returns a dict: ``filename``, ``archive_name``, ``bin_url``,
+    ``cuda_archive_name``, ``cuda_lib_url``, ``backend``.
+    """
+    if platform_name == "win32":
+        if prefer_cuda:
+            return {
+                "filename": "llama-server.exe",
+                "archive_name": WIN_CUDA_ARCHIVE_NAME,
+                "bin_url": WIN_CUDA_BIN_URL,
+                "cuda_archive_name": WIN_CUDA_LIB_ARCHIVE_NAME,
+                "cuda_lib_url": WIN_CUDA_LIB_URL,
+                "backend": "cuda",
+            }
+        # Vulkan build is vendor-neutral (AMD/Intel) and runs CPU-only when no
+        # Vulkan device is present, so it also IS the CPU fallback. No cudart.
+        return {
+            "filename": "llama-server.exe",
+            "archive_name": WIN_VULKAN_ARCHIVE_NAME,
+            "bin_url": WIN_VULKAN_BIN_URL,
+            "cuda_archive_name": None,
+            "cuda_lib_url": None,
+            "backend": "vulkan",
+        }
+    # Linux (and any non-Windows that reaches the download path): ubuntu-vulkan.
+    return {
+        "filename": "llama-server",
+        "archive_name": LINUX_VULKAN_ARCHIVE_NAME,
+        "bin_url": LINUX_VULKAN_BIN_URL,
+        "cuda_archive_name": None,
+        "cuda_lib_url": None,
+        "backend": "vulkan",
+    }
+
+
+def resolve_runtime_spec():
+    """Choose the llama.cpp runtime archive to install for THIS machine.
+
+    On Windows we pick CUDA only when an NVIDIA GPU is actually present;
+    otherwise Vulkan — so a non-NVIDIA Windows PC gets a runtime that works and
+    accelerates (AMD/Intel via Vulkan, or CPU) instead of a CUDA build with no
+    usable device and a pointless ~300 MB cudart download. Honors the
+    ``BETTERFINGERS_LLAMA_RUNTIME`` override. Linux/macOS are unchanged.
+    """
+    if sys.platform != "win32":
+        return _select_runtime_spec(sys.platform, prefer_cuda=False)
+
+    override = _runtime_backend_override()
+    if override == "cuda":
+        prefer_cuda = True
+    elif override in ("vulkan", "cpu"):
+        prefer_cuda = False
+    else:
+        prefer_cuda = _windows_has_nvidia_gpu()
+    return _select_runtime_spec("win32", prefer_cuda)
 
 PACKAGED_LLAMA_CPP_BUILD = 9548
 GEMMA4_MIN_LLAMA_CPP_BUILD = 8660
@@ -1322,17 +1424,20 @@ def check_and_download_resources(model_id=None, progress_callback=None):
         return {"ok": False, "model_id": target_model_id, "message": message}
 
     if server_needs_install:
-        logging.info("llama-server not found or outdated. Downloading binaries...")
+        # Pick CUDA vs Vulkan (vendor-neutral / CPU fallback) for THIS machine —
+        # an AMD/Intel Windows PC must not get the CUDA-only build (§ item 2).
+        spec = resolve_runtime_spec()
+        logging.info("llama-server not found or outdated. Downloading %s runtime...", spec["backend"])
 
-        bin_archive = os.path.join(models_dir, SERVER_ARCHIVE_NAME)
+        bin_archive = os.path.join(models_dir, spec["archive_name"])
         try:
             download_file(
-                SERVER_BIN_URL,
+                spec["bin_url"],
                 bin_archive,
                 "llama-server",
                 progress_callback=report,
                 progress_key=f"{target_model_id}:server",
-                expected_sha256=runtime_artifact_sha256(SERVER_BIN_URL),
+                expected_sha256=runtime_artifact_sha256(spec["bin_url"]),
             )
             # Validated staging + atomic promote: a malicious/corrupt archive
             # can't escape models_dir or leave a half-written runtime, and the
@@ -1340,10 +1445,10 @@ def check_and_download_resources(model_id=None, progress_callback=None):
             safe_extract_runtime_archive(
                 bin_archive,
                 models_dir,
-                SERVER_ARCHIVE_NAME,
-                required_members=[SERVER_FILENAME],
+                spec["archive_name"],
+                required_members=[spec["filename"]],
             )
-            if not SERVER_ARCHIVE_NAME.endswith(".zip"):
+            if not spec["archive_name"].endswith(".zip"):
                 repair_linux_runtime_links(os.path.dirname(os.path.abspath(server_path)))
             # Pin the extracted binary's digest so a later swap is detected (§11).
             record_runtime_digest(server_path)
@@ -1351,18 +1456,18 @@ def check_and_download_resources(model_id=None, progress_callback=None):
             if os.path.exists(bin_archive):
                 os.remove(bin_archive)
 
-        if CUDA_LIB_URL and CUDA_ARCHIVE_NAME:
-            cuda_archive = os.path.join(models_dir, CUDA_ARCHIVE_NAME)
+        if spec["cuda_lib_url"] and spec["cuda_archive_name"]:
+            cuda_archive = os.path.join(models_dir, spec["cuda_archive_name"])
             try:
                 download_file(
-                    CUDA_LIB_URL,
+                    spec["cuda_lib_url"],
                     cuda_archive,
                     "CUDA Runtime",
                     progress_callback=report,
                     progress_key=f"{target_model_id}:cuda",
-                    expected_sha256=runtime_artifact_sha256(CUDA_LIB_URL),
+                    expected_sha256=runtime_artifact_sha256(spec["cuda_lib_url"]),
                 )
-                safe_extract_runtime_archive(cuda_archive, models_dir, CUDA_ARCHIVE_NAME)
+                safe_extract_runtime_archive(cuda_archive, models_dir, spec["cuda_archive_name"])
                 os.remove(cuda_archive)
             except Exception as exc:
                 logging.warning("Failed to download CUDA libs: %s. Server will run on CPU.", exc)
