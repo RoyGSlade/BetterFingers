@@ -129,6 +129,98 @@
 
       <!-- Dashboard Tab Content -->
       <div id="tabDashboard" class="tab-content active" role="tabpanel" aria-labelledby="tabButtonDashboard" tabindex="0">
+        <!-- First-run "get set up" checklist (W8). Shown when the runtime/LLM/
+             Whisper models aren't all ready yet; hidden once ready or once the
+             user dismisses it. An in-page panel (not another modal) so it never
+             fights with the onboarding overlay above -- see features/firstRun.js
+             header comment for why. -->
+        <section id="firstRunPanel" class="stream-panel first-run-panel" aria-labelledby="firstRunHeading" hidden>
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">First-run setup</p>
+              <h2 id="firstRunHeading">Get BetterFingers set up</h2>
+            </div>
+            <span id="firstRunOverallBadge" class="model-badge">Checking…</span>
+          </div>
+
+          <p class="status-detail">
+            BetterFingers needs a couple of local models before it can transcribe and clean up speech.
+            These are multi-gigabyte downloads -- keep the app open while they run.
+          </p>
+
+          <div id="firstRunDiskWarning" class="warning-banner" role="alert" hidden>
+            <strong>Not enough disk space:</strong>
+            <span id="firstRunDiskWarningMessage"></span>
+          </div>
+
+          <div class="model-overview">
+            <div class="model-stat">
+              <span>Runtime</span>
+              <strong id="firstRunRuntimeBadge" data-tone="warning">Checking…</strong>
+              <small id="firstRunRuntimeDetail">llama-server binary</small>
+            </div>
+            <div class="model-stat">
+              <span>Language model</span>
+              <strong id="firstRunLlmBadge" data-tone="warning">Checking…</strong>
+              <small id="firstRunLlmDetail">—</small>
+            </div>
+            <div class="model-stat">
+              <span>Speech model</span>
+              <strong id="firstRunWhisperBadge" data-tone="warning">Checking…</strong>
+              <small id="firstRunWhisperDetail">—</small>
+            </div>
+          </div>
+
+          <div class="model-panel model-panel-compact">
+            <div class="model-panel-header">
+              <div>
+                <h3>Language model (LLM)</h3>
+                <p>Cleans up dictated text. Downloading it also installs the matching llama-server runtime.</p>
+              </div>
+              <button id="firstRunDownloadLlmButton" class="secondary-button primary-button" type="button">Download language model</button>
+            </div>
+            <div id="firstRunLlmProgress" class="model-download-progress" hidden>
+              <div class="model-progress-header">
+                <span id="firstRunLlmProgressLabel">Download pending</span>
+                <strong id="firstRunLlmProgressPercent">0%</strong>
+              </div>
+              <div class="model-progress-track" aria-hidden="true">
+                <div id="firstRunLlmProgressFill" class="model-progress-fill"></div>
+              </div>
+              <small id="firstRunLlmProgressBytes"></small>
+            </div>
+          </div>
+
+          <div class="model-panel model-panel-compact">
+            <div class="model-panel-header">
+              <div>
+                <h3>Speech model (Whisper)</h3>
+                <p>Transcribes your recorded speech to text.</p>
+              </div>
+              <button id="firstRunDownloadWhisperButton" class="secondary-button primary-button" type="button">Download speech model</button>
+            </div>
+            <div id="firstRunWhisperProgress" class="model-download-progress" hidden>
+              <div class="model-progress-header">
+                <span id="firstRunWhisperProgressLabel">Download pending</span>
+                <strong id="firstRunWhisperProgressPercent">0%</strong>
+              </div>
+              <div class="model-progress-track" aria-hidden="true">
+                <div id="firstRunWhisperProgressFill" class="model-progress-fill"></div>
+              </div>
+              <small id="firstRunWhisperProgressBytes"></small>
+            </div>
+          </div>
+
+          <div id="firstRunMessage" class="warmup-message" role="status" aria-live="polite"></div>
+
+          <div class="action-row">
+            <button id="firstRunRefreshButton" class="secondary-button" type="button">Check again</button>
+            <span class="first-run-spacer"></span>
+            <button id="firstRunDismissButton" class="secondary-button" type="button">I'll set this up myself</button>
+            <button id="firstRunContinueButton" class="secondary-button primary-button" type="button" disabled>Continue to app</button>
+          </div>
+        </section>
+
         <section class="status-grid" aria-label="Backend status">
           <article class="status-card">
             <span class="status-label">Backend</span>
