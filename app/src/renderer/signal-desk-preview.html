@@ -22,6 +22,18 @@
   unit-tested router logic lives in features/signalDeskShell.js /
   tests/signalDeskShell.test.mjs and will be wired into the actual app
   (index.html/main.js) in a later phase without needing this page to change.
+
+  Phase 2 (Talk + Signal Core ring): the SAME file:// module-fetch CORS
+  restriction applies to `import`-ing signalCore.js/talkWorkspace.js, so this
+  page tries to mount the real, animated canvas ring via a `type="module"`
+  script (works when served over http:// -- e.g. `python3 -m http.server`
+  from app/src/renderer, or this repo's Playwright/Browser-pane tooling --
+  but is expected to silently no-op under a raw file:// open in Chrome). The
+  enhanced static CSS ring (::before/::after on .sd-signal-core-ring, now
+  sized to the same ~520px as the canvas) stays visible as a fallback "good
+  static frame" per the phase brief either way, and
+  .sd-signal-core-ring--js-mounted (added once the canvas actually mounts)
+  hides it so only the live ring shows when the module loads successfully.
 -->
 <link rel="stylesheet" href="./styles/signal-desk.css" />
 <style>
@@ -136,26 +148,41 @@
         <div class="sd-signal-core-status" style="color: var(--sd-green);">
           <span class="sd-signal-core-status__dot" aria-hidden="true"></span>
           <span>
-            <span class="sd-signal-core-status__label">Listening</span>
-            <span class="sd-signal-core-status__detail">Voice input detected</span>
+            <span class="sd-signal-core-status__label" id="sdSignalCoreStatusLabel">Listening</span>
+            <span class="sd-signal-core-status__detail" id="sdSignalCoreStatusDetail">Voice input detected</span>
           </span>
         </div>
 
         <div class="sd-signal-core-meter">
-          <span>&minus;18 dB</span>
-          <span class="sd-signal-core-meter__bar" aria-hidden="true"></span>
+          <span id="sdSignalCoreMeterValue">&minus;18 dB</span>
+          <span class="sd-signal-core-meter__bar" id="sdSignalCoreMeterBar" aria-hidden="true">
+            <span class="sd-signal-core-meter__level" id="sdSignalCoreMeterLevel"></span>
+          </span>
         </div>
 
-        <div class="sd-signal-core-ring">
+        <!-- signalCore.js mounts a <canvas class="sd-signal-core-canvas"> into
+             this element (createSignalCore({ container: ... })) and adds
+             .sd-signal-core-ring--js-mounted once it does, which hides the
+             ::before/::after CSS fallback rings below. If the module script
+             fails to load (see the file:// CORS note above), the CSS
+             fallback stays visible so the page never renders empty. -->
+        <div class="sd-signal-core-ring" id="sdSignalCoreRing">
+          <!-- signalCore.js appends its <canvas> here, sized to fill the
+               whole 520px ring (see .sd-signal-core-canvas-mount). -->
+          <div class="sd-signal-core-canvas-mount" id="sdSignalCoreCanvasMount" aria-hidden="true"></div>
+
+          <!-- Static fallback waveform: hidden once the canvas mounts
+               (.sd-signal-core-ring--js-mounted), visible before/if it
+               doesn't (see the file:// CORS note above) so the ring never
+               renders with an empty center. -->
           <div class="sd-signal-core-ring__waveform" aria-hidden="true">
             <svg viewBox="0 0 200 40" preserveAspectRatio="none">
               <polyline fill="none" stroke="currentColor" stroke-width="1.5"
                 points="0,20 8,20 14,10 20,30 26,14 32,26 38,8 44,32 50,18 56,22 62,6 68,34 74,16 80,24 86,12 92,28 98,20 104,20 110,4 116,36 122,18 128,22 134,10 140,30 146,16 152,24 158,20 164,20 170,12 176,28 182,20 188,20 194,20 200,20" />
             </svg>
           </div>
+          <p class="sd-signal-core-hint"><strong>Hold Ctrl + Space</strong><br />Speak naturally</p>
         </div>
-
-        <p class="sd-signal-core-hint"><strong>Hold Ctrl + Space</strong><br />Speak naturally</p>
       </div>
 
       <div class="sd-refined-card">
@@ -164,26 +191,26 @@
             <span class="sd-refined-card__eyebrow-icon" aria-hidden="true">&#10022;</span>
             Refined Message
           </span>
-          <span class="sd-badge sd-badge--ready">
-            <span aria-hidden="true">&check;</span> Ready
+          <span class="sd-badge sd-badge--ready" id="sdRefinedBadge">
+            <span aria-hidden="true">&check;</span> <span data-badge-label>Ready</span>
           </span>
         </div>
 
-        <p class="sd-refined-card__hero">I should be there around six. I&rsquo;ll message you when I&rsquo;m leaving.</p>
+        <p class="sd-refined-card__hero" id="sdRefinedHero">I should be there around six. I&rsquo;ll message you when I&rsquo;m leaving.</p>
 
         <div class="sd-meta-strip">
           <div class="sd-meta-cell">
             <span class="sd-meta-cell__label">Raw Transcript</span>
-            <span class="sd-meta-cell__raw">&ldquo;i should be there around six i&rsquo;ll message you when i&rsquo;m leaving&rdquo;</span>
+            <span class="sd-meta-cell__raw" id="sdRawTranscriptText">&ldquo;i should be there around six i&rsquo;ll message you when i&rsquo;m leaving&rdquo;</span>
           </div>
           <div class="sd-meta-cell">
             <span class="sd-meta-cell__label">Confidence</span>
-            <span class="sd-meta-cell__confidence-value">94%</span>
-            <span class="sd-confidence-bar"><span class="sd-confidence-bar__fill" style="width: 94%;"></span></span>
+            <span class="sd-meta-cell__confidence-value" id="sdConfidenceValue">94%</span>
+            <span class="sd-confidence-bar"><span class="sd-confidence-bar__fill" id="sdConfidenceBarFill" style="width: 94%;"></span></span>
           </div>
           <div class="sd-meta-cell">
             <span class="sd-meta-cell__label">Persona</span>
-            <span class="sd-chip sd-chip--persona-natural">Natural</span>
+            <span class="sd-chip sd-chip--persona-natural"><span id="sdPersonaLabel">Natural</span></span>
           </div>
           <div class="sd-meta-cell">
             <span class="sd-meta-cell__label">Destination</span>
@@ -194,30 +221,30 @@
                 <circle cx="15" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle>
                 <path d="M8 7 9 4h6l1 3"></path>
               </svg>
-              Discord
+              <span id="sdDestinationLabel">Discord</span>
             </span>
           </div>
         </div>
 
         <div class="sd-actions-row">
-          <button type="button" class="sd-btn">
+          <button type="button" class="sd-btn" id="sdRawTranscriptButton">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="3" width="14" height="18" rx="2"></rect><line x1="9" y1="8" x2="15" y2="8"></line><line x1="9" y1="12" x2="15" y2="12"></line></svg>
             Raw Transcript
           </button>
-          <button type="button" class="sd-btn">
+          <button type="button" class="sd-btn" id="sdListenButton">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6,4 20,12 6,20"></polygon></svg>
             Listen
           </button>
-          <button type="button" class="sd-btn">
+          <button type="button" class="sd-btn" id="sdReviseButton">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20l4-1 11-11-3-3L5 16z"></path></svg>
             Revise
           </button>
           <span class="sd-btn-split">
-            <button type="button" class="sd-btn sd-btn--primary">
+            <button type="button" class="sd-btn sd-btn--primary" id="sdSendButton">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="20" x2="20" y2="4"></line><polygon points="20,4 12,4 20,12"></polygon></svg>
               Send / Insert
             </button>
-            <button type="button" class="sd-btn-split__chevron" aria-label="More send options">&#9662;</button>
+            <button type="button" class="sd-btn-split__chevron" id="sdSendChevronButton" aria-label="More send options">&#9662;</button>
           </span>
         </div>
       </div>
@@ -280,16 +307,16 @@
 
       <div class="sd-context__section">
         <span class="sd-context__section-label">Delivery <span class="sd-help" aria-hidden="true">?</span></span>
-        <div class="sd-segmented" role="group" aria-label="Delivery method">
-          <button type="button" class="sd-segmented__option is-active">
+        <div class="sd-segmented" role="group" aria-label="Delivery method" id="sdDeliverySegmented">
+          <button type="button" class="sd-segmented__option is-active" data-delivery-option="send">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="20" x2="20" y2="4"></line><polygon points="20,4 12,4 20,12"></polygon></svg>
             Send
           </button>
-          <button type="button" class="sd-segmented__option">
+          <button type="button" class="sd-segmented__option" data-delivery-option="insert">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="4" x2="12" y2="20"></line><line x1="7" y1="4" x2="17" y2="4"></line><line x1="9" y1="20" x2="15" y2="20"></line></svg>
             Insert
           </button>
-          <button type="button" class="sd-segmented__option">
+          <button type="button" class="sd-segmented__option" data-delivery-option="copy">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="11" height="12" rx="2"></rect><path d="M5 15V4h10"></path></svg>
             Copy
           </button>
@@ -469,6 +496,33 @@
     document.getElementById('sdContextCollapseBtn').addEventListener('click', toggleContextCollapsed);
     document.getElementById('sdContextHideBtn').addEventListener('click', toggleContextCollapsed);
   })();
+</script>
+
+<!--
+  Phase 2: mount the REAL Signal Core ring + Talk workspace adapter for
+  director QA. This is a `type="module"` script (see the header comment) --
+  under a plain file:// open in Chrome the import below is expected to be
+  CORS-blocked and silently not run, leaving the static CSS fallback ring
+  visible; served over http:// (a local static server, or this repo's
+  Browser-pane tooling) it mounts the live, animated, amplitude-reactive
+  canvas. No backend/Electron bridge exists on this page, so `hooks.drafts`
+  is intentionally omitted -- the action-row buttons safely no-op with a
+  console warning (see talkWorkspace.js's TODO(phase-integration) notes)
+  rather than throwing. A fixed 'listening' state + gentle amplitude is set
+  below purely so the QA screenshot shows an "active" ring rather than idle.
+-->
+<script type="module">
+  import { createTalkWorkspaceFeature, collectTalkElements } from './features/talkWorkspace.js';
+
+  const elements = collectTalkElements(document);
+  const talkWorkspace = createTalkWorkspaceFeature({ elements, hooks: {} });
+  talkWorkspace.init({ state: 'listening', amplitude: 0.34 });
+
+  // Debug handle for director/manual QA from devtools, e.g.:
+  //   window.__signalCore.setState('recording'); window.__signalCore.setAmplitude(0.8);
+  //   window.__signalCore.renderOnce(); // paint one frame on demand
+  window.__talkWorkspace = talkWorkspace;
+  window.__signalCore = talkWorkspace.getSignalCore();
 </script>
 
 </body>
