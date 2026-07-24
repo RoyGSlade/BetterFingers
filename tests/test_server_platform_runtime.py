@@ -205,7 +205,8 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
         with patch("sys.platform", "linux"), patch.object(
             platform_capabilities, "is_linux", True
         ), patch.object(platform_capabilities, "is_windows", False), patch.object(
-            platform_capabilities, "is_wayland", True
+            platform_capabilities, "is_macos", False
+        ), patch.object(platform_capabilities, "is_wayland", True
         ), patch.object(platform_capabilities, "is_x11", False), patch.object(
             platform_capabilities, "session_type", "wayland"
         ), patch("platform_capabilities.shutil.which", return_value=None):
@@ -214,6 +215,10 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         injection = response.json()["injection"]
+        # is_macos must be neutralized too: _detect_clipboard_backend() returns
+        # "native" unconditionally on macOS/Windows, so without this patch the
+        # macOS CI runner reports method="paste" (native clipboard) instead of
+        # "none" for this "Linux Wayland, no tools" scenario.
         self.assertEqual(injection["method"], "none")
         self.assertIsNone(injection["required_tool"])
         self.assertFalse(injection["tool_available"])
