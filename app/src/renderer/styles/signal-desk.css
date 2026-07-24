@@ -3053,3 +3053,653 @@
   color: var(--sd-text-secondary);
   border-color: var(--sd-cyan);
 }
+
+/* ==========================================================================
+   UTILITIES workspace (SPEC 8, Phase 5a) -- the catch-all that guarantees no
+   feature from CURRENT_UI_INVENTORY.md is lost. NOT mocked pixel-for-pixel by
+   the director (SPEC 8: "Utilities & Settings are not mocked in detail") --
+   this reuses the SAME Signal Desk visual language and the SAME reusable
+   primitives Talk/Library/Studio already defined above (.sd-btn, .sd-chip,
+   .sd-badge, .sd-dropdown, .sd-segmented, .sd-slider/.sd-slider-row,
+   .sd-action-btn/.sd-actions-grid, .sd-status-card, .sd-transcript-box,
+   .sd-panel-label), adding only the generic primitives none of those three
+   needed: a left section sub-nav, a generic settings-group card, a settings
+   row (label + control), progress bars, level meters, a doctor-card grid, a
+   metrics table, and a monospace log/dump box. Bound by
+   features/utilitiesWorkspace.js -- see that file's header comment for the
+   full inventory -> section placement map.
+   ========================================================================== */
+
+/* --- Section shell: left sub-nav + right section content ------------------ */
+
+.sd-util-shell {
+  display: grid;
+  grid-template-columns: 190px 1fr;
+  gap: var(--sd-space-24);
+  align-items: start;
+}
+
+.sd-util-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  position: sticky;
+  top: 0;
+}
+
+.sd-util-nav__item {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+  padding: var(--sd-space-8) var(--sd-space-12);
+  border-radius: var(--sd-radius-pill);
+  border: 1px solid transparent;
+  background: none;
+  color: var(--sd-text-secondary);
+  font-family: inherit;
+  font-size: var(--sd-font-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sd-util-nav__item:hover {
+  background: var(--sd-surface-raised);
+  color: var(--sd-text-primary);
+}
+
+.sd-util-nav__item.is-active {
+  background: rgba(34, 211, 238, 0.1);
+  border: 1px solid rgba(34, 211, 238, 0.35);
+  color: var(--sd-cyan);
+  font-weight: 600;
+}
+
+.sd-util-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-20);
+  min-width: 0;
+}
+
+.sd-util-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-20);
+}
+
+.sd-util-section[hidden] {
+  display: none;
+}
+
+.sd-util-section__intro {
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-muted);
+  margin: 0;
+}
+
+/* --- Generic settings-group card -------------------------------------------- */
+
+.sd-util-group {
+  background: var(--sd-surface-raised);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-card);
+  padding: var(--sd-space-20);
+  box-shadow: var(--sd-shadow-card);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-16);
+}
+
+.sd-util-group__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sd-space-12);
+}
+
+.sd-util-group__title {
+  font-size: var(--sd-font-body);
+  font-weight: 600;
+  color: var(--sd-text-primary);
+}
+
+.sd-util-group__desc {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+  margin: 0;
+}
+
+.sd-util-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sd-space-16);
+}
+
+@media (max-width: 980px) {
+  .sd-util-grid-2 {
+    grid-template-columns: 1fr;
+  }
+  .sd-util-shell {
+    grid-template-columns: 1fr;
+  }
+  .sd-util-nav {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}
+
+/* --- Settings row (label + control) ----------------------------------------- */
+
+.sd-util-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sd-space-16);
+}
+
+.sd-util-row__label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sd-util-row__label-text {
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-primary);
+}
+
+.sd-util-row__label-hint {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+}
+
+.sd-util-row__control {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+}
+
+.sd-util-input,
+.sd-util-select {
+  padding: var(--sd-space-8) var(--sd-space-12);
+  border-radius: var(--sd-radius-pill);
+  border: 1px solid var(--sd-border);
+  background: var(--sd-surface-inset);
+  color: var(--sd-text-primary);
+  font-family: inherit;
+  font-size: var(--sd-font-sm);
+}
+
+.sd-util-input:focus,
+.sd-util-select:focus {
+  outline: none;
+  border-color: var(--sd-cyan);
+}
+
+.sd-util-input--number {
+  width: 90px;
+  text-align: right;
+}
+
+.sd-util-input--wide {
+  width: 100%;
+}
+
+.sd-util-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--sd-cyan);
+}
+
+/* --- Progress bar (model downloads, wake training) -------------------------- */
+
+.sd-util-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sd-util-progress[hidden] {
+  display: none;
+}
+
+.sd-util-progress__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+}
+
+.sd-util-progress__bar {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--sd-surface-inset);
+  overflow: hidden;
+}
+
+.sd-util-progress__fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--sd-cyan);
+  width: 0%;
+  transition: width 160ms ease;
+}
+
+/* --- Level meter (mic test / wake score) ------------------------------------- */
+
+.sd-util-meter {
+  width: 100%;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--sd-surface-inset);
+  overflow: hidden;
+  border: 1px solid var(--sd-border);
+}
+
+.sd-util-meter__fill {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--sd-green), var(--sd-cyan));
+  transition: width 80ms linear;
+}
+
+/* --- List rows (dictionary/macros/models/recordings/jobs/logs) -------------- */
+
+.sd-util-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-8);
+}
+
+.sd-util-list__empty {
+  color: var(--sd-text-muted);
+  font-size: var(--sd-font-sm);
+  padding: var(--sd-space-8) 0;
+}
+
+.sd-util-list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sd-space-12);
+  padding: var(--sd-space-8) var(--sd-space-12);
+  border-radius: var(--sd-radius-pill);
+  background: var(--sd-surface-inset);
+  border: 1px solid var(--sd-border);
+  font-size: var(--sd-font-sm);
+}
+
+.sd-util-list-row__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sd-util-list-row__title {
+  color: var(--sd-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sd-util-list-row__meta {
+  color: var(--sd-text-muted);
+  font-size: var(--sd-font-xs);
+}
+
+.sd-util-list-row__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+  flex-shrink: 0;
+}
+
+.sd-util-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sd-space-8);
+}
+
+.sd-util-chip-remove {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  margin-left: 4px;
+  font-size: inherit;
+  line-height: 1;
+}
+
+/* --- Doctor checkup grid ------------------------------------------------------ */
+
+.sd-util-doctor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--sd-space-12);
+}
+
+.sd-util-doctor-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--sd-space-12);
+  border-radius: var(--sd-radius-pill);
+  background: var(--sd-surface-inset);
+  border: 1px solid var(--sd-border);
+}
+
+.sd-util-doctor-card__title {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.sd-util-doctor-card__status {
+  font-size: var(--sd-font-sm);
+  font-weight: 600;
+  color: var(--sd-text-secondary);
+}
+
+.sd-util-doctor-card__status[data-tone="ok"] {
+  color: var(--sd-green);
+}
+
+.sd-util-doctor-card__status[data-tone="warn"] {
+  color: var(--sd-amber);
+}
+
+.sd-util-doctor-card__status[data-tone="error"] {
+  color: var(--sd-red);
+}
+
+.sd-util-doctor-card__status[data-tone="unknown"] {
+  color: var(--sd-text-muted);
+}
+
+.sd-util-doctor-card__detail {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-secondary);
+}
+
+/* --- Metrics table (latency HUD) ----------------------------------------------- */
+
+.sd-util-metrics-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--sd-font-xs);
+}
+
+.sd-util-metrics-table th,
+.sd-util-metrics-table td {
+  text-align: left;
+  padding: 6px var(--sd-space-8);
+  border-bottom: 1px solid var(--sd-border);
+  color: var(--sd-text-secondary);
+}
+
+.sd-util-metrics-table th {
+  color: var(--sd-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 500;
+}
+
+/* --- Monospace log/dump box ----------------------------------------------------- */
+
+.sd-util-log {
+  background: var(--sd-surface-inset);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-pill);
+  padding: var(--sd-space-12);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--sd-text-secondary);
+  max-height: 220px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* --- Inline warning/info banners ------------------------------------------------ */
+
+.sd-util-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sd-space-8);
+  padding: var(--sd-space-8) var(--sd-space-12);
+  border-radius: var(--sd-radius-pill);
+  font-size: var(--sd-font-xs);
+}
+
+.sd-util-banner--warn {
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: var(--sd-amber);
+}
+
+.sd-util-banner--danger {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: var(--sd-red);
+}
+
+.sd-util-banner[hidden] {
+  display: none;
+}
+
+/* --- Hotkey click-to-record widget ---------------------------------------------- */
+
+.sd-util-hotkey-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+}
+
+.sd-util-hotkey-input {
+  flex: 1;
+  min-width: 0;
+  padding: var(--sd-space-8) var(--sd-space-12);
+  border-radius: var(--sd-radius-pill);
+  border: 1px solid var(--sd-border);
+  background: var(--sd-surface-inset);
+  color: var(--sd-text-primary);
+  font-family: inherit;
+  font-size: var(--sd-font-sm);
+  cursor: pointer;
+  text-align: center;
+}
+
+.sd-util-hotkey-input.is-recording {
+  border-color: var(--sd-cyan);
+  color: var(--sd-cyan);
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.3);
+}
+
+.sd-util-hotkey-clear {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--sd-border);
+  background: transparent;
+  color: var(--sd-text-muted);
+  cursor: pointer;
+}
+
+.sd-util-hotkey-clear:hover {
+  color: var(--sd-red);
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.sd-util-field-error {
+  display: block;
+  font-size: 11px;
+  color: var(--sd-red);
+  min-height: 14px;
+}
+
+/* --- Model panel details grid --------------------------------------------------- */
+
+.sd-util-model-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px var(--sd-space-16);
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-secondary);
+  margin: 0;
+}
+
+.sd-util-model-details dt {
+  color: var(--sd-text-muted);
+}
+
+.sd-util-model-details dd {
+  margin: 0;
+  color: var(--sd-text-primary);
+}
+
+/* --- Section message line -------------------------------------------------------- */
+
+.sd-util-message {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+  min-height: 1em;
+}
+
+.sd-util-message[data-tone="success"] {
+  color: var(--sd-green);
+}
+
+.sd-util-message[data-tone="danger"] {
+  color: var(--sd-red);
+}
+
+.sd-util-message[data-tone="warning"] {
+  color: var(--sd-amber);
+}
+
+/* --- Message Rescue compatibility shim ------------------------------------------
+   The three reused surfaces (features/messageRescueDraft.js,
+   messageRescuePanel.js, textPlayground.js) are bound VERBATIM (not
+   restyled) and write a small, fixed set of legacy class names that
+   originate in the pre-Signal-Desk stylesheet (base.css), which this
+   standalone preview page does not link. Re-mapping just those class names
+   onto var(--sd-*) tokens here keeps the reused surfaces legible/in-language
+   without touching (or forking) the feature modules themselves. */
+
+.empty-state {
+  color: var(--sd-text-muted);
+  font-size: var(--sd-font-sm);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.draft-text {
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+  line-height: 1.5;
+}
+
+.message-rescue-context-preview {
+  padding: var(--sd-space-8) var(--sd-space-12);
+  border-radius: var(--sd-radius-pill);
+  background: var(--sd-surface-inset);
+  border: 1px solid var(--sd-border);
+}
+
+.message-rescue-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: var(--sd-radius-chip);
+  background: var(--sd-surface-inset);
+  border: 1px solid var(--sd-border);
+  color: var(--sd-text-secondary);
+  font-size: var(--sd-font-xs);
+  margin: 0 6px 6px 0;
+}
+
+.message-rescue-check {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-secondary);
+}
+
+.message-rescue-check--pass .message-rescue-check-icon {
+  color: var(--sd-green);
+}
+
+.message-rescue-check--fail .message-rescue-check-icon {
+  color: var(--sd-red);
+}
+
+.message-rescue-check-name {
+  color: var(--sd-text-primary);
+  font-weight: 500;
+}
+
+.message-rescue-check-detail {
+  color: var(--sd-text-muted);
+}
+
+.sd-message-rescue-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sd-message-rescue-variants {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-8);
+}
+
+.sd-message-rescue-variant-option {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+}
+
+.sd-message-rescue-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--sd-space-12);
+}
+
+.sd-message-rescue-column {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--sd-space-12);
+  border-radius: var(--sd-radius-pill);
+  background: var(--sd-surface-inset);
+  border: 1px solid var(--sd-border);
+}
+
+.sd-message-rescue-column__label {
+  font-size: var(--sd-font-label);
+  letter-spacing: var(--sd-label-letter-spacing);
+  text-transform: uppercase;
+  color: var(--sd-text-muted);
+}
