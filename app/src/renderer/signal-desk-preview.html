@@ -489,9 +489,298 @@
 
     </section>
 
-    <section class="sd-workspace sd-workspace--placeholder" id="workspace-studio" data-workspace="studio" hidden>
-      <strong>Studio</strong>
-      <span>Personas, foundry, and voice studio land here in a later phase.</span>
+    <!-- ---------- STUDIO workspace (populated, SPEC 6) ----------
+         Static markup below is a director-QA fixture matching mockup 03's 5
+         sample personas (Natural/Direct/Warm/Professional/Playful) and the
+         selected-Natural detail. features/studioWorkspace.js's module script
+         further down re-renders this SAME content from equivalent persona
+         objects via createStudioWorkspaceFeature() when it can load (see the
+         file:// CORS note on Phase 2's script) -- this static version is the
+         guaranteed-visible fallback either way, mirroring Talk/Library. -->
+    <section class="sd-workspace" id="workspace-studio" data-workspace="studio" hidden>
+      <div class="sd-studio-grid">
+
+        <!-- LEFT: PERSONAS -->
+        <div class="sd-studio-personas">
+          <div class="sd-studio-personas__header">
+            <span class="sd-studio-personas__title">Personas</span>
+            <div class="sd-studio-personas__header-actions">
+              <button type="button" class="sd-link-btn" id="sdOpenFoundryButton">&#10024; Build with AI</button>
+              <button type="button" class="sd-btn" id="sdNewPersonaButton">
+                <span aria-hidden="true">&#65291;</span> New Persona
+              </button>
+            </div>
+          </div>
+
+          <div class="sd-persona-grid" id="sdPersonaGrid">
+            <!-- studioWorkspace.js's createStudioWorkspaceFeature() re-renders
+                 these cards from persona data; static fallback below matches
+                 mockup 03's 5 sample personas exactly. -->
+
+            <button type="button" class="sd-persona-card is-selected" data-persona-name="Natural" style="--sd-persona-color: var(--sd-persona-natural);">
+              <div class="sd-persona-card__header">
+                <span class="sd-persona-card__name">Natural</span>
+                <span class="sd-persona-card__check" aria-hidden="true">&check;</span>
+              </div>
+              <span class="sd-persona-card__waveform" aria-hidden="true">
+                <svg viewBox="0 0 160 28" preserveAspectRatio="none"><polyline fill="none" stroke="currentColor" stroke-width="1.6" points="0,14 8,14 12,6 16,22 20,9 24,19 28,4 32,24 36,12 40,16 44,3 48,25 52,11 56,17 60,7 64,21 68,14 72,14 76,2 80,26 84,12 88,16 92,7 96,19 100,10 104,16 108,14 112,14 116,7 120,19 124,14 128,14 132,14 136,14 140,14 144,14 148,14 152,14 156,14 160,14"></polyline></svg>
+              </span>
+              <div class="sd-persona-card__sliders">
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Warmth</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:70%;"></span></span></div>
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Directness</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:55%;"></span></span></div>
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Detail</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:60%;"></span></span></div>
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Formality</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:35%;"></span></span></div>
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Confidence</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:65%;"></span></span></div>
+              </div>
+            </button>
+
+            <button type="button" class="sd-persona-card" data-persona-name="Direct" style="--sd-persona-color: var(--sd-persona-direct);">
+              <div class="sd-persona-card__header">
+                <span class="sd-persona-card__name">Direct</span>
+              </div>
+              <span class="sd-persona-card__waveform" aria-hidden="true">
+                <svg viewBox="0 0 160 28" preserveAspectRatio="none"><polyline fill="none" stroke="currentColor" stroke-width="1.6" points="0,14 8,14 12,4 16,24 20,7 24,21 28,2 32,26 36,10 40,18 44,1 48,27 52,9 56,19 60,5 64,23 68,14 72,14 76,1 80,27 84,10 88,18 92,5 96,21 100,8 104,18 108,14 112,14 116,5 120,21 124,14 128,14 132,14 136,14 140,14 144,14 148,14 152,14 156,14 160,14"></polyline></svg>
+              </span>
+              <div class="sd-persona-card__sliders">
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Warmth</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:30%;"></span></span></div>
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Directness</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:85%;"></span></span></div>
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Detail</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:40%;"></span></span></div>
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Formality</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:45%;"></span></span></div>
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Confidence</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:80%;"></span></span></div>
+              </div>
+            </button>
+
+            <button type="button" class="sd-persona-card" data-persona-name="Warm" style="--sd-persona-color: var(--sd-persona-warm);">
+              <div class="sd-persona-card__header">
+                <span class="sd-persona-card__name">Warm</span>
+              </div>
+              <span class="sd-persona-card__waveform" aria-hidden="true">
+                <svg viewBox="0 0 160 28" preserveAspectRatio="none"><polyline fill="none" stroke="currentColor" stroke-width="1.6" points="0,14 8,14 12,7 16,21 20,10 24,18 28,5 32,23 36,13 40,15 44,4 48,24 52,12 56,16 60,8 64,20 68,14 72,14 76,3 80,25 84,13 88,15 92,8 96,18 100,11 104,15 108,14 112,14 116,8 120,18 124,14 128,14 132,14 136,14 140,14 144,14 148,14 152,14 156,14 160,14"></polyline></svg>
+              </span>
+              <div class="sd-persona-card__sliders">
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Warmth</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:85%;"></span></span></div>
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Directness</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:35%;"></span></span></div>
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Detail</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:50%;"></span></span></div>
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Formality</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:25%;"></span></span></div>
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Confidence</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:60%;"></span></span></div>
+              </div>
+            </button>
+
+            <button type="button" class="sd-persona-card" data-persona-name="Professional" style="--sd-persona-color: var(--sd-persona-professional);">
+              <div class="sd-persona-card__header">
+                <span class="sd-persona-card__name">Professional</span>
+              </div>
+              <span class="sd-persona-card__waveform" aria-hidden="true">
+                <svg viewBox="0 0 160 28" preserveAspectRatio="none"><polyline fill="none" stroke="currentColor" stroke-width="1.6" points="0,14 8,14 12,8 16,20 20,10 24,18 28,6 32,22 36,13 40,15 44,5 48,23 52,12 56,16 60,9 64,19 68,14 72,14 76,4 80,24 84,13 88,15 92,8 96,18 100,11 104,15 108,14 112,14 116,8 120,18 124,14 128,14 132,14 136,14 140,14 144,14 148,14 152,14 156,14 160,14"></polyline></svg>
+              </span>
+              <div class="sd-persona-card__sliders">
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Warmth</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:35%;"></span></span></div>
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Directness</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:55%;"></span></span></div>
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Detail</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:80%;"></span></span></div>
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Formality</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:85%;"></span></span></div>
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Confidence</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:75%;"></span></span></div>
+              </div>
+            </button>
+
+            <button type="button" class="sd-persona-card" data-persona-name="Playful" style="--sd-persona-color: var(--sd-persona-playful);">
+              <div class="sd-persona-card__header">
+                <span class="sd-persona-card__name">Playful</span>
+              </div>
+              <span class="sd-persona-card__waveform" aria-hidden="true">
+                <svg viewBox="0 0 160 28" preserveAspectRatio="none"><polyline fill="none" stroke="currentColor" stroke-width="1.6" points="0,14 8,14 12,5 16,23 20,8 24,20 28,3 32,25 36,11 40,17 44,2 48,26 52,10 56,18 60,6 64,22 68,14 72,14 76,2 80,26 84,11 88,17 92,6 96,20 100,9 104,17 108,14 112,14 116,6 120,20 124,14 128,14 132,14 136,14 140,14 144,14 148,14 152,14 156,14 160,14"></polyline></svg>
+              </span>
+              <div class="sd-persona-card__sliders">
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Warmth</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:85%;"></span></span></div>
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Directness</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:40%;"></span></span></div>
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Detail</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:35%;"></span></span></div>
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Formality</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:15%;"></span></span></div>
+                <div class="sd-trait-row"><span class="sd-trait-row__label">Confidence</span><span class="sd-trait-row__bar"><span class="sd-trait-row__fill" style="width:55%;"></span></span></div>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        <!-- CENTER: selected persona detail -->
+        <div class="sd-studio-detail">
+          <div class="sd-studio-detail-card">
+            <div class="sd-studio-detail-card__header">
+              <div class="sd-studio-detail-card__title">
+                <span class="sd-studio-detail-card__icon" id="sdPersonaDetailIcon" aria-hidden="true" style="color: var(--sd-persona-natural);">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="10" x2="4" y2="14"></line><line x1="8" y1="6" x2="8" y2="18"></line><line x1="12" y1="3" x2="12" y2="21"></line><line x1="16" y1="7" x2="16" y2="17"></line><line x1="20" y1="9" x2="20" y2="15"></line></svg>
+                </span>
+                <span class="sd-studio-detail-card__name" id="sdPersonaDetailName">Natural</span>
+                <span class="sd-badge sd-badge--active" id="sdPersonaDetailBadge"><span aria-hidden="true">&#9679;</span> Active</span>
+              </div>
+              <div class="sd-studio-detail-card__menu-actions">
+                <button type="button" class="sd-icon-btn" id="sdPersonaEditButton" aria-label="Edit persona">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20l4-1 11-11-3-3L5 16z"></path></svg>
+                </button>
+                <button type="button" class="sd-icon-btn" id="sdPersonaDuplicateButton" aria-label="Duplicate persona">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M4 16V4h12"></path></svg>
+                </button>
+                <div class="sd-studio-detail-card__menu-wrap">
+                  <button type="button" class="sd-icon-btn" id="sdPersonaMenuButton" aria-label="More persona actions">&#8942;</button>
+                  <div class="sd-persona-menu" id="sdPersonaMenu" hidden>
+                    <button type="button" class="sd-persona-menu__item" id="sdPersonaDeleteButton">Delete Persona</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <p class="sd-studio-detail-card__description" id="sdPersonaDescription">Conversational, clear, and friendly. Balances warmth with clarity to help messages feel human and easy to read.</p>
+
+            <div class="sd-rewrites-panel">
+              <span class="sd-panel-label">Example Rewrites <span class="sd-help" aria-hidden="true">?</span></span>
+              <table class="sd-rewrites-table">
+                <thead>
+                  <tr><th>Input</th><th></th><th id="sdRewritesOutputHeader">Natural Output</th><th></th></tr>
+                </thead>
+                <tbody id="sdExampleRewritesBody">
+                  <tr>
+                    <td>Can you send the report?</td>
+                    <td class="sd-rewrites-table__arrow">&rarr;</td>
+                    <td>Could you send over the report when you have a moment?</td>
+                    <td><button type="button" class="sd-rewrites-table__play" aria-label="Play this example">&#9654;</button></td>
+                  </tr>
+                  <tr>
+                    <td>We need to reschedule.</td>
+                    <td class="sd-rewrites-table__arrow">&rarr;</td>
+                    <td>Let&rsquo;s find a better time that works for both of us.</td>
+                    <td><button type="button" class="sd-rewrites-table__play" aria-label="Play this example">&#9654;</button></td>
+                  </tr>
+                  <tr>
+                    <td>Thanks.</td>
+                    <td class="sd-rewrites-table__arrow">&rarr;</td>
+                    <td>Thanks so much!</td>
+                    <td><button type="button" class="sd-rewrites-table__play" aria-label="Play this example">&#9654;</button></td>
+                  </tr>
+                </tbody>
+              </table>
+              <p class="sd-rewrites-empty" id="sdExampleRewritesEmpty" hidden>No example rewrites yet for this persona.</p>
+            </div>
+
+            <div class="sd-example-columns">
+              <div class="sd-example-column sd-example-column__input">
+                <span class="sd-example-column__label">Input Example</span>
+                <textarea id="sdTestSampleInput" rows="2" placeholder="Type or paste a sample utterance&hellip;">I&rsquo;ll be out after 6.</textarea>
+                <span class="sd-example-column__meta" id="sdTestInputMeta">Tone: Neutral &middot; Length: 4 words</span>
+              </div>
+              <div class="sd-example-column">
+                <span class="sd-example-column__label"><span id="sdOutputColumnLabel">Natural Output</span> <span class="sd-example-column__live-badge" id="sdTestOutputBadge">Live preview</span></span>
+                <p class="sd-example-column__body" id="sdTestOutputText">I should be there around six.</p>
+                <span class="sd-example-column__meta" id="sdTestOutputMeta">Tone: Friendly &middot; Length: 6 words</span>
+              </div>
+              <div class="sd-example-column">
+                <span class="sd-example-column__label">Why This Works</span>
+                <ul class="sd-example-column__why-list" id="sdWhyThisWorksList">
+                  <li>Adds clarity and flow</li>
+                  <li>Sounds natural and human</li>
+                  <li>Keeps it short and helpful</li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="sd-stress-results" id="sdStressTestResults"></div>
+
+            <div class="sd-studio-actions-row">
+              <button type="button" class="sd-btn" id="sdTestPersonaButton">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="10" x2="4" y2="14"></line><line x1="8" y1="6" x2="8" y2="18"></line><line x1="12" y1="3" x2="12" y2="21"></line><line x1="16" y1="7" x2="16" y2="17"></line></svg>
+                Test Persona
+              </button>
+              <button type="button" class="sd-btn" id="sdStressTestButton">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3 8 4-16 3 8h4"></path></svg>
+                Stress Test
+              </button>
+              <button type="button" class="sd-btn" id="sdPersonaSaveButton">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h11l3 3v13H5z"></path><path d="M8 4v5h8V4"></path></svg>
+                Save
+              </button>
+              <span class="sd-btn-split">
+                <button type="button" class="sd-btn sd-btn--primary" id="sdPublishPresetButton">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"></path><path d="M7 8l5-5 5 5"></path><path d="M5 21h14"></path></svg>
+                  Publish Preset
+                </button>
+                <button type="button" class="sd-btn-split__chevron" id="sdPublishPresetChevronButton" aria-label="More publish options">&#9662;</button>
+              </span>
+            </div>
+            <p class="sd-studio-message" id="sdStudioMessage"></p>
+
+            <!-- "Teach from my edits" -- features/personaLearning.js reused verbatim; see studioWorkspace.js's file-header ID-COLLISION NOTE for why these use sdTeach* ids rather than personaLearning.js's own canonical personaLearning* ids. -->
+            <div class="sd-teach-panel" id="sdTeachSection">
+              <div class="sd-teach-panel__header">
+                <span class="sd-panel-label">Teach From My Edits <span class="sd-help" aria-hidden="true">?</span></span>
+                <span class="sd-teach-panel__persona" id="sdTeachPersonaLabel">Natural</span>
+              </div>
+              <p class="sd-teach-panel__desc">Run Test Persona above, then teach this persona the exact input/output pair you just approved &mdash; nothing is learned automatically.</p>
+              <button type="button" class="sd-btn" id="sdTeachButton">Teach this persona from my edit</button>
+
+              <p class="sd-teach-panel__empty-hint" id="sdTeachPreviewEmpty">Run Test Persona, then click &ldquo;Teach this persona from my edit&rdquo; to preview what would be learned.</p>
+              <div class="sd-teach-panel__preview-pair" id="sdTeachPreviewGroup" hidden>
+                <p class="sd-teach-panel__preview-block" id="sdTeachPreviewRaw"></p>
+                <p class="sd-teach-panel__preview-block" id="sdTeachPreviewOut"></p>
+              </div>
+              <p class="sd-teach-panel__notice" id="sdTeachTruncatedNotice" hidden></p>
+
+              <div class="sd-teach-panel__actions">
+                <label class="sd-teach-panel__checkbox-row">
+                  <input type="checkbox" id="sdTeachConsentCheckbox" />
+                  I consent to teaching this persona with this example.
+                </label>
+                <button type="button" class="sd-btn sd-btn--primary" id="sdTeachConfirmButton" disabled>Confirm &amp; Teach</button>
+                <button type="button" class="sd-btn" id="sdTeachCancelButton" disabled>Cancel</button>
+              </div>
+              <p class="sd-teach-panel__feedback" id="sdTeachAddFeedback"></p>
+
+              <div class="sd-teach-panel__examples">
+                <div class="sd-teach-panel__examples-header">
+                  <span class="sd-panel-label">Learned Examples (<span id="sdTeachExampleCount">0</span>)</span>
+                  <button type="button" class="secondary-button danger-button compact-button" id="sdTeachClearAllButton" disabled>Clear All</button>
+                </div>
+                <p class="sd-teach-panel__feedback" id="sdTeachListStatus"></p>
+                <ul class="sd-teach-panel__examples-list" id="sdTeachExamplesList"></ul>
+                <p class="sd-teach-panel__feedback" id="sdTeachClearFeedback"></p>
+                <p class="sd-teach-panel__feedback" id="sdTeachDeleteFeedback"></p>
+              </div>
+            </div>
+          </div>
+
+          <!-- VOICE & DELIVERY blend strip -->
+          <div class="sd-voice-delivery-strip">
+            <span class="sd-panel-label">Voice &amp; Delivery <span class="sd-help" aria-hidden="true">?</span></span>
+            <p class="sd-voice-delivery-strip__desc">Blend shapes how your persona sounds across every message.</p>
+            <div class="sd-voice-blend-cards" id="sdVoiceBlendCards">
+              <div class="sd-voice-blend-card is-selected" style="--sd-voice-card-color: var(--sd-cyan);">
+                <span class="sd-voice-blend-card__name">Clarity Core</span>
+                <span class="sd-voice-blend-card__bar"><span class="sd-voice-blend-card__fill" style="width:58%;"></span></span>
+                <span class="sd-voice-blend-card__pct">58%</span>
+              </div>
+              <div class="sd-voice-blend-card" style="--sd-voice-card-color: var(--sd-amber);">
+                <span class="sd-voice-blend-card__name">Warmth Air</span>
+                <span class="sd-voice-blend-card__bar"><span class="sd-voice-blend-card__fill" style="width:28%;"></span></span>
+                <span class="sd-voice-blend-card__pct">28%</span>
+              </div>
+              <div class="sd-voice-blend-card" style="--sd-voice-card-color: var(--sd-persona-professional);">
+                <span class="sd-voice-blend-card__name">Presence Boost</span>
+                <span class="sd-voice-blend-card__bar"><span class="sd-voice-blend-card__fill" style="width:14%;"></span></span>
+                <span class="sd-voice-blend-card__pct">14%</span>
+              </div>
+              <button type="button" class="sd-voice-blend-add" id="sdAddVoiceButton">
+                <span aria-hidden="true">&#65291;</span> Add Voice
+              </button>
+            </div>
+            <div class="sd-voice-preview-row">
+              <button type="button" class="sd-voice-preview-btn" id="sdVoicePreviewButton" aria-label="Preview voice blend">
+                <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="6,4 20,12 6,20"></polygon></svg>
+              </button>
+              <span class="sd-voice-preview-text" id="sdVoicePreviewText">I should be there around six.</span>
+              <span class="sd-voice-output-wave" aria-hidden="true">
+                Output
+                <svg viewBox="0 0 200 24" preserveAspectRatio="none"><polyline fill="none" stroke="currentColor" stroke-width="1.5" points="0,12 6,12 10,4 14,20 18,6 22,18 26,3 30,21 34,10 38,14 42,2 46,22 50,9 54,15 58,5 62,19 66,12 70,12 74,1 78,23 82,11 86,14 90,6 94,18 98,9 102,15 106,12 110,12 114,6 118,18 122,12 126,12 130,12"></polyline></svg>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
     </section>
     <section class="sd-workspace sd-workspace--placeholder" id="workspace-utilities" data-workspace="utilities" hidden>
       <strong>Utilities</strong>
@@ -723,6 +1012,82 @@
         </div>
 
       </div><!-- /data-context-for="library" -->
+
+      <!-- ---------- STUDIO context content: "SELECTED PERSONA" (SPEC 6) ---------- -->
+      <div class="sd-context__content" data-context-for="studio" hidden>
+
+        <div class="sd-context__section">
+          <span class="sd-context__section-label">Selected Persona</span>
+          <div class="sd-ctx-persona-card">
+            <span class="sd-ctx-persona-card__icon" id="sdCtxPersonaIcon" aria-hidden="true" style="color: var(--sd-persona-natural);">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="10" x2="4" y2="14"></line><line x1="8" y1="6" x2="8" y2="18"></line><line x1="12" y1="3" x2="12" y2="21"></line><line x1="16" y1="7" x2="16" y2="17"></line><line x1="20" y1="9" x2="20" y2="15"></line></svg>
+            </span>
+            <span class="sd-ctx-persona-card__text">
+              <span class="sd-ctx-persona-card__name" id="sdCtxPersonaName">Natural</span>
+              <span class="sd-badge sd-badge--active" id="sdCtxPersonaBadge"><span aria-hidden="true">&#9679;</span> Active</span>
+            </span>
+          </div>
+        </div>
+
+        <div class="sd-context__section">
+          <span class="sd-context__section-label">Description</span>
+          <p class="sd-context__description" id="sdCtxPersonaDescription">Conversational, clear, and friendly. Balances warmth with clarity to help messages feel human and easy to read.</p>
+        </div>
+
+        <div class="sd-context__section">
+          <span class="sd-context__section-label">Stats</span>
+          <div class="sd-stat-row">
+            <span>Examples</span>
+            <span class="sd-stat-row__value" id="sdCtxExampleCount">128</span>
+          </div>
+          <div class="sd-stat-row">
+            <span>Reliability</span>
+            <span class="sd-stat-row__value" id="sdCtxReliabilityValue">94%</span>
+          </div>
+          <span class="sd-reliability-bar"><span class="sd-reliability-bar__fill" id="sdCtxReliabilityBarFill" style="width: 94%;"></span></span>
+        </div>
+
+        <div class="sd-context__section">
+          <span class="sd-context__section-label">Preferred Destinations</span>
+          <div class="sd-preferred-destinations" id="sdCtxPreferredDestinations">
+            <span class="sd-destination-icon" title="Discord">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="16" height="11" rx="4"></rect><circle cx="9" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="15" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle><path d="M8 7 9 4h6l1 3"></path></svg>
+            </span>
+            <span class="sd-destination-icon" title="Gmail">G</span>
+            <span class="sd-destination-icon" title="Slack">S</span>
+          </div>
+        </div>
+
+        <div class="sd-context__section">
+          <span class="sd-context__section-label">Paired Voice</span>
+          <button type="button" class="sd-dropdown">
+            <span class="sd-dropdown__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="10" x2="4" y2="14"></line><line x1="8" y1="6" x2="8" y2="18"></line><line x1="12" y1="3" x2="12" y2="21"></line><line x1="16" y1="7" x2="16" y2="17"></line></svg>
+            </span>
+            <span class="sd-dropdown__text">
+              <span class="sd-dropdown__name" id="sdCtxPairedVoiceName">Clarity Core</span>
+              <span class="sd-dropdown__desc">Primary</span>
+            </span>
+            <span class="sd-dropdown__chevron" aria-hidden="true">&#9662;</span>
+          </button>
+        </div>
+
+        <div class="sd-context__section">
+          <span class="sd-context__section-label">Last Updated</span>
+          <span class="sd-context__description" id="sdCtxLastUpdated">May 15, 2025 &middot; 2:14 PM by Signal Core</span>
+        </div>
+
+        <div class="sd-context__section">
+          <span class="sd-context__section-label">Tags</span>
+          <div class="sd-tags-row" id="sdCtxTags">
+            <span class="sd-chip sd-chip--tag">Conversational</span>
+            <span class="sd-chip sd-chip--tag">Friendly</span>
+            <span class="sd-chip sd-chip--tag">Balanced</span>
+          </div>
+          <button type="button" class="sd-tags-row__add-btn" id="sdCtxAddTagButton" aria-label="Add tag">&#65291;</button>
+        </div>
+
+      </div><!-- /data-context-for="studio" -->
     </div>
 
     <button type="button" class="sd-context__hide-btn" id="sdContextHideBtn">
@@ -989,6 +1354,117 @@
   //   window.__libraryWorkspace.setChipFilter('recoverable');
   //   window.__libraryWorkspace.selectItem('draft-3');
   window.__libraryWorkspace = libraryWorkspace;
+</script>
+
+<!--
+  Phase 4: mount the REAL Studio workspace adapter for director QA -- same
+  file:// CORS caveat as Phase 2/3's module scripts above (silently no-ops
+  under a plain file:// open; works over http://). MOCK_PERSONAS below
+  mirrors the 5 static persona cards + selected-Natural detail already
+  hard-coded into #workspace-studio (same colors/traits/examples/blend), so
+  mounting the adapter re-renders visually equivalent content from real
+  persona-shaped data rather than replacing it with something new -- if the
+  module fails to load, the static markup above stays exactly as the
+  director already sees it either way.
+
+  The shape of each mock persona below matches EXACTLY what fetchPersonas()
+  really returns (prompt/voice/persona_card/few_shot are real schema-v2
+  fields) -- see studioWorkspace.js's file-header SPEC GAPS list for which
+  fields (traits, tags, preferred_destinations, updated_at_label) have no
+  real backend field yet and are included here purely as illustrative
+  fixture data, same convention as Library's MOCK_ITEMS.
+-->
+<script type="module">
+  import { createStudioWorkspaceFeature, collectStudioElements } from './features/studioWorkspace.js';
+
+  const MOCK_PERSONAS = {
+    Natural: {
+      prompt: 'You are a natural, conversational rewriting assistant. Keep it warm, clear, and human.',
+      voice: { base: 'clarity_core' },
+      persona_card: { reliability_score: 94 },
+      few_shot: [
+        { raw: 'Can you send the report?', out: 'Could you send over the report when you have a moment?' },
+        { raw: 'We need to reschedule.', out: 'Let’s find a better time that works for both of us.' },
+        { raw: 'Thanks.', out: 'Thanks so much!' },
+      ],
+      tags: ['Conversational', 'Friendly', 'Balanced'],
+      preferred_destinations: ['discord', 'gmail', 'slack'],
+      updated_at_label: 'May 15, 2025 · 2:14 PM by Signal Core',
+    },
+    Direct: {
+      prompt: 'You are a short, confident, to-the-point rewriting assistant. Cut filler and hedging.',
+      voice: { base: 'clarity_core' },
+      persona_card: { reliability_score: 88 },
+      few_shot: [
+        { raw: 'I was wondering if maybe you could possibly take a look at this sometime?', out: 'Please review this today.' },
+      ],
+      tags: ['Concise', 'Confident'],
+      preferred_destinations: ['slack'],
+      updated_at_label: 'May 2, 2025 · 9:05 AM by Signal Core',
+    },
+    Warm: {
+      prompt: 'You are a gentle, personable rewriting assistant. Lean into empathy and encouragement.',
+      voice: { base: 'warmth_air' },
+      persona_card: { reliability_score: 90 },
+      few_shot: [
+        { raw: 'That deadline slipped again.', out: 'No worries at all — the deadline slipped again, let’s figure out a plan together.' },
+      ],
+      tags: ['Empathetic', 'Encouraging'],
+      preferred_destinations: ['gmail'],
+      updated_at_label: 'Apr 28, 2025 · 4:40 PM by Signal Core',
+    },
+    Professional: {
+      prompt: 'You are a polished, precise, formal rewriting assistant suited for business correspondence.',
+      voice: { base: 'presence_boost' },
+      persona_card: { reliability_score: 96 },
+      few_shot: [
+        { raw: 'hey can we push the meeting', out: 'Could we please reschedule the meeting to a later time?' },
+      ],
+      tags: ['Formal', 'Polished'],
+      preferred_destinations: ['gmail', 'slack'],
+      updated_at_label: 'May 10, 2025 · 11:12 AM by Signal Core',
+    },
+    Playful: {
+      prompt: 'You are a light, expressive rewriting assistant. Add personality for casual messages.',
+      voice: { base: 'clarity_core' },
+      persona_card: { reliability_score: 82 },
+      few_shot: [
+        { raw: 'ok i am omw', out: 'Heads up — I’m on my way!' },
+      ],
+      tags: ['Casual', 'Expressive'],
+      preferred_destinations: ['discord'],
+      updated_at_label: 'Apr 20, 2025 · 6:02 PM by Signal Core',
+    },
+  };
+
+  const MOCK_VOICES = [
+    { id: 'clarity_core', name: 'Clarity Core' },
+    { id: 'warmth_air', name: 'Warmth Air' },
+    { id: 'presence_boost', name: 'Presence Boost' },
+  ];
+
+  const elements = collectStudioElements(document);
+  const studioWorkspace = createStudioWorkspaceFeature({ elements, hooks: {} });
+  studioWorkspace.setPersonas(MOCK_PERSONAS, {
+    builtins: [],
+    voices: MOCK_VOICES,
+    // Weights chosen so computeEffectiveMix() reproduces the mockup's exact
+    // 58% / 28% / 14% blend split (base always enters at weight 1.0; see
+    // voiceStudio.js's computeEffectiveMix()).
+    blend: {
+      base: { voiceId: 'clarity_core', label: 'Clarity Core' },
+      layers: [
+        { voiceId: 'warmth_air', weight: 0.483 },
+        { voiceId: 'presence_boost', weight: 0.241 },
+      ],
+    },
+  });
+  studioWorkspace.init();
+
+  // Debug handle for director/manual QA from devtools, e.g.:
+  //   window.__studioWorkspace.selectPersona('Direct');
+  //   window.__studioWorkspace.handleTestPersonaClick();
+  window.__studioWorkspace = studioWorkspace;
 </script>
 
 </body>

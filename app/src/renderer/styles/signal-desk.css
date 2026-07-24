@@ -117,6 +117,21 @@
   box-sizing: border-box;
 }
 
+/* Robust `.hidden = true` support for EVERY element under the shell, present
+   or future: a plain attribute selector like `[hidden]` ties in specificity
+   with any single class selector (e.g. `.sd-badge { display: inline-flex }`),
+   and author-origin rules always beat the UA stylesheet's own `[hidden] {
+   display: none }` regardless of source order -- so a class that sets
+   `display` can silently defeat `element.hidden = true`. Phase 1-3 patched
+   this per-element (`.sd-header__breadcrumb[hidden]`, `.sd-workspace[hidden]`
+   below); Studio (Phase 4) introduces several more toggled-via-`.hidden`
+   elements (badges, teach-panel preview blocks, the persona menu), so this
+   raises specificity ONCE for the whole shell instead of chasing it
+   one selector at a time. */
+.sd-shell [hidden] {
+  display: none;
+}
+
 .sd-shell {
   --sd-context-width: 320px;
   --sd-context-collapsed-width: 56px; /* thin rail width; not specified exactly by SPEC 3c */
@@ -2030,4 +2045,1011 @@
 
 .sd-restore-resend__btn--resend:hover {
   background: rgba(34, 197, 94, 0.2);
+}
+
+/* ==========================================================================
+   STUDIO workspace components (SPEC 6)
+   Phase 4: features/studioWorkspace.js binds this markup to fetchPersonas /
+   fetchBuiltinPersonaNames / savePersona / deletePersona / testPersona /
+   fetchTtsVoices / saveVoicePreset (own data, direct backend.js calls) plus
+   REUSED helpers from voiceStudio.js (blend math) and personaLearning.js
+   (the "Teach from my edits" panel) -- see that file's header comment for
+   the full inventory-preservation map and the SPEC-GAP notes on which of
+   these values (trait sliders, description, "why this works", tags,
+   preferred destinations, last-updated) have no real backend field yet.
+   ========================================================================== */
+
+/* Generic uppercase-tracked panel label, reused for center-column section
+   headers (EXAMPLE REWRITES / VOICE & DELIVERY) the same way
+   .sd-context__section-label is used in the right panel. */
+.sd-panel-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--sd-font-label);
+  letter-spacing: var(--sd-label-letter-spacing);
+  text-transform: uppercase;
+  color: var(--sd-text-muted);
+}
+
+/* --- Studio's own left(personas)/center(detail) split, nested inside the
+   shared shell's center column -------------------------------------------- */
+
+.sd-studio-grid {
+  display: grid;
+  grid-template-columns: minmax(300px, 380px) 1fr;
+  gap: var(--sd-space-24);
+  align-items: start;
+}
+
+/* --- Left: PERSONAS grid ---------------------------------------------------- */
+
+.sd-studio-personas {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-16);
+}
+
+.sd-studio-personas__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sd-space-12);
+  flex-wrap: wrap;
+}
+
+.sd-studio-personas__title {
+  font-size: var(--sd-font-label);
+  letter-spacing: var(--sd-label-letter-spacing);
+  text-transform: uppercase;
+  color: var(--sd-text-muted);
+}
+
+.sd-studio-personas__header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-12);
+}
+
+.sd-link-btn {
+  background: none;
+  border: none;
+  color: var(--sd-cyan);
+  font-family: inherit;
+  font-size: var(--sd-font-sm);
+  cursor: pointer;
+  padding: 0;
+}
+
+.sd-link-btn:hover {
+  color: var(--sd-teal);
+  text-decoration: underline;
+}
+
+.sd-persona-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sd-space-12);
+}
+
+.sd-persona-grid__empty {
+  grid-column: 1 / -1;
+  color: var(--sd-text-muted);
+  font-size: var(--sd-font-sm);
+  padding: var(--sd-space-16);
+  text-align: center;
+  border: 1px dashed var(--sd-border);
+  border-radius: var(--sd-radius-card);
+}
+
+.sd-persona-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-12);
+  text-align: left;
+  font-family: inherit;
+  color: inherit;
+  background: var(--sd-surface);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-card);
+  padding: var(--sd-space-12) var(--sd-space-16);
+  box-shadow: var(--sd-shadow-card);
+  cursor: pointer;
+}
+
+.sd-persona-card:hover {
+  border-color: var(--sd-border-hover);
+}
+
+.sd-persona-card.is-selected {
+  border-width: var(--sd-border-selected-width);
+  border-color: var(--sd-blue);
+  box-shadow: var(--sd-shadow-selected);
+}
+
+.sd-persona-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sd-space-8);
+}
+
+.sd-persona-card__name {
+  font-size: var(--sd-font-body);
+  font-weight: 600;
+  color: var(--sd-text-primary);
+}
+
+.sd-persona-card__check {
+  color: var(--sd-blue);
+  font-size: 13px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* Waveform signature: colored via --sd-persona-color, set inline per-card by
+   studioWorkspace.js from personaSignatureColorVar() (SPEC 2's 5-color
+   table, with a deterministic fallback for any other persona name). */
+.sd-persona-card__waveform {
+  display: block;
+  height: 26px;
+  color: var(--sd-persona-color, var(--sd-cyan));
+}
+
+.sd-persona-card__waveform svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.sd-persona-card__sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sd-trait-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+}
+
+.sd-trait-row__label {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+  width: 64px;
+  flex-shrink: 0;
+}
+
+.sd-trait-row__bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--sd-surface-inset);
+  overflow: hidden;
+  display: block;
+}
+
+.sd-trait-row__fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--sd-persona-color, var(--sd-cyan));
+}
+
+/* --- Center: selected-persona detail card ----------------------------------- */
+
+.sd-studio-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-20);
+}
+
+.sd-studio-detail-card {
+  background: var(--sd-surface-raised);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-hero-card);
+  padding: var(--sd-space-24);
+  box-shadow: var(--sd-shadow-card);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-20);
+}
+
+.sd-studio-detail-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sd-space-16);
+}
+
+.sd-studio-detail-card__title {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-12);
+  min-width: 0;
+}
+
+.sd-studio-detail-card__icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--sd-surface-inset);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--sd-cyan);
+}
+
+.sd-studio-detail-card__icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.sd-studio-detail-card__name {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--sd-text-primary);
+}
+
+.sd-badge--active {
+  background: rgba(59, 130, 246, 0.14);
+  color: var(--sd-blue-light);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.sd-studio-detail-card__menu-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+  flex-shrink: 0;
+}
+
+.sd-icon-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--sd-radius-chip);
+  border: 1px solid var(--sd-border);
+  background: var(--sd-surface-raised);
+  color: var(--sd-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.sd-icon-btn:hover {
+  border-color: var(--sd-border-hover);
+  color: var(--sd-text-primary);
+}
+
+.sd-icon-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.sd-studio-detail-card__menu-wrap {
+  position: relative;
+}
+
+.sd-persona-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: var(--sd-space-8);
+  background: var(--sd-surface-raised);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-pill);
+  box-shadow: var(--sd-shadow-card);
+  padding: 6px;
+  z-index: 5;
+  min-width: 170px;
+}
+
+.sd-persona-menu__item {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: var(--sd-space-8) 10px;
+  border-radius: 8px;
+  color: var(--sd-red);
+  font-family: inherit;
+  font-size: var(--sd-font-sm);
+  cursor: pointer;
+}
+
+.sd-persona-menu__item:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.sd-studio-detail-card__description {
+  color: var(--sd-text-secondary);
+  font-size: var(--sd-font-body);
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* --- EXAMPLE REWRITES table ---------------------------------------------------- */
+
+.sd-rewrites-panel {
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-card);
+  background: var(--sd-surface-inset);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-8);
+  padding: var(--sd-space-16);
+}
+
+.sd-rewrites-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.sd-rewrites-table thead th {
+  text-align: left;
+  font-size: var(--sd-font-label);
+  letter-spacing: var(--sd-label-letter-spacing);
+  text-transform: uppercase;
+  color: var(--sd-text-muted);
+  padding: var(--sd-space-8) var(--sd-space-8) var(--sd-space-12);
+  border-bottom: 1px solid var(--sd-border);
+}
+
+.sd-rewrites-table tbody td {
+  padding: var(--sd-space-12) var(--sd-space-8);
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+  border-bottom: 1px solid var(--sd-border);
+  vertical-align: middle;
+}
+
+.sd-rewrites-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.sd-rewrites-table__arrow {
+  color: var(--sd-text-muted);
+  text-align: center;
+  width: 24px;
+}
+
+.sd-rewrites-table__play {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid var(--sd-border-hover);
+  background: transparent;
+  color: var(--sd-text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.sd-rewrites-table__play:hover {
+  color: var(--sd-text-primary);
+  border-color: var(--sd-cyan);
+}
+
+.sd-rewrites-empty {
+  color: var(--sd-text-muted);
+  font-size: var(--sd-font-sm);
+  padding: var(--sd-space-8);
+}
+
+/* --- INPUT EXAMPLE / OUTPUT (Live preview) / WHY THIS WORKS 3-col card --------- */
+
+.sd-example-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: var(--sd-space-16);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-card);
+  padding: var(--sd-space-16);
+  background: var(--sd-surface-inset);
+}
+
+.sd-example-column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-8);
+  min-width: 0;
+}
+
+.sd-example-column__label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--sd-font-label);
+  letter-spacing: var(--sd-label-letter-spacing);
+  text-transform: uppercase;
+  color: var(--sd-text-muted);
+}
+
+.sd-example-column__live-badge {
+  color: var(--sd-green);
+  font-size: var(--sd-font-xs);
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.sd-example-column__body {
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-primary);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.sd-example-column__input .sd-example-column__body {
+  color: var(--sd-text-secondary);
+}
+
+.sd-example-column__input textarea {
+  width: 100%;
+  min-height: 48px;
+  resize: vertical;
+  background: var(--sd-surface);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-chip);
+  color: var(--sd-text-primary);
+  font-family: inherit;
+  font-size: var(--sd-font-sm);
+  padding: var(--sd-space-8);
+}
+
+.sd-example-column__meta {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+}
+
+.sd-example-column__why-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sd-example-column__why-list li {
+  position: relative;
+  padding-left: 14px;
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+}
+
+.sd-example-column__why-list li::before {
+  content: '\2022';
+  position: absolute;
+  left: 0;
+  color: var(--sd-cyan);
+}
+
+/* --- Center action row (Test Persona / Stress Test / Save / Publish Preset) --- */
+
+.sd-studio-actions-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-12);
+  flex-wrap: wrap;
+}
+
+.sd-stress-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-8);
+}
+
+.sd-stress-result {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--sd-space-8) var(--sd-space-12);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-chip);
+  background: var(--sd-surface-inset);
+}
+
+.sd-stress-result__category {
+  font-size: var(--sd-font-label);
+  letter-spacing: var(--sd-label-letter-spacing);
+  text-transform: uppercase;
+  color: var(--sd-text-muted);
+}
+
+.sd-stress-result__output {
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-primary);
+}
+
+.sd-studio-message {
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+}
+
+.sd-studio-message[data-tone="danger"] {
+  color: var(--sd-red);
+}
+
+.sd-studio-message[data-tone="success"] {
+  color: var(--sd-green);
+}
+
+/* --- VOICE & DELIVERY blend strip ----------------------------------------------- */
+
+.sd-voice-delivery-strip {
+  background: var(--sd-surface-raised);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-hero-card);
+  padding: var(--sd-space-20) var(--sd-space-24);
+  box-shadow: var(--sd-shadow-card);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-16);
+}
+
+.sd-voice-delivery-strip__desc {
+  color: var(--sd-text-muted);
+  font-size: var(--sd-font-sm);
+  margin: 0;
+}
+
+.sd-voice-blend-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sd-space-12);
+}
+
+.sd-voice-blend-card {
+  flex: 1 1 150px;
+  min-width: 150px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-8);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-card);
+  padding: var(--sd-space-12);
+  background: var(--sd-surface-inset);
+}
+
+.sd-voice-blend-card.is-selected {
+  border-width: var(--sd-border-selected-width);
+  border-color: var(--sd-blue);
+  box-shadow: var(--sd-shadow-selected);
+}
+
+.sd-voice-blend-card__name {
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-primary);
+  font-weight: 500;
+}
+
+.sd-voice-blend-card__bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--sd-border);
+  overflow: hidden;
+  display: block;
+}
+
+.sd-voice-blend-card__fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--sd-voice-card-color, var(--sd-cyan));
+}
+
+.sd-voice-blend-card__pct {
+  align-self: flex-end;
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+}
+
+.sd-voice-blend-add {
+  flex: 1 1 150px;
+  min-width: 150px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px dashed var(--sd-border);
+  border-radius: var(--sd-radius-card);
+  background: transparent;
+  color: var(--sd-text-muted);
+  font-family: inherit;
+  font-size: var(--sd-font-sm);
+  cursor: pointer;
+}
+
+.sd-voice-blend-add:hover {
+  border-color: var(--sd-border-hover);
+  color: var(--sd-text-secondary);
+}
+
+.sd-voice-blend-add:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sd-voice-preview-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-16);
+  flex-wrap: wrap;
+}
+
+.sd-voice-preview-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--sd-border-hover);
+  background: transparent;
+  color: var(--sd-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.sd-voice-preview-btn:hover {
+  color: var(--sd-text-primary);
+  border-color: var(--sd-cyan);
+}
+
+.sd-voice-preview-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.sd-voice-preview-text {
+  color: var(--sd-text-secondary);
+  font-size: var(--sd-font-sm);
+  flex: 1;
+  min-width: 120px;
+}
+
+.sd-voice-output-wave {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+  color: var(--sd-cyan);
+  flex: 1;
+  min-width: 160px;
+}
+
+.sd-voice-output-wave svg {
+  width: 100%;
+  height: 22px;
+  display: block;
+}
+
+/* --- "Teach from my edits" (personaLearning.js reuse) --------------------------
+   The classnames INSIDE .sd-teach-panel below (persona-learning-example,
+   status-label, draft-text, secondary-button, danger-button, compact-button,
+   empty-state) are NOT invented here -- they're exactly what
+   personaLearning.js's buildExamplesHtml()/renderPersonaLearning() already
+   emit (see features/personaLearning.js). base.css styles the same
+   classnames for the OLD Settings surface; that's a different stylesheet
+   entirely, so there's no collision -- these rules just teach signal-desk.css
+   how to render the SAME reused module's output using --sd-* tokens, scoped
+   under .sd-teach-panel so they can't leak into anything else. */
+
+.sd-teach-panel {
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-card);
+  padding: var(--sd-space-16) var(--sd-space-20);
+  background: var(--sd-surface-inset);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-12);
+}
+
+.sd-teach-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sd-space-12);
+  flex-wrap: wrap;
+}
+
+.sd-teach-panel__persona {
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+}
+
+.sd-teach-panel__desc {
+  color: var(--sd-text-muted);
+  font-size: var(--sd-font-xs);
+  margin: 0;
+}
+
+/* display:grid here is safely overridden when `.hidden = true` by the
+   higher-specificity `.sd-shell [hidden]` rule near the top of this file --
+   no `:not([hidden])` needed. */
+.sd-teach-panel__preview-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sd-space-12);
+}
+
+.sd-teach-panel__preview-block {
+  background: var(--sd-surface);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-chip);
+  padding: var(--sd-space-8) var(--sd-space-12);
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+  margin: 0;
+}
+
+.sd-teach-panel__empty-hint {
+  color: var(--sd-text-muted);
+  font-size: var(--sd-font-sm);
+  margin: 0;
+}
+
+.sd-teach-panel__notice {
+  color: var(--sd-amber);
+  font-size: var(--sd-font-xs);
+  margin: 0;
+}
+
+.sd-teach-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-12);
+  flex-wrap: wrap;
+}
+
+.sd-teach-panel__checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+}
+
+.sd-teach-panel__feedback {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-secondary);
+}
+
+.sd-teach-panel__feedback[data-tone="success"] {
+  color: var(--sd-green);
+}
+
+.sd-teach-panel__feedback[data-tone="danger"] {
+  color: var(--sd-red);
+}
+
+.sd-teach-panel__examples-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sd-teach-panel .persona-learning-example {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--sd-space-8) var(--sd-space-12);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-chip);
+  background: var(--sd-surface);
+}
+
+.sd-teach-panel .persona-learning-example-pair {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sd-teach-panel .status-label {
+  font-size: var(--sd-font-label);
+  letter-spacing: var(--sd-label-letter-spacing);
+  text-transform: uppercase;
+  color: var(--sd-text-muted);
+}
+
+.sd-teach-panel .draft-text {
+  margin: 0;
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+}
+
+.sd-teach-panel .empty-state {
+  list-style: none;
+  color: var(--sd-text-muted);
+  font-size: var(--sd-font-sm);
+}
+
+.sd-teach-panel .secondary-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px var(--sd-space-12);
+  border-radius: var(--sd-radius-pill);
+  border: 1px solid var(--sd-border);
+  background: var(--sd-surface-raised);
+  color: var(--sd-text-secondary);
+  font-family: inherit;
+  font-size: var(--sd-font-sm);
+  cursor: pointer;
+}
+
+.sd-teach-panel .secondary-button:hover {
+  border-color: var(--sd-border-hover);
+  color: var(--sd-text-primary);
+}
+
+.sd-teach-panel .secondary-button.danger-button {
+  border-color: rgba(239, 68, 68, 0.4);
+  color: var(--sd-red);
+}
+
+.sd-teach-panel .secondary-button.danger-button:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.sd-teach-panel .secondary-button.compact-button {
+  padding: 4px 10px;
+  font-size: var(--sd-font-xs);
+}
+
+.sd-teach-panel__examples-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-8);
+}
+
+/* ==========================================================================
+   STUDIO context panel content ("SELECTED PERSONA", SPEC 6)
+   Shares .sd-context__section / .sd-dropdown / .sd-help with Talk/Library's
+   panels; only one .sd-context__content block is shown at a time (see the
+   [data-context-for] rule in the LIBRARY context panel section above).
+   ========================================================================== */
+
+.sd-ctx-persona-card {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-12);
+  padding: var(--sd-space-12);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-card);
+  background: var(--sd-surface-raised);
+}
+
+.sd-ctx-persona-card__icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--sd-surface-inset);
+  color: var(--sd-cyan);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.sd-ctx-persona-card__icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.sd-ctx-persona-card__text {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+  flex-wrap: wrap;
+}
+
+.sd-ctx-persona-card__name {
+  font-size: var(--sd-font-body);
+  font-weight: 600;
+  color: var(--sd-text-primary);
+}
+
+.sd-context__description {
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.sd-stat-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+}
+
+.sd-stat-row + .sd-stat-row {
+  margin-top: var(--sd-space-8);
+}
+
+.sd-stat-row__value {
+  color: var(--sd-text-primary);
+  font-weight: 600;
+}
+
+.sd-reliability-bar {
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--sd-surface-inset);
+  overflow: hidden;
+  margin-top: var(--sd-space-4);
+}
+
+.sd-reliability-bar__fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--sd-green);
+}
+
+.sd-preferred-destinations {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+  flex-wrap: wrap;
+}
+
+.sd-destination-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--sd-surface-inset);
+  border: 1px solid var(--sd-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-secondary);
+  flex-shrink: 0;
+}
+
+.sd-context__empty-text {
+  color: var(--sd-text-muted);
+  font-size: var(--sd-font-xs);
+}
+
+.sd-chip--tag {
+  color: var(--sd-text-secondary);
+}
+
+.sd-tags-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+  flex-wrap: wrap;
+}
+
+.sd-tags-row__add-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px dashed var(--sd-border-hover);
+  background: transparent;
+  color: var(--sd-text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sd-tags-row__add-btn:hover {
+  color: var(--sd-text-secondary);
+  border-color: var(--sd-cyan);
 }
