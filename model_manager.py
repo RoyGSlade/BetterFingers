@@ -1116,6 +1116,61 @@ def safe_extract_runtime_archive(archive_path, dest_dir, archive_name, required_
         shutil.rmtree(staging_dir, ignore_errors=True)
 
 
+# --- Hard disk-space gate (pre-download) --------------------------------------
+# hardware_report.py's assess_model_fit() flags low disk as ADVISORY text only
+# (a warning line in the fit report) — nothing there stops a download from
+# starting. A multi-GB transfer that runs out of space partway leaves a
+# truncated .part file and a confusing state. The checks below are a hard
+# gate: refuse before any bytes hit disk, using the exact same free-space
+# primitive hardware_report.py already relies on (``shutil.disk_usage``) so
+# there is only one way disk space gets queried in this codebase.
+
+class InsufficientDiskSpaceError(OSError):
+    """Raised when free space at a download destination can't cover the
+    pending transfer (plus headroom). Subclasses OSError so it is still
+    caught by any pre-existing ``except Exception``/``except OSError``
+    download-failure handling, while remaining distinguishable via
+    ``isinstance`` for callers that want to surface its specific message
+    instead of a generic "download failed" one."""
+
+    def __init__(self, message, *, dest_dir, required_bytes, free_bytes):
+        super().__init__(message)
+        self.dest_dir = dest_dir
+        self.required_bytes = required_bytes
+        self.free_bytes = free_bytes
+
+
+def _format_gb(num_bytes):
+    return f"{num_bytes / (1024 ** 3):.1f} GB"
+
+
+def _ensure_disk_space(dest_dir, required_bytes, *, headroom=1.1):
+    """Hard pre-download gate: raise :class:`InsufficientDiskSpaceError` when
+    free space at ``dest_dir`` is less than ``required_bytes * headroom``.
+
+    ``required_bytes`` is the number of *new* bytes about to be written (e.g.
+    the remaining bytes of a resumed transfer, not the whole file) — callers
+    that only know the final file size should account for bytes already on
+    disk themselves. A falsy ``required_bytes`` (size genuinely unknown) is
+    treated as nothing to check, not a spurious failure — callers with no
+    known size should skip calling this rather than pass 0.
+    """
+    required_bytes = int(required_bytes or 0)
+    if required_bytes <= 0:
+        return
+    os.makedirs(dest_dir, exist_ok=True)
+    usage = shutil.disk_usage(dest_dir)
+    needed = int(required_bytes * headroom)
+    if usage.free < needed:
+        message = (
+            f"Not enough disk space to download this file: need {_format_gb(needed)} "
+            f"free, only {_format_gb(usage.free)} available at {dest_dir}."
+        )
+        raise InsufficientDiskSpaceError(
+            message, dest_dir=dest_dir, required_bytes=required_bytes, free_bytes=usage.free
+        )
+
+
 def download_file(url, dest_path, desc="File", progress_callback=None, progress_key="", resume=True,
                   expected_sha256=None):
     """Download a file safely.
@@ -1179,6 +1234,19 @@ def download_file(url, dest_path, desc="File", progress_callback=None, progress_
             total_size = _parse_content_range_total(response.headers.get("content-range"))
             if not total_size:
                 total_size = resumed_bytes + content_length if resumed_bytes else content_length
+
+            # Hard disk-space gate: the response headers are in, so the size of
+            # THIS transfer is now known (this is the only place download_file
+            # knows it — callers such as the runtime-archive downloads have no
+            # catalog size to pre-check). Gate on the bytes still to be written
+            # this session (not the whole file) so resuming a mostly-complete
+            # download isn't refused for space already spent on the .part file.
+            # Runs before the destination file is opened, so a refusal leaves
+            # any pre-existing .part file untouched.
+            remaining_bytes = content_length or max(0, total_size - resumed_bytes)
+            if remaining_bytes:
+                _ensure_disk_space(os.path.dirname(os.path.abspath(dest_path)) or ".", remaining_bytes)
+
             downloaded = resumed_bytes
             last_reported = -1
 
@@ -1326,6 +1394,13 @@ def check_and_download_resources(model_id=None, progress_callback=None):
             _prepare_incomplete_model_for_resume(target_model_id)
             partial_path = get_partial_model_path(target_model_id)
             partial_bytes = _file_size(partial_path)
+            # Hard pre-download gate (§ disk-space): fail fast, before opening a
+            # network connection, when free space can't cover what's left to
+            # fetch. Catalog size_bytes is known up-front for every model, so
+            # this checks the exact remaining requirement (full size minus any
+            # partial bytes already on disk from a previous resume).
+            required_bytes = max(0, _expected_model_bytes(target_model_id) - partial_bytes)
+            _ensure_disk_space(models_dir, required_bytes)
             report({
                 "key": target_model_id,
                 "status": "starting",
@@ -1347,6 +1422,21 @@ def check_and_download_resources(model_id=None, progress_callback=None):
                 progress_key=target_model_id,
                 expected_sha256=model_info.get("sha256"),
             )
+        except InsufficientDiskSpaceError as exc:
+            message = str(exc)
+            logging.warning("Refusing to download model %s: %s", target_model_id, message)
+            partial_path = get_partial_model_path(target_model_id)
+            partial_bytes = _file_size(partial_path)
+            report({
+                "key": target_model_id,
+                "status": "error",
+                "percent": 0.0,
+                "downloaded_bytes": partial_bytes,
+                "partial_path": partial_path if partial_bytes else "",
+                "resumable": bool(partial_bytes),
+                "message": message,
+            })
+            return {"ok": False, "model_id": target_model_id, "message": message}
         except Exception:
             logging.warning("Failed to download model %s. Check internet connection.", target_model_id)
             partial_path = get_partial_model_path(target_model_id)
