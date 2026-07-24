@@ -3703,3 +3703,438 @@
   text-transform: uppercase;
   color: var(--sd-text-muted);
 }
+
+/* ==========================================================================
+   SETTINGS workspace (SPEC 8, Phase 5b) -- profile-configuration +
+   profile-management, same "not mocked pixel-for-pixel" contract as
+   Utilities (SPEC 8: "Utilities & Settings are not mocked in detail").
+   Reuses the shared primitives already defined above (.sd-btn, .sd-badge,
+   .sd-actions-row, .sd-action-btn--danger, .sd-help) plus its OWN set of
+   section-shell/group/row/input primitives -- deliberately parallel to (not
+   reused from) .sd-util-* so Settings stays a self-contained module, same
+   convention Studio/Library/Talk already follow for their own per-workspace
+   classes. Bound by features/settingsWorkspace.js -- see that file's header
+   comment for the full inventory -> section placement map.
+   ========================================================================== */
+
+/* --- Search bar + header/empty-state (§7.0) -------------------------------- */
+
+.sd-set-search-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-12);
+  margin-bottom: var(--sd-space-20);
+}
+
+.sd-set-search {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.sd-set-search__icon {
+  position: absolute;
+  left: var(--sd-space-16);
+  width: 18px;
+  height: 18px;
+  color: var(--sd-text-muted);
+  pointer-events: none;
+}
+
+.sd-set-search__input {
+  width: 100%;
+  padding: 12px var(--sd-space-16) 12px 44px;
+  border-radius: var(--sd-radius-pill);
+  border: 1px solid var(--sd-border);
+  background: var(--sd-surface-raised);
+  color: var(--sd-text-primary);
+  font-family: inherit;
+  font-size: var(--sd-font-body);
+}
+
+.sd-set-search__input::placeholder {
+  color: var(--sd-text-muted);
+}
+
+.sd-set-search__input:focus {
+  outline: none;
+  border-color: var(--sd-border-hover);
+}
+
+.sd-set-search-header {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+  margin-bottom: var(--sd-space-12);
+}
+
+.sd-set-search-header.hidden,
+.sd-set-empty-state.hidden {
+  display: none;
+}
+
+.sd-set-empty-state {
+  padding: var(--sd-space-20);
+  text-align: center;
+  color: var(--sd-text-muted);
+  font-size: var(--sd-font-sm);
+}
+
+/* --- Section shell: left sub-nav + right section content ------------------ */
+
+.sd-set-shell {
+  display: grid;
+  grid-template-columns: 190px 1fr;
+  gap: var(--sd-space-24);
+  align-items: start;
+}
+
+.sd-set-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  position: sticky;
+  top: 0;
+}
+
+.sd-set-nav__item {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+  padding: var(--sd-space-8) var(--sd-space-12);
+  border-radius: var(--sd-radius-pill);
+  border: 1px solid transparent;
+  background: none;
+  color: var(--sd-text-secondary);
+  font-family: inherit;
+  font-size: var(--sd-font-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sd-set-nav__item:hover {
+  background: var(--sd-surface-raised);
+  color: var(--sd-text-primary);
+}
+
+.sd-set-nav__item.is-active {
+  background: rgba(34, 211, 238, 0.1);
+  border: 1px solid rgba(34, 211, 238, 0.35);
+  color: var(--sd-cyan);
+  font-weight: 600;
+}
+
+.sd-set-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-20);
+  min-width: 0;
+  /* Room at the bottom so the sticky save bar never overlaps the last card. */
+  padding-bottom: 88px;
+}
+
+.sd-set-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-20);
+}
+
+.sd-set-section[hidden] {
+  display: none;
+}
+
+.sd-set-section__intro {
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-muted);
+  margin: 0;
+}
+
+@media (max-width: 980px) {
+  .sd-set-shell {
+    grid-template-columns: 1fr;
+  }
+  .sd-set-nav {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}
+
+/* --- Generic settings-group card -------------------------------------------- */
+
+.sd-set-group {
+  background: var(--sd-surface-raised);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-card);
+  padding: var(--sd-space-20);
+  box-shadow: var(--sd-shadow-card);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-16);
+}
+
+.sd-set-group[hidden] {
+  display: none;
+}
+
+.sd-set-group__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sd-space-12);
+}
+
+.sd-set-group__title {
+  font-size: var(--sd-font-body);
+  font-weight: 600;
+  color: var(--sd-text-primary);
+}
+
+.sd-set-group__desc {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+  margin: 0;
+}
+
+.sd-set-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sd-space-16);
+}
+
+@media (max-width: 980px) {
+  .sd-set-grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* --- Settings row (label + control) ----------------------------------------- */
+
+.sd-set-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sd-space-16);
+}
+
+.sd-set-row[hidden] {
+  display: none;
+}
+
+.sd-set-row__label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sd-set-row__label-text {
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-primary);
+}
+
+.sd-set-row__label-hint {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+}
+
+.sd-set-row__control {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+}
+
+.sd-set-input,
+.sd-set-select {
+  padding: var(--sd-space-8) var(--sd-space-12);
+  border-radius: var(--sd-radius-pill);
+  border: 1px solid var(--sd-border);
+  background: var(--sd-surface-inset);
+  color: var(--sd-text-primary);
+  font-family: inherit;
+  font-size: var(--sd-font-sm);
+}
+
+.sd-set-input:focus,
+.sd-set-select:focus {
+  outline: none;
+  border-color: var(--sd-cyan);
+}
+
+.sd-set-input.input-error {
+  border-color: var(--sd-red);
+}
+
+.sd-set-input--number {
+  width: 90px;
+  text-align: right;
+}
+
+.sd-set-input--wide {
+  width: 100%;
+}
+
+.sd-set-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--sd-cyan);
+}
+
+.sd-set-field-error {
+  display: block;
+  font-size: 11px;
+  color: var(--sd-red);
+  min-height: 14px;
+}
+
+.sd-set-range {
+  width: 160px;
+  accent-color: var(--sd-cyan);
+}
+
+.sd-set-range-value {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+  min-width: 40px;
+  text-align: right;
+}
+
+/* --- Banners + messages ------------------------------------------------------ */
+
+.sd-set-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sd-space-8);
+  padding: var(--sd-space-8) var(--sd-space-12);
+  border-radius: var(--sd-radius-pill);
+  font-size: var(--sd-font-xs);
+}
+
+.sd-set-banner--warn {
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: var(--sd-amber);
+}
+
+.sd-set-banner[hidden] {
+  display: none;
+}
+
+.sd-set-message {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+  min-height: 1em;
+}
+
+.sd-set-message[data-tone="success"] {
+  color: var(--sd-green);
+}
+
+.sd-set-message[data-tone="danger"] {
+  color: var(--sd-red);
+}
+
+.sd-set-message[data-tone="warning"] {
+  color: var(--sd-amber);
+}
+
+/* --- Profile management: action rows + styled file-input button ------------- */
+
+.sd-set-profile-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-12);
+}
+
+.sd-set-import-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+  padding: var(--sd-space-8) var(--sd-space-16);
+  border-radius: var(--sd-radius-pill);
+  font-size: var(--sd-font-sm);
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--sd-border);
+  background: var(--sd-surface-raised);
+  color: var(--sd-text-secondary);
+}
+
+.sd-set-import-label:hover {
+  border-color: var(--sd-border-hover);
+  color: var(--sd-text-primary);
+}
+
+.sd-set-import-label input[type="file"] {
+  display: none;
+}
+
+/* --- Privacy detail rows (network/data-location lists) ----------------------- */
+
+.sd-set-detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sd-set-detail-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sd-space-12);
+  padding: 6px 0;
+  border-bottom: 1px solid var(--sd-border);
+  font-size: var(--sd-font-xs);
+}
+
+.sd-set-detail-row:last-child {
+  border-bottom: none;
+}
+
+.sd-set-detail-key {
+  color: var(--sd-text-secondary);
+}
+
+.sd-set-detail-value {
+  color: var(--sd-text-muted);
+  text-align: right;
+}
+
+/* --- Sticky Save/Discard bar (§7.0) ------------------------------------------ */
+
+.sd-set-savebar {
+  position: sticky;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sd-space-16);
+  margin-top: var(--sd-space-20);
+  padding: var(--sd-space-16) var(--sd-space-20);
+  border-radius: var(--sd-radius-card);
+  background: var(--sd-surface-raised);
+  border: 1px solid var(--sd-border);
+  box-shadow: var(--sd-shadow-card);
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.sd-set-savebar.hidden {
+  display: none;
+}
+
+.sd-set-savebar.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.sd-set-savebar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-12);
+}
