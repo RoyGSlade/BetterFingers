@@ -4,19 +4,26 @@
     <meta charset="UTF-8" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* http://localhost:* ws://localhost:*; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" />
     <title>BetterFingers Overlay</title>
+    <!-- Signal Desk design tokens + shared component classes (SPEC 2/7). See
+         styles/signal-desk.css's "OVERLAYS" section for .sd-capture-*. -->
+    <link rel="stylesheet" href="./styles/signal-desk.css" />
     <style>
       * { box-sizing: border-box; }
-      body {
+      html, body {
         margin: 0;
         padding: 0;
         overflow: hidden;
         background: transparent !important;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        font-family: var(--sd-font-family);
         user-select: none;
       }
-      /* Just the glitch circle (its background is a circular disc drawn in-canvas,
-         not a box). The whole window is the drag handle. */
-      .overlay-wrap {
+      /* Just the Signal Core ring (its "background" is drawn in-canvas, not a
+         box) plus an optional glass status pill. The whole window is the drag
+         handle. Window pixel bounds are set by windows.js's
+         overlayWindowSize() -- see signal-desk.css's OVERLAYS section header
+         comment for why this stays compact rather than mockup 04's full
+         capture-overlay composition. */
+      .sd-capture-wrap {
         position: relative;
         display: flex;
         align-items: center;
@@ -26,107 +33,81 @@
         height: 100vh;
         -webkit-app-region: drag;
       }
-      .overlay-wrap.pos-beside { flex-direction: row; }
-      .overlay-wrap.pos-above { flex-direction: column-reverse; gap: 2px; }
-      .overlay-wrap.pos-below { flex-direction: column; gap: 2px; }
-      .status-ring {
-        flex-shrink: 0;
-        display: block;
-        /* width/height set inline from the size setting */
-      }
-      .status-text {
-        font-size: 13px;
-        font-weight: 600;
-        color: #f5f5f5;
-        white-space: nowrap;
-        /* Readable while floating over arbitrary desktop content, no box needed. */
-        text-shadow: 0 1px 5px rgba(0, 0, 0, 0.95), 0 0 3px rgba(0, 0, 0, 0.9);
-      }
-      /* "Across the centre" — overlay the label on top of the ring's middle. */
-      .overlay-wrap.pos-center .status-text {
+      .sd-capture-wrap.pos-beside { flex-direction: row; }
+      .sd-capture-wrap.pos-above { flex-direction: column-reverse; gap: 2px; }
+      .sd-capture-wrap.pos-below { flex-direction: column; gap: 2px; }
+      /* "Across the centre" -- overlay the label on top of the ring's middle. */
+      .sd-capture-wrap.pos-center .sd-capture-label {
         position: absolute;
         left: 50%;
         top: 50%;
         transform: translate(-50%, -50%);
         text-align: center;
       }
-      .status-text.hidden { display: none; }
     </style>
   </head>
   <body>
-    <div class="overlay-wrap" id="overlayWrap">
-      <canvas id="statusRing" class="status-ring" width="70" height="70" style="width: 70px; height: 70px;"></canvas>
-      <div id="statusText" class="status-text hidden">Ready</div>
+    <div class="sd-capture-wrap" id="overlayWrap">
+      <canvas id="statusRing" class="sd-capture-ring" width="70" height="70" style="width: 70px; height: 70px;"></canvas>
+      <div id="statusText" class="sd-capture-label hidden" data-ring-state="idle">Press Alt + Space to capture</div>
     </div>
 
     <script type="module">
-      import { createGlitchRing } from './glitch-ring.js';
+      import { createSignalCore } from './signalCore.js';
+      import { interpretOverlayStatus } from './lib/overlayStatus.mjs';
 
       const wrap = document.getElementById('overlayWrap');
       const canvas = document.getElementById('statusRing');
       const textEl = document.getElementById('statusText');
-      const ring = createGlitchRing(canvas, { state: 'idle', compact: false, theme: 'cobalt' });
+
+      // Signal Core is the Signal Desk's canonical HUD ring (cyan/teal
+      // segmented arcs -- SPEC 4/7), reused here instead of glitch-ring.js so
+      // the capture overlay shares the exact same ring identity as the Talk
+      // workspace's hero ring. Segment/particle counts are turned down from
+      // signalCore.js's ~520px-hero defaults since this window is only
+      // 46-150px (see windows.js's OVERLAY_SIZE_PX) -- fewer, thicker
+      // segments read more clearly at that size. Every ratio-based number
+      // (radii, line widths) is already resolution-independent and needs no
+      // tuning; only the raw segment/particle COUNTS benefit from it.
+      const COMPACT_RING_OPTIONS = {
+        segmentedRings: [
+          { segmentCount: 28 },
+          { segmentCount: 20 },
+          { segmentCount: 14 },
+        ],
+        particles: { count: 10 },
+      };
+      const ring = createSignalCore({ canvas, state: 'idle', options: COMPACT_RING_OPTIONS });
 
       const SIZE_PX = { small: 46, medium: 70, large: 108, xlarge: 150 };
       const POSITIONS = new Set(['beside', 'above', 'below', 'center']);
 
-      // Apply the user's overlay appearance (ring size, vibrancy, label position).
-      // Window geometry (placement/opacity/bounds) is handled by the main process.
+      // Apply the user's overlay appearance (ring size, vibrancy, label
+      // position). Window geometry (placement/opacity/bounds) is handled by
+      // the main process. signalCore.js has no setCompact()/setVibrancy()
+      // (glitch-ring.js's API) -- vibrancy is approximated with a CSS
+      // brightness filter on the canvas instead, which is visually
+      // equivalent for this "dimmer/hotter" setting.
       function applyAppearance(a) {
         const px = SIZE_PX[a?.size] || SIZE_PX.medium;
         canvas.style.width = px + 'px';
         canvas.style.height = px + 'px';
-        ring.setCompact(px < 60);
-        ring.setVibrancy(typeof a?.vibrancy === 'number' ? a.vibrancy : 1);
+        const vibrancy = typeof a?.vibrancy === 'number' ? Math.max(0.3, Math.min(2, a.vibrancy)) : 1;
+        canvas.style.filter = vibrancy === 1 ? '' : `brightness(${vibrancy})`;
         const pos = POSITIONS.has(a?.labelPos) ? a.labelPos : 'hidden';
-        wrap.className = 'overlay-wrap' + (pos !== 'hidden' ? ' pos-' + pos : '');
+        wrap.className = 'sd-capture-wrap' + (pos !== 'hidden' ? ' pos-' + pos : '');
         textEl.classList.toggle('hidden', pos === 'hidden');
-      }
-
-      // Map an IPC status payload to { ring state, text }.
-      function interpret(status, payload) {
-        switch (status) {
-          case 'recording_started':
-          case 'recording':
-            return { ring: 'recording', text: 'Recording...' };
-          case 'listening':
-          case 'recording_armed':
-            return { ring: 'listening', text: payload.message || 'Listening...' };
-          case 'transcribing':
-          case 'rewriting':
-          case 'processing':
-            return { ring: 'transcribing', text: 'Processing...' };
-          case 'long_recording_detected':
-          case 'chunking_started':
-          case 'chunking_progress':
-            return { ring: 'transcribing', text: payload.message || 'Processing...' };
-          case 'chunking_stitching':
-            return { ring: 'stitching', text: payload.message || 'Stitching...' };
-          case 'preview_ready':
-            return { ring: 'ready', text: payload.message || 'Draft ready' };
-          case 'draft_sent':
-            return payload.fallback
-              ? { ring: 'warning', text: payload.message || 'Copied as fallback' }
-              : { ring: 'ready', text: payload.message || 'Sent' };
-          case 'selection_captured':
-            return { ring: 'ready', text: payload.message || 'Selection captured' };
-          case 'emergency_stop':
-            return { ring: 'warning', text: payload.message || 'Stopped' };
-          case 'draft_blocked':
-          case 'draft_error':
-          case 'draft_send_error':
-          case 'selection_capture_failed':
-            return { ring: 'error', text: payload.message || 'Needs attention' };
-          default:
-            return { ring: 'idle', text: status };
-        }
       }
 
       window.betterFingersOverlay?.onStatusUpdate((update) => {
         const payload = typeof update === 'string' ? { status: update } : (update || {});
         const status = payload.status || 'unknown';
-        const { ring: ringState, text: label } = interpret(status, payload);
+        const { ring: ringState, text: label } = interpretOverlayStatus(status, payload);
         ring.setState(ringState);
+        // Presentation-only hook: colors the label pill (and its dot) per
+        // ring state via signal-desk.css's [data-ring-state] rules. Does not
+        // affect the ring itself or any IPC/backend behavior.
+        textEl.dataset.ringState = ringState;
         textEl.textContent = label;
         // Live mic RMS (when the backend includes it) pulses the ring + wave.
         if (status === 'recording' && typeof payload.amplitude === 'number') {
