@@ -287,8 +287,27 @@ def _default_persona_lookup(name: str) -> Mapping[str, Any] | None:
     return persona_service.get_persona(name)
 
 
+def _default_examples_lookup(name: str) -> list[dict[str, str]] | None:
+    """Consent-gated learned examples for ``name``, in persona few-shot shape.
+
+    Returns ``None`` -- never ``[]`` -- when the user has taught this persona
+    nothing. build_rescue_prompt only falls back to the persona's own
+    ``few_shot`` when this is ``None`` (see its `if few_shot is None` branch),
+    so handing back an empty list would silently strip a persona's built-in
+    examples for every user who has never used the teach flow.
+
+    Only examples that passed the explicit two-step consent flow exist in this
+    store (rule 4), and it never leaves the device (rule 1).
+    """
+
+    from backend.services.persona_learning import PersonaLearningStore
+
+    return PersonaLearningStore().to_few_shot(name) or None
+
+
 router = create_message_rescue_router(
     context_session=_context_session,
     call_fn=_default_call_fn,
     persona_lookup=_default_persona_lookup,
+    examples_lookup=_default_examples_lookup,
 )

@@ -548,5 +548,81 @@ class OpenApiAndNoContentLoggingTests(unittest.TestCase):
         self.assertIsNone(re.search(r"\blogging\.\w+\(", source))
 
 
+class DefaultExamplesLookupWiringTests(unittest.TestCase):
+    """The production router must actually supply an examples_lookup.
+
+    It was constructed without one, so the `if examples_lookup is not None`
+    branch never fired and consent-gated learned examples were collected,
+    stored, and displayed -- but never reached a single prompt.
+    """
+
+    def test_production_router_supplies_an_examples_lookup(self):
+        from backend.api.routes import message_rescue as module
+
+        self.assertIsNotNone(
+            getattr(module, "_default_examples_lookup", None),
+            "no default examples lookup defined",
+        )
+
+    def test_lookup_returns_none_not_empty_list_when_nothing_learned(self):
+        """Empty must be None, or personas lose their own few-shot examples.
+
+        build_rescue_prompt falls back to persona['few_shot'] only when
+        examples is None; an empty list is not None, so it would suppress the
+        persona's built-in examples for every user who never taught anything.
+        """
+        from backend.api.routes import message_rescue as module
+
+        class _EmptyStore:
+            def to_few_shot(self, name):
+                return []
+
+        import backend.services.persona_learning as learning
+
+        # The lookup imports the store inside the function body, so patching
+        # it on the owning module is what the call actually resolves.
+        real = learning.PersonaLearningStore
+        learning.PersonaLearningStore = lambda *a, **k: _EmptyStore()
+        try:
+            self.assertIsNone(module._default_examples_lookup("Polished"))
+        finally:
+            learning.PersonaLearningStore = real
+
+    def test_lookup_projects_learned_examples_into_few_shot_shape(self):
+        from backend.api.routes import message_rescue as module
+        import backend.services.persona_learning as learning
+
+        class _Store:
+            def to_few_shot(self, name):
+                return [{"raw": "cant make it", "out": "I can't make it."}]
+
+        real = learning.PersonaLearningStore
+        learning.PersonaLearningStore = lambda *a, **k: _Store()
+        try:
+            result = module._default_examples_lookup("Polished")
+        finally:
+            learning.PersonaLearningStore = real
+
+        self.assertEqual(result, [{"raw": "cant make it", "out": "I can't make it."}])
+
+    def test_empty_examples_list_would_suppress_persona_few_shot(self):
+        """Proves the regression the None-not-[] rule exists to prevent."""
+        from backend.services.message_rescue import build_rescue_prompt
+
+        persona = {"prompt": "Be concise.", "few_shot": [{"raw": "yo", "out": "Hello."}]}
+
+        with_none = build_rescue_prompt("hi", persona=persona, examples=None)
+        with_empty = build_rescue_prompt("hi", persona=persona, examples=[])
+
+        self.assertTrue(
+            any(m.get("content") == "Hello." for m in with_none),
+            "persona few_shot should be used when examples is None",
+        )
+        self.assertFalse(
+            any(m.get("content") == "Hello." for m in with_empty),
+            "an empty list suppresses persona few_shot -- this is why the lookup returns None",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

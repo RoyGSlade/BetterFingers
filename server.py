@@ -45,6 +45,7 @@ from job_manager import JOBS, JobState
 from backend.runtime.dependencies import JobManagerCancellationBridge, PipelineDependencies
 from backend.services.dictation_pipeline import DictationPipeline, FunctionStage
 from backend.services.speech_signals import compute_speech_signals
+from backend.services.audio_energy import rms_windows
 from backend.domain.contracts import to_dict as _contract_to_dict
 from output_coordinator import OutputCoordinator
 import voice_commands
@@ -1696,8 +1697,18 @@ def process_recording_result(
                         raw_text, confidence, structured = trans.transcribe_with_structured(audio_data, hotwords=hotwords)
                         ctx.extra["transcription_result"] = structured
                         try:
+                            # Without energy_windows the energy half of `arousal`
+                            # is always 0.0, leaving it a rescaled pace metric.
+                            # audio_data is the same mono float32 buffer just
+                            # transcribed -- no extra capture, nothing leaves the
+                            # device, and the helper returns loudness numbers only.
                             ctx.extra["speech_signals"] = compute_speech_signals(
-                                structured.segments, audio_duration_s=structured.audio_duration_s,
+                                structured.segments,
+                                audio_duration_s=structured.audio_duration_s,
+                                energy_windows=rms_windows(
+                                    audio_data,
+                                    sample_rate=getattr(recording_result, "sample_rate", 16000) or 16000,
+                                ),
                             )
                         except Exception as exc:
                             logging.debug(f"speech signal computation failed: {exc}")
