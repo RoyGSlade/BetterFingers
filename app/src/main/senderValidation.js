@@ -9,7 +9,17 @@ const url = require('node:url');
 
 // The exact set of pages the app ships. A sender frame that has navigated to
 // anything else — even another file under the same directory — is untrusted.
-const RENDERER_PAGES = new Set(['index.html', 'overlay.html', 'review-overlay.html']);
+const RENDERER_PAGES = new Set([
+  'index.html',
+  'overlay.html',
+  'review-overlay.html',
+  // Signal Desk (DESIGN.md §11), reachable via BF_UI=signal-desk. This entry
+  // is load-bearing, not bookkeeping: a page missing from this set still
+  // loads, but every IPC call from it is rejected, so `window.betterFingers`
+  // is absent. The renderer is pervasively optional-chained, so that surfaces
+  // as a silently dead UI rather than an error.
+  'signal-desk-preview.html',
+]);
 
 // A file URL is Windows-flavoured when its pathname starts with a drive letter
 // (e.g. file:///C:/... -> "/C:/..."). Detecting the flavour from the URL lets

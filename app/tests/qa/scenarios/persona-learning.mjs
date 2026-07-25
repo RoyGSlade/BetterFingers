@@ -24,6 +24,12 @@ async function goToDashboardWithPersona(page, personaName) {
   await page.reload();
   await page.waitForSelector('#backendStatus', { state: 'attached', timeout: 15000 });
   await page.click('#tabButtonSettings');
+  // #settingCurrentPreset lives in the "ai-cleanup" settings section, which
+  // starts hidden (General is the default active section) -- without opening
+  // it first, selectOption times out on visibility rather than failing on
+  // anything to do with persona learning.
+  await page.click('.settings-nav-button[data-section="ai-cleanup"]');
+  await expect(page.locator('.settings-section[data-section="ai-cleanup"]')).toHaveClass(/active/);
   await page.selectOption('#settingCurrentPreset', personaName);
   await page.click('#tabButtonDashboard');
   await expect(page.locator('#personaLearningSection')).toBeVisible();

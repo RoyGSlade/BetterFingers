@@ -207,12 +207,27 @@ function resolveAppIcon() {
   return undefined;
 }
 
+// Opt-in only, and deliberately not a persisted setting: the Signal Desk
+// workspace UI (DESIGN.md §11) is landing incrementally and is not at feature
+// parity with index.html yet, so it must not be reachable by accident. The
+// default is unchanged for every shipping user.
+const SIGNAL_DESK_PAGE = 'signal-desk-preview.html';
+
+function dashboardPage() {
+  return process.env.BF_UI === 'signal-desk' ? SIGNAL_DESK_PAGE : 'index.html';
+}
+
 function loadDashboard(window) {
+  const page = dashboardPage();
+
   if (process.env.ELECTRON_RENDERER_URL) {
-    return window.loadURL(process.env.ELECTRON_RENDERER_URL);
+    // The dev server serves the renderer root; index.html is its directory
+    // index, so it stays path-less to preserve the exact existing behaviour.
+    const base = process.env.ELECTRON_RENDERER_URL;
+    return window.loadURL(page === 'index.html' ? base : `${base}/${page}`);
   }
 
-  return window.loadFile(path.join(__dirname, '../renderer/index.html'));
+  return window.loadFile(path.join(__dirname, `../renderer/${page}`));
 }
 
 function createMainWindow() {

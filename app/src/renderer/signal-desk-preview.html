@@ -42,6 +42,16 @@
 </head>
 <body>
 
+<!--
+  Toast mount point. Every Signal Desk workspace module already calls
+  hooks.showToast(...) for save/delete/publish results and errors, but this
+  page had no container and no toast implementation, so lib/toast.mjs's
+  container-less no-op swallowed all of it: a user could click Save or Delete
+  here and get no feedback either way, success or failure. aria-live so the
+  message reaches assistive tech, matching index.html's container.
+-->
+<div id="toastContainer" class="toast-container" role="status" aria-live="polite"></div>
+
 <div class="sd-shell" id="sdShell" data-workspace="talk">
 
   <!-- ============================== 3a. Left nav rail ============================== -->
@@ -2379,20 +2389,29 @@
   })();
 </script>
 
+<!--
+  REMOVED: a script here used to force `pref_message_rescue_enabled = 'true'`
+  so all three Message Rescue surfaces were visible for director QA.
+
+  That was defensible while this page could only be opened over file:// as a
+  standalone mockup. It is not defensible now that the page loads inside the
+  real app (BF_UI=signal-desk): both pages are file:// URLs under the same
+  renderer directory, so they share one localStorage origin, and merely
+  OPENING this UI permanently flipped a default-OFF user-facing feature flag
+  for the shipping dashboard. It was caught by the default UI's own
+  `message-rescue/panel-hidden-by-default` QA scenario starting to fail.
+
+  A preview must not mutate real user state to make itself look better. The
+  flag now behaves here exactly as it does everywhere else: default OFF,
+  enabled only by a deliberate user action.
+-->
+
 <script>
-  // Force the Message Rescue feature flag ON for this preview so all 3
-  // reused surfaces (draft-bound live panel, static preview, playground) are
-  // visible for director QA -- the flag defaults OFF everywhere in the real
-  // app (see features/messageRescuePanel.js's isMessageRescueEnabled()).
-  // Must run as a plain (non-module) script BEFORE the deferred module
-  // scripts below: messageRescuePanel.js self-initializes at import time and
-  // reads this flag synchronously, so it has to already be set by then.
-  try {
-    localStorage.setItem('pref_message_rescue_enabled', 'true');
-  } catch (_e) {
-    // Storage unavailable in some sandboxed preview contexts -- the panels
-    // simply stay hidden, matching their real default-off contract.
-  }
+  // Onboarding is a modal gate on the default dashboard; this page has no
+  // onboarding markup of its own (SPEC gap -- no Signal Desk design exists
+  // for it yet), so nothing to suppress here. Kept as a marker so the next
+  // person does not re-add storage writes to this page casually: writes here
+  // are visible to index.html.
 </script>
 
 <!--
@@ -2410,9 +2429,10 @@
 -->
 <script type="module">
   import { createTalkWorkspaceFeature, collectTalkElements } from './features/talkWorkspace.js';
+  import { showToast } from './lib/toast.mjs';
 
   const elements = collectTalkElements(document);
-  const talkWorkspace = createTalkWorkspaceFeature({ elements, hooks: {} });
+  const talkWorkspace = createTalkWorkspaceFeature({ elements, hooks: { showToast } });
   talkWorkspace.init({ state: 'listening', amplitude: 0.34 });
 
   // Debug handle for director/manual QA from devtools, e.g.:
@@ -2420,6 +2440,12 @@
   //   window.__signalCore.renderOnce(); // paint one frame on demand
   window.__talkWorkspace = talkWorkspace;
   window.__signalCore = talkWorkspace.getSignalCore();
+  // Same debug-handle convention as the two above. Needed by QA because the
+  // bundler inlines lib/toast.mjs into this page's chunk, so a test cannot
+  // reach it by path in the built app — and asserting the toast host from
+  // outside is the only way to catch a missing container or missing CSS,
+  // which a fake-DOM unit test cannot see.
+  window.__showToast = showToast;
 </script>
 
 <!--
@@ -2436,6 +2462,7 @@
 -->
 <script type="module">
   import { createLibraryWorkspaceFeature, collectLibraryElements, mapLibraryConfidenceBand } from './features/libraryWorkspace.js';
+  import { showToast } from './lib/toast.mjs';
 
   function at(daysAgo, hh, mm) {
     const d = new Date();
@@ -2497,7 +2524,7 @@
   ];
 
   const elements = collectLibraryElements(document);
-  const libraryWorkspace = createLibraryWorkspaceFeature({ elements, hooks: {} });
+  const libraryWorkspace = createLibraryWorkspaceFeature({ elements, hooks: { showToast } });
   libraryWorkspace.setItems(MOCK_ITEMS);
   libraryWorkspace.selectItem('draft-1');
   libraryWorkspace.init();
@@ -2528,6 +2555,7 @@
 -->
 <script type="module">
   import { createStudioWorkspaceFeature, collectStudioElements } from './features/studioWorkspace.js';
+  import { showToast } from './lib/toast.mjs';
 
   const MOCK_PERSONAS = {
     Natural: {
@@ -2596,7 +2624,7 @@
   ];
 
   const elements = collectStudioElements(document);
-  const studioWorkspace = createStudioWorkspaceFeature({ elements, hooks: {} });
+  const studioWorkspace = createStudioWorkspaceFeature({ elements, hooks: { showToast, confirmFn: (m) => window.confirm(m) } });
   studioWorkspace.setPersonas(MOCK_PERSONAS, {
     builtins: [],
     voices: MOCK_VOICES,
@@ -2640,9 +2668,10 @@
     collectUtilitiesElements,
     UTILITIES_SECTION_META,
   } from './features/utilitiesWorkspace.js';
+  import { showToast } from './lib/toast.mjs';
 
   const elements = collectUtilitiesElements(document);
-  const utilitiesWorkspace = createUtilitiesWorkspaceFeature({ elements, hooks: {} });
+  const utilitiesWorkspace = createUtilitiesWorkspaceFeature({ elements, hooks: { showToast, confirmFn: (m) => window.confirm(m) } });
   utilitiesWorkspace.init();
 
   // --- Models -----------------------------------------------------------
@@ -2770,9 +2799,10 @@
 -->
 <script type="module">
   import { createSettingsWorkspaceFeature, collectSettingsElements } from './features/settingsWorkspace.js';
+  import { showToast } from './lib/toast.mjs';
 
   const elements = collectSettingsElements(document);
-  const settingsWorkspace = createSettingsWorkspaceFeature({ elements, hooks: {} });
+  const settingsWorkspace = createSettingsWorkspaceFeature({ elements, hooks: { showToast, confirmFn: (m) => window.confirm(m) } });
   settingsWorkspace.init();
 
   // --- Profile list + a representative settings object (mirrors the shape

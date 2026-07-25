@@ -26,6 +26,24 @@ import { voiceCloningScenarios } from './voice-cloning.mjs';
 import { messageRescueScenarios } from './message-rescue.mjs';
 import { messageRescueDraftScenarios } from './message-rescue-draft.mjs';
 import { textPlaygroundScenarios } from './text-playground.mjs';
+import { draftsScenarios } from './drafts.mjs';
+import { personaScenarios } from './personas.mjs';
+// Signal Desk scenarios carry `ui: 'signal-desk'`; run.mjs filters by UI
+// target, so these are skipped on a default run and vice versa.
+import { signalDeskShellScenarios } from './signal-desk-shell.mjs';
+// NOT imported on purpose: ./persona-learning.mjs (3 scenarios, area
+// 'persona-learning'). They drive #personaLearningSection /
+// #personaLearningConfirmButton / #personaLearningPersonaLabel, none of which
+// exist in index.html -- those ids live only in features/personaLearning.js
+// and features/studioWorkspace.js, i.e. the Signal Desk STUDIO workspace,
+// which is not in electron.vite.config.js's build inputs and therefore never
+// ships. Verified 2026-07-25: wiring them in yields 0/3, failing on
+// "#personaLearningSection ... element(s) not found" -- a true report that the
+// feature is unreachable, not a scenario bug. Registering them today would
+// make `npm run qa:screens` permanently red and train people to ignore it,
+// which is the exact failure the run.mjs exit-code fix just removed. Re-enable
+// this import in the same change that mounts the Studio workspace in the
+// shipping renderer.
 
 export const scenarios = [
   ...baselineScenarios,
@@ -37,4 +55,7 @@ export const scenarios = [
   ...messageRescueScenarios,
   ...messageRescueDraftScenarios,
   ...textPlaygroundScenarios,
+  ...draftsScenarios,
+  ...personaScenarios,
+  ...signalDeskShellScenarios,
 ];

@@ -8,7 +8,7 @@
 //   areaFilter (optional): only run scenarios whose `area` matches exactly.
 
 import path from 'node:path';
-import { startStubBackend, launchApp, resetBackendState, snap, writeReportFile, OUT_DIR } from './harness.mjs';
+import { startStubBackend, launchApp, resetBackendState, snap, writeReportFile, OUT_DIR, TARGET } from './harness.mjs';
 import { scenarios } from './scenarios/index.mjs';
 
 // One Electron launch for the whole run (like electron-smoke.spec.js's single
@@ -114,15 +114,26 @@ function renderReport(results) {
 
 async function main() {
   const areaFilter = process.argv[2];
-  const selected = areaFilter ? scenarios.filter((s) => s.area === areaFilter) : scenarios;
+  // A scenario is written against one UI's element ids and is meaningless
+  // against the other (the two dashboards share no ids at all), so scenarios
+  // declare their target via `ui` and default to the shipping one. Without
+  // this filter, running either target drags in the other's scenarios and
+  // reports a wall of "element not found" that looks like a broken app.
+  const forTarget = scenarios.filter((s) => (s.ui || 'index') === TARGET.name);
+  const selected = areaFilter ? forTarget.filter((s) => s.area === areaFilter) : forTarget;
   if (!selected.length) {
-    console.error(`No scenarios matched area filter "${areaFilter}".`);
+    const detail = areaFilter ? `area filter "${areaFilter}" on ` : '';
+    console.error(`No scenarios matched ${detail}UI target "${TARGET.name}".`);
     return 1;
   }
 
   const firstState =
     typeof selected[0].backendState === 'function' ? selected[0].backendState() : selected[0].backendState;
   const stub = await startStubBackend(firstState);
+  // Say which app is under test: the two UIs share no element ids, so a run
+  // against the wrong target fails in confusing ways ("element not found" for
+  // everything) unless the target is stated up front.
+  console.log(`UI target: ${TARGET.name} (${TARGET.page})`);
   const harness = await launchApp({ backendPort: stub.port });
 
   const results = [];
@@ -144,6 +155,12 @@ async function main() {
   const failed = results.filter((r) => r.status === 'FAIL');
   console.log(`\n${results.length - failed.length}/${results.length} passed. Report: ${reportPath}`);
   const exitCode = failed.length ? 1 : 0;
+  // Stage the code on the process BEFORE closing Electron, not just in a
+  // local: closing can terminate this process outright (harness.mjs close()),
+  // in which case the `process.exit(code)` below never runs and the shell saw
+  // a green 0 for a red run -- i.e. the suite could not fail a build at all.
+  // `process.exitCode` is honoured by whatever exit path actually wins.
+  process.exitCode = exitCode;
 
   await harness.close().catch(() => {});
   await stub.close().catch(() => {});

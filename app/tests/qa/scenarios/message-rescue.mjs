@@ -18,6 +18,16 @@ export const messageRescueScenarios = [
       'flag does not change any existing UI.',
     backendState: coldBoot,
     async navigate(page) {
+      // Establish the default rather than assuming it. This scenario asserts a
+      // SHIPPED DEFAULT, so it must not depend on ambient localStorage: the
+      // flag survives across scenarios in the shared Electron session, and it
+      // is also visible to any other page under the same file:// renderer
+      // directory. It was in fact contaminated from outside once (the Signal
+      // Desk page used to force the flag on at load), and this scenario failed
+      // for a reason that had nothing to do with the dashboard it tests.
+      await page.evaluate(() => localStorage.removeItem('pref_message_rescue_enabled'));
+      await page.reload();
+      await page.waitForSelector('#backendStatus', { state: 'attached', timeout: 15000 });
       await page.click('#tabButtonDashboard');
     },
     async expects(page) {

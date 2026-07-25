@@ -4631,3 +4631,76 @@
 .message[data-tone="success"] { color: var(--sd-green); }
 .message[data-tone="warning"] { color: var(--sd-amber); }
 .message[data-tone="danger"] { color: var(--sd-red); }
+
+/* ==========================================
+   Toasts
+   ------------------------------------------
+   Same DOM contract as base.css's toasts (lib/toast.mjs builds one structure
+   for both dashboards), restyled onto Signal Desk tokens. Without these rules
+   the shared toast function would emit unstyled text over the workspace,
+   since this page does not load base.css.
+   ========================================== */
+.toast-container {
+  position: fixed;
+  top: var(--sd-space-16, 16px);
+  right: var(--sd-space-16, 16px);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: min(380px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--sd-radius-md, 12px);
+  background: var(--sd-surface-raised);
+  border: 1px solid var(--sd-border);
+  color: var(--sd-text-primary);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .45);
+  font-size: var(--sd-font-sm, .9rem);
+  line-height: 1.4;
+  animation: sd-toast-in .18s ease-out;
+}
+
+.toast.leaving { animation: sd-toast-out .18s ease-in forwards; }
+
+.toast[data-tone="success"] { border-left: 4px solid var(--sd-green); }
+.toast[data-tone="warning"] { border-left: 4px solid var(--sd-amber); }
+.toast[data-tone="danger"]  { border-left: 4px solid var(--sd-red); }
+.toast[data-tone="info"]    { border-left: 4px solid var(--sd-text-secondary); }
+
+.toast-message { flex: 1; }
+
+.toast-close {
+  flex: none;
+  background: none;
+  border: none;
+  color: var(--sd-text-secondary);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.toast-close:hover { color: var(--sd-text-primary); }
+
+@keyframes sd-toast-in {
+  from { opacity: 0; transform: translateX(16px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes sd-toast-out {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 0; transform: translateX(16px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast,
+  .toast.leaving { animation: none; }
+}

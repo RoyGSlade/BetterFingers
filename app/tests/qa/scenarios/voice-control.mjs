@@ -13,6 +13,20 @@ async function openVoiceControl(page) {
   await expect(page.locator('.settings-section[data-section="voice-control"]')).toHaveClass(/active/);
 }
 
+// The wake-engine backbone list (#wakeBackboneList, the only one in the app --
+// main.js's renderWakeBackbones has a single render target) lives in the
+// MODELS tab, not in Settings -> Voice Control. Scenarios that touch the
+// per-backbone Download buttons must open this tab: under openVoiceControl()
+// the buttons exist but sit inside `#tabModels { display: none }`, so a
+// `page.click` on one times out on visibility, and -- worse -- text/enabled
+// assertions still PASS against the hidden nodes while the screenshot shows
+// the wrong panel entirely. Assert visibility here so that failure mode can
+// never come back silently.
+async function openWakeModels(page) {
+  await page.click('#tabButtonModels');
+  await expect(page.locator('#wakeBackboneList')).toBeVisible();
+}
+
 const BACKBONE_MODELS = [
   { id: 'melspectrogram', name: 'Melspectrogram feature extractor', kind: 'backbone', license: 'Apache-2.0', origin: 'bundled', size_bytes: 1087958, downloaded: false },
   { id: 'embedding_model', name: 'Speech embedding model', kind: 'backbone', license: 'Apache-2.0', origin: 'bundled', size_bytes: 1326578, downloaded: false },
@@ -64,10 +78,11 @@ export const voiceControlScenarios = [
       'GET /wake/models': { models: BACKBONE_MODELS },
     }),
     async navigate(page) {
-      await openVoiceControl(page);
+      await openWakeModels(page);
     },
     async expects(page) {
       const list = page.locator('#wakeBackboneList');
+      await expect(list).toBeVisible();
       await expect(list).toContainText('not downloaded');
       await expect(page.locator('[data-wake-download="melspectrogram"]')).toBeEnabled();
       await expect(page.locator('[data-wake-download="melspectrogram"]')).toHaveText('Download');
@@ -89,7 +104,7 @@ export const voiceControlScenarios = [
       'GET /wake/models/:id/download-state': (req, { params }) => ({ model_id: params.id, active: true, downloaded: false }),
     }),
     async navigate(page) {
-      await openVoiceControl(page);
+      await openWakeModels(page);
       await page.click('[data-wake-download="melspectrogram"]');
     },
     async expects(page) {
@@ -115,7 +130,7 @@ export const voiceControlScenarios = [
       'GET /wake/models/:id/download-state': (req, { params }) => ({ model_id: params.id, active: true, downloaded: false }),
     }),
     async navigate(page) {
-      await openVoiceControl(page);
+      await openWakeModels(page);
       await page.click('[data-wake-download="melspectrogram"]');
       // Give the first poll tick (main.js polls download-state ~1s after
       // the click) a chance to run without a raw sleep in the assertion.
@@ -140,6 +155,22 @@ export const voiceControlScenarios = [
       ...coldBoot(),
       'GET /wake/status': { enabled: false, available: false, listening: false, reason: 'disabled' },
       'GET /wake/models': { models: BACKBONE_MODELS_READY },
+      // Required, not optional: main.js gates the enable POST on each
+      // backbone's download-state. Without this stub the route 404s, the
+      // renderer concludes the backbone is not really installed, and it never
+      // POSTs /wake/enable at all -- so #wakeStatusDetail stays "Disabled."
+      // and this scenario silently tests nothing. Shape mirrors
+      // routes_wake.py's wake_model_download_state().
+      'GET /wake/models/:id/download-state': (req, { params }) => ({
+        model_id: params.id,
+        active: false,
+        downloaded: true,
+        present: true,
+        verified: true,
+        loadable: true,
+        error: null,
+        last_status: 'done',
+      }),
       'POST /wake/enable': {
         ok: false,
         enabled: false,

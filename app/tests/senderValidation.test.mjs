@@ -24,6 +24,15 @@ test('accepts a valid packaged page (posix)', () => {
   assert.equal(isTrustedFileUrl(`file://${dir}/review-overlay.html`, dir), true);
 });
 
+// Regression guard: this page is reachable via BF_UI=signal-desk. Dropping it
+// from RENDERER_PAGES does not fail loudly — the window still loads, but every
+// IPC call is rejected, so `window.betterFingers` is absent and the pervasively
+// optional-chained renderer degrades to a silently dead UI.
+test('accepts the Signal Desk page so its IPC bridge is not silently revoked', () => {
+  const dir = '/opt/app/resources/app.asar/out/renderer';
+  assert.equal(isTrustedFileUrl(`file://${dir}/signal-desk-preview.html`, dir), true);
+});
+
 test('rejects a non-renderer page that still lives under the renderer dir', () => {
   const dir = '/opt/app/out/renderer';
   assert.equal(isTrustedFileUrl(`file://${dir}/evil.html`, dir), false);

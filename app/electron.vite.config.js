@@ -38,6 +38,13 @@ module.exports = defineConfig({
           index: resolve(__dirname, 'src/renderer/index.html'),
           overlay: resolve(__dirname, 'src/renderer/overlay.html'),
           reviewOverlay: resolve(__dirname, 'src/renderer/review-overlay.html'),
+          // Signal Desk (DESIGN.md §11) behind BF_UI=signal-desk — see
+          // windows.js loadDashboard(). Built but not default: without this
+          // entry the page only ever ran over file://, where its own header
+          // documents that type="module" fetches are CORS-blocked, so the
+          // real feature modules never mounted and nothing could be verified
+          // against the actual Electron bridge.
+          signalDeskPreview: resolve(__dirname, 'src/renderer/signal-desk-preview.html'),
         },
       },
     },

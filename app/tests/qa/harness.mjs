@@ -38,6 +38,61 @@ export const DEFAULT_MASK_SELECTORS = ['#sidecarLogsTail', '[data-qa-mask]'];
 
 const FIXED_VIEWPORT = { width: 1280, height: 800 };
 
+// --- UI target ---------------------------------------------------------------
+//
+// The app ships two dashboards: the default `index.html` and the Signal Desk
+// workspace UI behind BF_UI=signal-desk (see main/windows.js loadDashboard).
+// They share ZERO element ids, so window discovery and the readiness sentinel
+// cannot be hard-coded to either one.
+//
+// This is a RUN-level choice, not a per-scenario one, and deliberately so:
+// launchApp's own close() comment documents that quitting Electron kills the
+// parent runner process in this Electron/Playwright combo, which is why the
+// whole suite reuses a single launch. Switching target mid-run would require
+// relaunching with different env, so `BF_QA_UI` picks one target per run:
+//
+//   node tests/qa/run.mjs <area>                       # default UI
+//   BF_QA_UI=signal-desk node tests/qa/run.mjs <area>  # Signal Desk
+export const UI_TARGETS = {
+  index: {
+    name: 'index',
+    page: 'index.html',
+    env: {},
+    // Present as soon as the shell renders; also the thing that reports
+    // backend health, so it doubles as the readiness signal.
+    attachedSelector: '#backendStatus',
+    readyTextSelector: '#backendStatus',
+    readyTextPattern: /ready|active|running|external/i,
+    outSubdir: '',
+  },
+  'signal-desk': {
+    name: 'signal-desk',
+    page: 'signal-desk-preview.html',
+    env: { BF_UI: 'signal-desk' },
+    attachedSelector: '.sd-shell',
+    // Intentionally null: this page's status bar is currently static markup
+    // with no ids and nothing bound to backend state, so there is no honest
+    // readiness signal to wait on yet. Waiting on a hard-coded string here
+    // would assert a truth the page is not telling. Give this a real selector
+    // in the same change that binds the status bar.
+    readyTextSelector: null,
+    readyTextPattern: null,
+    // Namespaced so a Signal Desk run cannot clobber the default UI's
+    // committed screenshots.
+    outSubdir: 'signal-desk',
+  },
+};
+
+const REQUESTED_UI = process.env.BF_QA_UI || 'index';
+if (!Object.hasOwn(UI_TARGETS, REQUESTED_UI)) {
+  throw new Error(
+    `Unknown BF_QA_UI="${REQUESTED_UI}". Known targets: ${Object.keys(UI_TARGETS).join(', ')}`,
+  );
+}
+
+/** The UI target this run is exercising. */
+export const TARGET = UI_TARGETS[REQUESTED_UI];
+
 // --- Stub backend ------------------------------------------------------------
 //
 // `state` is a plain object keyed by "METHOD /path" (fixed paths) or
@@ -201,8 +256,8 @@ export function startStubBackend(initialState = {}) {
  * poll exactly like app/tests/electron-smoke.spec.js so scenarios start from
  * the same known-good state that suite already validates.
  */
-export async function launchApp({ backendPort }) {
-  const launchEnv = { ...process.env };
+export async function launchApp({ backendPort, target = TARGET }) {
+  const launchEnv = { ...process.env, ...target.env };
   delete launchEnv.ELECTRON_RUN_AS_NODE;
   delete launchEnv.ELECTRON_NO_ATTACH_CONSOLE;
   launchEnv.BETTERFINGERS_HOST = '127.0.0.1';
@@ -218,18 +273,16 @@ export async function launchApp({ backendPort }) {
     env: launchEnv,
   });
 
+  const isTargetPage = (w) => w.url().includes(target.page);
   const windows = app.windows();
-  let page = windows.find((w) => w.url().includes('index.html'));
+  let page = windows.find(isTargetPage);
   if (!page) {
-    page = await app.waitForEvent('window', {
-      predicate: (w) => w.url().includes('index.html'),
-      timeout: 20000,
-    });
+    page = await app.waitForEvent('window', { predicate: isTargetPage, timeout: 20000 });
   }
 
   await page.setViewportSize(FIXED_VIEWPORT);
   await page.waitForLoadState('domcontentloaded');
-  await page.waitForSelector('#backendStatus', { state: 'attached', timeout: 15000 });
+  await page.waitForSelector(target.attachedSelector, { state: 'attached', timeout: 15000 });
 
   // Skip the modal first-run onboarding overlay -- it blocks every other
   // interaction. Same trick electron-smoke.spec.js uses.
@@ -243,7 +296,7 @@ export async function launchApp({ backendPort }) {
   await page.reload();
   await page.setViewportSize(FIXED_VIEWPORT);
   await page.waitForLoadState('domcontentloaded');
-  await page.waitForSelector('#backendStatus', { state: 'attached', timeout: 15000 });
+  await page.waitForSelector(target.attachedSelector, { state: 'attached', timeout: 15000 });
 
   const onboardingDecline = page.locator('button:has-text("Decline & quit")');
   const onboardingGetStarted = page.locator('button:has-text("Get started")');
@@ -256,13 +309,16 @@ export async function launchApp({ backendPort }) {
   }
 
   await page
-    .locator('#backendStatus')
+    .locator(target.attachedSelector)
     .waitFor({ state: 'attached', timeout: 15000 });
-  await waitForText(page.locator('#backendStatus'), /ready|active|running|external/i, 15000);
+  if (target.readyTextSelector) {
+    await waitForText(page.locator(target.readyTextSelector), target.readyTextPattern, 15000);
+  }
 
   return {
     app,
     page,
+    target,
     // NOTE: Playwright's ElectronApplication.close() was observed to kill the
     // PARENT node process outright in this Electron/Playwright version combo
     // (confirmed via a minimal repro: awaiting app.close() never returns to
@@ -281,13 +337,15 @@ export async function launchApp({ backendPort }) {
  * reloading is both the workaround and the better design (matches
  * electron-smoke.spec.js's single beforeAll launch for its whole suite).
  */
-export async function resetBackendState(page, stub, newState) {
+export async function resetBackendState(page, stub, newState, target = TARGET) {
   stub.setState(newState);
   await page.reload();
   await page.setViewportSize(FIXED_VIEWPORT);
   await page.waitForLoadState('domcontentloaded');
-  await page.waitForSelector('#backendStatus', { state: 'attached', timeout: 15000 });
-  await waitForText(page.locator('#backendStatus'), /ready|active|running|external/i, 15000);
+  await page.waitForSelector(target.attachedSelector, { state: 'attached', timeout: 15000 });
+  if (target.readyTextSelector) {
+    await waitForText(page.locator(target.readyTextSelector), target.readyTextPattern, 15000);
+  }
 }
 
 export async function waitForText(locator, pattern, timeoutMs) {
@@ -319,7 +377,9 @@ export async function snap(page, area, name, { mask = [] } = {}) {
   const maskSelectors = [...DEFAULT_MASK_SELECTORS, ...mask];
   const maskLocators = maskSelectors.map((sel) => page.locator(sel));
 
-  const dir = join(OUT_DIR, area);
+  // Namespaced per target so a Signal Desk run cannot overwrite the default
+  // UI's committed screenshots with pictures of a different app.
+  const dir = join(OUT_DIR, TARGET.outSubdir, area);
   mkdirSync(dir, { recursive: true });
   const filePath = join(dir, `${name}.png`);
   await page.screenshot({ path: filePath, mask: maskLocators });
@@ -331,7 +391,9 @@ export function ensureOutDir() {
 }
 
 export function writeReportFile(relativePath, content) {
-  const filePath = join(OUT_DIR, relativePath);
+  // Same namespacing as snap(): a Signal Desk run must not overwrite the
+  // default UI's walkbook with a report about a different app.
+  const filePath = join(OUT_DIR, TARGET.outSubdir, relativePath);
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, content);
   return filePath;

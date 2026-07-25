@@ -61,6 +61,7 @@ import {
   importWakeModel,
 } from './api/backend.js';
 import { summarizeWipeFailure } from './lib/wipeSummary.mjs';
+import { showToast as showToastImpl } from './lib/toast.mjs';
 import { createDraftsFeature } from './features/drafts.js';
 import { createPersonasFeature } from './features/personas.js';
 import { createRuntimeFeature } from './features/runtime.js';
@@ -957,46 +958,14 @@ function setMessage(el, message = '', tone = '') {
 
 // Transient toast notifications — the app-wide way to surface events/errors that
 // would otherwise only reach the console.
+//
+// The implementation now lives in lib/toast.mjs so the Signal Desk page can
+// share it (its workspace modules all call hooks.showToast). This wrapper
+// keeps main.js's ~40 existing call sites and their default arguments
+// unchanged — a compatibility wrapper in the rule-7 sense, not indirection
+// for its own sake.
 function showToast(message, tone = 'info', durationMs = 5000) {
-  const container = document.getElementById('toastContainer');
-  if (!container || !message) {
-    return;
-  }
-
-  const toast = document.createElement('div');
-  toast.className = 'toast';
-  toast.dataset.tone = tone;
-
-  const text = document.createElement('div');
-  text.className = 'toast-message';
-  text.textContent = String(message);
-
-  const close = document.createElement('button');
-  close.className = 'toast-close';
-  close.type = 'button';
-  close.setAttribute('aria-label', 'Dismiss notification');
-  close.textContent = '×';
-
-  let removeTimer = null;
-  const dismiss = () => {
-    if (removeTimer) {
-      clearTimeout(removeTimer);
-      removeTimer = null;
-    }
-    toast.classList.add('leaving');
-    toast.addEventListener('animationend', () => toast.remove(), { once: true });
-    // Fallback in case the animation doesn't fire.
-    setTimeout(() => toast.remove(), 250);
-  };
-
-  close.addEventListener('click', dismiss);
-  toast.append(text, close);
-  container.append(toast);
-
-  if (durationMs > 0) {
-    removeTimer = setTimeout(dismiss, durationMs);
-  }
-  return toast;
+  return showToastImpl(message, tone, durationMs);
 }
 
 // --- First-run onboarding (policy -> tour -> models) ---
