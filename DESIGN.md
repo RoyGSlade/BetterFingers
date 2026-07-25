@@ -812,11 +812,22 @@ One idea drives it: **everything you say becomes a visible, solid, manipulable o
   ink for high-confidence words, translucent + soft underline for low — corrections feed
   the dictionary and the user watches the app learn. The recovery bin is just the Stream's
   "unprocessed" filter.
-- **Three spaces + a rail:** **Talk** (Stream + live mic state, the 90% view), **Library**
-  (history search; later Meetings/Brainstorms), **Studio** (Personas & Voices, Models &
-  Hardware, Macros, Tools/MCP, Privacy). Persistent bottom **status rail**: mic level,
-  loaded models w/ RAM-VRAM gauge, active persona, target app, latency readout — every
-  piece of hidden state permanently glanceable, click-to-jump.
+- **Five spaces + a rail:** **Talk** (Stream + live mic state, the 90% view), **Library**
+  (history search; later Meetings/Brainstorms), **Studio** (Personas & Voices),
+  **Utilities** (Models & Hardware, Macros, Dictionary, Wake word, Tools/MCP,
+  Diagnostics & Doctor), **Settings** (profile keys, hotkeys, Privacy). Persistent bottom
+  **status rail**: mic level, loaded models w/ RAM-VRAM gauge, active persona, target app,
+  latency readout — every piece of hidden state permanently glanceable, click-to-jump.
+
+  > **Amended 2026-07-25 (three spaces → five).** This paragraph originally folded Models,
+  > Macros, Tools and Privacy into Studio. The implementation split them into Utilities +
+  > Settings, and that split is now canon rather than drift, for a concrete reason: the
+  > `INVENTORY_PLACEMENT_MAP` completeness gates — the only machine-checked proof that no
+  > feature was lost in the redesign — live in `utilitiesWorkspace.js` and
+  > `settingsWorkspace.js`. Folding those two back into Studio would dissolve the best
+  > parity asset in the repo to satisfy a doc sentence. Talk/Library/Studio remain the
+  > daily-use spaces; Utilities/Settings are the configuration surfaces you visit rarely,
+  > which is why they carry the long tail of controls.
 - **Design language "solid":** tactile not glassy; strong grotesque for UI + serif for
   transcript ink; hard edges, real shadows, springy 120–200 ms motion; dark "desk" theme
   default + paper-light; three optional earcons (record start / refined / sent); calm

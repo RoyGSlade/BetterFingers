@@ -290,8 +290,10 @@ example content was found in any new or touched log call.
 - **Renderer Electron QA:** `node app/tests/qa/run.mjs baseline` → 3/3 PASS
   (dashboard-loads, settings-general-renders, settings-recording-renders), run against
   the real Electron composition root + stub backend by both A1.10 and the board #11 audit.
-  No dedicated drafts/personas QA scenario exists yet under `tests/qa/scenarios` — flagged
-  by A1.3, A1.7, and the board #11 audit as a Phase 1 gate gap, not yet closed.
+  ~~No dedicated drafts/personas QA scenario exists yet under `tests/qa/scenarios`~~ —
+  **CLOSED by A1.12** (see "A1.12" below): `scenarios/drafts.mjs` (3) and
+  `scenarios/personas.mjs` (3) now cover the two feature modules Phase 1 extracted,
+  re-verified by the coordinator at 3/3 and 3/3.
 - **Backend targeted:** the board #16 audit's fresh combined run —
   `tests/test_dictation_pipeline.py tests/test_server_jobs.py tests/test_server_drafts.py
   tests/test_pipeline_single_flight.py tests/test_p0_hardening.py tests/test_token_concepts.py
@@ -309,7 +311,39 @@ example content was found in any new or touched log call.
   shape/determinism, re-run for this entry: 8 passed (grew by one test since A1.8's
   original handoff; not investigated further, out of scope for a docs-only task).
 
-#### Authoritative full-gate status — PENDING
+#### Authoritative full-gate status — RESOLVED 2026-07-25 (superseding the PENDING note below)
+
+Run by the coordinator against the current checkout (post-A1.9/A1.10, plus A1.12):
+
+- **Python full suite (authoritative, untargeted):** `.venv/bin/python -m pytest -q tests`
+  → **1833 passed, 3 skipped, 0 failed** in ~65s. Run twice, identical both times. The
+  3 skips are environmental, not silent coverage loss, and are named here deliberately:
+  two are `tests/test_wake_word.py` needing `BETTERFINGERS_WAKE_FIXTURES=<dir>`, and one was
+  `tests/test_architecture_smoke.py:157` skipping because PyInstaller was not installed in
+  the venv — **since fixed** (see the A1.12 follow-up below): `pyinstaller==6.21.0` (the
+  version already pinned in `requirements-dev.lock`) is now installed and
+  `tests/test_architecture_smoke.py` runs **3/3 PASSED**, so A1.4's packaging check —
+  PyInstaller's dependency analysis really does walk into `backend/**` — is now verified
+  on this machine rather than assumed.
+
+  Note on skip stability: the totals are stable (1833/3 across three runs) but the *set*
+  is not. After the PyInstaller install, that skip became a pass and
+  `tests/test_live_model_integration.py:47` began skipping instead ("live local model
+  unavailable: model file not ready"). Anyone diffing skip lists between runs should expect
+  that one to move; it is environment-sensitive, not a regression.
+- **Node unit tests:** `npm run test:unit` → **572 pass, 0 fail** (the "60/60" figure in the
+  Renderer bullet above is stale; the suite has grown since Phase 1).
+- **Electron build:** `npm run build` (electron-vite) → succeeds on the current checkout.
+- **Model-free smoke (baseline QA):** `node tests/qa/run.mjs baseline` → 3/3 PASS, exit 0.
+
+**The full QA suite was silently red before today** — see the A1.12 entry below. First
+honest measurement: `node tests/qa/run.mjs` (all areas) → 33/37, 4 failed. After the
+follow-up repair below it is **36/37, 1 failed** (`model-resources/resources-ledger-contract`,
+which has never passed and needs a product decision, not a test fix). This does not block
+the Phase 1 gate item as written ("model-free smoke", satisfied by baseline 3/3), but it
+must not be read as the whole QA suite being green. It is not, by exactly one scenario.
+
+#### Superseded: Authoritative full-gate status — PENDING (kept for provenance)
 
 The Phase 1 gate in `ACCOMPLISH.md` §10 requires "Python full suite, Node unit tests,
 Electron build, and model-free smoke are green." This entry can only confirm the
@@ -333,9 +367,11 @@ result.
 - [x] Existing route paths and WebSocket statuses remain compatible (see sections above).
 - [x] Compatibility re-exports are documented and have removal notes for after the
   hackathon (table above).
-- [ ] Python full suite, Node unit tests, Electron build, and model-free smoke are green —
-  **Node/build/baseline-smoke are green; the authoritative untargeted Python full suite is
-  PENDING** (see above).
+- [x] Python full suite, Node unit tests, Electron build, and model-free smoke are green —
+  closed 2026-07-25 by the coordinator: Python 1833 passed / 3 skipped / 0 failed
+  (untargeted), Node 572/572, electron-vite build succeeds, baseline QA 3/3. Two caveats
+  recorded above and not hidden by this checkbox: the PyInstaller packaging check is
+  SKIPPED in this venv, and the *full* QA suite (all areas) is 33/37, not green.
 - [x] No raw text appears in new logs or diagnostics (audit above).
 
 #### How this entry was verified
@@ -399,3 +435,217 @@ skipped (skip path unit-tested separately, per above). `py_compile` clean on all
 files. `grep` for `logging.`/`print(` in the three non-CLI new files found nothing; the CLI
 tool's only `print(` calls emit the structural report dict, never transcript/context/model
 text.
+
+---
+
+### A1.12 — drafts/personas QA scenarios + QA runner exit-code defect (2026-07-25)
+
+**Task:** close the Phase 1 gate gap flagged three times (A1.3, A1.7, board #11): no
+dedicated drafts/personas QA scenario existed, so nothing proved the composition root still
+wired the two feature modules Phase 1 extracted.
+
+**Delivered:** `app/tests/qa/scenarios/drafts.mjs` (267 lines, 3 scenarios) and
+`app/tests/qa/scenarios/personas.mjs` (242 lines, 3 scenarios), registered in
+`scenarios/index.mjs` (+4 lines). Coverage: draft raw/final text kept distinct, confidence
+badge derivation (0.42 → "42% confident", `data-tone=warning`), token summary, metadata +
+tooltip, the `setDraftControlsEnabled` matrix; history list ordering/truncation and
+click-to-reselect proving no stale confidence state; `/history/search` round trip; persona
+list order + active selection from `current_preset`; wizard load-existing-persona; lint
+warnings and the two pre-save validation refusals. No sleeps, no clock reads, no models.
+
+**Defect found and fixed — the QA runner could not fail a build.** `tests/qa/run.mjs`
+computed its exit code into a local, then called `harness.close()`, which can terminate the
+runner process outright (a hazard `harness.mjs` documents). The process died during close,
+so `process.exit(code)` never ran and the shell saw **0 for a red run**. Verified before the
+fix: `node tests/qa/run.mjs voice-control` printed `9/12 passed` and exited **0**. Fix is
+one line plus comment — stage `process.exitCode` *before* closing Electron. Verified after:
+same command exits **1**; `baseline`, `drafts`, `personas` still exit **0** at 3/3 each, so
+the fix does not over-fire. `npm run qa:screens` can gate CI again.
+
+**Consequence — the QA suite was already red and the bug hid it.** With exit codes working,
+`node tests/qa/run.mjs` (all areas) → **33/37, exit 1**. The 4 failures are pre-existing and
+unrelated to A1.12 (they reproduce in areas containing none of the new scenarios):
+
+| Failure | Diagnosis |
+|---|---|
+| `voice-control/backbone-downloading` | `page.click` 30s timeout: the stub has no `GET /wake/models/melspectrogram/download-state`, which the harness logs loudly ("add it to backendState"), so the download control never becomes visible. Scenario stub drifted behind the renderer. |
+| `voice-control/backbone-downloading-stalls` | same missing stub route |
+| `voice-control/backbone-ready-no-classifier` | same missing stub route |
+| `model-resources/resources-ledger-contract` | already `FAIL` in the committed `qa-report.md` (which records 30/31); pre-existing |
+
+**Also found, not fixed:** `app/tests/qa/scenarios/persona-learning.mjs` exists (3
+scenarios, area `persona-learning`, from I3.8) but is **not imported** by
+`scenarios/index.mjs`, so it has never run. Wiring it in was outside A1.12's scope and it
+may fail; it needs its own task.
+
+**Verification (coordinator-run, not worker-self-certified):** `node --check` clean on all
+three files; `run.mjs drafts` 3/3 exit 0; `run.mjs personas` 3/3 exit 0; `run.mjs baseline`
+3/3 exit 0 (no regression); `run.mjs voice-control` 9/12 exit 1 (fix proof); full
+`run.mjs` 33/37 exit 1. The worker additionally reported a deliberate-lie check on both new
+files (flipping a stubbed confidence score and a stubbed `current_preset` each produced the
+expected assertion failure); the coordinator independently confirmed assertion quality by
+reading the `expects` bodies rather than relying on that report.
+
+**Uncommitted side effects for the coordinator to resolve:** running the harness rewrote
+~20 tracked `.png` files under `app/tests/qa/out/` plus `qa-report.md` (byte-level
+rerender), and added untracked `out/drafts/` and `out/personas/`. No agent ran any mutating
+git command, per AGENTS.md; deciding what to stage or revert is the user's call.
+
+#### A1.12 follow-up — QA suite repaired to 36/37 (same day)
+
+Three of the four failures above were fixed. Each root cause was diagnosed against the live
+DOM, not guessed; the first diagnosis in the entry above ("all three voice-control failures
+share a missing stub route") was **wrong** and is corrected here.
+
+1. **`voice-control` backbone scenarios navigated to the wrong tab.** `#wakeBackboneList` —
+   the only backbone list in the app (`main.js`'s `renderWakeBackbones` has a single render
+   target) — lives in the **Models** tab, but the scenarios opened Settings → Voice Control.
+   The two that `page.click` a Download button failed on visibility. **`backbone-not-downloaded`
+   was passing vacuously**: Playwright's text/enabled assertions do not require visibility, so
+   it asserted against nodes inside `#tabModels { display: none }` while screenshotting the
+   wrong panel entirely. Added an `openWakeModels()` helper that clicks the Models tab and
+   asserts `#wakeBackboneList` is *visible*, so that silent failure mode cannot return, and
+   pointed all three scenarios at it.
+2. **`backbone-ready-no-classifier` really was the missing stub route.** `main.js` gates the
+   enable POST on each backbone's download-state; with `GET /wake/models/:id/download-state`
+   unstubbed it 404s, the renderer concludes the backbone is not installed and never POSTs
+   `/wake/enable`, leaving `#wakeStatusDetail` at "Disabled." — the scenario tested nothing.
+   Added the stub (shape mirrored from `routes_wake.py`'s `wake_model_download_state()`).
+   Renderer now reports "Disabled (unavailable: no wake-phrase classifier selected)."
+   `node tests/qa/run.mjs voice-control` → **12/12, exit 0** (was 9/12).
+3. **PyInstaller installed** — see the gate section above; architecture smoke now 3/3.
+
+**Still failing (1): `model-resources/resources-ledger-contract` — needs a product decision,
+deliberately not "fixed".** It calls `window.betterFingers.backendRequest('GET',
+'/models/resources')` and asserts 200. The main-process proxy refuses it:
+`{"ok":false,"status":0,"error":"GET /models/resources is not an allowed backend route"}` —
+`/models/resources` is absent from `backendProxy.js`'s `ROUTE_ALLOWLIST`. It has never
+passed (it is `❌ FAIL` in the committed report at HEAD too). The scenario's own description
+concedes no UI consumes this route yet, so the allowlist omission is correct least-privilege,
+not a bug. The choice is (a) widen a security allowlist for a route nothing consumes, or
+(b) rewrite the scenario to assert the proxy's actual refusal. **Widening the renderer's
+reachable backend surface is not a call an agent should make unilaterally** — left for the
+user. Option (b) is the recommendation.
+
+**`persona-learning.mjs` deliberately left unregistered.** Wiring it in was attempted and
+reverted. Its 3 scenarios drive `#personaLearningSection` / `#personaLearningConfirmButton`
+/ `#personaLearningPersonaLabel`, none of which exist in `index.html` — those ids live only
+in `features/personaLearning.js` and `features/studioWorkspace.js`, i.e. the **Signal Desk
+Studio workspace, which is absent from `electron.vite.config.js`'s build inputs and never
+ships**. Wired in, they yield 0/3 on "element(s) not found": a true report that the feature
+is unreachable, not a scenario bug. Registering them would make `npm run qa:screens`
+permanently red and retrain people to ignore it — the exact failure the exit-code fix just
+removed. One real bug in that file *was* fixed while diagnosing (its helper selected
+`#settingCurrentPreset` without first opening the hidden `ai-cleanup` settings section), so
+the scenarios are one step closer to usable. Re-enable the import in the same change that
+mounts the Studio workspace in the shipping renderer.
+
+**Verification:** `node --check` clean on all edited scenario files; `run.mjs voice-control`
+12/12 exit 0; `run.mjs` (full) **36/37 exit 1**, sole failure as above; Python suite re-run
+after the PyInstaller install → 1833 passed / 3 skipped / 0 failed, unchanged.
+
+---
+
+### UI reconciliation — Stages 1–5a (2026-07-25)
+
+Executing the approved plan to reconcile the two coexisting renderers (`index.html` +
+`main.js` vs the Signal Desk workspace UI) and lay the groundwork for tone/delivery work.
+Ordering per the plan: cheap backend wins first, then de-risking, then shell primitives.
+
+**Stage 1 — `arousal` was a pace metric wearing an emotion label.**
+`compute_speech_signals()` accepts `energy_windows`; `server.py` never passed it, so
+`_energy_stats` returned zeros and `arousal = 0.5*normalized_wpm + 0.5*0`. New
+[`backend/services/audio_energy.py`](../backend/services/audio_energy.py) supplies per-window
+RMS from the same buffer just transcribed (no new capture — rules 1 and 2 unaffected);
+`speech_signals.py` stays audio-free as its docstring requires. Measured: flat/monotone
+delivery still reads 0.500 (correct — no variation, no contribution), dynamic delivery now
+reads 0.962, where both were 0.500 before. Evidence strings stay numbers-only, and
+`test_speech_signals.py`'s `_assert_no_emotion_language()` still passes.
+
+Two hot-path defects found and fixed while building it, both on every transcription:
+`astype(float64)` + `np.square` allocated ~518MB of temporaries on a supported 60-minute
+recording (now `einsum` reading frames in place), and eager `nan_to_num` paid that cost on
+every recording to guard a rare bad frame (now lazy — only non-finite rows are repaired).
+**518MB → 0.1MB, 400ms → 39ms**, bad-frame repair verified intact. +19 tests.
+
+**Stage 2 — consent-gated learned examples never reached a prompt.**
+The production router was built without `examples_lookup`, so the branch that injects them
+never fired. Now wired via `PersonaLearningStore.to_few_shot()`. **The lookup returns `None`,
+never `[]`** — `build_rescue_prompt` only falls back to the persona's own `few_shot` when
+examples is `None`, so an empty list would have silently stripped built-in examples from
+every persona for every user who never used the teach flow. A test demonstrates that exact
+regression so the rule cannot be undone by accident.
+
+**Stage 3 — the coexistence flag (3 files).** `BF_UI=signal-desk` now loads the Signal Desk
+page; default unchanged. `electron.vite.config.js` builds it, `senderValidation.js`
+allowlists it (load-bearing: a page missing from `RENDERER_PAGES` still loads but has every
+IPC call rejected, which the pervasively optional-chained renderer surfaces as a silently
+dead UI), `windows.js` branches. Verified in the real shell: default → `index.html` with the
+old tab shell; flagged → Signal Desk with `.sd-shell` and a live 26-method bridge, and the
+stub backend logging real requests (`/drafts/latest`, `/personas/*/examples`) — **those
+feature modules had never executed before**, being CORS-blocked over `file://`.
+
+**Stage 4b — the QA harness can target either UI.** `BF_QA_UI=signal-desk` selects the
+target; page discovery and the readiness sentinel are parameterized. Run-level by necessity
+(quitting Electron kills the parent runner, so the suite reuses one launch). Scenarios
+declare `ui:` and default to `index`; output is namespaced to `out/signal-desk/` so a run
+cannot overwrite the other UI's screenshots. **Signal Desk's readiness sentinel is
+deliberately `null`**: its status bar is static markup bound to nothing, so there is no
+honest readiness signal to wait on — waiting on a hard-coded string would assert a truth the
+page is not telling. First automated Signal Desk coverage: 3 scenarios, all passing.
+
+> **Bug this exposed — a preview page was mutating real user state.**
+> `signal-desk-preview.html` force-wrote `pref_message_rescue_enabled = 'true'` at load so
+> its Message Rescue surfaces looked populated for director QA. Harmless while the page
+> could only be opened as a standalone `file://` mockup; **not** harmless once Stage 3 made
+> it loadable in the app, because both pages are `file://` URLs in the same directory and
+> therefore share one localStorage origin — merely opening the new UI permanently flipped a
+> default-OFF user-facing feature flag for the shipping dashboard. Caught by the default
+> UI's own `message-rescue/panel-hidden-by-default` scenario starting to fail. Removed. The
+> scenario was also made to establish its own precondition instead of assuming ambient
+> storage — it had been passing only because it happened to run before the scenario that
+> sets the flag. The bug pre-dated today; making the page real is what made it observable.
+
+**Stage 5a — the toast host (the plan's hard blocker).** Every Signal Desk workspace calls
+`hooks.showToast(...)`, but that page had no `#toastContainer` and no toast function, so
+`lib/toast.mjs`'s container-less no-op swallowed every save/delete/publish result and every
+error — a user could click Save and get no feedback either way. `showToast` extracted from
+`main.js` into [`lib/toast.mjs`](../app/src/renderer/lib/toast.mjs); `main.js` keeps its name
+via a wrapper so its ~40 call sites are untouched (rule 7). Container added to the Signal
+Desk page, toast styles ported onto `--sd-*` tokens (that page does not load `base.css`, so
+the shared function would otherwise have emitted unstyled text), and all five workspace
+mounts now receive real `showToast`/`confirmFn` hooks instead of `hooks: {}`. +7 unit tests,
+plus a QA scenario that asserts the toast is **visible** and the container computes to
+`position: fixed` — a fake-DOM unit test cannot catch missing CSS or a missing container.
+
+**Doc — `DESIGN.md` §11 amended from three spaces to five.** Utilities and Settings are now
+canon rather than drift. Rationale recorded inline: the `INVENTORY_PLACEMENT_MAP`
+completeness gates — the only machine-checked proof no feature was lost in the redesign —
+live in those two workspaces, and folding them into Studio to satisfy a doc sentence would
+dissolve the best parity asset in the repo.
+
+**Gate at time of push:**
+
+| Check | Result |
+|---|---|
+| Python full suite (untargeted) | **1856 passed, 3 skipped, 0 failed** |
+| Node unit tests | **580 / 580** |
+| Electron build | succeeds (now emits the Signal Desk entry) |
+| QA — default UI | **36 / 37**, exit 1 |
+| QA — Signal Desk | **3 / 3**, exit 0 |
+
+The single default-UI failure is `model-resources/resources-ledger-contract`, unchanged and
+**deliberately not fixed**: it asserts 200 from `GET /models/resources`, which
+`backendProxy.js`'s `ROUTE_ALLOWLIST` refuses, and no UI consumes that route — so the
+omission is correct least-privilege, not a bug. The choice is to widen a security allowlist
+or to rewrite the scenario, and widening the renderer's reachable backend surface is not an
+agent's call to make.
+
+**Not done, and why:** Stage 4a (the full Signal Desk composition root) is **blocked on a
+design decision, not on effort**. It would compose `drafts`/`personas`/`firstRun` against
+Signal Desk markup that does not exist yet — there is no draft editor, no persona wizard,
+and no first-run panel on that page. The keystone is the Talk draft editor (plan Stage 6),
+whose one hard constraint is that `drafts.js` reads `.value`/`.selectionStart`/
+`.selectionEnd`, so it must be a real `<textarea>` or an element with an equivalent
+selection API; a styled `contenteditable` cascades rewrites into `drafts.js`,
+`personaLearning.js`, and `messageRescueDraft.js`.
