@@ -2327,77 +2327,30 @@
 
 </div>
 
-<script>
-  // Small, non-module inline demo of the same show/hide behavior that
-  // features/signalDeskShell.js implements and that tests/signalDeskShell.test.mjs
-  // covers. Kept intentionally tiny -- this page's job is to be a static,
-  // file://-safe screenshot target, not to re-host the real router.
-  (function () {
-    var shell = document.getElementById('sdShell');
-    var contextPanel = document.getElementById('sdContextPanel');
-    var headerTitle = document.getElementById('sdHeaderTitle');
-    var headerSubtitle = document.getElementById('sdHeaderSubtitle');
-    var headerPill = document.getElementById('sdHeaderPillLabel');
-    var headerBreadcrumb = document.getElementById('sdHeaderBreadcrumb');
+<!--
+  The workspace router.
 
-    var META = {
-      talk: { title: 'TALK', subtitle: 'Capture, refine, and send in one motion.', pill: 'Signal Core', breadcrumb: 'Capture → Refine → Send' },
-      library: { title: 'LIBRARY', subtitle: 'Search, revisit, and recover speech.', pill: 'Signal Core', breadcrumb: null },
-      studio: { title: 'STUDIO', subtitle: 'Design how BetterFingers sounds and behaves.', pill: 'Persona Foundry', breadcrumb: null },
-      utilities: { title: 'UTILITIES', subtitle: 'Dictionary, macros, devices, and diagnostics.', pill: 'Signal Core', breadcrumb: null },
-      settings: { title: 'SETTINGS', subtitle: 'Profile, hotkeys, and everything else.', pill: 'Signal Core', breadcrumb: null }
-    };
+  This was an inline non-module clone of features/signalDeskShell.js, justified
+  at the time by this page being "a static, file://-safe screenshot target" --
+  under a plain file:// open Chrome CORS-blocks module imports. That is no
+  longer what this page is: it loads inside the real app via BF_UI=signal-desk,
+  over a real origin, and every workspace module on this page is already a
+  `type="module"` import.
 
-    var navButtons = Array.prototype.slice.call(document.querySelectorAll('[data-nav]'));
+  Keeping the clone meant the router users actually touched was the copy that
+  had no tests, while the unit-tested module ran nowhere -- so the roving
+  tabindex and arrow-key navigation added to the module reached no one. The
+  real module is mounted below and the clone is gone; there is now exactly one
+  implementation, and tests/signalDeskShell.test.mjs covers it.
+-->
+<script type="module">
+  import { createSignalDeskShellFeature, collectShellElements } from './features/signalDeskShell.js';
 
-    function goTo(id) {
-      var meta = META[id];
-      if (!meta) return;
+  const shell = createSignalDeskShellFeature({ elements: collectShellElements(document) });
+  shell.init('talk');
 
-      navButtons.forEach(function (btn) {
-        var active = btn.getAttribute('data-nav') === id;
-        btn.classList.toggle('is-active', active);
-        btn.setAttribute('aria-current', active ? 'page' : 'false');
-      });
-
-      Object.keys(META).forEach(function (workspaceId) {
-        var section = document.getElementById('workspace-' + workspaceId);
-        if (section) section.hidden = workspaceId !== id;
-      });
-
-      // Swap the right context panel's content to match the active
-      // workspace (SPEC 3c: contents are workspace-specific). Only Talk and
-      // Library have a .sd-context__content block so far -- Studio/
-      // Utilities/Settings simply show neither (matches their placeholder
-      // workspace containers) until those phases add their own.
-      Array.prototype.slice.call(document.querySelectorAll('.sd-context__content[data-context-for]')).forEach(function (contentEl) {
-        var isActive = contentEl.getAttribute('data-context-for') === id;
-        contentEl.classList.toggle('is-active-context', isActive);
-        contentEl.hidden = !isActive;
-      });
-
-      headerTitle.textContent = meta.title;
-      headerSubtitle.textContent = meta.subtitle;
-      headerPill.textContent = meta.pill;
-      headerBreadcrumb.hidden = !meta.breadcrumb;
-      headerBreadcrumb.textContent = meta.breadcrumb || '';
-    }
-
-    navButtons.forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        goTo(btn.getAttribute('data-nav'));
-      });
-    });
-
-    function toggleContextCollapsed() {
-      var collapsed = !contextPanel.classList.contains('is-collapsed');
-      contextPanel.classList.toggle('is-collapsed', collapsed);
-      shell.classList.toggle('is-context-collapsed', collapsed);
-    }
-
-    document.getElementById('sdContextCollapseBtn').addEventListener('click', toggleContextCollapsed);
-    document.getElementById('sdContextHideBtn').addEventListener('click', toggleContextCollapsed);
-  })();
+  // Debug handle, same convention as __talkWorkspace/__signalCore above.
+  window.__signalDeskShell = shell;
 </script>
 
 <!--

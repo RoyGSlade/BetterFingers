@@ -63,6 +63,22 @@ function makeButton() {
     click() {
       listeners.click?.();
     },
+    // Roving-tabindex support: the rail moves focus with the selection, so
+    // tests need to observe focus and to deliver keydowns.
+    focused: false,
+    focus() {
+      this.focused = true;
+    },
+    press(key) {
+      let defaultPrevented = false;
+      listeners.keydown?.({
+        key,
+        preventDefault() {
+          defaultPrevented = true;
+        },
+      });
+      return defaultPrevented;
+    },
   };
 }
 
@@ -313,5 +329,104 @@ test('getState: returns a shallow copy, not a live reference', () => {
   const state = feature.getState();
   state.active = 'mutated';
 
+  assert.equal(feature.getState().active, 'talk');
+});
+
+// --- roving tabindex + arrow-key navigation -----------------------------------
+//
+// DESIGN.md §11 lists "accessibility as identity" (full keyboard nav, visible
+// focus). The old tab bar implemented a roving tabindex with arrow keys; the
+// rail shipped with neither, which made every workspace button its own tab stop
+// and left arrow keys dead.
+
+test('exactly one nav button is in the tab order at a time', () => {
+  const els = makeShellElements();
+  const feature = createSignalDeskShellFeature({ elements: els });
+  feature.init();
+
+  const inOrder = WORKSPACES.filter((id) => els.navButtons[id].getAttribute('tabindex') === '0');
+  assert.deepEqual(inOrder, ['talk']);
+
+  feature.goTo('studio');
+  const afterMove = WORKSPACES.filter((id) => els.navButtons[id].getAttribute('tabindex') === '0');
+  assert.deepEqual(afterMove, ['studio'], 'the tab stop must follow the active workspace');
+});
+
+test('ArrowDown/ArrowUp move through the rail and wrap', () => {
+  const els = makeShellElements();
+  const feature = createSignalDeskShellFeature({ elements: els });
+  feature.init();
+
+  els.navButtons.talk.press('ArrowDown');
+  assert.equal(feature.getState().active, 'library');
+
+  els.navButtons.library.press('ArrowUp');
+  assert.equal(feature.getState().active, 'talk');
+
+  // Wrapping backwards off the first item lands on the last.
+  els.navButtons.talk.press('ArrowUp');
+  assert.equal(feature.getState().active, 'settings');
+
+  // ...and forwards off the last returns to the first.
+  els.navButtons.settings.press('ArrowDown');
+  assert.equal(feature.getState().active, 'talk');
+});
+
+test('Left/Right also work, so tab-bar muscle memory survives', () => {
+  const els = makeShellElements();
+  const feature = createSignalDeskShellFeature({ elements: els });
+  feature.init();
+
+  els.navButtons.talk.press('ArrowRight');
+  assert.equal(feature.getState().active, 'library');
+  els.navButtons.library.press('ArrowLeft');
+  assert.equal(feature.getState().active, 'talk');
+});
+
+test('Home and End jump to the ends of the rail', () => {
+  const els = makeShellElements();
+  const feature = createSignalDeskShellFeature({ elements: els });
+  feature.init();
+
+  els.navButtons.talk.press('End');
+  assert.equal(feature.getState().active, 'settings');
+
+  els.navButtons.settings.press('Home');
+  assert.equal(feature.getState().active, 'talk');
+});
+
+test('focus follows the selection', () => {
+  // Otherwise the keyboard user is left focused on a button that is no longer
+  // current, and the next arrow key moves from the wrong place.
+  const els = makeShellElements();
+  const feature = createSignalDeskShellFeature({ elements: els });
+  feature.init();
+
+  els.navButtons.talk.press('ArrowDown');
+  assert.equal(els.navButtons.library.focused, true);
+});
+
+test('navigation keys are consumed; unrelated keys are left alone', () => {
+  const els = makeShellElements();
+  const feature = createSignalDeskShellFeature({ elements: els });
+  feature.init();
+
+  assert.equal(els.navButtons.talk.press('ArrowDown'), true, 'ArrowDown should preventDefault');
+  assert.equal(
+    els.navButtons.library.press('a'),
+    false,
+    'a plain character key must not be swallowed by the rail',
+  );
+  assert.equal(feature.getState().active, 'library', 'an unrelated key must not navigate');
+});
+
+test('Enter and Space are left to the button, not hijacked', () => {
+  // The buttons are real <button>s; click already activates them.
+  const els = makeShellElements();
+  const feature = createSignalDeskShellFeature({ elements: els });
+  feature.init();
+
+  assert.equal(els.navButtons.talk.press('Enter'), false);
+  assert.equal(els.navButtons.talk.press(' '), false);
   assert.equal(feature.getState().active, 'talk');
 });

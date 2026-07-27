@@ -169,4 +169,45 @@ export const signalDeskShellScenarios = [
     },
     screenshots: [{ name: 'status-bar-reports-real-state' }],
   },
+  {
+    area: 'signal-desk-shell',
+    ui: 'signal-desk',
+    name: 'nav-rail-is-keyboard-navigable',
+    kind: 'standard',
+    description:
+      'DESIGN.md §11 lists "accessibility as identity" -- full keyboard nav and visible focus. The rail shipped ' +
+      'with neither a roving tabindex nor arrow keys, so every workspace button was its own tab stop and arrows ' +
+      'were dead; the old tab bar it replaced had both. Drives the real keyboard on the real page: only one ' +
+      'button is in the tab order, arrows move and wrap, and focus follows the selection (without that last ' +
+      'part the next arrow press moves from the wrong place).',
+    backendState: coldBoot,
+    async navigate(_page) {},
+    async expects(page) {
+      const tabbable = page.locator('.sd-nav__button[tabindex="0"]');
+      await expect(tabbable).toHaveCount(1);
+      await expect(tabbable).toHaveAttribute('data-nav', 'talk');
+
+      await page.focus('.sd-nav__button[data-nav="talk"]');
+      await page.keyboard.press('ArrowDown');
+      await expectOnlyWorkspaceVisible(page, 'library');
+
+      // Focus must travel with the selection.
+      const focusedAfterDown = await page.evaluate(() =>
+        document.activeElement?.getAttribute('data-nav'),
+      );
+      expect(focusedAfterDown, 'focus did not follow the selection').toBe('library');
+      await expect(page.locator('.sd-nav__button[tabindex="0"]')).toHaveCount(1);
+
+      // Wrapping backwards off the first item lands on the last.
+      await page.keyboard.press('ArrowUp');
+      await page.keyboard.press('ArrowUp');
+      await expectOnlyWorkspaceVisible(page, 'settings');
+
+      await page.keyboard.press('Home');
+      await expectOnlyWorkspaceVisible(page, 'talk');
+      await page.keyboard.press('End');
+      await expectOnlyWorkspaceVisible(page, 'settings');
+    },
+    screenshots: [{ name: 'nav-rail-is-keyboard-navigable' }],
+  },
 ];

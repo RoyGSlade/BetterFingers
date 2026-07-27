@@ -90,6 +90,38 @@ export function computeCollapsed(state, collapsed) {
 // --- DOM-wiring feature ------------------------------------------------------
 
 /**
+ * Build the nested `elements` shape from a document.
+ *
+ * Follows the `collectXElements(root)` convention the workspace modules use.
+ * Without it every caller hand-assembles a five-key nested object, and a typo
+ * in one nav id degrades silently to a dead button (every access in this module
+ * is optional-chained, by design, so nothing throws).
+ */
+export function collectShellElements(root = document) {
+  const navButtons = {};
+  const workspaces = {};
+  for (const id of WORKSPACES) {
+    navButtons[id] = root?.querySelector?.(`[data-nav="${id}"]`) ?? null;
+    workspaces[id] = root?.getElementById?.(`workspace-${id}`) ?? null;
+  }
+  return {
+    navButtons,
+    workspaces,
+    headerTitle: root?.getElementById?.('sdHeaderTitle') ?? null,
+    headerSubtitle: root?.getElementById?.('sdHeaderSubtitle') ?? null,
+    headerPillLabel: root?.getElementById?.('sdHeaderPillLabel') ?? null,
+    headerBreadcrumb: root?.getElementById?.('sdHeaderBreadcrumb') ?? null,
+    shellRoot: root?.getElementById?.('sdShell') ?? null,
+    contextPanel: root?.getElementById?.('sdContextPanel') ?? null,
+    contextCollapseButton: root?.getElementById?.('sdContextCollapseBtn') ?? null,
+    contextHideButton: root?.getElementById?.('sdContextHideBtn') ?? null,
+    contextContents: root?.querySelectorAll
+      ? Array.from(root.querySelectorAll('.sd-context__content[data-context-for]'))
+      : [],
+  };
+}
+
+/**
  * @param {object} deps
  * @param {object} deps.elements DOM element references looked up by the caller (main.js in a
  *   later phase, or a test stub today). Every access below is optional-chained.
@@ -102,6 +134,10 @@ export function computeCollapsed(state, collapsed) {
  *   - contextPanel -- the `.sd-context` aside (gets `.is-collapsed` toggled)
  *   - contextCollapseButton -- the header `«` chevron
  *   - contextHideButton -- the bottom `‹ Hide Panel` button
+ *   - contextContents -- iterable of `.sd-context__content[data-context-for]` blocks; the one
+ *     whose `data-context-for` matches the active workspace is shown (SPEC 3c: the context
+ *     panel's contents are workspace-specific). Optional -- workspaces without their own
+ *     context block simply show none.
  */
 export function createSignalDeskShellFeature({ elements } = {}) {
   const els = elements || {};
@@ -114,6 +150,11 @@ export function createSignalDeskShellFeature({ elements } = {}) {
       const isActive = id === state.active;
       btn.classList?.toggle('is-active', isActive);
       btn.setAttribute?.('aria-current', isActive ? 'page' : 'false');
+      // Roving tabindex: exactly one rail button is in the tab order, so Tab
+      // moves past the whole rail in one press and arrow keys move within it.
+      // Without this every workspace button is a separate tab stop, which the
+      // old tab bar avoided (main.js's activateTab) and the rail regressed.
+      btn.setAttribute?.('tabindex', isActive ? '0' : '-1');
     });
   }
 
@@ -123,6 +164,20 @@ export function createSignalDeskShellFeature({ elements } = {}) {
       if (!container) return;
       container.hidden = id !== state.active;
     });
+  }
+
+  // SPEC 3c: the right-hand context panel's contents are workspace-specific.
+  // A workspace with no matching block shows none, which is why this drives
+  // hidden per block rather than assuming every workspace has one.
+  function applyContextContent() {
+    const blocks = els.contextContents;
+    if (!blocks) return;
+    for (const block of blocks) {
+      if (!block) continue;
+      const isActive = block.getAttribute?.('data-context-for') === state.active;
+      block.classList?.toggle('is-active-context', isActive);
+      block.hidden = !isActive;
+    }
   }
 
   function applyHeader() {
@@ -146,6 +201,7 @@ export function createSignalDeskShellFeature({ elements } = {}) {
   function render() {
     applyActiveNav();
     applyWorkspaceVisibility();
+    applyContextContent();
     applyHeader();
     applyContextCollapsed();
     // Stamp the active workspace so per-workspace styling (e.g. Talk's blue H1)
@@ -172,8 +228,33 @@ export function createSignalDeskShellFeature({ elements } = {}) {
   }
 
   function bindOnce() {
-    WORKSPACES.forEach((id) => {
-      els.navButtons?.[id]?.addEventListener?.('click', () => goTo(id));
+    WORKSPACES.forEach((id, index) => {
+      const btn = els.navButtons?.[id];
+      btn?.addEventListener?.('click', () => goTo(id));
+      // Arrow-key navigation within the rail. The rail is VERTICAL, so
+      // Up/Down are the primary keys here (the old tab bar was horizontal and
+      // used Left/Right); Left/Right are accepted too so muscle memory from
+      // the tab bar still works. Wraps at both ends, matching activateTab's
+      // modulo behaviour, and moves focus with the selection so the keyboard
+      // user is never left focused on a button that is no longer current.
+      btn?.addEventListener?.('keydown', (event) => {
+        let nextIndex = null;
+        const key = event?.key;
+        if (key === 'ArrowDown' || key === 'ArrowRight') {
+          nextIndex = (index + 1) % WORKSPACES.length;
+        } else if (key === 'ArrowUp' || key === 'ArrowLeft') {
+          nextIndex = (index - 1 + WORKSPACES.length) % WORKSPACES.length;
+        } else if (key === 'Home') {
+          nextIndex = 0;
+        } else if (key === 'End') {
+          nextIndex = WORKSPACES.length - 1;
+        }
+        if (nextIndex === null) return;
+        event.preventDefault?.();
+        const nextId = WORKSPACES[nextIndex];
+        goTo(nextId);
+        els.navButtons?.[nextId]?.focus?.();
+      });
     });
     els.contextCollapseButton?.addEventListener?.('click', () => toggleContextCollapsed());
     els.contextHideButton?.addEventListener?.('click', () => toggleContextCollapsed());
