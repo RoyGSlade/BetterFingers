@@ -89,4 +89,46 @@ export const signalDeskSectionScenarios = [
     },
     screenshots: [{ name: 'settings-sections-are-all-reachable' }],
   },
+  {
+    area: 'signal-desk-sections',
+    ui: 'signal-desk',
+    name: 'voice-studio-is-present-and-consent-gated',
+    kind: 'standard',
+    description:
+      'settingsWorkspace.js delegates §7.9 to Studio, but Studio had only the blend strip -- presets, ' +
+      'modulation, cloning and read-aloud speed had no markup at all, so voiceStudio.js\'s logic could not bind ' +
+      'to anything. Asserts each group exists, and that the clone upload stays unreachable until consent is ' +
+      'ticked: cloning is the one irreversible action on this screen, so the checkbox has to be a gate rather ' +
+      'than a formality sitting next to an already-live button.',
+    backendState: coldBoot,
+    async navigate(page) {
+      await page.click('.sd-nav__button[data-nav="studio"]');
+    },
+    async expects(page) {
+      // Every §7.9 group has a real mount point.
+      for (const id of [
+        'settingReviewTtsVoiceHint', 'settingReviewTtsSpeed', 'testTtsButton', 'voicePreviewText',
+        'voiceBlendRows', 'addVoiceLayerButton', 'resetVoiceBlendButton',
+        'voicePitch', 'voiceEnergy', 'voiceWarmth', 'voiceBrightness', 'voicePauseStyle',
+        'voicePresetSelect', 'voicePresetNameInput', 'saveVoicePresetButton', 'voicePresetList',
+        'voiceCloneConsent', 'voiceCloneName', 'voiceCloneFile', 'voiceCloneUploadButton',
+      ]) {
+        await expect(page.locator(`#${id}`), `#${id} missing from Voice Studio`).toHaveCount(1);
+      }
+
+      // The consent gate.
+      const consent = page.locator('#voiceCloneConsent');
+      const upload = page.locator('#voiceCloneUploadButton');
+      await expect(consent).not.toBeChecked();
+      await expect(upload, 'clone upload is live before consent was given').toBeDisabled();
+
+      await consent.check();
+      await expect(upload).toBeEnabled();
+
+      // Withdrawing consent must close the gate again, not leave it ajar.
+      await consent.uncheck();
+      await expect(upload, 'gate stayed open after consent was withdrawn').toBeDisabled();
+    },
+    screenshots: [{ name: 'voice-studio-is-present-and-consent-gated' }],
+  },
 ];

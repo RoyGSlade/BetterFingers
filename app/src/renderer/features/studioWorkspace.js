@@ -187,11 +187,11 @@ export const STUDIO_PLACEMENT_MAP = {
 
   'voice.blend': { section: 'voice', control: 'Voice blend mix (Clarity/Warmth/Presence)', wired: true },
   'voice.preview': { section: 'voice', control: 'Voice preview / audition', wired: true },
-  'voice.presets': { section: 'voice', control: 'Voice presets list / apply / delete', wired: false, note: 'settingsWorkspace.js delegates §7.9 to Studio, but Studio implements only the blend; voiceStudio.js has the logic and no markup here' },
-  'voice.modulation': { section: 'voice', control: 'Voice modulation sliders', wired: false, note: 'Same §7.9 delegation gap' },
-  'voice.ttsSpeed': { section: 'voice', control: 'Read-aloud speed', wired: false, note: 'Same §7.9 delegation gap' },
-  'voice.voiceHint': { section: 'voice', control: 'Active TTS voice select', wired: false, note: 'Same §7.9 delegation gap' },
-  'voice.cloning': { section: 'voice', control: 'Voice cloning consent + sample upload', wired: false, note: 'Same §7.9 delegation gap; consent flow has no Signal Desk design' },
+  'voice.presets': { section: 'voice', control: 'Voice presets list / apply / delete', wired: true },
+  'voice.modulation': { section: 'voice', control: 'Voice modulation sliders (pitch/energy/warmth/brightness/pause)', wired: true },
+  'voice.ttsSpeed': { section: 'voice', control: 'Read-aloud speed', wired: true },
+  'voice.voiceHint': { section: 'voice', control: 'Active TTS voice select', wired: true },
+  'voice.cloning': { section: 'voice', control: 'Voice cloning consent + sample upload (upload gated on explicit consent)', wired: true },
 
   'learning.teachFromEdit': { section: 'learning', control: 'Teach this persona from my edit', wired: false, note: 'Panel renders, but the trigger is a draft-edit diff that needs the SPEC 6 editor' },
   'learning.exampleList': { section: 'learning', control: 'Learned examples list + delete', wired: true },

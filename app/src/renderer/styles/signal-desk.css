@@ -1211,6 +1211,99 @@
   margin-top: 4px;
 }
 
+/* ==========================================
+   Voice Studio (§7.9)
+   ------------------------------------------
+   Grouped in task order -- pick a voice, shape it, save it, clone -- rather
+   than in schema order, because these controls are visited rarely and the
+   sequence is the only thing that makes them navigable.
+   ========================================== */
+.sd-voice-studio {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-16, 16px);
+  margin-top: var(--sd-space-16, 16px);
+}
+
+.sd-voice-studio__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-8, 8px);
+  padding: var(--sd-space-12, 12px);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-md, 12px);
+  background: var(--sd-surface);
+}
+
+/* The clone group is set apart: it is the one irreversible, consent-gated
+   action on this screen and should not read as another row of settings. */
+.sd-voice-studio__group--gated {
+  border-color: rgba(245, 158, 11, .35);
+}
+
+.sd-voice-studio__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sd-space-8, 8px);
+}
+
+.sd-voice-studio__label {
+  font-size: var(--sd-font-xs, .75rem);
+  color: var(--sd-text-secondary);
+}
+
+.sd-voice-studio__grow { flex: 1 1 260px; }
+.sd-voice-studio__num { width: 5.5rem; }
+
+.sd-voice-studio__sliders {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--sd-space-12, 12px);
+}
+
+.sd-voice-studio__slider {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--sd-font-xs, .75rem);
+  color: var(--sd-text-secondary);
+}
+
+.sd-voice-studio__slider input[type="range"] { width: 100%; }
+
+.sd-voice-studio__mix {
+  margin-left: auto;
+  font-size: var(--sd-font-xs, .75rem);
+  color: var(--sd-text-secondary);
+}
+
+.sd-voice-studio__preset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sd-voice-studio__consent {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sd-space-8, 8px);
+  font-size: var(--sd-font-sm, .85rem);
+  color: var(--sd-text-primary);
+  line-height: 1.4;
+}
+
+.sd-voice-studio__result {
+  margin: 0;
+  min-height: 1.2em;
+  font-size: var(--sd-font-sm, .85rem);
+  color: var(--sd-text-secondary);
+}
+
+.sd-voice-studio__result[data-tone="danger"] { color: var(--sd-red); }
+.sd-voice-studio__result[data-tone="success"] { color: var(--sd-green); }
+.sd-voice-studio__result[data-tone="warning"] { color: var(--sd-amber); }
+
 /* Revise drawer: rewrite tools, collapsed until asked for. */
 .sd-revise-drawer {
   display: flex;

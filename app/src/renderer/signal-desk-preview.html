@@ -869,6 +869,119 @@
               </span>
             </div>
           </div>
+
+          <!--
+            VOICE STUDIO (CURRENT_UI_INVENTORY §7.9). settingsWorkspace.js
+            delegates this whole section to Studio, but Studio only ever
+            implemented the blend strip above -- presets, modulation, cloning
+            and read-aloud speed had markup nowhere, so voiceStudio.js's logic
+            (731 lines of it) had nothing to bind to.
+
+            Ids here are the CANONICAL voice* ones, not sd*-prefixed, because
+            voiceStudio.js self-queries the document by those exact names. That
+            is safe where personaLearning's sdTeach* rename was necessary: this
+            module does not self-initialise at import, and the two dashboards
+            are separate documents, so there is no second copy to collide with.
+
+            Ordered the way the task actually runs: pick a voice, shape it,
+            save it as a preset, and only then the clone flow -- which is last
+            because it is the only irreversible, consent-gated step here.
+          -->
+          <div class="sd-voice-studio">
+
+            <section class="sd-voice-studio__group">
+              <span class="sd-panel-label">Read-aloud voice</span>
+              <div class="sd-voice-studio__row">
+                <label class="sd-voice-studio__label" for="settingReviewTtsVoiceHint">Voice</label>
+                <select class="sd-review-select" id="settingReviewTtsVoiceHint"></select>
+                <label class="sd-voice-studio__label" for="settingReviewTtsSpeed">Speed</label>
+                <input class="sd-review-select sd-voice-studio__num" type="number" id="settingReviewTtsSpeed"
+                       min="0.5" max="3" step="0.1" />
+                <button type="button" class="sd-btn" id="testTtsButton">Audition</button>
+              </div>
+              <div class="sd-voice-studio__row">
+                <label class="sd-visually-hidden" for="voicePreviewText">Preview text</label>
+                <input class="sd-review-select sd-voice-studio__grow" type="text" id="voicePreviewText"
+                       placeholder="Text to audition…" />
+              </div>
+            </section>
+
+            <section class="sd-voice-studio__group">
+              <span class="sd-panel-label">Blend</span>
+              <div id="voiceBlendRows"></div>
+              <div class="sd-voice-studio__row">
+                <button type="button" class="sd-btn" id="addVoiceLayerButton">Add layer</button>
+                <button type="button" class="sd-btn" id="resetVoiceBlendButton">Reset</button>
+                <span class="sd-voice-studio__mix" id="voiceEffectiveMix"></span>
+              </div>
+            </section>
+
+            <section class="sd-voice-studio__group">
+              <span class="sd-panel-label">Modulation</span>
+              <div class="sd-voice-studio__sliders">
+                <label class="sd-voice-studio__slider">
+                  <span>Pitch</span>
+                  <input type="range" id="voicePitch" min="-12" max="12" step="1" value="0" />
+                </label>
+                <label class="sd-voice-studio__slider">
+                  <span>Energy</span>
+                  <input type="range" id="voiceEnergy" min="0" max="100" step="1" value="50" />
+                </label>
+                <label class="sd-voice-studio__slider">
+                  <span>Warmth</span>
+                  <input type="range" id="voiceWarmth" min="0" max="100" step="1" value="50" />
+                </label>
+                <label class="sd-voice-studio__slider">
+                  <span>Brightness</span>
+                  <input type="range" id="voiceBrightness" min="0" max="100" step="1" value="50" />
+                </label>
+              </div>
+              <div class="sd-voice-studio__row">
+                <label class="sd-voice-studio__label" for="voicePauseStyle">Pause style</label>
+                <select class="sd-review-select" id="voicePauseStyle">
+                  <option value="natural">Natural</option>
+                  <option value="tight">Tight</option>
+                  <option value="relaxed">Relaxed</option>
+                </select>
+              </div>
+            </section>
+
+            <section class="sd-voice-studio__group">
+              <span class="sd-panel-label">Presets</span>
+              <div class="sd-voice-studio__row">
+                <label class="sd-visually-hidden" for="voicePresetSelect">Apply preset</label>
+                <select class="sd-review-select" id="voicePresetSelect"></select>
+                <label class="sd-visually-hidden" for="voicePresetNameInput">New preset name</label>
+                <input class="sd-review-select" type="text" id="voicePresetNameInput" placeholder="Save current as…" />
+                <button type="button" class="sd-btn" id="saveVoicePresetButton">Save preset</button>
+              </div>
+              <div id="voicePresetList" class="sd-voice-studio__preset-list"></div>
+            </section>
+
+            <section class="sd-voice-studio__group sd-voice-studio__group--gated">
+              <span class="sd-panel-label">Clone a voice</span>
+              <!--
+                Last, and visually set apart, because it is the only
+                irreversible consent-gated action on this screen. The upload
+                button stays disabled until consent is explicitly ticked --
+                the checkbox is the gate, not a formality beside it.
+              -->
+              <label class="sd-voice-studio__consent">
+                <input type="checkbox" id="voiceCloneConsent" />
+                <span>I have the right to clone this voice and consent to it being processed on this device.</span>
+              </label>
+              <div class="sd-voice-studio__row">
+                <label class="sd-visually-hidden" for="voiceCloneName">Cloned voice name</label>
+                <input class="sd-review-select" type="text" id="voiceCloneName" placeholder="Name this voice…" />
+                <label class="sd-visually-hidden" for="voiceCloneFile">Voice sample</label>
+                <input type="file" id="voiceCloneFile" accept="audio/*" />
+                <button type="button" class="sd-btn" id="voiceCloneUploadButton" disabled>Upload sample</button>
+              </div>
+              <p class="sd-voice-studio__result" id="voiceCloneResult" role="status" aria-live="polite"></p>
+            </section>
+
+            <p class="sd-voice-studio__result" id="profileMessage" role="status" aria-live="polite"></p>
+          </div>
         </div>
       </div>
     </section>
@@ -2778,6 +2891,40 @@
 
   const elements = collectStudioElements(document);
   const studioWorkspace = createStudioWorkspaceFeature({ elements, hooks: { showToast, confirmFn: (m) => window.confirm(m) } });
+
+  // Voice Studio (§7.9). settingsWorkspace.js delegates the whole section here,
+  // but Studio only had the blend strip -- presets, modulation, cloning and
+  // read-aloud speed had no markup, so voiceStudio.js could not bind to
+  // anything. Mounted against the canonical voice* ids it self-queries.
+  const { createVoiceStudioFeature } = await import('./features/voiceStudio.js');
+  const voiceStudio = createVoiceStudioFeature({
+    ui: {
+      setMessage: (target, text, tone = 'info') => {
+        if (!target) return;
+        target.textContent = text || '';
+        if (tone) target.dataset.tone = tone;
+      },
+      showToast,
+    },
+    hooks: {
+      markProfileDirty: () => {},
+      renderVoiceCloningPanel: () => {},
+    },
+  });
+  voiceStudio.init?.();
+  voiceStudio.refreshVoices?.().catch?.(() => {});
+  window.__voiceStudio = voiceStudio;
+
+  // The consent checkbox is the gate, not a formality beside it: cloning is
+  // the one irreversible action on this screen, so the upload cannot be
+  // reachable until consent is explicitly given.
+  const consent = document.getElementById('voiceCloneConsent');
+  const upload = document.getElementById('voiceCloneUploadButton');
+  const syncConsent = () => {
+    if (upload) upload.disabled = !consent?.checked;
+  };
+  consent?.addEventListener('change', syncConsent);
+  syncConsent();
   studioWorkspace.setPersonas(MOCK_PERSONAS, {
     builtins: [],
     voices: MOCK_VOICES,
