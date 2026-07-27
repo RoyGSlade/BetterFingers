@@ -649,3 +649,81 @@ whose one hard constraint is that `drafts.js` reads `.value`/`.selectionStart`/
 `.selectionEnd`, so it must be a real `<textarea>` or an element with an equivalent
 selection API; a styled `contenteditable` cascades rewrites into `drafts.js`,
 `personaLearning.js`, and `messageRescueDraft.js`.
+
+---
+
+### UI reconciliation — Stages 5b–5e (2026-07-25, continued)
+
+**5b — status bar de-fabricated.** The rail was static markup reading
+"Live / Ready / Local / Natural / Discord / 1.2 sec" no matter what the app was doing.
+Three of those were not merely stale but misleading: "Live" claimed the mic was live while
+idle (the most privacy-sensitive claim in the UI), "Local" described where the model runs —
+invariant, therefore uninformative — and "1.2 sec" appeared before any dictation had run.
+New `features/statusBar.js` binds Mic/STT/LLM/Persona/Latency to real sources with pure,
+separately-testable mappers; unknown reads `—`, never an invented value. "Destination:
+Discord" was **cut, not rebound**: drafts carry no destination field and nothing in the app
+knows a channel or a person. It is now "Target app" per §11 and reads `—` until something
+supplies one. This also earned the Signal Desk QA target a real readiness sentinel (it was
+deliberately `null` while the rail was hard-coded, because waiting on a constant asserts a
+truth the page is not telling).
+
+**5c — nav rail keyboard navigation, and the router the page was actually running.**
+The rail had neither a roving tabindex nor arrow keys, so every workspace button was its own
+tab stop — a regression against the tab bar it replaced. While fixing it, the fix turned out
+to reach nobody: the page ran an **inline non-module clone** of `signalDeskShell.js`, so the
+router users touched was the copy with no tests while the unit-tested module ran nowhere.
+The clone's justification (file:// CORS) died when `BF_UI=signal-desk` made the page load
+inside the app. Replaced with the real module — genuine Stage 4a progress for the shell —
+after porting the one thing only the clone had (context-panel content switching, SPEC 3c)
+and adding `collectShellElements()` so callers stop hand-assembling a nested object where a
+typo degrades to a dead button rather than an error.
+
+**5d — keyboard shortcuts (hybrid map), on both review surfaces.** Split by consequence:
+irreversible actions are modifier-guarded and live even while typing; navigation and
+non-destructive actions are single-key and inert in text fields. Bound on the Review Deck
+too, since that is what is on screen at review time while the main window sits behind the
+app being dictated into. Two bugs caught before shipping:
+
+1. `?` is Shift+`/` on most layouts, so an exact-shift match made that binding silently
+   dead — and the dead binding was the shortcut sheet, the only discoverable listing of
+   every other shortcut.
+2. **The map inverted Accept and Send against the shipping dashboard.**
+   `features/drafts.js handleGlobalShortcut` has long bound Ctrl+Enter = Accept and
+   Ctrl+Shift+Enter = Send. The new map had them reversed, so muscle memory carried from
+   the old UI would press Ctrl+Enter meaning "keep this draft" and send the message
+   instead — exactly the failure the consequence-split was designed to prevent. Found by
+   reading `CURRENT_UI_INVENTORY.md` §6.3; an earlier grep missed it because the handler
+   tests `event.ctrlKey` rather than naming keys inline. Aligned to the shipping bindings
+   (which are also the better design: the extra modifier guards the more consequential
+   action), added the two the map had dropped (Ctrl+S, Ctrl+Shift+C), and pinned all five
+   with a regression test.
+
+**5e — parity gates for Talk / Library / Studio.** `utilitiesWorkspace.js`'s
+`INVENTORY_PLACEMENT_MAP` and its completeness tests were the only machine-checked proof
+that the redesign lost no feature — and Utilities/Settings, the two workspaces that had a
+gate, are the two with the fewest gaps. The three that had none are where the gaps cluster.
+Added `TALK_PLACEMENT_MAP`, `LIBRARY_PLACEMENT_MAP` and `STUDIO_PLACEMENT_MAP` with the same
+four invariants, seeded mostly `wired: false` with mandatory explanatory notes.
+
+Introduced **before** the work they gate, deliberately: a gate added afterwards
+rubber-stamps whatever shipped, while a gate added first measures the gap and turns each
+later phase's diff into `wired: false → true` plus the code that earns it. The tests do NOT
+assert that everything is wired — that would fail today, and a permanently-red gate teaches
+people to ignore it, the same failure mode as the QA runner that could not report red. They
+assert that every gap is **declared and explained**.
+
+First honest parity measurement:
+
+| Workspace | Wired |
+|---|---|
+| Talk | **11 / 32** |
+| Library | **9 / 22** |
+| Studio | **16 / 31** |
+
+These are a seeded assessment read off each module, not a precise audit — reviewers should
+expect to reclassify individual entries. Two cross-cutting facts the maps surface: the
+"destination" concept is claimed by three workspaces and backed by none (a test asserts they
+cannot silently disagree), and the SPEC 6 draft editor blocks entries in all three.
+
+**Gate:** Python 1856 passed / 3 skipped / 0 failed · Node unit **646 / 646** · QA default
+36/37 · QA Signal Desk **6 / 6**.

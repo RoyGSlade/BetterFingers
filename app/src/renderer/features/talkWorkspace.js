@@ -203,6 +203,66 @@ export function deriveRefinedViewModel(draft) {
 // The DOM ids the Talk workspace markup exposes (see signal-desk-preview.html
 // and any later index.html integration). Kept as one map so a future main.js
 // only needs `collectTalkElements()` rather than re-deriving every id.
+// --- Inventory -> Talk placement map (machine-readable parity gate) ---------
+//
+// Mirrors utilitiesWorkspace.js's INVENTORY_PLACEMENT_MAP, which is the only
+// machine-checked proof that the redesign lost no feature. Utilities and
+// Settings had such a gate; Talk, Library and Studio did not -- and those are
+// exactly where the gaps cluster, so the surfaces most at risk were the ones
+// nothing was measuring.
+//
+// Seeded deliberately mostly `wired: false`. Introducing the gate BEFORE the
+// work makes it measure the gap instead of rubber-stamping it: each later
+// phase's diff becomes `wired: false -> true` plus the code that earns it, and
+// an unwired entry must say why in `note`.
+//
+// Keys are drawn from docs/ui/CURRENT_UI_INVENTORY.md §6.3 (Review Draft
+// Panel), the surface Talk replaces.
+export const TALK_SECTIONS = ['capture', 'refine', 'review', 'delivery', 'context'];
+
+export function isValidTalkSection(id) {
+  return TALK_SECTIONS.includes(id);
+}
+
+export const TALK_PLACEMENT_MAP = {
+  'capture.signalCore': { section: 'capture', control: 'Signal Core ring + live amplitude', wired: true },
+  'capture.statusText': { section: 'capture', control: 'Listening / voice-detected status', wired: true },
+  'capture.levelMeter': { section: 'capture', control: 'dB level meter', wired: true },
+  'capture.toggleRecording': { section: 'capture', control: 'Start/Stop Recording', wired: false, note: 'SPEC 6: Talk has no recording control of its own; the ring is display-only and #toggleRecordingButton lives on the old dashboard' },
+  'capture.emergencyStop': { section: 'capture', control: 'Emergency Stop', wired: false, note: 'SPEC 6: no action row on Talk yet' },
+
+  'refine.refinedText': { section: 'refine', control: 'Refined message text', wired: true },
+  'refine.rawTranscript': { section: 'refine', control: 'Raw transcript (collapsible)', wired: true },
+  'refine.confidence': { section: 'refine', control: 'Confidence badge + band', wired: true },
+  'refine.statusPill': { section: 'refine', control: 'Draft status pill', wired: true },
+  'refine.tokenSummary': { section: 'refine', control: 'Token count / limit + long-text flag', wired: false, note: 'SPEC 6: no token summary element in Talk markup; drafts.js renders it into #draftTokenSummary on the old dashboard' },
+  'refine.metadata': { section: 'refine', control: 'Recording duration + stop reason', wired: false, note: 'SPEC 6: no metadata line in Talk markup' },
+
+  'review.editor': { section: 'review', control: 'Cleaned-output editor (textarea)', wired: false, note: 'SPEC 6 KEYSTONE: Talk has no draft editor. drafts.js reads .value/.selectionStart/.selectionEnd, so this must be a real textarea or an element with an equivalent selection API' },
+  'review.saveEdit': { section: 'review', control: 'Save Edit', wired: false, note: 'SPEC 6: blocked on review.editor' },
+  'review.rewriteShorter': { section: 'review', control: 'Make Shorter', wired: false, note: 'SPEC 6: rewrite-tools row not designed for Talk yet' },
+  'review.rewriteClearer': { section: 'review', control: 'Make Clearer', wired: false, note: 'SPEC 6: rewrite-tools row not designed for Talk yet' },
+  'review.rewriteTone': { section: 'review', control: 'Change Tone', wired: false, note: 'SPEC 6: rewrite-tools row not designed for Talk yet' },
+  'review.rewriteCustom': { section: 'review', control: 'Custom rewrite instruction + run', wired: false, note: 'SPEC 6: rewrite-tools row not designed for Talk yet' },
+  'review.revise': { section: 'review', control: 'Revise button', wired: false, note: 'Button exists and is bound, but hooks.onReviseRequested is a documented stub: no 1:1 handler exists without the editor surface' },
+  'review.listen': { section: 'review', control: 'Listen / read aloud', wired: true },
+  'review.readSelection': { section: 'review', control: 'Read Selection', wired: false, note: 'SPEC 6: needs a text selection, which needs review.editor' },
+
+  'delivery.sendInsert': { section: 'delivery', control: 'Send / Insert primary action', wired: true },
+  'delivery.sendVariants': { section: 'delivery', control: 'Send split-button variant popover', wired: false, note: 'DESIGN GAP: no popover component exists anywhere in the repo; hooks.onSendVariantsRequested is a stub' },
+  'delivery.segmented': { section: 'delivery', control: 'Send / Insert / Copy segmented control', wired: false, note: 'Local UI state only; must become (or drive) getSelectedSendAction() to replace #sendActionSelect' },
+  'delivery.accept': { section: 'delivery', control: 'Accept draft', wired: false, note: 'SPEC 6: no action row on Talk yet' },
+  'delivery.decline': { section: 'delivery', control: 'Decline draft', wired: false, note: 'SPEC 6: no action row on Talk yet' },
+  'delivery.retry': { section: 'delivery', control: 'Retry (blocked/error drafts)', wired: false, note: 'SPEC 6: no action row on Talk yet' },
+  'delivery.copy': { section: 'delivery', control: 'Copy cleaned output', wired: false, note: 'SPEC 6: no action row on Talk yet' },
+  'delivery.sendResult': { section: 'delivery', control: 'Send-result detail (requested/used action, fallback reason)', wired: false, note: 'SPEC 6: no send-result panel in Talk markup' },
+
+  'context.persona': { section: 'context', control: 'Active persona', wired: true },
+  'context.processingMode': { section: 'context', control: 'Processing mode (local)', wired: true },
+  'context.destination': { section: 'context', control: 'Destination', wired: false, note: 'No backing field: drafts carry no destination (backend/stores/drafts.py) and no recipient concept exists. See the status bar Target-app cell for the same finding' },
+  'context.confidenceSlider': { section: 'context', control: 'Confidence gate control', wired: false, note: 'Display-only in the mockup; the real gate is a profile setting owned by Settings' },
+};
+
 export const TALK_ELEMENT_IDS = {
   signalCoreRing: 'sdSignalCoreRing',
   signalCoreContainer: 'sdSignalCoreCanvasMount',

@@ -149,6 +149,58 @@ import { createPersonaLearningFeature } from './personaLearning.js';
 
 // --- Pure helpers (no DOM) ---------------------------------------------------
 
+// --- Inventory -> Studio placement map (machine-readable parity gate) -------
+//
+// Same contract as talkWorkspace.js / libraryWorkspace.js / utilities. Keys
+// cover CURRENT_UI_INVENTORY.md §2 (Onboarding), §3 (Persona Foundry), §7.5 /
+// §7.5.1 (personas + wizard) and §7.9 (TTS / Voice Studio) -- the surfaces
+// Studio is supposed to absorb. This is the workspace with the largest gap
+// between what the mockup shows and what exists, which is precisely why it
+// needed a gate.
+export const STUDIO_SECTIONS = ['personas', 'detail', 'voice', 'learning', 'context'];
+
+export function isValidStudioSection(id) {
+  return STUDIO_SECTIONS.includes(id);
+}
+
+export const STUDIO_PLACEMENT_MAP = {
+  'personas.list': { section: 'personas', control: 'Persona cards list + selection', wired: true },
+  'personas.active': { section: 'personas', control: 'Active persona indicator', wired: false, note: 'hooks.getActivePersonaName is a documented stub; should read the profile current_preset' },
+  'personas.new': { section: 'personas', control: 'New Persona', wired: false, note: 'Reaches across documents by hardcoded id (#wizardStep1); degrades to a toast because the wizard markup lives only on the old dashboard' },
+  'personas.foundry': { section: 'personas', control: 'Build with AI / Persona Foundry', wired: false, note: 'Same cross-document reach (#openFoundryButton); the Foundry overlay has no Signal Desk design (DESIGN GAP)' },
+  'personas.wizard': { section: 'personas', control: 'Manual persona wizard (~40 controls)', wired: false, note: 'DESIGN GAP: no Signal Desk design exists for the wizard' },
+  'personas.traits': { section: 'personas', control: '5-axis trait sliders (warmth/directness/detail/formality/confidence)', wired: false, note: 'RENDERER-ONLY FICTION: no persona.traits field exists in the backend schema; derivePersonaTraits() invents values from hardcoded presets keyed to mockup names that do not match the real builtins. Needs an honest empty state now and a design doc before becoming real' },
+
+  'detail.description': { section: 'detail', control: 'Persona description', wired: true },
+  'detail.exampleRewrites': { section: 'detail', control: 'Example rewrites table', wired: true },
+  'detail.testPersona': { section: 'detail', control: 'Test Persona (live preview)', wired: true },
+  'detail.stressTest': { section: 'detail', control: 'Stress Test', wired: true },
+  'detail.save': { section: 'detail', control: 'Save persona', wired: true },
+  'detail.publish': { section: 'detail', control: 'Publish preset', wired: true },
+  'detail.edit': { section: 'detail', control: 'Edit persona', wired: false, note: 'Same cross-document reach as personas.new' },
+  'detail.duplicate': { section: 'detail', control: 'Duplicate persona', wired: true },
+  'detail.delete': { section: 'detail', control: 'Delete persona', wired: true },
+  'detail.reliability': { section: 'detail', control: 'Reliability / examples stats', wired: true },
+  'detail.tags': { section: 'detail', control: 'Persona tags', wired: false, note: 'No backing field in the persona schema; the mockup shows tags the backend never stores' },
+  'detail.preferredDestinations': { section: 'detail', control: 'Preferred destinations', wired: false, note: 'No backing field, and no destination/recipient concept exists anywhere (see Talk context.destination)' },
+  'detail.lastUpdated': { section: 'detail', control: 'Last updated by/at', wired: false, note: 'No backing field: personas carry no updated_at or author' },
+
+  'voice.blend': { section: 'voice', control: 'Voice blend mix (Clarity/Warmth/Presence)', wired: true },
+  'voice.preview': { section: 'voice', control: 'Voice preview / audition', wired: true },
+  'voice.presets': { section: 'voice', control: 'Voice presets list / apply / delete', wired: false, note: 'settingsWorkspace.js delegates §7.9 to Studio, but Studio implements only the blend; voiceStudio.js has the logic and no markup here' },
+  'voice.modulation': { section: 'voice', control: 'Voice modulation sliders', wired: false, note: 'Same §7.9 delegation gap' },
+  'voice.ttsSpeed': { section: 'voice', control: 'Read-aloud speed', wired: false, note: 'Same §7.9 delegation gap' },
+  'voice.voiceHint': { section: 'voice', control: 'Active TTS voice select', wired: false, note: 'Same §7.9 delegation gap' },
+  'voice.cloning': { section: 'voice', control: 'Voice cloning consent + sample upload', wired: false, note: 'Same §7.9 delegation gap; consent flow has no Signal Desk design' },
+
+  'learning.teachFromEdit': { section: 'learning', control: 'Teach this persona from my edit', wired: false, note: 'Panel renders, but the trigger is a draft-edit diff that needs the SPEC 6 editor' },
+  'learning.exampleList': { section: 'learning', control: 'Learned examples list + delete', wired: true },
+  'learning.consent': { section: 'learning', control: 'Explicit consent checkbox before learning', wired: true },
+
+  'context.selectedPersona': { section: 'context', control: 'Selected persona summary', wired: true },
+  'context.pairedVoice': { section: 'context', control: 'Paired voice', wired: true },
+};
+
 export const TRAIT_KEYS = ['warmth', 'directness', 'detail', 'formality', 'confidence'];
 
 export const TRAIT_LABELS = {

@@ -128,6 +128,49 @@ function startOfDay(date) {
 }
 
 /** 'Today' / 'Yesterday' / 'Jul 20' for a timestamp, relative to `now` (defaults to `new Date()`). Never throws on a bad timestamp -- returns 'Unknown'. */
+// --- Inventory -> Library placement map (machine-readable parity gate) ------
+//
+// Same contract as talkWorkspace.js's TALK_PLACEMENT_MAP and utilities'
+// INVENTORY_PLACEMENT_MAP: every entry names a section, describes a control,
+// and any `wired: false` explains itself. Seeded before the work so it measures
+// the gap rather than certifying it.
+//
+// Keys cover the history / recovery / recordings surfaces Library replaces
+// (CURRENT_UI_INVENTORY.md §6.3 draft history, plus the recovery bin).
+export const LIBRARY_SECTIONS = ['search', 'timeline', 'selected', 'recovery'];
+
+export function isValidLibrarySection(id) {
+  return LIBRARY_SECTIONS.includes(id);
+}
+
+export const LIBRARY_PLACEMENT_MAP = {
+  'search.fullText': { section: 'search', control: 'Full-text history search', wired: true },
+  'search.filterChips': { section: 'search', control: 'All / Pinned / Unsent / Recoverable / Sent chips', wired: true },
+  'search.personaFilter': { section: 'search', control: 'Persona filter dropdown', wired: false, note: 'Chip renders but opens no menu: no persona-filter data source is wired yet' },
+  'search.destinationFilter': { section: 'search', control: 'Destination filter dropdown', wired: false, note: 'No backing field: drafts carry no destination (backend/stores/drafts.py)' },
+  'search.dateFilter': { section: 'search', control: 'Date filter dropdown', wired: false, note: 'Chip renders but opens no menu; GET /history/search takes no date range yet' },
+  'search.clearHistory': { section: 'search', control: 'Clear History', wired: false, note: 'DELETE /drafts exists (clearDrafts) but no Library control is bound to it' },
+
+  'timeline.dayGrouping': { section: 'timeline', control: 'Today / Yesterday day grouping', wired: true },
+  'timeline.cards': { section: 'timeline', control: 'Message cards (raw -> refined -> status)', wired: true },
+  'timeline.statusGlyphs': { section: 'timeline', control: 'Per-item status glyph (sent/failed/draft/pinned)', wired: true },
+  'timeline.confidence': { section: 'timeline', control: 'Per-item confidence bar', wired: true },
+  'timeline.waveformThumb': { section: 'timeline', control: 'Per-item waveform thumbnail + duration', wired: false, note: 'Present in the static markup and the mockup, but renderCard() emits no waveform element, so it disappears the moment live data renders' },
+  'timeline.loadMore': { section: 'timeline', control: 'Load more / pagination', wired: true },
+
+  'selected.detail': { section: 'selected', control: 'Selected item detail panel', wired: true },
+  'selected.playAudio': { section: 'selected', control: 'Replay captured audio', wired: true },
+  'selected.reopen': { section: 'selected', control: 'Reopen in Talk', wired: false, note: 'Falls back to a "not wired up yet" toast: needs the SPEC 6 draft editor to reopen into' },
+  'selected.resend': { section: 'selected', control: 'Resend', wired: false, note: 'hooks.onResendRequested is a documented stub; no resend endpoint exists' },
+  'selected.restore': { section: 'selected', control: 'Restore from recovery', wired: false, note: 'hooks.onRestoreRequested is a documented stub' },
+  'selected.duplicate': { section: 'selected', control: 'Duplicate', wired: false, note: 'hooks.onDuplicateRequested is a documented stub; no duplicate concept exists for a draft' },
+  'selected.delete': { section: 'selected', control: 'Delete item', wired: false, note: 'hooks.onDeleteRequested is a documented stub; no per-draft delete endpoint exists (only DELETE /drafts for all)' },
+  'selected.pin': { section: 'selected', control: 'Pin / unpin', wired: false, note: 'Pinned state renders but nothing sets it: no pin endpoint or local store' },
+
+  'recovery.recordings': { section: 'recovery', control: 'Retained recordings list', wired: false, note: 'Owned by Utilities (diagnostics.recordings) today; SPEC 5 places recovery in Library -- ownership needs a director call before wiring' },
+  'recovery.retranscribe': { section: 'recovery', control: 'Retranscribe a retained recording', wired: false, note: 'Same ownership question as recovery.recordings' },
+};
+
 export function dayLabelFor(timestamp, now = new Date()) {
   const d = new Date(timestamp);
   if (Number.isNaN(d.getTime())) return 'Unknown';
