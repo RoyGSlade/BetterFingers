@@ -21,6 +21,7 @@ const MODELS_WHISPER_URL = `${BACKEND_ORIGIN}/models/whisper`;
 const MODELS_UNLOAD_URL = `${BACKEND_ORIGIN}/models/unload`;
 const VOICE_STATUS_WS_URL = `${BACKEND_ORIGIN.replace(/^http/, 'ws')}/ws/voice_status`;
 const DOCTOR_URL = `${BACKEND_ORIGIN}/doctor`;
+const AUDIO_DEVICES_URL = `${BACKEND_ORIGIN}/runtime/audio-devices`;
 const REFRESH_AUDIO_DEVICES_URL = `${BACKEND_ORIGIN}/runtime/audio-devices/refresh`;
 const RUNTIME_VERSION_URL = `${BACKEND_ORIGIN}/runtime/version`;
 const PERSONAS_URL = `${BACKEND_ORIGIN}/personas`;
@@ -92,6 +93,10 @@ async function typedRequest(name, label, timeoutMs, ...args) {
 
 async function fetchDoctor(refreshAudio = false, timeoutMs = 5000) {
   return fetchJson(`${DOCTOR_URL}?refresh_audio=${refreshAudio}`, timeoutMs);
+}
+
+async function fetchAudioDevices(timeoutMs = 2500) {
+  return fetchJson(AUDIO_DEVICES_URL, timeoutMs);
 }
 
 async function refreshAudioDevices(timeoutMs = 5000) {
@@ -895,6 +900,7 @@ export {
   warmupRuntime,
   normalizeHealthPayload,
   fetchDoctor,
+  fetchAudioDevices,
   refreshAudioDevices,
   fetchVersion,
 };

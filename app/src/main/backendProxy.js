@@ -22,6 +22,12 @@ const ROUTE_ALLOWLIST = {
   GET: [
     '/runtime/status', '/runtime/output-settings', '/runtime/version',
     '/runtime/errors', '/runtime/tts-status',
+    // The POST /runtime/audio-devices/refresh sibling was already allowed while
+    // the plain GET was not, which made the input-device picker unfillable:
+    // refreshAudioInputDevices() could ask the backend to rescan but never read
+    // the result. Listing device names is strictly less privileged than the
+    // rescan already permitted below.
+    '/runtime/audio-devices',
     '/capabilities', '/doctor', '/metrics', '/privacy',
     '/diagnostics/logs', '/diagnostics/paths',
     '/recordings', '/jobs', '/dictionary', '/macros',

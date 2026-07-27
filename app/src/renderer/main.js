@@ -8,6 +8,7 @@ import {
   downloadWhisperModel,
   emergencyStop,
   fetchCapabilities,
+  fetchAudioDevices,
   fetchDiagnosticsLogs,
   fetchDiagnosticsPaths,
   fetchSupportReport,
@@ -1420,7 +1421,12 @@ async function refreshAudioInputDevices() {
   if (!select) return;
   let info;
   try {
-    info = await fetchJson('/runtime/audio-devices');
+    // Was `fetchJson('/runtime/audio-devices')` -- a function that is defined
+    // inside api/backend.js, never exported, and never imported here. So this
+    // threw ReferenceError on every call, its own catch logged it, and the
+    // input-device dropdown silently stayed empty: the microphone picker has
+    // been non-functional, failing quietly enough to look like "no devices".
+    info = await fetchAudioDevices();
   } catch (error) {
     console.error('Failed to load audio input devices:', error);
     return;
@@ -3183,8 +3189,21 @@ function initSettingsPanel() {
         refreshWakeStatus().catch(() => {});
         refreshWakeModels().catch(() => {});
       } else if (sectionName === 'tts-readaloud') {
-        refreshVoiceBlendCapabilityNote().catch(() => {});
-        refreshCloneStatusNote().catch(() => {});
+        // REMOVED: refreshVoiceBlendCapabilityNote() and refreshCloneStatusNote().
+        // Neither function exists -- not in main.js, not on the voiceStudio
+        // feature, nowhere in the renderer. Each appeared exactly once in the
+        // codebase: here, at the call. So opening this settings section threw
+        // ReferenceError, and `.catch()` does not help because the throw is
+        // synchronous (it happens evaluating the callee, before any promise
+        // exists). The throw aborted this handler before the
+        // settingsSections.forEach() below, which is what actually shows the
+        // section -- so clicking "TTS / Read-Aloud" failed to open it at all.
+        //
+        // Not reimplemented here: what they were meant to render is unknown
+        // (there is no capability-note element, and the clone-status renderer
+        // that does exist, renderVoiceCloningPanel(), needs data these were
+        // presumably fetching). Recorded as unwired in STUDIO_PLACEMENT_MAP
+        // under voice.cloning rather than guessed at.
       }
 
       settingsSections.forEach((section) => {

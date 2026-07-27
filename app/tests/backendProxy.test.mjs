@@ -147,6 +147,19 @@ test('typed operations validate their payloads before any request', async () => 
   assert.equal((await proxy.deleteVoice({ voiceId: '', confirm: true })).status, 0);
 });
 
+test('GET /runtime/audio-devices is reachable, not just its POST refresh sibling', () => {
+  // These were asymmetric: POST .../refresh was allowed while the plain GET
+  // was not, so the renderer could ask the backend to rescan devices and then
+  // never read the result. The input-device picker could not be populated.
+  assert.equal(proxy.isRouteAllowed?.('GET', '/runtime/audio-devices') ?? true, true);
+  const { ROUTE_ALLOWLIST } = proxy;
+  assert.ok(
+    ROUTE_ALLOWLIST.GET.includes('/runtime/audio-devices'),
+    'GET /runtime/audio-devices missing from the allowlist',
+  );
+  assert.ok(ROUTE_ALLOWLIST.POST.includes('/runtime/audio-devices/refresh'));
+});
+
 test('destructive typed operations require confirm: true', async () => {
   const wipe = await proxy.wipePrivacyData({ wipeVoices: true });
   assert.equal(wipe.ok, false);
