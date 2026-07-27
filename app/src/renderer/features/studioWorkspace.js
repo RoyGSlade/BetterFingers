@@ -169,7 +169,7 @@ export const STUDIO_PLACEMENT_MAP = {
   'personas.new': { section: 'personas', control: 'New Persona', wired: false, note: 'Reaches across documents by hardcoded id (#wizardStep1); degrades to a toast because the wizard markup lives only on the old dashboard' },
   'personas.foundry': { section: 'personas', control: 'Build with AI / Persona Foundry', wired: false, note: 'Same cross-document reach (#openFoundryButton); the Foundry overlay has no Signal Desk design (DESIGN GAP)' },
   'personas.wizard': { section: 'personas', control: 'Manual persona wizard (~40 controls)', wired: false, note: 'DESIGN GAP: no Signal Desk design exists for the wizard' },
-  'personas.traits': { section: 'personas', control: '5-axis trait sliders (warmth/directness/detail/formality/confidence)', wired: false, note: 'RENDERER-ONLY FICTION: no persona.traits field exists in the backend schema; derivePersonaTraits() invents values from hardcoded presets keyed to mockup names that do not match the real builtins. Needs an honest empty state now and a design doc before becoming real' },
+  'personas.traits': { section: 'personas', control: '5-axis trait sliders (warmth/directness/detail/formality/confidence)', wired: false, note: 'No persona.traits field exists in the backend schema, so every axis reports null and renders as an empty track (the archetype-preset fabrication has been removed). Becomes wired when the schema gains a user-authored traits field -- derivePersonaTraits() already reads it. Needs a design doc first' },
 
   'detail.description': { section: 'detail', control: 'Persona description', wired: true },
   'detail.exampleRewrites': { section: 'detail', control: 'Example rewrites table', wired: true },
@@ -264,36 +264,46 @@ export function clampPercent(value, fallback = 0) {
   return Math.max(0, Math.min(100, Math.round(n)));
 }
 
-// Best-effort visual read of mockup 03's mini slider bars per named
-// archetype (the spec's own text gives no exact numbers -- see SPEC GAP 2
-// above). Keyed by EXACT lowercased name match only (unlike the color
-// fallback above) so an unrelated custom persona never silently inherits
-// e.g. "Warm"'s specific trait shape just because it hashed to warm's color.
-const TRAIT_PRESETS = {
-  natural: { warmth: 70, directness: 55, detail: 60, formality: 35, confidence: 65 },
-  direct: { warmth: 30, directness: 85, detail: 40, formality: 45, confidence: 80 },
-  warm: { warmth: 85, directness: 35, detail: 50, formality: 25, confidence: 60 },
-  professional: { warmth: 35, directness: 55, detail: 80, formality: 85, confidence: 75 },
-  playful: { warmth: 85, directness: 40, detail: 35, formality: 15, confidence: 55 },
-};
+// REMOVED: a TRAIT_PRESETS table that assigned trait numbers per persona name,
+// read visually off mockup 03's slider bars. It was keyed to the mockup's five
+// archetypes (natural/direct/warm/professional/playful), none of which are this
+// app's actual builtins (Formal, Polished, Pompous 1800s Lord, True Janitor,
+// Unhinged) -- so in practice every real persona either matched nothing and
+// rendered a flat 50, or matched by coincidence and rendered another persona's
+// invented shape. Either way the UI presented numbers nobody measured.
+//
+// Traits become real when the persona schema gains a user-authored `traits`
+// field; derivePersonaTraits() already reads it.
 
 /**
- * Warmth/Directness/Detail/Formality/Confidence, 0-100 each. Prefers an
- * explicit `persona.traits` field (future-proofing -- no such field exists
- * on the backend schema today) over the archetype preset above, and falls
- * back to a flat neutral 50 for an unrecognized name with no explicit
- * traits.
+ * Warmth/Directness/Detail/Formality/Confidence, 0-100 each, or `null` per
+ * axis when unknown -- which is every axis today, since no backend schema
+ * field supplies them.
  */
-export function derivePersonaTraits(persona, name) {
-  const key = String(name || '').trim().toLowerCase();
-  const preset = TRAIT_PRESETS[key] || NEUTRAL_TRAITS;
+export function derivePersonaTraits(persona) {
   const explicit = persona && typeof persona.traits === 'object' && persona.traits ? persona.traits : null;
   const out = {};
   for (const traitKey of TRAIT_KEYS) {
-    const source = explicit && explicit[traitKey] !== undefined ? explicit[traitKey] : preset[traitKey];
-    out[traitKey] = clampPercent(source, NEUTRAL_TRAITS[traitKey]);
+    const source = explicit ? explicit[traitKey] : undefined;
+    // null, not a number: the backend has no traits field, so ANY number here
+    // is invented. This used to fall back to TRAIT_PRESETS keyed by persona
+    // name -- five names read off the mockup (natural/direct/warm/professional/
+    // playful) that do not match this app's real builtins (Formal, Polished,
+    // Pompous 1800s Lord, True Janitor, Unhinged). The result was that every
+    // real persona rendered either a flat 50 or, worse, another persona's
+    // numbers, presented as if measured.
+    //
+    // Same rule as reliabilityPercentFromPersona() directly below: unknown is
+    // reported as unknown. Real values arrive when the persona schema gains a
+    // user-authored `traits` field, at which point this already reads it.
+    out[traitKey] = source === undefined || source === null ? null : clampPercent(source, null);
   }
   return out;
+}
+
+/** True when nothing is known about any axis -- the current production state. */
+export function traitsAreUnknown(traits) {
+  return TRAIT_KEYS.every((key) => traits?.[key] === null || traits?.[key] === undefined);
 }
 
 /** persona.persona_card.reliability_score (0-100) if present, else null -- never fabricated. */
@@ -351,6 +361,12 @@ export function derivePersonaDescription(persona, name) {
 
 /** "WHY THIS WORKS" bullets (up to 3), a presentational heuristic over the trait values -- see SPEC GAP 2. */
 export function buildWhyThisWorksBullets(traits) {
+  // Every bullet below is a claim ABOUT the traits ("Adds clarity and flow",
+  // "Sounds natural and human"). With no trait data there is nothing to base
+  // them on, and spreading nulls over NEUTRAL_TRAITS would quietly emit the
+  // else-branch of each test as though it had been measured. Say nothing
+  // instead -- the panel renders empty until traits are real.
+  if (traitsAreUnknown(traits)) return [];
   const t = { ...NEUTRAL_TRAITS, ...(traits || {}) };
   const bullets = [];
   bullets.push(t.directness >= 60 ? 'Adds clarity and flow' : 'Keeps phrasing close to what you said');
@@ -686,7 +702,17 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
     bar.className = 'sd-trait-row__bar';
     const fill = document.createElement('span');
     fill.className = 'sd-trait-row__fill';
-    fill.style.width = `${value}%`;
+    // An unknown axis renders as an empty track, never `null%` (which the
+    // browser drops, leaving whatever width was there before) and never a
+    // plausible-looking number. The row still renders so the axis names stay
+    // visible as the shape of the thing being described.
+    const known = value !== null && value !== undefined;
+    fill.style.width = known ? `${value}%` : '0%';
+    row.dataset.known = known ? 'true' : 'false';
+    if (!known) {
+      row.title = 'Not set — personas have no trait data yet';
+      bar.setAttribute('aria-label', `${TRAIT_LABELS[key]}: not set`);
+    }
     bar.append(fill);
     row.append(label, bar);
     return row;
@@ -795,7 +821,9 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
     }
     if (els.whyList) {
       els.whyList.replaceChildren();
-      const traits = persona ? derivePersonaTraits(persona, selectedName) : NEUTRAL_TRAITS;
+      // No persona selected means no traits -- not "neutral traits", which
+      // would render three confident bullets about a persona that isn't there.
+      const traits = persona ? derivePersonaTraits(persona) : {};
       buildWhyThisWorksBullets(traits).forEach((bullet) => {
         const li = document.createElement('li');
         li.textContent = bullet;

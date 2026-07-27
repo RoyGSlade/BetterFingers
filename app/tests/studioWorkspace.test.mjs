@@ -18,6 +18,7 @@ import {
   personaSignatureColorVar,
   clampPercent,
   derivePersonaTraits,
+  traitsAreUnknown,
   reliabilityPercentFromPersona,
   reliabilityBarWidth,
   exampleCountFromPersona,
@@ -92,34 +93,48 @@ test('clampPercent: non-finite input falls back to the given default', () => {
   assert.equal(clampPercent('not a number', 7), 7);
 });
 
-test('derivePersonaTraits: known archetype names get their mockup-read preset, every trait key present and in range', () => {
-  const traits = derivePersonaTraits({}, 'Natural');
+test('derivePersonaTraits: reports null per axis when the backend supplies nothing', () => {
+  // No persona schema field supplies traits, so any number here is invented.
+  // This used to return numbers from a TRAIT_PRESETS table keyed to the
+  // mockup's archetype names -- names that are not this app's real builtins,
+  // so every real persona rendered either a flat 50 or another persona's
+  // shape, presented as though measured.
+  const traits = derivePersonaTraits({});
   for (const key of TRAIT_KEYS) {
-    assert.ok(key in traits);
-    assert.ok(traits[key] >= 0 && traits[key] <= 100);
+    assert.ok(key in traits, `${key} should still be reported`);
+    assert.equal(traits[key], null, `${key} must be null, not an invented number`);
   }
-  // Natural reads warmer/higher-confidence than Direct in the mockup.
-  const direct = derivePersonaTraits({}, 'Direct');
-  assert.ok(traits.warmth > direct.warmth);
-  assert.ok(direct.directness > traits.directness);
 });
 
-test('derivePersonaTraits: an unrecognized persona name with no persona.traits override defaults to flat neutral (50 each)', () => {
-  const traits = derivePersonaTraits({}, 'True Janitor');
-  assert.deepEqual(traits, NEUTRAL_TRAITS);
+test('derivePersonaTraits: a persona name can never conjure trait values', () => {
+  // The old behaviour: naming a persona "Natural" gave it the mockup's numbers.
+  for (const name of ['Natural', 'Direct', 'Warm', 'Professional', 'Playful', 'True Janitor']) {
+    const traits = derivePersonaTraits({}, name);
+    assert.ok(traitsAreUnknown(traits), `"${name}" fabricated traits from its name alone`);
+  }
 });
 
-test('derivePersonaTraits: an explicit persona.traits field overrides the preset/neutral default, per-key', () => {
-  const traits = derivePersonaTraits({ traits: { warmth: 90 } }, 'True Janitor');
+test('derivePersonaTraits: an explicit persona.traits field is read, per-key', () => {
+  // Future-proofing: when the schema gains user-authored traits, this already
+  // reads them -- and axes the user has not set stay unknown rather than
+  // defaulting to a middle value they never chose.
+  const traits = derivePersonaTraits({ traits: { warmth: 90 } });
   assert.equal(traits.warmth, 90);
-  // Untouched keys still fall back to neutral (the persona only overrode warmth).
-  assert.equal(traits.directness, 50);
+  assert.equal(traits.directness, null);
 });
 
-test('derivePersonaTraits: an explicit traits value is clamped the same as anything else', () => {
-  const traits = derivePersonaTraits({ traits: { confidence: 500, formality: -20 } }, 'Natural');
+test('derivePersonaTraits: an explicit traits value is still clamped', () => {
+  const traits = derivePersonaTraits({ traits: { confidence: 500, formality: -20 } });
   assert.equal(traits.confidence, 100);
   assert.equal(traits.formality, 0);
+});
+
+test('buildWhyThisWorksBullets: says nothing when there are no traits to reason from', () => {
+  // Each bullet is a claim ABOUT the traits. With none, spreading nulls over
+  // NEUTRAL_TRAITS would emit the else-branch of every test as if measured.
+  assert.deepEqual(buildWhyThisWorksBullets(derivePersonaTraits({})), []);
+  assert.deepEqual(buildWhyThisWorksBullets({}), []);
+  assert.deepEqual(buildWhyThisWorksBullets(null), []);
 });
 
 // --- reliabilityPercentFromPersona / reliabilityBarWidth ---------------------
