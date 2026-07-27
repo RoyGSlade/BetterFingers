@@ -43,6 +43,22 @@ NODE_BIN_DIR="$(dirname "$NODE_BIN")"
 BACKEND_LOG="$LOG_DIR/backend-$RUN_ID.log"
 ELECTRON_LOG="$LOG_DIR/electron-$RUN_ID.log"
 
+# One auth token for this launch, shared by the backend, the readiness probe,
+# and Electron. All three need the SAME value or nothing works:
+#
+#   * server.py enforces BETTERFINGERS_AUTH_TOKEN on every non-/ws/ route,
+#     including /health, and generates its own if none is supplied;
+#   * wait_for_backend() below must present it or it reads 401 forever and
+#     kills a backend that was healthy the whole time;
+#   * Electron's main process talks to this already-running ("external")
+#     backend, so it must present the same token rather than minting one.
+#
+# Honour an inherited value so a caller can pin the token; otherwise generate.
+if [[ -z "${BETTERFINGERS_AUTH_TOKEN:-}" ]]; then
+  BETTERFINGERS_AUTH_TOKEN="$("$PYTHON_BIN" -c 'import secrets; print(secrets.token_hex(32))')"
+fi
+export BETTERFINGERS_AUTH_TOKEN
+
 current_pgid() {
   ps -o pgid= "$$" | tr -d '[:space:]'
 }
@@ -138,20 +154,27 @@ cleanup_this_launch() {
 }
 
 wait_for_backend() {
-  "$PYTHON_BIN" - "$HOST" "$PORT" <<'PY'
+  "$PYTHON_BIN" - "$HOST" "$PORT" "${BETTERFINGERS_AUTH_TOKEN:-}" <<'PY'
 import sys
 import time
 import urllib.request
 
 host = sys.argv[1]
 port = sys.argv[2]
+token = sys.argv[3] if len(sys.argv) > 3 else ""
 url = f"http://{host}:{port}/health"
+# /health is NOT exempt from auth (server.py exempts only /ws/). Probing it
+# bare returns 401 forever, and the caller then tears down a backend that was
+# healthy from the first second. app/src/main/sidecar.js documents having hit
+# exactly this; the same rule applies here.
+headers = {"Authorization": f"Bearer {token}"} if token else {}
 deadline = time.time() + 45
 last_error = ""
 
 while time.time() < deadline:
     try:
-        with urllib.request.urlopen(url, timeout=1.5) as response:
+        request = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(request, timeout=1.5) as response:
             if 200 <= response.status < 300:
                 print(f"Backend is healthy at {url}")
                 raise SystemExit(0)
@@ -208,6 +231,7 @@ setsid env \
   PYTHONPATH="$PYTHONPATH_EXTRA" \
   BETTERFINGERS_LAZY_STARTUP=1 \
   BETTERFINGERS_ENV=development \
+  BETTERFINGERS_AUTH_TOKEN="$BETTERFINGERS_AUTH_TOKEN" \
   "$PYTHON_BIN" "$APP_DIR/server.py" --host "$HOST" --port "$PORT" --log-level INFO \
   >>"$BACKEND_LOG" 2>&1 &
 BACKEND_PID=$!
@@ -229,6 +253,7 @@ printf 'Starting Electron UI from current code...\n'
     BETTERFINGERS_PYTHON="$PYTHON_BIN" \
     BETTERFINGERS_HOST="$HOST" \
     BETTERFINGERS_PORT="$PORT" \
+    BETTERFINGERS_AUTH_TOKEN="$BETTERFINGERS_AUTH_TOKEN" \
     PATH="$NODE_BIN_DIR:$PATH" \
     "$NODE_BIN" scripts/dev.js
 ) >>"$ELECTRON_LOG" 2>&1 &

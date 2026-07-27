@@ -186,6 +186,18 @@ export function createFirstRunFeature({
   const { afterModelsChanged, goToModelsTab } = hooks;
 
   let lastStatus = null;
+
+  // Set while a "backend unreachable" retry loop is armed. init() runs as soon
+  // as the renderer boots, which on the path where Electron spawns the backend
+  // itself is well before that backend is listening. Without a retry the panel
+  // latched onto its first failed probe and sat there advertising "Get
+  // BetterFingers set up" -- with Download buttons for multi-gigabyte models --
+  // on an install that already had every model loaded, until the user noticed
+  // the Check again button. Observed on a working machine with 150 drafts of
+  // history.
+  let reachRetryTimer = null;
+  const REACH_RETRY_MS = 2000;
+  const REACH_RETRY_MAX_ATTEMPTS = 45; // ~90s: cold model load can be slow.
   let initialized = false;
 
   function isDismissed() {
@@ -309,6 +321,32 @@ export function createFirstRunFeature({
     }
   }
 
+  function stopReachRetry() {
+    if (reachRetryTimer) {
+      clearInterval(reachRetryTimer);
+      reachRetryTimer = null;
+    }
+  }
+
+  // Keep probing until the backend answers, so the panel corrects itself
+  // instead of waiting for the user to discover the Check again button. Bounded
+  // rather than forever: if the backend really is down, a panel that says so is
+  // the honest end state, not one that spins indefinitely. refreshStatus()
+  // calls stopReachRetry() the moment anything responds, so this cannot outlive
+  // its usefulness, and the guard below keeps one loop armed at a time.
+  function scheduleReachRetry() {
+    if (reachRetryTimer) return;
+    let attempts = 0;
+    reachRetryTimer = setInterval(() => {
+      attempts += 1;
+      if (attempts > REACH_RETRY_MAX_ATTEMPTS) {
+        stopReachRetry();
+        return;
+      }
+      refreshStatus().catch(() => {});
+    }, REACH_RETRY_MS);
+  }
+
   // Re-fetches every endpoint the checklist depends on. Each call is
   // independently wrapped so one failing endpoint (e.g. the backend hasn't
   // finished starting yet) never blanks out data the others already have,
@@ -329,8 +367,12 @@ export function createFirstRunFeature({
         'Could not reach the local backend yet. It may still be starting -- try Check again in a moment.',
         'warning',
       );
+      scheduleReachRetry();
       return null;
     }
+
+    // Reached it, so any armed retry has done its job.
+    stopReachRetry();
 
     const status = computeFirstRunStatus({ health, runtime, llmModels, whisperModels });
     lastStatus = status;

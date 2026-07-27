@@ -514,3 +514,91 @@ test('downloadWhisper: success path polls GET /models/whisper for progress (no d
   assert.ok(messages.some((m) => m.text === 'Speech model download complete.' && m.tone === 'success'));
   assert.equal(elements.downloadWhisperButton.disabled, false);
 });
+
+// --- unreachable-backend auto-retry -------------------------------------------
+//
+// init() runs the instant the renderer boots, which on the path where Electron
+// spawns the backend itself is before that backend is listening. Without a
+// retry the panel latched onto its first failed probe and advertised "Get
+// BetterFingers set up" -- with multi-gigabyte Download buttons -- on a machine
+// that already had every model loaded.
+
+/** All four endpoints reject until `failures` calls have been made. */
+function makeFlakyApi(failures) {
+  let calls = 0;
+  const healthy = makeApiStub();
+  const down = async () => {
+    throw new Error('ECONNREFUSED');
+  };
+  return {
+    get calls() {
+      return calls;
+    },
+    api: {
+      ...healthy,
+      fetchHealth: async (...a) => {
+        calls += 1;
+        return calls <= failures ? down() : healthy.fetchHealth(...a);
+      },
+      fetchRuntimeStatus: async (...a) => (calls <= failures ? down() : healthy.fetchRuntimeStatus(...a)),
+      fetchLlmModels: async (...a) => (calls <= failures ? down() : healthy.fetchLlmModels(...a)),
+      fetchWhisperModels: async (...a) => (calls <= failures ? down() : healthy.fetchWhisperModels(...a)),
+    },
+  };
+}
+
+test('recovers on its own once the backend comes up', async () => {
+  const elements = makeElements();
+  const { ui, messages } = makeUi();
+  const flaky = makeFlakyApi(1);
+  const feature = createFirstRunFeature({
+    elements,
+    ui,
+    hooks: {},
+    api: flaky.api,
+    storage: makeFakeStorage(),
+  });
+
+  await feature.refreshStatus();
+  assert.ok(
+    messages.some((m) => /Could not reach the local backend/.test(m.text)),
+    'expected the unreachable warning on the first failed probe',
+  );
+
+  // Let the armed retry fire (interval is 2s in the module).
+  await new Promise((resolve) => setTimeout(resolve, 2300));
+
+  assert.ok(
+    messages.some((m) => m.text === "Everything's installed and ready to go."),
+    'panel should have corrected itself without user interaction',
+  );
+});
+
+test('stops retrying rather than spinning forever', async () => {
+  const elements = makeElements();
+  const { ui } = makeUi();
+  // Never recovers.
+  const flaky = makeFlakyApi(Number.MAX_SAFE_INTEGER);
+  const feature = createFirstRunFeature({
+    elements,
+    ui,
+    hooks: {},
+    api: flaky.api,
+    storage: makeFakeStorage(),
+  });
+
+  await feature.refreshStatus();
+  const afterFirst = flaky.calls;
+
+  await new Promise((resolve) => setTimeout(resolve, 2300));
+  const afterRetry = flaky.calls;
+  assert.ok(afterRetry > afterFirst, 'a retry should have been armed');
+
+  // Only one loop may be armed no matter how many times we ask.
+  await feature.refreshStatus();
+  await feature.refreshStatus();
+  const before = flaky.calls;
+  await new Promise((resolve) => setTimeout(resolve, 2300));
+  const added = flaky.calls - before;
+  assert.ok(added <= 4, `expected a single armed retry loop, saw ${added} extra probes`);
+});

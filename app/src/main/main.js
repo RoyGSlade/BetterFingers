@@ -10,7 +10,15 @@ const backendProxy = require('./backendProxy');
 const { unregisterAllHotkeys, triggerBackendAction } = require('./hotkeys');
 const { BACKEND_HOST, BACKEND_PORT, BACKEND_ORIGIN } = require('./config');
 
-const authToken = randomUUID();
+// Adopt an inherited token when the backend is managed by something else (the
+// Linux launcher starts it before us, so sidecar.js finds it already listening
+// and treats it as "external"). Minting a fresh token unconditionally meant
+// that in external mode we authenticated against a backend holding a DIFFERENT
+// token, so every request 401'd — external-backend support existed in
+// sidecar.js but could never actually work. When we spawn the backend
+// ourselves, nothing is inherited and we generate one as before, which stays
+// the normal path.
+const authToken = process.env.BETTERFINGERS_AUTH_TOKEN || randomUUID();
 // The token lives only in the main process (Phase 3c). The renderer reaches the
 // backend exclusively through the validated proxy, which holds these.
 backendProxy.init({ origin: BACKEND_ORIGIN, token: authToken });
