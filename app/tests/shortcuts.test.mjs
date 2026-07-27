@@ -62,27 +62,39 @@ test('single-key actions do not fire while typing', () => {
 });
 
 test('irreversible actions still fire while typing', () => {
-  assert.equal(matchShortcut(ev('Enter', { ctrlKey: true }), { typing: true }), ACTIONS.SEND);
-  assert.equal(
-    matchShortcut(ev('D', { ctrlKey: true, shiftKey: true }), { typing: true }),
-    ACTIONS.DECLINE,
-  );
+  assert.equal(matchShortcut(ev('Enter', { ctrlKey: true }), { typing: true }), ACTIONS.ACCEPT);
+  assert.equal(matchShortcut(ev('D', { ctrlKey: true }), { typing: true }), ACTIONS.DECLINE);
+});
+
+test('REGRESSION: draft bindings match the shipping dashboard exactly', () => {
+  // features/drafts.js handleGlobalShortcut already trains these on the old
+  // dashboard. An earlier version of this map had Ctrl+Enter as Send and
+  // Ctrl+Shift+Enter as Accept -- inverted -- so muscle memory carried across
+  // from the old UI would have pressed "keep this draft" and sent the message
+  // instead. Divergence here is worse than having no shortcuts at all.
+  assert.equal(matchShortcut(ev('Enter', { ctrlKey: true })), ACTIONS.ACCEPT);
+  assert.equal(matchShortcut(ev('Enter', { ctrlKey: true, shiftKey: true })), ACTIONS.SEND);
+  assert.equal(matchShortcut(ev('d', { ctrlKey: true })), ACTIONS.DECLINE);
+  assert.equal(matchShortcut(ev('s', { ctrlKey: true })), ACTIONS.SAVE_EDIT);
+  assert.equal(matchShortcut(ev('C', { ctrlKey: true, shiftKey: true })), ACTIONS.COPY);
 });
 
 test('a bare letter never triggers a destructive action', () => {
-  // Decline is Ctrl+Shift+D precisely so that pressing "d" cannot lose a draft.
+  // Decline needs Ctrl precisely so that pressing "d" cannot lose a draft.
   assert.notEqual(matchShortcut(ev('d'), { typing: false }), ACTIONS.DECLINE);
   assert.notEqual(matchShortcut(ev('r'), { typing: false }), ACTIONS.RETRY);
+  assert.notEqual(matchShortcut(ev('s'), { typing: false }), ACTIONS.SAVE_EDIT);
   assert.notEqual(matchShortcut(ev('Enter'), { typing: false }), ACTIONS.SEND);
+  assert.notEqual(matchShortcut(ev('Enter'), { typing: false }), ACTIONS.ACCEPT);
 });
 
 // --- exact modifier matching --------------------------------------------------
 
 test('Ctrl+Enter and Ctrl+Shift+Enter are different actions', () => {
-  // "send it" vs "do not send it" -- a loose match here would make one shadow
-  // the other, in the one place that is least forgiving.
-  assert.equal(matchShortcut(ev('Enter', { ctrlKey: true })), ACTIONS.SEND);
-  assert.equal(matchShortcut(ev('Enter', { ctrlKey: true, shiftKey: true })), ACTIONS.ACCEPT);
+  // "keep it" vs "send it" -- a loose match here would make one shadow the
+  // other, in the one place that is least forgiving.
+  assert.equal(matchShortcut(ev('Enter', { ctrlKey: true })), ACTIONS.ACCEPT);
+  assert.equal(matchShortcut(ev('Enter', { ctrlKey: true, shiftKey: true })), ACTIONS.SEND);
 });
 
 test('a bare Enter is not Send', () => {
@@ -96,7 +108,7 @@ test('Alt is never a wildcard', () => {
 });
 
 test('Cmd is accepted as Ctrl for macOS', () => {
-  assert.equal(matchShortcut(ev('Enter', { metaKey: true })), ACTIONS.SEND);
+  assert.equal(matchShortcut(ev('Enter', { metaKey: true })), ACTIONS.ACCEPT);
 });
 
 test('Caps Lock does not disable letter shortcuts', () => {
@@ -112,9 +124,9 @@ test('shifted punctuation reaches its shortcut', () => {
 });
 
 test('Shift still distinguishes chorded bindings', () => {
-  // The bare-key relaxation must not leak into chords: send vs do-not-send.
-  assert.equal(matchShortcut(ev('Enter', { ctrlKey: true, shiftKey: false })), ACTIONS.SEND);
-  assert.equal(matchShortcut(ev('Enter', { ctrlKey: true, shiftKey: true })), ACTIONS.ACCEPT);
+  // The bare-key relaxation must not leak into chords: keep vs send.
+  assert.equal(matchShortcut(ev('Enter', { ctrlKey: true, shiftKey: false })), ACTIONS.ACCEPT);
+  assert.equal(matchShortcut(ev('Enter', { ctrlKey: true, shiftKey: true })), ACTIONS.SEND);
 });
 
 // --- no collisions with reserved keys -----------------------------------------
@@ -183,7 +195,11 @@ test('dispatches to the handler and consumes the key', () => {
   feature.init();
 
   let prevented = false;
-  doc.fire({ ...ev('Enter', { ctrlKey: true }), target: null, preventDefault: () => { prevented = true; } });
+  doc.fire({
+    ...ev('Enter', { ctrlKey: true, shiftKey: true }),
+    target: null,
+    preventDefault: () => { prevented = true; },
+  });
 
   assert.deepEqual(calls, ['send']);
   assert.equal(prevented, true);

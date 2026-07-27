@@ -659,6 +659,13 @@
           const click = (id) => document.getElementById(id)?.click();
           createShortcutsFeature({
             handlers: {
+              // This overlay has ONE affirmative path: its primary button
+              // inserts/sends. Both Accept and Send map to it deliberately,
+              // rather than leaving Ctrl+Enter dead here -- a key that works
+              // on the dashboard and silently does nothing on the overlay
+              // reads as a broken app, and there is no "keep without sending"
+              // action on this surface to distinguish them.
+              [ACTIONS.ACCEPT]: () => click('acceptButton'),
               [ACTIONS.SEND]: () => click('acceptButton'),
               [ACTIONS.DECLINE]: () => click('cancelButton'),
               [ACTIONS.REVISE]: () => click('changeButton'),

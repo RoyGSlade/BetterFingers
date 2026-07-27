@@ -27,6 +27,7 @@ export const ACTIONS = {
   ACCEPT: 'accept',
   DECLINE: 'decline',
   RETRY: 'retry',
+  SAVE_EDIT: 'saveEdit',
   COPY: 'copy',
   LISTEN: 'listen',
   REVISE: 'revise',
@@ -50,12 +51,28 @@ export const ACTIONS = {
  */
 export const KEYMAP = [
   // --- irreversible: modifier-guarded, active everywhere ---
-  { action: ACTIONS.SEND, key: 'Enter', ctrl: true, whileTyping: true, label: 'Send / insert', group: 'Draft' },
-  { action: ACTIONS.ACCEPT, key: 'Enter', ctrl: true, shift: true, whileTyping: true, label: 'Accept without sending', group: 'Draft' },
-  { action: ACTIONS.DECLINE, key: 'D', ctrl: true, shift: true, whileTyping: true, label: 'Decline draft', group: 'Draft' },
+  //
+  // These four MATCH THE SHIPPING DASHBOARD (features/drafts.js
+  // handleGlobalShortcut). That is not a coincidence and must not drift: an
+  // earlier draft of this map had Ctrl+Enter as Send and Ctrl+Shift+Enter as
+  // Accept -- exactly inverted -- so a user carrying muscle memory from the
+  // old dashboard would press Ctrl+Enter meaning "keep this draft" and send
+  // the message instead. That is the precise failure this whole map exists to
+  // prevent, and it would have shipped silently.
+  //
+  // The shipping arrangement is also the better one: the extra modifier guards
+  // the more consequential action (Accept keeps, Shift escalates to Send).
+  { action: ACTIONS.ACCEPT, key: 'Enter', ctrl: true, whileTyping: true, label: 'Accept draft', group: 'Draft' },
+  { action: ACTIONS.SEND, key: 'Enter', ctrl: true, shift: true, whileTyping: true, label: 'Send / insert', group: 'Draft' },
+  { action: ACTIONS.DECLINE, key: 'D', ctrl: true, whileTyping: true, label: 'Decline draft', group: 'Draft' },
+  { action: ACTIONS.SAVE_EDIT, key: 'S', ctrl: true, whileTyping: true, label: 'Save edit', group: 'Draft' },
+  { action: ACTIONS.COPY, key: 'C', ctrl: true, shift: true, whileTyping: true, label: 'Copy cleaned output', group: 'Draft' },
+  // No shipping equivalent; Retry is new surface, so it is free to be chorded.
   { action: ACTIONS.RETRY, key: 'R', ctrl: true, shift: true, whileTyping: true, label: 'Retry cleanup', group: 'Draft' },
 
   // --- non-destructive: single key, inert while typing ---
+  // `c` is a second way to reach Copy; the chorded Ctrl+Shift+C above is kept
+  // because the shipping dashboard has trained it.
   { action: ACTIONS.COPY, key: 'c', label: 'Copy cleaned output', group: 'Draft' },
   { action: ACTIONS.LISTEN, key: 'l', label: 'Listen', group: 'Draft' },
   { action: ACTIONS.REVISE, key: 'e', label: 'Revise', group: 'Draft' },

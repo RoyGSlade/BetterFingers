@@ -2408,6 +2408,11 @@
     [ACTIONS.GO_SETTINGS]: () => shell.goTo('settings'),
     [ACTIONS.TOGGLE_CONTEXT]: () => shell.toggleContextCollapsed(),
     [ACTIONS.SHOW_HELP]: () => setSheetOpen(true),
+    // Accept / Decline / Retry / Save-edit are intentionally NOT bound here
+    // yet: Talk has no draft editor or action row (SPEC 6, the keystone), so
+    // there is nothing to click. createShortcutsFeature leaves unimplemented
+    // actions to the browser rather than swallowing them, so these stay dead
+    // here and live on the Review Deck until that editor lands.
     [ACTIONS.SEND]: () => click('sdSendButton'),
     [ACTIONS.LISTEN]: () => click('sdListenButton'),
     [ACTIONS.REVISE]: () => click('sdReviseButton'),
