@@ -2249,7 +2249,7 @@
       </span>
       <span class="sd-statusbar__text">
         <span class="sd-statusbar__label">Mic</span>
-        <span class="sd-statusbar__value">Live</span>
+        <span class="sd-statusbar__value" id="sdStatusMicValue">—</span>
       </span>
       <span class="sd-statusbar__mini-viz" aria-hidden="true">
         <svg viewBox="0 0 40 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><line x1="2" y1="7" x2="2" y2="11"></line><line x1="7" y1="4" x2="7" y2="14"></line><line x1="12" y1="1" x2="12" y2="17"></line><line x1="17" y1="5" x2="17" y2="13"></line><line x1="22" y1="3" x2="22" y2="15"></line><line x1="27" y1="6" x2="27" y2="12"></line><line x1="32" y1="2" x2="32" y2="16"></line><line x1="37" y1="7" x2="37" y2="11"></line></svg>
@@ -2261,8 +2261,8 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h2l2 6 3-15 3 12 2-9 2 6h4"></path></svg>
       </span>
       <span class="sd-statusbar__text">
-        <span class="sd-statusbar__label">STT <span class="sd-statusbar__dot" aria-hidden="true"></span></span>
-        <span class="sd-statusbar__value">Ready</span>
+        <span class="sd-statusbar__label">STT <span class="sd-statusbar__dot" id="sdStatusSttDot" aria-hidden="true"></span></span>
+        <span class="sd-statusbar__value" id="sdStatusSttValue">—</span>
       </span>
     </div>
 
@@ -2271,8 +2271,8 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4a3 3 0 0 0-3 3v1a3 3 0 0 0-1 5.8V15a3 3 0 0 0 3 3h.5"></path><path d="M15 4a3 3 0 0 1 3 3v1a3 3 0 0 1 1 5.8V15a3 3 0 0 1-3 3h-.5"></path><path d="M9 4a3 3 0 0 1 3-1 3 3 0 0 1 3 1v13a3 3 0 0 1-3 2 3 3 0 0 1-3-2z"></path></svg>
       </span>
       <span class="sd-statusbar__text">
-        <span class="sd-statusbar__label">LLM <span class="sd-statusbar__dot" aria-hidden="true"></span></span>
-        <span class="sd-statusbar__value">Local</span>
+        <span class="sd-statusbar__label">LLM <span class="sd-statusbar__dot" id="sdStatusLlmDot" aria-hidden="true"></span></span>
+        <span class="sd-statusbar__value" id="sdStatusLlmValue">—</span>
       </span>
     </div>
 
@@ -2282,7 +2282,7 @@
       </span>
       <span class="sd-statusbar__text">
         <span class="sd-statusbar__label">Persona</span>
-        <span class="sd-statusbar__value">Natural</span>
+        <span class="sd-statusbar__value" id="sdStatusPersonaValue">—</span>
       </span>
     </div>
 
@@ -2291,8 +2291,19 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="11" rx="4"></rect><circle cx="9" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="15" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle><path d="M8 7 9 4h6l1 3"></path></svg>
       </span>
       <span class="sd-statusbar__text">
-        <span class="sd-statusbar__label">Destination</span>
-        <span class="sd-statusbar__value">Discord</span>
+        <!--
+          Was "Destination: Discord", which was fiction twice over: drafts carry
+          no destination field (backend/stores/drafts.py), and nothing in the
+          app knows a channel or a person. The only real per-app signal is
+          injection_pacing.py's detect_active_app_key(), which names the focused
+          APPLICATION, is used only to pick keystroke pacing, never reaches the
+          renderer, and is empty on Wayland. DESIGN.md §11 asks for "target app"
+          in the rail, so that is what this is -- and it reads "—" until
+          something actually supplies one, rather than naming a recipient the
+          product has no concept of.
+        -->
+        <span class="sd-statusbar__label">Target app</span>
+        <span class="sd-statusbar__value" id="sdStatusTargetAppValue">—</span>
       </span>
     </div>
 
@@ -2302,7 +2313,7 @@
       </span>
       <span class="sd-statusbar__text">
         <span class="sd-statusbar__label">Latency</span>
-        <span class="sd-statusbar__value">1.2 sec</span>
+        <span class="sd-statusbar__value" id="sdStatusLatencyValue">—</span>
       </span>
       <span class="sd-statusbar__mini-viz" aria-hidden="true">
         <svg viewBox="0 0 40 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="0,14 6,10 11,15 16,6 21,11 26,4 31,9 36,12 40,7"></polyline></svg>
@@ -2446,6 +2457,28 @@
   // outside is the only way to catch a missing container or missing CSS,
   // which a fake-DOM unit test cannot see.
   window.__showToast = showToast;
+</script>
+
+<!--
+  Status bar (SPEC 3d), bound to real backend state. Until now every cell was
+  hard-coded markup: "Live / Ready / Local / Natural / Discord / 1.2 sec" showed
+  identically whether the backend was up, down, or absent. Cells read "—" when a
+  value is genuinely unknown rather than inventing a plausible one.
+-->
+<script type="module">
+  import { createStatusBarFeature, collectStatusBarElements } from './features/statusBar.js';
+  import * as api from './api/backend.js';
+
+  const statusBar = createStatusBarFeature({
+    elements: collectStatusBarElements(document),
+    api,
+  });
+
+  // Same 3s cadence runtime.js uses for its health poll on the other dashboard.
+  statusBar.refresh().catch(() => {});
+  setInterval(() => statusBar.refresh().catch(() => {}), 3000);
+
+  window.__statusBar = statusBar;
 </script>
 
 <!--

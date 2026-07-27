@@ -70,13 +70,15 @@ export const UI_TARGETS = {
     page: 'signal-desk-preview.html',
     env: { BF_UI: 'signal-desk' },
     attachedSelector: '.sd-shell',
-    // Intentionally null: this page's status bar is currently static markup
-    // with no ids and nothing bound to backend state, so there is no honest
-    // readiness signal to wait on yet. Waiting on a hard-coded string here
-    // would assert a truth the page is not telling. Give this a real selector
-    // in the same change that binds the status bar.
-    readyTextSelector: null,
-    readyTextPattern: null,
+    // Now a real signal: the status bar's STT cell is bound to backend state
+    // and starts at "—", so waiting for it to say Loaded/Not loaded proves the
+    // page actually reached the backend. (This was deliberately null while the
+    // rail was hard-coded markup — waiting on a constant would have asserted a
+    // truth the page was not telling.) "Not loaded" counts as ready: it is a
+    // truthful answer from a reachable backend, which is what readiness means
+    // here; only "—" means we have not heard back yet.
+    readyTextSelector: '#sdStatusSttValue',
+    readyTextPattern: /loaded/i,
     // Namespaced so a Signal Desk run cannot clobber the default UI's
     // committed screenshots.
     outSubdir: 'signal-desk',

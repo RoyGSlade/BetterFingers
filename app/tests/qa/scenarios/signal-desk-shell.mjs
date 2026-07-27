@@ -127,4 +127,46 @@ export const signalDeskShellScenarios = [
     },
     screenshots: [{ name: 'toast-host-renders-feedback' }],
   },
+  {
+    area: 'signal-desk-shell',
+    ui: 'signal-desk',
+    name: 'status-bar-reports-real-state',
+    kind: 'standard',
+    description:
+      'The status rail was hard-coded markup reading "Live / Ready / Local / Natural / Discord / 1.2 sec" ' +
+      'regardless of what the app was doing. This drives it from a stub whose values differ from every one of ' +
+      'those strings, so a regression to fabricated markup fails here rather than looking plausible. Also pins ' +
+      'the two cells that must stay honest: Latency reads "—" before any dictation has run (total.last_ms is ' +
+      'null), and Target app reads "—" because nothing in the app knows a destination.',
+    backendState: () => ({
+      ...coldBoot(),
+      'GET /health': { status: 'active', transcriber: true, llm_engine: true, active_job_count: 0, active_jobs: [], last_progress_at: null, runtime_leases: {} },
+      'GET /runtime/status': { transcriber_loaded: true, llm_ready: true, recording_active: false },
+      'GET /settings/profiles/Default': { current_preset: 'Polished' },
+      'GET /metrics': { total: { last_ms: null } },
+    }),
+    async navigate(_page) {},
+    async expects(page) {
+      // Values the stub implies -- none of which match the old hard-coded text.
+      await expect(page.locator('#sdStatusSttValue')).toHaveText('Loaded');
+      await expect(page.locator('#sdStatusLlmValue')).toHaveText('Ready');
+      await expect(page.locator('#sdStatusMicValue')).toHaveText('Idle');
+      await expect(page.locator('#sdStatusPersonaValue')).toHaveText('Polished');
+
+      // Honest unknowns, not plausible-looking numbers.
+      await expect(page.locator('#sdStatusLatencyValue')).toHaveText('—');
+      await expect(page.locator('#sdStatusTargetAppValue')).toHaveText('—');
+
+      // The rail must be visible, not merely present: it is chrome the spec
+      // requires to be permanently glanceable.
+      await expect(page.locator('.sd-statusbar')).toBeVisible();
+
+      // Explicitly assert the fabricated strings are gone.
+      const rail = await page.locator('.sd-statusbar').innerText();
+      for (const ghost of ['Live', 'Local', 'Natural', 'Discord', '1.2 sec']) {
+        expect(rail, `status bar still shows hard-coded "${ghost}"`).not.toContain(ghost);
+      }
+    },
+    screenshots: [{ name: 'status-bar-reports-real-state' }],
+  },
 ];
