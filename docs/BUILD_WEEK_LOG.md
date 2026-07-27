@@ -727,3 +727,70 @@ cannot silently disagree), and the SPEC 6 draft editor blocks entries in all thr
 
 **Gate:** Python 1856 passed / 3 skipped / 0 failed · Node unit **646 / 646** · QA default
 36/37 · QA Signal Desk **6 / 6**.
+
+---
+
+### Overnight autonomous pass — de-fabrication, two silent bugs, Stage 9 (2026-07-25/26)
+
+Worked the queue that needed no design input. Stages 6 (Talk draft editor), 8's Voice
+Studio layout and 13 (Foundry/wizard/onboarding comps) were deliberately left alone — they
+need director decisions, and inventing them would be worse than leaving them undone.
+
+**Persona traits stopped being fiction.** The 5-axis sliders had no backing field anywhere;
+`derivePersonaTraits()` filled them from a table read visually off mockup 03 and keyed to
+the mockup's archetype names, none of which are this app's builtins. Every real persona
+therefore rendered a flat 50 or another persona's invented shape — measurements nobody took,
+on the screen whose whole job is describing how a persona behaves. Axes now report `null`
+and render as empty tracks. `buildWhyThisWorksBullets()` was the same bug one layer up
+(every bullet is a claim *about* the traits) and now says nothing when there is nothing to
+reason from.
+
+**Library card durations restored; waveform deliberately not.** Duration was in the static
+markup and the mockup but `renderCard()` never emitted it. It is real data and it is what
+most distinguishes one card from another. The waveform thumbnail stays unwired: items carry
+aggregate rms/peak only, never a per-time amplitude series, so any thumbnail would be
+decoration implying it depicts that specific recording. Split into two placement entries so
+the honest half could ship.
+
+**Two silent ReferenceErrors, both user-facing, both long-lived:**
+
+1. *The microphone picker never worked.* `refreshAudioInputDevices()` called `fetchJson` —
+   defined inside `api/backend.js`, never exported, never imported into `main.js`. Every
+   call threw, its own `catch` logged it, and the dropdown rendered empty, indistinguishable
+   from "no devices found". The proxy allowlist had `POST /runtime/audio-devices/refresh`
+   but not the plain `GET`, so the renderer could ask for a rescan and never read the
+   result.
+2. *Settings → TTS / Read-Aloud could not be opened.* That branch called two functions that
+   exist nowhere — each appearing exactly once in the codebase, at the call. `.catch()` does
+   not help: the throw is synchronous, evaluating the callee, so it aborted the handler
+   before the `settingsSections.forEach()` that actually reveals the section. Removed rather
+   than reimplemented; what they were meant to render is unknown and guessing would invent
+   behaviour.
+
+`tests/mainScopeLint.test.mjs` now catches the class rather than the instances. `main.js` is
+~4,300 lines with ~60 named imports and nothing in the toolchain notices a call to a name
+that is not in scope, because it only fails on a path tests never take. **The second bug was
+found by the lint written for the first**, which is the argument for the lint.
+
+**Stage 9 — delivery signals reach the main dictation prompt, opt-in, default OFF.**
+`_summarize_signals` moved to `speech_signals.py` with a wrapper left behind (rule 7);
+`process_fast_lane` gained an additive `delivery_summary=None` (rule 6, and the five test
+doubles the plan predicted). Default off is the deliberate part — this is the first path
+where *how* something was said can change *what* gets sent:
+
+- rule 3 is satisfied structurally: the injected block is axis numbers and counts, with no
+  emotion vocabulary, so the model gets observations and no field to read a diagnosis from.
+- rule 5 is satisfied by an explicit preservation clause forbidding any change to meaning,
+  facts or intensity, plus an eval asserting that calm vs agitated delivery of the same
+  words yields different axes and never leaks the words.
+
+The eval runs against computed signals, not a live model. **A real-model version of it is
+the gate that must pass before the default flips on**, and until then nothing changes for
+anyone: signals are computed and persisted either way, they simply do not reach the prompt.
+
+**Migration check:** the real on-disk profile loads with the new `use_delivery_signals` key
+backfilled to `False` and every existing value preserved; the app boots through the shortcut
+path with zero non-200 backend responses.
+
+**Gate:** Python **1872 passed / 3 skipped / 0 failed** · Node unit **651 / 651** · QA
+default 36/37 · QA Signal Desk **7 / 7**.
