@@ -117,6 +117,20 @@ The plan is based on the live repository, not only the older roadmap.
    not leave the device.
 2. **Context is explicit.** The user selects or pastes context and can see, remove, and
    expire it. We do not scrape conversations or silently monitor text fields.
+
+   **Audience clarification (2026-07-26).** A contact/recipient is *created, named and
+   selected by the user*. The app never infers who is being addressed — not from window
+   titles, not from the OS address book, not from message history, not from anything the
+   user did not hand it deliberately. `detect_active_app_key()` identifies the focused
+   application for keystroke pacing and must never be promoted into a recipient signal.
+   A contact being **available** never means it is **applied**.
+
+   **Explicit means chosen once, not asked every time.** This rule is about who decides,
+   not how often they are interrupted; re-confirming a standing choice adds friction with
+   no safety benefit, and a feature heavy enough to go unused protects nobody. A sticky
+   selection the user set, and can see and change, satisfies this rule. If a design finds
+   itself needing repeated confirmations to feel safe, it is usually asking at the wrong
+   moment rather than missing a prompt.
 3. **Emotion is presented as an uncertain signal.** Show observable evidence and
    confidence. Never present frustration, sadness, excitement, happiness, or similar
    labels as a diagnosis.

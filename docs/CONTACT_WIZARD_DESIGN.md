@@ -158,11 +158,44 @@ be able to tell without the baseline comparison.
 - Per-contact message history. Library already stores drafts; a second per-person store would
   be a surveillance-shaped feature the product does not need.
 
-## 9. Open questions for the owner
+## 9. Resolved (owner, 2026-07-26)
 
-1. Should a contact be applicable **retroactively** to an existing draft (re-clean it for a
-   different person), or only chosen before dictating?
-2. When a persona and a contact disagree on tone, which wins? Proposal: **contact wins**, and
-   the UI says so, since it is the more specific choice.
-3. Should the wizard be able to *update* an existing contact from a correction ("that was too
-   formal for her"), reusing the persona-learning consent flow?
+1. **Retroactive application: yes.** A contact can be applied to an existing draft, re-cleaning
+   it for a different person. This matters more than it looks: it means choosing a contact is
+   never a prerequisite for dictating, only an optional improvement afterwards — which is what
+   keeps §10's friction budget affordable.
+2. **Contact beats persona on tone**, and the UI says so. The contact is the more specific
+   choice, and a user who picked a person expects that to win.
+3. **The wizard may update an existing contact from a correction** ("that was too formal for
+   her"), reusing persona-learning's consent flow — an approved edit becomes guidance only
+   after an explicit user action, never silently.
+
+## 10. Friction is a design constraint, not an afterthought
+
+Owner note, recorded because it binds every decision above:
+
+> "too much friction in the app can reduce usage"
+
+This is the real risk to this feature. Rule 2 requires everything be explicit, and the naive
+reading of "explicit" is a prompt before every dictation — which would make the fastest part
+of the product slower, and would train people to dismiss it. A contact feature that makes
+dictation heavier will simply go unused, and an unused feature protects nobody.
+
+The resolution: **explicit means the user chose it once, not that the user is asked every
+time.** Concretely, binding on implementation:
+
+- **No contact is the default and always fine.** The picker never blocks, never modals, never
+  nags. Most dictation has no particular audience.
+- **Selection is sticky, not per-utterance.** Choosing a contact sets it until it is changed,
+  the way the active persona already works. Re-confirming a standing choice is friction with
+  no safety benefit — the user already made the decision.
+- **Retroactive application (§9.1) is what makes this affordable.** Speak first, attribute
+  after, only when it is worth it.
+- **The wizard is optional, not a gate.** Contacts can be created with a name alone; the
+  interview is an offer to make one better, and quitting halfway must still save something
+  usable.
+- **One consent surface, not many.** Contacts inherit the existing privacy wipe and the
+  persona-learning consent flow rather than introducing new prompts of their own.
+
+Where friction and rule 2 genuinely conflict, rule 2 wins — but the conflict is usually a
+sign the design is asking at the wrong moment, not that a confirmation is missing.
