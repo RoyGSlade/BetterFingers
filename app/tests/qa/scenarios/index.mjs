@@ -31,6 +31,7 @@ import { personaScenarios } from './personas.mjs';
 // Signal Desk scenarios carry `ui: 'signal-desk'`; run.mjs filters by UI
 // target, so these are skipped on a default run and vice versa.
 import { signalDeskShellScenarios } from './signal-desk-shell.mjs';
+import { signalDeskSectionScenarios } from './signal-desk-sections.mjs';
 // NOT imported on purpose: ./persona-learning.mjs (3 scenarios, area
 // 'persona-learning'). They drive #personaLearningSection /
 // #personaLearningConfirmButton / #personaLearningPersonaLabel, none of which
@@ -58,4 +59,5 @@ export const scenarios = [
   ...draftsScenarios,
   ...personaScenarios,
   ...signalDeskShellScenarios,
+  ...signalDeskSectionScenarios,
 ];
