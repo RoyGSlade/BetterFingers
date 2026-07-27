@@ -44,7 +44,7 @@ import mcp_client
 from job_manager import JOBS, JobState
 from backend.runtime.dependencies import JobManagerCancellationBridge, PipelineDependencies
 from backend.services.dictation_pipeline import DictationPipeline, FunctionStage
-from backend.services.speech_signals import compute_speech_signals
+from backend.services.speech_signals import compute_speech_signals, summarize_signals
 from backend.services.audio_energy import rms_windows
 from backend.domain.contracts import to_dict as _contract_to_dict
 from output_coordinator import OutputCoordinator
@@ -1856,6 +1856,17 @@ def process_recording_result(
         try:
             # LLM read lease: an unload/reload/select can't drop the runtime
             # while this cleanup awaits llama-server.
+            # Delivery signals are computed and persisted on every draft, but
+            # only reach the prompt when the user opts in: this is the first
+            # path where how something was SAID can influence the words that
+            # get sent, and rule 5 makes stated intensity an invariant. The
+            # summary is numbers-only (see speech_signals.summarize_signals).
+            delivery_summary = None
+            if profile_config.get("use_delivery_signals"):
+                signals = ctx.extra.get("speech_signals")
+                if signals is not None:
+                    delivery_summary = summarize_signals(signals)
+
             with model_runtime.read_lease("llm"):
                 final_text = engine.process_fast_lane(
                     raw_text,
@@ -1864,6 +1875,7 @@ def process_recording_result(
                     chunk_size=llm_chunk_size,
                     progress_callback=_chunk_progress if will_chunk else None,
                     stitch_pass=stitch_enabled,
+                    delivery_summary=delivery_summary,
                 )
         finally:
             if heartbeat is not None:

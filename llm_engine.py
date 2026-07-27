@@ -2267,6 +2267,7 @@ class LLMEngine:
         chunk_size=750,
         progress_callback=None,
         stitch_pass=False,
+        delivery_summary=None,
     ):
         """
         Process text through the sidecar with preset-based prompts.
@@ -2325,6 +2326,27 @@ class LLMEngine:
 
         if rules_text:
             system_prompt += rules_text
+
+        # Delivery signals (opt-in, default off — see the profile's
+        # `use_delivery_signals`). `delivery_summary` is the numbers-only string
+        # from speech_signals.summarize_signals(): axis values and counts, never
+        # transcript text and never an emotion word. That is deliberate under
+        # ACCOMPLISH.md §3 rule 3 — the model is handed observations, with no
+        # field to read a diagnosis out of.
+        #
+        # The instruction is phrased as "may inform tone" and paired with an
+        # explicit preservation clause, because rule 5 makes stated emotional
+        # intensity an invariant: knowing the speaker was fast and loud must not
+        # license amplifying (or flattening) what they actually said.
+        if delivery_summary and str(delivery_summary).strip() and str(delivery_summary).strip() != "none":
+            system_prompt += (
+                "\n\nDELIVERY SIGNALS (observed timing/energy measurements of how this was "
+                f"spoken, not a description of mood): {str(delivery_summary).strip()}. "
+                "These may inform pacing and tone. They must NOT change the meaning, the "
+                "facts, or the stated intensity of the message: preserve the speaker's own "
+                "wording of how strongly they feel, neither amplifying nor softening it. "
+                "Never mention these measurements in your output."
+            )
 
         # A persona temperature (when set) overrides the strict/default heuristic.
         if persona is not None and persona.get("temperature") is not None:

@@ -311,6 +311,10 @@ def _sanitize_profile_values(config, defaults):
         cfg.get("streaming_transcription_enabled", d["streaming_transcription_enabled"]),
         d["streaming_transcription_enabled"],
     )
+    cfg["use_delivery_signals"] = _coerce_bool(
+        cfg.get("use_delivery_signals", d["use_delivery_signals"]),
+        d["use_delivery_signals"],
+    )
     cfg["streaming_batch_min_seconds"] = _coerce_float(
         cfg.get("streaming_batch_min_seconds", d["streaming_batch_min_seconds"]),
         d["streaming_batch_min_seconds"],
@@ -815,6 +819,17 @@ def _profile_defaults():
         # Hands-free auto-stop after trailing silence (Phase 10). Off by default;
         # silence is defined by the no-audio gate thresholds unless the optional
         # auto_stop_rms_threshold / auto_stop_peak_threshold overrides are set.
+        # Feed the numbers-only delivery-signal summary (pace/energy/pause
+        # counts from speech_signals) into the main cleanup prompt.
+        #
+        # OFF by default, and deliberately so: this is the first thing that lets
+        # observed delivery influence the words the user actually sends. Rule 5
+        # makes stated emotional intensity a preservation invariant, so the
+        # default stays off until the preservation eval in
+        # tests/test_delivery_signal_prompt.py is trusted on real models rather
+        # than a fake one. Nothing about this changes what is captured or
+        # stored — the signals are computed and persisted either way.
+        "use_delivery_signals": False,
         "auto_stop_after_silence_enabled": False,
         "auto_stop_silence_ms": 900,
         "auto_stop_min_recording_ms": 700,

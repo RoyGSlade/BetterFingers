@@ -181,3 +181,30 @@ def compute_speech_signals(
         evidence=evidence,
         confidence=confidence,
     )
+
+
+def summarize_signals(signals: SpeechSignals | None) -> str:
+    """Short, bounded, text-free description of delivery, for a prompt.
+
+    Numbers only — never echoes transcript text, matching this module's
+    evidence-never-echoes-text guarantee, and never emits an emotion word.
+    That second property is the load-bearing one once this reaches a model:
+    the prompt gets axes and counts, so there is no field for the model to
+    read a diagnosis out of (ACCOMPLISH.md §3 rule 3).
+
+    Lives here rather than in message_rescue.py because two callers now need
+    it — the rescue prompt and the main dictation prompt — and duplicating it
+    is how the two would drift into describing delivery differently.
+    """
+
+    if signals is None:
+        return "none"
+    axes = signals.delivery_axes or {}
+    parts = [f"{key}={value:.2f}" for key, value in sorted(axes.items()) if isinstance(value, (int, float))]
+    if signals.pause_count:
+        parts.append(f"pauses={signals.pause_count}")
+    if signals.filler_count:
+        parts.append(f"fillers={signals.filler_count}")
+    if signals.self_correction_count:
+        parts.append(f"self_corrections={signals.self_correction_count}")
+    return ", ".join(parts) if parts else "none"

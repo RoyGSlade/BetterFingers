@@ -37,6 +37,7 @@ import string
 from typing import Any, Callable, Mapping, Sequence
 
 from backend.domain.contracts import MessageRescueResult, SpeechSignals
+from backend.services.speech_signals import summarize_signals
 
 # --- Output shape limits (invariant: "strict size ceiling") -----------------
 
@@ -94,20 +95,14 @@ _SYSTEM_INSTRUCTIONS = (
 
 
 def _summarize_signals(signals: SpeechSignals) -> str:
-    """Short, bounded, text-free description of delivery for the prompt.
+    """Compatibility wrapper — the implementation moved to speech_signals.
 
-    Numbers only — never echoes transcript text, matching F2.1's own
-    evidence-never-echoes-text guarantee.
+    Kept so this module's existing callers and tests are untouched (rule 7:
+    extract a seam, leave a wrapper). The main dictation prompt now needs the
+    same summary, and two copies would drift into describing delivery
+    differently in the two places a user sees it.
     """
-    axes = signals.delivery_axes or {}
-    parts = [f"{key}={value:.2f}" for key, value in sorted(axes.items()) if isinstance(value, (int, float))]
-    if signals.pause_count:
-        parts.append(f"pauses={signals.pause_count}")
-    if signals.filler_count:
-        parts.append(f"fillers={signals.filler_count}")
-    if signals.self_correction_count:
-        parts.append(f"self_corrections={signals.self_correction_count}")
-    return ", ".join(parts) if parts else "none"
+    return summarize_signals(signals)
 
 
 def build_rescue_prompt(
