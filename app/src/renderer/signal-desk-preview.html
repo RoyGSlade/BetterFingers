@@ -52,6 +52,22 @@
 -->
 <div id="toastContainer" class="toast-container" role="status" aria-live="polite"></div>
 
+<!--
+  Keyboard shortcut sheet (SPEC 5d). Not decoration: there is no menu bar on
+  this surface, so without a visible list every binding is undiscoverable and
+  therefore unused. Opened with "?" and closed with Escape.
+-->
+<div id="sdShortcutSheet" class="sd-shortcut-sheet" role="dialog" aria-modal="true"
+     aria-labelledby="sdShortcutSheetTitle" hidden>
+  <div class="sd-shortcut-sheet__card">
+    <div class="sd-shortcut-sheet__header">
+      <h2 id="sdShortcutSheetTitle">Keyboard shortcuts</h2>
+      <button type="button" class="sd-btn" id="sdShortcutSheetClose" aria-label="Close shortcuts">×</button>
+    </div>
+    <div class="sd-shortcut-sheet__body" id="sdShortcutSheetBody"></div>
+  </div>
+</div>
+
 <div class="sd-shell" id="sdShell" data-workspace="talk">
 
   <!-- ============================== 3a. Left nav rail ============================== -->
@@ -2351,6 +2367,67 @@
 
   // Debug handle, same convention as __talkWorkspace/__signalCore above.
   window.__signalDeskShell = shell;
+
+  // --- keyboard shortcuts (SPEC 5d) ---
+  const { createShortcutsFeature, describeShortcuts, ACTIONS } = await import('./features/shortcuts.js');
+
+  const sheet = document.getElementById('sdShortcutSheet');
+  const sheetBody = document.getElementById('sdShortcutSheetBody');
+  const click = (id) => document.getElementById(id)?.click();
+
+  function renderSheet(supported) {
+    if (!sheetBody) return;
+    sheetBody.innerHTML = describeShortcuts(supported)
+      .map(
+        (group) =>
+          `<div class="sd-shortcut-group">` +
+          `<span class="sd-shortcut-group__label">${group.group}</span>` +
+          group.items
+            .map(
+              (item) =>
+                `<div class="sd-shortcut-row">` +
+                `<span class="sd-shortcut-row__label">${item.label}</span>` +
+                `<kbd class="sd-shortcut-row__keys">${item.accelerator}</kbd>` +
+                `</div>`,
+            )
+            .join('') +
+          `</div>`,
+      )
+      .join('');
+  }
+
+  const setSheetOpen = (open) => {
+    if (sheet) sheet.hidden = !open;
+  };
+
+  const handlers = {
+    [ACTIONS.GO_TALK]: () => shell.goTo('talk'),
+    [ACTIONS.GO_LIBRARY]: () => shell.goTo('library'),
+    [ACTIONS.GO_STUDIO]: () => shell.goTo('studio'),
+    [ACTIONS.GO_UTILITIES]: () => shell.goTo('utilities'),
+    [ACTIONS.GO_SETTINGS]: () => shell.goTo('settings'),
+    [ACTIONS.TOGGLE_CONTEXT]: () => shell.toggleContextCollapsed(),
+    [ACTIONS.SHOW_HELP]: () => setSheetOpen(true),
+    [ACTIONS.SEND]: () => click('sdSendButton'),
+    [ACTIONS.LISTEN]: () => click('sdListenButton'),
+    [ACTIONS.REVISE]: () => click('sdReviseButton'),
+    // Escape closes the narrowest thing that is open, rather than always
+    // meaning one fixed action.
+    [ACTIONS.CANCEL]: () => {
+      if (sheet && !sheet.hidden) {
+        setSheetOpen(false);
+        return;
+      }
+      document.activeElement?.blur?.();
+    },
+  };
+
+  renderSheet(Object.keys(handlers));
+  document.getElementById('sdShortcutSheetClose')?.addEventListener('click', () => setSheetOpen(false));
+
+  const shortcuts = createShortcutsFeature({ handlers });
+  shortcuts.init();
+  window.__shortcuts = shortcuts;
 </script>
 
 <!--

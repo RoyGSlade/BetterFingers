@@ -210,4 +210,57 @@ export const signalDeskShellScenarios = [
     },
     screenshots: [{ name: 'nav-rail-is-keyboard-navigable' }],
   },
+  {
+    area: 'signal-desk-shell',
+    ui: 'signal-desk',
+    name: 'shortcuts-are-live-and-typing-safe',
+    kind: 'standard',
+    description:
+      'The hybrid shortcut map (SPEC 5d) driven through the real keyboard. Single-key shortcuts navigate when ' +
+      'focus is loose, and -- the property that matters -- go inert the moment focus is in a text field, so ' +
+      'typing a draft cannot fire them. Also opens the shortcut sheet with "?", which is Shift+/ on most ' +
+      'layouts: an early exact-shift match made that key silently dead, taking the only discoverable listing ' +
+      'of every other binding with it.',
+    backendState: coldBoot,
+    async navigate(_page) {},
+    async expects(page) {
+      // Single-key navigation with focus loose.
+      await page.locator('body').click();
+      await page.keyboard.press('2');
+      await expectOnlyWorkspaceVisible(page, 'library');
+      await page.keyboard.press('1');
+      await expectOnlyWorkspaceVisible(page, 'talk');
+
+      // The safety property: the same key must do nothing from a text field.
+      // Asserted unconditionally on purpose -- guarding this behind
+      // `if (await search.count())` would mean a renamed id silently skips the
+      // single most important check here while the scenario still reports PASS.
+      const search = page.locator('#sdLibrarySearchInput');
+      await expect(search, 'library search input missing -- typing-safety unverified').toHaveCount(1);
+
+      await page.keyboard.press('2');
+      await expectOnlyWorkspaceVisible(page, 'library');
+      await search.click();
+      await search.type('3');
+      // "3" would jump to Studio if single-key shortcuts fired while typing.
+      await expectOnlyWorkspaceVisible(page, 'library');
+      await expect(search).toHaveValue('3');
+
+      await page.keyboard.press('Escape');
+      await page.locator('body').click();
+      await page.keyboard.press('1');
+      await expectOnlyWorkspaceVisible(page, 'talk');
+
+      // The shortcut sheet: "?" reports key "?" WITH shiftKey true.
+      await expect(page.locator('#sdShortcutSheet')).toBeHidden();
+      await page.keyboard.press('?');
+      await expect(page.locator('#sdShortcutSheet')).toBeVisible();
+      await expect(page.locator('#sdShortcutSheetBody .sd-shortcut-row')).not.toHaveCount(0);
+
+      // Escape closes the narrowest open thing.
+      await page.keyboard.press('Escape');
+      await expect(page.locator('#sdShortcutSheet')).toBeHidden();
+    },
+    screenshots: [{ name: 'shortcuts-are-live-and-typing-safe' }],
+  },
 ];

@@ -643,14 +643,45 @@
         rawToggleButton.setAttribute('aria-expanded', String(!collapsed));
       });
 
-      // Escape dismisses the review overlay (non-destructive: hides, doesn't decline).
-      document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape') {
-          event.preventDefault();
-          stopTtsIfSpeaking();
-          window.betterFingersReview?.hide?.();
-        }
-      });
+      // Keyboard shortcuts (SPEC 5d), sharing the map with the main window so a
+      // binding cannot mean two different things on two surfaces.
+      //
+      // This overlay gets the shortcuts that matter most in real use: it is
+      // what is on screen at review time, while the main window is usually
+      // behind whatever app the user is dictating into. Only the draft actions
+      // are bound -- workspace navigation has no meaning here, and
+      // createShortcutsFeature leaves unimplemented actions to the browser
+      // rather than swallowing them.
+      //
+      // Escape stays non-destructive: it hides the overlay, it does not decline.
+      import('./features/shortcuts.js')
+        .then(({ createShortcutsFeature, ACTIONS }) => {
+          const click = (id) => document.getElementById(id)?.click();
+          createShortcutsFeature({
+            handlers: {
+              [ACTIONS.SEND]: () => click('acceptButton'),
+              [ACTIONS.DECLINE]: () => click('cancelButton'),
+              [ACTIONS.REVISE]: () => click('changeButton'),
+              [ACTIONS.LISTEN]: () => click('readButton'),
+              [ACTIONS.CANCEL]: () => {
+                stopTtsIfSpeaking();
+                window.betterFingersReview?.hide?.();
+              },
+            },
+          }).init();
+        })
+        .catch((error) => {
+          // Never leave the overlay without a way out: if the shortcut module
+          // fails to load, fall back to the original Escape-only handler.
+          console.warn('shortcuts unavailable; falling back to Escape only:', error);
+          document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              stopTtsIfSpeaking();
+              window.betterFingersReview?.hide?.();
+            }
+          });
+        });
 
       refreshOutputSettings().catch(() => {});
       updateTtsStatusBadge().catch(() => {});
