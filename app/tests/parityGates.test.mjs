@@ -111,13 +111,26 @@ test('the three maps do not silently disagree about a shared concept', () => {
   );
 });
 
-test('the keystone is declared unwired in every workspace that depends on it', () => {
-  // The Talk draft editor blocks its own review row, Library's Reopen and
-  // Studio's teach-from-edit. Recording that in one place and forgetting the
-  // others is how a "done" claim outruns reality.
-  assert.equal(TALK_PLACEMENT_MAP['review.editor'].wired, false);
-  assert.equal(LIBRARY_PLACEMENT_MAP['selected.reopen'].wired, false);
-  assert.equal(STUDIO_PLACEMENT_MAP['learning.teachFromEdit'].wired, false);
+test('nothing depending on the draft editor can be wired before the editor is', () => {
+  // The Talk draft editor is the keystone: Library's "Reopen in Talk" needs
+  // somewhere to reopen INTO, and Studio's teach-from-edit needs an edit diff
+  // to learn from. The implication is one-directional -- an unwired editor
+  // forces its dependents unwired, while a wired editor merely UNBLOCKS them
+  // (they still need their own work). Asserting the dependents are wired here
+  // would be the "done claim outrunning reality" this file exists to prevent.
+  const editorWired = TALK_PLACEMENT_MAP['review.editor'].wired;
+  if (!editorWired) {
+    assert.equal(
+      LIBRARY_PLACEMENT_MAP['selected.reopen'].wired,
+      false,
+      'Reopen claims to be wired while the editor it reopens into is not',
+    );
+    assert.equal(
+      STUDIO_PLACEMENT_MAP['learning.teachFromEdit'].wired,
+      false,
+      'teach-from-edit claims to be wired while the editor producing the edit is not',
+    );
+  }
 });
 
 test('reports the current parity score for each workspace', () => {

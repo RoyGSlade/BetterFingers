@@ -222,7 +222,18 @@
           </span>
         </div>
 
-        <p class="sd-refined-card__hero" id="sdRefinedHero">I should be there around six. I&rsquo;ll message you when I&rsquo;m leaving.</p>
+        <!--
+          The editable draft (SPEC 6 keystone). A <textarea>, not a styled
+          contenteditable: drafts.js reads .value/.selectionStart/.selectionEnd
+          (for Read Selection and for the edit diff that feeds dictionary
+          suggestions), and contenteditable exposes none of those without
+          rewriting drafts.js, personaLearning.js and messageRescueDraft.js.
+          Styled to look exactly like the hero paragraph it replaces.
+        -->
+        <label class="sd-visually-hidden" for="sdRefinedHero">Cleaned message, editable</label>
+        <textarea class="sd-refined-card__hero" id="sdRefinedHero" rows="2"
+                  spellcheck="true" placeholder="Nothing captured yet. Hold Ctrl + Space and speak naturally."></textarea>
+        <p class="sd-refined-card__status" id="sdDraftMessage" role="status" aria-live="polite"></p>
 
         <div class="sd-meta-strip">
           <div class="sd-meta-cell">
@@ -238,17 +249,29 @@
             <span class="sd-meta-cell__label">Persona</span>
             <span class="sd-chip sd-chip--persona-natural"><span id="sdPersonaLabel">Natural</span></span>
           </div>
+          <!--
+            Was "Destination: Discord" -- fiction: no draft carries a
+            destination and the app has no concept of a channel or a person.
+            Replaced with the thing that IS real and that the user actually
+            controls: how the text lands. Both map to existing profile keys
+            (auto_send / send_mode) rather than inventing state.
+          -->
           <div class="sd-meta-cell">
-            <span class="sd-meta-cell__label">Destination</span>
-            <span class="sd-chip sd-chip--destination">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <rect x="4" y="7" width="16" height="11" rx="4"></rect>
-                <circle cx="9" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle>
-                <circle cx="15" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle>
-                <path d="M8 7 9 4h6l1 3"></path>
-              </svg>
-              <span id="sdDestinationLabel">Discord</span>
-            </span>
+            <span class="sd-meta-cell__label">Delivery</span>
+            <div class="sd-delivery-controls">
+              <label class="sd-visually-hidden" for="sdDeliveryMode">Delivery mode</label>
+              <select class="sd-review-select" id="sdDeliveryMode">
+                <option value="review">Review first</option>
+                <option value="immediate">Send immediately</option>
+              </select>
+              <label class="sd-visually-hidden" for="sdDeliveryType">Insert method</label>
+              <select class="sd-review-select" id="sdDeliveryType">
+                <option value="">Profile default</option>
+                <option value="type">Type at cursor</option>
+                <option value="paste">Paste at cursor</option>
+                <option value="clipboard">Copy only</option>
+              </select>
+            </div>
           </div>
         </div>
 
@@ -273,8 +296,49 @@
             <button type="button" class="sd-btn-split__chevron" id="sdSendChevronButton" aria-label="More send options">&#9662;</button>
           </span>
         </div>
+
+        <!--
+          Primary decisions. Placed ABOVE the revise drawer, not below it: a
+          drawer that expands above these would push Accept and Decline down
+          the moment it opens, and a Decline button that moves under the cursor
+          is one that gets mis-clicked. With this order the drawer grows
+          downward into empty space and these stay put.
+        -->
+        <div class="sd-decision-row">
+          <button type="button" class="sd-btn sd-btn--accept" id="sdAcceptButton">Accept</button>
+          <button type="button" class="sd-btn sd-btn--decline" id="sdDeclineButton">Decline</button>
+          <button type="button" class="sd-btn" id="sdRetryButton">Retry</button>
+          <button type="button" class="sd-btn" id="sdCopyButton">Copy</button>
+          <span class="sd-decision-row__meta">
+            <span id="sdDraftTokenSummary"></span>
+            <span id="sdDraftMetadata"></span>
+          </span>
+        </div>
       </div>
-    </section>
+          <!--
+          Revise drawer. The Revise button used to be a documented stub with no
+          handler; it now toggles this, which is where the rewrite tools live.
+          Collapsed by default on purpose: the common path is speak -> read ->
+          accept, and six rewrite controls permanently on screen would bury it.
+        -->
+        <div class="sd-revise-drawer" id="sdReviseDrawer" hidden>
+          <div class="sd-revise-drawer__row">
+            <button type="button" class="sd-btn" id="sdSaveEditButton">Save Edit</button>
+            <button type="button" class="sd-btn" id="sdRewriteShorterButton">Make Shorter</button>
+            <button type="button" class="sd-btn" id="sdRewriteClearerButton">Make Clearer</button>
+            <button type="button" class="sd-btn" id="sdRewriteToneButton">Change Tone</button>
+          </div>
+          <div class="sd-revise-drawer__row">
+            <label class="sd-visually-hidden" for="sdCustomRewriteInstruction">Custom rewrite instruction</label>
+            <input type="text" class="sd-review-select sd-revise-drawer__input" id="sdCustomRewriteInstruction"
+                   placeholder="Custom rewrite instruction…" />
+            <button type="button" class="sd-btn" id="sdRewriteCustomButton">Custom Rewrite</button>
+            <button type="button" class="sd-btn" id="sdReadSelectionButton">Read Selection</button>
+            <button type="button" class="sd-btn" id="sdReadFullButton">Read Full</button>
+          </div>
+        </div>
+
+  </section>
 
     <!-- ---------- LIBRARY workspace (populated, SPEC 5) ----------
          Static markup below is a director-QA fixture: 5 mock cards spanning
@@ -2408,12 +2472,15 @@
     [ACTIONS.GO_SETTINGS]: () => shell.goTo('settings'),
     [ACTIONS.TOGGLE_CONTEXT]: () => shell.toggleContextCollapsed(),
     [ACTIONS.SHOW_HELP]: () => setSheetOpen(true),
-    // Accept / Decline / Retry / Save-edit are intentionally NOT bound here
-    // yet: Talk has no draft editor or action row (SPEC 6, the keystone), so
-    // there is nothing to click. createShortcutsFeature leaves unimplemented
-    // actions to the browser rather than swallowing them, so these stay dead
-    // here and live on the Review Deck until that editor lands.
+    // Now that Talk has a draft editor and a decision row (SPEC 6), the four
+    // shortcuts that were dead on this surface reach real controls. They match
+    // the shipping dashboard's bindings exactly -- see features/shortcuts.js.
     [ACTIONS.SEND]: () => click('sdSendButton'),
+    [ACTIONS.ACCEPT]: () => click('sdAcceptButton'),
+    [ACTIONS.DECLINE]: () => click('sdDeclineButton'),
+    [ACTIONS.RETRY]: () => click('sdRetryButton'),
+    [ACTIONS.SAVE_EDIT]: () => click('sdSaveEditButton'),
+    [ACTIONS.COPY]: () => click('sdCopyButton'),
     [ACTIONS.LISTEN]: () => click('sdListenButton'),
     [ACTIONS.REVISE]: () => click('sdReviseButton'),
     // Escape closes the narrowest thing that is open, rather than always
@@ -2434,6 +2501,8 @@
   shortcuts.init();
   window.__shortcuts = shortcuts;
 </script>
+
+
 
 <!--
   REMOVED: a script here used to force `pref_message_rescue_enabled = 'true'`
@@ -2477,9 +2546,25 @@
   import { createTalkWorkspaceFeature, collectTalkElements } from './features/talkWorkspace.js';
   import { showToast } from './lib/toast.mjs';
 
+  // Single composition point for Talk: the drafts feature is built FIRST and
+  // handed to the workspace, because talkWorkspace.js was designed around a
+  // `hooks.drafts` contract -- its refresh() calls drafts.refreshLatestDraft()
+  // and its setActionsEnabled() gates Listen / Revise / Send on whether a draft
+  // exists. This page never supplied one, so those buttons sat permanently
+  // disabled and the refresh path was dead code.
+  const { buildTalkDrafts } = await import('./talkDrafts.js');
+  const drafts = buildTalkDrafts();
+
   const elements = collectTalkElements(document);
-  const talkWorkspace = createTalkWorkspaceFeature({ elements, hooks: { showToast } });
+  const talkWorkspace = createTalkWorkspaceFeature({ elements, hooks: { showToast, drafts } });
   talkWorkspace.init({ state: 'listening', amplitude: 0.34 });
+  window.__drafts = drafts;
+
+  // init() renders whatever draft is already cached but never fetches one, so
+  // without this the card stays empty and every control stays disabled on a
+  // fresh load. refresh() pulls the latest draft through the drafts feature and
+  // re-renders the card, which is what enables Listen / Revise / Send.
+  talkWorkspace.refresh?.().catch?.(() => {});
 
   // Debug handle for director/manual QA from devtools, e.g.:
   //   window.__signalCore.setState('recording'); window.__signalCore.setAmplitude(0.8);

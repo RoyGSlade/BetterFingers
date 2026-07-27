@@ -235,31 +235,32 @@ export const TALK_PLACEMENT_MAP = {
   'refine.rawTranscript': { section: 'refine', control: 'Raw transcript (collapsible)', wired: true },
   'refine.confidence': { section: 'refine', control: 'Confidence badge + band', wired: true },
   'refine.statusPill': { section: 'refine', control: 'Draft status pill', wired: true },
-  'refine.tokenSummary': { section: 'refine', control: 'Token count / limit + long-text flag', wired: false, note: 'SPEC 6: no token summary element in Talk markup; drafts.js renders it into #draftTokenSummary on the old dashboard' },
-  'refine.metadata': { section: 'refine', control: 'Recording duration + stop reason', wired: false, note: 'SPEC 6: no metadata line in Talk markup' },
+  'refine.tokenSummary': { section: 'refine', control: 'Token count / limit + long-text flag', wired: true },
+  'refine.metadata': { section: 'refine', control: 'Recording duration + stop reason', wired: true },
 
-  'review.editor': { section: 'review', control: 'Cleaned-output editor (textarea)', wired: false, note: 'SPEC 6 KEYSTONE: Talk has no draft editor. drafts.js reads .value/.selectionStart/.selectionEnd, so this must be a real textarea or an element with an equivalent selection API' },
-  'review.saveEdit': { section: 'review', control: 'Save Edit', wired: false, note: 'SPEC 6: blocked on review.editor' },
-  'review.rewriteShorter': { section: 'review', control: 'Make Shorter', wired: false, note: 'SPEC 6: rewrite-tools row not designed for Talk yet' },
-  'review.rewriteClearer': { section: 'review', control: 'Make Clearer', wired: false, note: 'SPEC 6: rewrite-tools row not designed for Talk yet' },
-  'review.rewriteTone': { section: 'review', control: 'Change Tone', wired: false, note: 'SPEC 6: rewrite-tools row not designed for Talk yet' },
-  'review.rewriteCustom': { section: 'review', control: 'Custom rewrite instruction + run', wired: false, note: 'SPEC 6: rewrite-tools row not designed for Talk yet' },
-  'review.revise': { section: 'review', control: 'Revise button', wired: false, note: 'Button exists and is bound, but hooks.onReviseRequested is a documented stub: no 1:1 handler exists without the editor surface' },
+  'review.editor': { section: 'review', control: 'Cleaned-output editor (textarea)', wired: true },
+  'review.saveEdit': { section: 'review', control: 'Save Edit', wired: true },
+  'review.rewriteShorter': { section: 'review', control: 'Make Shorter', wired: true },
+  'review.rewriteClearer': { section: 'review', control: 'Make Clearer', wired: true },
+  'review.rewriteTone': { section: 'review', control: 'Change Tone', wired: true },
+  'review.rewriteCustom': { section: 'review', control: 'Custom rewrite instruction + run', wired: true },
+  'review.revise': { section: 'review', control: 'Revise button (opens rewrite drawer)', wired: true },
   'review.listen': { section: 'review', control: 'Listen / read aloud', wired: true },
-  'review.readSelection': { section: 'review', control: 'Read Selection', wired: false, note: 'SPEC 6: needs a text selection, which needs review.editor' },
+  'review.readSelection': { section: 'review', control: 'Read Selection', wired: true },
 
   'delivery.sendInsert': { section: 'delivery', control: 'Send / Insert primary action', wired: true },
   'delivery.sendVariants': { section: 'delivery', control: 'Send split-button variant popover', wired: false, note: 'DESIGN GAP: no popover component exists anywhere in the repo; hooks.onSendVariantsRequested is a stub' },
-  'delivery.segmented': { section: 'delivery', control: 'Send / Insert / Copy segmented control', wired: false, note: 'Local UI state only; must become (or drive) getSelectedSendAction() to replace #sendActionSelect' },
-  'delivery.accept': { section: 'delivery', control: 'Accept draft', wired: false, note: 'SPEC 6: no action row on Talk yet' },
-  'delivery.decline': { section: 'delivery', control: 'Decline draft', wired: false, note: 'SPEC 6: no action row on Talk yet' },
-  'delivery.retry': { section: 'delivery', control: 'Retry (blocked/error drafts)', wired: false, note: 'SPEC 6: no action row on Talk yet' },
-  'delivery.copy': { section: 'delivery', control: 'Copy cleaned output', wired: false, note: 'SPEC 6: no action row on Talk yet' },
+  'delivery.segmented': { section: 'delivery', control: 'Insert method (type/paste/copy) driving getSelectedSendAction()', wired: true },
+  'delivery.accept': { section: 'delivery', control: 'Accept draft', wired: true },
+  'delivery.decline': { section: 'delivery', control: 'Decline draft', wired: true },
+  'delivery.retry': { section: 'delivery', control: 'Retry (blocked/error drafts)', wired: true },
+  'delivery.copy': { section: 'delivery', control: 'Copy cleaned output', wired: true },
   'delivery.sendResult': { section: 'delivery', control: 'Send-result detail (requested/used action, fallback reason)', wired: false, note: 'SPEC 6: no send-result panel in Talk markup' },
 
   'context.persona': { section: 'context', control: 'Active persona', wired: true },
   'context.processingMode': { section: 'context', control: 'Processing mode (local)', wired: true },
-  'context.destination': { section: 'context', control: 'Destination', wired: false, note: 'No backing field: drafts carry no destination (backend/stores/drafts.py) and no recipient concept exists. See the status bar Target-app cell for the same finding' },
+  'delivery.mode': { section: 'delivery', control: 'Review-first vs send-immediately', wired: true },
+  'context.destination': { section: 'context', control: 'Destination (REMOVED)', wired: false, note: 'Cut, not deferred: no draft carries a destination and the app has no recipient concept. Replaced on the card by Delivery mode + insert method, which are real and user-controlled' },
   'context.confidenceSlider': { section: 'context', control: 'Confidence gate control', wired: false, note: 'Display-only in the mockup; the real gate is a profile setting owned by Settings' },
 };
 
@@ -361,7 +362,13 @@ export function createTalkWorkspaceFeature({ elements, hooks } = {}) {
   function renderRefinedCard(draft) {
     const vm = deriveRefinedViewModel(draft);
 
-    if (els.refinedHero) els.refinedHero.textContent = vm.hero;
+    // Ownership split (SPEC 6): once the hero is a real editor, drafts.js owns
+    // its VALUE -- it is the module that reads .value back for Save Edit, the
+    // edit diff and Read Selection. Writing textContent here as well would
+    // give one element two writers, and the loser is whichever runs second.
+    // This module still owns the badge, meta strip and action enablement.
+    const heroIsEditor = typeof els.refinedHero?.value === 'string';
+    if (els.refinedHero && !heroIsEditor) els.refinedHero.textContent = vm.hero;
 
     if (els.refinedBadge) {
       els.refinedBadge.classList?.remove?.('sd-badge--ready', 'sd-badge--pending', 'sd-badge--error');
