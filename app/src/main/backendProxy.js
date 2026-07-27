@@ -34,6 +34,9 @@ const ROUTE_ALLOWLIST = {
     '/history', '/history/search',
     '/models/recommend', '/models/llm', '/models/llm/:id/download-state',
     '/models/whisper',
+    // The resource ledger (per-component estimated_mb/pinned, available_mb,
+    // ram_floor_mb). Read-only capacity reporting, no message content.
+    '/models/resources',
     '/settings/profiles', '/settings/profiles/:name',
     '/settings/profiles/:name/export',
     '/personas', '/personas-builtins', '/personas/:name',
