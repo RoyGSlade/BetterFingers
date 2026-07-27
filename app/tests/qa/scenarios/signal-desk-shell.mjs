@@ -263,4 +263,37 @@ export const signalDeskShellScenarios = [
     },
     screenshots: [{ name: 'shortcuts-are-live-and-typing-safe' }],
   },
+  {
+    area: 'signal-desk-shell',
+    ui: 'signal-desk',
+    name: 'library-cards-show-real-duration',
+    kind: 'standard',
+    description:
+      'Recording duration was in the static markup and the mockup but renderCard() never emitted it, so it ' +
+      'vanished the moment live data rendered -- the card lost the one field that most distinguishes it at a ' +
+      'glance. Asserts durations render from item data. The mockup pairs duration with a waveform thumbnail, ' +
+      'which is deliberately NOT drawn: items carry aggregate rms/peak only, never a per-time amplitude series, ' +
+      'so any squiggle would be decoration implying it depicts that specific recording.',
+    backendState: coldBoot,
+    async navigate(page) {
+      await page.click('.sd-nav__button[data-nav="library"]');
+    },
+    async expects(page) {
+      await expectOnlyWorkspaceVisible(page, 'library');
+
+      const durations = page.locator('#sdLibraryTimeline .sd-message-card__duration');
+      await expect(durations).not.toHaveCount(0);
+
+      // Real values from the seeded items (6s, 5s, 7s, 4s...), not placeholders.
+      const texts = await durations.allTextContents();
+      for (const text of texts) {
+        expect(text, `"${text}" is not a m:ss duration`).toMatch(/^\d+:[0-5]\d$/);
+      }
+      expect(texts.some((t) => t !== texts[0]), 'every card shows an identical duration -- looks hard-coded').toBe(true);
+
+      // No fabricated waveform crept back in alongside it.
+      await expect(page.locator('#sdLibraryTimeline .sd-message-card__waveform')).toHaveCount(0);
+    },
+    screenshots: [{ name: 'library-cards-show-real-duration' }],
+  },
 ];

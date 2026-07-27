@@ -43,7 +43,8 @@ const REQUIRED_KEYS = {
     'delivery.sendInsert', 'delivery.sendResult', 'capture.toggleRecording', 'capture.emergencyStop',
   ],
   Library: [
-    'search.fullText', 'search.clearHistory', 'timeline.cards', 'timeline.waveformThumb',
+    'search.fullText', 'search.clearHistory', 'timeline.cards', 'timeline.duration',
+    'timeline.waveformThumb',
     'selected.detail', 'selected.reopen', 'selected.resend', 'selected.delete',
     'recovery.recordings', 'recovery.retranscribe',
   ],

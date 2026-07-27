@@ -155,7 +155,8 @@ export const LIBRARY_PLACEMENT_MAP = {
   'timeline.cards': { section: 'timeline', control: 'Message cards (raw -> refined -> status)', wired: true },
   'timeline.statusGlyphs': { section: 'timeline', control: 'Per-item status glyph (sent/failed/draft/pinned)', wired: true },
   'timeline.confidence': { section: 'timeline', control: 'Per-item confidence bar', wired: true },
-  'timeline.waveformThumb': { section: 'timeline', control: 'Per-item waveform thumbnail + duration', wired: false, note: 'Present in the static markup and the mockup, but renderCard() emits no waveform element, so it disappears the moment live data renders' },
+  'timeline.duration': { section: 'timeline', control: 'Per-item recording duration', wired: true },
+  'timeline.waveformThumb': { section: 'timeline', control: 'Per-item waveform thumbnail', wired: false, note: 'Not drawable from available data: items carry aggregate rms/peak only, never a per-time amplitude series, so any thumbnail would be decoration implying it depicts that specific recording. Needs the backend to persist an amplitude envelope per draft' },
   'timeline.loadMore': { section: 'timeline', control: 'Load more / pagination', wired: true },
 
   'selected.detail': { section: 'selected', control: 'Selected item detail panel', wired: true },
@@ -692,6 +693,22 @@ export function createLibraryWorkspaceFeature({ elements, hooks } = {}) {
       confWrap.innerHTML = `<span class="sd-message-card__confidence-label">Confidence</span><span class="sd-message-card__confidence-value">${item.confidencePct}%</span><span class="sd-confidence-bar"><span class="sd-confidence-bar__fill" style="width:${item.confidencePct}%"></span></span>`;
       meta.append(confWrap);
     }
+    // Duration was in the static markup and the mockup but never emitted here,
+    // so it vanished the moment live data rendered. It is real data
+    // (metadata.duration_seconds) and it is the main thing that distinguishes
+    // one card from another at a glance.
+    //
+    // The mockup pairs it with a waveform thumbnail. That is NOT drawn: the
+    // item model carries aggregate rms/peak only, never a per-time amplitude
+    // series, so any squiggle here would be decoration implying it depicts
+    // this specific recording. See LIBRARY_PLACEMENT_MAP timeline.waveformThumb.
+    if (item.durationSeconds > 0) {
+      const duration = document.createElement('span');
+      duration.className = 'sd-message-card__duration';
+      duration.textContent = formatDuration(item.durationSeconds);
+      meta.append(duration);
+    }
+
     const statusLine = document.createElement('div');
     statusLine.className = `sd-message-card__status sd-message-card__status--${item.status === 'sent' ? 'sent' : item.status === 'failed' || item.status === 'recoverable' ? 'failed' : 'draft'}`;
     statusLine.textContent = statusLineText({ status: item.status, dayLabel: statusDayLabel, timeLabel: statusTimeLabel });
