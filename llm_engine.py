@@ -656,6 +656,33 @@ def resolve_dictation_preset(current_preset):
 MAX_FEW_SHOT_EXAMPLES = 5
 
 
+# ACCOMPLISH.md §3 rule 5 -- "Facts survive rewriting. Names, numbers, dates,
+# negation, commitments ... are preservation invariants."
+#
+# Appended to EVERY persona's system prompt at a single choke point in
+# process_fast_lane, because this is an invariant rather than a per-persona
+# style choice: putting it in one persona's text would leave every custom
+# persona -- which is what most people actually run -- free to break it.
+#
+# The behaviour this fixes, found by tools/delivery_preservation.py against the
+# real model: cleanup rewrote spoken numerals as words. "3 failing tests" came
+# back as "three failing tests" and "2 more days and 15 minutes" as "two more
+# days and 15 minutes" -- the ordinary prose convention of spelling out numbers
+# under ten, applied inconsistently ("meet me at 5 and bring 3 copies" survived
+# untouched). Harmless in a sentence; not harmless for a version, a dose, a room
+# number, a price or a time. A tool that promises to type what you said should
+# type the digits you said.
+#
+# Kept as a named constant so it is greppable and directly testable, rather than
+# an inline literal a test can only assert against by reading source.
+PRESERVATION_CLAUSE = (
+    " PRESERVE EXACTLY: keep numbers, dates, times, names and units in the same form "
+    "they were spoken -- never convert digits to words or words to digits, and never "
+    "round, reformat or re-unit them. Keep negations ('not', 'never', \"don't\") and "
+    "stated commitments intact."
+)
+
+
 def get_persona_runtime(name):
     """Return the runtime schema-v2 persona for ``name``, falling back to the
     default persona when the name is unknown. Always returns a normalized dict
@@ -2293,6 +2320,26 @@ class LLMEngine:
                 max_output_tokens = persona["max_completion_tokens"]
             if persona.get("chunk_size") is not None:
                 chunk_size = persona["chunk_size"]
+
+        # ACCOMPLISH.md §3 rule 5 -- "Facts survive rewriting. Names, numbers,
+        # dates, negation, commitments ... are preservation invariants."
+        #
+        # Applied to EVERY persona, at this choke point, on purpose: it is an
+        # invariant, not a per-persona style choice, and putting it in one
+        # persona's prompt would leave every custom persona free to break it.
+        # Both branches above land here, so internal presets and user personas
+        # get the same guarantee.
+        #
+        # The specific behaviour this fixes: cleanup was rewriting spoken
+        # numerals as words -- "3 failing tests" came back as "three failing
+        # tests", "2 more days and 15 minutes" as "two more days and 15
+        # minutes". The model was applying the ordinary prose convention of
+        # spelling out numbers under ten, and applying it inconsistently ("meet
+        # me at 5 and bring 3 copies" survived untouched). Harmless in a
+        # sentence, not harmless for a version, a dose, a room number, a price
+        # or a time -- and the user did not ask for it. A tool that promises to
+        # type what you said should type the digits you said.
+        system_prompt += PRESERVATION_CLAUSE
 
         strict_janitor_mode = str(preset_name or "").strip().lower() == "true janitor"
         if strict_janitor_mode:

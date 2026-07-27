@@ -116,6 +116,58 @@ class TestPromptInjection:
             assert word not in lowered, f"prompt block leaked emotion word {word!r}"
 
 
+class TestPreservationClause:
+    """Rule 5 enforced for EVERY persona, at the one choke point.
+
+    Found by the live probe: cleanup was rewriting spoken numerals as words --
+    "3 failing tests" came back as "three failing tests" -- because the model
+    applies the ordinary prose convention of spelling out numbers under ten.
+    Harmless in a sentence; not harmless for a version, a dose, a room number,
+    a price or a time, and never something the user asked for.
+    """
+
+    @staticmethod
+    def _source():
+        import inspect
+
+        import llm_engine
+
+        return inspect.getsource(llm_engine.LLMEngine.process_fast_lane)
+
+    @staticmethod
+    def _clause():
+        import llm_engine
+
+        return llm_engine.PRESERVATION_CLAUSE
+
+    def test_the_clause_exists(self):
+        assert "PRESERVE EXACTLY" in self._clause()
+
+    def test_it_names_the_numeral_conversion_both_ways(self):
+        # Asserted against the assembled constant, not the source: the literal
+        # is wrapped across lines, so grepping source for "words to digits"
+        # fails on a clause that is perfectly correct at runtime.
+        clause = self._clause().lower()
+        assert "digits to words" in clause
+        assert "words to digits" in clause
+
+    def test_it_covers_the_other_rule_5_invariants(self):
+        clause = self._clause().lower()
+        for invariant in ("numbers", "dates", "times", "names", "units"):
+            assert invariant in clause, f"rule-5 invariant {invariant!r} not preserved"
+        assert "negation" in clause
+
+    def test_it_applies_after_both_prompt_branches(self):
+        # Internal presets and user personas take different branches; the
+        # clause must land after they rejoin, or custom personas -- which is
+        # what most users actually run -- would be free to break the invariant.
+        source = self._source()
+        internal = source.index("INTERNAL_PRESETS[preset_name]")
+        composed = source.index("compose_persona_system_prompt(persona)")
+        applied = source.index("PRESERVATION_CLAUSE")
+        assert applied > internal and applied > composed
+
+
 class TestDefaultOff:
     def test_profile_default_is_off(self):
         from utils import _profile_defaults
