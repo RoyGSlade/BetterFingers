@@ -325,3 +325,24 @@ test('goTo accepts an index and clamps it', () => {
   h.flow.goTo(-3);
   assert.equal(h.flow.getStep().id, 'a');
 });
+
+test('open accepts a step id as well as an index', () => {
+  // Silent when it did not: Math.max(0, 'contactIntro') is NaN, steps[NaN] is
+  // undefined, and render() returned early leaving whatever was last shown --
+  // so a reopened wizard stayed on its "Saved" screen.
+  const h = makeIdHarness(
+    [{ id: 'a', title: 'A' }, { id: 'b', title: 'B' }],
+    ['a', 'b'],
+  );
+  h.flow.open('b');
+  assert.equal(h.flow.getStep().id, 'b');
+  assert.deepEqual(['a', 'b'].filter((_id, i) => !h.stepEls[i].hidden), ['b']);
+});
+
+test('open falls back to the first step for an unknown id', () => {
+  // Unlike goTo, which must not rewind a flow in progress, opening has nothing
+  // to preserve.
+  const h = makeIdHarness([{ id: 'a', title: 'A' }, { id: 'b', title: 'B' }], ['a', 'b']);
+  h.flow.open('nonsense');
+  assert.equal(h.flow.getStep().id, 'a');
+});

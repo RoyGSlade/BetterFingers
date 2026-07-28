@@ -25,6 +25,7 @@ const AUDIO_DEVICES_URL = `${BACKEND_ORIGIN}/runtime/audio-devices`;
 const REFRESH_AUDIO_DEVICES_URL = `${BACKEND_ORIGIN}/runtime/audio-devices/refresh`;
 const RUNTIME_VERSION_URL = `${BACKEND_ORIGIN}/runtime/version`;
 const PERSONAS_URL = `${BACKEND_ORIGIN}/personas`;
+const CONTACTS_URL = `${BACKEND_ORIGIN}/contacts`;
 const TTS_VOICES_URL = `${BACKEND_ORIGIN}/tts/voices`;
 const VOICE_PRESETS_URL = `${BACKEND_ORIGIN}/voice-presets`;
 const WAKE_URL = `${BACKEND_ORIGIN}/wake`;
@@ -486,6 +487,64 @@ async function clearPersonaExamples(name, timeoutMs = 10000) {
   );
 }
 
+// --- Contacts (Stage 11) -----------------------------------------------------
+//
+// A contact records how to speak to someone, not how to reach them, so there is
+// nothing here that sends anything anywhere. Updates go by POST rather than
+// PATCH: the main-process proxy's allowlist is keyed by method and carries only
+// GET/POST/DELETE.
+
+async function fetchContacts(timeoutMs = 2500) {
+  return fetchJson(CONTACTS_URL, timeoutMs);
+}
+
+async function saveContact(fields, timeoutMs = 10000) {
+  return postJson(CONTACTS_URL, fields, timeoutMs);
+}
+
+async function updateContact(contactId, fields, timeoutMs = 10000) {
+  return postJson(`${CONTACTS_URL}/${encodeURIComponent(contactId)}`, fields, timeoutMs);
+}
+
+async function deleteContact(contactId, timeoutMs = 10000) {
+  return proxyRequest(
+    'DELETE',
+    `${CONTACTS_URL}/${encodeURIComponent(contactId)}`,
+    undefined,
+    timeoutMs,
+  );
+}
+
+async function fetchActiveContact(timeoutMs = 2500) {
+  return fetchJson(`${CONTACTS_URL}/active`, timeoutMs);
+}
+
+// Its own route rather than a profile write: save_profile REPLACES the profile
+// with what it is given, so a client sending one key would reset every other
+// setting to its default.
+async function setActiveContact(contactId, timeoutMs = 10000) {
+  return postJson(`${CONTACTS_URL}/active`, { contact_id: contactId || '' }, timeoutMs);
+}
+
+async function startContactInterview(timeoutMs = 10000) {
+  return postJson(`${CONTACTS_URL}/interview/start`, {}, timeoutMs);
+}
+
+async function answerContactInterview(sessionId, answer, timeoutMs = 10000) {
+  return postJson(`${CONTACTS_URL}/interview/answer`, { session_id: sessionId, answer }, timeoutMs);
+}
+
+// Generous timeout: with a model already loaded this is one short generation,
+// but the route also serves the deterministic fallback, and a caller that asks
+// to wait_for_model is waiting on a multi-gigabyte load.
+async function compileContact(sessionId, waitForModel = false, timeoutMs = 120000) {
+  return postJson(
+    `${CONTACTS_URL}/compile`,
+    { session_id: sessionId, wait_for_model: waitForModel === true },
+    timeoutMs,
+  );
+}
+
 async function fetchBuiltinPersonaNames(timeoutMs = 2500) {
   return fetchJson(`${BACKEND_ORIGIN}/personas-builtins`, timeoutMs);
 }
@@ -824,6 +883,15 @@ export {
   addMacro,
   deleteMacro,
   fetchPersonas,
+  fetchContacts,
+  saveContact,
+  updateContact,
+  deleteContact,
+  startContactInterview,
+  answerContactInterview,
+  compileContact,
+  fetchActiveContact,
+  setActiveContact,
   fetchPersonaExamples,
   addPersonaExample,
   deletePersonaExample,

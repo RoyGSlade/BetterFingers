@@ -98,7 +98,7 @@ class ContactRoutesTests(unittest.TestCase):
         the string "compile" -- and presented as a 404."""
         lazy, transcriber = self._ctx()
         with lazy, transcriber, self._client() as client:
-            for literal in ("compile", "interview/start", "interview/answer"):
+            for literal in ("compile", "interview/start", "interview/answer", "active"):
                 resp = client.post(f"/contacts/{literal}", json={"session_id": "nope"})
                 self.assertNotEqual(
                     resp.json().get("detail"), "not_found",
@@ -137,6 +137,73 @@ class ContactRoutesTests(unittest.TestCase):
             self.assertEqual(client.patch("/contacts/nope", json={"notes": "x"}).status_code, 404)
             # Delete is idempotent by design, so a missing id is a success.
             self.assertEqual(client.delete("/contacts/nope").status_code, 200)
+
+    # --- sticky selection ---------------------------------------------------
+
+    def test_the_active_selection_round_trips(self):
+        lazy, transcriber = self._ctx()
+        with lazy, transcriber, self._client() as client:
+            cid = client.post("/contacts", json={"name": "Priya"}).json()["contact"]["id"]
+
+            self.assertIsNone(client.get("/contacts/active").json()["contact_id"])
+            self.assertTrue(client.post("/contacts/active", json={"contact_id": cid}).json()["ok"])
+
+            active = client.get("/contacts/active").json()
+            self.assertEqual(active["contact_id"], cid)
+            self.assertEqual(active["contact"]["name"], "Priya")
+
+    def test_the_selection_can_be_cleared(self):
+        """"No one in particular" is a first-class state, so clearing has to be
+        as easy as choosing."""
+        lazy, transcriber = self._ctx()
+        with lazy, transcriber, self._client() as client:
+            cid = client.post("/contacts", json={"name": "Priya"}).json()["contact"]["id"]
+            client.post("/contacts/active", json={"contact_id": cid})
+
+            client.post("/contacts/active", json={"contact_id": ""})
+            self.assertIsNone(client.get("/contacts/active").json()["contact_id"])
+
+    def test_selecting_an_unknown_contact_is_a_404(self):
+        lazy, transcriber = self._ctx()
+        with lazy, transcriber, self._client() as client:
+            resp = client.post("/contacts/active", json={"contact_id": "nope"})
+            self.assertEqual(resp.status_code, 404, resp.text)
+
+    def test_setting_the_selection_does_not_reset_other_settings(self):
+        """save_profile REPLACES the profile with what it is given, which is
+        exactly why this is a route rather than a one-key write from the
+        renderer: doing it client-side would reset every other setting."""
+        from utils import get_last_active_profile, load_profile, save_profile
+
+        lazy, transcriber = self._ctx()
+        with lazy, transcriber, self._client() as client:
+            cid = client.post("/contacts", json={"name": "Priya"}).json()["contact"]["id"]
+
+            name = get_last_active_profile()
+            profile = load_profile(name)
+            profile["draft_history_limit"] = 42
+            profile["instant_typing"] = True
+            save_profile(name, profile)
+
+            client.post("/contacts/active", json={"contact_id": cid})
+
+            after = load_profile(name)
+            self.assertEqual(after["draft_history_limit"], 42)
+            self.assertIs(after["instant_typing"], True)
+            self.assertEqual(after["active_contact_id"], cid)
+
+    def test_a_deleted_contact_reports_as_nothing_selected(self):
+        """A dangling id must not present as a broken reference: drafts that
+        recorded it keep it, and the picker simply shows none."""
+        lazy, transcriber = self._ctx()
+        with lazy, transcriber, self._client() as client:
+            cid = client.post("/contacts", json={"name": "Priya"}).json()["contact"]["id"]
+            client.post("/contacts/active", json={"contact_id": cid})
+            client.delete(f"/contacts/{cid}")
+
+            active = client.get("/contacts/active").json()
+            self.assertIsNone(active["contact_id"])
+            self.assertIsNone(active["contact"])
 
     # --- interview ----------------------------------------------------------
 

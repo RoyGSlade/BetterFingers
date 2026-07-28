@@ -35,6 +35,7 @@ import {
   STUDIO_ELEMENT_IDS,
   collectStudioElements,
   createStudioWorkspaceFeature,
+  contactsPreferring,
 } from '../src/renderer/features/studioWorkspace.js';
 
 // --- personaSignatureKey / personaSignatureColorVar --------------------------
@@ -426,4 +427,37 @@ test('with no hook, Build with AI still falls back to the dashboard trigger', ()
   });
 
   assert.equal(fallbackTrigger.clicked, 1);
+});
+
+// --- preferred contact (Stage 11) --------------------------------------------
+//
+// Replaces "Preferred Destinations", which read persona.preferred_destinations
+// -- a field no persona has ever carried -- and rendered it as Discord/Gmail/
+// Slack icons. The relationship is real in the other direction: contacts carry
+// preferred_persona.
+
+const CONTACTS = [
+  { id: 'a', name: 'Zoe', preferred_persona: 'Natural' },
+  { id: 'b', name: 'Priya', preferred_persona: 'Formal' },
+  { id: 'c', name: 'Sam', preferred_persona: 'Natural' },
+  { id: 'd', name: 'Nobody', preferred_persona: null },
+];
+
+test('contactsPreferring reads the relationship from the end that stores it', () => {
+  assert.deepEqual(contactsPreferring('Natural', CONTACTS).map((c) => c.name), ['Sam', 'Zoe']);
+});
+
+test('contactsPreferring sorts by name so chips do not reshuffle between renders', () => {
+  const shuffled = [CONTACTS[2], CONTACTS[0]];
+  assert.deepEqual(contactsPreferring('Natural', shuffled).map((c) => c.name), ['Sam', 'Zoe']);
+});
+
+test('a persona nobody prefers gets an empty list, not a fabricated one', () => {
+  assert.deepEqual(contactsPreferring('Playful', CONTACTS), []);
+  assert.deepEqual(contactsPreferring('', CONTACTS), []);
+  assert.deepEqual(contactsPreferring('Natural', null), []);
+});
+
+test('contactsPreferring ignores contacts with no name', () => {
+  assert.deepEqual(contactsPreferring('Natural', [{ id: 'x', preferred_persona: 'Natural' }]), []);
 });

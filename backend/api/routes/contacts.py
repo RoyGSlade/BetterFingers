@@ -143,6 +143,51 @@ async def create_contact_route(request: ContactRequest):
 # --- Interview ---------------------------------------------------------------
 
 
+class ActiveContactRequest(BaseModel):
+    # Empty string and null both mean "no one in particular" -- a first-class
+    # state, not an absence to be filled.
+    contact_id: Optional[str] = None
+
+
+@router.get("/contacts/active")
+async def get_active_contact_route():
+    from utils import get_last_active_profile, load_profile
+
+    profile = load_profile(get_last_active_profile()) or {}
+    contact_id = profile.get("active_contact_id") or None
+    contact = _store().get(contact_id) if contact_id else None
+    # A dangling id -- the contact was deleted while selected -- reports as
+    # nothing selected rather than as a broken reference. The drafts that
+    # recorded it keep it; the picker simply shows none.
+    return {"ok": True, "contact_id": contact["id"] if contact else None, "contact": contact}
+
+
+@router.post("/contacts/active")
+async def set_active_contact_route(request: ActiveContactRequest):
+    """Set (or clear) the sticky selection.
+
+    Its own route rather than a profile write from the renderer, because
+    save_profile REPLACES the profile with what it is given -- a client sending
+    one key would reset every other setting to its default. A one-key change
+    should not require round-tripping the whole profile, and it should not be
+    possible to lose someone's settings by forgetting to.
+    """
+    from utils import get_last_active_profile, load_profile, save_profile
+
+    contact_id = (request.contact_id or "").strip() or None
+    if contact_id and _store().get(contact_id) is None:
+        raise HTTPException(status_code=404, detail=f"Contact '{contact_id}' not found.")
+
+    name = get_last_active_profile()
+    profile = load_profile(name) or {}
+    profile["active_contact_id"] = contact_id
+    try:
+        save_profile(name, profile)
+    except Exception as exc:  # noqa: BLE001 - surfaced, not swallowed
+        raise HTTPException(status_code=500, detail=f"Could not save the selection: {exc}")
+    return {"ok": True, "contact_id": contact_id}
+
+
 @router.post("/contacts/interview/start")
 async def start_contact_interview():
     _evict_if_full()

@@ -260,7 +260,7 @@ export const TALK_PLACEMENT_MAP = {
   'context.persona': { section: 'context', control: 'Active persona', wired: true },
   'context.processingMode': { section: 'context', control: 'Processing mode (local)', wired: true },
   'delivery.mode': { section: 'delivery', control: 'Review-first vs send-immediately', wired: true },
-  'context.destination': { section: 'context', control: 'Destination (REMOVED)', wired: false, note: 'Cut, not deferred: no draft carries a destination and the app has no recipient concept. Replaced on the card by Delivery mode + insert method, which are real and user-controlled' },
+  'context.contact': { section: 'context', control: 'Writing to (recipient picker)', wired: true },
   'context.confidenceSlider': { section: 'context', control: 'Confidence gate control', wired: false, note: 'Display-only in the mockup; the real gate is a profile setting owned by Settings' },
 };
 

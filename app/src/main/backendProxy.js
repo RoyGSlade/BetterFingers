@@ -48,7 +48,7 @@ const ROUTE_ALLOWLIST = {
     '/message-rescue/context', '/message-rescue/generate/:id',
     // Contacts (Stage 11). User-authored records of how to speak to someone --
     // no addresses, no handles, nothing to reach anyone with.
-    '/contacts', '/contacts/:id',
+    '/contacts', '/contacts/:id', '/contacts/active',
   ],
   POST: [
     '/runtime/audio-devices/refresh', '/runtime/warmup',
@@ -76,7 +76,7 @@ const ROUTE_ALLOWLIST = {
     '/wake/models/:id/download',
     '/message-rescue/context/selection', '/message-rescue/context/manual',
     '/message-rescue/generate', '/message-rescue/generate/:id/cancel',
-    '/contacts', '/contacts/:id',
+    '/contacts', '/contacts/:id', '/contacts/active',
     '/contacts/interview/start', '/contacts/interview/answer', '/contacts/compile',
   ],
   DELETE: [

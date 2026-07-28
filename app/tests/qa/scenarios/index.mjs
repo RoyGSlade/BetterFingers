@@ -36,6 +36,7 @@ import { signalDeskTalkScenarios } from './signal-desk-talk.mjs';
 import { onboardingScenarios } from './onboarding.mjs';
 import { firstRunBannerScenarios } from './first-run-banner.mjs';
 import { personaFlowScenarios } from './persona-flow.mjs';
+import { contactsScenarios } from './contacts.mjs';
 // NOT imported on purpose: ./persona-learning.mjs (3 scenarios, area
 // 'persona-learning'). They drive #personaLearningSection /
 // #personaLearningConfirmButton / #personaLearningPersonaLabel, none of which
@@ -68,4 +69,5 @@ export const scenarios = [
   ...onboardingScenarios,
   ...firstRunBannerScenarios,
   ...personaFlowScenarios,
+  ...contactsScenarios,
 ];

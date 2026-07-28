@@ -92,22 +92,29 @@ for (const { name, map, isValidSection } of GATES) {
 }
 
 test('the three maps do not silently disagree about a shared concept', () => {
-  // "Destination" is claimed by Talk's context panel, Library's filter and
-  // Studio's preferred-destinations. None of them can work, because no
-  // destination or recipient concept exists in the backend at all. If one of
-  // them ever flips to wired while the others do not, that is either a real
-  // feature landing or a fabrication returning -- either way it should be a
-  // deliberate edit, not a drift nobody noticed.
-  const destinationEntries = [
-    TALK_PLACEMENT_MAP['context.destination'],
-    LIBRARY_PLACEMENT_MAP['search.destinationFilter'],
-    STUDIO_PLACEMENT_MAP['detail.preferredDestinations'],
+  // Talk's picker, Library's filter and Studio's preferred contact are three
+  // views of ONE backing field. While it did not exist they were three
+  // fabrications called "Destination"; now that contacts are real (Stage 11)
+  // they are three views of contact_id / preferred_persona. Either way they
+  // must agree: one flipping without the others is a real feature landing
+  // half-way, or a fabrication returning, and either should be a deliberate
+  // edit rather than drift nobody noticed.
+  //
+  // This test caught exactly that during Stage 11 -- Library and Studio were
+  // rewired to contacts while Talk's entry still said "Destination (REMOVED)".
+  const contactEntries = [
+    TALK_PLACEMENT_MAP['context.contact'],
+    LIBRARY_PLACEMENT_MAP['search.contactFilter'],
+    STUDIO_PLACEMENT_MAP['detail.preferredContacts'],
   ];
-  const wired = destinationEntries.map((e) => e.wired);
+  for (const [i, entry] of contactEntries.entries()) {
+    assert.ok(entry, `contact entry ${i} is missing from its placement map`);
+  }
+  const wired = contactEntries.map((e) => e.wired);
   assert.equal(
     new Set(wired).size,
     1,
-    'destination is wired in one workspace but not another -- these share a (missing) backing field',
+    'the recipient concept is wired in one workspace but not another -- they share one backing field',
   );
 });
 

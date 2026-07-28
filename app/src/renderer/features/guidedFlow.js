@@ -225,8 +225,23 @@ export function createGuidedFlow({
     if (event.key === 'Tab') trapTab(event);
   }
 
-  function open(startIndex = FIRST_STEP) {
+  /**
+   * @param {number|string} [start] step index, or a step id.
+   *
+   * Accepts an id as well as an index because goTo does, and a caller that
+   * learned one form will reach for it here. Passing an id to an index-only
+   * version was silent rather than loud -- Math.max(0, 'contactIntro') is NaN,
+   * steps[NaN] is undefined, and render() returned early leaving whatever the
+   * dialog last showed. An unknown id falls back to the first step: unlike
+   * goTo, which must not rewind a flow in progress, opening has nothing to
+   * preserve.
+   */
+  function open(start = FIRST_STEP) {
     opener = doc.activeElement;
+    const resolved = typeof start === 'string'
+      ? steps.findIndex((s) => s.id === start)
+      : start;
+    const startIndex = Number.isInteger(resolved) && resolved >= 0 ? resolved : FIRST_STEP;
     index = Math.min(Math.max(FIRST_STEP, startIndex), Math.max(0, steps.length - 1));
     if (root) root.hidden = false;
     keydownHandler = onKeydown;

@@ -186,7 +186,7 @@ export const STUDIO_PLACEMENT_MAP = {
   'detail.delete': { section: 'detail', control: 'Delete persona', wired: true },
   'detail.reliability': { section: 'detail', control: 'Reliability / examples stats', wired: true },
   'detail.tags': { section: 'detail', control: 'Persona tags', wired: false, note: 'No backing field in the persona schema; the mockup shows tags the backend never stores' },
-  'detail.preferredDestinations': { section: 'detail', control: 'Preferred destinations', wired: false, note: 'No backing field, and no destination/recipient concept exists anywhere (see Talk context.destination)' },
+  'detail.preferredContacts': { section: 'detail', control: 'Preferred contact', wired: true },
   'detail.lastUpdated': { section: 'detail', control: 'Last updated by/at', wired: false, note: 'No backing field: personas carry no updated_at or author' },
 
   'voice.blend': { section: 'voice', control: 'Voice blend mix (Clarity/Warmth/Presence)', wired: true },
@@ -447,6 +447,22 @@ export const STRESS_TEST_SAMPLES = [
 
 // --- Reusable element lookup -------------------------------------------------
 
+/**
+ * Contacts that name `personaName` as their preferred persona.
+ *
+ * Read from the contact end because that is the end that stores it: personas
+ * have no preferred_destinations (or preferred_contacts) field and never have.
+ * Sorted by name so the chips do not reshuffle between renders.
+ */
+export function contactsPreferring(personaName, contacts) {
+  const name = String(personaName || '').trim();
+  if (!name) return [];
+  return (Array.isArray(contacts) ? contacts : [])
+    .filter((c) => c && c.name && String(c.preferred_persona || '').trim() === name)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+
 export const STUDIO_ELEMENT_IDS = {
   personaGrid: 'sdPersonaGrid',
   newPersonaButton: 'sdNewPersonaButton',
@@ -515,7 +531,7 @@ export const STUDIO_ELEMENT_IDS = {
   ctxExampleCount: 'sdCtxExampleCount',
   ctxReliabilityValue: 'sdCtxReliabilityValue',
   ctxReliabilityBar: 'sdCtxReliabilityBarFill',
-  ctxDestinations: 'sdCtxPreferredDestinations',
+  ctxPreferredContacts: 'sdCtxPreferredContacts',
   ctxPairedVoice: 'sdCtxPairedVoiceName',
   ctxLastUpdated: 'sdCtxLastUpdated',
   ctxTags: 'sdCtxTags',
@@ -549,6 +565,11 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
   let personaOrder = []; // insertion order (stable render order)
   let builtinNames = new Set();
   let selectedName = null;
+
+  // Contacts, supplied by the host rather than fetched here: Talk already owns
+  // the picker and its list, and two independent fetches would let the two
+  // surfaces disagree about who exists.
+  let contacts = [];
 
   let voiceOptionsCache = []; // [{id, name}]
   let blendBase = { voiceId: '', label: '—' };
@@ -905,10 +926,6 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
 
   // --- rendering: SELECTED PERSONA context panel -----------------------------------
 
-  function destinationInitial(dest) {
-    return String(dest || '?').trim().charAt(0).toUpperCase() || '?';
-  }
-
   function renderContextPanel() {
     const persona = getSelectedPersona();
     const name = selectedName;
@@ -928,21 +945,24 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
     if (els.ctxReliabilityValue) els.ctxReliabilityValue.textContent = reliability === null ? '—' : `${reliability}%`;
     if (els.ctxReliabilityBar) els.ctxReliabilityBar.style.width = reliabilityBarWidth(reliability);
 
-    if (els.ctxDestinations && typeof els.ctxDestinations.replaceChildren === 'function') {
-      els.ctxDestinations.replaceChildren();
-      const destinations = Array.isArray(persona?.preferred_destinations) ? persona.preferred_destinations : [];
-      if (!destinations.length) {
+    // Was "Preferred Destinations", reading persona.preferred_destinations --
+    // a field no persona has ever carried, rendered as Discord/Gmail/Slack
+    // icons. Contacts DO carry preferred_persona, so the relationship is read
+    // from the end that actually stores it: which contacts prefer THIS persona.
+    if (els.ctxPreferredContacts && typeof els.ctxPreferredContacts.replaceChildren === 'function') {
+      els.ctxPreferredContacts.replaceChildren();
+      const preferring = contactsPreferring(name, contacts);
+      if (!preferring.length) {
         const empty = document.createElement('span');
         empty.className = 'sd-context__empty-text';
-        empty.textContent = name ? 'Not set for this persona yet.' : '';
-        els.ctxDestinations.append(empty);
+        empty.textContent = name ? 'No contact prefers this persona yet.' : '';
+        els.ctxPreferredContacts.append(empty);
       } else {
-        destinations.forEach((dest) => {
+        preferring.forEach((contact) => {
           const chip = document.createElement('span');
-          chip.className = 'sd-destination-icon';
-          chip.title = dest;
-          chip.textContent = destinationInitial(dest);
-          els.ctxDestinations.append(chip);
+          chip.className = 'sd-chip sd-chip--contact';
+          chip.textContent = contact.name;
+          els.ctxPreferredContacts.append(chip);
         });
       }
     }
@@ -1240,10 +1260,16 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
     return { getSelectedPersona };
   }
 
+  function setContacts(list) {
+    contacts = Array.isArray(list) ? list.slice() : [];
+    renderContextPanel();
+  }
+
   return {
     init,
     refresh,
     setPersonas,
+    setContacts,
     renderAll,
     selectPersona,
     getSelectedPersona,

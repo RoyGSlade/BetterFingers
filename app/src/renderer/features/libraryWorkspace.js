@@ -147,7 +147,7 @@ export const LIBRARY_PLACEMENT_MAP = {
   'search.fullText': { section: 'search', control: 'Full-text history search', wired: true },
   'search.filterChips': { section: 'search', control: 'All / Pinned / Unsent / Recoverable / Sent chips', wired: true },
   'search.personaFilter': { section: 'search', control: 'Persona filter dropdown', wired: false, note: 'Chip renders but opens no menu: no persona-filter data source is wired yet' },
-  'search.destinationFilter': { section: 'search', control: 'Destination filter dropdown', wired: false, note: 'No backing field: drafts carry no destination (backend/stores/drafts.py)' },
+  'search.contactFilter': { section: 'search', control: 'Contact filter dropdown', wired: true },
   'search.dateFilter': { section: 'search', control: 'Date filter dropdown', wired: false, note: 'Chip renders but opens no menu; GET /history/search takes no date range yet' },
   'search.clearHistory': { section: 'search', control: 'Clear History', wired: false, note: 'DELETE /drafts exists (clearDrafts) but no Library control is bound to it' },
 
@@ -317,11 +317,11 @@ export function mapLibraryConfidenceBand(score, status) {
 
 /**
  * True if `item` matches the current filter/search state.
- * @param {object} item { status, pinned, persona, destination, preview }
- * @param {object} filters { chip: 'all'|'pinned'|'unsent'|'recoverable'|'sent', persona, destination, query }
+ * @param {object} item { status, pinned, persona, contact, preview }
+ * @param {object} filters { chip: 'all'|'pinned'|'unsent'|'recoverable'|'sent', persona, contact, query }
  */
 export function itemMatchesFilters(item, filters = {}) {
-  const { chip = 'all', persona = null, destination = null, query = '' } = filters;
+  const { chip = 'all', persona = null, contact = null, query = '' } = filters;
   if (chip && chip !== 'all') {
     if (chip === 'pinned' && !item?.pinned) return false;
     if (chip === 'unsent' && !(item?.status === 'unsent' || item?.status === 'draft')) return false;
@@ -329,10 +329,10 @@ export function itemMatchesFilters(item, filters = {}) {
     if (chip === 'sent' && item?.status !== 'sent') return false;
   }
   if (persona && item?.persona !== persona) return false;
-  if (destination && item?.destination !== destination) return false;
+  if (contact && item?.contact !== contact) return false;
   const q = String(query || '').trim().toLowerCase();
   if (q) {
-    const haystack = `${item?.preview || ''} ${item?.persona || ''} ${item?.destination || ''}`.toLowerCase();
+    const haystack = `${item?.preview || ''} ${item?.persona || ''} ${item?.contact || ''}`.toLowerCase();
     if (!haystack.includes(q)) return false;
   }
   return true;
@@ -348,8 +348,21 @@ export function filterItems(items, filters = {}) {
  * model this module renders. No DOM involved. `raw` keeps the original
  * draft around so action handlers (Reopen/Listen) can hand it straight back
  * to hooks.drafts.
+ *
+ * `contactsById` resolves a draft's contact_id to a display name. Passed in
+ * rather than fetched here so this stays DOM-free and synchronous, and so a
+ * draft written before contacts existed (or one whose contact was since
+ * deleted) simply shows none.
  */
-export function deriveLibraryItemFromDraft(draft) {
+export function contactNameFor(contactId, contactsById) {
+  if (!contactId || !contactsById) return null;
+  const contact = typeof contactsById.get === 'function'
+    ? contactsById.get(contactId)
+    : contactsById[contactId];
+  return contact?.name || null;
+}
+
+export function deriveLibraryItemFromDraft(draft, contactsById = null) {
   const status = deriveLibraryStatusFromDraft(draft);
   const score = draft?.confidence?.score;
   const confidencePct = formatConfidencePercent(score);
@@ -362,7 +375,13 @@ export function deriveLibraryItemFromDraft(draft) {
     status,
     pinned: false,
     persona: draft?.persona_name || draft?.persona?.name || null,
-    destination: draft?.destination_name || draft?.destination?.name || null,
+    // Was `draft.destination_name || draft.destination?.name` -- neither field
+    // has ever existed, so this was always null and the filter above it always
+    // matched everything. contact_id is real (Stage 11); the NAME needs the
+    // contact list, which the caller supplies, so an unresolved id shows as no
+    // contact rather than as a raw id nobody can read.
+    contactId: draft?.contact_id || null,
+    contact: contactNameFor(draft?.contact_id, contactsById),
     confidencePct,
     confidenceBand: confidencePct === null ? null : mapLibraryConfidenceBand(score, status),
     durationSeconds: Number(draft?.metadata?.duration_seconds || 0),
@@ -383,7 +402,9 @@ export function deriveLibraryItemFromRecording(recording) {
     status: 'unsent',
     pinned: false,
     persona: null,
-    destination: null,
+    // A recording has not been through cleanup yet, so no contact was applied.
+    contactId: null,
+    contact: null,
     confidencePct: null,
     confidenceBand: null,
     durationSeconds: Number(recording?.duration_seconds || 0),
@@ -418,7 +439,7 @@ export const LIBRARY_ELEMENT_IDS = {
   selectedStatusTitle: 'sdSelectedStatusTitle',
   selectedStatusTime: 'sdSelectedStatusTime',
   selectedPersonaName: 'sdSelectedPersonaName',
-  selectedDestinationName: 'sdSelectedDestinationName',
+  selectedContactName: 'sdSelectedContactName',
   selectedAudioDuration: 'sdSelectedAudioDuration',
   selectedAudioPlayButton: 'sdSelectedAudioPlayButton',
   reopenButton: 'sdSelectedReopenButton',
@@ -454,7 +475,7 @@ export function createLibraryWorkspaceFeature({ elements, hooks } = {}) {
   const hks = hooks || {};
 
   let items = [];
-  let filters = { chip: 'all', persona: null, destination: null, query: '' };
+  let filters = { chip: 'all', persona: null, contact: null, query: '' };
   let selectedId = null;
   const pinnedIds = new Set();
   let searchTimer = null;
@@ -662,7 +683,7 @@ export function createLibraryWorkspaceFeature({ elements, hooks } = {}) {
     pipeline.innerHTML = `<span class="sd-message-card__pipeline-stage">Raw</span> → <span class="sd-message-card__pipeline-stage">Refined</span> → <span class="sd-message-card__pipeline-status">${pipelineStatusLabel(item.status)}</span>`;
     main.append(title, pipeline);
 
-    if (item.persona || item.destination) {
+    if (item.persona || item.contact) {
       const chips = document.createElement('div');
       chips.className = 'sd-message-card__chips';
       if (item.persona) {
@@ -671,10 +692,10 @@ export function createLibraryWorkspaceFeature({ elements, hooks } = {}) {
         personaChip.textContent = item.persona;
         chips.append(personaChip);
       }
-      if (item.destination) {
+      if (item.contact) {
         const destChip = document.createElement('span');
-        destChip.className = 'sd-chip sd-chip--destination';
-        destChip.textContent = item.destination;
+        destChip.className = 'sd-chip sd-chip--contact';
+        destChip.textContent = item.contact;
         chips.append(destChip);
       }
       main.append(chips);
@@ -759,7 +780,7 @@ export function createLibraryWorkspaceFeature({ elements, hooks } = {}) {
     }
 
     if (els.selectedPersonaName) els.selectedPersonaName.textContent = item.persona || '—';
-    if (els.selectedDestinationName) els.selectedDestinationName.textContent = item.destination || '—';
+    if (els.selectedContactName) els.selectedContactName.textContent = item.contact || '—';
     if (els.selectedAudioDuration) els.selectedAudioDuration.textContent = formatDuration(item.durationSeconds);
 
     setSelectedActionsEnabled(true);

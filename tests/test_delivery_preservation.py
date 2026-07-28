@@ -238,3 +238,156 @@ class TestFailureAttribution:
         result = run_delivery_probe(verbose_when_agitated, probe=PROBE)
         assert result["length_ratio_exceeded"] is True
         assert result["failure_attributable_to_delivery"] is True
+
+
+# --- Audience axis (Stage 11's gate) -----------------------------------------
+#
+# Same differential, mirrored risk: knowing you are writing to your manager must
+# not license formalising what you said, and knowing you are writing to your
+# brother must not license casualising it. Plus one failure mode delivery
+# signals cannot cause -- inventing a greeting or a sign-off.
+
+from delivery_preservation import (  # noqa: E402
+    CLOSE_AUDIENCE,
+    FORMAL_AUDIENCE,
+    addressing_invented,
+    run_audience_preservation_suite,
+    run_audience_probe,
+)
+
+
+class TestAddressingInvented:
+    def test_an_added_greeting_is_caught(self):
+        added = addressing_invented("the build broke again", "Hi Priya, the build broke again")
+        assert "hi" in added
+
+    def test_an_added_sign_off_is_caught(self):
+        added = addressing_invented("the build broke again", "The build broke again. Best regards")
+        assert "best regards" in added
+
+    def test_a_greeting_the_speaker_actually_said_is_kept(self):
+        # Only ADDITIONS count. A speaker who said "hey" gets to keep it.
+        assert addressing_invented("hey the build broke", "Hey, the build broke.") == []
+
+    def test_matching_is_word_level_not_substring(self):
+        # "best" must be matched by "best regards", not by ordinary prose.
+        assert addressing_invented("pick the option", "Pick the best option we have") == []
+
+    def test_nothing_added_is_an_empty_list(self):
+        assert addressing_invented("the build broke", "The build broke.") == []
+
+
+def _echo(text, audience_summary=None, **_kwargs):
+    return text
+
+
+class TestAudienceProbe:
+    def test_a_model_that_ignores_the_audience_passes(self):
+        # The correct outcome: audience context that changes nothing cannot
+        # have degraded anything.
+        result = run_audience_probe(_echo, probe=PROBE)
+        assert result["status"] == "PASS"
+        assert result["failure_attributable_to_audience"] is False
+
+    def test_the_audience_prose_leaking_into_output_fails(self):
+        def leaky(text, audience_summary=None, **_k):
+            return text if audience_summary is None else f"{text} (for my younger brother)"
+
+        result = run_audience_probe(leaky, probe=PROBE)
+        assert result["status"] == "FAIL"
+        assert result["signal_leak_detected"]
+        assert result["failure_attributable_to_audience"] is True
+
+    def test_an_invented_greeting_fails_and_is_attributed(self):
+        def polite(text, audience_summary=None, **_k):
+            return text if audience_summary is None else f"Hi there, {text}. Kind regards"
+
+        result = run_audience_probe(polite, probe=PROBE)
+        assert result["status"] == "FAIL"
+        assert result["invented_addressing"]
+        assert result["failure_attributable_to_audience"] is True
+
+    def test_a_dropped_intensity_marker_fails(self):
+        def flatten(text, audience_summary=None, **_k):
+            if audience_summary is None:
+                return text
+            return text.replace("really ", "").replace("frustrated", "unhappy")
+
+        result = run_audience_probe(flatten, probe=PROBE)
+        assert result["status"] == "FAIL"
+        assert result["lost_intensity_markers"]
+
+    def test_wildly_different_lengths_between_variants_fail(self):
+        def verbose_when_formal(text, audience_summary=None, **_k):
+            if audience_summary == FORMAL_AUDIENCE:
+                return text + " " + " ".join(["additionally"] * 30)
+            return text
+
+        result = run_audience_probe(verbose_when_formal, probe=PROBE)
+        assert result["status"] == "FAIL"
+        assert result["length_ratio_exceeded"] is True
+
+    def test_a_pre_existing_failure_is_not_blamed_on_the_audience(self):
+        # The whole point of the baseline arm: a model that always drops a fact
+        # was already doing that, and reporting it as an audience regression
+        # would send someone hunting a bug that predates the feature.
+        def always_drops_number(text, audience_summary=None, **_k):
+            return text.replace("20", "").replace("3", "")
+
+        result = run_audience_probe(always_drops_number, probe=PROBE)
+        assert result["status"] == "FAIL"
+        assert result["baseline_also_failed"] is True
+        assert result["failure_attributable_to_audience"] is False
+
+    def test_a_raising_model_is_reported_as_call_failed(self):
+        def boom(_text, audience_summary=None, **_k):
+            raise RuntimeError("no model")
+
+        assert run_audience_probe(boom, probe=PROBE)["status"] == "CALL_FAILED"
+
+    def test_the_probe_passes_the_audience_as_its_own_kwarg(self):
+        seen = []
+
+        def record(text, audience_summary=None, **_k):
+            seen.append(audience_summary)
+            return text
+
+        run_audience_probe(record, probe=PROBE)
+        assert seen == [None, CLOSE_AUDIENCE, FORMAL_AUDIENCE]
+
+    def test_the_audience_blocks_carry_no_name(self):
+        # contacts.audience_block() never emits one, so a probe that fed a name
+        # would be testing a prompt the app never builds.
+        for block in (CLOSE_AUDIENCE, FORMAL_AUDIENCE):
+            assert "Priya" not in block
+            assert "Sarah" not in block
+
+
+class TestAudienceSuite:
+    def test_all_pass_is_the_only_green(self):
+        report = run_audience_preservation_suite(_echo)
+        assert report["overall"] == "PASS"
+        assert report["passed"] == report["probe_count"]
+
+    def test_an_audience_caused_failure_blocks_the_gate(self):
+        def polite(text, audience_summary=None, **_k):
+            return text if audience_summary is None else f"Hello, {text}"
+
+        report = run_audience_preservation_suite(polite)
+        assert report["overall"] == "FAIL_AUDIENCE"
+        assert report["attributable_failures"]
+
+    def test_a_baseline_failure_is_reported_separately(self):
+        def always_drops_number(text, audience_summary=None, **_k):
+            return text.replace("20", "").replace("3", "")
+
+        report = run_audience_preservation_suite(always_drops_number)
+        assert report["overall"] == "FAIL_BASELINE"
+        assert report["attributable_failures"] == []
+
+    def test_the_suite_never_returns_model_text(self):
+        # A failing run must not leak a user's dictation into a log.
+        report = run_audience_preservation_suite(_echo)
+        blob = repr(report)
+        for probe in PROBES:
+            assert probe["transcript"] not in blob

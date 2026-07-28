@@ -5188,6 +5188,25 @@
   white-space: pre-wrap;
 }
 
+/* Secondary line under the recipient picker. Empty when nothing is selected --
+   the absence of a note IS the none state, and a permanent line explaining it
+   would be nagging by other means. */
+.sd-context__note {
+  display: block;
+  margin-top: 4px;
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+}
+
+.sd-context__note:empty { display: none; }
+
+.sd-contact-question {
+  margin: 0;
+  font-size: var(--sd-font-body);
+  line-height: 1.5;
+  color: var(--sd-text-primary);
+}
+
 /* --- Foundry-specific --------------------------------------------------- */
 
 .sd-foundry-log {

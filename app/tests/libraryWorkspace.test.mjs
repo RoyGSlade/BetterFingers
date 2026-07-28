@@ -24,6 +24,7 @@ import {
   itemMatchesFilters,
   filterItems,
   deriveLibraryItemFromDraft,
+  contactNameFor,
   deriveLibraryItemFromRecording,
   LIBRARY_ELEMENT_IDS,
   collectLibraryElements,
@@ -202,13 +203,13 @@ test('mapLibraryConfidenceBand: 60-69 is mid(amber); below 60 is low', () => {
 // --- itemMatchesFilters / filterItems -------------------------------------------
 
 const SAMPLE_ITEMS = [
-  { id: 'a', status: 'sent', pinned: true, persona: 'Natural', destination: 'Discord', preview: 'I should be there around six' },
-  { id: 'b', status: 'sent', pinned: false, persona: 'Professional', destination: 'Slack', preview: 'Can we push the meeting back?' },
-  { id: 'c', status: 'recoverable', pinned: false, persona: 'Natural', destination: 'Discord', preview: 'I wasn’t trying to be rude' },
-  { id: 'd', status: 'unsent', pinned: false, persona: 'Creative', destination: 'Slack', preview: 'I have a few ideas to share' },
+  { id: 'a', status: 'sent', pinned: true, persona: 'Natural', contact: 'Priya', preview: 'I should be there around six' },
+  { id: 'b', status: 'sent', pinned: false, persona: 'Professional', contact: 'Sam', preview: 'Can we push the meeting back?' },
+  { id: 'c', status: 'recoverable', pinned: false, persona: 'Natural', contact: 'Priya', preview: 'I wasn’t trying to be rude' },
+  { id: 'd', status: 'unsent', pinned: false, persona: 'Creative', contact: 'Sam', preview: 'I have a few ideas to share' },
 ];
 
-test('itemMatchesFilters: chip=all with no query/persona/destination matches everything', () => {
+test('itemMatchesFilters: chip=all with no query/persona/contact matches everything', () => {
   assert.equal(SAMPLE_ITEMS.every((item) => itemMatchesFilters(item, { chip: 'all' })), true);
 });
 
@@ -222,14 +223,17 @@ test('itemMatchesFilters: chip=sent / recoverable / unsent partition correctly',
   assert.deepEqual(filterItems(SAMPLE_ITEMS, { chip: 'unsent' }).map((i) => i.id), ['d']);
 });
 
-test('itemMatchesFilters: persona/destination filters narrow further', () => {
+test('itemMatchesFilters: persona/contact filters narrow further', () => {
   assert.deepEqual(filterItems(SAMPLE_ITEMS, { chip: 'all', persona: 'Natural' }).map((i) => i.id), ['a', 'c']);
-  assert.deepEqual(filterItems(SAMPLE_ITEMS, { chip: 'all', destination: 'Slack' }).map((i) => i.id), ['b', 'd']);
+  assert.deepEqual(filterItems(SAMPLE_ITEMS, { chip: 'all', contact: 'Sam' }).map((i) => i.id), ['b', 'd']);
 });
 
-test('itemMatchesFilters: query does a case-insensitive substring match across preview/persona/destination', () => {
+test('itemMatchesFilters: query does a case-insensitive substring match across preview/persona/contact', () => {
   assert.deepEqual(filterItems(SAMPLE_ITEMS, { chip: 'all', query: 'MEETING' }).map((i) => i.id), ['b']);
-  assert.deepEqual(filterItems(SAMPLE_ITEMS, { chip: 'all', query: 'discord' }).map((i) => i.id), ['a', 'c']);
+  // Searching a contact name finds their messages: the haystack covers the
+  // contact, which is now a real field rather than the always-null
+  // `destination` it replaced.
+  assert.deepEqual(filterItems(SAMPLE_ITEMS, { chip: 'all', query: 'priya' }).map((i) => i.id), ['a', 'c']);
   assert.deepEqual(filterItems(SAMPLE_ITEMS, { chip: 'all', query: 'zzz-no-match' }), []);
 });
 
@@ -321,4 +325,43 @@ test('createLibraryWorkspaceFeature: setChipFilter/handleSearchInput never throw
   // verification rather than a unit test, same as talkWorkspace.test.mjs
   // does for its network-calling handlers.
   assert.doesNotThrow(() => feature.handleSearchInput(''));
+});
+
+// --- contacts (Stage 11) ------------------------------------------------------
+//
+// Replaces the `destination` fabrication: drafts never had a destination_name
+// field, so that mapper was always null and the filter above it always matched
+// everything. contact_id is real; the NAME needs the contact list.
+
+test('contactNameFor resolves an id through the supplied lookup', () => {
+  const byId = new Map([['a1', { id: 'a1', name: 'Priya' }]]);
+  assert.equal(contactNameFor('a1', byId), 'Priya');
+  assert.equal(contactNameFor('a1', { a1: { name: 'Priya' } }), 'Priya', 'plain objects work too');
+});
+
+test('contactNameFor returns null rather than an unreadable id', () => {
+  // A draft written before contacts existed, or whose contact was deleted,
+  // shows no contact -- never a raw id nobody can read.
+  assert.equal(contactNameFor('gone', new Map()), null);
+  assert.equal(contactNameFor(null, new Map()), null);
+  assert.equal(contactNameFor('a1', null), null);
+});
+
+test('deriveLibraryItemFromDraft carries the contact id and resolved name', () => {
+  const byId = new Map([['a1', { id: 'a1', name: 'Priya' }]]);
+  const item = deriveLibraryItemFromDraft({ id: 7, final_text: 'hi', contact_id: 'a1' }, byId);
+  assert.equal(item.contactId, 'a1');
+  assert.equal(item.contact, 'Priya');
+});
+
+test('a draft with no contact is a first-class state, not an empty label', () => {
+  const item = deriveLibraryItemFromDraft({ id: 7, final_text: 'hi' });
+  assert.equal(item.contactId, null);
+  assert.equal(item.contact, null);
+});
+
+test('a recording carries no contact — it has not been through cleanup', () => {
+  const item = deriveLibraryItemFromRecording({ id: 3, raw_text: 'hi' });
+  assert.equal(item.contactId, null);
+  assert.equal(item.contact, null);
 });

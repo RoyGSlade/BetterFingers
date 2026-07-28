@@ -471,6 +471,114 @@
 <button type="button" id="openFoundryButton" hidden aria-hidden="true" tabindex="-1"></button>
 <div id="wizardStepProgress" hidden></div>
 
+<!--
+  Contact creation (Stage 11 section 6) on the guided-flow shell -- the fifth
+  flow docs/ui/SIGNAL_DESK_GUIDED_FLOWS.md section 4d reserved it for.
+
+  "Just save the name" sits on the FIRST screen rather than being buried as a
+  skip link, because creating a contact from a name alone is the supported path
+  and the interview is an offer to make it better (design section 10). Nothing
+  here is a gate: the picker works with no contacts, and dictating never routes
+  through this dialog.
+-->
+<div id="sdContactFlow" class="sd-flow sd-persona-flow" role="dialog" aria-modal="true"
+     aria-labelledby="sdContactFlowTitle" hidden>
+  <div class="sd-flow__card">
+    <header class="sd-flow__header">
+      <h2 class="sd-flow__title" id="sdContactFlowTitle" data-flow-title tabindex="-1">Add a contact</h2>
+      <div class="sd-flow__steps" data-flow-progress role="img" aria-label="Step 1 of 4">
+        <span class="sd-flow__dot" data-flow-dot data-state="current"></span>
+        <span class="sd-flow__dot" data-flow-dot data-state="upcoming"></span>
+        <span class="sd-flow__dot" data-flow-dot data-state="upcoming"></span>
+        <span class="sd-flow__dot" data-flow-dot data-state="upcoming"></span>
+      </div>
+      <button type="button" class="sd-btn" data-flow-close aria-label="Close">&times;</button>
+    </header>
+
+    <div class="sd-flow__body">
+      <section class="sd-flow__step" data-flow-step="contactIntro" hidden>
+        <div class="sd-persona-step">
+          <p class="sd-persona-step__desc">
+            A contact records how you talk to someone &mdash; not how to reach them. There is no
+            phone number, email or handle here, because BetterFingers never sends anything
+            anywhere on its own.
+          </p>
+          <label class="sd-field">
+            <span class="sd-field__label">Who is this?</span>
+            <input id="sdContactSeedName" class="sd-input" type="text" placeholder="A name or a nickname" />
+          </label>
+          <div class="sd-persona-actions">
+            <button type="button" class="sd-btn sd-btn--primary" id="sdContactStartInterview">Answer a few questions</button>
+            <button type="button" class="sd-btn" id="sdContactSaveNameOnly">Just save the name</button>
+          </div>
+          <p class="sd-persona-step__desc">
+            The questions run on your own model. If none is loaded you can still answer them
+            &mdash; your words are kept as written instead of being polished.
+          </p>
+        </div>
+      </section>
+
+      <section class="sd-flow__step" data-flow-step="contactInterview" hidden>
+        <div class="sd-persona-step">
+          <span class="sd-field__label" id="sdContactProgressNote"></span>
+          <p class="sd-contact-question" id="sdContactQuestion"></p>
+          <div class="sd-foundry-answer">
+            <label class="sd-visually-hidden" for="sdContactAnswer">Your answer</label>
+            <textarea id="sdContactAnswer" class="sd-input sd-input--area" placeholder="Type your answer, or leave blank to skip&hellip;"></textarea>
+            <button type="button" class="sd-btn sd-btn--primary" id="sdContactSendAnswer">Send</button>
+          </div>
+          <div class="sd-persona-message" id="sdContactPushback" role="status" aria-live="polite"></div>
+        </div>
+      </section>
+
+      <section class="sd-flow__step" data-flow-step="contactReview" hidden>
+        <div class="sd-persona-step">
+          <p class="sd-persona-step__desc">Every field is yours to change before anything is saved.</p>
+          <div class="sd-persona-message" id="sdContactReviewNote" role="status" aria-live="polite"></div>
+          <label class="sd-field">
+            <span class="sd-field__label">Name</span>
+            <input id="sdContactName" class="sd-input" type="text" />
+          </label>
+          <label class="sd-field">
+            <span class="sd-field__label">How you know them</span>
+            <input id="sdContactRelationship" class="sd-input" type="text" />
+          </label>
+          <label class="sd-field">
+            <span class="sd-field__label">How you talk to them</span>
+            <textarea id="sdContactTone" class="sd-input sd-input--area"></textarea>
+          </label>
+          <label class="sd-field">
+            <span class="sd-field__label">Worth knowing</span>
+            <textarea id="sdContactNotes" class="sd-input sd-input--area"></textarea>
+          </label>
+          <label class="sd-field">
+            <span class="sd-field__label">Preferred persona (optional)</span>
+            <input id="sdContactPersona" class="sd-input" type="text" placeholder="Leave blank for none" />
+          </label>
+          <div class="sd-persona-actions">
+            <button type="button" class="sd-btn sd-btn--primary" id="sdContactSave">Save contact</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="sd-flow__step" data-flow-step="contactSaved" hidden>
+        <div class="sd-persona-step">
+          <p class="sd-persona-step__desc">
+            Saved <strong id="sdContactSavedName"></strong>. Pick them under
+            <strong>Writing to</strong> whenever you want a message written for them &mdash;
+            it is never applied unless you choose it.
+          </p>
+          <div class="sd-persona-actions">
+            <button type="button" class="sd-btn sd-btn--primary" id="sdContactDone">Done</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="sd-persona-message sd-persona-flow__message" id="sdContactMessage" role="status" aria-live="polite"></div>
+  </div>
+</div>
+
 <div class="sd-shell" id="sdShell" data-workspace="talk">
 
   <!-- ============================== 3a. Left nav rail ============================== -->
@@ -869,7 +977,7 @@
       <div class="sd-library-toolbar">
         <div class="sd-library-search">
           <svg class="sd-library-search__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.5" y2="16.5"></line></svg>
-          <input type="search" class="sd-library-search__input" id="sdLibrarySearchInput" placeholder="Search messages, personas, or destinations&hellip;" />
+          <input type="search" class="sd-library-search__input" id="sdLibrarySearchInput" placeholder="Search messages, personas, or contacts&hellip;" />
         </div>
         <button type="button" class="sd-library-filter-btn" id="sdLibraryFilterButton" aria-label="Filter options">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"></line><circle cx="9" cy="6" r="2" fill="var(--sd-surface-raised)"></circle><line x1="4" y1="12" x2="20" y2="12"></line><circle cx="15" cy="12" r="2" fill="var(--sd-surface-raised)"></circle><line x1="4" y1="18" x2="20" y2="18"></line><circle cx="7" cy="18" r="2" fill="var(--sd-surface-raised)"></circle></svg>
@@ -895,7 +1003,7 @@
           Sent
         </button>
         <button type="button" class="sd-filter-chip sd-filter-chip--dropdown" id="sdFilterPersona">Persona <span class="sd-filter-chip__chevron" aria-hidden="true">&#9662;</span></button>
-        <button type="button" class="sd-filter-chip sd-filter-chip--dropdown" id="sdFilterDestination">Destination <span class="sd-filter-chip__chevron" aria-hidden="true">&#9662;</span></button>
+        <button type="button" class="sd-filter-chip sd-filter-chip--dropdown" id="sdFilterContact">Contact <span class="sd-filter-chip__chevron" aria-hidden="true">&#9662;</span></button>
         <button type="button" class="sd-filter-chip sd-filter-chip--dropdown" id="sdFilterDate">Date <span class="sd-filter-chip__chevron" aria-hidden="true">&#9662;</span></button>
       </div>
 
@@ -918,7 +1026,7 @@
                   <div class="sd-message-card__pipeline" data-status="sent"><span class="sd-message-card__pipeline-stage">Raw</span> &rarr; <span class="sd-message-card__pipeline-stage">Refined</span> &rarr; <span class="sd-message-card__pipeline-status">Sent</span></div>
                   <div class="sd-message-card__chips">
                     <span class="sd-chip sd-chip--persona">Natural</span>
-                    <span class="sd-chip sd-chip--destination-discord">
+                    <span class="sd-chip sd-chip--contact">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="16" height="11" rx="4"></rect><circle cx="9" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="15" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle><path d="M8 7 9 4h6l1 3"></path></svg>
                       Discord #general
                     </span>
@@ -952,7 +1060,7 @@
                   <div class="sd-message-card__pipeline" data-status="sent"><span class="sd-message-card__pipeline-stage">Raw</span> &rarr; <span class="sd-message-card__pipeline-stage">Refined</span> &rarr; <span class="sd-message-card__pipeline-status">Sent</span></div>
                   <div class="sd-message-card__chips">
                     <span class="sd-chip sd-chip--persona">Professional</span>
-                    <span class="sd-chip sd-chip--destination">
+                    <span class="sd-chip sd-chip--contact">
                       <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2" fill="#36C5F0"></rect><rect x="14" y="3" width="7" height="7" rx="2" fill="#2EB67D"></rect><rect x="3" y="14" width="7" height="7" rx="2" fill="#ECB22E"></rect><rect x="14" y="14" width="7" height="7" rx="2" fill="#E01E5A"></rect></svg>
                       Slack #team-ops
                     </span>
@@ -986,7 +1094,7 @@
                   <div class="sd-message-card__pipeline" data-status="recoverable"><span class="sd-message-card__pipeline-stage">Raw</span> &rarr; <span class="sd-message-card__pipeline-stage">Refined</span> &rarr; <span class="sd-message-card__pipeline-status">Recoverable</span></div>
                   <div class="sd-message-card__chips">
                     <span class="sd-chip sd-chip--persona">Natural</span>
-                    <span class="sd-chip sd-chip--destination-discord">
+                    <span class="sd-chip sd-chip--contact">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="16" height="11" rx="4"></rect><circle cx="9" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="15" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle><path d="M8 7 9 4h6l1 3"></path></svg>
                       Discord #general
                     </span>
@@ -1027,7 +1135,7 @@
                   <div class="sd-message-card__pipeline" data-status="sent"><span class="sd-message-card__pipeline-stage">Raw</span> &rarr; <span class="sd-message-card__pipeline-stage">Refined</span> &rarr; <span class="sd-message-card__pipeline-status">Sent</span></div>
                   <div class="sd-message-card__chips">
                     <span class="sd-chip sd-chip--persona">Professional</span>
-                    <span class="sd-chip sd-chip--destination">
+                    <span class="sd-chip sd-chip--contact">
                       <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"></rect><path d="M4 6l8 6 8-6" fill="none" stroke="#EF4444" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg>
                       Email
                     </span>
@@ -1061,7 +1169,7 @@
                   <div class="sd-message-card__pipeline" data-status="unsent"><span class="sd-message-card__pipeline-stage">Raw</span> &rarr; <span class="sd-message-card__pipeline-stage">Refined</span> &rarr; <span class="sd-message-card__pipeline-status">Unsent</span></div>
                   <div class="sd-message-card__chips">
                     <span class="sd-chip sd-chip--persona">Creative</span>
-                    <span class="sd-chip sd-chip--destination">
+                    <span class="sd-chip sd-chip--contact">
                       <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2" fill="#36C5F0"></rect><rect x="14" y="3" width="7" height="7" rx="2" fill="#2EB67D"></rect><rect x="3" y="14" width="7" height="7" rx="2" fill="#ECB22E"></rect><rect x="14" y="14" width="7" height="7" rx="2" fill="#E01E5A"></rect></svg>
                       Slack #product
                     </span>
@@ -2643,15 +2751,34 @@
         anywhere in the app. It read as a configured setting a user could rely
         on, which is worse than showing nothing.
 
-        A real recipient picker lands here once contacts exist --
-        docs/CONTACT_WIZARD_DESIGN.md section 6 -- backed by a record the user
-        actually created.
+        The real thing is below: a recipient picker backed by contacts the user
+        created (docs/CONTACT_WIZARD_DESIGN.md section 6).
 
         Still outstanding elsewhere: Library's "Destination" filter chip and its
         per-card destination chips, and Studio's "Preferred Destinations". Same
-        fiction, different surfaces, and they go with the contact work that
-        gives them something true to show.
+        fiction, different surfaces.
       -->
+
+      <!--
+        Writing to (Stage 11). "No one in particular" is a first-class state and
+        the default, not an empty slot: most dictation has no audience, and a
+        picker that nags for one trains people to pick wrong. The note beneath
+        is blank when nothing is selected -- the absence of a note IS the none
+        state, and a permanent line explaining it would be nagging by other
+        means.
+
+        Sticky, like the persona above it: the choice persists until changed.
+        Rule 2 is about who decides, not how often they are interrupted.
+      -->
+      <div class="sd-context__section">
+        <span class="sd-context__section-label">Writing to <span class="sd-help" aria-hidden="true">?</span></span>
+        <label class="sd-visually-hidden" for="sdContactPicker">Writing to</label>
+        <select class="sd-review-select" id="sdContactPicker">
+          <option value="">No one in particular</option>
+        </select>
+        <span class="sd-context__note" id="sdContactPickerNote"></span>
+        <button type="button" class="sd-link-btn" id="sdContactNewButton">&#65291; Add a contact</button>
+      </div>
 
       <div class="sd-context__section">
         <span class="sd-context__section-label">Delivery <span class="sd-help" aria-hidden="true">?</span></span>
@@ -2763,13 +2890,13 @@
         </div>
 
         <div class="sd-context__section">
-          <span class="sd-context__section-label">Destination</span>
-          <button type="button" class="sd-dropdown" id="sdSelectedDestinationDropdown">
+          <span class="sd-context__section-label">Contact</span>
+          <button type="button" class="sd-dropdown" id="sdSelectedContactDropdown">
             <span class="sd-dropdown__icon" aria-hidden="true" style="background: rgba(88,101,242,0.16); color: #8C9EFF;">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="11" rx="4"></rect><circle cx="9" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="15" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle><path d="M8 7 9 4h6l1 3"></path></svg>
             </span>
             <span class="sd-dropdown__text">
-              <span class="sd-dropdown__name" id="sdSelectedDestinationName">Discord #general</span>
+              <span class="sd-dropdown__name" id="sdSelectedContactName">&mdash;</span>
             </span>
             <span class="sd-dropdown__chevron" aria-hidden="true">&#9662;</span>
           </button>
@@ -2868,14 +2995,16 @@
         </div>
 
         <div class="sd-context__section">
-          <span class="sd-context__section-label">Preferred Destinations</span>
-          <div class="sd-preferred-destinations" id="sdCtxPreferredDestinations">
-            <span class="sd-destination-icon" title="Discord">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="16" height="11" rx="4"></rect><circle cx="9" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="15" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle><path d="M8 7 9 4h6l1 3"></path></svg>
-            </span>
-            <span class="sd-destination-icon" title="Gmail">G</span>
-            <span class="sd-destination-icon" title="Slack">S</span>
-          </div>
+          <span class="sd-context__section-label">Preferred contact</span>
+          <!--
+            Was "Preferred Destinations" with three hard-coded service icons
+            (Discord/Gmail/Slack) -- the last of the three destination
+            fabrications, and backed by nothing: personas carry no
+            preferred_destinations field. Contacts DO carry preferred_persona,
+            so this now reports the contacts that name this persona, which is
+            the same relationship read from the end that actually stores it.
+          -->
+          <div class="sd-preferred-contacts" id="sdCtxPreferredContacts"></div>
         </div>
 
         <div class="sd-context__section">
@@ -3266,7 +3395,7 @@
       preview: 'I should be there around six…',
       rawText: 'i should be there around six i’ll message you when i’m leaving',
       refinedText: 'I should be there around six. I’ll message you when I’m leaving.',
-      persona: 'Natural', destination: 'Discord #general', durationSeconds: 6,
+      persona: 'Natural', contact: 'Priya', durationSeconds: 6,
       timestamp: at(0, 10, 32), sentAtTimestamp: at(0, 10, 33),
       ...withBand(94, 'sent'),
     },
@@ -3275,7 +3404,7 @@
       preview: 'Can we push the meeting back?',
       rawText: 'can we push the meeting back',
       refinedText: 'Can we push the meeting back?',
-      persona: 'Professional', destination: 'Slack #team-ops', durationSeconds: 5,
+      persona: 'Professional', contact: null, durationSeconds: 5,
       timestamp: at(0, 9, 47), sentAtTimestamp: at(0, 9, 48),
       ...withBand(88, 'sent'),
     },
@@ -3284,7 +3413,7 @@
       preview: 'I wasn’t trying to be rude…',
       rawText: 'i wasnt trying to be rude i just meant',
       refinedText: 'I wasn’t trying to be rude — I just meant...',
-      persona: 'Natural', destination: 'Discord #general', durationSeconds: 7,
+      persona: 'Natural', contact: null, durationSeconds: 7,
       timestamp: at(0, 8, 15), sentAtTimestamp: null,
       ...withBand(61, 'recoverable'),
     },
@@ -3293,7 +3422,7 @@
       preview: 'Thanks for jumping on this.',
       rawText: 'thanks for jumping on this',
       refinedText: 'Thanks for jumping on this.',
-      persona: 'Professional', destination: 'Email', durationSeconds: 4,
+      persona: 'Professional', contact: null, durationSeconds: 4,
       timestamp: at(1, 16, 22), sentAtTimestamp: at(1, 16, 22),
       ...withBand(91, 'sent'),
     },
@@ -3302,7 +3431,7 @@
       preview: 'I have a few ideas to share…',
       rawText: 'i have a few ideas to share about the roadmap',
       refinedText: 'I have a few ideas to share about the roadmap.',
-      persona: 'Creative', destination: 'Slack #product', durationSeconds: 6,
+      persona: 'Creative', contact: null, durationSeconds: 6,
       timestamp: at(1, 11, 8), sentAtTimestamp: null,
       ...withBand(72, 'unsent'),
     },
@@ -3828,6 +3957,76 @@
   // time -- this script runs after that one.
   window.__personaFlow = personaFlow;
   window.__personas = personas;
+</script>
+
+<!--
+  Stage 11 section 6: the recipient picker and the contact wizard.
+
+  The selection is sticky, so choosing someone writes `active_contact_id` to the
+  profile the same way the active persona is stored. It is deliberately NOT
+  applied to anything by being available: it changes the prompt only when
+  `use_audience_context` is on, which ships off.
+-->
+<script type="module">
+  import * as backendApi from './api/backend.js';
+  import { createContactsFeature, collectContactElements } from './features/contacts.js';
+  import { createContactWizard, collectContactWizardElements } from './features/contactWizard.js';
+  import { showToast } from './lib/toast.mjs';
+  import { setMessage } from './lib/message.mjs';
+
+  const contactWizard = createContactWizard({
+    elements: collectContactWizardElements(document),
+    api: backendApi,
+    hooks: {
+      setMessage,
+      onSaved: (contact) => {
+        showToast(`Saved contact "${contact?.name || ''}".`, 'success');
+        // Refresh the picker, but do NOT select the new contact: creating
+        // someone is not the same as declaring you are writing to them, and
+        // rule 2's clarification says available never means applied.
+        contacts.refresh();
+      },
+    },
+  });
+
+  const contacts = createContactsFeature({
+    elements: collectContactElements(document),
+    api: backendApi,
+    hooks: {
+      showToast,
+      onCreateRequested: () => contactWizard.open(),
+      onSelect: async (contactId) => {
+        try {
+          await backendApi.setActiveContact(contactId);
+        } catch (error) {
+          showToast(`Could not remember that selection: ${error.message}`, 'warning');
+        }
+      },
+    },
+  });
+
+  // Load the list, then restore the sticky selection. Order matters: setting a
+  // selection before the options exist would silently fall back to none.
+  contacts.refresh()
+    .then(() => backendApi.fetchActiveContact())
+    .then((active) => contacts.setSelected(active?.contact_id || ''))
+    .catch(() => {});
+
+  // Studio's "Preferred contact" reads the same list rather than fetching its
+  // own: two independent fetches would let the two surfaces disagree about who
+  // exists.
+  function shareContacts() {
+    window.__studioWorkspace?.setContacts?.(contacts.getContacts());
+  }
+  const originalRefresh = contacts.refresh;
+  contacts.refresh = async () => {
+    const list = await originalRefresh();
+    shareContacts();
+    return list;
+  };
+
+  window.__contacts = contacts;
+  window.__contactWizard = contactWizard;
 </script>
 
 </body>

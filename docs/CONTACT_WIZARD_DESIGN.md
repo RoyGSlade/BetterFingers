@@ -1,12 +1,14 @@
 # Contacts — design doc
 
-**Status:** signed off; backend landing (Stage 11).
-**Landed so far:** the store (`backend/services/contacts.py`), the interview
-(`backend/services/contact_interview.py`), the routes (`backend/api/routes/contacts.py`), and
-privacy coverage — contacts are wiped by `/privacy/wipe` and disclosed on the privacy screen
-in the same change that created the store. See §4a for what implementation changed about this
-design. **Not yet landed:** the optional `contact_id` on drafts and the audience prompt block
-(§7), and the UI (§6).
+**Status:** signed off; **landed** (Stage 11, 2026-07-27).
+**Landed:** the store, the interview, the routes, privacy coverage, the optional `contact_id`
+on drafts, the audience prompt block, and the UI. See §4a and §7a for what implementation
+changed about this design.
+
+**Both preservation gates PASS 3/3 on a real model** (Gemma 4 12B Q4, 2026-07-27) — delivery
+and audience. `use_audience_context` and `use_delivery_signals` nevertheless remain **off**:
+the gate is the evidence, flipping the default is the owner's decision.
+
 **Required by:** `DESIGN.md` §14 ("each returns to the table one at a time, each with its own
 design doc"). Contacts are new product surface, not part of §11's incremental UI path, so
 this doc gates the code rather than following it.
@@ -29,7 +31,7 @@ one it is writing.
 The gap is total, not partial: repo-wide there is no contact, recipient, or audience concept
 anywhere. Three separate UI surfaces currently *imply* one — Talk's "Destination", Library's
 destination filter, Studio's "preferred destinations" — and all three were fabrications
-backed by no field. Two have since been removed rather than left to look functional.
+backed by no field. All three have since been replaced by the real thing (§6).
 
 ## 2. The rule-2 boundary — read this before writing code
 
@@ -167,11 +169,38 @@ version already proven.
 
 - **Talk context panel** — a recipient picker, defaulting to none. "None" is a first-class
   state, not an empty slot to be filled: most dictation has no particular audience, and a UI
-  that nags for one trains people to pick wrong.
+  that nags for one trains people to pick wrong. **Landed** as "Writing to". The note beneath
+  it is blank when nothing is selected — the absence of a note *is* the none state, and a
+  permanent line explaining it would be nagging by other means.
 - **Status bar** — the Target-app cell gains a sibling only once a contact is *applied*.
-- **Library** — filter by contact, once drafts carry the optional field.
-- **Studio** — a persona may name a default contact, replacing the removed
-  `preferred_destinations` fabrication with something backed by a real record.
+  `statusLabelFor()` returns null rather than "none", so nothing is rendered until then: an
+  empty state occupying permanent space is a slot asking to be filled.
+- **Library** — filter by contact. **Landed**, replacing the `destination` mapper, which read
+  `draft.destination_name || draft.destination?.name` — neither field has ever existed, so it
+  was always null and the filter above it always matched everything.
+- **Studio** — **landed, but read from the other end.** This section proposed "a persona may
+  name a default contact". Personas have no such field and adding one would have created a
+  second place to keep the relationship in step. Contacts already carry `preferred_persona`,
+  so Studio now shows *which contacts prefer this persona* — the same relationship, read from
+  the end that actually stores it. That also retires the third destination fabrication
+  (`preferred_destinations`, rendered as Discord/Gmail/Slack icons).
+
+### 6a. Creation is the fifth guided flow
+
+The wizard runs on the shell built in stage 13 (`docs/ui/SIGNAL_DESK_GUIDED_FLOWS.md` §4d),
+which is what that section reserved it for. Four steps like every other flow: Add a contact →
+A few questions → Review & save → Saved.
+
+**"Just save the name" sits on the first screen**, beside "Answer a few questions", rather than
+being buried as a skip link. Creating a contact from a name alone is the supported path; the
+interview is an offer to make it better. A name typed there is submitted as answer one rather
+than being asked again — a wizard that re-asks what it was just told reads as not listening.
+
+**The three placement maps are kept in agreement by a test.** Talk's picker, Library's filter
+and Studio's preferred contact are three views of one backing field; while it did not exist
+they were three fabrications called "Destination". `parityGates.test.mjs` asserts they never
+disagree, and it caught exactly that during this work — Library and Studio were rewired while
+Talk's entry still read "Destination (REMOVED)".
 
 ## 7. How it reaches the model
 
