@@ -48,7 +48,10 @@ def _ensure_schema(conn):
             profile TEXT,
             raw_text TEXT,
             final_text TEXT,
-            data TEXT
+            data TEXT,
+            pinned INTEGER NOT NULL DEFAULT 0,
+            pinned_at TEXT,
+            preset TEXT
         );
         CREATE VIRTUAL TABLE IF NOT EXISTS drafts_fts USING fts5(
             raw_text, final_text, content='drafts', content_rowid='id'
@@ -74,6 +77,22 @@ def _ensure_schema(conn):
     columns = {row[1] for row in conn.execute("PRAGMA table_info(drafts)").fetchall()}
     if "data" not in columns:
         conn.execute("ALTER TABLE drafts ADD COLUMN data TEXT")
+    # Wave 3: pinned columns, same additive guard. A pre-Wave-3 database keeps
+    # working unchanged and starts recording pin state on the next write —
+    # nothing here rewrites existing rows.
+    if "pinned" not in columns:
+        conn.execute("ALTER TABLE drafts ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
+    if "pinned_at" not in columns:
+        conn.execute("ALTER TABLE drafts ADD COLUMN pinned_at TEXT")
+    # Amendment A1: a dedicated `preset` column (the Library persona, e.g.
+    # "True Janitor" -- draft["preset"]) so persona filtering can be pushed
+    # into SQL too. Deliberately NOT the same thing as `profile`, which is
+    # the application/settings profile from draft["metadata"]["profile"];
+    # query()'s persona filter reads `preset` with a json_extract(data,
+    # '$.preset') fallback so rows written before this column existed are
+    # still found.
+    if "preset" not in columns:
+        conn.execute("ALTER TABLE drafts ADD COLUMN preset TEXT")
 
 
 def init():
@@ -107,6 +126,14 @@ def init():
 def _row_from_draft(draft):
     metadata = draft.get("metadata") or {}
     profile = str((metadata.get("profile") if isinstance(metadata, dict) else "") or draft.get("profile", ""))
+    # Repair the pinned/pinned_at invariant at write time too (mirrors
+    # domain.library.normalize_draft_record's rule): pinned False always
+    # forces pinned_at None, even if the caller's dict disagrees.
+    pinned = bool(draft.get("pinned", False))
+    pinned_at = draft.get("pinned_at") if pinned else None
+    pinned_at = str(pinned_at) if pinned_at is not None else None
+    preset = draft.get("preset")
+    preset = str(preset) if preset is not None else None
     return (
         int(draft.get("id")),
         str(draft.get("created_at", "")),
@@ -118,6 +145,9 @@ def _row_from_draft(draft):
         # (confidence, gate_reasons, send state, review fields, …), not just the
         # searchable subset — the basis for SQLite becoming the canonical store.
         json.dumps(draft, default=str),
+        1 if pinned else 0,
+        pinned_at,
+        preset,
     )
 
 
@@ -136,15 +166,18 @@ def upsert_draft(draft):
             try:
                 conn.execute(
                     """
-                    INSERT INTO drafts (id, created_at, status, profile, raw_text, final_text, data)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO drafts (id, created_at, status, profile, raw_text, final_text, data, pinned, pinned_at, preset)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         created_at=excluded.created_at,
                         status=excluded.status,
                         profile=excluded.profile,
                         raw_text=excluded.raw_text,
                         final_text=excluded.final_text,
-                        data=excluded.data
+                        data=excluded.data,
+                        pinned=excluded.pinned,
+                        pinned_at=excluded.pinned_at,
+                        preset=excluded.preset
                     """,
                     row,
                 )
@@ -181,15 +214,18 @@ def upsert_many(drafts):
             try:
                 conn.executemany(
                     """
-                    INSERT INTO drafts (id, created_at, status, profile, raw_text, final_text, data)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO drafts (id, created_at, status, profile, raw_text, final_text, data, pinned, pinned_at, preset)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         created_at=excluded.created_at,
                         status=excluded.status,
                         profile=excluded.profile,
                         raw_text=excluded.raw_text,
                         final_text=excluded.final_text,
-                        data=excluded.data
+                        data=excluded.data,
+                        pinned=excluded.pinned,
+                        pinned_at=excluded.pinned_at,
+                        preset=excluded.preset
                     """,
                     rows,
                 )
@@ -205,6 +241,17 @@ def upsert_many(drafts):
 
 
 def _row_to_dict(row):
+    # try/except rather than a blanket default: rows from a DB opened before
+    # the Wave 3 migration ran in this process still lack the columns, and a
+    # missing sqlite3.Row key raises IndexError rather than returning None.
+    try:
+        pinned = row["pinned"]
+    except (IndexError, KeyError):
+        pinned = 0
+    try:
+        pinned_at = row["pinned_at"]
+    except (IndexError, KeyError):
+        pinned_at = None
     return {
         "id": row["id"],
         "created_at": row["created_at"],
@@ -212,6 +259,8 @@ def _row_to_dict(row):
         "profile": row["profile"],
         "raw_text": row["raw_text"],
         "final_text": row["final_text"],
+        "pinned": bool(pinned),
+        "pinned_at": pinned_at,
     }
 
 
@@ -279,6 +328,9 @@ def _full_from_row(row):
                 return obj
         except (ValueError, TypeError):
             pass
+    # No JSON body (row predates the data column): the typed-column fallback
+    # in _row_to_dict already carries pinned/pinned_at, defaulted from the
+    # columns (False/None for rows written before Wave 3's migration too).
     return _row_to_dict(row)
 
 
@@ -301,6 +353,240 @@ def load_recent_full(limit=100):
             logging.debug(f"history_store load_recent_full failed: {exc}")
             return []
     return [_full_from_row(r) for r in reversed(rows)]
+
+
+# --- §1/§2 record normalization --------------------------------------------
+# The sibling Wave 3 domain module (backend/domain/library.py) is the
+# authority for what the §1 defaults are and how the pinned/pinned_at
+# invariant is repaired. It is being built concurrently by another worker
+# against the same contract and may not exist yet, so it is imported lazily
+# (inside the function, not at module load) and defensively: if the import
+# fails for any reason, fall back to an inline copy of the same §1 defaults
+# so this module and its tests stand alone either way.
+_FALLBACK_LIBRARY_FIELD_DEFAULTS = {
+    "pinned": False,
+    "pinned_at": None,
+    "duplicated_from_id": None,
+    "reopened_from_id": None,
+    "revision_of_id": None,
+    "restored_from_recording_id": None,
+    "restored_from_draft_id": None,
+}
+
+
+def _fallback_normalize_draft_record(draft):
+    if not isinstance(draft, dict):
+        return draft
+    normalized = dict(draft)
+    for key, default in _FALLBACK_LIBRARY_FIELD_DEFAULTS.items():
+        normalized.setdefault(key, default)
+    if not normalized.get("pinned"):
+        normalized["pinned_at"] = None
+    return normalized
+
+
+def _normalize_record(draft):
+    try:
+        from backend.domain.library import normalize_draft_record
+    except Exception:
+        return _fallback_normalize_draft_record(draft)
+    try:
+        return normalize_draft_record(draft)
+    except Exception:
+        return _fallback_normalize_draft_record(draft)
+
+
+def get(draft_id):
+    """One complete archive record by exact id, or None.
+
+    Amendment A2: a single indexed lookup (WHERE id = ?), not a scan --
+    delete_item(kind="history_entry") needs to resolve a target that may
+    exist ONLY in the archive (draft_queue is bounded at 100; the archive
+    holds up to MAX_HISTORY_RECORDS), and query({}, limit=<total>) plus a
+    scan would deserialize every row's JSON just to find one. Passed through
+    _normalize_record (same lazy/defensive domain.library.normalize_draft_
+    record import as query()) so the caller gets a Wave-3-shaped record with
+    the §1 defaults filled and pin state populated from the columns even for
+    a legacy row. Defensive like the rest of this module: never raises,
+    returns None on a missing row and on any failure.
+    """
+    init()
+    with _lock:
+        try:
+            conn = _connect()
+            try:
+                row = conn.execute("SELECT * FROM drafts WHERE id = ?", (int(draft_id),)).fetchone()
+                if row is None:
+                    return None
+                return _normalize_record(_full_from_row(row))
+            finally:
+                conn.close()
+        except Exception as exc:
+            logging.debug(f"history_store get failed: {exc}")
+            return None
+
+
+def set_pinned(draft_id, pinned, pinned_at):
+    """Update the pinned columns AND the pinned/pinned_at keys inside the
+    stored `data` JSON so the archive stays self-consistent -- a later
+    load_recent_full/query must see the pin without a separate re-read of the
+    columns. Returns False if no such row exists. Defensive like the rest of
+    this module: never raises."""
+    init()
+    pinned = bool(pinned)
+    pinned_at_val = str(pinned_at) if (pinned and pinned_at is not None) else None
+    with _lock:
+        try:
+            conn = _connect()
+            try:
+                row = conn.execute("SELECT * FROM drafts WHERE id = ?", (int(draft_id),)).fetchone()
+                if row is None:
+                    return False
+                record = dict(_full_from_row(row))
+                record["pinned"] = pinned
+                record["pinned_at"] = pinned_at_val
+                conn.execute(
+                    "UPDATE drafts SET pinned = ?, pinned_at = ?, data = ? WHERE id = ?",
+                    (1 if pinned else 0, pinned_at_val, json.dumps(record, default=str), int(draft_id)),
+                )
+                conn.commit()
+                return True
+            finally:
+                conn.close()
+        except Exception as exc:
+            logging.warning(f"history_store set_pinned failed: {exc}")
+            return False
+
+
+def delete_draft(draft_id):
+    """Delete one archive row by exact id. The existing drafts_ad trigger
+    keeps FTS in sync. Idempotent: returns False (not an error) when the row
+    is already absent."""
+    init()
+    with _lock:
+        try:
+            conn = _connect()
+            try:
+                cur = conn.execute("DELETE FROM drafts WHERE id = ?", (int(draft_id),))
+                conn.commit()
+                return cur.rowcount > 0
+            finally:
+                conn.close()
+        except Exception as exc:
+            logging.warning(f"history_store delete_draft failed: {exc}")
+            return False
+
+
+def query(filters, limit=50, offset=0):
+    """Backend-driven filtering: does the filtering in SQL rather than
+    pulling every row into Python. `filters` is expected to be the output of
+    domain.library.parse_filters (persona/date_from/date_to/status/pinned/
+    query), but this function stays defensive about its shape since the
+    domain module may be unavailable.
+
+    persona -> the `preset` column, NOT `profile` (Amendment A1; see the
+    comment on the persona clause below -- `profile` is an unrelated
+    application/settings profile and filtering persona on it would silently
+    return wrong rows); status -> status column (accepts a single
+    value or a collection, per contract §2's matches_filters); pinned ->
+    pinned column; date_from/date_to -> inclusive created_at range; query ->
+    FTS5 MATCH over the same row set, reusing the safe prefix-term quoting
+    from search() (never interpolates user text into SQL).
+
+    Returns {"results": [full records], "total", "limit", "offset"} where
+    total is the match count BEFORE limit/offset is applied. Ordering is
+    pinned DESC, created_at DESC, id DESC. Never raises; on failure returns
+    an empty result set and logs.
+    """
+    init()
+    filters = filters or {}
+    limit = int(limit)
+    offset = int(offset)
+    empty = {"results": [], "total": 0, "limit": limit, "offset": offset}
+
+    where = []
+    params = []
+
+    persona = filters.get("persona")
+    if persona:
+        # Amendment A1: persona is draft["preset"] (e.g. "True Janitor"), NOT
+        # draft["metadata"]["profile"] (the `profile` column, an unrelated
+        # application/settings profile) -- matches domain.library.matches_
+        # filters, which tests draft["preset"]. COALESCE falls back to
+        # extracting it out of the JSON body for rows written before the
+        # `preset` column existed, so a persona filter still finds them.
+        # json_extract is SQLite's JSON1 extension, compiled in by default on
+        # every Python 3.9+ build this project targets; if it's ever
+        # unavailable this whole function still degrades to an empty result
+        # rather than raising, per the try/except around the query below.
+        where.append("COALESCE(d.preset, json_extract(d.data, '$.preset')) = ?")
+        params.append(str(persona))
+
+    status = filters.get("status")
+    if status:
+        statuses = list(status) if isinstance(status, (list, tuple, set, frozenset)) else [status]
+        statuses = [str(s) for s in statuses if s is not None]
+        if statuses:
+            where.append(f"d.status IN ({','.join('?' for _ in statuses)})")
+            params.extend(statuses)
+
+    pinned = filters.get("pinned")
+    if pinned is not None:
+        where.append("d.pinned = ?")
+        params.append(1 if pinned else 0)
+
+    date_from = filters.get("date_from")
+    if date_from:
+        where.append("d.created_at >= ?")
+        params.append(str(date_from))
+
+    date_to = filters.get("date_to")
+    if date_to:
+        where.append("d.created_at <= ?")
+        params.append(str(date_to))
+
+    # Same safe prefix-MATCH construction as search(): quote each term and
+    # add a trailing * for prefix search. User text is never interpolated
+    # directly into the SQL string -- it only ever reaches sqlite as a bound
+    # FTS5 query-string parameter.
+    query_text = str(filters.get("query") or "").strip()
+    match = None
+    if query_text:
+        terms = [t for t in query_text.replace('"', " ").split() if t]
+        if terms:
+            match = " ".join(f'"{t}"*' for t in terms)
+
+    if match:
+        from_clause = "FROM drafts d JOIN drafts_fts f ON d.id = f.rowid"
+        where = ["drafts_fts MATCH ?"] + where
+        params = [match] + params
+    else:
+        from_clause = "FROM drafts d"
+
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+
+    with _lock:
+        try:
+            conn = _connect()
+            try:
+                total = int(
+                    conn.execute(f"SELECT COUNT(*) AS c {from_clause} {where_sql}", params).fetchone()["c"]
+                )
+                rows = conn.execute(
+                    f"""
+                    SELECT d.* {from_clause} {where_sql}
+                    ORDER BY d.pinned DESC, d.created_at DESC, d.id DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    params + [limit, offset],
+                ).fetchall()
+                results = [_normalize_record(_full_from_row(r)) for r in rows]
+                return {"results": results, "total": total, "limit": limit, "offset": offset}
+            finally:
+                conn.close()
+        except Exception as exc:
+            logging.debug(f"history_store query failed: {exc}")
+            return empty
 
 
 def count():

@@ -282,3 +282,237 @@ class DraftStore:
                 if draft["id"] == draft_id:
                     return draft
         return None
+
+    # -- Wave 3 Library additions ------------------------------------------
+    #
+    # These follow create_draft's shape exactly: build the response dict
+    # inside self.lock, then call save_fn(changed_draft_id=...) OUTSIDE the
+    # lock. Persisting (JSON snapshot + history_store mirror) while holding
+    # the reentrant draft lock would stall every concurrent draft read for
+    # the duration of the write, same reasoning as create_draft's comment
+    # above (§9 there).
+    #
+    # Each of these lazily and defensively imports backend.domain.library --
+    # the sibling Wave 3 domain module -- inside the method that needs it
+    # rather than at module import time, because that module is being built
+    # concurrently against the same contract and may not exist yet. If the
+    # import (or the call into it) fails for any reason, each method falls
+    # back to an inline equivalent so this store and its tests work whether
+    # or not the domain module is present.
+
+    def _apply_pin(self, draft, pinned, now_iso):
+        try:
+            from backend.domain.library import apply_pin
+        except Exception:
+            apply_pin = None
+        if apply_pin is not None:
+            try:
+                return apply_pin(draft, pinned, now_iso)
+            except Exception:
+                pass
+        # Fallback: the same invariant apply_pin documents -- pinning stamps
+        # pinned_at only on the True transition (re-pinning an already-pinned
+        # draft is a no-op that preserves the original pinned_at); unpinning
+        # always clears it.
+        updated = dict(draft)
+        if pinned:
+            if not updated.get("pinned"):
+                updated["pinned_at"] = now_iso
+            updated["pinned"] = True
+        else:
+            updated["pinned"] = False
+            updated["pinned_at"] = None
+        return updated
+
+    def set_pinned(self, draft_id, pinned, save_fn=None):
+        """Pin or unpin a draft already in the working queue.
+
+        Returns the updated draft dict, or None if draft_id isn't present
+        (idempotent-friendly: callers check for None rather than an
+        exception). See _apply_pin for the pinned_at invariant.
+        """
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self.lock:
+            draft = self.get_draft_by_id(draft_id)
+            if draft is None:
+                return None
+            updated = self._apply_pin(draft, bool(pinned), now_iso)
+            draft.clear()
+            draft.update(updated)
+            response = dict(draft)
+
+        if save_fn is not None:
+            save_fn(changed_draft_id=draft_id)
+        return response
+
+    def delete_draft(self, draft_id, save_fn=None):
+        """Remove a draft from the working queue and its recording, if any.
+
+        Does NOT touch pending_manual_send_ids -- that list lives in
+        server.py, not here. A send in flight must be refused by the caller
+        (via domain.library.delete_decision, consulting the live in-flight
+        id set) before this is ever invoked; this method only performs the
+        already-authorized removal and has no way to check send state on its
+        own, so it must never be called directly from a route.
+
+        Idempotent: returns False (not an error) when draft_id is already
+        absent, same as history_store.delete_draft.
+        """
+        with self.lock:
+            idx = next((i for i, d in enumerate(self.draft_queue) if d["id"] == draft_id), None)
+            if idx is None:
+                return False
+            del self.draft_queue[idx]
+            self.draft_recordings.pop(draft_id, None)
+
+        if save_fn is not None:
+            save_fn(changed_draft_id=draft_id)
+        return True
+
+    def _build_duplicate(self, source, new_id, now_iso):
+        try:
+            from backend.domain.library import build_duplicate
+        except Exception:
+            build_duplicate = None
+        if build_duplicate is not None:
+            try:
+                return build_duplicate(source, new_id, now_iso)
+            except Exception:
+                pass
+        # Fallback mirrors build_duplicate's contract: a NEW pending draft
+        # that copies content/authoring context but never send/delivery
+        # state, so a duplicate can never masquerade as sent history.
+        metadata = source.get("metadata")
+        return {
+            "id": new_id,
+            "raw_text": source.get("raw_text", ""),
+            "final_text": source.get("final_text", ""),
+            "preset": source.get("preset", "True Janitor"),
+            "status": "pending",
+            "metadata": dict(metadata) if isinstance(metadata, dict) else (metadata or {}),
+            "error": "",
+            "gate_reasons": [],
+            "confidence": source.get("confidence") or {"score": None, "avg_logprob": None, "no_speech_prob": None},
+            "transcription_result": source.get("transcription_result"),
+            "speech_signals": source.get("speech_signals"),
+            "contact_id": source.get("contact_id"),
+            "pending_send": False,
+            "send_result": None,
+            "created_at": now_iso,
+            "duplicated_from_id": source.get("id"),
+            "reopened_from_id": None,
+            "revision_of_id": None,
+            "restored_from_recording_id": None,
+            "restored_from_draft_id": None,
+            "pinned": False,
+            "pinned_at": None,
+        }
+
+    def duplicate_draft(self, draft_id, save_fn=None, max_history=None):
+        """Create a new pending draft copying content/authoring context from
+        an existing one (queue or history). See _build_duplicate for the
+        never-sent-shaped guarantee. Honours the same max_history trim as
+        create_draft, dropping trimmed drafts' draft_recordings entries.
+        Returns the new draft dict, or None if draft_id doesn't exist.
+        """
+        limit = max_history if max_history is not None else self.max_history
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self.lock:
+            source = self.get_draft_by_id(draft_id)
+            if source is None:
+                return None
+            new_id = self.next_draft_id
+            new_draft = self._build_duplicate(source, new_id, now_iso)
+            new_draft["id"] = new_id
+            self.next_draft_id += 1
+            self.draft_queue.append(new_draft)
+
+            if len(self.draft_queue) > limit:
+                removed = self.draft_queue[: len(self.draft_queue) - limit]
+                del self.draft_queue[: len(self.draft_queue) - limit]
+                for removed_draft in removed:
+                    self.draft_recordings.pop(removed_draft["id"], None)
+
+            response = dict(new_draft)
+
+        if save_fn is not None:
+            save_fn(changed_draft_id=new_id)
+        return response
+
+    def create_from_record(self, record, save_fn=None, max_history=None):
+        """Place an already-built record into the working queue.
+
+        The domain layer (one of backend.domain.library's build_* functions
+        -- reopen-edit, restore-from-recording, restore-from-draft) decides
+        what the record IS; this method only assigns it a queue id and
+        places it, honouring the same max_history trim as create_draft
+        (including dropping trimmed drafts' draft_recordings entries).
+        """
+        limit = max_history if max_history is not None else self.max_history
+        with self.lock:
+            draft = dict(record)
+            draft["id"] = self.next_draft_id
+            new_id = draft["id"]
+            self.next_draft_id += 1
+            self.draft_queue.append(draft)
+
+            if len(self.draft_queue) > limit:
+                removed = self.draft_queue[: len(self.draft_queue) - limit]
+                del self.draft_queue[: len(self.draft_queue) - limit]
+                for removed_draft in removed:
+                    self.draft_recordings.pop(removed_draft["id"], None)
+
+            response = dict(draft)
+
+        if save_fn is not None:
+            save_fn(changed_draft_id=new_id)
+        return response
+
+    def _fallback_matches_filters(self, draft, filters):
+        persona = filters.get("persona")
+        if persona and draft.get("preset") != persona:
+            return False
+        status = filters.get("status")
+        if status:
+            statuses = status if isinstance(status, (list, tuple, set, frozenset)) else [status]
+            if draft.get("status") not in statuses:
+                return False
+        pinned = filters.get("pinned")
+        if pinned is not None and bool(draft.get("pinned", False)) != bool(pinned):
+            return False
+        date_from = filters.get("date_from")
+        if date_from and str(draft.get("created_at") or "") < str(date_from):
+            return False
+        date_to = filters.get("date_to")
+        if date_to and str(draft.get("created_at") or "") > str(date_to):
+            return False
+        query = filters.get("query")
+        if query:
+            haystack = f"{draft.get('raw_text', '')} {draft.get('final_text', '')}".lower()
+            if str(query).lower() not in haystack:
+                return False
+        return True
+
+    def _matches_filters_fn(self):
+        try:
+            from backend.domain.library import matches_filters
+            return matches_filters
+        except Exception:
+            return self._fallback_matches_filters
+
+    def list_drafts(self, filters=None):
+        """The working-queue drafts matching `filters` (same shape as
+        domain.library.parse_filters output), pinned-first then newest-first
+        then id-descending -- same ordering rule as history_store.query.
+        filters=None (the default) returns every queued draft in that order.
+        """
+        with self.lock:
+            drafts = [dict(d) for d in self.draft_queue]
+        filters = filters or {}
+        predicate = self._matches_filters_fn()
+        filtered = [d for d in drafts if predicate(d, filters)]
+        filtered.sort(
+            key=lambda d: (int(bool(d.get("pinned"))), str(d.get("created_at") or ""), d.get("id") or 0),
+            reverse=True,
+        )
+        return filtered
