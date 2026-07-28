@@ -25,7 +25,7 @@ No implementation wave may start while Gate 0 is not passed.
 | Source vs `main` | 7 ahead, 0 behind | `DONE` |
 | Local unpushed commits | None on `feat/signal-desk-ui` or `main` | `DONE` |
 | Open worktrees | One, at the repository root | `DONE` |
-| Integration branch | `release/true-betterfingers`, created from `093eaf2a…` and pushed to `origin` | `DONE` |
+| Integration branch | `release/true-betterfingers`, created from `093eaf2a…` and pushed to `origin`. Consolidated by the operator on 2026-07-28: the release line (plus dependabot websockets bump and regenerated dependency locks) became `main` and the release branch was retired; `main` is the integration line from Wave 4 onward. | `DONE` |
 | Collaboration repair A | Implemented and tested | `DONE` |
 | Collaboration repair B | Implemented | `DONE` |
 | Collaboration repair C | Adversarial hardening and authoritative docs/tests accepted; regression suite passes | `DONE` |
