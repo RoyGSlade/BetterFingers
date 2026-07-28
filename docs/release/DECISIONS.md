@@ -388,3 +388,36 @@ with zero console/page errors.
 - The collab Stop-hook sibling misattribution that cost worker cycles in both
   Wave 1 lanes is root-caused and fixed: room-scoped `spawns.json` records
   now filter on `spawned_by_sid` in `stop_report()` and `wait_for_activity()`.
+
+## D-0020 — Gate 3 is accepted
+
+**Owner:** release-director
+
+**Evidence:** [WAVE3_LIBRARY_CONTRACT.md](WAVE3_LIBRARY_CONTRACT.md) (ratified
+before implementation, amended A1/A2 under its own change rule); commits
+`ff39159`/`8408aad`/`9db4500`. Director-run in the qualified `.venv`: cheap
+suite `2114 passed / 0 failed` (+142 over the Wave 0 baseline), the
+privacy-wipe contract suites green against the widened history schema, the
+137 new library tests, and 28 ducker tests.
+
+**Decision:** Accept Gate 3. Wave 4 (Library UI) may start once the Wave 2
+lane releases the shared composition root, so the two lanes never hold
+`signal-desk.html` concurrently.
+
+**Rulings on the lane's open findings:**
+
+- **Restore fidelity:** a restored recording yields a pending draft whose
+  `final_text` is the raw transcript (the full pipeline would double-create a
+  draft). Accepted for `v0.2.0-alpha.1`: the draft is pending, opens in Talk
+  for review, and Talk's ordinary revise path can clean it. Wave 4's UI must
+  label restored drafts as raw transcripts; a process-without-creating-draft
+  pipeline seam is the recorded follow-up if that labeling proves
+  insufficient.
+- **Ducker stranding (reported by sup-talk's lane, fixed at integration):**
+  emergency stop now unducks unconditionally, and ducks carry a generation
+  captured at recording start so a stop that lands before the async duck
+  commits wins. Gate 2's "emergency stop releases ducking" bullet is now
+  true at the backend level.
+- The `_parse_date_bound` docstring overclaim was corrected at integration:
+  space-separated datetimes are deliberately treated as date-only and
+  widened to end-of-day, and the docstring now says so.

@@ -4,6 +4,7 @@
 - **Current wave:** Waves 2 (Talk) and 3 (Library domain), in parallel per D-0014
 - **Gate 0:** **ACCEPTED (2026-07-28, release-director)**
 - **Gate 1:** **ACCEPTED (2026-07-28, release-director, D-0019)**
+- **Gate 3:** **ACCEPTED (2026-07-28, release-director, D-0020)**
 - **Last updated:** 2026-07-28
 
 Statuses: `DONE`, `IN PROGRESS`, `BLOCKED`, `PENDING`, `CUT`.
@@ -101,8 +102,8 @@ Wave 1 follow-ups recorded: factory-reset executor exists nowhere (Wave 6 backlo
 | 0 | Repository truth, measurements, scope freeze | None | `DONE` |
 | 1 | Production Signal Desk composition and durable onboarding | Gate 0 | `DONE` |
 | 2 | Talk completion | Gate 1 | `IN PROGRESS` |
-| 3 | Library domain semantics | Gate 1 contracts | `IN PROGRESS` |
-| 4 | Library UI completion | Gate 3 | `BLOCKED` |
+| 3 | Library domain semantics | Gate 1 contracts | `DONE` |
+| 4 | Library UI completion | Gate 3 | `PENDING` (opens when Wave 2 releases the composition root) |
 | 5 | Studio, contacts/audience, Settings | Gates 1–2 | `BLOCKED` |
 | 6 | Privacy/data lifecycle closure | Final store set from Waves 3/5/7/8/9/10 | `BLOCKED` |
 | 7 | Application context/profiles | Gate 1 | `BLOCKED` |
