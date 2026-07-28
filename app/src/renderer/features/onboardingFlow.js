@@ -16,6 +16,13 @@
 
 import { createGuidedFlow } from './guidedFlow.js';
 
+// ONBOARDING_FLAG / shouldShowOnboarding / markOnboardingComplete are the
+// LEGACY renderer-local path (localStorage only -- it dies with the renderer
+// profile and cannot record legal consent). The durable path lives in
+// features/onboardingConsent.js against the main-process store; the legacy
+// flag is now read only ONCE, by onboardingConsent's migration, to carry a
+// returning user's prior completion into the durable store. Do not add new
+// callers of this flag -- gate and complete through the `consent` seam below.
 export const ONBOARDING_FLAG = 'bf_onboarding_complete';
 
 /**
@@ -126,21 +133,41 @@ export function collectOnboardingElements(doc = globalThis.document) {
 /**
  * @param {object} opts
  * @param {ReturnType<typeof collectOnboardingElements>} opts.elements
- * @param {Storage} [opts.storage]
+ * @param {Storage} [opts.storage] legacy path, used when `consent`/`isConsented`/`shouldShow` are absent
  * @param {object} [opts.hooks]
- *   quitApp()               — Decline & quit
+ *   quitApp()               — Decline & quit (legacy path, or when `consent` has no decline())
  *   fetchRecommendation()   — U4 hardware tier; failure leaves the box hidden
  *   fetchWhisperModels()    — decides which "speech models" paragraph shows
- *   onComplete()            — after the flag is written
+ *   onComplete()            — after completion is confirmed (durable accept ok, or legacy flag written)
+ *   onConsentError(err)     — a durable consent accept() or decline() failed; the gate stays open / app does not quit
+ * @param {() => boolean} [opts.isConsented]
+ *   Durable-state seam: when supplied, gates the consent step instead of the
+ *   checkbox alone (see features/onboardingConsent.js's needsConsent). Falls
+ *   back to `elements.consent?.checked` when absent.
+ * @param {{accept: () => Promise<{ok: boolean}>, decline?: () => Promise<{ok: boolean}>}} [opts.consent]
+ *   Durable-state seam: when supplied, its accept() records completion in the
+ *   durable store instead of the legacy localStorage flag, and the gate only
+ *   closes once accept() confirms {ok: true} -- a failed or throwing write
+ *   leaves the flow open and reports through onConsentError instead. When it
+ *   also exposes decline(), the Decline button routes through it instead of
+ *   calling hooks.quitApp() directly.
+ * @param {() => boolean} [opts.shouldShow]
+ *   Durable-state seam: when supplied, init() gates on this instead of the
+ *   legacy localStorage flag (see features/onboardingConsent.js's
+ *   resolveOnboardingGate). Defaults to `() => shouldShowOnboarding(storage)`,
+ *   i.e. omitting it reproduces today's legacy behavior exactly.
  */
 export function createOnboardingFlow({
   elements = {},
   storage = globalThis.localStorage,
   hooks = {},
   doc = globalThis.document,
+  consent = null,
+  isConsented,
+  shouldShow = () => shouldShowOnboarding(storage),
 } = {}) {
   const steps = buildOnboardingSteps({
-    isConsented: () => Boolean(elements.consent?.checked),
+    isConsented: isConsented ?? (() => Boolean(elements.consent?.checked)),
   });
 
   let flow = null;
@@ -171,10 +198,31 @@ export function createOnboardingFlow({
     }
   }
 
-  function finish() {
-    markOnboardingComplete(storage);
-    flow?.close();
-    hooks.onComplete?.();
+  // Legacy path branches early and returns before any `await`, so its side
+  // effects (flag write, close, onComplete) still happen synchronously --
+  // async only changes behavior for callers that supply `consent`.
+  async function finish() {
+    if (!consent) {
+      markOnboardingComplete(storage);
+      flow?.close();
+      hooks.onComplete?.();
+      return;
+    }
+
+    let result;
+    try {
+      result = await consent.accept();
+    } catch (e) {
+      hooks.onConsentError?.(e);
+      return;
+    }
+
+    if (result?.ok === true) {
+      flow?.close();
+      hooks.onComplete?.();
+    } else {
+      hooks.onConsentError?.(new Error('durable consent write failed'));
+    }
   }
 
   flow = createGuidedFlow({
@@ -198,12 +246,22 @@ export function createOnboardingFlow({
   // Re-evaluating on change is what makes the checkbox a live control rather
   // than one that only takes effect on the next re-render.
   elements.consent?.addEventListener?.('change', () => flow.refresh());
-  elements.decline?.addEventListener?.('click', () => hooks.quitApp?.());
+  elements.decline?.addEventListener?.('click', () => {
+    if (typeof consent?.decline === 'function') {
+      Promise.resolve(consent.decline())
+        .then((result) => {
+          if (!result?.ok) hooks.onConsentError?.(new Error('durable consent decline failed'));
+        })
+        .catch((e) => hooks.onConsentError?.(e));
+    } else {
+      hooks.quitApp?.();
+    }
+  });
 
   /** @returns {boolean} whether onboarding was shown. */
   function init() {
     if (!elements.root) return false;
-    if (!shouldShowOnboarding(storage)) return false;
+    if (!shouldShow()) return false;
     flow.open();
     return true;
   }
