@@ -113,12 +113,18 @@ class AudioRecorder:
                     restore_fallback_percent = float(
                         config.get("audio_ducking_fallback_return_percent", 100.0)
                     )
-                    # Fire-and-forget ducking to avoid blocking recording start
+                    # Fire-and-forget ducking to avoid blocking recording start.
+                    # The generation captured here lets a stop that lands before
+                    # the thread commits cancel the duck instead of losing the
+                    # race and stranding the system quiet.
+                    duck_generation = self.ducker.generation()
+
                     def _duck_async():
                         try:
                             self.ducker.duck(
                                 target_level=duck_level_percent / 100.0,
                                 fallback_restore_level=restore_fallback_percent / 100.0,
+                                generation=duck_generation,
                             )
                         except Exception as e:
                             logging.warning(f"Async ducking failed: {e}")

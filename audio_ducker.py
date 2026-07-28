@@ -41,6 +41,10 @@ class AudioDucker:
     def __init__(self):
         self._lock = threading.Lock()
         self._ducked = False
+        # Bumped by every unduck(). A duck() carrying a generation captured
+        # before an intervening unduck refuses to commit, so a stop that races
+        # the async duck thread wins instead of leaving the system ducked.
+        self._generation = 0
         self._pre_duck_volume = None
         self._pre_duck_mute = None
         self._fallback_restore_level = 1.0
@@ -218,13 +222,27 @@ class AudioDucker:
                 except Exception:
                     pass
 
-    def duck(self, target_level=0.18, fallback_restore_level=1.0, fade_duration=0.2):
-        """Reduce master output volume to target_level (0.0-1.0)."""
+    def generation(self):
+        """Token for duck(generation=...): capture at duck-session start
+        (recording start), before handing the duck to a worker thread."""
+        with self._lock:
+            return self._generation
+
+    def duck(self, target_level=0.18, fallback_restore_level=1.0, fade_duration=0.2,
+             generation=None):
+        """Reduce master output volume to target_level (0.0-1.0).
+
+        When `generation` is supplied and an unduck() ran after it was
+        captured, the duck is stale (its recording already stopped) and is
+        refused rather than committed with no one left to release it."""
         del fade_duration
         target = self._clamp_level(target_level, default=0.18)
         fallback = self._clamp_level(fallback_restore_level, default=1.0)
         with self._lock:
             if self._ducked:
+                return
+            if generation is not None and generation != self._generation:
+                logging.info("Audio duck cancelled: a stop arrived before it committed.")
                 return
 
             self._fallback_restore_level = fallback
@@ -243,6 +261,9 @@ class AudioDucker:
         """Restore master output volume to pre-duck level or fallback."""
         del fade_duration
         with self._lock:
+            # Invalidate any in-flight duck even when nothing is ducked yet:
+            # the stop must win over a duck that has not committed.
+            self._generation += 1
             if not self._ducked:
                 return
 
