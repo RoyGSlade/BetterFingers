@@ -19,9 +19,10 @@
 
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { homedir } from 'node:os';
 import { _electron as electron } from 'playwright';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -338,9 +339,39 @@ export async function launchApp({ backendPort, target = TARGET }) {
 
   // Skip the modal first-run onboarding overlay -- it blocks every other
   // interaction. Same trick electron-smoke.spec.js uses.
+  //
+  // Guarded on bf_qa_no_auto_dismiss (QA-only seam, D-durable-consent-qa):
+  // Playwright has no removeInitScript, and an addInitScript callback re-runs
+  // on EVERY reload/navigation of this page for the rest of its life -- so a
+  // first-run scenario that clears bf_onboarding_complete via page.evaluate()
+  // would see this same init script silently re-set it out from under it on
+  // its very next reload. localStorage is the only channel that survives a
+  // reload and is readable from an init script, so a second, distinct key
+  // that this function never sets itself -- only enterFirstRunState /
+  // enterCompletedProfileState opt into it -- is the only way to switch this
+  // auto-dismiss off for the rest of the run. No existing scenario or target
+  // ever sets bf_qa_no_auto_dismiss, so the condition below is always false
+  // for them and this is byte-identical to the unconditional setItem it
+  // replaces.
+  //
+  // SINGLE-SHOT, deliberately: the sentinel suppresses auto-dismiss for
+  // exactly the ONE load that follows it being set, then removes itself. A
+  // sticky sentinel would be a live grenade in this suite -- run.mjs reuses a
+  // single Electron window for every scenario, so once a first-run scenario
+  // turned auto-dismiss off for good, every LATER scenario (persona-learning,
+  // the prod section/console sweep, anything added next) would reload into a
+  // raised consent gate and fail for a reason that has nothing to do with what
+  // it was testing. Single-shot means a first-run scenario gets its ungated
+  // boot and the very next reload is back to normal, so scenario ORDER stops
+  // mattering. This is why enterFirstRunState() below sets the sentinel
+  // immediately before its own reload and never has to clean up after itself.
   await page.addInitScript(() => {
     try {
-      localStorage.setItem('bf_onboarding_complete', 'true');
+      if (localStorage.getItem('bf_qa_no_auto_dismiss') === 'true') {
+        localStorage.removeItem('bf_qa_no_auto_dismiss');
+      } else {
+        localStorage.setItem('bf_onboarding_complete', 'true');
+      }
     } catch (_e) {
       /* ignore */
     }
@@ -409,6 +440,195 @@ export async function waitForText(locator, pattern, timeoutMs) {
     await new Promise((r) => setTimeout(r, 200));
   }
   throw new Error(`Timed out waiting for text matching ${pattern} (last saw: "${lastText}")`);
+}
+
+// --- Durable-consent QA seam (D-durable-consent-qa) ---------------------------
+//
+// Production Signal Desk gates onboarding on the durable record in
+// app/src/main/onboardingStore.js (<root>/onboarding.json), reached from the
+// renderer only through IPC (see signalDeskApp.js's resolveOnboardingGate call
+// and ipc.js's onboarding:* handlers) -- there is no window.__onboarding debug
+// handle on this page, and this file must not add one. These helpers drive the
+// same durable state a real profile would have, by writing/deleting the actual
+// file the main process reads, exactly like a real install would produce it.
+//
+// A helper here is only honest if it cannot silently degrade into operating on
+// someone's REAL profile -- see qaDataRoot()'s null-refusal, used by both
+// state-entering functions below.
+
+/**
+ * The expanded BETTERFINGERS_DATA_DIR override, or null when it is unset.
+ *
+ * Deliberately mirrors ONLY the override branch of resolveUserDataRoot()
+ * (app/src/main/userDataRoot.js), not its full precedence chain (APPDATA,
+ * legacy ~/BetterFingers, platform default) -- those branches exist so a real
+ * install finds a sensible root with no configuration. A QA helper that fell
+ * through to one of them on a developer's own machine would read/write that
+ * developer's real onboarding.json, which is both destructive and would
+ * fabricate a "first run" result that was never produced against an isolated
+ * root. Returning null instead lets callers refuse outright.
+ */
+export function qaDataRoot() {
+  const override = process.env.BETTERFINGERS_DATA_DIR;
+  if (!override) return null;
+  if (override === '~') return homedir();
+  if (override.startsWith('~/') || override.startsWith('~\\')) {
+    return join(homedir(), override.slice(2));
+  }
+  return override;
+}
+
+/**
+ * The pure record enterCompletedProfileState({via: 'record'}) writes to
+ * <root>/onboarding.json -- the exact shape onboardingStore.recordAcceptance()
+ * produces (schema_version 1, consent_version 1, accepted true, an ISO
+ * accepted_at, no completed_steps). Exported standalone, with no Electron/fs
+ * dependency of its own, so its shape is unit-testable without Electron (see
+ * tests/qaFirstRun.test.mjs) -- the assertion it makes honest is "this is what
+ * a real accepted profile's file actually contains", not "this is whatever a
+ * QA helper happened to write".
+ */
+export function seededAcceptedRecord({ now = () => new Date() } = {}) {
+  return {
+    schema_version: 1,
+    consent_version: 1,
+    accepted: true,
+    accepted_at: now().toISOString(),
+    completed_steps: [],
+  };
+}
+
+/**
+ * Puts the CURRENT page into a genuine first-run state: no durable
+ * onboarding.json, no legacy bf_onboarding_complete flag, and the
+ * bf_qa_no_auto_dismiss sentinel set so launchApp's init script (see above)
+ * does not re-set that flag out from under this on the reload below. The
+ * sentinel is single-shot -- it covers exactly that one reload and clears
+ * itself -- so this leaves nothing behind for the next scenario to trip over,
+ * and the run does not depend on where in the order these scenarios sit.
+ *
+ * Refuses outright when qaDataRoot() is null -- see its own comment. Running
+ * a first-run scenario against the real default root would silently destroy
+ * a real onboarding.json and hand back a fabricated "first run" result.
+ *
+ * Deliberately waits ONLY on target.attachedSelector, not readyTextSelector:
+ * signalDeskApp.js resolves the onboarding gate over IPC asynchronously and
+ * independently of the status bar's own refresh, so waiting on
+ * readyTextSelector here would not hang -- but it also proves nothing about
+ * first-run state, and this function's job ends at "the page reloaded into a
+ * clean profile", not "the onboarding gate has finished resolving". Scenario
+ * `expects()` blocks use Playwright's auto-retrying locator assertions
+ * (expect(...).toBeVisible()) to observe the gate once it resolves, which is
+ * the honest place for that wait to live.
+ */
+export async function enterFirstRunState(page, { target = TARGET } = {}) {
+  const root = qaDataRoot();
+  if (!root) {
+    throw new Error(
+      'enterFirstRunState refuses to run without BETTERFINGERS_DATA_DIR set: with no override, ' +
+        "onboardingStore would resolve to this machine's REAL user-data root, and deleting " +
+        'onboarding.json there would destroy a real consent record while reporting a fabricated ' +
+        '"first run" result. Set BETTERFINGERS_DATA_DIR to a throwaway directory (and export it ' +
+        'before launching the QA run, so the Electron subprocess inherits the same override) ' +
+        'before running first-run scenarios.',
+    );
+  }
+
+  await page.evaluate(() => {
+    try {
+      localStorage.setItem('bf_qa_no_auto_dismiss', 'true');
+      localStorage.removeItem('bf_onboarding_complete');
+    } catch (_e) {
+      /* ignore */
+    }
+  });
+
+  try {
+    rmSync(join(root, 'onboarding.json'), { force: true });
+  } catch (_e) {
+    /* best-effort, same tolerance onboardingStore.clearForFactoryReset uses */
+  }
+
+  await page.reload();
+  await page.setViewportSize(FIXED_VIEWPORT);
+  await page.waitForLoadState('domcontentloaded');
+  await page.waitForSelector(target.attachedSelector, { state: 'attached', timeout: 15000 });
+}
+
+/**
+ * Puts the CURRENT page into a completed-onboarding state, proving one of the
+ * two ways a real profile reaches it:
+ *
+ *   - via: 'record' (default) -- writes seededAcceptedRecord() to
+ *     <root>/onboarding.json and clears the legacy flag, so the durable
+ *     record is the ONLY reason the gate stays down.
+ *   - via: 'legacy-flag' -- deletes onboarding.json and sets
+ *     bf_onboarding_complete='true' in localStorage instead, proving the
+ *     one-shot migrateLegacyCompletion() path rather than the durable record.
+ *
+ * Both set the single-shot bf_qa_no_auto_dismiss sentinel first (see
+ * launchApp). Without it, launchApp's own init script would unconditionally
+ * stomp bf_onboarding_complete='true' on the reload below regardless of which
+ * path this call is trying to exercise --
+ * which would make 'record' pass for the wrong reason (the legacy flag it
+ * never touched) and make 'legacy-flag' impossible to exercise at all, since
+ * the durable-record absence it relies on would be masked by a flag this
+ * function never asked for.
+ *
+ * Refuses outright when qaDataRoot() is null, for the same reason
+ * enterFirstRunState does.
+ */
+export async function enterCompletedProfileState(page, { via = 'record', target = TARGET } = {}) {
+  const root = qaDataRoot();
+  if (!root) {
+    throw new Error(
+      'enterCompletedProfileState refuses to run without BETTERFINGERS_DATA_DIR set -- see ' +
+        'enterFirstRunState for why operating on the real default root is unacceptable here.',
+    );
+  }
+  if (via !== 'record' && via !== 'legacy-flag') {
+    throw new Error(`enterCompletedProfileState: unknown via="${via}" (expected 'record' or 'legacy-flag')`);
+  }
+
+  const recordPath = join(root, 'onboarding.json');
+
+  if (via === 'record') {
+    mkdirSync(root, { recursive: true });
+    writeFileSync(recordPath, JSON.stringify(seededAcceptedRecord(), null, 2));
+    await page.evaluate(() => {
+      try {
+        localStorage.setItem('bf_qa_no_auto_dismiss', 'true');
+        localStorage.removeItem('bf_onboarding_complete');
+      } catch (_e) {
+        /* ignore */
+      }
+    });
+  } else {
+    try {
+      rmSync(recordPath, { force: true });
+    } catch (_e) {
+      /* best-effort, same tolerance onboardingStore.clearForFactoryReset uses */
+    }
+    await page.evaluate(() => {
+      try {
+        localStorage.setItem('bf_qa_no_auto_dismiss', 'true');
+        localStorage.setItem('bf_onboarding_complete', 'true');
+      } catch (_e) {
+        /* ignore */
+      }
+    });
+  }
+
+  await page.reload();
+  await page.setViewportSize(FIXED_VIEWPORT);
+  await page.waitForLoadState('domcontentloaded');
+  await page.waitForSelector(target.attachedSelector, { state: 'attached', timeout: 15000 });
+  // Unlike enterFirstRunState, waiting on readyTextSelector here is safe AND
+  // meaningful: a completed profile never shows the modal, so nothing about
+  // this wait can be blocked by a gate that is supposed to be down.
+  if (target.readyTextSelector) {
+    await waitForText(page.locator(target.readyTextSelector), target.readyTextPattern, 15000);
+  }
 }
 
 // --- Screenshots ---------------------------------------------------------------

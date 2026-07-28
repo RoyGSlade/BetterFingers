@@ -49,6 +49,18 @@ import { contactsScenarios } from './contacts.mjs';
 // the production Signal Desk composition root (signal-desk.html), never in
 // index.html, hence the dedicated UI target instead of the default one.
 import { personaLearningScenarios } from './persona-learning.mjs';
+// The rest of the `ui: 'signal-desk-prod'` coverage (Wave 1, W1-G1). Both of
+// these drive the production composition root through the real UI only --
+// there is no window.__onboarding debug handle on signal-desk.html and none
+// may be added, so onboarding-prod.mjs reaches first-run/completed state the
+// way a real user does: the durable <BETTERFINGERS_DATA_DIR>/onboarding.json
+// record and the legacy localStorage flag (see harness.mjs's
+// enterFirstRunState/enterCompletedProfileState). Consequence: the
+// onboarding-prod area REQUIRES BETTERFINGERS_DATA_DIR to be exported before
+// the run, and those helpers refuse loudly rather than touch a real profile
+// when it is not.
+import { onboardingProdScenarios } from './onboarding-prod.mjs';
+import { signalDeskProdSweepScenarios } from './signal-desk-prod-sweep.mjs';
 
 export const scenarios = [
   ...baselineScenarios,
@@ -70,4 +82,11 @@ export const scenarios = [
   ...personaFlowScenarios,
   ...contactsScenarios,
   ...personaLearningScenarios,
+  ...signalDeskProdSweepScenarios,
+  // Ordered last among the prod-target scenarios as belt-and-braces, not as a
+  // load-bearing requirement: the auto-dismiss sentinel these use is
+  // single-shot (harness.mjs), so a first-run scenario cannot leave the shared
+  // Electron window sitting behind a raised consent gate for whatever runs
+  // next. Order here is a second line of defence, not the mechanism.
+  ...onboardingProdScenarios,
 ];
