@@ -173,6 +173,12 @@ export function coldBoot() {
     'GET /tts/voices': { voices: [], cloned: [] },
     'GET /voice-presets': { presets: [] },
     'GET /recordings': { ok: true, recordings: [] },
+    // Wave 4: the production Library workspace loads from /library/search on
+    // boot (backend-driven filtering + pagination, WAVE3_LIBRARY_CONTRACT §5).
+    // Without this every signal-desk-prod scenario would boot straight into
+    // Library's error state -- which is a real state worth testing, but not
+    // one a cold boot should be forced into.
+    'GET /library/search': { ok: true, results: [], total: 0, limit: 25, offset: 0 },
     'GET /jobs': { ok: true, jobs: [], runtime_leases: {} },
     'GET /metrics': {},
     'GET /macros': { ok: true, macros: [] },
