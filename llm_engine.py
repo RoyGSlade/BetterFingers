@@ -2295,6 +2295,7 @@ class LLMEngine:
         progress_callback=None,
         stitch_pass=False,
         delivery_summary=None,
+        audience_summary=None,
     ):
         """
         Process text through the sidecar with preset-based prompts.
@@ -2393,6 +2394,32 @@ class LLMEngine:
                 "facts, or the stated intensity of the message: preserve the speaker's own "
                 "wording of how strongly they feel, neither amplifying nor softening it. "
                 "Never mention these measurements in your output."
+            )
+
+        # Audience (Stage 11, opt-in, default off -- see the profile's
+        # `use_audience_context`). `audience_summary` is the prose block from
+        # contacts.audience_block(): relationship, tone guidance and notes the
+        # USER wrote about a person they selected.
+        #
+        # Three things this deliberately does not carry, each for its own
+        # reason. The person's NAME and id, because a rewrite does not need to
+        # know who someone is to sound right for them, and a name in a prompt is
+        # a name in whatever the model layer logs or caches. And any hint that
+        # the audience was detected -- it is stated as user-declared context,
+        # because under rule 2 that is the only way it can ever have arrived.
+        #
+        # Same preservation clause as delivery signals, for the same rule-5
+        # reason: knowing who is being written to may change register and word
+        # choice; it must not change what was said.
+        if audience_summary and str(audience_summary).strip():
+            system_prompt += (
+                "\n\nAUDIENCE (context the user explicitly selected, not something detected "
+                f"or inferred):\n{str(audience_summary).strip()}\n"
+                "This may inform register and word choice. It must NOT change the meaning, "
+                "the facts, or the stated intensity of the message, and must not add "
+                "greetings, sign-offs, or references to this person that the speaker did not "
+                "say. Never mention this context in your output."
+                + PRESERVATION_CLAUSE
             )
 
         # A persona temperature (when set) overrides the strict/default heuristic.

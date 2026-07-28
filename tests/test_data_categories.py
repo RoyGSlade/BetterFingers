@@ -17,7 +17,7 @@ import data_registry as dr
 # real persistent store is added or removed — never auto-derive it from CATEGORIES.
 EXPECTED_IDS = frozenset({
     "raw_recordings", "drafts", "history_db", "temp_audio",
-    "cloned_voices", "personas", "dictionary", "macros", "wake_models",
+    "cloned_voices", "personas", "dictionary", "macros", "contacts", "wake_models",
     "mcp_config", "graph_data", "debug_log", "sidecar_raw_log", "support_report",
     "voice_presets", "profiles", "app_state", "overlay_position",
     "overlay_appearance", "model_runtime_metadata", "downloaded_models",

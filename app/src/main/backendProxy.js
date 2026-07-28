@@ -46,6 +46,9 @@ const ROUTE_ALLOWLIST = {
     '/wake/status', '/wake/models', '/wake/models/:id/download-state',
     '/wake/train/status',
     '/message-rescue/context', '/message-rescue/generate/:id',
+    // Contacts (Stage 11). User-authored records of how to speak to someone --
+    // no addresses, no handles, nothing to reach anyone with.
+    '/contacts', '/contacts/:id',
   ],
   POST: [
     '/runtime/audio-devices/refresh', '/runtime/warmup',
@@ -73,6 +76,8 @@ const ROUTE_ALLOWLIST = {
     '/wake/models/:id/download',
     '/message-rescue/context/selection', '/message-rescue/context/manual',
     '/message-rescue/generate', '/message-rescue/generate/:id/cancel',
+    '/contacts', '/contacts/:id',
+    '/contacts/interview/start', '/contacts/interview/answer', '/contacts/compile',
   ],
   DELETE: [
     '/settings/profiles/:name',
@@ -83,6 +88,7 @@ const ROUTE_ALLOWLIST = {
     '/personas/:name/examples/:example_id', '/personas/:name/examples',
     '/wake/models/:id',
     '/message-rescue/context',
+    '/contacts/:id',
   ],
 };
 const ALLOWED_METHODS = new Set(Object.keys(ROUTE_ALLOWLIST));

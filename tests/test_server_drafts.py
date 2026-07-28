@@ -47,14 +47,14 @@ class EmptyStructuredTranscriber(EmptyTranscriber):
 
 
 class DummyEngine:
-    def process_fast_lane(self, text, preset, max_output_tokens=None, chunk_size=None, progress_callback=None, stitch_pass=False, delivery_summary=None):
+    def process_fast_lane(self, text, preset, max_output_tokens=None, chunk_size=None, progress_callback=None, stitch_pass=False, delivery_summary=None, audience_summary=None):
         return f"{preset}: {text}"
 
 
 class ProgressReportingEngine:
     """Simulates the engine's chunk-progress callbacks for long recordings."""
 
-    def process_fast_lane(self, text, preset, max_output_tokens=None, chunk_size=None, progress_callback=None, stitch_pass=False, delivery_summary=None):
+    def process_fast_lane(self, text, preset, max_output_tokens=None, chunk_size=None, progress_callback=None, stitch_pass=False, delivery_summary=None, audience_summary=None):
         if progress_callback:
             progress_callback({"status": "chunking_started", "chunk_count": 3})
             for i in range(1, 4):

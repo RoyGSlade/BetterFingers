@@ -1,6 +1,12 @@
 # Contacts — design doc
 
-**Status:** proposal, awaiting owner sign-off.
+**Status:** signed off; backend landing (Stage 11).
+**Landed so far:** the store (`backend/services/contacts.py`), the interview
+(`backend/services/contact_interview.py`), the routes (`backend/api/routes/contacts.py`), and
+privacy coverage — contacts are wiped by `/privacy/wipe` and disclosed on the privacy screen
+in the same change that created the store. See §4a for what implementation changed about this
+design. **Not yet landed:** the optional `contact_id` on drafts and the audience prompt block
+(§7), and the UI (§6).
 **Required by:** `DESIGN.md` §14 ("each returns to the table one at a time, each with its own
 design doc"). Contacts are new product surface, not part of §11's incremental UI path, so
 this doc gates the code rather than following it.
@@ -108,6 +114,40 @@ editable — a wizard the user cannot overrule is a wizard that guesses wrong pe
 else. If no model is loaded, the wizard must degrade to the plain form rather than blocking
 contact creation — the feature cannot become a reason the user is unable to use the app.
 
+### 4a. What implementation changed (2026-07-27)
+
+**The interview needs no model at all.** Copying the Foundry's shape brought a property this
+doc did not anticipate: Foundry's interview *navigation* is deterministic and rule-based, and
+the model is invoked only at compile. Contacts inherit that, so "degrade to the plain form"
+turns out to be unnecessary — a user with nothing loaded gets the whole interview, and only
+the final polish is missing. `compile_contact` assembles their answers into the fields itself.
+
+That is strictly better than what this doc asked for. Falling back to a blank form would
+discard answers the user had just given and make them type it all again; the fallback for
+"the model could not help" should never be "your work is gone".
+
+**Compile does not boot a model.** The Foundry calls `ensure_ready()` and waits, which is
+right for a feature called "Build with AI". Spinning up a multi-gigabyte model to write two
+sentences about someone's brother is not — §10's friction budget applies to latency as much
+as to prompts. So compile uses a model that is *already up* and otherwise uses the
+deterministic path, reporting which happened via `used_model`. `wait_for_model` is there for
+a caller that explicitly wants to wait.
+
+**The person's name never reaches the model.** `build_compile_prompt` sends relationship,
+tone and boundaries — not the name. The model's job is to turn "how do I talk to them" into
+prose about register, and it can do that without being told who they are. The same holds at
+rewrite time: `audience_block()` renders a contact for the prompt and deliberately omits both
+name and id. A name in a prompt is a name in whatever the model layer logs or caches.
+
+**Routing details are refused, not merely unsupported.** `sanitize_contact` drops unknown
+keys *and returns what it dropped*, so a client that tries to stash an email or a phone number
+is told rather than quietly succeeding. §8's "out of scope" is enforced in code.
+
+**Hitting the cap is an error, not an eviction.** `PersonaLearningStore` evicts oldest-first
+when full because examples are derived data. Contacts are authored, so the store refuses
+instead: losing a learned example costs a little quality, losing a contact someone sat through
+an interview to build is losing their work.
+
 ## 5. Tone guidance is prose, not sliders
 
 Tempting to reuse the 5-axis trait model here. Don't — not yet.
@@ -149,6 +189,30 @@ delivery signals: `delivery_preservation.py`'s differential, extended with audie
 axis. The first real run of that probe found the main cleanup path already drops stated
 numbers — a contact prompt must not be allowed to make that worse, and right now we would not
 be able to tell without the baseline comparison.
+
+### 7a. What landed (2026-07-27)
+
+- `drafts` gained a nullable `contact_id`, and `process_fast_lane` an optional
+  `audience_summary=None` — both additive (rule 6).
+- Two profile keys: `use_audience_context` (default **false**, gating the prompt) and
+  `active_contact_id` (default null). The selection is **sticky like `current_preset`**, per
+  §10 — rule 2 is about who decides, not how often they are interrupted.
+- **The two are gated separately, deliberately.** The toggle governs whether a contact reaches
+  the *prompt*; the draft records the user's standing selection either way. That is what makes
+  Library filtering and retroactive application (§9.1) possible while the prompt side is still
+  off — speak first, attribute after.
+- The prompt block states the audience as *"context the user explicitly selected, not
+  something detected or inferred"*. That sentence is load-bearing: this is the one place a
+  future contributor could read audience as something the app worked out for itself.
+- It also forbids **inventing greetings and sign-offs** — the most likely way an audience
+  prompt breaks rule 5 in practice is deciding a message to your manager should open with "Hi
+  Priya," and close with "Best", words the speaker never said.
+- Same `PRESERVATION_CLAUSE` as delivery signals. Rule 5 does not get a weaker version because
+  the input is prose instead of numbers.
+
+**Still outstanding before the default can flip:** `delivery_preservation.py` does not yet
+carry audience as a third axis. Until it does, `use_audience_context` stays off — the same
+standard delivery signals are held to.
 
 ## 8. Explicitly out of scope
 

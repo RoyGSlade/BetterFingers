@@ -220,12 +220,20 @@ class DraftStore:
                       metadata=None, error="", gate_reasons=None, recording_result=None,
                       confidence=None, review_fields_fn=None,
                       save_fn=None, max_history=None,
-                      transcription_result=None, speech_signals=None):
+                      transcription_result=None, speech_signals=None, contact_id=None):
         """transcription_result/speech_signals are additive, optional, already-
         serialized (plain dict, e.g. via backend.domain.contracts.to_dict) data
         from I3.1's structured-transcription/speech-signal pipeline stages.
         Default None so callers that never compute them (and old drafts loaded
-        from disk, which won't even have these keys) are unaffected."""
+        from disk, which won't even have these keys) are unaffected.
+
+        contact_id (Stage 11) is the same shape of addition: an optional,
+        nullable reference to a contact the USER applied. Null is the normal
+        case and always fine -- most dictation has no particular audience, and
+        nothing infers one. It is stored as an opaque id rather than a copy of
+        the contact so that editing a contact does not require rewriting every
+        draft that ever referenced it, and so deleting one leaves a dangling id
+        rather than orphaned prose about a person."""
         limit = max_history if max_history is not None else self.max_history
         with self.lock:
             draft = {
@@ -240,6 +248,7 @@ class DraftStore:
                 "confidence": confidence or {"score": None, "avg_logprob": None, "no_speech_prob": None},
                 "transcription_result": transcription_result,
                 "speech_signals": speech_signals,
+                "contact_id": contact_id,
                 "pending_send": False,
                 "send_result": None,
                 "created_at": datetime.now(timezone.utc).isoformat(),

@@ -198,6 +198,70 @@ class PrivacyWipeTests(unittest.TestCase):
                 self.assertEqual(report["message_rescue"]["stored_results"]["count"], 0)
                 self.assertEqual(report["message_rescue"]["persona_examples"]["total"], 0)
 
+    def test_privacy_report_discloses_the_contacts_store(self):
+        """Wiping a store is not the same as telling the user it exists. Every
+        other on-disk store of user text is listed on the privacy screen with
+        its path; contacts hold prose the user wrote about the people in their
+        life, so leaving it off would be a report that lies by omission."""
+        with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ):
+            with self._client() as client:
+                report = client.get("/privacy").json()
+
+        names = [entry["name"] for entry in report["data_locations"]]
+        self.assertIn("Contacts", names)
+        entry = next(e for e in report["data_locations"] if e["name"] == "Contacts")
+        self.assertTrue(entry["path"].endswith("contacts.json"), entry["path"])
+
+    def test_wipe_clears_contacts(self):
+        """A contact list that survived "delete my data" would be a breach of
+        the product's central promise, so this lands with the store rather than
+        after it. Asserted on disk as well as through the API: a wipe that
+        logically empties the store but leaves the notes readable in the
+        profile directory has not deleted anything."""
+        from backend.services.contacts import ContactStore
+
+        with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ):
+            store = ContactStore()
+            store.create({"name": "Priya", "notes": "distinctive-secret-string"})
+            self.assertEqual(store.count(), 1)
+            store_path = store.path
+
+            with self._client() as client:
+                payload = client.post("/privacy/wipe", json={}).json()
+
+            self.assertTrue(payload["ok"], payload)
+            self.assertTrue(payload["cleared"]["contacts_cleared"])
+            self.assertEqual(ContactStore().count(), 0)
+            with open(store_path, encoding="utf-8") as handle:
+                self.assertNotIn("distinctive-secret-string", handle.read())
+
+    def test_wipe_reports_failure_when_contacts_cannot_be_cleared(self):
+        """contacts_cleared is a postcondition, not a report line: `ok` is
+        computed from the postconditions, so a store that could not be written
+        must make the whole wipe report failure rather than quietly succeed."""
+        with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ):
+            from backend.services import contacts as contacts_module
+
+            class _UnwritableStore(contacts_module.ContactStore):
+                def clear_all(self):
+                    return {"ok": False, "error": "write_failed", "message": "disk on fire"}
+
+                def count(self):
+                    return 1
+
+            with patch.object(contacts_module, "ContactStore", _UnwritableStore):
+                with self._client() as client:
+                    payload = client.post("/privacy/wipe", json={}).json()
+
+            self.assertFalse(payload["cleared"]["contacts_cleared"])
+            self.assertFalse(payload["ok"], payload)
+
     def test_wipe_message_rescue_and_persona_clear_is_idempotent(self):
         with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
             server, "Transcriber", DummyTranscriber

@@ -315,6 +315,11 @@ def _sanitize_profile_values(config, defaults):
         cfg.get("use_delivery_signals", d["use_delivery_signals"]),
         d["use_delivery_signals"],
     )
+    cfg["use_audience_context"] = _coerce_bool(
+        cfg.get("use_audience_context", d["use_audience_context"]),
+        d["use_audience_context"],
+    )
+    cfg["active_contact_id"] = _coerce_str(cfg.get("active_contact_id") or "", "").strip() or None
     cfg["streaming_batch_min_seconds"] = _coerce_float(
         cfg.get("streaming_batch_min_seconds", d["streaming_batch_min_seconds"]),
         d["streaming_batch_min_seconds"],
@@ -830,6 +835,19 @@ def _profile_defaults():
         # than a fake one. Nothing about this changes what is captured or
         # stored — the signals are computed and persisted either way.
         "use_delivery_signals": False,
+        # Audience context (Stage 11). Same shape and the same reason for the
+        # default: this is the second thing that can change the words the user
+        # actually sends, so it ships off until the preservation differential
+        # covers audience as its own axis. Nothing about this changes what is
+        # captured or stored -- a contact is saved and selectable either way,
+        # it just does not reach the prompt.
+        "use_audience_context": False,
+        # Which contact is currently selected, or None. Sticky like
+        # current_preset above, deliberately: rule 2 is about who decides, not
+        # how often they are interrupted, and re-confirming a standing choice
+        # before every utterance is friction with no safety benefit. Empty
+        # string is normalized to None so "nobody" is one value, not two.
+        "active_contact_id": None,
         "auto_stop_after_silence_enabled": False,
         "auto_stop_silence_ms": 900,
         "auto_stop_min_recording_ms": 700,

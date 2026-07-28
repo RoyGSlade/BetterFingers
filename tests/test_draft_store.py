@@ -58,6 +58,30 @@ class DraftStoreSignalsTests(unittest.TestCase):
             send_process_token="test-token",
         )
 
+    def test_contact_id_defaults_to_null(self):
+        """Stage 11: null is the normal case and always fine. Most dictation
+        has no particular audience, and nothing infers one."""
+        draft = self._create()
+        self.assertIsNone(draft["contact_id"])
+
+    def test_an_applied_contact_is_stored_as_an_opaque_id(self):
+        """An id rather than a copy of the contact: editing a contact must not
+        require rewriting every draft that referenced it, and deleting one
+        should leave a dangling id rather than orphaned prose about a person."""
+        draft = self._create(contact_id="abc123")
+        self.assertEqual(draft["contact_id"], "abc123")
+
+    def test_contact_id_survives_a_restart(self):
+        draft = self._create(contact_id="abc123")
+        restarted = DraftStore(
+            data_dir_fn=lambda: self._tmp.name,
+            history_store=self.history,
+            send_process_token="test-token",
+        )
+        restarted.load_history()
+        stored = next(d for d in restarted.draft_queue if d["id"] == draft["id"])
+        self.assertEqual(stored["contact_id"], "abc123")
+
     def _create(self, **overrides):
         kwargs = dict(
             raw_text="hello world",

@@ -106,6 +106,14 @@ CATEGORIES: list[DataCategory] = [
     _cat("macros", "Macros", "python", "personal",
          "Kept until personal data is cleared.", _PERSONAL,
          in_export=True, user_text=True),
+    # Contacts (Stage 11). Registered in the same change that creates the store,
+    # not after it: a contact list that survived "delete my data" would be a
+    # breach of the product's central promise, and an undeclared one is a
+    # privacy report that lies by omission. user_text because notes and tone
+    # guidance are free prose the user wrote about a person.
+    _cat("contacts", "Contacts", "python", "personal",
+         "Kept until personal data is cleared.", _PERSONAL,
+         in_export=True, user_text=True),
     _cat("wake_models", "Wake models & training artifacts", "python", "sensitive",
          "Kept until personal data is cleared.", _PERSONAL),
     _cat("mcp_config", "MCP configuration", "python", "sensitive",

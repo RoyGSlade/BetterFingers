@@ -933,7 +933,7 @@ def _serialize_optional_contract(value):
     return _contract_to_dict(value) if value is not None else None
 
 
-def create_draft(raw_text, final_text, preset="True Janitor", status="pending", metadata=None, error="", gate_reasons=None, recording_result=None, confidence=None, transcription_result=None, speech_signals=None):
+def create_draft(raw_text, final_text, preset="True Janitor", status="pending", metadata=None, error="", gate_reasons=None, recording_result=None, confidence=None, transcription_result=None, speech_signals=None, contact_id=None):
     global next_draft_id
     _draft_store.next_draft_id = next_draft_id
     result = _draft_store.create_draft(
@@ -942,6 +942,7 @@ def create_draft(raw_text, final_text, preset="True Janitor", status="pending", 
         confidence=confidence, review_fields_fn=update_draft_review_fields,
         save_fn=save_draft_history, max_history=MAX_DRAFT_HISTORY,
         transcription_result=transcription_result, speech_signals=speech_signals,
+        contact_id=contact_id,
     )
     next_draft_id = _draft_store.next_draft_id
     return result
@@ -1867,6 +1868,23 @@ def process_recording_result(
                 if signals is not None:
                     delivery_summary = summarize_signals(signals)
 
+            # Audience (Stage 11), same opt-in shape. The contact comes from
+            # the profile's sticky `active_contact_id` -- a choice the user
+            # made and can see and change -- never from anything inferred.
+            # Resolving it here rather than caching means an edit to a contact
+            # takes effect on the next utterance.
+            audience_summary = None
+            if profile_config.get("use_audience_context") and profile_config.get("active_contact_id"):
+                try:
+                    from backend.services.contacts import ContactStore, audience_block
+                    contact = ContactStore().get(profile_config["active_contact_id"])
+                    if contact:
+                        audience_summary = audience_block(contact) or None
+                except Exception as exc:
+                    # A contact that cannot be read must not stop the dictation
+                    # it was only meant to flavour.
+                    logging.warning(f"Audience context unavailable: {exc}")
+
             with model_runtime.read_lease("llm"):
                 final_text = engine.process_fast_lane(
                     raw_text,
@@ -1876,6 +1894,7 @@ def process_recording_result(
                     progress_callback=_chunk_progress if will_chunk else None,
                     stitch_pass=stitch_enabled,
                     delivery_summary=delivery_summary,
+                    audience_summary=audience_summary,
                 )
         finally:
             if heartbeat is not None:
@@ -1893,6 +1912,13 @@ def process_recording_result(
             confidence=confidence,
             transcription_result=_serialize_optional_contract(ctx.extra.get("transcription_result")),
             speech_signals=_serialize_optional_contract(ctx.extra.get("speech_signals")),
+            # Recorded whether or not `use_audience_context` is on: the toggle
+            # governs whether a contact reaches the PROMPT, not whether the
+            # user's own standing selection is written down. Keeping it either
+            # way is what lets Library filter by contact and what makes
+            # retroactive application (design §9.1) possible -- speak first,
+            # attribute after.
+            contact_id=profile_config.get("active_contact_id"),
         )
         if pipeline_flags["editing_commands"]:
             utterance_history.record(
@@ -3244,7 +3270,15 @@ def get_privacy_report():
     history_db = history_store.get_db_path()
     recordings_dir = str(recordings.get_recordings_dir())
 
+    # Contacts (Stage 11) are listed here, not only wiped, because the privacy
+    # screen is what a user actually reads: a store of prose they wrote about
+    # the people in their life that the screen never mentions is a report that
+    # lies by omission.
+    from backend.services.contacts import ContactStore
+    contacts_path = ContactStore().path
+
     data_locations = [
+        {"name": "Contacts", "path": contacts_path, "bytes": _path_size_bytes(contacts_path)},
         {"name": "Draft history", "path": history_file, "bytes": _path_size_bytes(history_file)},
         {"name": "Searchable history (database)", "path": history_db, "bytes": _path_size_bytes(history_db)},
         {"name": "Raw audio recordings", "path": recordings_dir, "bytes": _path_size_bytes(recordings_dir)},
@@ -3563,6 +3597,23 @@ def _perform_privacy_wipe(wipe_voices: bool):
                 )
         cleared["persona_examples_cleared"] = persona_examples_ok and not persona_store.list_personas()
 
+        # 5d. Clear contacts (Stage 11). User-authored records of how to speak
+        #     to a person -- notes and tone guidance are free prose about
+        #     someone -- so they go with the rest of the personal data. A
+        #     contact list that survived "delete my data" would be a breach of
+        #     the product's central promise, which is why this lands in the
+        #     same change that creates the store rather than after it.
+        from backend.services.contacts import ContactStore
+        contact_store = ContactStore()
+        contacts_result = contact_store.clear_all()
+        if not contacts_result.get("ok"):
+            logging.warning(
+                f"Privacy wipe: failed to clear contacts: {contacts_result.get('message')}"
+            )
+        # Verified by re-reading, not by trusting the return value: the claim
+        # this dict makes is "they are gone", not "we asked".
+        cleared["contacts_cleared"] = contacts_result.get("ok", False) and contact_store.count() == 0
+
         # 6. Verify every target and report per-path postconditions.
         leftover_recordings = recordings.list_leftover_files()
         postconditions = {
@@ -3584,6 +3635,10 @@ def _perform_privacy_wipe(wipe_voices: bool):
             "voice_cache_cleared": cleared["voice_cache_cleared"],
             "message_rescue_context_cleared": cleared["message_rescue_context_cleared"],
             "persona_examples_cleared": cleared["persona_examples_cleared"],
+            # A postcondition, not just a report line: `ok` below is computed
+            # from this dict, so a contacts file that failed to clear makes the
+            # whole wipe report failure instead of quietly succeeding.
+            "contacts_cleared": cleared["contacts_cleared"],
         }
         if wipe_voices:
             postconditions["voices_absent"] = not get_voices_path().exists()
@@ -5078,6 +5133,7 @@ import routes_models_resources  # noqa: E402
 import routes_wake  # noqa: E402
 from backend.api.routes import personas as routes_personas  # noqa: E402
 from backend.api.routes import message_rescue as routes_message_rescue  # noqa: E402
+from backend.api.routes import contacts as routes_contacts  # noqa: E402
 
 app.include_router(routes_foundry.router)
 app.include_router(routes_user_config.router)
@@ -5085,6 +5141,7 @@ app.include_router(routes_models_resources.router)
 app.include_router(routes_wake.router)
 app.include_router(routes_personas.router)
 app.include_router(routes_message_rescue.router)
+app.include_router(routes_contacts.router)
 _foundry_sessions = routes_foundry._foundry_sessions
 
 
