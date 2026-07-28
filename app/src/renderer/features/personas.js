@@ -61,8 +61,22 @@ const foundryState = {
   stressCases: [],
 };
 
+// The document this feature was mounted into.
+//
+// Wave 5: these lookups used the ambient `document` -- whichever page the
+// renderer happened to have loaded, not the one createPersonasFeature() was
+// given elements from. On a page hosting more than one document (or in a test
+// that fakes one) that reads and writes another document's DOM. The host now
+// passes its `doc` once and every lookup below goes through it; the ambient
+// document remains the fallback so the legacy dashboard is unaffected.
+let mountedDoc = null;
+
+function docRef() {
+  return mountedDoc || (typeof document !== 'undefined' ? document : null);
+}
+
 function foundryEl(id) {
-  return document.getElementById(id);
+  return docRef()?.getElementById?.(id) ?? null;
 }
 
 function foundryResetState() {
@@ -407,10 +421,20 @@ function foundryClose() {
  * @param {object} deps.ui shared render helpers: setMessage, showToast
  * @param {object} deps.hooks cross-feature callbacks: getLoadedPersonas, refreshPersonasAndVoices, markProfileDirty
  */
-export function createPersonasFeature({ elements, ui, hooks }) {
+export function createPersonasFeature({ elements, ui, hooks, doc }) {
   const els = elements;
   const { setMessage, showToast } = ui;
   const { getLoadedPersonas, refreshPersonasAndVoices, markProfileDirty } = hooks;
+
+  // Recorded for the module-level lookups above. Set here rather than per-call
+  // because the Foundry's helpers are module-scope and predate the injection.
+  if (doc) mountedDoc = doc;
+
+  // Set by initWizard() once its closure exists. openPersonaForEdit() below is
+  // the ONLY way in from outside, and it is deliberately not a second save
+  // path: it loads a persona into the wizard the user is looking at and hands
+  // stepping back to the wizard, whose Save is still the one that writes.
+  let wizardControls = null;
 
   async function foundrySave() {
     const persona = foundryState.compiledPersona;
@@ -550,7 +574,7 @@ export function createPersonasFeature({ elements, ui, hooks }) {
       currentStep = stepNum;
       notifyObserver(wizardStepObserver, stepNum);
       for (let i = 1; i <= 4; i++) {
-        const stepEl = document.getElementById(`wizardStep${i}`);
+        const stepEl = docRef()?.getElementById?.(`wizardStep${i}`) ?? null;
         if (stepEl) {
           if (i === stepNum) {
             stepEl.classList.remove('hidden');
@@ -859,6 +883,38 @@ export function createPersonasFeature({ elements, ui, hooks }) {
         els.wizardCustomToneLabel?.classList.add('hidden');
       }
     });
+
+    /**
+     * Open this wizard on an existing persona, at Review & save.
+     *
+     * Studio's Edit (pencil) calls this through the guided-flow shell. It does
+     * the same three things the user's own path does -- put the name in the
+     * name field, load that persona's saved fields and prompt, land on step 4
+     * -- and nothing else. In particular it does NOT save: `editingExistingPersona`
+     * stays true so showStep(4) leaves the hand-tuned prompt alone instead of
+     * regenerating one from the wizard selections, and the wizard's own Save
+     * button remains the only writer.
+     *
+     * Returns false for an unknown or empty name so the caller can decline to
+     * open a dialog rather than showing an empty one titled "edit".
+     */
+    async function openForEdit(name) {
+      const trimmed = String(name ?? '').trim();
+      if (!trimmed) return false;
+      const loadedPersonas = getLoadedPersonas();
+      if (!loadedPersonas || !loadedPersonas[trimmed]) return false;
+
+      if (els.wizardPersonaName) els.wizardPersonaName.value = trimmed;
+      // Awaited: showStep(4) below decides whether to regenerate the prompt
+      // from `editingExistingPersona`, which this is what sets. Racing them
+      // would overwrite the saved prompt roughly half the time.
+      await loadExistingPersonaAdvanced();
+      showStep(4);
+      updateDeleteButtonVisibility();
+      return true;
+    }
+
+    wizardControls = { openForEdit, showStep: (n) => showStep(n) };
 
     els.wizardPersonaName?.addEventListener('input', () => {
       updateDeleteButtonVisibility();
@@ -1181,5 +1237,17 @@ export function createPersonasFeature({ elements, ui, hooks }) {
     });
   }
 
-  return { initWizard, initFoundry };
+  /**
+   * Load an existing persona into the wizard, at Review & save.
+   *
+   * Returns false when the wizard has not been initialised yet or the name is
+   * not a persona we know about, so a caller can leave the shell shut rather
+   * than opening an empty dialog.
+   */
+  async function openPersonaForEdit(name) {
+    if (!wizardControls) return false;
+    return wizardControls.openForEdit(name);
+  }
+
+  return { initWizard, initFoundry, openPersonaForEdit };
 }

@@ -1,10 +1,18 @@
 // Persona creation on the guided-flow shell (stage 13 §4c,
 // docs/ui/SIGNAL_DESK_GUIDED_FLOWS.md).
 //
-// One dialog, two entry paths. Studio's "+ New Persona" opens the manual wizard
-// (Goal & role -> Tone -> Rules -> Review & save); "Build with AI" opens the
-// Persona Foundry's model-led interview (Interview -> Examples -> Stress test ->
-// Review & save). Both already ended at the same POST /personas.
+// One dialog, three entry paths, one save. Studio's "+ New Persona" opens the
+// manual wizard at Goal & role (-> Tone -> Rules -> Review & save); "Build with
+// AI" opens the Persona Foundry's model-led interview (Interview -> Examples ->
+// Stress test -> Review & save); Wave 5's Edit opens the SAME wizard path at
+// Review & save with the persona already loaded. All three end at the same
+// POST /personas.
+//
+// The point of routing Edit through here rather than giving it its own editor
+// is that a second editor is a second save path, and two things that can write
+// a persona is how a persona gets written twice with different fields. Edit
+// therefore borrows the wizard rather than reimplementing it, and does not save
+// anything itself.
 //
 // WHAT THIS DOES NOT DO, and why: it does not take over stepping. The wizard
 // advances from its own Back/Next plus a jump to step 4 when the model drafts a
@@ -93,6 +101,10 @@ export function wizardStepIdFor(stepNum) {
  *   module-level state in personas.js, so a test that wants to drive the following has to
  *   be handed the callback rather than reach for a private
  * @param {Function} [opts.observeFoundryScreen]  same
+ * @param {Function} [opts.openPersonaForEdit]  personas.js's openPersonaForEdit;
+ *   loads a saved persona into the wizard at Review & save. Injected rather
+ *   than imported because it is per-instance closure state inside
+ *   createPersonasFeature, not a module-level function.
  */
 export function createPersonaFlow({
   root,
@@ -100,6 +112,7 @@ export function createPersonaFlow({
   foundryTrigger,
   observeWizardStep = setWizardStepObserver,
   observeFoundryScreen = setFoundryScreenObserver,
+  openPersonaForEdit,
   doc = globalThis.document,
 } = {}) {
   // Two flows over one root. They share the markup and differ only in which
@@ -138,6 +151,42 @@ export function createPersonaFlow({
     // Whatever step the wizard is actually on -- it keeps its state between
     // openings, so assuming step 1 would mislabel a reopened dialog.
     doc?.getElementById?.('wizardPersonaName')?.focus?.();
+  }
+
+  /**
+   * Third entry point, SAME shell, same wizard path, different starting step.
+   *
+   * New Persona lands on Goal & role because there is nothing to review yet;
+   * Edit lands on Review & save because there is. That is the only difference
+   * between them -- one dialog, one document, one save.
+   *
+   * The dialog is opened BEFORE the persona loads and closed again if the load
+   * declines. Opening first means the user sees the shell respond to their
+   * click immediately rather than after a round trip; closing on failure means
+   * an unknown persona never leaves an empty dialog sitting open. Returns
+   * whether it stayed open.
+   */
+  async function openWizardForEdit(name) {
+    active = 'wizard';
+    setFooter('wizard');
+    showRoot();
+    wizardFlow.open();
+
+    let loaded = false;
+    try {
+      loaded = Boolean(await openPersonaForEdit?.(name));
+    } catch (_error) {
+      // A failed load must not strand an open dialog claiming to be editing.
+      loaded = false;
+    }
+    if (!loaded) {
+      close();
+      return false;
+    }
+    // No goTo() here: personas.js's showStep(4) fires the wizard-step observer
+    // registered below, which is what moves the shell. Calling goTo as well
+    // would give the dialog two authorities on which step it is showing.
+    return true;
   }
 
   function openFoundry() {
@@ -183,6 +232,7 @@ export function createPersonaFlow({
 
   return {
     openWizard,
+    openWizardForEdit,
     openFoundry,
     close,
     getActivePath: () => active,

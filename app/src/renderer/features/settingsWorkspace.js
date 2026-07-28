@@ -225,6 +225,117 @@ export function computeNextSettingsSection(state, requestedId) {
   return { active: requestedId };
 }
 
+// --- Disclosed toggles (D-0005) ---------------------------------------------
+//
+// Two profile keys change what the model is told about your speech and your
+// audience. Both existed in the backend with no way for an ordinary user to
+// see them, which is the specific thing D-0005 forbids: a feature nobody can
+// inspect is a feature nobody consented to.
+//
+// A plain checkbox would not have fixed that. "Use speech delivery signals"
+// tells a user nothing about what is collected, what changes, or what is
+// promised to survive. So each control carries six required pieces -- data
+// used, what it may change, what it must preserve, its default, where to
+// inspect the data, and its preservation-gate status -- and the shape is
+// enforced by a test rather than by whoever writes the next one.
+//
+// `userEnablable` is the honest/live distinction. Delivery signals have
+// retained PASS 3/3 preservation evidence and no decision blocking them, so a
+// user may turn them on; they simply default off. Audience context may NOT be
+// turned on here: D-0005 reserves that for a director ruling at Gate 5. Its
+// control renders, discloses and reports its gate, and cannot be switched --
+// and `use_audience_context` is deliberately absent from SETTINGS_FIELD_KEYS
+// below, so no save path can carry it at all. A disabled checkbox is a
+// promise; a key that is never collected is a guarantee.
+export const DISCLOSED_TOGGLES = [
+  {
+    key: 'use_delivery_signals',
+    label: 'Use speech delivery signals',
+    summary: 'Tell the cleanup model how you said something, not just what you said.',
+    dataUsed: 'Pace, pauses, emphasis and hesitation measured from the recording you just made. Derived on this device from audio that is already being transcribed; no new recording and nothing extra leaves your machine.',
+    mayChange: 'Punctuation, sentence breaks and emphasis in the cleaned-up draft. A long pause may become a paragraph break; stress may become italics or a comma.',
+    mustPreserve: 'Your words, their order, and their meaning. Delivery signals may change how a sentence is set, never what it says — hedges, negations and specifics stay exactly as you said them.',
+    defaultOn: false,
+    inspect: {
+      label: 'See the signals recorded on your drafts',
+      // Drafts carry `speech_signals`; the Privacy section lists where drafts
+      // live on disk and is the honest "inspect the data" destination today.
+      section: 'privacy',
+      target: 'speech_signals',
+    },
+    gate: {
+      status: 'qualified',
+      text: 'Preservation check passed (PASS 3/3, retained Wave 0 baseline). Off by default so the change is yours to make.',
+      decision: 'D-0005',
+    },
+    userEnablable: true,
+  },
+  {
+    key: 'use_audience_context',
+    label: 'Use selected contact/audience context',
+    summary: 'Let the cleanup model know who you are writing to.',
+    dataUsed: 'The contact you selected in "Writing to" — their relationship and tone notes, as a name-free summary. Never their name, and never anything you did not type into that contact yourself.',
+    mayChange: 'Register and formality of the cleaned-up draft. Writing to a manager may come out less casual than writing to a sibling.',
+    mustPreserve: 'Your words, their order, and their meaning. Audience context may change register, never content — it must not soften a refusal, drop a specific, or add a pleasantry you did not say.',
+    defaultOn: false,
+    inspect: {
+      label: 'Review your contacts and what they store',
+      section: 'privacy',
+      target: 'contacts',
+    },
+    gate: {
+      status: 'awaiting-ruling',
+      text: 'Preservation check passed (PASS 3/3, retained Wave 0 baseline), but enabling this is a release gate decision that has not been made. The control is here so you can see what it would do; it cannot be switched on yet.',
+      decision: 'D-0005',
+    },
+    userEnablable: false,
+  },
+];
+
+/** The toggle descriptor for `key`, or null. */
+export function disclosedToggleFor(key) {
+  return DISCLOSED_TOGGLES.find((t) => t.key === key) || null;
+}
+
+/**
+ * The disclosure a control must show, in render order.
+ *
+ * Returned as labelled rows rather than a paragraph so the markup cannot
+ * quietly drop one: a missing "what it must preserve" line is exactly the
+ * omission D-0005 exists to prevent, and a test can count these.
+ */
+export function disclosureRowsFor(toggle) {
+  if (!toggle) return [];
+  return [
+    { field: 'dataUsed', label: 'Data it uses', text: toggle.dataUsed },
+    { field: 'mayChange', label: 'What it may change', text: toggle.mayChange },
+    { field: 'mustPreserve', label: 'What it must preserve', text: toggle.mustPreserve },
+    { field: 'default', label: 'Default', text: toggle.defaultOn ? 'On' : 'Off' },
+    { field: 'inspect', label: 'Inspect the data', text: toggle.inspect.label },
+    { field: 'gate', label: 'Preservation gate', text: toggle.gate.text },
+  ];
+}
+
+/**
+ * Should this control be interactive?
+ *
+ * Split out from `userEnablable` because the answer is "no" for a second
+ * reason too: a toggle already stored as ON stays readable but is not made
+ * switchable by this function alone.
+ */
+export function toggleIsInteractive(toggle) {
+  return Boolean(toggle && toggle.userEnablable);
+}
+
+/** What a control reports as its current state, given stored profile settings. */
+export function toggleStateFrom(settings, toggle) {
+  if (!toggle) return { checked: false, disabled: true };
+  const stored = (settings || {})[toggle.key];
+  // `undefined` means the profile has never stored it, which is the default.
+  const checked = stored === undefined ? Boolean(toggle.defaultOn) : Boolean(stored);
+  return { checked, disabled: !toggleIsInteractive(toggle) };
+}
+
 // --- Inventory -> section placement map (machine-readable, see file header) -
 
 export const INVENTORY_PLACEMENT_MAP = {
@@ -259,6 +370,8 @@ export const INVENTORY_PLACEMENT_MAP = {
   'aicleanup.llmChunkSize': { section: 'aicleanup', control: 'LLM chunk size (50-5000)', wired: true },
   'aicleanup.whisperChunkSize': { section: 'aicleanup', control: 'Whisper chunk size (50-5000)', wired: true },
   'aicleanup.stitchPass': { section: 'aicleanup', control: 'Long-recording stitch pass toggle', wired: true },
+  'aicleanup.deliverySignals': { section: 'aicleanup', control: 'Use speech delivery signals (disclosed toggle, default off)', wired: true },
+  'aicleanup.audienceContext': { section: 'aicleanup', control: 'Use selected contact/audience context (disclosed toggle, default off)', wired: false, note: 'D-0005: the control, its disclosure and its gate status are built and rendered, but enabling it is a release gate decision that has not been made. `use_audience_context` is deliberately excluded from SETTINGS_FIELD_KEYS so no save path can set it.' },
 
   'notifications.statusIndicator': { section: 'notifications', control: 'Status indicator overlay toggle', wired: true },
   'notifications.notificationOverlay': { section: 'notifications', control: 'Notification overlay toggle', wired: true },
@@ -425,6 +538,10 @@ export const SETTINGS_FIELD_KEYS = [
   'status_indicator_enabled',
   'notification_overlay_enabled',
   'preview_overlay_enabled',
+  // D-0005 disclosed toggle. `use_audience_context` is deliberately NOT here:
+  // a key that is never collected cannot be turned on by any save path,
+  // including a future one written by someone who did not read D-0005.
+  'use_delivery_signals',
 ];
 
 export const SETTINGS_FIELD_TYPES = {
@@ -453,6 +570,7 @@ export const SETTINGS_FIELD_TYPES = {
   status_indicator_enabled: 'checkbox',
   notification_overlay_enabled: 'checkbox',
   preview_overlay_enabled: 'checkbox',
+  use_delivery_signals: 'checkbox',
 };
 
 // Checkbox fields that default ON when the profile hasn't stored them yet —
@@ -629,6 +747,32 @@ export const SETTINGS_ELEMENT_IDS = {
     status_indicator_enabled: 'sdSetStatusIndicator',
     notification_overlay_enabled: 'sdSetNotificationOverlay',
     preview_overlay_enabled: 'sdSetPreviewOverlay',
+    use_delivery_signals: 'sdSetUseDeliverySignals',
+  },
+
+  // --- D-0005 disclosed toggles -------------------------------------------
+  //
+  // The audience input is listed here rather than under `fields` on purpose:
+  // it must be rendered and read, never collected into a profile patch.
+  disclosedToggles: {
+    use_delivery_signals: {
+      input: 'sdSetUseDeliverySignals',
+      dataUsed: 'sdSetDeliverySignalsDataUsed',
+      mayChange: 'sdSetDeliverySignalsMayChange',
+      mustPreserve: 'sdSetDeliverySignalsMustPreserve',
+      default: 'sdSetDeliverySignalsDefault',
+      inspect: 'sdSetDeliverySignalsInspect',
+      gate: 'sdSetDeliverySignalsGate',
+    },
+    use_audience_context: {
+      input: 'sdSetUseAudienceContext',
+      dataUsed: 'sdSetAudienceContextDataUsed',
+      mayChange: 'sdSetAudienceContextMayChange',
+      mustPreserve: 'sdSetAudienceContextMustPreserve',
+      default: 'sdSetAudienceContextDefault',
+      inspect: 'sdSetAudienceContextInspect',
+      gate: 'sdSetAudienceContextGate',
+    },
   },
 
   // --- Per-field validation error spans (only the fields with a rule) ---
@@ -654,8 +798,14 @@ export function collectSettingsElements(root) {
   const byId = (id) => (doc && typeof doc.getElementById === 'function' ? doc.getElementById(id) || null : null);
   const els = {};
   for (const [key, value] of Object.entries(SETTINGS_ELEMENT_IDS)) {
-    if (key === 'fields' || key === 'fieldErrors') continue;
+    if (key === 'fields' || key === 'fieldErrors' || key === 'disclosedToggles') continue;
     els[key] = byId(value);
+  }
+  els.disclosedToggles = {};
+  for (const [toggleKey, ids] of Object.entries(SETTINGS_ELEMENT_IDS.disclosedToggles)) {
+    const group = {};
+    for (const [slot, id] of Object.entries(ids)) group[slot] = byId(id);
+    els.disclosedToggles[toggleKey] = group;
   }
   els.fields = {};
   for (const [fieldKey, id] of Object.entries(SETTINGS_ELEMENT_IDS.fields)) {
@@ -787,12 +937,45 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
     }
   }
 
+  /**
+   * Paint the D-0005 disclosure blocks.
+   *
+   * Every row is written from the descriptor, never from markup, so the six
+   * required pieces cannot drift apart from what the toggle actually does --
+   * and a control whose gate is unresolved is disabled here rather than
+   * relying on a `disabled` attribute someone remembered to type.
+   */
+  function renderDisclosedToggles(settings) {
+    for (const toggle of DISCLOSED_TOGGLES) {
+      const group = (els.disclosedToggles || {})[toggle.key];
+      if (!group) continue;
+
+      const state = toggleStateFrom(settings, toggle);
+      if (group.input) {
+        group.input.checked = state.checked;
+        group.input.disabled = state.disabled;
+        // Announced, not just greyed: a screen reader user must learn the
+        // control is unavailable and why, same as a sighted one.
+        group.input.setAttribute?.('aria-disabled', state.disabled ? 'true' : 'false');
+        if (state.disabled) {
+          group.input.title = toggle.gate.text;
+        }
+      }
+
+      for (const row of disclosureRowsFor(toggle)) {
+        const el = group[row.field];
+        if (el) el.textContent = row.text;
+      }
+    }
+  }
+
   /** Restores a full profile `settings` object into the DOM (the "restore" half of the collect/restore cycle) and clears dirty/validation state. */
   function renderSettings(settings) {
     activeProfileSettings = { ...(settings || {}) };
     profileDirty = false;
     validationErrors = {};
     applyFieldStates(restoreFieldStatesFromSettings(activeProfileSettings));
+    renderDisclosedToggles(activeProfileSettings);
     for (const key of Object.keys(fieldErrorEls)) clearFieldError(key);
     hideSaveBar();
     return activeProfileSettings;
@@ -1369,6 +1552,39 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
 
   // --- lifecycle --------------------------------------------------------
 
+  /**
+   * "Inspect the data" links, and the guard on the ungated control.
+   *
+   * The click guard is belt-and-braces next to `disabled` and the missing
+   * SETTINGS_FIELD_KEYS entry: a checkbox can be toggled programmatically, and
+   * D-0005's promise is about the stored value, not about the widget. If
+   * anything does flip it, it flips straight back and the user is told why
+   * rather than left with a control that appears to have worked.
+   */
+  function bindDisclosedToggles() {
+    for (const toggle of DISCLOSED_TOGGLES) {
+      const group = (els.disclosedToggles || {})[toggle.key];
+      if (!group) continue;
+
+      group.inspect?.addEventListener?.('click', (event) => {
+        event?.preventDefault?.();
+        if (hks.onInspectToggleData) {
+          hks.onInspectToggleData(toggle.key, toggle.inspect.target);
+          return;
+        }
+        goToSection(toggle.inspect.section);
+      });
+
+      if (!toggleIsInteractive(toggle)) {
+        group.input?.addEventListener?.('change', () => {
+          if (!group.input.checked) return;
+          group.input.checked = false;
+          setMessage(els.profileMessage, toggle.gate.text, 'warning');
+        });
+      }
+    }
+  }
+
   function bindOnce() {
     bindSectionNav();
     bindFieldDirtyTracking();
@@ -1376,6 +1592,7 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
     bindAppearanceControls();
     bindOverlayAppearanceControls();
     bindPrivacyControls();
+    bindDisclosedToggles();
     bindSearch();
   }
 
@@ -1405,6 +1622,7 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
     setProfilesList,
     setPersonaOptions,
     renderSettings,
+    renderDisclosedToggles,
     collectSettings,
     runValidation,
     renderPrivacyReport,

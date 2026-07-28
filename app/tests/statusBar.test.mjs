@@ -17,6 +17,8 @@ import {
   mapPersona,
   mapStt,
   mapTargetApp,
+  mapContact,
+  createStatusBarFeature,
 } from '../src/renderer/features/statusBar.js';
 
 // --- mic ---------------------------------------------------------------------
@@ -111,11 +113,22 @@ test('target app shows an application name when one is supplied', () => {
 
 // --- whole snapshot ----------------------------------------------------------
 
-test('an entirely absent backend degrades every cell to unknown', () => {
+test('an entirely absent backend degrades every always-present cell to unknown', () => {
   const values = computeStatusBar({});
   for (const [key, cell] of Object.entries(values)) {
+    // `contact` is the one cell that can be genuinely ABSENT rather than
+    // unknown -- see the mapContact tests below. Every other cell describes
+    // something that always has a state, so `—` is the honest reading.
+    if (key === 'contact') continue;
     assert.equal(cell.text, UNKNOWN, `${key} should be unknown, saw "${cell.text}"`);
   }
+});
+
+test('with no contact applied the cell is absent, not unknown', () => {
+  // The distinction is the point. "No one in particular" is the default and a
+  // real choice; a permanent rail cell reading `—` beside it would turn that
+  // default into a gap the user feels invited to fill.
+  assert.equal(computeStatusBar({}).contact, null);
 });
 
 test('a healthy snapshot reports real values', () => {
@@ -142,4 +155,82 @@ test('one dead endpoint does not blank the cells that did resolve', () => {
   });
   assert.equal(values.stt.text, 'Loaded');
   assert.equal(values.persona.text, UNKNOWN);
+});
+
+// --- Wave 5: the applied-contact cell ---------------------------------------
+
+test('an applied contact is named in the rail', () => {
+  assert.deepEqual(mapContact({ id: 'a1', name: 'Priya' }), { text: 'Priya', tone: 'muted' });
+});
+
+test('a contact with no id or no name yields no cell', () => {
+  // A dangling id -- the contact was deleted while applied -- must show
+  // nothing rather than a bare identifier.
+  assert.equal(mapContact({ id: 'a1', name: '' }), null);
+  assert.equal(mapContact({ id: '', name: 'Priya' }), null);
+  assert.equal(mapContact(null), null);
+  assert.equal(mapContact({ id: 'a1', name: '   ' }), null);
+});
+
+function railHarness() {
+  const mk = () => ({ textContent: '', dataset: {}, hidden: false });
+  const elements = {
+    micValue: mk(), sttValue: mk(), sttDot: mk(), llmValue: mk(), llmDot: mk(),
+    personaValue: mk(), targetAppValue: mk(), latencyValue: mk(),
+    contactCell: mk(), contactValue: mk(),
+  };
+  return { elements, feature: createStatusBarFeature({ elements }) };
+}
+
+test('the cell is hidden until a contact is applied', () => {
+  const h = railHarness();
+  h.feature.render({});
+  assert.equal(h.elements.contactCell.hidden, true);
+  assert.equal(h.elements.contactValue.textContent, '');
+});
+
+test('setContact shows the cell immediately', () => {
+  const h = railHarness();
+  h.feature.render({});
+  h.feature.setContact({ id: 'a1', name: 'Priya' });
+
+  assert.equal(h.elements.contactCell.hidden, false);
+  assert.equal(h.elements.contactValue.textContent, 'Priya');
+});
+
+test('clearing the contact hides the cell again', () => {
+  const h = railHarness();
+  h.feature.setContact({ id: 'a1', name: 'Priya' });
+  h.feature.setContact(null);
+
+  assert.equal(h.elements.contactCell.hidden, true);
+  assert.equal(h.elements.contactValue.textContent, '');
+});
+
+test('a later health poll does not silently clear the applied contact', () => {
+  // The applied contact is pushed in by the contacts feature, not fetched by
+  // refresh(). Without the held state the next poll would blank the cell.
+  const h = railHarness();
+  h.feature.setContact({ id: 'a1', name: 'Priya' });
+
+  h.feature.render({ runtime: { recording_active: true } });
+
+  assert.equal(h.elements.contactCell.hidden, false);
+  assert.equal(h.elements.contactValue.textContent, 'Priya');
+  assert.equal(h.elements.micValue.textContent, 'Recording', 'the rest of the rail still updates');
+});
+
+test('an explicit contact in a snapshot still wins', () => {
+  const h = railHarness();
+  h.feature.setContact({ id: 'a1', name: 'Priya' });
+  h.feature.render({ contact: { id: 'b2', name: 'Sam' } });
+  assert.equal(h.elements.contactValue.textContent, 'Sam');
+});
+
+test('a rail with no contact elements still renders everything else', () => {
+  const elements = { micValue: { textContent: '', dataset: {} } };
+  const feature = createStatusBarFeature({ elements });
+  feature.setContact({ id: 'a1', name: 'Priya' });
+  feature.render({ runtime: { recording_active: false } });
+  assert.equal(elements.micValue.textContent, 'Idle');
 });

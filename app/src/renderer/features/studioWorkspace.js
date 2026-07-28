@@ -50,12 +50,17 @@
 //      (real -- Foundry-compiled personas have this); manually-wizard-built
 //      personas don't carry a persona_card, so this shows '—' for them,
 //      honestly, rather than inventing a score.
-//   4. PREFERRED DESTINATIONS / TAGS / LAST UPDATED / PAIRED VOICE base
-//      voice: `preferred_destinations`/`tags`/`updated_at_label` have no
-//      backend field either (rendered empty-state when absent); PAIRED
-//      VOICE reads the REAL `persona.voice.base` field (persona v2 schema
-//      does have an optional `voice: dict`), resolved against
-//      fetchTtsVoices() for a display label.
+//   4. RESOLVED in Wave 5 (cut, not deferred). `preferred_destinations`,
+//      `tags` and `updated_at_label` have no backend field and never had one,
+//      so the Tags and Last Updated panels are GONE rather than rendering a
+//      permanent empty state. An empty slot is still a promise that something
+//      belongs there; the release rule is that no UI field may display an
+//      invented value, and "—" forever is an invented value's waiting room.
+//      Their placement-map rows survive marked `cut: true` so the parity
+//      ledger records the removal instead of losing the row. PAIRED VOICE
+//      stays: it reads the REAL `persona.voice.base` field (persona v2 does
+//      have an optional `voice: dict`), resolved against fetchTtsVoices()
+//      for a display label.
 //   5. "Stress Test" here is NOT Foundry's guided stress-test screen (that
 //      requires a session_id from the guided interview flow -- it doesn't
 //      apply to an arbitrary already-saved persona). This is a lightweight
@@ -79,13 +84,15 @@
 //      inside Settings' AI Cleanup section). RESOLVED for Signal Desk: both
 //      live in the shared guided-flow dialog (features/personaFlow.js,
 //      docs/ui/SIGNAL_DESK_GUIDED_FLOWS.md §4c), reached through the injected
-//      hooks below. Both handlers try, in order: the injected hook, then a
-//      same-document DOM element if one exists, then a toast -- the hook FIRST,
-//      because it is a decision the host made and the DOM reach is a guess.
-//      handleOpenFoundryClick had those two the other way round and it broke
-//      the moment the Foundry was mounted here: the trigger existed, so the
-//      guess won, clicked it directly, and started an interview inside a
-//      dialog nothing had opened.
+//      hooks below. Wave 5 removed the DOM fallbacks entirely: New, Build
+//      with AI and Edit now go through their hook or say so, and reach for no
+//      element at all. The fallbacks were `document.getElementById` against
+//      the AMBIENT document rather than the one this workspace was mounted
+//      into -- a cross-document lookup that finds whatever page happens to be
+//      loaded. handleOpenFoundryClick had already been burned by the ordering
+//      once: the trigger existed, the guess won, and an interview started
+//      inside a dialog nothing had opened. Deleting the guess is the fix that
+//      ordering only postponed.
 //
 // ---------------------------------------------------------------------------
 // ID-COLLISION NOTE (Teach from my edits / personaLearning.js reuse):
@@ -110,22 +117,24 @@
 //   hooks.showToast(msg, tone, duration)     Optional user feedback (same
 //                              shared helper signature as ui.showToast
 //                              elsewhere).
-//   hooks.getActivePersonaName()             TODO(phase-integration): should
-//                              return the profile's `current_preset` so the
-//                              detail header's "Active" badge reflects the
-//                              app's actual default persona, not just grid
-//                              selection. Defaults to "always active when
-//                              selected" (matches the mockup visually) until
-//                              wired.
-//   hooks.onNewPersonaRequested()            TODO(phase-integration): see
-//                              SPEC GAP 7 above.
-//   hooks.onOpenFoundryRequested()           TODO(phase-integration): see
-//                              SPEC GAP 7 above.
-//   hooks.onEditPersonaRequested(name)       TODO(phase-integration): same
-//                              "wizard doesn't live here yet" gap, for the
-//                              per-persona edit (pencil) icon.
-//   hooks.onAddTagRequested(name)            TODO(phase-integration): no
-//                              backend tags field/endpoint exists yet.
+//   hooks.getActivePersonaName()             Returns the profile's
+//                              `current_preset`, so the "Active" badge names
+//                              the persona the app will actually use. Wave 5:
+//                              when the hook is absent this now reports NOT
+//                              active. It used to default to "always active
+//                              when selected", which made the badge a label
+//                              for the cursor rather than a fact about the
+//                              profile -- clicking through a grid lit "Active"
+//                              on five personas in turn, only one of which was.
+//   hooks.onNewPersonaRequested()            Opens the guided-flow shell on
+//                              the manual wizard path (see SPEC GAP 7).
+//   hooks.onOpenFoundryRequested()           Opens the SAME shell on the
+//                              Foundry path (see SPEC GAP 7).
+//   hooks.onEditPersonaRequested(name)       Opens the SAME shell on the
+//                              wizard path with `name` loaded, at Review &
+//                              save. Not a separate editor and not a second
+//                              save path -- the wizard's own save is the only
+//                              one.
 //   hooks.onPlayRequested(text)              Optional override for the
 //                              per-example ▶ / strip Preview ▶ buttons;
 //                              defaults to a direct speakTts(text) call.
@@ -169,11 +178,11 @@ export function isValidStudioSection(id) {
 
 export const STUDIO_PLACEMENT_MAP = {
   'personas.list': { section: 'personas', control: 'Persona cards list + selection', wired: true },
-  'personas.active': { section: 'personas', control: 'Active persona indicator', wired: false, note: 'hooks.getActivePersonaName is a documented stub; should read the profile current_preset' },
+  'personas.active': { section: 'personas', control: 'Active persona indicator', wired: true },
   'personas.new': { section: 'personas', control: 'New Persona', wired: true },
   'personas.foundry': { section: 'personas', control: 'Build with AI / Persona Foundry', wired: true },
   'personas.wizard': { section: 'personas', control: 'Manual persona wizard (~40 controls)', wired: true },
-  'personas.traits': { section: 'personas', control: '5-axis trait sliders (warmth/directness/detail/formality/confidence)', wired: true },
+  'personas.traits': { section: 'personas', control: '5-axis trait sliders (warmth/directness/detail/formality/confidence)', wired: false, note: 'D-0006: the sliders save to the persona, but `use_persona_traits` is false and no UI may enable it, so saved values do not reach the cleanup prompt. Surfaced as "Experimental — unavailable" with the reason (PERSONA_TRAITS_STATUS) rather than left looking live.' },
 
   'detail.description': { section: 'detail', control: 'Persona description', wired: true },
   'detail.exampleRewrites': { section: 'detail', control: 'Example rewrites table', wired: true },
@@ -181,13 +190,13 @@ export const STUDIO_PLACEMENT_MAP = {
   'detail.stressTest': { section: 'detail', control: 'Stress Test', wired: true },
   'detail.save': { section: 'detail', control: 'Save persona', wired: true },
   'detail.publish': { section: 'detail', control: 'Publish preset', wired: true },
-  'detail.edit': { section: 'detail', control: 'Edit persona', wired: false, note: 'Same cross-document reach as personas.new' },
+  'detail.edit': { section: 'detail', control: 'Edit persona', wired: true },
   'detail.duplicate': { section: 'detail', control: 'Duplicate persona', wired: true },
   'detail.delete': { section: 'detail', control: 'Delete persona', wired: true },
   'detail.reliability': { section: 'detail', control: 'Reliability / examples stats', wired: true },
-  'detail.tags': { section: 'detail', control: 'Persona tags', wired: false, note: 'No backing field in the persona schema; the mockup shows tags the backend never stores' },
+  'detail.tags': { section: 'detail', control: 'Persona tags', wired: false, cut: true, note: 'CUT in Wave 5: no backing field in the persona schema. The mockup showed tags the backend never stores, and an always-empty tag row is a promise the product cannot keep. Restore only alongside a real persona tags field.' },
   'detail.preferredContacts': { section: 'detail', control: 'Preferred contact', wired: true },
-  'detail.lastUpdated': { section: 'detail', control: 'Last updated by/at', wired: false, note: 'No backing field: personas carry no updated_at or author' },
+  'detail.lastUpdated': { section: 'detail', control: 'Last updated by/at', wired: false, cut: true, note: 'CUT in Wave 5: personas carry no updated_at and no author, so both halves of "last updated by" were unbacked. Restore only alongside real persona audit fields.' },
 
   'voice.blend': { section: 'voice', control: 'Voice blend mix (Clarity/Warmth/Presence)', wired: true },
   'voice.preview': { section: 'voice', control: 'Voice preview / audition', wired: true },
@@ -204,6 +213,46 @@ export const STUDIO_PLACEMENT_MAP = {
   'context.selectedPersona': { section: 'context', control: 'Selected persona summary', wired: true },
   'context.pairedVoice': { section: 'context', control: 'Paired voice', wired: true },
 };
+
+// --- Persona traits: Experimental -- unavailable (D-0006) --------------------
+//
+// The five axes are real everywhere EXCEPT the one place that matters: schema
+// normalization, storage, routes, these sliders, prompt rendering and tests all
+// carry them, and `use_persona_traits` is false, so nothing a user sets here
+// reaches the live cleanup prompt.
+//
+// D-0006 is why there is no switch next to this text. The corrected production
+// True Janitor protocol produced three consecutive PASS 3/3 suites, but the
+// valid historical FAIL_TRAITS 0/3 result is not retracted by a later green
+// run, and the earlier Wave 0 adapter's observations were methodologically
+// invalid. Qualification methodology is therefore unreconciled, and a feature
+// whose preservation behaviour is unknown is not one a user can consent to.
+//
+// The disclosure exists because the alternative is worse in both directions: a
+// slider that silently does nothing teaches the user their input is being
+// honoured, and hiding the sliders entirely would delete persona data they may
+// already have authored. So the values stay editable and stored, and the panel
+// says plainly that they are not in effect and why.
+export const PERSONA_TRAITS_STATUS = Object.freeze({
+  /** The profile key this describes. Ships false and no UI may set it true. */
+  profileKey: 'use_persona_traits',
+  available: false,
+  /** Exact release wording; QA asserts on this string. */
+  label: 'Persona traits: Experimental — unavailable',
+  reason: 'Preservation qualification has not passed. Trait values are saved with the persona but are not applied to cleanup.',
+  detail: 'A repeated-sampling qualification policy has not been approved, so we cannot yet show that traits preserve what you said. Until then there is no switch to turn this on.',
+  decision: 'D-0006',
+});
+
+/**
+ * The disclosure lines for the traits panel, in render order.
+ *
+ * A function rather than a constant array so a caller cannot mutate the
+ * shared frozen status into saying something else.
+ */
+export function personaTraitsDisclosureLines(status = PERSONA_TRAITS_STATUS) {
+  return [status.label, status.reason, status.detail];
+}
 
 export const TRAIT_KEYS = ['warmth', 'directness', 'detail', 'formality', 'confidence'];
 
@@ -553,9 +602,15 @@ export const STUDIO_ELEMENT_IDS = {
   ctxReliabilityBar: 'sdCtxReliabilityBarFill',
   ctxPreferredContacts: 'sdCtxPreferredContacts',
   ctxPairedVoice: 'sdCtxPairedVoiceName',
-  ctxLastUpdated: 'sdCtxLastUpdated',
-  ctxTags: 'sdCtxTags',
-  ctxAddTagButton: 'sdCtxAddTagButton',
+
+  // Wave 5 removed ctxLastUpdated / ctxTags / ctxAddTagButton along with their
+  // markup -- no persona schema field backed any of them (see SPEC GAP 4).
+
+  // D-0006 traits disclosure. A status block, not a control: there is
+  // deliberately no element here that could turn traits on.
+  traitsStatusLabel: 'sdStudioTraitsStatusLabel',
+  traitsStatusReason: 'sdStudioTraitsStatusReason',
+  traitsStatusDetail: 'sdStudioTraitsStatusDetail',
 };
 
 /** Looks up every STUDIO_ELEMENT_IDS entry by id from `root` (defaults to `document`). Missing ids resolve to null, never throw. */
@@ -737,6 +792,22 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
     return wrap;
   }
 
+  /**
+   * Does `name` name the persona the profile will actually use?
+   *
+   * Wave 5: with no `getActivePersonaName` hook this returns false. The old
+   * default was true, which meant the badge tracked the grid cursor -- select
+   * any persona and it claimed to be the active one. A badge that is right
+   * only when the host happens to have wired it is a badge that lies by
+   * default, and "no host told us" is not evidence that this persona is
+   * active. Compared trimmed because `current_preset` is a stored string and a
+   * stray space would silently un-badge the correct persona.
+   */
+  function isActivePersona(name) {
+    if (!name || !hks.getActivePersonaName) return false;
+    return String(hks.getActivePersonaName() ?? '').trim() === String(name).trim();
+  }
+
   function buildTraitRow(key, value) {
     const row = document.createElement('div');
     row.className = 'sd-trait-row';
@@ -814,8 +885,7 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
     if (els.detailIcon) els.detailIcon.style.color = name ? personaSignatureColorVar(name) : '';
     if (els.detailName) els.detailName.textContent = name || 'Select a persona';
     if (els.detailBadge) {
-      const isActive = Boolean(name) && (hks.getActivePersonaName ? hks.getActivePersonaName() === name : true);
-      els.detailBadge.hidden = !isActive;
+      els.detailBadge.hidden = !isActivePersona(name);
     }
     if (els.description) els.description.textContent = name ? derivePersonaDescription(persona, name) : '';
 
@@ -964,8 +1034,7 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
     if (els.ctxIcon) els.ctxIcon.style.color = name ? personaSignatureColorVar(name) : '';
     if (els.ctxName) els.ctxName.textContent = name || '—';
     if (els.ctxBadge) {
-      const isActive = Boolean(name) && (hks.getActivePersonaName ? hks.getActivePersonaName() === name : true);
-      els.ctxBadge.hidden = !isActive;
+      els.ctxBadge.hidden = !isActivePersona(name);
     }
     if (els.ctxDescription) els.ctxDescription.textContent = name ? derivePersonaDescription(persona, name) : '';
 
@@ -1003,24 +1072,28 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
       els.ctxPairedVoice.textContent = voiceId ? voiceLabel(voiceId) : 'Not paired';
     }
 
-    if (els.ctxLastUpdated) els.ctxLastUpdated.textContent = persona?.updated_at_label || '—';
+    // Wave 5: the Last Updated and Tags panels were removed here and in the
+    // markup. Personas carry no updated_at, no author and no tags, so both
+    // could only ever render an em dash or an empty row -- a field that is
+    // permanently blank still tells the user a value is coming.
+  }
 
-    if (els.ctxTags && typeof els.ctxTags.replaceChildren === 'function') {
-      els.ctxTags.replaceChildren();
-      const tags = Array.isArray(persona?.tags) ? persona.tags : [];
-      tags.forEach((tag) => {
-        const chip = document.createElement('span');
-        chip.className = 'sd-chip sd-chip--tag';
-        chip.textContent = tag;
-        els.ctxTags.append(chip);
-      });
-    }
+  /**
+   * D-0006 traits disclosure. Static text: nothing about it depends on which
+   * persona is selected, and nothing about it can be toggled.
+   */
+  function renderTraitsStatus() {
+    const [label, reason, detail] = personaTraitsDisclosureLines();
+    if (els.traitsStatusLabel) els.traitsStatusLabel.textContent = label;
+    if (els.traitsStatusReason) els.traitsStatusReason.textContent = reason;
+    if (els.traitsStatusDetail) els.traitsStatusDetail.textContent = detail;
   }
 
   function renderAll() {
     renderPersonaGrid();
     renderPersonaDetail();
     renderContextPanel();
+    renderTraitsStatus();
   }
 
   // --- actions: playback --------------------------------------------------------
@@ -1143,56 +1216,47 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
 
   // --- actions: persona lifecycle (New / Foundry / Edit / Duplicate / Delete) ------
 
+  // All three go through their hook or say nothing happened. Wave 5 deleted the
+  // `document.getElementById(...)` fallbacks each of them used to carry: that
+  // `document` is the AMBIENT one, not the document this workspace was mounted
+  // into, so the fallback searched whichever page the renderer happened to have
+  // loaded. When it found something it drove a dialog in another document; when
+  // it found nothing it silently did nothing. The hook is the only path that
+  // knows which shell is open, so it is now the only path.
   function handleNewPersonaClick() {
-    if (hks.onNewPersonaRequested) {
-      hks.onNewPersonaRequested();
+    if (!hks.onNewPersonaRequested) {
+      hks.showToast?.('Persona wizard isn’t wired into this page yet.', 'warning');
       return;
     }
-    const wizardStep = typeof document !== 'undefined' ? document.getElementById('wizardStep1') : null;
-    if (wizardStep) {
-      wizardStep.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
-      document.getElementById('wizardPersonaName')?.focus?.();
-      return;
-    }
-    hks.showToast?.('Persona wizard isn’t wired into this page yet.', 'warning');
+    hks.onNewPersonaRequested();
   }
 
   function handleOpenFoundryClick() {
-    // Hook first, DOM fallback second -- the order handleNewPersonaClick above
-    // already uses, and the order that is actually correct: an explicitly
-    // injected hook is a decision the host made, while reaching across the
-    // document for #openFoundryButton is a guess.
-    //
-    // This was the other way round, and it broke the moment Signal Desk mounted
-    // the Foundry: the trigger existed, so the fallback won, clicked it
-    // directly, and started an interview inside a dialog nothing had opened.
-    // The dialog stayed hidden and the interview's error landed off screen.
-    if (hks.onOpenFoundryRequested) {
-      hks.onOpenFoundryRequested();
+    // The fallback deleted here is the one that caused the original bug: it
+    // clicked #openFoundryButton directly, starting an interview inside a
+    // dialog nothing had opened, so the dialog stayed hidden and the
+    // interview's error landed off screen. Reordering hid that; removing it
+    // fixes it.
+    if (!hks.onOpenFoundryRequested) {
+      hks.showToast?.('Persona Foundry isn’t wired into this page yet.', 'warning');
       return;
     }
-    const trigger = typeof document !== 'undefined' ? document.getElementById('openFoundryButton') : null;
-    if (trigger) {
-      trigger.click();
-      return;
-    }
-    hks.showToast?.('Persona Foundry isn’t wired into this page yet.', 'warning');
+    hks.onOpenFoundryRequested();
   }
 
+  // Edit opens the SAME guided-flow shell the New and Build-with-AI entry
+  // points open, on the wizard path, with this persona loaded at Review & save.
+  // The deleted fallback typed the name into another document's input and fired
+  // a synthetic change event at it -- an edit performed on a form the user was
+  // not looking at, which could also save through a path this workspace never
+  // saw. There is one save path and it belongs to the wizard.
   function handleEditClick() {
     if (!selectedName) return;
-    if (hks.onEditPersonaRequested) {
-      hks.onEditPersonaRequested(selectedName);
+    if (!hks.onEditPersonaRequested) {
+      hks.showToast?.('Persona wizard isn’t wired into this page yet.', 'warning');
       return;
     }
-    const nameInput = typeof document !== 'undefined' ? document.getElementById('wizardPersonaName') : null;
-    if (nameInput) {
-      nameInput.value = selectedName;
-      nameInput.dispatchEvent(new Event('change', { bubbles: true }));
-      nameInput.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
-      return;
-    }
-    hks.showToast?.('Persona wizard isn’t wired into this page yet.', 'warning');
+    hks.onEditPersonaRequested(selectedName);
   }
 
   async function handleDuplicateClick() {
@@ -1250,15 +1314,9 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
     renderVoiceBlendStrip();
   }
 
-  // --- actions: tags / destinations (no backend field yet -- see SPEC GAP 4) -------
-
-  function handleAddTagClick() {
-    if (hks.onAddTagRequested) {
-      hks.onAddTagRequested(selectedName);
-      return;
-    }
-    hks.showToast?.('Tags aren’t wired up yet — no backend field exists for persona tags.', 'warning');
-  }
+  // Wave 5: handleAddTagClick and its "tags aren't wired up yet" toast are
+  // gone with the Tags panel. A button whose only behaviour is to apologise
+  // for itself is still a button promising a feature -- see SPEC GAP 4.
 
   // --- lifecycle -----------------------------------------------------------------
 
@@ -1279,8 +1337,6 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
 
     els.addVoiceButton?.addEventListener?.('click', handleAddVoiceClick);
     els.previewButton?.addEventListener?.('click', () => playText(livePreview.input || els.previewText?.textContent || ''));
-
-    els.ctxAddTagButton?.addEventListener?.('click', handleAddTagClick);
 
     ensurePersonaLearning();
   }
@@ -1315,8 +1371,9 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
     handleDuplicateClick,
     handleDeleteClick,
     handleAddVoiceClick,
-    handleAddTagClick,
     playText,
+    renderTraitsStatus,
+    isActivePersona,
     getPersonaLearningFeature: () => personaLearningFeature,
   };
 }

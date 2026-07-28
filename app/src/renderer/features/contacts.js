@@ -77,6 +77,24 @@ export function canSaveContact(fields) {
   return Boolean(fields && String(fields.name || '').trim());
 }
 
+/**
+ * Summary of what applying a contact does, for the confirmation surfaces.
+ *
+ * Deliberately mentions the toggle. A user who applies a contact while
+ * `use_audience_context` is off must not believe they have changed how their
+ * words are cleaned up -- the selection is recorded on the draft either way
+ * (that is what lets Library filter by contact), but it reaches the PROMPT only
+ * when the disclosed Settings toggle is on, which D-0005 keeps off.
+ */
+export function describeApplyEffect(contact, { audienceEnabled = false } = {}) {
+  if (!contact || !contact.id) {
+    return 'Drafts will record no contact.';
+  }
+  return audienceEnabled
+    ? `Drafts will record ${contact.name}, and cleanup will be told who you are writing to.`
+    : `Drafts will record ${contact.name}. Cleanup is not told who you are writing to — that is off in Settings.`;
+}
+
 export function collectContactElements(doc = globalThis.document) {
   const $ = (id) => doc.getElementById(id);
   return {
@@ -84,6 +102,13 @@ export function collectContactElements(doc = globalThis.document) {
     pickerNote: $('sdContactPickerNote'),
     manageButton: $('sdContactManageButton'),
     newButton: $('sdContactNewButton'),
+    // Wave 5: clearing an applied contact and managing the list are separate
+    // actions from creating one. "Manage" used to open the create wizard,
+    // which meant the only thing a user could do to an existing contact was
+    // make another one.
+    clearButton: $('sdContactClearButton'),
+    manageList: $('sdContactManageList'),
+    manageEmpty: $('sdContactManageEmpty'),
   };
 }
 
@@ -91,8 +116,11 @@ export function collectContactElements(doc = globalThis.document) {
  * @param {object} opts
  * @param {ReturnType<typeof collectContactElements>} opts.elements
  * @param {object} [opts.hooks]
- *   onSelect(contactId)   — persist the sticky selection (profile write)
- *   onCreateRequested()   — open the creation wizard
+ *   onSelect(contactId)      — persist the sticky selection (profile write)
+ *   onCreateRequested()      — open the creation wizard
+ *   onEditRequested(contact) — open the wizard on an existing contact
+ *   onApplied(contact|null)  — the applied contact changed (status bar, etc.)
+ *   confirmFn(message)       — injected confirm() for delete
  *   showToast(msg, tone)
  */
 export function createContactsFeature({
@@ -103,6 +131,9 @@ export function createContactsFeature({
 } = {}) {
   let contacts = [];
   let selectedId = '';
+
+  const confirmFn = hooks.confirmFn
+    || (typeof globalThis.confirm === 'function' ? globalThis.confirm.bind(globalThis) : () => true);
 
   function selected() {
     return resolveSelected(contacts, selectedId);
@@ -133,6 +164,57 @@ export function createContactsFeature({
     renderNote();
   }
 
+  /**
+   * The manage list: every contact, each with Edit and Delete.
+   *
+   * Built from the same `contacts` array the picker uses, so the two can never
+   * disagree about who exists. Rows carry the id in a dataset entry rather
+   * than closing over an index -- a list that re-renders between click and
+   * handler would otherwise delete the wrong person.
+   */
+  function renderManageList() {
+    const list = elements.manageList;
+    if (!list || typeof list.replaceChildren !== 'function') return;
+
+    if (elements.manageEmpty) elements.manageEmpty.hidden = contacts.length > 0;
+
+    list.replaceChildren(...contacts.map((contact) => {
+      const row = doc.createElement('li');
+      row.className = 'sd-contact-row';
+      row.dataset.contactId = contact.id;
+
+      const name = doc.createElement('span');
+      name.className = 'sd-contact-row__name';
+      name.textContent = contact.name;
+
+      const detail = doc.createElement('span');
+      detail.className = 'sd-contact-row__detail';
+      detail.textContent = describeContact(contact);
+
+      const edit = doc.createElement('button');
+      edit.type = 'button';
+      edit.className = 'sd-link-btn sd-contact-row__edit';
+      edit.textContent = 'Edit';
+      edit.setAttribute('aria-label', `Edit ${contact.name}`);
+      edit.addEventListener('click', () => hooks.onEditRequested?.({ ...contact }));
+
+      const remove = doc.createElement('button');
+      remove.type = 'button';
+      remove.className = 'sd-link-btn sd-contact-row__delete';
+      remove.textContent = 'Delete';
+      remove.setAttribute('aria-label', `Delete ${contact.name}`);
+      remove.addEventListener('click', () => { deleteContact(contact.id); });
+
+      row.append(name, detail, edit, remove);
+      return row;
+    }));
+  }
+
+  function renderAll() {
+    renderPicker();
+    renderManageList();
+  }
+
   async function refresh() {
     try {
       const payload = await api.fetchContacts();
@@ -141,7 +223,7 @@ export function createContactsFeature({
       // A contact list that cannot be loaded must not stop anyone dictating.
       contacts = [];
     }
-    renderPicker();
+    renderAll();
     return contacts;
   }
 
@@ -149,16 +231,73 @@ export function createContactsFeature({
     selectedId = String(contactId || '');
     if (elements.picker) elements.picker.value = selectedId;
     renderNote();
+    hooks.onApplied?.(selected());
+  }
+
+  /**
+   * Clear the applied contact.
+   *
+   * A separate action from picking "No one in particular" only in how it is
+   * reached; both end in the same state, and both persist, because a sticky
+   * selection that un-sticks on clear would be sticky in one direction.
+   */
+  async function clearSelected() {
+    selectedId = '';
+    if (elements.picker) elements.picker.value = '';
+    renderNote();
+    hooks.onApplied?.(null);
+    try {
+      await api.setActiveContact('');
+    } catch (error) {
+      hooks.showToast?.(`Failed to clear the contact: ${error.message}`, 'danger');
+      return false;
+    }
+    hooks.onSelect?.(null);
+    return true;
+  }
+
+  /**
+   * Delete a contact.
+   *
+   * If the deleted contact was the applied one, the selection is cleared here
+   * rather than left dangling: resolveSelected() would already render nothing,
+   * but the stored `active_contact_id` would still name a contact that no
+   * longer exists, and a later restore would try to apply it.
+   */
+  async function deleteContact(contactId) {
+    const contact = resolveSelected(contacts, contactId);
+    if (!contact) return false;
+    if (!confirmFn(`Delete contact "${contact.name}"? This cannot be undone.`)) return false;
+
+    try {
+      await api.deleteContact(contactId);
+    } catch (error) {
+      hooks.showToast?.(`Delete failed: ${error.message}`, 'danger');
+      return false;
+    }
+
+    const wasApplied = selectedId === contactId;
+    await refresh();
+    if (wasApplied) await clearSelected();
+    hooks.showToast?.(`Deleted contact "${contact.name}".`, 'success');
+    return true;
   }
 
   function bind() {
     elements.picker?.addEventListener?.('change', () => {
       selectedId = elements.picker.value || '';
       renderNote();
+      hooks.onApplied?.(selected());
       hooks.onSelect?.(selectedId || null);
     });
     elements.newButton?.addEventListener?.('click', () => hooks.onCreateRequested?.());
-    elements.manageButton?.addEventListener?.('click', () => hooks.onCreateRequested?.());
+    // Manage now opens the list. It used to open the create wizard, which is
+    // how contacts ended up create-only: there was no path to an existing one.
+    elements.manageButton?.addEventListener?.('click', () => {
+      renderManageList();
+      hooks.onManageRequested?.(contacts.map((c) => ({ ...c })));
+    });
+    elements.clearButton?.addEventListener?.('click', () => { clearSelected(); });
   }
 
   bind();
@@ -166,10 +305,14 @@ export function createContactsFeature({
   return {
     refresh,
     setSelected,
+    clearSelected,
+    deleteContact,
     getSelected: selected,
     getSelectedId: () => selectedId || null,
     getContacts: () => contacts.map((c) => ({ ...c })),
     renderPicker,
+    renderManageList,
+    renderAll,
   };
 }
 

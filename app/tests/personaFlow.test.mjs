@@ -106,7 +106,7 @@ function makeEl(extra = {}) {
   };
 }
 
-function harness() {
+function harness({ openPersonaForEdit } = {}) {
   // Captured rather than registered globally: personas.js keeps its observers in
   // module state, so two flows in one test file would fight over them.
   const registered = {};
@@ -137,6 +137,7 @@ function harness() {
     footer,
     foundryTrigger: trigger,
     doc,
+    openPersonaForEdit,
     observeWizardStep: (fn) => { registered.wizardStep = fn; },
     observeFoundryScreen: (fn) => { registered.foundryScreen = fn; },
   });
@@ -241,6 +242,97 @@ test('reopening after a close works from either entry', () => {
   assert.equal(h.root.hidden, false);
   assert.equal(h.classes.has('hidden'), false);
   assert.deepEqual(h.visible(), ['interview']);
+});
+
+// --- Edit: the third entry into the SAME shell (Wave 5) ----------------------
+//
+// Studio's Edit used to reach across the ambient document, type a name into
+// #wizardPersonaName and fire a synthetic change event at it -- an edit
+// performed on a form in a page the user was not looking at. Edit now opens
+// this shell, on the wizard path, at Review & save.
+
+test('Edit opens the same shell on the wizard path, at Review & save', async () => {
+  const loads = [];
+  const h = harness({
+    openPersonaForEdit: async (name) => {
+      loads.push(name);
+      // personas.js's showStep(4) is what moves the chrome; the flow must
+      // follow it rather than position the dialog itself.
+      h.registered.wizardStep(4);
+      return true;
+    },
+  });
+
+  const opened = await h.flow.openWizardForEdit('Formal');
+
+  assert.equal(opened, true);
+  assert.deepEqual(loads, ['Formal'], 'the persona is loaded through personas.js, not typed into a form');
+  assert.equal(h.flow.getActivePath(), 'wizard', 'Edit is the wizard path, not a third path');
+  assert.deepEqual(h.visible(), ['wizard4']);
+  assert.equal(h.title.textContent, 'Review & save');
+  assert.equal(h.footer.hidden, false, 'the wizard footer is the same one New Persona gets');
+  assert.equal(h.classes.has('hidden'), false);
+});
+
+test('Edit and New Persona are the same dialog at different steps', () => {
+  const h = harness({ openPersonaForEdit: async () => { h.registered.wizardStep(4); return true; } });
+
+  h.flow.openWizard();
+  const newPersonaRoot = h.root;
+  const newPersonaPath = h.flow.getActivePath();
+  h.flow.close();
+
+  return h.flow.openWizardForEdit('Formal').then(() => {
+    assert.equal(h.root, newPersonaRoot, 'one root element, therefore one document');
+    assert.equal(h.flow.getActivePath(), newPersonaPath);
+  });
+});
+
+test('Edit never starts a Foundry interview', () => {
+  const h = harness({ openPersonaForEdit: async () => { h.registered.wizardStep(4); return true; } });
+  return h.flow.openWizardForEdit('Formal').then(() => {
+    assert.equal(h.trigger.clicked, undefined, 'the Foundry trigger belongs to the AI path only');
+  });
+});
+
+test('an unknown persona leaves no empty dialog open', async () => {
+  // The load declines rather than throwing: the name is simply not a persona.
+  const h = harness({ openPersonaForEdit: async () => false });
+
+  const opened = await h.flow.openWizardForEdit('Does Not Exist');
+
+  assert.equal(opened, false);
+  assert.equal(h.root.hidden, true, 'a dialog titled "edit" with nothing in it is worse than none');
+  assert.equal(h.classes.has('hidden'), true);
+  assert.equal(h.flow.getActivePath(), null);
+});
+
+test('a load that throws closes the dialog rather than stranding it', async () => {
+  const h = harness({
+    openPersonaForEdit: async () => { throw new Error('backend down'); },
+  });
+
+  const opened = await h.flow.openWizardForEdit('Formal');
+
+  assert.equal(opened, false);
+  assert.equal(h.root.hidden, true);
+  assert.equal(h.flow.getActivePath(), null);
+});
+
+test('Edit with no loader wired opens nothing', async () => {
+  const h = harness();
+  const opened = await h.flow.openWizardForEdit('Formal');
+  assert.equal(opened, false);
+  assert.equal(h.root.hidden, true);
+});
+
+test('the flow exposes no save of its own', () => {
+  // The whole point of routing Edit through the wizard is that there is one
+  // writer. A save on the shell would be a second one.
+  const h = harness();
+  for (const key of Object.keys(h.flow)) {
+    assert.equal(/save/i.test(key), false, `personaFlow must expose no ${key}`);
+  }
 });
 
 // --- trait sliders (Stage 10) -------------------------------------------------

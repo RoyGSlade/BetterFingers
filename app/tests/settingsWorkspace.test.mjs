@@ -48,6 +48,11 @@ import {
   SETTINGS_ELEMENT_IDS,
   collectSettingsElements,
   createSettingsWorkspaceFeature,
+  DISCLOSED_TOGGLES,
+  disclosedToggleFor,
+  disclosureRowsFor,
+  toggleIsInteractive,
+  toggleStateFrom,
 } from '../src/renderer/features/settingsWorkspace.js';
 
 // --- section routing (pure reducer, same contract as signalDeskShell.js / utilitiesWorkspace.js) ---
@@ -340,6 +345,10 @@ test('collect/restore ROUND TRIP: a full settings object survives restore -> (si
     status_indicator_enabled: false,
     notification_overlay_enabled: false,
     preview_overlay_enabled: false,
+    // D-0005 disclosed toggle. Included with a non-default value on purpose:
+    // a user who turns delivery signals on must find them still on after a
+    // profile round trip, or the control is decorative.
+    use_delivery_signals: true,
   };
 
   // "Restore" -> simulated DOM element states (value/checked as strings, the
@@ -576,7 +585,261 @@ test('COMPLETENESS: every placement map entry names a valid Settings section', (
   }
 });
 
-test('COMPLETENESS: every placement map entry is marked wired (Settings has no stubbed controls this phase)', () => {
-  const notWired = Object.entries(INVENTORY_PLACEMENT_MAP).filter(([, entry]) => entry.wired !== true);
-  assert.deepEqual(notWired, []);
+test('COMPLETENESS: an unwired Settings control must explain itself', () => {
+  // This used to assert that NOTHING in Settings was unwired. Wave 5 added a
+  // control that is deliberately built-but-not-live -- the audience toggle,
+  // which D-0005 reserves for a director ruling -- so the rule becomes the one
+  // the other workspaces already use: unwired is allowed, undeclared is not.
+  for (const [key, entry] of Object.entries(INVENTORY_PLACEMENT_MAP)) {
+    if (entry.wired === true) continue;
+    assert.equal(entry.wired, false, `${key}.wired must be a boolean`);
+    assert.ok(
+      typeof entry.note === 'string' && entry.note.length > 0,
+      `${key} is unwired with no note -- an undeclared gap is how features get lost`,
+    );
+  }
+});
+
+// --- D-0005 disclosed toggles ------------------------------------------------
+//
+// Both keys changed model behaviour with no way for a user to see them. The
+// tests below pin the two things that makes acceptable: the disclosure is
+// complete, and the ungated one cannot be turned on by any path Settings owns.
+
+test('both disclosed toggles exist, with the release wording', () => {
+  assert.equal(DISCLOSED_TOGGLES.length, 2);
+  assert.deepEqual(
+    DISCLOSED_TOGGLES.map((t) => t.label),
+    ['Use speech delivery signals', 'Use selected contact/audience context'],
+  );
+});
+
+test('every toggle discloses all six required pieces', () => {
+  for (const toggle of DISCLOSED_TOGGLES) {
+    const rows = disclosureRowsFor(toggle);
+    assert.deepEqual(
+      rows.map((r) => r.field),
+      ['dataUsed', 'mayChange', 'mustPreserve', 'default', 'inspect', 'gate'],
+      `${toggle.key} must disclose data used, what it may change, what it must preserve, its default, an inspect path, and its gate status`,
+    );
+    for (const row of rows) {
+      assert.ok(row.text && row.text.length > 0, `${toggle.key}.${row.field} is empty`);
+    }
+  }
+});
+
+test('every toggle ships OFF', () => {
+  for (const toggle of DISCLOSED_TOGGLES) {
+    assert.equal(toggle.defaultOn, false, `${toggle.key} must default off`);
+    // And the rendered "Default" row must say so, not just the descriptor.
+    const defaultRow = disclosureRowsFor(toggle).find((r) => r.field === 'default');
+    assert.equal(defaultRow.text, 'Off');
+  }
+});
+
+test('a profile that has never stored the key reports the default, not a guess', () => {
+  for (const toggle of DISCLOSED_TOGGLES) {
+    assert.equal(toggleStateFrom({}, toggle).checked, false);
+    assert.equal(toggleStateFrom(undefined, toggle).checked, false);
+  }
+});
+
+test('every toggle names a preservation gate status and its decision', () => {
+  for (const toggle of DISCLOSED_TOGGLES) {
+    assert.ok(toggle.gate.status, `${toggle.key} has no gate status`);
+    assert.equal(toggle.gate.decision, 'D-0005');
+  }
+});
+
+test('every toggle promises meaning is preserved, in its own words', () => {
+  for (const toggle of DISCLOSED_TOGGLES) {
+    assert.match(toggle.mustPreserve, /meaning/i,
+      `${toggle.key} must state that meaning survives -- that is the promise the whole product rests on`);
+  }
+});
+
+test('the audience toggle cannot be enabled from Settings', () => {
+  const audience = disclosedToggleFor('use_audience_context');
+  assert.equal(audience.userEnablable, false);
+  assert.equal(toggleIsInteractive(audience), false);
+  assert.equal(toggleStateFrom({}, audience).disabled, true);
+  assert.match(audience.gate.text, /cannot be switched on yet/);
+});
+
+test('use_audience_context is not collectable into a profile patch at all', () => {
+  // The strongest guarantee available: the key is absent from the field maps,
+  // so no save path -- including one written later by someone who has not read
+  // D-0005 -- can carry it.
+  assert.equal(SETTINGS_FIELD_KEYS.includes('use_audience_context'), false);
+  assert.equal('use_audience_context' in SETTINGS_FIELD_TYPES, false);
+
+  const patch = collectPatchFromFieldStates({
+    use_audience_context: { checked: true, disabled: false },
+    use_delivery_signals: { checked: true, disabled: false },
+  });
+  assert.equal('use_audience_context' in patch, false, 'the audience key must never reach a patch');
+  assert.equal(patch.use_delivery_signals, true);
+});
+
+test('a profile that already has audience context on still reports it honestly', () => {
+  // Settings does not write the key, but it must not lie about it either: a
+  // user who set it by hand is shown the truth, still with no way to flip it
+  // here.
+  const audience = disclosedToggleFor('use_audience_context');
+  const state = toggleStateFrom({ use_audience_context: true }, audience);
+  assert.equal(state.checked, true);
+  assert.equal(state.disabled, true);
+});
+
+test('the delivery-signals toggle is a real control that defaults off', () => {
+  const delivery = disclosedToggleFor('use_delivery_signals');
+  assert.equal(delivery.userEnablable, true);
+  assert.equal(toggleIsInteractive(delivery), true);
+  assert.equal(toggleStateFrom({}, delivery).disabled, false);
+
+  assert.equal(SETTINGS_FIELD_KEYS.includes('use_delivery_signals'), true);
+  assert.equal(SETTINGS_FIELD_TYPES.use_delivery_signals, 'checkbox');
+  // Not in the default-ON set: it must survive a restore as off.
+  assert.equal(SETTINGS_DEFAULT_ON_KEYS.has('use_delivery_signals'), false);
+  assert.equal(restoreFieldStatesFromSettings({}).use_delivery_signals.checked, false);
+});
+
+test('delivery signals survive a collect/restore round trip once turned on', () => {
+  const patch = collectPatchFromFieldStates({ use_delivery_signals: { checked: true, disabled: false } });
+  assert.equal(patch.use_delivery_signals, true);
+  assert.equal(restoreFieldStatesFromSettings(patch).use_delivery_signals.checked, true);
+});
+
+test('every disclosed toggle has a full set of element ids', () => {
+  for (const toggle of DISCLOSED_TOGGLES) {
+    const ids = SETTINGS_ELEMENT_IDS.disclosedToggles[toggle.key];
+    assert.ok(ids, `${toggle.key} has no element ids`);
+    assert.deepEqual(
+      Object.keys(ids).sort(),
+      ['dataUsed', 'default', 'gate', 'input', 'inspect', 'mayChange', 'mustPreserve'],
+      `${toggle.key} is missing an element for one of its disclosure rows`,
+    );
+  }
+});
+
+test('collectSettingsElements resolves the disclosure groups', () => {
+  const seen = [];
+  const doc = { getElementById: (id) => { seen.push(id); return { id }; } };
+  const els = collectSettingsElements(doc);
+
+  for (const toggle of DISCLOSED_TOGGLES) {
+    const group = els.disclosedToggles[toggle.key];
+    assert.ok(group, `${toggle.key} group missing`);
+    assert.equal(group.input.id, SETTINGS_ELEMENT_IDS.disclosedToggles[toggle.key].input);
+    assert.equal(group.mustPreserve.id, SETTINGS_ELEMENT_IDS.disclosedToggles[toggle.key].mustPreserve);
+  }
+});
+
+// --- disclosed toggles: DOM behaviour ---------------------------------------
+
+function toggleGroupStub() {
+  const listeners = {};
+  const mk = () => ({ textContent: '' });
+  const input = {
+    checked: false,
+    disabled: false,
+    title: '',
+    attrs: {},
+    setAttribute(name, value) { this.attrs[name] = value; },
+    addEventListener: (evt, fn) => { listeners[evt] = fn; },
+    fire: (evt) => listeners[evt]?.(),
+  };
+  return {
+    input,
+    dataUsed: mk(),
+    mayChange: mk(),
+    mustPreserve: mk(),
+    default: mk(),
+    inspect: { addEventListener: (evt, fn) => { listeners[`inspect:${evt}`] = fn; }, click: () => listeners['inspect:click']?.({ preventDefault() {} }) },
+    gate: mk(),
+    fireInputChange: () => listeners.change?.(),
+  };
+}
+
+function settingsHarness(hooks = {}) {
+  const groups = {
+    use_delivery_signals: toggleGroupStub(),
+    use_audience_context: toggleGroupStub(),
+  };
+  const feature = createSettingsWorkspaceFeature({
+    elements: { disclosedToggles: groups, fields: {}, fieldErrors: {} },
+    hooks,
+  });
+  return { feature, groups };
+}
+
+test('rendering writes every disclosure row into its element', () => {
+  const { feature, groups } = settingsHarness();
+  feature.renderSettings({});
+
+  for (const toggle of DISCLOSED_TOGGLES) {
+    const group = groups[toggle.key];
+    assert.equal(group.dataUsed.textContent, toggle.dataUsed);
+    assert.equal(group.mayChange.textContent, toggle.mayChange);
+    assert.equal(group.mustPreserve.textContent, toggle.mustPreserve);
+    assert.equal(group.default.textContent, 'Off');
+    assert.equal(group.gate.textContent, toggle.gate.text);
+  }
+});
+
+test('rendering leaves both controls off and the audience one disabled', () => {
+  const { feature, groups } = settingsHarness();
+  feature.renderSettings({});
+
+  assert.equal(groups.use_delivery_signals.input.checked, false);
+  assert.equal(groups.use_delivery_signals.input.disabled, false);
+
+  assert.equal(groups.use_audience_context.input.checked, false);
+  assert.equal(groups.use_audience_context.input.disabled, true);
+  assert.equal(groups.use_audience_context.input.attrs['aria-disabled'], 'true');
+  assert.match(groups.use_audience_context.input.title, /cannot be switched on yet/);
+});
+
+test('forcing the audience checkbox on flips it straight back and says why', () => {
+  const { feature, groups } = settingsHarness();
+  feature.init();
+  feature.renderSettings({});
+  // Stand in for anything that sets .checked directly -- a stray script, an
+  // autofill, a future bug. D-0005 is about the stored value, not the widget.
+  groups.use_audience_context.input.checked = true;
+  groups.use_audience_context.fireInputChange();
+
+  assert.equal(groups.use_audience_context.input.checked, false);
+  // And it can never reach a patch regardless.
+  assert.equal('use_audience_context' in feature.collectSettings(), false);
+});
+
+test('the delivery-signals control is not force-reset', () => {
+  const { feature, groups } = settingsHarness();
+  feature.init();
+  feature.renderSettings({});
+  groups.use_delivery_signals.input.checked = true;
+  groups.use_delivery_signals.fireInputChange();
+  assert.equal(groups.use_delivery_signals.input.checked, true, 'this one the user is allowed to turn on');
+});
+
+test('the inspect link routes to the data rather than explaining it away', () => {
+  const inspected = [];
+  const { feature, groups } = settingsHarness({
+    onInspectToggleData: (key, target) => inspected.push([key, target]),
+  });
+  feature.init();
+
+  groups.use_audience_context.inspect.click();
+  assert.deepEqual(inspected, [['use_audience_context', 'contacts']]);
+
+  groups.use_delivery_signals.inspect.click();
+  assert.deepEqual(inspected[1], ['use_delivery_signals', 'speech_signals']);
+});
+
+test('with no inspect hook the link still goes somewhere real', () => {
+  const { feature, groups } = settingsHarness();
+  feature.init();
+  groups.use_delivery_signals.inspect.click();
+  assert.equal(feature.getSectionState().active, 'privacy');
 });

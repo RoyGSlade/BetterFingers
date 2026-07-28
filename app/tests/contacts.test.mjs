@@ -15,6 +15,7 @@ import {
   contactStepIdFor,
   createContactsFeature,
   describeContact,
+  describeApplyEffect,
   resolveSelected,
   statusLabelFor,
 } from '../src/renderer/features/contacts.js';
@@ -86,37 +87,68 @@ function makeEl(extra = {}) {
   return {
     value: '',
     textContent: '',
+    hidden: false,
+    dataset: {},
     children: [],
     addEventListener: (evt, fn) => { listeners[evt] = fn; },
+    setAttribute(name, value) { this.dataset[name] = value; },
+    append(...nodes) { this.children.push(...nodes); },
     replaceChildren(...nodes) { this.children = nodes; },
     focus() { this.focused = true; },
+    click() { listeners.click?.(); },
     fire: (evt) => listeners[evt]?.(),
     ...extra,
   };
 }
 
-function harness({ contacts = CONTACTS, fetchImpl } = {}) {
+function harness({ contacts = CONTACTS, fetchImpl, confirmFn = () => true, deleteImpl, setActiveImpl } = {}) {
   const picker = makeEl();
   const pickerNote = makeEl();
   const newButton = makeEl();
+  const manageButton = makeEl();
+  const clearButton = makeEl();
+  const manageList = makeEl();
+  const manageEmpty = makeEl();
   const selected = [];
   const created = [];
+  const edited = [];
+  const applied = [];
+  const managed = [];
+  const deleted = [];
+  const activeWrites = [];
+  const toasts = [];
+
+  let current = contacts;
 
   const doc = { createElement: () => makeEl() };
   const api = {
-    fetchContacts: fetchImpl || (async () => ({ ok: true, contacts })),
+    fetchContacts: fetchImpl || (async () => ({ ok: true, contacts: current })),
+    deleteContact: deleteImpl || (async (id) => {
+      deleted.push(id);
+      current = current.filter((c) => c.id !== id);
+      return { ok: true };
+    }),
+    setActiveContact: setActiveImpl || (async (id) => { activeWrites.push(id); return { ok: true }; }),
   };
 
   const feature = createContactsFeature({
-    elements: { picker, pickerNote, newButton },
+    elements: { picker, pickerNote, newButton, manageButton, clearButton, manageList, manageEmpty },
     api,
     doc,
     hooks: {
       onSelect: (id) => selected.push(id),
       onCreateRequested: () => created.push('open'),
+      onEditRequested: (contact) => edited.push(contact),
+      onManageRequested: (list) => managed.push(list),
+      onApplied: (contact) => applied.push(contact),
+      showToast: (msg, tone) => toasts.push({ msg, tone }),
+      confirmFn,
     },
   });
-  return { feature, picker, pickerNote, newButton, selected, created };
+  return {
+    feature, picker, pickerNote, newButton, manageButton, clearButton, manageList, manageEmpty,
+    selected, created, edited, applied, managed, deleted, activeWrites, toasts,
+  };
 }
 
 test('refresh fills the picker and defaults to none', () => {
@@ -196,4 +228,207 @@ test('getContacts returns copies', async () => {
   const list = h.feature.getContacts();
   list[0].name = 'mutated';
   assert.equal(h.feature.getContacts()[0].name, 'Priya');
+});
+
+// --- Wave 5: completing the D-0004 contract ---------------------------------
+//
+// Before this wave contacts were create-only: the picker could apply one and
+// the wizard could make one, and that was the entire surface. Manage opened
+// the create wizard, so the only thing a user could do to an existing contact
+// was make another. These tests pin the rest of the contract.
+
+test('Manage opens the list rather than the create wizard', async () => {
+  const h = harness();
+  await h.feature.refresh();
+  h.manageButton.fire('click');
+
+  assert.equal(h.created.length, 0, 'Manage is not a second New');
+  assert.equal(h.managed.length, 1);
+  assert.deepEqual(h.managed[0].map((c) => c.name), ['Priya', 'Sam']);
+});
+
+test('the manage list renders a row per contact, keyed by id', async () => {
+  const h = harness();
+  await h.feature.refresh();
+
+  assert.equal(h.manageList.children.length, 2);
+  assert.deepEqual(
+    h.manageList.children.map((row) => row.dataset.contactId),
+    ['a1', 'b2'],
+    'rows carry the id so a re-render between click and handler cannot delete the wrong person',
+  );
+});
+
+test('an empty contact list says so instead of rendering an empty box', async () => {
+  const h = harness({ contacts: [] });
+  await h.feature.refresh();
+  assert.equal(h.manageList.children.length, 0);
+  assert.equal(h.manageEmpty.hidden, false);
+});
+
+test('the empty note hides once a contact exists', async () => {
+  const h = harness();
+  await h.feature.refresh();
+  assert.equal(h.manageEmpty.hidden, true);
+});
+
+test('Edit hands the whole contact to the host, not just an id', async () => {
+  const h = harness();
+  await h.feature.refresh();
+  // children[2] is the Edit button -- name, detail, edit, delete.
+  h.manageList.children[0].children[2].click();
+
+  assert.equal(h.edited.length, 1);
+  assert.equal(h.edited[0].id, 'a1');
+  assert.equal(h.edited[0].name, 'Priya');
+  assert.equal(h.edited[0].relationship, 'my manager');
+});
+
+test('Delete asks first, and a refusal deletes nothing', async () => {
+  const asked = [];
+  const h = harness({ confirmFn: (msg) => { asked.push(msg); return false; } });
+  await h.feature.refresh();
+
+  const ok = await h.feature.deleteContact('a1');
+
+  assert.equal(ok, false);
+  assert.deepEqual(h.deleted, []);
+  assert.equal(asked.length, 1);
+  assert.match(asked[0], /Priya/);
+  assert.match(asked[0], /cannot be undone/);
+});
+
+test('Delete removes the contact and refreshes the list', async () => {
+  const h = harness();
+  await h.feature.refresh();
+
+  const ok = await h.feature.deleteContact('a1');
+
+  assert.equal(ok, true);
+  assert.deepEqual(h.deleted, ['a1']);
+  assert.deepEqual(h.feature.getContacts().map((c) => c.name), ['Sam']);
+  assert.equal(h.manageList.children.length, 1);
+  assert.equal(h.picker.children.length, 2, 'none + Sam');
+});
+
+test('deleting an unknown contact is a no-op, not a confirm prompt', async () => {
+  const asked = [];
+  const h = harness({ confirmFn: () => { asked.push(1); return true; } });
+  await h.feature.refresh();
+
+  assert.equal(await h.feature.deleteContact('nope'), false);
+  assert.deepEqual(asked, []);
+  assert.deepEqual(h.deleted, []);
+});
+
+test('deleting the APPLIED contact clears the stored selection too', async () => {
+  // resolveSelected() would already render nothing, but `active_contact_id`
+  // would still name a contact that no longer exists, and a later restore
+  // would try to apply it.
+  const h = harness();
+  await h.feature.refresh();
+  h.feature.setSelected('a1');
+  assert.equal(h.feature.getSelectedId(), 'a1');
+
+  await h.feature.deleteContact('a1');
+
+  assert.equal(h.feature.getSelectedId(), null);
+  assert.ok(h.activeWrites.includes(''), 'the cleared selection is persisted, not just forgotten');
+  assert.equal(h.applied.at(-1), null, 'the status bar is told the contact is gone');
+});
+
+test('deleting a contact that is NOT applied leaves the selection alone', async () => {
+  const h = harness();
+  await h.feature.refresh();
+  h.feature.setSelected('b2');
+
+  await h.feature.deleteContact('a1');
+
+  assert.equal(h.feature.getSelectedId(), 'b2');
+});
+
+test('a failed delete changes nothing locally', async () => {
+  const h = harness({ deleteImpl: async () => { throw new Error('offline'); } });
+  await h.feature.refresh();
+
+  assert.equal(await h.feature.deleteContact('a1'), false);
+  assert.deepEqual(h.feature.getContacts().map((c) => c.name), ['Priya', 'Sam']);
+  assert.match(h.toasts.at(-1).msg, /Delete failed: offline/);
+});
+
+// --- clearing the applied contact -------------------------------------------
+
+test('Clear applied resets the picker and persists the empty selection', async () => {
+  const h = harness();
+  await h.feature.refresh();
+  h.feature.setSelected('a1');
+
+  const ok = await h.feature.clearSelected();
+
+  assert.equal(ok, true);
+  assert.equal(h.feature.getSelectedId(), null);
+  assert.equal(h.picker.value, '');
+  assert.equal(h.pickerNote.textContent, '', 'no note is the none state');
+  assert.deepEqual(h.activeWrites, [''], 'a sticky selection must un-stick durably');
+  assert.equal(h.selected.at(-1), null);
+});
+
+test('the Clear button is wired to the same path', async () => {
+  const h = harness();
+  await h.feature.refresh();
+  h.feature.setSelected('a1');
+
+  h.clearButton.fire('click');
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.equal(h.feature.getSelectedId(), null);
+});
+
+test('a clear that fails to persist says so rather than pretending', async () => {
+  const h = harness({ setActiveImpl: async () => { throw new Error('offline'); } });
+  await h.feature.refresh();
+  h.feature.setSelected('a1');
+
+  assert.equal(await h.feature.clearSelected(), false);
+  assert.match(h.toasts.at(-1).msg, /Failed to clear the contact/);
+});
+
+// --- what applying a contact actually does ----------------------------------
+
+test('applying a contact reports the audience toggle honestly', () => {
+  // A user who applies a contact while use_audience_context is off must not
+  // believe they have changed how their words are cleaned up.
+  const contact = { id: 'a1', name: 'Priya' };
+
+  assert.match(describeApplyEffect(contact, { audienceEnabled: false }), /not told who you are writing to/);
+  assert.match(describeApplyEffect(contact, { audienceEnabled: false }), /off in Settings/);
+  assert.match(describeApplyEffect(contact, { audienceEnabled: true }), /cleanup will be told/);
+});
+
+test('applying nobody describes recording nothing', () => {
+  assert.match(describeApplyEffect(null), /record no contact/);
+  assert.match(describeApplyEffect({ id: '', name: '' }), /record no contact/);
+});
+
+test('selecting through the picker notifies the status bar with the resolved contact', async () => {
+  const h = harness();
+  await h.feature.refresh();
+
+  h.picker.value = 'b2';
+  h.picker.fire('change');
+
+  assert.equal(h.applied.at(-1).name, 'Sam', 'the status bar gets a contact, not an id');
+  assert.deepEqual(h.selected.at(-1), 'b2');
+});
+
+test('selecting "no one in particular" clears the status bar cell', async () => {
+  const h = harness();
+  await h.feature.refresh();
+  h.feature.setSelected('b2');
+
+  h.picker.value = '';
+  h.picker.fire('change');
+
+  assert.equal(h.applied.at(-1), null);
 });

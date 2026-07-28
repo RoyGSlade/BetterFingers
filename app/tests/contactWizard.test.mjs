@@ -53,6 +53,10 @@ function makeApi(overrides = {}) {
       calls.push(['save', fields]);
       return { ok: true, contact: { id: 'new1', ...fields } };
     },
+    updateContact: async (contactId, fields) => {
+      calls.push(['update', contactId, fields]);
+      return { ok: true, contact: { id: contactId, ...fields } };
+    },
     ...overrides,
   };
   return { api, calls };
@@ -98,7 +102,7 @@ function harness(apiOverrides = {}) {
     api,
     doc,
     hooks: {
-      onSaved: (c) => saved.push(c),
+      onSaved: (c, meta) => saved.push({ contact: c, meta }),
       setMessage: (el, text) => { if (el) el.textContent = text || ''; },
     },
   });
@@ -128,7 +132,8 @@ test('"just save the name" is on the first screen and works alone', async () => 
 
   assert.deepEqual(h.calls, [['save', { name: 'Sam' }]]);
   assert.deepEqual(h.visible(), ['contactSaved']);
-  assert.equal(h.saved[0].name, 'Sam');
+  assert.equal(h.saved[0].contact.name, 'Sam');
+  assert.equal(h.saved[0].meta.edited, false, 'a name-only create is a create');
 });
 
 test('saving with no name is refused rather than sent', async () => {
@@ -274,4 +279,96 @@ test('reopening clears the previous run', async () => {
   assert.equal(h.elements.seedName.value, '');
   assert.equal(h.elements.review.name.value, '');
   assert.deepEqual(h.visible(), ['contactIntro']);
+});
+
+// --- Wave 5: editing an existing contact ------------------------------------
+//
+// The same dialog, opened at Review & save with the contact loaded. A separate
+// editor would be a second thing that can write a contact; this one differs
+// from creating only in which verb it sends.
+
+const EXISTING = {
+  id: 'a1',
+  name: 'Priya',
+  relationship: 'my manager',
+  tone_guidance: 'Direct, no filler.',
+  notes: 'Prefers bullet points.',
+  preferred_persona: 'Formal',
+};
+
+test('Edit opens at Review & save with every field loaded', () => {
+  const h = harness();
+  const opened = h.wizard.openForEdit(EXISTING);
+
+  assert.equal(opened, true);
+  assert.deepEqual(h.visible(), ['contactReview']);
+  assert.equal(h.elements.review.name.value, 'Priya');
+  assert.equal(h.elements.review.relationship.value, 'my manager');
+  assert.equal(h.elements.review.tone_guidance.value, 'Direct, no filler.');
+  assert.equal(h.elements.review.notes.value, 'Prefers bullet points.');
+  assert.equal(h.elements.review.preferred_persona.value, 'Formal');
+});
+
+test('Edit never starts an interview', () => {
+  const h = harness();
+  h.wizard.openForEdit(EXISTING);
+  assert.deepEqual(h.calls, [], 'the contact already exists; there is nothing to interview about');
+});
+
+test('saving an edit updates rather than creating a duplicate', async () => {
+  const h = harness();
+  h.wizard.openForEdit(EXISTING);
+  h.elements.review.tone_guidance.value = 'Warmer than before.';
+  h.elements.saveButton.fire('click');
+  await tick();
+
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0][0], 'update', 'a create here would silently duplicate the contact');
+  assert.equal(h.calls[0][1], 'a1');
+  assert.equal(h.calls[0][2].tone_guidance, 'Warmer than before.');
+  assert.equal(h.saved[0].meta.edited, true);
+});
+
+test('a contact with no id cannot be edited', () => {
+  // Otherwise save() would fall through to create and quietly duplicate it.
+  const h = harness();
+  assert.equal(h.wizard.openForEdit({ name: 'Priya' }), false);
+  assert.equal(h.wizard.openForEdit(null), false);
+  assert.equal(h.wizard.getEditingId(), null);
+});
+
+test('opening for create after an edit forgets the edit', () => {
+  // Shared state between two openings is how an edit of one contact ends up
+  // overwriting another.
+  const h = harness();
+  h.wizard.openForEdit(EXISTING);
+  assert.equal(h.wizard.getEditingId(), 'a1');
+
+  h.wizard.open();
+
+  assert.equal(h.wizard.getEditingId(), null);
+  assert.deepEqual(h.visible(), ['contactIntro']);
+});
+
+test('a create after an edit posts a new contact, not a patch', async () => {
+  const h = harness();
+  h.wizard.openForEdit(EXISTING);
+  h.wizard.open();
+
+  h.elements.seedName.value = 'Sam';
+  h.elements.saveNameOnlyButton.fire('click');
+  await tick();
+
+  assert.deepEqual(h.calls, [['save', { name: 'Sam' }]]);
+});
+
+test('an edit whose save fails keeps the dialog on review with the message', async () => {
+  const h = harness({ updateContact: async () => { throw new Error('offline'); } });
+  h.wizard.openForEdit(EXISTING);
+  h.elements.saveButton.fire('click');
+  await tick();
+
+  assert.deepEqual(h.visible(), ['contactReview'], 'the user keeps their edits');
+  assert.match(h.elements.message.textContent, /Save failed: offline/);
+  assert.deepEqual(h.saved, []);
 });

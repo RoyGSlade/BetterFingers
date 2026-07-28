@@ -71,6 +71,10 @@ export function createContactWizard({
   let sessionId = null;
   let compiled = null;
   let busy = false;
+  // Set when the dialog was opened on an existing contact. It routes save()
+  // to PATCH instead of POST, which is the whole difference between editing
+  // and creating -- there is one dialog and one save, not two of either.
+  let editingId = null;
 
   const setMessage = hooks.setMessage || ((el, text) => { if (el) el.textContent = text || ''; });
 
@@ -200,11 +204,13 @@ export function createContactWizard({
     }
     setBusy(true);
     try {
-      const body = await api.saveContact(payload);
+      const body = editingId
+        ? await api.updateContact(editingId, payload)
+        : await api.saveContact(payload);
       const contact = body?.contact || null;
       if (elements.savedName) elements.savedName.textContent = contact?.name || '';
       goToPhase('saved');
-      hooks.onSaved?.(contact);
+      hooks.onSaved?.(contact, { edited: Boolean(editingId) });
       return contact;
     } catch (error) {
       setMessage(elements.message, `Save failed: ${error.message}`, 'danger');
@@ -217,6 +223,7 @@ export function createContactWizard({
   function open() {
     sessionId = null;
     compiled = null;
+    editingId = null;
     setMessage(elements.message, '');
     setMessage(elements.pushback, '');
     if (elements.seedName) elements.seedName.value = '';
@@ -225,6 +232,31 @@ export function createContactWizard({
     }
     flow.open('contactIntro');
     elements.seedName?.focus?.();
+  }
+
+  /**
+   * Open the SAME dialog on an existing contact, at Review & save.
+   *
+   * The same shape as the persona flow's Edit, for the same reason: a second
+   * editor would be a second thing that can write a contact. The interview is
+   * skipped because there is nothing to interview about -- the contact already
+   * exists and the user asked to change a field, not to be asked five
+   * questions again.
+   *
+   * Returns false for a contact with no id so a caller cannot open an "edit"
+   * dialog that would silently create a duplicate on save.
+   */
+  function openForEdit(contact) {
+    if (!contact || !contact.id) return false;
+    sessionId = null;
+    editingId = contact.id;
+    setMessage(elements.message, '');
+    setMessage(elements.pushback, '');
+    if (elements.seedName) elements.seedName.value = '';
+    renderReview(contact, []);
+    flow.open('contactReview');
+    review.name?.focus?.();
+    return true;
   }
 
   function bind() {
@@ -254,12 +286,14 @@ export function createContactWizard({
 
   return {
     open,
+    openForEdit,
     close: () => flow.close(),
     startInterview,
     submitAnswer,
     save,
     flow,
     getSessionId: () => sessionId,
+    getEditingId: () => editingId,
     getCompiled: () => (compiled ? { ...compiled } : null),
   };
 }

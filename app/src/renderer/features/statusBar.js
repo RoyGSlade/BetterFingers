@@ -23,6 +23,10 @@ export const STATUS_BAR_ELEMENT_IDS = {
   personaValue: 'sdStatusPersonaValue',
   targetAppValue: 'sdStatusTargetAppValue',
   latencyValue: 'sdStatusLatencyValue',
+  // Wave 5. Unlike every other cell this one HIDES when there is nothing to
+  // say, so it needs its container as well as its value element.
+  contactCell: 'sdStatusContactCell',
+  contactValue: 'sdStatusContactValue',
 };
 
 export const UNKNOWN = '—';
@@ -102,8 +106,29 @@ export function mapTargetApp(targetApp) {
   return name ? { text: name, tone: IDLE } : { text: UNKNOWN, tone: IDLE };
 }
 
+/**
+ * Applied contact — the "Writing to" selection, made glanceable.
+ *
+ * This is the one cell that can be ABSENT rather than unknown, and the
+ * distinction matters. Every other cell describes something that always has a
+ * state, so `—` is the honest reading when we cannot see it. "No one in
+ * particular" is not an unknown audience, it is a real and default choice, and
+ * a permanent rail cell reading `—` next to "Writing to" would turn that
+ * default into a gap the user feels invited to fill.
+ *
+ * So: a contact returns a cell, no contact returns null, and the caller hides
+ * the element. Reuses statusLabelFor()'s rule via the same null contract, and
+ * takes the resolved contact rather than an id -- an id whose contact was
+ * deleted must show nothing, not a dangling identifier.
+ */
+export function mapContact(contact) {
+  const name = typeof contact?.name === 'string' ? contact.name.trim() : '';
+  if (!contact?.id || !name) return null;
+  return { text: name, tone: IDLE };
+}
+
 /** Maps a whole backend snapshot to the full set of cell values. */
-export function computeStatusBar({ health, runtime, profile, metrics, targetApp } = {}) {
+export function computeStatusBar({ health, runtime, profile, metrics, targetApp, contact } = {}) {
   return {
     mic: mapMic(runtime),
     stt: mapStt(health, runtime),
@@ -111,6 +136,7 @@ export function computeStatusBar({ health, runtime, profile, metrics, targetApp 
     persona: mapPersona(profile),
     targetApp: mapTargetApp(targetApp),
     latency: formatLatency(metrics),
+    contact: mapContact(contact),
   };
 }
 
@@ -140,9 +166,27 @@ function paint(el, dotEl, cell) {
  */
 export function createStatusBarFeature({ elements = {}, api = null } = {}) {
   let latest = null;
+  // Held across renders because it does not come from the backend snapshot the
+  // poll below fetches -- the applied contact is pushed in by the contacts
+  // feature when the user changes it. Without this, the next health poll would
+  // silently clear the cell.
+  let appliedContact = null;
+
+  function paintContact(cell) {
+    if (elements.contactCell) elements.contactCell.hidden = !cell;
+    if (!cell) {
+      if (elements.contactValue) elements.contactValue.textContent = '';
+      return;
+    }
+    paint(elements.contactValue, null, cell);
+  }
 
   function render(snapshot) {
-    const values = computeStatusBar(snapshot || {});
+    const source = snapshot || {};
+    const values = computeStatusBar({
+      ...source,
+      contact: 'contact' in source ? source.contact : appliedContact,
+    });
     latest = values;
     paint(elements.micValue, null, values.mic);
     paint(elements.sttValue, elements.sttDot, values.stt);
@@ -150,7 +194,21 @@ export function createStatusBarFeature({ elements = {}, api = null } = {}) {
     paint(elements.personaValue, null, values.persona);
     paint(elements.targetAppValue, null, values.targetApp);
     paint(elements.latencyValue, null, values.latency);
+    paintContact(values.contact);
     return values;
+  }
+
+  /**
+   * The contacts feature calls this when the applied contact changes, including
+   * with null when it is cleared. Repaints immediately rather than waiting for
+   * the next poll: clearing an audience is the kind of thing a user wants to
+   * see take effect at once.
+   */
+  function setContact(contact) {
+    appliedContact = contact || null;
+    paintContact(mapContact(appliedContact));
+    if (latest) latest.contact = mapContact(appliedContact);
+    return appliedContact;
   }
 
   // Each call is independently guarded: one dead endpoint must degrade its own
@@ -171,5 +229,5 @@ export function createStatusBarFeature({ elements = {}, api = null } = {}) {
     return render({ health, runtime, profile, metrics });
   }
 
-  return { render, refresh, getState: () => latest };
+  return { render, refresh, setContact, getContact: () => appliedContact, getState: () => latest };
 }

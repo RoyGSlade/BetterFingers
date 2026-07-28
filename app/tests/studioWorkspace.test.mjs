@@ -37,6 +37,9 @@ import {
   createStudioWorkspaceFeature,
   contactsPreferring,
   traitBandLabel,
+  STUDIO_PLACEMENT_MAP,
+  PERSONA_TRAITS_STATUS,
+  personaTraitsDisclosureLines,
 } from '../src/renderer/features/studioWorkspace.js';
 
 // --- personaSignatureKey / personaSignatureColorVar --------------------------
@@ -361,10 +364,37 @@ function stubButton() {
   };
 }
 
+/**
+ * A DOM node stub good enough for the render path.
+ *
+ * renderAll() builds persona cards with createElement/append, so any test that
+ * selects a persona needs createElement to return something. Deliberately
+ * minimal: it records what it was given rather than emulating a browser, so a
+ * test that starts depending on real layout fails loudly instead of passing on
+ * a half-truth.
+ */
+function stubElement() {
+  const el = {
+    children: [],
+    style: {},
+    dataset: {},
+    classList: { add() {}, remove() {}, toggle() {} },
+    textContent: '',
+    innerHTML: '',
+    hidden: false,
+    setAttribute() {},
+    addEventListener() {},
+    append(...kids) { el.children.push(...kids); },
+    appendChild(kid) { el.children.push(kid); return kid; },
+    replaceChildren(...kids) { el.children = kids; },
+  };
+  return el;
+}
+
 function withFakeDocument(trigger, fn) {
   const had = 'document' in globalThis;
   const previous = globalThis.document;
-  globalThis.document = { getElementById: () => trigger };
+  globalThis.document = { getElementById: () => trigger, createElement: () => stubElement() };
   try {
     fn();
   } finally {
@@ -412,22 +442,93 @@ test('New Persona prefers the injected hook too', () => {
   assert.deepEqual(calls, ['hook']);
 });
 
-test('with no hook, Build with AI still falls back to the dashboard trigger', () => {
-  // The fallback is what keeps this adapter usable on index.html; removing it
-  // would trade one broken page for another.
+// Wave 5 replaced the assertion this test used to make. It required that with
+// no hook, Build with AI reach across the AMBIENT document for
+// #openFoundryButton and click it. That reach is the bug: `document` here is
+// whichever page the renderer has loaded, not the document this workspace was
+// mounted into, so the fallback could drive a dialog in another document -- and
+// did, starting an interview inside a dialog nothing had opened. The release
+// rule is no cross-document element lookup, so the fallback is gone and its
+// absence is now the thing under test.
+test('with no hook, Build with AI reaches for no element in any document', () => {
   const openFoundryButton = stubButton();
-  const fallbackTrigger = stubButton();
+  const strayTrigger = stubButton();
+  const toasts = [];
 
-  withFakeDocument(fallbackTrigger, () => {
+  withFakeDocument(strayTrigger, () => {
     const feature = createStudioWorkspaceFeature({
       elements: { openFoundryButton },
-      hooks: { showToast: () => {} },
+      hooks: { showToast: (msg, tone) => toasts.push({ msg, tone }) },
     });
     feature.init();
     openFoundryButton.click();
   });
 
-  assert.equal(fallbackTrigger.clicked, 1);
+  assert.equal(strayTrigger.clicked, 0, 'an element in another document must never be clicked');
+  assert.equal(toasts.length, 1, 'the user is told nothing happened rather than left guessing');
+  assert.match(toasts[0].msg, /isn’t wired into this page/);
+});
+
+test('with no hook, New Persona reaches for no element in any document', () => {
+  const newPersonaButton = stubButton();
+  const strayTrigger = stubButton();
+  const toasts = [];
+
+  withFakeDocument(strayTrigger, () => {
+    const feature = createStudioWorkspaceFeature({
+      elements: { newPersonaButton },
+      hooks: { showToast: (msg, tone) => toasts.push({ msg, tone }) },
+    });
+    feature.init();
+    newPersonaButton.click();
+  });
+
+  assert.equal(strayTrigger.clicked, 0);
+  assert.equal(toasts.length, 1);
+});
+
+test('Edit routes through the hook with the selected persona, and never types into another document', () => {
+  const editButton = stubButton();
+  const strayInput = stubButton();
+  const edits = [];
+
+  withFakeDocument(strayInput, () => {
+    const feature = createStudioWorkspaceFeature({
+      elements: { editButton },
+      hooks: {
+        onEditPersonaRequested: (name) => edits.push(name),
+        showToast: () => {},
+      },
+    });
+    feature.init();
+    feature.setPersonas({ Formal: { prompt: 'p' } });
+    feature.selectPersona('Formal');
+    editButton.click();
+  });
+
+  assert.deepEqual(edits, ['Formal'], 'Edit hands the selected persona to the one shell');
+  assert.equal(strayInput.clicked, 0);
+});
+
+test('Edit with nothing selected does nothing at all', () => {
+  const editButton = stubButton();
+  const edits = [];
+  const toasts = [];
+
+  withFakeDocument(stubButton(), () => {
+    const feature = createStudioWorkspaceFeature({
+      elements: { editButton },
+      hooks: {
+        onEditPersonaRequested: (name) => edits.push(name),
+        showToast: (msg) => toasts.push(msg),
+      },
+    });
+    feature.init();
+    editButton.click();
+  });
+
+  assert.deepEqual(edits, []);
+  assert.deepEqual(toasts, [], 'nothing selected is not an error worth a toast');
 });
 
 // --- preferred contact (Stage 11) --------------------------------------------
@@ -507,4 +608,176 @@ test('derivePersonaTraits reads a real traits field', () => {
   assert.equal(traits.warmth, 90);
   assert.equal(traits.directness, 10);
   assert.equal(traits.formality, null, 'an axis the persona omits stays unknown');
+});
+
+// --- Wave 5: the "Active" badge is a fact about the profile ------------------
+//
+// It used to be a fact about the cursor. With no getActivePersonaName hook the
+// badge defaulted to "active", so clicking through a grid of five personas lit
+// "Active" on each in turn while only one of them was the profile's
+// current_preset. A badge that is correct only when the host remembered to wire
+// it is a badge that lies by default.
+
+test('with no getActivePersonaName hook, no persona is claimed to be active', () => {
+  withFakeDocument(stubButton(), () => {
+    const feature = createStudioWorkspaceFeature({ elements: {}, hooks: {} });
+    feature.init();
+    assert.equal(feature.isActivePersona('Formal'), false);
+    assert.equal(feature.isActivePersona(''), false);
+  });
+});
+
+test('the badge follows current_preset, not the selection', () => {
+  withFakeDocument(stubButton(), () => {
+    let currentPreset = 'True Janitor';
+    const feature = createStudioWorkspaceFeature({
+      elements: {},
+      hooks: { getActivePersonaName: () => currentPreset },
+    });
+    feature.init();
+
+    assert.equal(feature.isActivePersona('True Janitor'), true);
+    assert.equal(feature.isActivePersona('Formal'), false,
+      'selecting another persona must not move the Active badge to it');
+
+    currentPreset = 'Formal';
+    assert.equal(feature.isActivePersona('Formal'), true);
+    assert.equal(feature.isActivePersona('True Janitor'), false);
+  });
+});
+
+test('a stored current_preset with stray whitespace still matches its persona', () => {
+  withFakeDocument(stubButton(), () => {
+    const feature = createStudioWorkspaceFeature({
+      elements: {},
+      hooks: { getActivePersonaName: () => '  Formal  ' },
+    });
+    feature.init();
+    assert.equal(feature.isActivePersona('Formal'), true);
+  });
+});
+
+test('the badge element is hidden for a persona that is not the active one', () => {
+  const detailBadge = stubElement();
+  const ctxBadge = stubElement();
+
+  withFakeDocument(stubButton(), () => {
+    const feature = createStudioWorkspaceFeature({
+      elements: { detailBadge, ctxBadge },
+      hooks: { getActivePersonaName: () => 'True Janitor' },
+    });
+    feature.init();
+    feature.setPersonas({ Formal: { prompt: 'p' }, 'True Janitor': { prompt: 'p' } });
+
+    feature.selectPersona('Formal');
+    assert.equal(detailBadge.hidden, true, 'Formal is selected but not active');
+    assert.equal(ctxBadge.hidden, true);
+
+    feature.selectPersona('True Janitor');
+    assert.equal(detailBadge.hidden, false);
+    assert.equal(ctxBadge.hidden, false);
+  });
+});
+
+// --- Wave 5: fields with no backing schema are gone, not blank --------------
+
+test('the element map no longer names tags or last-updated elements', () => {
+  const ids = Object.values(STUDIO_ELEMENT_IDS);
+  for (const gone of ['sdCtxTags', 'sdCtxAddTagButton', 'sdCtxLastUpdated']) {
+    assert.equal(ids.includes(gone), false, `${gone} must not be looked up any more`);
+  }
+});
+
+test('the feature exposes no add-tag action', () => {
+  withFakeDocument(stubButton(), () => {
+    const feature = createStudioWorkspaceFeature({ elements: {}, hooks: {} });
+    assert.equal('handleAddTagClick' in feature, false,
+      'a button whose only behaviour is to apologise for itself is still a promise');
+  });
+});
+
+test('the parity ledger records the cuts rather than losing the rows', () => {
+  for (const key of ['detail.tags', 'detail.lastUpdated']) {
+    const entry = STUDIO_PLACEMENT_MAP[key];
+    assert.ok(entry, `${key} must stay in the ledger so the removal is reviewable`);
+    assert.equal(entry.wired, false);
+    assert.equal(entry.cut, true);
+    assert.match(entry.note, /CUT in Wave 5/);
+  }
+});
+
+test('rendering a persona that carries tags or an updated label emits neither', () => {
+  // Defence against the fields creeping back via data rather than markup: even
+  // if some persona payload grows a `tags` array, nothing here renders it.
+  const ctxTags = stubElement();
+  const ctxLastUpdated = stubElement();
+
+  withFakeDocument(stubButton(), () => {
+    const feature = createStudioWorkspaceFeature({
+      elements: { ctxTags, ctxLastUpdated },
+      hooks: {},
+    });
+    feature.init();
+    feature.setPersonas({ Formal: { prompt: 'p', tags: ['work', 'email'], updated_at_label: 'yesterday' } });
+    feature.selectPersona('Formal');
+  });
+
+  assert.deepEqual(ctxTags.children, [], 'no tag chips are rendered');
+  assert.equal(ctxLastUpdated.textContent, '', 'no last-updated value is rendered');
+});
+
+// --- Wave 5: persona traits are Experimental — unavailable (D-0006) ---------
+
+test('the traits status is unavailable and names its decision', () => {
+  assert.equal(PERSONA_TRAITS_STATUS.available, false);
+  assert.equal(PERSONA_TRAITS_STATUS.profileKey, 'use_persona_traits');
+  assert.equal(PERSONA_TRAITS_STATUS.decision, 'D-0006');
+  assert.equal(PERSONA_TRAITS_STATUS.label, 'Persona traits: Experimental — unavailable');
+});
+
+test('the disclosure states the reason: preservation qualification has not passed', () => {
+  const [label, reason, detail] = personaTraitsDisclosureLines();
+  assert.match(label, /Experimental — unavailable/);
+  assert.match(reason, /[Pp]reservation qualification has not passed/);
+  assert.ok(detail.length > 0, 'the user is told why, not just that');
+});
+
+test('the disclosure never claims traits affect output', () => {
+  const text = personaTraitsDisclosureLines().join(' ');
+  assert.match(text, /not applied to cleanup/);
+  assert.equal(/\bwill (?:be )?(?:apply|applied|affect)\b/.test(text), false);
+});
+
+test('the status object cannot be rewritten into saying traits are available', () => {
+  assert.throws(() => { PERSONA_TRAITS_STATUS.available = true; },
+    'a frozen status is what stops a later caller from flipping the disclosure');
+  assert.equal(PERSONA_TRAITS_STATUS.available, false);
+});
+
+test('the traits status renders into its elements and offers no control', () => {
+  const traitsStatusLabel = stubElement();
+  const traitsStatusReason = stubElement();
+  const traitsStatusDetail = stubElement();
+
+  withFakeDocument(stubButton(), () => {
+    const feature = createStudioWorkspaceFeature({
+      elements: { traitsStatusLabel, traitsStatusReason, traitsStatusDetail },
+      hooks: {},
+    });
+    feature.init();
+  });
+
+  assert.equal(traitsStatusLabel.textContent, 'Persona traits: Experimental — unavailable');
+  assert.match(traitsStatusReason.textContent, /qualification has not passed/);
+  assert.ok(traitsStatusDetail.textContent.length > 0);
+
+  const ids = Object.values(STUDIO_ELEMENT_IDS).join(' ');
+  assert.equal(/[Tt]raits(Toggle|Switch|Enable|Checkbox)/.test(ids), false,
+    'D-0006 forbids an enabling switch');
+});
+
+test('the placement map marks traits unwired and cites D-0006', () => {
+  const entry = STUDIO_PLACEMENT_MAP['personas.traits'];
+  assert.equal(entry.wired, false, 'saved values do not reach the prompt');
+  assert.match(entry.note, /D-0006/);
 });
