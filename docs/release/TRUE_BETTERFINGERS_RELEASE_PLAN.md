@@ -4,8 +4,8 @@
 - **Publisher:** Source Arcanum
 - **Target platforms:** Windows and Linux
 - **Recommended release identity:** `v0.2.0-alpha.1`
-- **Status:** Wave 0 product measurement evidence complete; collaboration
-  repair C, external authentication/restart/spawn proof, and coordinator
+- **Status:** Wave 0 product measurement evidence and collaboration repairs
+  complete; external authentication/restart/spawn proof and director
   acceptance remain open, and the implementation freeze remains active
 - **Last reconciled:** 2026-07-28
 
@@ -57,7 +57,7 @@ repository on 2026-07-28:
 | `AUTHORITATIVE_COMMIT` | `093eaf2a2ae3e68c2671d8549d4b583c31558080` | Local `HEAD`, `origin/feat/signal-desk-ui`, and the GitHub comparison head agree. |
 | `REMOTE_MAIN_COMMIT` | `4f9f4a8b7ff7f83bb67081063cfa439397b1663e` | Local `main`, `origin/main`, and the GitHub comparison base agree. |
 | `LOCAL_UNPUSHED_COMMITS` | None on either local branch | Both local branches equal their configured upstreams; the authoritative branch is `0` ahead and `0` behind its upstream. |
-| `OPEN_WORKTREES` | One: `/home/donaven/Desktop/BetterFingers` on `feat/signal-desk-ui` | `git worktree list --porcelain`. |
+| `OPEN_WORKTREES` | One: `/home/donaven/Desktop/BetterFingers` on `release/true-betterfingers` | `git worktree list --porcelain`. |
 | Branch relationship | Authoritative branch is 7 commits ahead of `main`, 0 behind | Connected GitHub comparison and local history agree. |
 
 The seven authoritative commits above `main` are:
@@ -70,10 +70,10 @@ The seven authoritative commits above `main` are:
 6. `8b0e0dc` — persona-traits design.
 7. `093eaf2` — persona traits and the default-off preservation gate.
 
-### 2.1 Retained Wave 0 worktree
+### 2.1 Integrated Wave 0 workset
 
-The live Wave 0 worktree is broader than collaboration infrastructure. Its
-retained review-and-commit scope is:
+The Wave 0 workset was broader than collaboration infrastructure. Its exact
+review-and-commit scope was:
 
 ```text
 AGENTS.md
@@ -124,26 +124,29 @@ app/tests/qa/out/voice-control/disabled-default.png
 app/tests/qa/out/voice-control/user-imported-classifier-present.png
 ```
 
-This is active Gate 0 work, including release evidence and documentation as
-well as infrastructure; it is not a claim that only infrastructure is dirty.
-The worktree is not clean, so Gate 0 is not satisfied. Collaboration repairs A
-and B are implemented. Repair C is in progress. Claude authentication, an MCP
-restart onto the repaired configuration, and real authenticated Claude
-cross-client spawn evidence remain external blockers; that spawn evidence is
-incomplete.
+The coordinator reviewed and integrated that complete set, including the
+regenerated QA report and all 23 pixel-identical PNG re-encodings, in three
+bounded commits:
 
-The coordinator must review and commit every exact retained Gate 0 path,
-including the regenerated QA report and all 23 PNGs, and establish the clean
-integration tree before Gate 0 can pass.
+1. `abafdf6` — collaboration hierarchy hardening, repairs A–C, tests, and
+   authoritative operating instructions.
+2. `d320904` — repository, parity, preservation, package, and release-control
+   baselines.
+3. `cfe6136` — deterministic QA evidence.
+
+The integration tree was clean after those commits. Claude authentication, a
+client/MCP restart onto the repaired configuration, and real authenticated
+Claude cross-client spawn evidence remain external blockers; that spawn
+evidence is incomplete. Gate 0 therefore remains unsatisfied.
 
 ### 2.2 Integration branch status
 
-The required `release/true-betterfingers` integration branch does not exist
-locally or on the connected remote. Agents are prohibited from managing Git,
-so the coordinator must create it from the authoritative commit after accepting
-this reconciliation. No later implementation wave may begin until that action,
-review and commit of the full retained Gate 0 worktree, repair C, the MCP
-restart, and the authenticated cross-client spawn smoke are complete.
+The coordinator created `release/true-betterfingers` from the authoritative
+commit, integrated the reviewed Wave 0 workset, and pushed the branch to
+`origin`. No later implementation wave may begin until Claude is authenticated,
+the client/MCP is restarted onto the repaired configuration, the authenticated
+cross-client spawn smoke passes, and the release director records Gate 0
+acceptance.
 
 ## 3. Current evidence, not assumptions
 

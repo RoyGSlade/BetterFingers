@@ -13,19 +13,19 @@ publication.
 
 - **Gate 0 is not passed.** Product measurement evidence for tests, QA,
   preservation, strict parity, dependencies, sizes, and artifacts is complete.
-  Repairs A and B are implemented; repair C remains in progress. The remaining
-  blockers are coordinator creation of the integration branch; review and
-  commit of every exact retained Gate 0 path; completion and review of repair
-  C; external Claude authentication; an MCP restart onto the repaired
-  configuration; and a real authenticated Claude cross-client spawn smoke.
-  That cross-client spawn evidence is incomplete and blocking.
-- **The retained Gate 0 worktree is broader than infrastructure.** The
-  [exact workset](TRUE_BETTERFINGERS_RELEASE_PLAN.md#21-retained-wave-0-worktree)
+  Repairs A–C are complete, independently reviewed, and integrated with the
+  complete Wave 0 workset on the pushed `release/true-betterfingers` branch.
+  The remaining blockers are external Claude authentication, a client/MCP
+  restart onto the repaired configuration, a real authenticated Claude
+  cross-client spawn smoke, and subsequent director acceptance. That
+  cross-client spawn evidence is incomplete and blocking.
+- **The integrated Gate 0 workset was broader than infrastructure.** The
+  [exact workset](TRUE_BETTERFINGERS_RELEASE_PLAN.md#21-integrated-wave-0-workset)
   includes `AGENTS.md`; `.claude`/`.codex` infrastructure and skills;
   `ACCOMPLISH.md` repair C; UI/release/persona docs; the regenerated Signal
   Desk QA report; and 23 regenerated PNGs that are pixel-identical but
-  byte-reencoded. The coordinator must review and commit the full exact
-  workset.
+  byte-reencoded. The coordinator reviewed and integrated that full set in
+  `abafdf6`, `d320904`, and `cfe6136`.
 - **Literal system Python is not a project environment.** It exits 2 with 72
   dependency-related collection errors because packages including `fastapi`,
   `numpy`, `keyboard`, and `pyperclip` are absent. The qualified `.venv` is

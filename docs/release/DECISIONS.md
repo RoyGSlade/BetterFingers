@@ -25,25 +25,27 @@ behind `main` and has no local-only commits.
 **Consequence:** Connected `main` at `4f9f4a8…` is not a sufficient release
 planning baseline. Source authority does not imply Gate 0 qualification.
 
-## D-0002 — Integration branch remains a coordinator action
+## D-0002 — Use the coordinator-owned integration branch
 
 **Owner:** release-director / coordinator
 
-**Decision:** Create `release/true-betterfingers` from `093eaf2a…` only after
-accepting the Wave 0 reconciliation.
+**Decision:** Use `release/true-betterfingers`, created by the coordinator from
+`093eaf2a…` and pushed to `origin`, as the release integration branch.
 
-**Reason:** The branch does not exist, and repository rules prohibit agents
-from creating or switching branches.
+**Reason:** Wave 0 reconciliation identified the authoritative source, and the
+coordinator reviewed and integrated the bounded workset without changing that
+source ancestry.
 
-**Consequence:** Gate 0 remains open and all implementation waves remain
-blocked.
+**Consequence:** The branch-creation requirement is satisfied. Gate 0 remains
+open and all implementation waves remain blocked on the authenticated,
+restarted cross-client spawn proof and subsequent director acceptance.
 
 ## D-0003 — Preserve and review the complete Wave 0 workset
 
 **Owner:** release-director / coordinator
 
-**Decision:** Retain for coordinator review and commit every exact Gate 0 path
-listed in the [release plan workset](TRUE_BETTERFINGERS_RELEASE_PLAN.md#21-retained-wave-0-worktree):
+**Decision:** The coordinator reviewed and committed every exact Gate 0 path
+listed in the [release plan workset](TRUE_BETTERFINGERS_RELEASE_PLAN.md#21-integrated-wave-0-workset):
 `AGENTS.md`; `.claude`/`.codex` infrastructure and skills; `ACCOMPLISH.md`
 repair C; UI/release/persona docs; the regenerated Signal Desk QA report; and
 the 23 regenerated PNGs that are pixel-identical but byte-reencoded.
@@ -52,11 +54,11 @@ the 23 regenerated PNGs that are pixel-identical but byte-reencoded.
 documentation, evidence, and generated QA artifacts. It is inaccurate to
 describe only collaboration/hierarchy infrastructure as dirty.
 
-**Consequence:** Repairs A and B are implemented. Repair C remains in
-progress. The coordinator must review and commit the full exact workset.
-Claude authentication, an MCP restart onto the repaired configuration, and a
-real authenticated Claude cross-client spawn remain external blockers before
-Gate 0 can pass; the spawn evidence is incomplete.
+**Consequence:** Repairs A–C and the complete workset are integrated in
+`abafdf6`, `d320904`, and `cfe6136`; the integration tree was clean afterward.
+Claude authentication, a client/MCP restart onto the repaired configuration,
+and a real authenticated Claude cross-client spawn remain external blockers
+before Gate 0 can pass; the spawn evidence is incomplete.
 
 ## D-0004 — Contacts are partially implemented
 

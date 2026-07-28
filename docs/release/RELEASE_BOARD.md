@@ -20,26 +20,26 @@ No implementation wave may start while Gate 0 is not passed.
 | Source vs `main` | 7 ahead, 0 behind | `DONE` |
 | Local unpushed commits | None on `feat/signal-desk-ui` or `main` | `DONE` |
 | Open worktrees | One, at the repository root | `DONE` |
-| Integration branch | `release/true-betterfingers` does not yet exist | `BLOCKED` — coordinator Git action |
+| Integration branch | `release/true-betterfingers`, created from `093eaf2a…` and pushed to `origin` | `DONE` |
 | Collaboration repair A | Implemented and tested | `DONE` |
 | Collaboration repair B | Implemented | `DONE` |
-| Collaboration repair C | Adversarial hardening and authoritative docs/tests | `IN PROGRESS` |
+| Collaboration repair C | Adversarial hardening and authoritative docs/tests accepted; regression suite passes | `DONE` |
 | Cross-client spawn/auth smoke | Real authenticated Claude cross-client spawn evidence is incomplete; Claude authentication and an MCP restart remain external prerequisites | `BLOCKED` |
-| Clean worktree | The full retained Gate 0 workset remains under review, including infrastructure, plans/evidence, UI/persona docs, and regenerated QA artifacts | `BLOCKED` — coordinator must review and commit every exact Gate 0 path on the integration branch |
+| Clean worktree | The complete retained Gate 0 workset was reviewed and integrated in `abafdf6`, `d320904`, and `cfe6136`; the tree was clean after integration | `DONE` |
 
 ## Gate 0 queue
 
 | ID | Work item | Owner | Status | Acceptance evidence |
 |---|---|---|---|---|
 | W0-R1 | Verify local and connected remote repository, branch, and commit topology. | reconciliation | `DONE` | Local Git plus GitHub metadata/compare agree. |
-| W0-R2 | Identify all worktrees, local-only commits, and active Wave 0 work. | reconciliation | `DONE` | One worktree; no local-only commits. The [exact retained workset](TRUE_BETTERFINGERS_RELEASE_PLAN.md#21-retained-wave-0-worktree) includes `AGENTS.md`; `.claude`/`.codex` infrastructure and skills; `ACCOMPLISH.md` repair C; UI/release/persona docs; the regenerated QA report; and 23 pixel-identical but byte-reencoded PNGs. |
+| W0-R2 | Identify all worktrees, local-only commits, and active Wave 0 work. | reconciliation | `DONE` | One worktree; no local-only commits. The [exact integrated workset](TRUE_BETTERFINGERS_RELEASE_PLAN.md#21-integrated-wave-0-workset) includes `AGENTS.md`; `.claude`/`.codex` infrastructure and skills; `ACCOMPLISH.md` repair C; UI/release/persona docs; the regenerated QA report; and 23 pixel-identical but byte-reencoded PNGs. |
 | W0-R3 | Reconcile contacts, audience, and traits against connected `main`. | reconciliation | `DONE` | Contacts `partial`; audience backend `implemented` but user feature `unavailable`; traits `implemented` but preservation-blocked. |
 | W0-R4 | Audit shipping default, preview bootstrap, and production mock use. | reconciliation | `DONE` | Legacy default; opt-in preview; runtime mocks and ephemeral onboarding confirmed. |
-| W0-G1 | Create `release/true-betterfingers` from `093eaf2a…`. | coordinator | `BLOCKED` | Branch exists locally and remotely at the accepted source commit. |
-| W0-G2 | Review and commit the complete retained Gate 0 workset. | coordinator | `BLOCKED` | Coordinator reviews and commits every exact Gate 0 path—both infrastructure and non-infrastructure evidence/docs/artifacts—and establishes a clean integration tree. |
+| W0-G1 | Create `release/true-betterfingers` from `093eaf2a…`. | coordinator | `DONE` | Branch was created from the accepted source commit and exists locally and on `origin`. |
+| W0-G2 | Review and commit the complete retained Gate 0 workset. | coordinator | `DONE` | The full infrastructure and non-infrastructure evidence/docs/artifact set was reviewed and integrated in `abafdf6`, `d320904`, and `cfe6136`; the tree was clean afterward. |
 | W0-C1 | Implement and test collaboration infrastructure repair A. | infrastructure | `DONE` | Repair A implementation and targeted tests are complete. |
-| W0-C2 | Implement collaboration infrastructure repair B. | infrastructure | `DONE` | Repair B implementation is complete; repair C carries the remaining adversarial hardening and authoritative test/doc work. |
-| W0-C3 | Complete and review collaboration infrastructure repair C. | infrastructure/coordinator | `IN PROGRESS` | Completion requires adversarial hook atomicity, privacy migration, spawn/name/path safety, routable claims, tests, and authoritative docs with no unresolved release-critical findings. |
+| W0-C2 | Implement collaboration infrastructure repair B. | infrastructure | `DONE` | Repair B implementation is complete and integrated. |
+| W0-C3 | Complete and review collaboration infrastructure repair C. | infrastructure/coordinator | `DONE` | Hook atomicity, privacy migration, spawn/name/path safety, routable claims, tests, and authoritative docs received independent final review with no unresolved release-critical findings; the regression suite passes. |
 | W0-C4 | Prove a real authenticated cross-client Claude spawn. | infrastructure/coordinator | `BLOCKED` | External operator authenticates Claude, restarts the client/MCP onto the repaired configuration, and proves a real Claude session can spawn, join the intended private hierarchy room, report, and exit. |
 | W0-T1 | Reuse the qualified `.venv` and run the full and cheap Python suites. | baseline | `DONE` | Full: `2,085 passed, 3 skipped, 9 subtests, 12 warnings`, exit 0. Cheap: `1,972 passed, 3 skipped, 113 deselected`, exit 0. System Python's 72 dependency collection errors are classified `ENVIRONMENT`. |
 | W0-T2 | Run renderer unit tests and production build. | baseline | `DONE` | Unit `775/775`; production build passed; `app/out` is `1,288,162` bytes. |
@@ -48,7 +48,7 @@ No implementation wave may start while Gate 0 is not passed.
 | W0-P1 | Rerun delivery, audience, and traits preservation probes on the qualified model. | baseline | `DONE` | [Retained evidence](PRESERVATION_BASELINE.md) and [JSON](PRESERVATION_BASELINE.json): delivery `PASS 3/3`; audience `PASS 3/3`; corrected production True Janitor traits protocol exactly three consecutive suites, each `PASS 3/3`. Traits remain `unavailable_methodology_unreconciled`: valid historical `FAIL_TRAITS 0/3` plus the invalid earlier Wave 0 adapter leave methodology unreconciled. Under the current gate, the valid historical failure blocks qualification. Its `2/3`, `3/3`, `3/3` observations are non-qualifying, not current evidence. Evidence collection is done; traits qualification is not a pass. |
 | W0-I1 | Convert the 438-item inventory into an exact release-status ledger or generate an equivalent machine-readable report. | QA/parity | `DONE` | [Strict ledger](PARITY_INVENTORY.md): `0 wired`, `4 intentional_cut`, `434 blocked`, total `438`. |
 | W0-D1 | Record file sizes, dependency graph, package artifact sizes, and package contents. | baseline/packaging | `DONE` | [Package baseline](PACKAGE_BASELINE.md): reproducible measurements plus exact `ABSENT/UNBUILT` sidecar and Windows/Linux artifact ledger. |
-| W0-S1 | Freeze release scope and accept Gate 0. | release-director | `BLOCKED` | Product measurement evidence is complete. W0-G1, W0-G2, W0-C3, and W0-C4 remain; only then may the director consider Gate 0 acceptance. |
+| W0-S1 | Freeze release scope and accept Gate 0. | release-director | `BLOCKED` | Product measurement, integration, and collaboration repair evidence are complete. W0-C4 remains; only after the authenticated restarted cross-client smoke may the director consider Gate 0 acceptance. |
 
 ## Current evidence ledger
 
@@ -122,10 +122,11 @@ data_categories.py
 
 ## Gate 0 exit checklist
 
-- [ ] `release/true-betterfingers` exists at the accepted commit.
+- [x] `release/true-betterfingers` was created from the accepted commit and
+      exists locally and on `origin`.
 - [x] Collaboration repairs A and B are implemented; repair A's targeted tests
       are recorded.
-- [ ] Repair C is complete and reviewed, every exact retained Gate 0 path is
+- [x] Repair C is complete and reviewed, every exact retained Gate 0 path is
       accepted and committed, and the integration worktree is clean.
 - [ ] Claude authentication is available, the client/MCP is restarted onto
       the repaired configuration, and a real authenticated cross-client
