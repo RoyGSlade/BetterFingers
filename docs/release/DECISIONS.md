@@ -305,3 +305,47 @@ wave gates remain closed until their own evidence exists. The stale
 pre-repair `sup-reconcile`/`sup-baseline` fleet records (exit status 1, from
 the unauthenticated era) are historical artifacts, correctly classified by the
 repaired liveness logic, and consume no capacity.
+
+## D-0018 — Wave 1 objectives A and B accepted and integrated
+
+**Owner:** release-director
+
+**Evidence:** Supervisor handoffs in the main room (2026-07-28); director
+reruns: renderer unit `856/856`, build green, onboarding suite 78 tests green,
+`test_data_categories` 11/11, legacy QA `37/37`, preview QA `28/28`,
+production `signal-desk-prod` persona-learning `3/3`
+([report](../../app/tests/qa/out/signal-desk-prod/qa-report.md)).
+
+**Decision:** Accept and integrate Wave 1 Objective A (production composition
+root) and Objective B (durable onboarding/consent), with the director applying
+the integration-owned wiring. Ratify sup-composition's QA judgment call: the
+"editing never learns anything on its own" trigger is asserted as "running
+Test Persona never learns anything on its own" because Studio's teach panel
+has no live-draft concept; the privacy invariant under test (nothing stored
+without prepare-then-confirm-with-consent) is unchanged. Restoring the
+original edit-trigger assertion is Wave 2+ Studio wiring work, not a scenario
+weakening.
+
+**Also decided:**
+
+- The taskSafe spawn allowlist gains `Bash(npm run test:*)` and
+  `Bash(node --test *)`. Three Wave 1 sessions were unable to execute any
+  renderer test (`npm run test *` cannot match `test:unit`) and correctly
+  refused to shim around the allowlist; they reported UNRUN instead of
+  fabricating results. That behavior is the intended contract.
+- Committed QA screenshots are environment-pinned baselines. A rerun from a
+  different rendering environment that changes PNGs visually (46/46 here)
+  must not overwrite them; assertion-level passes are the portable evidence.
+- Production-target QA runs must isolate both Electron state
+  (`BF_QA_USER_DATA_DIR`) and the unified data root
+  (`BETTERFINGERS_DATA_DIR`) now that the durable consent store writes real
+  files; the isolated run produced a correct migrated record while real roots
+  stayed untouched.
+
+**Consequence:** Wave 1 remains `IN PROGRESS` on W1-G1 (consent-gate QA on
+the prod target, real-backend dev boot, reachability/console sweep,
+privacy-wipe reachability) before a Gate 1 ruling. Two integration-caught
+defect classes are recorded for future waves: new main-process modules must be
+added to `electron.vite.config.js` main inputs (a missing input fails at
+runtime as a silent no-window startup), and consent-step advance predicates
+must incorporate live user intent, not only boot-time durable state.

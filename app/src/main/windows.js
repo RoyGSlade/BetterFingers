@@ -212,8 +212,12 @@ function resolveAppIcon() {
 // parity with index.html yet, so it must not be reachable by accident. The
 // default is unchanged for every shipping user.
 const SIGNAL_DESK_PAGE = 'signal-desk-preview.html';
+// The production composition root (D-0007). Also opt-in until the Wave 11
+// default flip; BF_UI=signal-desk keeps routing to the QA preview above.
+const SIGNAL_DESK_PROD_PAGE = 'signal-desk.html';
 
 function dashboardPage() {
+  if (process.env.BF_UI === 'signal-desk-prod') return SIGNAL_DESK_PROD_PAGE;
   return process.env.BF_UI === 'signal-desk' ? SIGNAL_DESK_PAGE : 'index.html';
 }
 

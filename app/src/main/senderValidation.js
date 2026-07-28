@@ -19,6 +19,9 @@ const RENDERER_PAGES = new Set([
   // is absent. The renderer is pervasively optional-chained, so that surfaces
   // as a silently dead UI rather than an error.
   'signal-desk-preview.html',
+  // Production Signal Desk composition root, reachable via
+  // BF_UI=signal-desk-prod until the Wave 11 default flip.
+  'signal-desk.html',
 ]);
 
 // A file URL is Windows-flavoured when its pathname starts with a drive letter

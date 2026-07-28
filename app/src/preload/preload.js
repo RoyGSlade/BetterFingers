@@ -42,6 +42,17 @@ const api = {
   quitApp: () => ipcRenderer.invoke('app:quit'),
   showApp: () => ipcRenderer.invoke('app:show'),
   getAppState: () => ipcRenderer.invoke('app:get-state'),
+  getAppVersion: () => ipcRenderer.invoke('app:get-version'),
+  // Durable onboarding consent record. quit reuses the existing app:quit
+  // channel so declining consent exits through the ordinary shutdown path.
+  onboarding: {
+    getState: () => ipcRenderer.invoke('onboarding:get-state'),
+    accept: ({ consentVersion } = {}) => ipcRenderer.invoke('onboarding:accept', { consentVersion }),
+    completeStep: (stepId) => ipcRenderer.invoke('onboarding:complete-step', { stepId }),
+    migrateLegacy: ({ legacyComplete } = {}) =>
+      ipcRenderer.invoke('onboarding:migrate-legacy', { legacyComplete }),
+    quit: () => ipcRenderer.invoke('app:quit'),
+  },
   getSidecarStatus: () => ipcRenderer.invoke('sidecar:get-status'),
   getSidecarLogs: () => ipcRenderer.invoke('sidecar:get-logs'),
   onSidecarStatus: (callback) =>

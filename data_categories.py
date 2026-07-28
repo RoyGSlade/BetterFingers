@@ -138,6 +138,8 @@ CATEGORIES: list[DataCategory] = [
          "Settings; removed on factory reset (Electron-owned).", _FACTORY),
     _cat("overlay_appearance", "Overlay appearance", "electron", "configuration",
          "Settings; removed on factory reset (Electron-owned).", _FACTORY),
+    _cat("onboarding_consent", "Onboarding consent record", "electron", "configuration",
+         "Consent record; removed only on factory reset (Electron-owned).", _FACTORY),
     _cat("model_runtime_metadata", "Model / runtime metadata", "python", "configuration",
          "Settings; removed on factory reset.", _FACTORY),
 

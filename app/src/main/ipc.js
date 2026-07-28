@@ -157,6 +157,24 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthT
     return true;
   });
 
+  // Durable onboarding consent record (unified data root, not Electron
+  // userData). consentVersion is sanitized to a finite number — the renderer
+  // must never write an arbitrary value into the consent record.
+  const onboardingStore = require('./onboardingStore');
+  handleTrusted('onboarding:get-state', () => onboardingStore.readState());
+  handleTrusted('onboarding:accept', (_event, req) => onboardingStore.recordAcceptance({
+    consentVersion: Number.isFinite(req?.consentVersion) ? req.consentVersion : undefined,
+  }));
+  handleTrusted('onboarding:complete-step', (_event, req) =>
+    onboardingStore.recordStepComplete(String(req?.stepId || '')));
+  handleTrusted('onboarding:migrate-legacy', (_event, req) =>
+    onboardingStore.migrateLegacyCompletion({ legacyComplete: Boolean(req?.legacyComplete) }));
+
+  handleTrusted('app:get-version', () => {
+    const { APP_VERSION } = require('./config');
+    return APP_VERSION;
+  });
+
   onTrusted('update-hotkeys', (_event, config) => {
     const { registerHotkeys } = require('./hotkeys');
     const token = typeof getAuthToken === 'function' ? getAuthToken() : null;

@@ -20,7 +20,8 @@ EXPECTED_IDS = frozenset({
     "cloned_voices", "personas", "dictionary", "macros", "contacts", "wake_models",
     "mcp_config", "graph_data", "debug_log", "sidecar_raw_log", "support_report",
     "voice_presets", "profiles", "app_state", "overlay_position",
-    "overlay_appearance", "model_runtime_metadata", "downloaded_models",
+    "overlay_appearance", "onboarding_consent", "model_runtime_metadata",
+    "downloaded_models",
 })
 
 
