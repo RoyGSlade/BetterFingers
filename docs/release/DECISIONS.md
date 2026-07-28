@@ -271,3 +271,37 @@ Under the current gate, the valid historical failure blocks qualification.
 traits qualification is not a pass. `use_persona_traits` remains `false` until
 a future director-approved repeated qualification policy reconciles the
 methodology and yields an accepted result.
+
+## D-0017 — Gate 0 is accepted
+
+**Owner:** release-director
+
+**Evidence:** Spawn logs
+`.claude/collab/spawn-logs/sup-smoke-20260728-021957-e6f6a187.log` and
+`.claude/collab/spawn-logs/worker-smoke-20260728-022013-58ad2be3.log`; room
+`.claude/collab/rooms/sup-smoke-18c6699673c0b3ee-e6f6a187/`; main-room
+`SMOKE PASS` report-up of 2026-07-28.
+
+**Decision:** Accept Gate 0 and open Wave 1.
+
+**Reason:** The one remaining blocker, W0-C4, passed on 2026-07-28. The
+operator authenticated the Claude CLI interactively (version 2.1.219,
+`loggedIn: true`, claude.ai first-party auth). A freshly started collab MCP
+process serving the repaired post-`abafdf6` code ran the complete hierarchy:
+the Fable 5 release-director session spawned `sup-smoke` (Opus 5), which
+received its own generation-specific private room, spawned exactly one
+`worker-smoke` (Sonnet 5) into that room, and the worker registered, performed
+a `__smoke-test__` pseudo-claim round-trip, verified the release board and a
+clean worktree, and handed off. The supervisor independently re-verified every
+worker-reported fact, reported `SMOKE PASS` up to the director's room, and both
+children exited status 0. The auth preflight and bounded health check that
+previously refused unauthenticated spawns (`loggedIn: false`) demonstrably
+gated, then admitted, the real session. Every other Gate 0 row was already
+`DONE` with retained evidence.
+
+**Consequence:** Wave 1 (production Signal Desk composition root and durable
+onboarding) may begin under the recorded sequencing rules (D-0014). All other
+wave gates remain closed until their own evidence exists. The stale
+pre-repair `sup-reconcile`/`sup-baseline` fleet records (exit status 1, from
+the unauthenticated era) are historical artifacts, correctly classified by the
+repaired liveness logic, and consume no capacity.

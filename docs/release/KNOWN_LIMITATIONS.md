@@ -11,14 +11,13 @@ publication.
 
 ## Release-control limitations
 
-- **Gate 0 is not passed.** Product measurement evidence for tests, QA,
-  preservation, strict parity, dependencies, sizes, and artifacts is complete.
-  Repairs A–C are complete, independently reviewed, and integrated with the
-  complete Wave 0 workset on the pushed `release/true-betterfingers` branch.
-  The remaining blockers are external Claude authentication, a client/MCP
-  restart onto the repaired configuration, a real authenticated Claude
-  cross-client spawn smoke, and subsequent director acceptance. That
-  cross-client spawn evidence is incomplete and blocking.
+- **Gate 0 is accepted; later gates are not.** Product measurement evidence
+  for tests, QA, preservation, strict parity, dependencies, sizes, and
+  artifacts is complete. Repairs A–C are integrated on the pushed
+  `release/true-betterfingers` branch, and the authenticated cross-client
+  hierarchy smoke passed on the restarted repaired configuration on
+  2026-07-28 (D-0017). Gates 1–12 remain open work: the strict parity ledger
+  still records 434 `blocked` items and no distributable package exists.
 - **The integrated Gate 0 workset was broader than infrastructure.** The
   [exact workset](TRUE_BETTERFINGERS_RELEASE_PLAN.md#21-integrated-wave-0-workset)
   includes `AGENTS.md`; `.claude`/`.codex` infrastructure and skills;

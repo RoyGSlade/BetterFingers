@@ -1,8 +1,8 @@
 # True BetterFingers Release Board
 
 - **Release:** `v0.2.0-alpha.1`
-- **Current wave:** Wave 0 — reconcile, freeze, and measure
-- **Gate 0:** **NOT PASSED**
+- **Current wave:** Wave 1 — production Signal Desk composition and durable onboarding
+- **Gate 0:** **ACCEPTED (2026-07-28, release-director)**
 - **Last updated:** 2026-07-28
 
 Statuses: `DONE`, `IN PROGRESS`, `BLOCKED`, `PENDING`, `CUT`.
@@ -24,7 +24,7 @@ No implementation wave may start while Gate 0 is not passed.
 | Collaboration repair A | Implemented and tested | `DONE` |
 | Collaboration repair B | Implemented | `DONE` |
 | Collaboration repair C | Adversarial hardening and authoritative docs/tests accepted; regression suite passes | `DONE` |
-| Cross-client spawn/auth smoke | Real authenticated Claude cross-client spawn evidence is incomplete; Claude authentication and an MCP restart remain external prerequisites | `BLOCKED` |
+| Cross-client spawn/auth smoke | Passed 2026-07-28: after interactive `claude auth login` (CLI 2.1.219, `loggedIn: true`), a restarted collab MCP on the repaired configuration served `release-director` (Claude Fable 5), which spawned `sup-smoke` (Opus 5) into generation room `sup-smoke-18c6699673c0b3ee-e6f6a187`; `sup-smoke` spawned `worker-smoke` (Sonnet 5), which registered, claimed and released `__smoke-test__`, verified board and clean worktree, and handed off; `sup-smoke` independently re-verified all facts and reported `SMOKE PASS` up to the director; both children exited status 0. Logs: `.claude/collab/spawn-logs/sup-smoke-20260728-021957-e6f6a187.log`, `.claude/collab/spawn-logs/worker-smoke-20260728-022013-58ad2be3.log` | `DONE` |
 | Clean worktree | The complete retained Gate 0 workset was reviewed and integrated in `abafdf6`, `d320904`, and `cfe6136`; the tree was clean after integration | `DONE` |
 
 ## Gate 0 queue
@@ -40,7 +40,7 @@ No implementation wave may start while Gate 0 is not passed.
 | W0-C1 | Implement and test collaboration infrastructure repair A. | infrastructure | `DONE` | Repair A implementation and targeted tests are complete. |
 | W0-C2 | Implement collaboration infrastructure repair B. | infrastructure | `DONE` | Repair B implementation is complete and integrated. |
 | W0-C3 | Complete and review collaboration infrastructure repair C. | infrastructure/coordinator | `DONE` | Hook atomicity, privacy migration, spawn/name/path safety, routable claims, tests, and authoritative docs received independent final review with no unresolved release-critical findings; the regression suite passes. |
-| W0-C4 | Prove a real authenticated cross-client Claude spawn. | infrastructure/coordinator | `BLOCKED` | External operator authenticates Claude, restarts the client/MCP onto the repaired configuration, and proves a real Claude session can spawn, join the intended private hierarchy room, report, and exit. |
+| W0-C4 | Prove a real authenticated cross-client Claude spawn. | infrastructure/coordinator | `DONE` | Operator authenticated Claude interactively; a restarted MCP on the repaired configuration ran the full director → Opus supervisor (own generation room) → Sonnet worker chain with claim/release, worker→supervisor handoff, independent supervisor re-verification, `SMOKE PASS` report-up, and clean status-0 exits (see spawn/auth smoke row above for exact rooms and logs). |
 | W0-T1 | Reuse the qualified `.venv` and run the full and cheap Python suites. | baseline | `DONE` | Full: `2,085 passed, 3 skipped, 9 subtests, 12 warnings`, exit 0. Cheap: `1,972 passed, 3 skipped, 113 deselected`, exit 0. System Python's 72 dependency collection errors are classified `ENVIRONMENT`. |
 | W0-T2 | Run renderer unit tests and production build. | baseline | `DONE` | Unit `775/775`; production build passed; `app/out` is `1,288,162` bytes. |
 | W0-Q1 | Run default/legacy and Signal Desk Playwright/QA targets. | baseline | `DONE` | Wave 0 regenerated reports: legacy `37/37`; Signal Desk `28/28`. |
@@ -48,7 +48,7 @@ No implementation wave may start while Gate 0 is not passed.
 | W0-P1 | Rerun delivery, audience, and traits preservation probes on the qualified model. | baseline | `DONE` | [Retained evidence](PRESERVATION_BASELINE.md) and [JSON](PRESERVATION_BASELINE.json): delivery `PASS 3/3`; audience `PASS 3/3`; corrected production True Janitor traits protocol exactly three consecutive suites, each `PASS 3/3`. Traits remain `unavailable_methodology_unreconciled`: valid historical `FAIL_TRAITS 0/3` plus the invalid earlier Wave 0 adapter leave methodology unreconciled. Under the current gate, the valid historical failure blocks qualification. Its `2/3`, `3/3`, `3/3` observations are non-qualifying, not current evidence. Evidence collection is done; traits qualification is not a pass. |
 | W0-I1 | Convert the 438-item inventory into an exact release-status ledger or generate an equivalent machine-readable report. | QA/parity | `DONE` | [Strict ledger](PARITY_INVENTORY.md): `0 wired`, `4 intentional_cut`, `434 blocked`, total `438`. |
 | W0-D1 | Record file sizes, dependency graph, package artifact sizes, and package contents. | baseline/packaging | `DONE` | [Package baseline](PACKAGE_BASELINE.md): reproducible measurements plus exact `ABSENT/UNBUILT` sidecar and Windows/Linux artifact ledger. |
-| W0-S1 | Freeze release scope and accept Gate 0. | release-director | `BLOCKED` | Product measurement, integration, and collaboration repair evidence are complete. W0-C4 remains; only after the authenticated restarted cross-client smoke may the director consider Gate 0 acceptance. |
+| W0-S1 | Freeze release scope and accept Gate 0. | release-director | `DONE` | All Gate 0 evidence rows are complete, W0-C4 passed on the restarted repaired configuration, and the release director recorded `Gate 0: ACCEPTED` (D-0017). Release scope remains frozen to the directive's Wave 1–13 plan. |
 
 ## Current evidence ledger
 
@@ -86,8 +86,8 @@ No implementation wave may start while Gate 0 is not passed.
 
 | Wave | Objective | Dependency | Status |
 |---:|---|---|---|
-| 0 | Repository truth, measurements, scope freeze | None | `IN PROGRESS` |
-| 1 | Production Signal Desk composition and durable onboarding | Gate 0 | `BLOCKED` |
+| 0 | Repository truth, measurements, scope freeze | None | `DONE` |
+| 1 | Production Signal Desk composition and durable onboarding | Gate 0 | `IN PROGRESS` |
 | 2 | Talk completion | Gate 1 | `BLOCKED` |
 | 3 | Library domain semantics | Gate 1 contracts | `BLOCKED` |
 | 4 | Library UI completion | Gate 3 | `BLOCKED` |
@@ -128,7 +128,7 @@ data_categories.py
       are recorded.
 - [x] Repair C is complete and reviewed, every exact retained Gate 0 path is
       accepted and committed, and the integration worktree is clean.
-- [ ] Claude authentication is available, the client/MCP is restarted onto
+- [x] Claude authentication is available, the client/MCP is restarted onto
       the repaired configuration, and a real authenticated cross-client
       Claude spawn passes through the repaired hierarchy infrastructure.
 - [x] Exact Python totals are recorded at `2,085 passed / 3 skipped` in the
@@ -144,4 +144,4 @@ data_categories.py
       package result is `ABSENT/UNBUILT`.
 - [x] Contacts remain classified as partial until completed or cut.
 - [x] No other worktree contains release-critical code.
-- [ ] Release director records `Gate 0: ACCEPTED`.
+- [x] Release director records `Gate 0: ACCEPTED`.

@@ -134,19 +134,21 @@ bounded commits:
    baselines.
 3. `cfe6136` — deterministic QA evidence.
 
-The integration tree was clean after those commits. Claude authentication, a
-client/MCP restart onto the repaired configuration, and real authenticated
-Claude cross-client spawn evidence remain external blockers; that spawn
-evidence is incomplete. Gate 0 therefore remains unsatisfied.
+The integration tree was clean after those commits. The final external
+prerequisite was satisfied on 2026-07-28: the operator authenticated the
+Claude CLI interactively, a restarted collab MCP served the repaired
+configuration, and the authenticated cross-client hierarchy smoke passed end
+to end (director → Opus supervisor in its own generation room → Sonnet worker;
+claim round-trip, handoff, independent re-verification, `SMOKE PASS`
+report-up, status-0 exits). Gate 0 is **ACCEPTED** (D-0017).
 
 ### 2.2 Integration branch status
 
 The coordinator created `release/true-betterfingers` from the authoritative
 commit, integrated the reviewed Wave 0 workset, and pushed the branch to
-`origin`. No later implementation wave may begin until Claude is authenticated,
-the client/MCP is restarted onto the repaired configuration, the authenticated
-cross-client spawn smoke passes, and the release director records Gate 0
-acceptance.
+`origin`. The authenticated cross-client spawn smoke passed and the release
+director recorded Gate 0 acceptance on 2026-07-28 (D-0017); Wave 1 is open
+under the recorded sequencing rules (D-0014).
 
 ## 3. Current evidence, not assumptions
 
