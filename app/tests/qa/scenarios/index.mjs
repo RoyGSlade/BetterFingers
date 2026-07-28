@@ -66,6 +66,11 @@ import { signalDeskProdSweepScenarios } from './signal-desk-prod-sweep.mjs';
 // unit tests. Request capture is stub-side per D-0021; see the file header.
 import { libraryScenarios } from './library.mjs';
 import { wave5StudioScenarios } from './wave5-studio.mjs';
+// Wave 7 (Gate 7): application context and automatic profiles. Requires the
+// /app-context/* entries in app/src/main/backendProxy.js's ROUTE_ALLOWLIST and
+// the api/backend.js helpers -- see this module's header for why, and
+// docs/release/WAVE7_INTEGRATION_DIFFS.md for the exact diffs.
+import { wave7AppContextScenarios } from './wave7-app-context.mjs';
 
 export const scenarios = [
   ...baselineScenarios,
@@ -89,6 +94,7 @@ export const scenarios = [
   ...personaLearningScenarios,
   ...libraryScenarios,
   ...wave5StudioScenarios,
+  ...wave7AppContextScenarios,
   ...signalDeskProdSweepScenarios,
   // Ordered last among the prod-target scenarios as belt-and-braces, not as a
   // load-bearing requirement: the auto-dismiss sentinel these use is

@@ -18,6 +18,8 @@ import {
   mapStt,
   mapTargetApp,
   mapContact,
+  mapAppProfile,
+  appProfileLabel,
   createStatusBarFeature,
 } from '../src/renderer/features/statusBar.js';
 
@@ -116,12 +118,15 @@ test('target app shows an application name when one is supplied', () => {
 test('an entirely absent backend degrades every always-present cell to unknown', () => {
   const values = computeStatusBar({});
   for (const [key, cell] of Object.entries(values)) {
-    // `contact` is the one cell that can be genuinely ABSENT rather than
-    // unknown -- see the mapContact tests below. Every other cell describes
-    // something that always has a state, so `—` is the honest reading.
-    if (key === 'contact') continue;
+    // `contact` and `appProfile` are the two cells that can be genuinely
+    // ABSENT rather than unknown -- see their own tests below. Every other cell
+    // describes something that always has a state, so `—` is the honest
+    // reading.
+    if (key === 'contact' || key === 'appProfile') continue;
     assert.equal(cell.text, UNKNOWN, `${key} should be unknown, saw "${cell.text}"`);
   }
+  assert.equal(values.contact, null);
+  assert.equal(values.appProfile, null);
 });
 
 test('with no contact applied the cell is absent, not unknown', () => {
@@ -178,6 +183,7 @@ function railHarness() {
     micValue: mk(), sttValue: mk(), sttDot: mk(), llmValue: mk(), llmDot: mk(),
     personaValue: mk(), targetAppValue: mk(), latencyValue: mk(),
     contactCell: mk(), contactValue: mk(),
+    appProfileCell: mk(), appProfileValue: mk(),
   };
   return { elements, feature: createStatusBarFeature({ elements }) };
 }
@@ -231,6 +237,100 @@ test('a rail with no contact elements still renders everything else', () => {
   const elements = { micValue: { textContent: '', dataset: {} } };
   const feature = createStatusBarFeature({ elements });
   feature.setContact({ id: 'a1', name: 'Priya' });
+  feature.render({ runtime: { recording_active: false } });
+  assert.equal(elements.micValue.textContent, 'Idle');
+});
+
+// --- application profile cell (Wave 7) ---------------------------------------
+
+test('the Default profile yields NO cell, not an em dash', () => {
+  // Default is also what an unidentified application resolves to. Both mean
+  // "behaving normally"; a permanent cell reading "Default" would claim
+  // activity where there is none.
+  assert.equal(mapAppProfile({ profile_id: 'default', detected: false }), null);
+  assert.equal(mapAppProfile({ profile_id: 'default', detected: true }), null);
+});
+
+test('an absent or empty context yields no cell', () => {
+  assert.equal(mapAppProfile(null), null);
+  assert.equal(mapAppProfile({}), null);
+  assert.equal(mapAppProfile({ profile_id: '   ' }), null);
+});
+
+test('a real profile names itself', () => {
+  assert.equal(mapAppProfile({ profile_id: 'rocket_league' }).text, 'Rocket League');
+  assert.equal(mapAppProfile({ profile_id: 'discord' }).text, 'Discord');
+});
+
+test('a held override reads differently from an automatic match', () => {
+  // An override the user forgot they set is exactly the thing the rail has to
+  // remind them about, so it cannot look identical to a normal match.
+  const matched = mapAppProfile({ profile_id: 'discord', source: 'matched' });
+  const held = mapAppProfile({ profile_id: 'discord', source: 'override', override_active: true });
+  assert.equal(matched.text, 'Discord');
+  assert.equal(held.text, 'Discord (held)');
+  assert.notEqual(held.tone, matched.tone);
+});
+
+test('an unknown profile id is word-cased rather than dropped', () => {
+  // A profile the user created; the id is the only name it has.
+  assert.equal(appProfileLabel('my_editor'), 'My Editor');
+  assert.equal(mapAppProfile({ profile_id: 'my_editor' }).text, 'My Editor');
+});
+
+test('built-in labels are spelled the way the products are', () => {
+  assert.equal(appProfileLabel('world_of_warcraft'), 'World of Warcraft');
+});
+
+test('the app-profile cell is hidden until a non-default profile applies', () => {
+  const h = railHarness();
+  h.feature.render({});
+  assert.equal(h.elements.appProfileCell.hidden, true);
+  assert.equal(h.elements.appProfileValue.textContent, '');
+});
+
+test('setAppContext shows the cell immediately', () => {
+  const h = railHarness();
+  h.feature.render({});
+  h.feature.setAppContext({ profile_id: 'discord', source: 'matched', detected: true });
+  assert.equal(h.elements.appProfileCell.hidden, false);
+  assert.equal(h.elements.appProfileValue.textContent, 'Discord');
+});
+
+test('returning to Default hides the cell again', () => {
+  const h = railHarness();
+  h.feature.setAppContext({ profile_id: 'discord' });
+  h.feature.setAppContext({ profile_id: 'default', source: 'unknown' });
+  assert.equal(h.elements.appProfileCell.hidden, true);
+  assert.equal(h.elements.appProfileValue.textContent, '');
+});
+
+test('a later health poll does not silently clear the application profile', () => {
+  // Same held-state contract as the contact cell: the context is pushed in by
+  // applicationProfiles.js, not fetched by refresh().
+  const h = railHarness();
+  h.feature.setAppContext({ profile_id: 'rocket_league' });
+  h.feature.render({ runtime: { recording_active: true } });
+  assert.equal(h.elements.appProfileCell.hidden, false);
+  assert.equal(h.elements.appProfileValue.textContent, 'Rocket League');
+  assert.equal(h.elements.micValue.textContent, 'Recording');
+});
+
+test('the rail never renders anything about a recipient', () => {
+  // The cell is fed the backend snapshot verbatim. If a recipient-ish field
+  // ever appeared in it, the mapper must still ignore it.
+  const cell = mapAppProfile({
+    profile_id: 'discord',
+    recipient: 'Priya',
+    conversation: 'about the trip',
+  });
+  assert.equal(cell.text, 'Discord');
+});
+
+test('a rail with no app-profile elements still renders everything else', () => {
+  const elements = { micValue: { textContent: '', dataset: {} } };
+  const feature = createStatusBarFeature({ elements });
+  feature.setAppContext({ profile_id: 'discord' });
   feature.render({ runtime: { recording_active: false } });
   assert.equal(elements.micValue.textContent, 'Idle');
 });

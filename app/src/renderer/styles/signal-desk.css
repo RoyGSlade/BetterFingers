@@ -6259,3 +6259,116 @@
 .sd-contact-row__delete {
   font-size: 12px;
 }
+
+/* ============================================================================
+   Application profiles (Wave 7) — Settings > AI Cleanup > Application Profiles.
+   The status-bar cell needs no rules of its own: it reuses .sd-statusbar__cell
+   and is toggled with [hidden], the same as the Wave 5 contact cell.
+   ========================================================================== */
+
+.sd-appprofile-unavailable {
+  margin: var(--sd-space-8) 0 0;
+  padding: var(--sd-space-8);
+  border-radius: 6px;
+  border: 1px solid var(--sd-warning, #b8860b);
+  color: var(--sd-text-dim);
+  font-size: 12px;
+}
+
+.sd-appprofile-unavailable[hidden] {
+  display: none;
+}
+
+/* A row whose control is a full-width block rather than a right-aligned
+   widget: the profile list needs the whole column. */
+.sd-set-row--stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sd-space-8);
+}
+
+.sd-appprofile-current {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.sd-appprofile-current__value {
+  font-weight: 600;
+}
+
+.sd-appprofile-current__detected {
+  font-size: 12px;
+  color: var(--sd-text-dim);
+}
+
+.sd-appprofile-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-8);
+}
+
+.sd-appprofile-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "head    select"
+    "summary select"
+    "match   select";
+  align-items: center;
+  gap: 2px var(--sd-space-8);
+  padding: var(--sd-space-8);
+  border: 1px solid var(--sd-border);
+  border-radius: 6px;
+}
+
+.sd-appprofile-row.is-active {
+  border-color: var(--sd-accent);
+}
+
+.sd-appprofile-row__head {
+  grid-area: head;
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+}
+
+.sd-appprofile-row__name {
+  font-weight: 600;
+}
+
+.sd-appprofile-row__badge {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--sd-accent);
+}
+
+.sd-appprofile-row__summary {
+  grid-area: summary;
+  font-size: 12px;
+  color: var(--sd-text-dim);
+}
+
+.sd-appprofile-row__match {
+  grid-area: match;
+  font-size: 12px;
+  color: var(--sd-text-dim);
+}
+
+.sd-appprofile-row__select {
+  grid-area: select;
+  font-size: 12px;
+  background: none;
+  border: 1px solid var(--sd-border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  color: inherit;
+  cursor: pointer;
+}
+
+.sd-appprofile-row[data-selected="true"] .sd-appprofile-row__select {
+  border-color: var(--sd-accent);
+  color: var(--sd-accent);
+}

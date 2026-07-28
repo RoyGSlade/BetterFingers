@@ -2477,6 +2477,77 @@
                 </div>
               </div>
             </div>
+
+            <!--
+              ============ APPLICATION PROFILES (Wave 7) ============
+
+              Placed as a GROUP inside AI Cleanup rather than as an eighth
+              Settings section on purpose: the section list is owned by
+              features/settingsWorkspace.js (SETTINGS_SECTIONS + its nav/section
+              element maps), and a nav button whose id that module does not know
+              would never be hidden when another section is active -- it would
+              render on top of every other section. Promoting this to its own
+              section is a settingsWorkspace.js change, not a markup one.
+
+              Everything here is rendered by features/applicationProfiles.js.
+              Note what is NOT here: no recipient, no contact, no conversation.
+              A profile selects how the app behaves in an application; it never
+              claims to know who you are writing to.
+            -->
+            <div class="sd-set-group" id="sdSetAppProfileGroup" data-search-group>
+              <div class="sd-set-group__header">
+                <span class="sd-set-group__title">Application Profiles</span>
+              </div>
+              <p class="sd-set-group__desc">
+                Automatically match the focused application to a profile: a writing preset, a
+                performance preset, how text is delivered, and whether activation is announced.
+              </p>
+
+              <p class="sd-appprofile-unavailable" id="sdSetAppProfileUnavailable" hidden></p>
+
+              <div class="sd-set-row" data-search-row data-search-label="active application profile right now detected application">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Right now</span>
+                  <span class="sd-set-row__label-hint" id="sdSetAppProfileSource"></span>
+                </div>
+                <div class="sd-set-row__control sd-appprofile-current">
+                  <span class="sd-appprofile-current__value" id="sdSetAppProfileCurrent">&mdash;</span>
+                  <span class="sd-appprofile-current__detected" id="sdSetAppProfileDetected">&mdash;</span>
+                </div>
+              </div>
+
+              <div class="sd-set-row" data-search-row data-search-label="temporary profile override hold a profile">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Temporary override</span>
+                  <span class="sd-set-row__label-hint">
+                    Hold one profile whatever is focused. Not saved &mdash; it ends when you clear it
+                    or restart.
+                  </span>
+                </div>
+                <div class="sd-set-row__control">
+                  <select class="sd-set-select sd-set-input--wide" id="sdSetAppProfileOverride"></select>
+                  <button type="button" class="sd-btn" id="sdSetAppProfileOverrideClear" disabled>Clear</button>
+                </div>
+              </div>
+
+              <div class="sd-set-row" data-search-row data-search-label="always use this profile here pin application">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Always use this profile here</span>
+                  <span class="sd-set-row__label-hint" id="sdSetAppProfilePinNote"></span>
+                </div>
+                <div class="sd-set-row__control">
+                  <button type="button" class="sd-btn" id="sdSetAppProfilePinButton" disabled>Always use here</button>
+                </div>
+              </div>
+
+              <div class="sd-set-row sd-set-row--stacked" data-search-row data-search-label="application profiles list discord email game rocket league world of warcraft writing">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Profiles</span>
+                  <span class="sd-set-row__label-hint" id="sdSetAppProfileAnnounceNote"></span>
+                </div>
+                <div class="sd-appprofile-list" id="sdSetAppProfileList"></div>
+              </div>
+            </div>
           </section>
 
           <!-- ============================== NOTIFICATIONS & STATUS (inventory §7.10) ============================== -->
@@ -3177,6 +3248,23 @@
       <span class="sd-statusbar__text">
         <span class="sd-statusbar__label">Writing to</span>
         <span class="sd-statusbar__value" id="sdStatusContactValue"></span>
+      </span>
+    </div>
+
+    <!--
+      Wave 7. Hidden for Default, and Default is also what an unidentified
+      application resolves to (Wayland has no portable focused-window query).
+      Both mean "behaving normally", and a permanent cell announcing
+      "Profile: Default" would claim activity where there is none.
+      statusBar.js toggles [hidden]; see mapAppProfile().
+    -->
+    <div class="sd-statusbar__cell" id="sdStatusAppProfileCell" hidden>
+      <span class="sd-statusbar__icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"></rect><path d="M8 20h8"></path></svg>
+      </span>
+      <span class="sd-statusbar__text">
+        <span class="sd-statusbar__label">App profile</span>
+        <span class="sd-statusbar__value" id="sdStatusAppProfileValue"></span>
       </span>
     </div>
 

@@ -27,6 +27,10 @@ export const STATUS_BAR_ELEMENT_IDS = {
   // say, so it needs its container as well as its value element.
   contactCell: 'sdStatusContactCell',
   contactValue: 'sdStatusContactValue',
+  // Wave 7. Same absent-rather-than-unknown rule as the contact cell above,
+  // for the same reason -- see mapAppProfile().
+  appProfileCell: 'sdStatusAppProfileCell',
+  appProfileValue: 'sdStatusAppProfileValue',
 };
 
 export const UNKNOWN = '—';
@@ -127,8 +131,67 @@ export function mapContact(contact) {
   return { text: name, tone: IDLE };
 }
 
+/**
+ * Human labels for the built-in application profiles.
+ *
+ * A map rather than a title-caser because "World Of Warcraft" is not what the
+ * game is called, and a status rail that misspells the thing it is reporting on
+ * reads as a rail that is guessing. Ids this build has never seen (a profile a
+ * user created) fall back to word-casing, which is the honest best effort for a
+ * string only the user chose.
+ */
+export const APP_PROFILE_LABELS = {
+  default: 'Default',
+  discord: 'Discord',
+  email: 'Email',
+  game_generic: 'Game',
+  rocket_league: 'Rocket League',
+  world_of_warcraft: 'World of Warcraft',
+  writing_app: 'Writing',
+};
+
+export function appProfileLabel(profileId) {
+  const id = typeof profileId === 'string' ? profileId.trim() : '';
+  if (!id) return '';
+  if (APP_PROFILE_LABELS[id]) return APP_PROFILE_LABELS[id];
+  return id
+    .split('_')
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+/**
+ * Active application profile — the second cell that can be ABSENT.
+ *
+ * Hidden for Default, and Default is also what an unidentified application
+ * resolves to (Wayland has no portable focused-window query, so the backend
+ * honestly reports nothing rather than guessing). Both of those states mean
+ * "the app is behaving normally", and a permanent rail cell announcing
+ * "Profile: Default" would be a claim of activity where there is none — the
+ * same mistake the mockup's hard-coded "Destination: Discord" made, and the
+ * same rule the Wave 5 contact cell established.
+ *
+ * A cell appears only when a real, non-default profile is in effect. The
+ * `source` rides along as a tone so a TEMPORARY override reads differently
+ * from an automatic match: an override the user forgot they set is exactly the
+ * thing they need the rail to remind them about.
+ */
+export function mapAppProfile(context) {
+  const id = typeof context?.profile_id === 'string' ? context.profile_id.trim() : '';
+  if (!id || id === 'default') return null;
+  const label = appProfileLabel(id);
+  if (!label) return null;
+  return {
+    text: context?.override_active ? `${label} (held)` : label,
+    tone: context?.override_active ? WARN : IDLE,
+  };
+}
+
 /** Maps a whole backend snapshot to the full set of cell values. */
-export function computeStatusBar({ health, runtime, profile, metrics, targetApp, contact } = {}) {
+export function computeStatusBar({
+  health, runtime, profile, metrics, targetApp, contact, appContext,
+} = {}) {
   return {
     mic: mapMic(runtime),
     stt: mapStt(health, runtime),
@@ -137,6 +200,7 @@ export function computeStatusBar({ health, runtime, profile, metrics, targetApp,
     targetApp: mapTargetApp(targetApp),
     latency: formatLatency(metrics),
     contact: mapContact(contact),
+    appProfile: mapAppProfile(appContext),
   };
 }
 
@@ -171,6 +235,10 @@ export function createStatusBarFeature({ elements = {}, api = null } = {}) {
   // feature when the user changes it. Without this, the next health poll would
   // silently clear the cell.
   let appliedContact = null;
+  // Same reason as appliedContact: the application context is pushed in by the
+  // applicationProfiles feature (it owns the /app-context poll), so without
+  // holding it here the next health poll would silently clear the cell.
+  let appContext = null;
 
   function paintContact(cell) {
     if (elements.contactCell) elements.contactCell.hidden = !cell;
@@ -181,11 +249,21 @@ export function createStatusBarFeature({ elements = {}, api = null } = {}) {
     paint(elements.contactValue, null, cell);
   }
 
+  function paintAppProfile(cell) {
+    if (elements.appProfileCell) elements.appProfileCell.hidden = !cell;
+    if (!cell) {
+      if (elements.appProfileValue) elements.appProfileValue.textContent = '';
+      return;
+    }
+    paint(elements.appProfileValue, null, cell);
+  }
+
   function render(snapshot) {
     const source = snapshot || {};
     const values = computeStatusBar({
       ...source,
       contact: 'contact' in source ? source.contact : appliedContact,
+      appContext: 'appContext' in source ? source.appContext : appContext,
     });
     latest = values;
     paint(elements.micValue, null, values.mic);
@@ -195,6 +273,7 @@ export function createStatusBarFeature({ elements = {}, api = null } = {}) {
     paint(elements.targetAppValue, null, values.targetApp);
     paint(elements.latencyValue, null, values.latency);
     paintContact(values.contact);
+    paintAppProfile(values.appProfile);
     return values;
   }
 
@@ -229,5 +308,26 @@ export function createStatusBarFeature({ elements = {}, api = null } = {}) {
     return render({ health, runtime, profile, metrics });
   }
 
-  return { render, refresh, setContact, getContact: () => appliedContact, getState: () => latest };
+  /**
+   * The applicationProfiles feature calls this when the active profile
+   * changes, including with null. Repaints immediately rather than waiting for
+   * the next poll -- a profile switch the user just caused should be visible
+   * when they look, not up to three seconds later.
+   */
+  function setAppContext(context) {
+    appContext = context || null;
+    paintAppProfile(mapAppProfile(appContext));
+    if (latest) latest.appProfile = mapAppProfile(appContext);
+    return appContext;
+  }
+
+  return {
+    render,
+    refresh,
+    setContact,
+    getContact: () => appliedContact,
+    setAppContext,
+    getAppContext: () => appContext,
+    getState: () => latest,
+  };
 }

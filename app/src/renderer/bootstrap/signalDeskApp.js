@@ -43,6 +43,10 @@ import { createSettingsWorkspaceFeature, collectSettingsElements } from '../feat
 import { createVoiceStudioFeature } from '../features/voiceStudio.js';
 import { createPersonasFeature } from '../features/personas.js';
 import { createPersonaFlow, collectPersonaWizardElements } from '../features/personaFlow.js';
+import {
+  createApplicationProfilesFeature,
+  collectAppProfileElements,
+} from '../features/applicationProfiles.js';
 import { createContactsFeature, collectContactElements } from '../features/contacts.js';
 import { createContactWizard, collectContactWizardElements } from '../features/contactWizard.js';
 import { createOnboardingFlow, collectOnboardingElements } from '../features/onboardingFlow.js';
@@ -561,6 +565,29 @@ export function startSignalDeskApp(doc = document) {
     button.addEventListener('click', () => settingsWorkspace.goToSection(button.dataset.setNav));
   });
 
+  // --- Application profiles (Wave 7) ---------------------------------------
+  //
+  // Owns the /app-context poll and the Settings > AI Cleanup > Application
+  // Profiles group, and pushes each new context snapshot to the status bar --
+  // the same push-in pattern the contacts feature uses for the contact cell,
+  // and for the same reason: the status bar's own poll does not fetch this, so
+  // without the push the next health poll would clear the cell.
+  //
+  // If api has no application-context methods (the main-process proxy's route
+  // allowlist has to carry /app-context/* before they can exist), the feature
+  // reports itself unavailable in one sentence and paints nothing. It never
+  // invents a profile to fill the gap.
+  const applicationProfiles = createApplicationProfilesFeature({
+    elements: collectAppProfileElements(doc),
+    api,
+    hooks: {
+      showToast,
+      escapeHtml,
+      onContextChanged: (context) => statusBar.setAppContext(context),
+    },
+  });
+  applicationProfiles.init();
+
   // --- Persona wizard / Foundry + persona list refresh (shared) -----------
 
   let loadedPersonas = {};
@@ -772,6 +799,7 @@ export function startSignalDeskApp(doc = document) {
   return {
     destroy() {
       clearInterval(statusBarInterval);
+      applicationProfiles.destroy?.();
       voiceStatusConnection.close?.();
       talkWorkspace.destroy?.();
       talkCapture.destroy?.();
