@@ -332,6 +332,69 @@ async function fetchLatestDraft(timeoutMs = 2500) {
   return fetchJson(`${DRAFTS_URL}/latest`, timeoutMs);
 }
 
+// --- Library (Wave 4, WAVE3_LIBRARY_CONTRACT §5). Confirmation semantics are
+// enforced server-side; the confirm flag is threaded explicitly here so no
+// wrapper can perform a destructive call without its caller saying so.
+const LIBRARY_URL = `${BACKEND_ORIGIN}/library`;
+
+async function librarySearch(filters = {}, timeoutMs = 2500) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value !== undefined && value !== null && value !== '') {
+      params.set(key, String(value));
+    }
+  }
+  const query = params.toString();
+  return fetchJson(`${LIBRARY_URL}/search${query ? `?${query}` : ''}`, timeoutMs);
+}
+
+async function setLibraryDraftPinned(draftId, pinned, timeoutMs = 2500) {
+  return postJson(`${LIBRARY_URL}/drafts/${encodeURIComponent(draftId)}/pin`, { pinned: Boolean(pinned) }, timeoutMs);
+}
+
+async function deleteLibraryDraft(draftId, { confirm = false } = {}, timeoutMs = 2500) {
+  return deleteJson(`${LIBRARY_URL}/drafts/${encodeURIComponent(draftId)}?confirm=${confirm}`, timeoutMs);
+}
+
+async function deleteLibraryHistoryEntry(entryId, { confirm = false } = {}, timeoutMs = 2500) {
+  return deleteJson(`${LIBRARY_URL}/history/${encodeURIComponent(entryId)}?confirm=${confirm}`, timeoutMs);
+}
+
+async function deleteLibraryRecording(recId, { confirm = false } = {}, timeoutMs = 2500) {
+  return deleteJson(`${LIBRARY_URL}/recordings/${encodeURIComponent(recId)}?confirm=${confirm}`, timeoutMs);
+}
+
+async function duplicateLibraryDraft(draftId, timeoutMs = 2500) {
+  return postJson(`${LIBRARY_URL}/drafts/${encodeURIComponent(draftId)}/duplicate`, {}, timeoutMs);
+}
+
+async function fetchLibraryReopen(draftId, timeoutMs = 2500) {
+  return fetchJson(`${LIBRARY_URL}/drafts/${encodeURIComponent(draftId)}/reopen`, timeoutMs);
+}
+
+async function commitLibraryReopenEdit(draftId, { rawText, finalText } = {}, timeoutMs = 2500) {
+  return postJson(`${LIBRARY_URL}/drafts/${encodeURIComponent(draftId)}/reopen`, {
+    raw_text: rawText ?? null,
+    final_text: finalText ?? null,
+  }, timeoutMs);
+}
+
+async function resendLibraryDraft(draftId, timeoutMs = 2500) {
+  return postJson(`${LIBRARY_URL}/drafts/${encodeURIComponent(draftId)}/resend`, {}, timeoutMs);
+}
+
+async function restoreLibraryRecording(recId, timeoutMs = 30000) {
+  return postJson(`${LIBRARY_URL}/recordings/${encodeURIComponent(recId)}/restore`, {}, timeoutMs);
+}
+
+async function restoreLibraryDraft(draftId, timeoutMs = 2500) {
+  return postJson(`${LIBRARY_URL}/drafts/${encodeURIComponent(draftId)}/restore`, {}, timeoutMs);
+}
+
+async function clearLibrary(scope, { confirm = false } = {}, timeoutMs = 10000) {
+  return postJson(`${LIBRARY_URL}/clear`, { scope, confirm: Boolean(confirm) }, timeoutMs);
+}
+
 // --- Message Rescue (I3.2): context capture + text/persona generation. ---
 // Board #31's text playground is the first live caller of the generate
 // route -- context/manual and generate both go through the proxy's existing
@@ -947,6 +1010,18 @@ export {
   fetchDrafts,
   fetchHealth,
   fetchLatestDraft,
+  librarySearch,
+  setLibraryDraftPinned,
+  deleteLibraryDraft,
+  deleteLibraryHistoryEntry,
+  deleteLibraryRecording,
+  duplicateLibraryDraft,
+  fetchLibraryReopen,
+  commitLibraryReopenEdit,
+  resendLibraryDraft,
+  restoreLibraryRecording,
+  restoreLibraryDraft,
+  clearLibrary,
   fetchMessageRescueContext,
   captureManualMessageRescueContext,
   captureSelectionMessageRescueContext,

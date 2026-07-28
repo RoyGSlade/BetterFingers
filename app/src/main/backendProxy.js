@@ -49,6 +49,9 @@ const ROUTE_ALLOWLIST = {
     // Contacts (Stage 11). User-authored records of how to speak to someone --
     // no addresses, no handles, nothing to reach anyone with.
     '/contacts', '/contacts/:id', '/contacts/active',
+    // Wave 4 Library UI (contract §5): backend-driven search + read-only
+    // reopen payload.
+    '/library/search', '/library/drafts/:id/reopen',
   ],
   POST: [
     '/runtime/audio-devices/refresh', '/runtime/warmup',
@@ -79,6 +82,10 @@ const ROUTE_ALLOWLIST = {
     '/message-rescue/generate', '/message-rescue/generate/:id/cancel',
     '/contacts', '/contacts/:id', '/contacts/active',
     '/contacts/interview/start', '/contacts/interview/answer', '/contacts/compile',
+    '/library/drafts/:id/pin', '/library/drafts/:id/duplicate',
+    '/library/drafts/:id/reopen', '/library/drafts/:id/resend',
+    '/library/drafts/:id/restore', '/library/recordings/:id/restore',
+    '/library/clear',
   ],
   DELETE: [
     '/settings/profiles/:name',
@@ -90,6 +97,7 @@ const ROUTE_ALLOWLIST = {
     '/wake/models/:id',
     '/message-rescue/context',
     '/contacts/:id',
+    '/library/drafts/:id', '/library/history/:id', '/library/recordings/:id',
   ],
 };
 const ALLOWED_METHODS = new Set(Object.keys(ROUTE_ALLOWLIST));
