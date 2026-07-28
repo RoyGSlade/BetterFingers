@@ -54,6 +54,7 @@ const ROUTE_ALLOWLIST = {
     '/runtime/audio-devices/refresh', '/runtime/warmup',
     '/runtime/primary-action', '/runtime/emergency-stop',
     '/runtime/recording/toggle',
+    '/runtime/recording/start', '/runtime/recording/stop',
     '/settings/profiles', '/settings/profiles/import',
     '/settings/profiles/:name', '/settings/profiles/:name/activate',
     '/settings/profiles/:name/rename', '/settings/profiles/:name/duplicate',

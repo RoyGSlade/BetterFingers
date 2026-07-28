@@ -421,3 +421,45 @@ lane releases the shared composition root, so the two lanes never hold
 - The `_parse_date_bound` docstring overclaim was corrected at integration:
   space-separated datetimes are deliberately treated as date-only and
   widened to end-of-day, and the docstring now says so.
+
+## D-0021 — Gate 2 is accepted
+
+**Owner:** release-director
+
+**Evidence:** Commits `eda4ae0` (lane) and the integration commit following
+it. Director-run: renderer unit `963/963`; production QA `16/16` including
+the five new Talk scenarios (capture actions, single delivery selector,
+send-result surface, confidence-links-to-Settings, and
+`editing-teaches-only-with-approval` — the restored D-0018 trigger, proving
+save performs zero teach calls and consent+confirm performs exactly one,
+carrying the edited text and `consent: true`); preview `28/28` and legacy
+`37/37` unregressed; build green.
+
+**Decision:** Accept Gate 2. The Wave 1 QA substitution recorded in D-0018 is
+retired — the original "editing teaches only with approval" invariant is now
+asserted directly.
+
+**Ratifications:**
+
+- Three single-owner intentional cuts in Talk: the context-panel persona
+  dropdown, the confidence slider, and the delivery-mode select were all
+  unbound controls miming Settings-owned profile fields; Talk now displays
+  each read-only with a link to the real owner. A per-utterance persona
+  picker needs a per-draft persona concept and is Wave 5 scope.
+- "Send to Chat" as the primary-button label when `send_mode` is `auto_send`
+  and no delivery segment is selected.
+- Two QA-fixture corrections at integration, neither weakening an assertion:
+  the teach scenario's request capture moved from `page.on('request')` —
+  which can never see backend traffic because the renderer talks through the
+  main-process IPC proxy — to the stub itself, the one place every real
+  request lands; and the send scenario's stub became stateful so GET /drafts
+  reflects the post-send draft exactly as the real backend does.
+
+**Deferred with reasons, not silently:**
+
+- Controller capture-path convergence is Wave 10 scope; no controller
+  bindings exist yet. The shared reducer contract is the convergence
+  mechanism when they arrive.
+- "Emergency stop releases the privacy lease" waits for Wave 8, which
+  introduces the lease; recorder, TTS, pending injection, mute key, and
+  (as of D-0020) audio ducking are all released today.

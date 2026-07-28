@@ -9,6 +9,8 @@ const RUNTIME_OUTPUT_SETTINGS_URL = `${BACKEND_ORIGIN}/runtime/output-settings`;
 const RUNTIME_PRIMARY_ACTION_URL = `${BACKEND_ORIGIN}/runtime/primary-action`;
 const RUNTIME_EMERGENCY_STOP_URL = `${BACKEND_ORIGIN}/runtime/emergency-stop`;
 const RUNTIME_RECORDING_TOGGLE_URL = `${BACKEND_ORIGIN}/runtime/recording/toggle`;
+const RUNTIME_RECORDING_START_URL = `${BACKEND_ORIGIN}/runtime/recording/start`;
+const RUNTIME_RECORDING_STOP_URL = `${BACKEND_ORIGIN}/runtime/recording/stop`;
 const CAPABILITIES_URL = `${BACKEND_ORIGIN}/capabilities`;
 const DIAGNOSTICS_LOGS_URL = `${BACKEND_ORIGIN}/diagnostics/logs`;
 const DIAGNOSTICS_PATHS_URL = `${BACKEND_ORIGIN}/diagnostics/paths`;
@@ -453,6 +455,14 @@ async function toggleRecording(timeoutMs = 120000) {
   return postJson(RUNTIME_RECORDING_TOGGLE_URL, {}, timeoutMs);
 }
 
+async function startRecording(timeoutMs = 120000) {
+  return postJson(RUNTIME_RECORDING_START_URL, {}, timeoutMs);
+}
+
+async function stopRecording(timeoutMs = 120000) {
+  return postJson(RUNTIME_RECORDING_STOP_URL, {}, timeoutMs);
+}
+
 async function fetchPersonas(timeoutMs = 2500) {
   return fetchJson(PERSONAS_URL, timeoutMs);
 }
@@ -841,6 +851,8 @@ export {
   RUNTIME_OUTPUT_SETTINGS_URL,
   RUNTIME_PRIMARY_ACTION_URL,
   RUNTIME_RECORDING_TOGGLE_URL,
+  RUNTIME_RECORDING_START_URL,
+  RUNTIME_RECORDING_STOP_URL,
   RUNTIME_STATUS_URL,
   RUNTIME_WARMUP_URL,
   SETTINGS_PROFILES_URL,
@@ -964,6 +976,8 @@ export {
   speakDraft,
   speakTts,
   toggleRecording,
+  startRecording,
+  stopRecording,
   unloadModel,
   warmupRuntime,
   normalizeHealthPayload,
