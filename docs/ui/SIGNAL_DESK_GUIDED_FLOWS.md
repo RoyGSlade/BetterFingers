@@ -86,7 +86,19 @@ the only flow that may block the app, and only once.
 
 **Decline & quit** stays in the footer, left-aligned, visually separated from the forward
 action — it quits the application, and must never sit adjacent to `Next` where a mis-click
-lands on it.
+lands on it. That separation is measured, not eyeballed: the QA scenario asserts the gap
+between the two controls exceeds 30% of the card width, so a future footer reflow breaks
+loudly rather than quietly moving an app-exit button under the cursor.
+
+Two implementation notes worth keeping:
+
+- **Step bodies are markup, not template strings.** The shipping overlay builds each body
+  with `innerHTML`, which is why every piece of backend text in the recommendation box needs
+  an `escapeHtml()` around it. Markup plus `textContent` has no such rule to remember.
+- **Listeners bind at construction, not on open.** Binding inside `init()` left the dialog
+  half-live for any caller that opened it another way: steps advanced but the consent
+  checkbox was inert, which is indistinguishable on screen from a gate that can never be
+  satisfied. Caught by QA, now covered by a unit test.
 
 ### 4b. First-Run Setup — *not* a flow. It belongs in Talk.
 
@@ -134,9 +146,12 @@ even for users who never click it.
 
 ## 5. Order of work
 
-1. The shell (`sd-flow`) + unit tests for the step model. **← implementing now**
-2. Onboarding onto the shell — the only gating flow, and the one with real consequences.
-3. First-Run banner in Talk.
+1. ~~The shell (`sd-flow`) + unit tests for the step model.~~ **Done.**
+2. ~~Onboarding onto the shell — the only gating flow, and the one with real consequences.~~
+   **Done** — `features/onboardingFlow.js`, `tests/onboardingFlow.test.mjs` (19),
+   `tests/qa/scenarios/onboarding.mjs` (4). First QA coverage onboarding has ever had; the
+   harness skipped it because there was no way to ask for it on a configured profile.
+3. First-Run banner in Talk. **← next**
 4. Persona flow (both entry paths converging on Review & save).
 5. Contact flow, when contacts land.
 

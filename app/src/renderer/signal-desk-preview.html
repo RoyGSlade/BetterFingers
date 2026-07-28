@@ -68,6 +68,91 @@
   </div>
 </div>
 
+<!--
+  First-run onboarding (stage 13, docs/ui/SIGNAL_DESK_GUIDED_FLOWS.md 4a) on the
+  shared guided-flow shell. Step bodies are markup here rather than template
+  strings so no backend text is ever parsed as HTML.
+
+  There is deliberately no close button: this is the one gating flow, Escape is
+  swallowed, and the only way out other than finishing is "Decline & quit" --
+  which sits hard left, separated from Next by the spacer, because a mis-click
+  on it exits the application.
+-->
+<div id="sdOnboarding" class="sd-flow" role="dialog" aria-modal="true"
+     aria-labelledby="sdOnboardingTitle" hidden>
+  <div class="sd-flow__card">
+    <header class="sd-flow__header">
+      <!-- tabindex="-1": the shell moves focus here on every step so the step
+           is announced before its contents. Not reachable by Tab. -->
+      <h2 class="sd-flow__title" id="sdOnboardingTitle" data-flow-title tabindex="-1">Welcome to BetterFingers</h2>
+      <div class="sd-flow__steps" data-flow-progress role="img" aria-label="Step 1 of 4">
+        <span class="sd-flow__dot" data-flow-dot data-state="current"></span>
+        <span class="sd-flow__dot" data-flow-dot data-state="upcoming"></span>
+        <span class="sd-flow__dot" data-flow-dot data-state="upcoming"></span>
+        <span class="sd-flow__dot" data-flow-dot data-state="upcoming"></span>
+      </div>
+    </header>
+
+    <div class="sd-flow__body">
+      <section class="sd-flow__step" data-flow-step>
+        <p>BetterFingers turns your voice into text anywhere on your system — fully
+        local, no cloud. This quick setup takes about a minute.</p>
+        <h3>What you'll do</h3>
+        <ul>
+          <li>Review how BetterFingers uses your data</li>
+          <li>Learn the record → review → send flow</li>
+          <li>Make sure a speech model is installed</li>
+        </ul>
+      </section>
+
+      <section class="sd-flow__step" data-flow-step hidden>
+        <div class="sd-flow__policy">
+          <p>BetterFingers runs a local speech-to-text, rewrite, and text-to-speech
+          pipeline on your own machine. Audio you record is transcribed locally and is
+          not sent to any external server.</p>
+          <p>The only network activity is downloading the AI models you choose to
+          install. You can delete recordings, drafts, and models at any time from the
+          app.</p>
+          <p>By continuing you confirm you will use BetterFingers lawfully and only to
+          capture speech you are authorized to capture.</p>
+        </div>
+        <label class="sd-flow__consent">
+          <input type="checkbox" id="sdOnboardConsent" />
+          <span>I understand and accept how BetterFingers handles my data.</span>
+        </label>
+      </section>
+
+      <section class="sd-flow__step" data-flow-step hidden>
+        <ul>
+          <li><strong>Record</strong> — press your record hotkey (or use the tray) and speak.
+          Hold-to-talk and press-to-toggle are both supported.</li>
+          <li><strong>Review</strong> — a draft appears with the cleaned-up text. Rewrite it
+          (Clearer / Shorter / Tone), edit inline, or have it read back to you.</li>
+          <li><strong>Send</strong> — accept to type or paste it into whatever app you're in.</li>
+        </ul>
+        <p>You can change hotkeys, injection behavior, and more under <strong>Settings</strong>.</p>
+      </section>
+
+      <section class="sd-flow__step" data-flow-step hidden>
+        <p id="sdOnboardModelsPresent" hidden>A speech model is installed — you're ready to go.
+        You can manage or add models any time from <strong>Utilities → Models</strong>.</p>
+        <p id="sdOnboardModelsMissing" hidden>No speech model is installed yet. Open
+        <strong>Utilities → Models</strong> to download the recommended set for your hardware
+        (a small Whisper model for transcription, plus an optional local LLM for cleanup).
+        You can finish setup now and download models whenever you're ready.</p>
+        <div id="sdOnboardRecommendation" class="sd-flow__policy" hidden></div>
+      </section>
+    </div>
+
+    <footer class="sd-flow__footer">
+      <button type="button" class="sd-btn sd-flow__quit" id="sdOnboardDecline">Decline &amp; quit</button>
+      <span class="sd-flow__spacer"></span>
+      <button type="button" class="sd-btn" data-flow-back hidden>Back</button>
+      <button type="button" class="sd-btn sd-btn--primary" data-flow-primary>Get started</button>
+    </footer>
+  </div>
+</div>
+
 <div class="sd-shell" id="sdShell" data-workspace="talk">
 
   <!-- ============================== 3a. Left nav rail ============================== -->
@@ -2120,19 +2205,23 @@
         </button>
       </div>
 
-      <div class="sd-context__section">
-        <span class="sd-context__section-label">Destination <span class="sd-help" aria-hidden="true">?</span></span>
-        <button type="button" class="sd-dropdown">
-          <span class="sd-dropdown__icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="11" rx="4"></rect><circle cx="9" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="15" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle><path d="M8 7 9 4h6l1 3"></path></svg>
-          </span>
-          <span class="sd-dropdown__text">
-            <span class="sd-dropdown__name">Discord</span>
-            <span class="sd-dropdown__desc">#general</span>
-          </span>
-          <span class="sd-dropdown__chevron" aria-hidden="true">&#9662;</span>
-        </button>
-      </div>
+      <!--
+        Removed: a "Destination -- Discord #general" dropdown. Last surviving
+        copy of the fabrication already cut from the review card and the status
+        bar: no id, no handler, no backend field (drafts carry no destination,
+        backend/stores/drafts.py), and no concept of a channel or a person
+        anywhere in the app. It read as a configured setting a user could rely
+        on, which is worse than showing nothing.
+
+        A real recipient picker lands here once contacts exist --
+        docs/CONTACT_WIZARD_DESIGN.md section 6 -- backed by a record the user
+        actually created.
+
+        Still outstanding elsewhere: Library's "Destination" filter chip and its
+        per-card destination chips, and Studio's "Preferred Destinations". Same
+        fiction, different surfaces, and they go with the contact work that
+        gives them something true to show.
+      -->
 
       <div class="sd-context__section">
         <span class="sd-context__section-label">Delivery <span class="sd-help" aria-hidden="true">?</span></span>
@@ -3169,6 +3258,56 @@
   //   window.__settingsWorkspace.goToSection('privacy');
   //   window.__settingsWorkspace.refreshAll(); // real backend calls (fail gracefully with no bridge)
   window.__settingsWorkspace = settingsWorkspace;
+</script>
+
+<!--
+  Stage 13: mount the real onboarding flow, but only on request.
+
+  Two things this must not do. It must not cover every other QA screenshot with
+  a modal, and it must not touch the real `bf_onboarding_complete` key -- this
+  page shares a localStorage origin with the app, so writing that flag here
+  would silently skip first-run onboarding on the user's actual install. So the
+  flow is opened by `#onboarding` (or `?flow=onboarding`) and is handed an
+  in-memory storage stub that starts empty and is thrown away.
+-->
+<script type="module">
+  import { createOnboardingFlow, collectOnboardingElements } from './features/onboardingFlow.js';
+
+  const requested = window.location.hash === '#onboarding'
+    || new URLSearchParams(window.location.search).get('flow') === 'onboarding';
+
+  const memoryStorage = (() => {
+    const map = new Map();
+    return {
+      getItem: (k) => (map.has(k) ? map.get(k) : null),
+      setItem: (k, v) => map.set(k, String(v)),
+    };
+  })();
+
+  const onboarding = createOnboardingFlow({
+    elements: collectOnboardingElements(document),
+    storage: memoryStorage,
+    hooks: {
+      quitApp: () => window.betterFingers?.quitApp?.(),
+      // Representative shapes; with no bridge these are what the real
+      // fetchWhisperModels()/fetchModelRecommendation() would return.
+      fetchWhisperModels: async () => ({ models: [{ id: 'base.en', downloaded: true }] }),
+      fetchRecommendation: async () => ({
+        recommendation: {
+          tier: 'high',
+          tier_label: 'High (16 GB VRAM)',
+          tier_guidance: 'Comfortably runs a 12B model alongside Whisper.',
+          llm: { recommended: 'gemma-4-12b-q4', models: [{ id: 'gemma-4-12b-q4', name: 'Gemma 4 12B (Q4)', note: 'best quality for this card' }] },
+          whisper: { recommended: 'base.en' },
+        },
+      }),
+    },
+  });
+
+  if (requested) onboarding.init();
+
+  // Debug handle: window.__onboarding.flow.open() to inspect it without a reload.
+  window.__onboarding = onboarding;
 </script>
 
 </body>

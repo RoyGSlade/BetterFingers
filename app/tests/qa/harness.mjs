@@ -269,9 +269,28 @@ export async function launchApp({ backendPort, target = TARGET }) {
   launchEnv.TZ = 'UTC';
   launchEnv.LANG = 'en_US.UTF-8';
 
+  // BF_QA_USER_DATA_DIR: run against a throwaway Electron profile instead of
+  // the developer's real one. Two reasons, both real:
+  //
+  //  - main.js takes a single-instance lock keyed on the userData path, so a
+  //    QA run and the actual app are mutually exclusive. Anyone with the app
+  //    open has to close it to run the suite, which is exactly the friction
+  //    that stops people running it.
+  //  - the suite otherwise inherits whatever is in the developer's
+  //    localStorage (pref_message_rescue_enabled, dismissal flags, ...), so
+  //    "deterministic across runs" quietly means "deterministic on my machine".
+  //
+  // Opt-in rather than default: switching every existing scenario to a blank
+  // profile changes their starting state, and that belongs in its own change
+  // with its own baseline comparison, not smuggled in here.
+  const args = ['.', '--force-device-scale-factor=1'];
+  if (process.env.BF_QA_USER_DATA_DIR) {
+    args.push(`--user-data-dir=${process.env.BF_QA_USER_DATA_DIR}`);
+  }
+
   const app = await electron.launch({
     cwd: APP_DIR,
-    args: ['.', '--force-device-scale-factor=1'],
+    args,
     env: launchEnv,
   });
 

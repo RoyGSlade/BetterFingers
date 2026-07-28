@@ -123,6 +123,14 @@ export function createGuidedFlow({
       if (dots[i]) dots[i].dataset.state = state;
     });
 
+    // The dots are shape, not text, so position has to be stated for anyone who
+    // cannot see them. The container carries role="img" and this label rather
+    // than each dot announcing itself, which would read as four blank items.
+    q('[data-flow-progress]')?.setAttribute?.(
+      'aria-label',
+      `Step ${index + 1} of ${steps.length}`,
+    );
+
     const back = q('[data-flow-back]');
     if (back) back.hidden = isFirstStep(index);
 

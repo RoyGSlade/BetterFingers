@@ -5014,3 +5014,164 @@
   border-radius: 6px;
   padding: 2px 8px;
 }
+
+/* ==========================================
+   Guided flows (docs/ui/SIGNAL_DESK_GUIDED_FLOWS.md)
+
+   One shell for onboarding, persona creation and the contact wizard. Same
+   modal vocabulary as .sd-shortcut-sheet above -- fixed overlay, centred card,
+   header / scrollable body / footer -- so there is nothing new to learn.
+   ========================================== */
+.sd-flow {
+  position: fixed;
+  inset: 0;
+  z-index: 10001; /* above the shortcut sheet: a gating flow owns the screen */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 6, 12, .78);
+  padding: var(--sd-space-24);
+}
+
+.sd-flow[hidden] { display: none; }
+
+.sd-flow__card {
+  display: flex;
+  flex-direction: column;
+  width: min(620px, 100%);
+  max-height: min(80vh, 640px);
+  background: var(--sd-surface-raised);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-hero-card);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .55);
+  color: var(--sd-text-primary);
+}
+
+.sd-flow__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sd-space-16);
+  padding: var(--sd-space-20) var(--sd-space-24);
+  border-bottom: 1px solid var(--sd-border);
+}
+
+.sd-flow__title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+
+/* The heading is the focus target on every step transition. It must show that
+   without looking like a text field. */
+.sd-flow__title:focus-visible {
+  outline: 2px solid var(--sd-cyan);
+  outline-offset: 4px;
+  border-radius: var(--sd-radius-chip);
+}
+
+.sd-flow__steps {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+}
+
+.sd-flow__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--sd-border-hover);
+  transition: background .18s ease, transform .18s ease;
+}
+
+.sd-flow__dot[data-state="done"] { background: var(--sd-cyan); opacity: .5; }
+.sd-flow__dot[data-state="current"] { background: var(--sd-cyan); transform: scale(1.4); }
+
+@media (prefers-reduced-motion: reduce) {
+  .sd-flow__dot { transition: none; }
+}
+
+.sd-flow__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sd-space-24);
+  font-size: var(--sd-font-body);
+  line-height: 1.55;
+  color: var(--sd-text-secondary);
+}
+
+.sd-flow__step[hidden] { display: none; }
+.sd-flow__step > :first-child { margin-top: 0; }
+.sd-flow__step > :last-child { margin-bottom: 0; }
+
+.sd-flow__step h3 {
+  margin: var(--sd-space-20) 0 var(--sd-space-8);
+  font-size: var(--sd-font-body);
+  font-weight: 600;
+  color: var(--sd-text-primary);
+}
+
+.sd-flow__step ul { margin: 0; padding-left: var(--sd-space-20); }
+.sd-flow__step li { margin-bottom: var(--sd-space-8); }
+.sd-flow__step strong { color: var(--sd-text-primary); }
+
+.sd-flow__policy {
+  background: var(--sd-surface-inset);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-card);
+  padding: var(--sd-space-16);
+  margin-bottom: var(--sd-space-16);
+}
+
+.sd-flow__policy > :first-child { margin-top: 0; }
+.sd-flow__policy > :last-child { margin-bottom: 0; }
+
+.sd-flow__note { color: var(--sd-text-muted); font-size: var(--sd-font-sm); }
+
+.sd-flow__consent {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sd-space-12);
+  cursor: pointer;
+  color: var(--sd-text-primary);
+}
+
+.sd-flow__consent input { margin-top: 3px; accent-color: var(--sd-cyan); }
+
+.sd-flow__footer {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-12);
+  padding: var(--sd-space-16) var(--sd-space-24);
+  border-top: 1px solid var(--sd-border);
+}
+
+.sd-flow__spacer { flex: 1; }
+
+/* .sd-btn--primary carries margin-left:auto for its usual toolbar context.
+   Here the spacer already does that job, and the auto margin would prise Back
+   and Next apart into two unrelated-looking controls. */
+.sd-flow__footer .sd-btn--primary { margin-left: 0; }
+
+.sd-flow__footer .sd-btn:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.sd-flow__footer [data-flow-back][hidden] { display: none; }
+
+/* Quitting the app is not a step in the flow. It reads as a quiet destructive
+   action and lives hard left, a full spacer away from the forward button. */
+.sd-flow__quit {
+  background: transparent;
+  border-color: transparent;
+  color: var(--sd-text-muted);
+}
+
+.sd-flow__quit:hover {
+  border-color: var(--sd-red);
+  color: var(--sd-red);
+}
