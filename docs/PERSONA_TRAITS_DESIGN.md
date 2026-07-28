@@ -202,7 +202,22 @@ Acceptance, all three required:
 3. It passes **with confidence at 100 specifically**. If it does not, `confidence` is cut and
    the remaining four ship (§4b).
 
-### 8a. Gate result — FAILED (Gemma 4 12B Q4, 2026-07-27)
+### 8a. Historical gate result — FAILED (Gemma 4 12B Q4, 2026-07-27)
+
+> **Current Gate 0 evidence:** This section is retained as the exact historical
+> 2026-07-27 result. It is superseded as the current numeric snapshot by the
+> [Gate 0 preservation baseline](release/PRESERVATION_BASELINE.md), which
+> records the model file hash, source/corpus hashes, exact commands, timestamps,
+> and lossless per-probe structural outcomes. The corrected production-preset
+> protocol ran exactly three consecutive suites at the True Janitor path's
+> temperature `0.05`; all three passed 3/3. Earlier Wave 0 results used the
+> wrong preset name, temperature `0.3`, and omitted True Janitor's absolute
+> rule, so they are invalid methodological observations rather than
+> qualification evidence. The green corrected snapshot still does not qualify
+> traits: the historical 0/3 result and the invalid prior method remain
+> unreconciled until a director approves a repeated qualification policy.
+> `use_persona_traits` remains off. Nothing below has been rewritten as though
+> the 2026-07-27 failure did not happen.
 
 Acceptance 1 **passes**: an all-neutral persona composes byte-identically to a persona with no
 traits field. Verified against the real engine, not just in unit tests. Every existing persona

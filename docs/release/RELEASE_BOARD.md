@@ -1,0 +1,146 @@
+# True BetterFingers Release Board
+
+- **Release:** `v0.2.0-alpha.1`
+- **Current wave:** Wave 0 — reconcile, freeze, and measure
+- **Gate 0:** **NOT PASSED**
+- **Last updated:** 2026-07-28
+
+Statuses: `DONE`, `IN PROGRESS`, `BLOCKED`, `PENDING`, `CUT`.
+
+No implementation wave may start while Gate 0 is not passed.
+
+## Authoritative baseline
+
+| Field | Value | Status |
+|---|---|---|
+| Repository | `RoyGSlade/BetterFingers` / `https://github.com/RoyGSlade/BetterFingers.git` | `DONE` |
+| Source branch | `feat/signal-desk-ui` | `DONE` |
+| Source commit | `093eaf2a2ae3e68c2671d8549d4b583c31558080` | `DONE` |
+| Remote `main` | `4f9f4a8b7ff7f83bb67081063cfa439397b1663e` | `DONE` |
+| Source vs `main` | 7 ahead, 0 behind | `DONE` |
+| Local unpushed commits | None on `feat/signal-desk-ui` or `main` | `DONE` |
+| Open worktrees | One, at the repository root | `DONE` |
+| Integration branch | `release/true-betterfingers` does not yet exist | `BLOCKED` — coordinator Git action |
+| Collaboration repair A | Implemented and tested | `DONE` |
+| Collaboration repair B | Implemented | `DONE` |
+| Collaboration repair C | Adversarial hardening and authoritative docs/tests | `IN PROGRESS` |
+| Cross-client spawn/auth smoke | Real authenticated Claude cross-client spawn evidence is incomplete; Claude authentication and an MCP restart remain external prerequisites | `BLOCKED` |
+| Clean worktree | The full retained Gate 0 workset remains under review, including infrastructure, plans/evidence, UI/persona docs, and regenerated QA artifacts | `BLOCKED` — coordinator must review and commit every exact Gate 0 path on the integration branch |
+
+## Gate 0 queue
+
+| ID | Work item | Owner | Status | Acceptance evidence |
+|---|---|---|---|---|
+| W0-R1 | Verify local and connected remote repository, branch, and commit topology. | reconciliation | `DONE` | Local Git plus GitHub metadata/compare agree. |
+| W0-R2 | Identify all worktrees, local-only commits, and active Wave 0 work. | reconciliation | `DONE` | One worktree; no local-only commits. The [exact retained workset](TRUE_BETTERFINGERS_RELEASE_PLAN.md#21-retained-wave-0-worktree) includes `AGENTS.md`; `.claude`/`.codex` infrastructure and skills; `ACCOMPLISH.md` repair C; UI/release/persona docs; the regenerated QA report; and 23 pixel-identical but byte-reencoded PNGs. |
+| W0-R3 | Reconcile contacts, audience, and traits against connected `main`. | reconciliation | `DONE` | Contacts `partial`; audience backend `implemented` but user feature `unavailable`; traits `implemented` but preservation-blocked. |
+| W0-R4 | Audit shipping default, preview bootstrap, and production mock use. | reconciliation | `DONE` | Legacy default; opt-in preview; runtime mocks and ephemeral onboarding confirmed. |
+| W0-G1 | Create `release/true-betterfingers` from `093eaf2a…`. | coordinator | `BLOCKED` | Branch exists locally and remotely at the accepted source commit. |
+| W0-G2 | Review and commit the complete retained Gate 0 workset. | coordinator | `BLOCKED` | Coordinator reviews and commits every exact Gate 0 path—both infrastructure and non-infrastructure evidence/docs/artifacts—and establishes a clean integration tree. |
+| W0-C1 | Implement and test collaboration infrastructure repair A. | infrastructure | `DONE` | Repair A implementation and targeted tests are complete. |
+| W0-C2 | Implement collaboration infrastructure repair B. | infrastructure | `DONE` | Repair B implementation is complete; repair C carries the remaining adversarial hardening and authoritative test/doc work. |
+| W0-C3 | Complete and review collaboration infrastructure repair C. | infrastructure/coordinator | `IN PROGRESS` | Completion requires adversarial hook atomicity, privacy migration, spawn/name/path safety, routable claims, tests, and authoritative docs with no unresolved release-critical findings. |
+| W0-C4 | Prove a real authenticated cross-client Claude spawn. | infrastructure/coordinator | `BLOCKED` | External operator authenticates Claude, restarts the client/MCP onto the repaired configuration, and proves a real Claude session can spawn, join the intended private hierarchy room, report, and exit. |
+| W0-T1 | Reuse the qualified `.venv` and run the full and cheap Python suites. | baseline | `DONE` | Full: `2,085 passed, 3 skipped, 9 subtests, 12 warnings`, exit 0. Cheap: `1,972 passed, 3 skipped, 113 deselected`, exit 0. System Python's 72 dependency collection errors are classified `ENVIRONMENT`. |
+| W0-T2 | Run renderer unit tests and production build. | baseline | `DONE` | Unit `775/775`; production build passed; `app/out` is `1,288,162` bytes. |
+| W0-Q1 | Run default/legacy and Signal Desk Playwright/QA targets. | baseline | `DONE` | Wave 0 regenerated reports: legacy `37/37`; Signal Desk `28/28`. |
+| W0-Q2 | Run the Playwright baseline. | baseline | `DONE` | `18` passed; `3` model-dependent scenarios skipped. |
+| W0-P1 | Rerun delivery, audience, and traits preservation probes on the qualified model. | baseline | `DONE` | [Retained evidence](PRESERVATION_BASELINE.md) and [JSON](PRESERVATION_BASELINE.json): delivery `PASS 3/3`; audience `PASS 3/3`; corrected production True Janitor traits protocol exactly three consecutive suites, each `PASS 3/3`. Traits remain `unavailable_methodology_unreconciled`: valid historical `FAIL_TRAITS 0/3` plus the invalid earlier Wave 0 adapter leave methodology unreconciled. Under the current gate, the valid historical failure blocks qualification. Its `2/3`, `3/3`, `3/3` observations are non-qualifying, not current evidence. Evidence collection is done; traits qualification is not a pass. |
+| W0-I1 | Convert the 438-item inventory into an exact release-status ledger or generate an equivalent machine-readable report. | QA/parity | `DONE` | [Strict ledger](PARITY_INVENTORY.md): `0 wired`, `4 intentional_cut`, `434 blocked`, total `438`. |
+| W0-D1 | Record file sizes, dependency graph, package artifact sizes, and package contents. | baseline/packaging | `DONE` | [Package baseline](PACKAGE_BASELINE.md): reproducible measurements plus exact `ABSENT/UNBUILT` sidecar and Windows/Linux artifact ledger. |
+| W0-S1 | Freeze release scope and accept Gate 0. | release-director | `BLOCKED` | Product measurement evidence is complete. W0-G1, W0-G2, W0-C3, and W0-C4 remain; only then may the director consider Gate 0 acceptance. |
+
+## Current evidence ledger
+
+| Evidence | Current value | Release use |
+|---|---|---|
+| Workspace placement maps | Talk `28/33`; Library `11/23`; Studio `26/31`; Utilities `57/59`; Settings `37/37`; total **159/183 placed/wired in those maps, 24 unwired** | Preview placement signal only; it does not satisfy the strict 438-item production-evidence rule. |
+| 438-item release ledger | [PARITY_INVENTORY.md](PARITY_INVENTORY.md): **0 `wired`, 4 `intentional_cut`, 434 `blocked`; total 438** | Completed Gate 0 classification. Zero wired is the honest strict baseline, not a product failure count to hide. |
+| Renderer unit baseline | `775/775` passed | Current renderer evidence from the authoritative source baseline. |
+| Renderer production build | Passed; `app/out` 30 files / `1,288,162` bytes | Current build evidence; it is not a distributable installer. |
+| Playwright | `18` passed; `3` model-dependent skipped | Current browser/Electron evidence; skipped cases remain unqualified. |
+| Default QA artifact | Wave 0 regenerated report: `37/37` | Current deterministic-stub QA evidence. |
+| Signal Desk QA artifact | Wave 0 regenerated aggregate report: `28/28` | Current deterministic-stub QA evidence; it does not clear production mock/composition blockers. |
+| Backend full suite | `2,085 passed`; `3 skipped`; `9 subtests`; `12 warnings`; exit 0 | Current `.venv` evidence from the authoritative baseline. |
+| Backend cheap suite | `1,972 passed`; `3 skipped`; `113 deselected`; `9 subtests`; `12 warnings`; exit 0 | Current fast-gate evidence. |
+| Storage/privacy/contact focus | `248 passed`; `6 warnings`; exit 0 | Current targeted evidence. |
+| Preservation | [Baseline](PRESERVATION_BASELINE.md) / [JSON](PRESERVATION_BASELINE.json): delivery `PASS 3/3` and audience `PASS 3/3`, both qualified-but-disabled; corrected traits protocol three consecutive suites, each `PASS 3/3`; traits `unavailable_methodology_unreconciled` because historical `FAIL_TRAITS 0/3` and invalid earlier methodology remain unreconciled | W0-P1 measurement is complete. The valid historical failure blocks the current gate; the invalid earlier `2/3`, `3/3`, `3/3` observations are not current evidence. Traits stay off pending a director-approved repeated qualification policy. |
+| Package baseline | [PACKAGE_BASELINE.md](PACKAGE_BASELINE.md), snapshot `2026-07-28T08:11:19Z`: tracked checkout 525 files / 35,761,072 bytes; `app/out` 30 / 1,288,162 bytes; assets + images 14 / 15,941,784 bytes; sidecar unbuilt; Windows 0 artifacts / 0 bytes; Linux 0 artifacts / 0 bytes; lock/toolchain drift recorded | The tracked-checkout count is a timestamped snapshot, not a live authoritative byte count. W0-D1 measurement is complete; the package conclusion remains `ABSENT/UNBUILT`, and Wave 12 remains blocked. |
+| Targeted renderer audit | `100/100` passed | Supports the reconciliation only. |
+| Targeted Python audit | `146/152` passed; six import-dependent failures; broader selection could not collect without `fastapi`/`numpy` | Environment diagnosis only; not a product verdict. |
+
+## Reconciled product state
+
+| Area | State | Release action |
+|---|---|---|
+| Legacy renderer | Production default | Retain as rollback through Wave 11; do not claim Signal Desk is shipping. |
+| Signal Desk | QA preview, mixed live/fixture data | Replace with `signal-desk.html` and one live composition root in Wave 1. |
+| Production mocks | Present in Electron-loadable preview | Remove or isolate to test/QA-only entry points before Gate 1. |
+| Onboarding | Legacy renderer localStorage; Signal Desk QA-only in-memory flow | Replace with durable, versioned application consent state. |
+| Contacts | Partially implemented | Complete edit/delete/manage, retrofit, export/lifecycle, Settings disclosure, and production composition in Wave 5, or cut entirely. |
+| Audience context | Backend path exists; default off; no visible control | Keep unavailable until current preservation pass plus Wave 5 Settings control/disclosure. |
+| Persona traits | Schema/storage/UI/prompt exist; corrected production protocol passed three consecutive 3/3 suites, but historical 0/3 and invalid earlier methodology leave qualification unreconciled; default is off | Show `Experimental — unavailable`; do not enable until a director-approved repeated policy produces an accepted qualification. |
+| Versioning | Package `0.1.0`; preview `v1.2.0`; planned `0.2.0-alpha.1` | Centralize one build version before the default flip. |
+
+## Wave queue
+
+| Wave | Objective | Dependency | Status |
+|---:|---|---|---|
+| 0 | Repository truth, measurements, scope freeze | None | `IN PROGRESS` |
+| 1 | Production Signal Desk composition and durable onboarding | Gate 0 | `BLOCKED` |
+| 2 | Talk completion | Gate 1 | `BLOCKED` |
+| 3 | Library domain semantics | Gate 1 contracts | `BLOCKED` |
+| 4 | Library UI completion | Gate 3 | `BLOCKED` |
+| 5 | Studio, contacts/audience, Settings | Gates 1–2 | `BLOCKED` |
+| 6 | Privacy/data lifecycle closure | Final store set from Waves 3/5/7/8/9/10 | `BLOCKED` |
+| 7 | Application context/profiles | Gate 1 | `BLOCKED` |
+| 8 | Audio privacy and wake hardening | AudioInputBroker before isolation/handoff | `BLOCKED` |
+| 9 | Restricted action engine | Approved action schema | `BLOCKED` |
+| 10 | Controller and Stream Deck | Shared action IDs from Waves 2/9 | `BLOCKED` |
+| 11 | Strict 438-item parity closure, version, default flip | Gates 1–10 | `BLOCKED` |
+| 12 | Windows/Linux package qualification | Gate 11 | `BLOCKED` |
+| 13 | Source Arcanum publication | Gates 0–12 | `BLOCKED` |
+| 14 | One-release legacy cleanup and later backend split | One completed Signal Desk release | `BLOCKED` |
+
+## Integration-owned paths
+
+The following paths require director-granted integration claims and must not be
+edited concurrently:
+
+```text
+server.py
+llm_engine.py
+utils.py
+app/src/main/windows.js
+app/src/main/main.js
+app/src/preload/preload.js
+app/src/renderer/api/backend.js
+app/src/renderer/signal-desk.html
+app/package.json
+data_categories.py
+```
+
+## Gate 0 exit checklist
+
+- [ ] `release/true-betterfingers` exists at the accepted commit.
+- [x] Collaboration repairs A and B are implemented; repair A's targeted tests
+      are recorded.
+- [ ] Repair C is complete and reviewed, every exact retained Gate 0 path is
+      accepted and committed, and the integration worktree is clean.
+- [ ] Claude authentication is available, the client/MCP is restarted onto
+      the repaired configuration, and a real authenticated cross-client
+      Claude spawn passes through the repaired hierarchy infrastructure.
+- [x] Exact Python totals are recorded at `2,085 passed / 3 skipped` in the
+      qualified `.venv`.
+- [x] Renderer unit total is recorded at `775/775`; production build passes.
+- [x] Exact default (`37/37`) and Signal Desk (`28/28`) QA totals are recorded.
+- [x] Delivery, audience, and traits preservation measurements are retained;
+      delivery and audience pass 3/3, while traits remain unavailable because
+      their qualification methodology is unreconciled.
+- [x] All 438 inventory items have strict release statuses:
+      `0 wired / 4 intentional_cut / 434 blocked`.
+- [x] Dependency/file/artifact/package measurements are recorded; the exact
+      package result is `ABSENT/UNBUILT`.
+- [x] Contacts remain classified as partial until completed or cut.
+- [x] No other worktree contains release-critical code.
+- [ ] Release director records `Gate 0: ACCEPTED`.

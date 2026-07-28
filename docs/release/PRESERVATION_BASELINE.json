@@ -1,0 +1,276 @@
+{
+  "schema_version": 2,
+  "artifact": "BetterFingers Gate 0 preservation baseline",
+  "recorded_at_utc": "2026-07-28T08:43:44Z",
+  "privacy": {
+    "contains_user_content": false,
+    "contains_probe_text": false,
+    "report_policy": "Runner reports are copied field-for-field. Only probe text and model output are absent because the runner itself never returns them."
+  },
+  "environment": {
+    "os": "Linux Mint 22.3",
+    "ubuntu_codename": "noble",
+    "kernel": "7.0.0-28-generic",
+    "architecture": "x86_64",
+    "python_executable": "/home/donaven/Desktop/BetterFingers/.venv/bin/python",
+    "python_version": "3.12.3",
+    "pytest_version": "9.1.1"
+  },
+  "model": {
+    "lifecycle_owner": "pre-existing external process; this task did not start, reload, or stop it",
+    "endpoint": "http://127.0.0.1:8080",
+    "health_response": {
+      "status": "ok"
+    },
+    "name_from_runtime_path": "Gemma 4 12B IT Q4_K_M",
+    "path": "/home/donaven/BetterFingers/models/gemma-4-12b-it-Q4_K_M.gguf",
+    "size_bytes": 7121860000,
+    "sha256": "43fec98c5102b1c446b4ddd0a9439f1db3a2e1f2e0b8cd143ce1ea619a9403d6",
+    "runtime_started_at_utc": "2026-07-28T07:56:42Z",
+    "runtime_settings": {
+      "context_size": 16384,
+      "gpu_layers": 99,
+      "threads": 8,
+      "batch_size": 512,
+      "parallel": 1,
+      "cache_type_k": "q8_0",
+      "jinja": true,
+      "thinking": false
+    }
+  },
+  "sources": {
+    "delivery_preservation.py": "5fbe42076fad0c71d6489ff32139dfd34ff84bd728d7aead978d1ab1b2084558",
+    "tools/delivery_preservation.py": "7bc2eb9a60582ab65b4f43c8f683a4c9f13d8fb3bcfc24e8df9e0884df018589",
+    "llm_engine.py": "0e935082782fb2f684bd81fec5e66bd5b613bc61c479159e1613fb0b0fc3e468",
+    "persona_traits.py": "8efa562a3ce0abad929ba81b1bb56b2f8c61ef5bdf741c31bee194400901810a",
+    "backend/services/message_rescue.py": "9eeec276256f6d2835803025a96aea00df2aea80fcb2c41932fc6572c69239c7",
+    "tests/test_delivery_preservation.py": "04cc6ff06b90368231f3f53339704f2f8713e30bfba003f1df07e6a00b9b339e"
+  },
+  "probe_corpus": {
+    "source": "delivery_preservation.PROBES, WARM_TRAITS, and BLUNT_TRAITS",
+    "probe_ids": [
+      "explicit-high-intensity",
+      "explicit-low-intensity",
+      "negated-intensity"
+    ],
+    "canonical_serialization": "json.dumps({'probes': PROBES, 'warm_traits': WARM_TRAITS, 'blunt_traits': BLUNT_TRAITS}, sort_keys=True, separators=(',', ':')).encode('utf-8')",
+    "canonical_sha256": "e5bf5dc2d0d0feea4a8f2f0c5bc1bbd0e1ad4c68e5ecc529749275f0e4abc956",
+    "probe_text_redacted": true
+  },
+  "delivery_audience_run": {
+    "command": ".venv/bin/python tools/delivery_preservation.py --json",
+    "started_at_utc": "2026-07-28T08:27:18Z",
+    "ended_at_utc": "2026-07-28T08:27:42Z",
+    "duration_wall_seconds": 23.57,
+    "max_rss_kb": 32168,
+    "exit_code": 0,
+    "report_normalization": "none; copied field-for-field from runner stdout",
+    "report": {
+      "delivery": {
+        "overall": "PASS",
+        "probe_count": 3,
+        "passed": 3,
+        "attributable_failures": [],
+        "results": [
+          {
+            "probe": "explicit-high-intensity",
+            "status": "PASS",
+            "baseline_also_failed": false,
+            "failure_attributable_to_delivery": false,
+            "empty_outputs": [],
+            "lost_intensity_markers": [],
+            "fact_preservation_failures": {},
+            "fact_categories_checked": ["names", "numbers"],
+            "signal_leak_detected": [],
+            "calm_vs_agitated_length_ratio": 1.0,
+            "length_ratio_exceeded": false,
+            "output_char_counts": {"baseline": 81, "calm": 81, "agitated": 81},
+            "elapsed_s": 4.184
+          },
+          {
+            "probe": "explicit-low-intensity",
+            "status": "PASS",
+            "baseline_also_failed": false,
+            "failure_attributable_to_delivery": false,
+            "empty_outputs": [],
+            "lost_intensity_markers": [],
+            "fact_preservation_failures": {},
+            "fact_categories_checked": ["dates", "modality", "names", "negation"],
+            "signal_leak_detected": [],
+            "calm_vs_agitated_length_ratio": 1.0,
+            "length_ratio_exceeded": false,
+            "output_char_counts": {"baseline": 68, "calm": 68, "agitated": 68},
+            "elapsed_s": 3.772
+          },
+          {
+            "probe": "negated-intensity",
+            "status": "PASS",
+            "baseline_also_failed": false,
+            "failure_attributable_to_delivery": false,
+            "empty_outputs": [],
+            "lost_intensity_markers": [],
+            "fact_preservation_failures": {},
+            "fact_categories_checked": ["negation", "numbers"],
+            "signal_leak_detected": [],
+            "calm_vs_agitated_length_ratio": 1.0,
+            "length_ratio_exceeded": false,
+            "output_char_counts": {"baseline": 71, "calm": 71, "agitated": 71},
+            "elapsed_s": 3.624
+          }
+        ],
+        "gate_note": "PASS is the only green. FAIL_DELIVERY means the summary itself degraded the output and blocks default-on. FAIL_BASELINE means the model already did that without any delivery summary -- a real bug worth fixing, but not caused by this feature and not evidence against it."
+      },
+      "audience": {
+        "overall": "PASS",
+        "probe_count": 3,
+        "passed": 3,
+        "attributable_failures": [],
+        "results": [
+          {
+            "probe": "explicit-high-intensity",
+            "status": "PASS",
+            "baseline_also_failed": false,
+            "failure_attributable_to_audience": false,
+            "empty_outputs": [],
+            "lost_intensity_markers": [],
+            "fact_preservation_failures": {},
+            "fact_categories_checked": ["names", "numbers"],
+            "signal_leak_detected": [],
+            "close_vs_formal_length_ratio": 1.0,
+            "length_ratio_exceeded": false,
+            "output_char_counts": {"baseline": 81, "close": 81, "formal": 81},
+            "elapsed_s": 3.725,
+            "invented_addressing": {}
+          },
+          {
+            "probe": "explicit-low-intensity",
+            "status": "PASS",
+            "baseline_also_failed": false,
+            "failure_attributable_to_audience": false,
+            "empty_outputs": [],
+            "lost_intensity_markers": [],
+            "fact_preservation_failures": {},
+            "fact_categories_checked": ["dates", "modality", "names", "negation"],
+            "signal_leak_detected": [],
+            "close_vs_formal_length_ratio": 1.13,
+            "length_ratio_exceeded": false,
+            "output_char_counts": {"baseline": 68, "close": 68, "formal": 77},
+            "elapsed_s": 4.14,
+            "invented_addressing": {}
+          },
+          {
+            "probe": "negated-intensity",
+            "status": "PASS",
+            "baseline_also_failed": false,
+            "failure_attributable_to_audience": false,
+            "empty_outputs": [],
+            "lost_intensity_markers": [],
+            "fact_preservation_failures": {},
+            "fact_categories_checked": ["negation", "numbers"],
+            "signal_leak_detected": [],
+            "close_vs_formal_length_ratio": 1.0,
+            "length_ratio_exceeded": false,
+            "output_char_counts": {"baseline": 71, "close": 71, "formal": 71},
+            "elapsed_s": 3.717,
+            "invented_addressing": {}
+          }
+        ],
+        "gate_note": "PASS is the only green. FAIL_AUDIENCE means the contact context itself degraded the output and blocks default-on. FAIL_BASELINE means the model already did that with no audience at all -- a real bug worth fixing, but not caused by this feature and not evidence against it."
+      }
+    }
+  },
+  "corrected_traits_protocol": {
+    "predeclared": true,
+    "consecutive_suite_count": 3,
+    "command": ".venv/bin/python -",
+    "adapter_sha256": "1e7cd32ca799230aa3729cfb8fcbf75d4660525b057645b1065178da6f254af1",
+    "preset_name": "True Janitor",
+    "effective_temperature": 0.05,
+    "strict_true_janitor_rule_applied": true,
+    "report_normalization": "none; each report copied field-for-field from runner stdout",
+    "trials": [
+      {
+        "trial": 1,
+        "started_at_utc": "2026-07-28T08:42:42Z",
+        "ended_at_utc": "2026-07-28T08:42:55Z",
+        "duration_wall_seconds": 12.88,
+        "max_rss_kb": 33760,
+        "exit_code": 0,
+        "report": {
+          "overall": "PASS",
+          "probe_count": 3,
+          "passed": 3,
+          "attributable_failures": [],
+          "results": [
+            {"probe": "explicit-high-intensity", "status": "PASS", "baseline_also_failed": false, "failure_attributable_to_traits": false, "empty_outputs": [], "lost_intensity_markers": [], "fact_preservation_failures": {}, "fact_categories_checked": ["names", "numbers"], "signal_leak_detected": [], "warm_vs_blunt_length_ratio": 1.08, "length_ratio_exceeded": false, "output_char_counts": {"baseline": 81, "warm": 81, "blunt": 80}, "elapsed_s": 5.083, "invented_addressing": {}},
+            {"probe": "explicit-low-intensity", "status": "PASS", "baseline_also_failed": false, "failure_attributable_to_traits": false, "empty_outputs": [], "lost_intensity_markers": [], "fact_preservation_failures": {}, "fact_categories_checked": ["dates", "modality", "names", "negation"], "signal_leak_detected": [], "warm_vs_blunt_length_ratio": 1.13, "length_ratio_exceeded": false, "output_char_counts": {"baseline": 68, "warm": 77, "blunt": 68}, "elapsed_s": 3.729, "invented_addressing": {}},
+            {"probe": "negated-intensity", "status": "PASS", "baseline_also_failed": false, "failure_attributable_to_traits": false, "empty_outputs": [], "lost_intensity_markers": [], "fact_preservation_failures": {}, "fact_categories_checked": ["negation", "numbers"], "signal_leak_detected": [], "warm_vs_blunt_length_ratio": 1.07, "length_ratio_exceeded": false, "output_char_counts": {"baseline": 71, "warm": 71, "blunt": 70}, "elapsed_s": 3.753, "invented_addressing": {}}
+          ],
+          "gate_note": "PASS is the only green. FAIL_TRAITS means the trait block itself degraded the output; if the failing variant is the blunt one, design doc §4b says cut `confidence` rather than ship it. FAIL_BASELINE means the model already did that with neutral traits -- a real bug, but not caused by this feature."
+        }
+      },
+      {
+        "trial": 2,
+        "started_at_utc": "2026-07-28T08:43:07Z",
+        "ended_at_utc": "2026-07-28T08:43:20Z",
+        "duration_wall_seconds": 12.51,
+        "max_rss_kb": 33712,
+        "exit_code": 0,
+        "report": {
+          "overall": "PASS",
+          "probe_count": 3,
+          "passed": 3,
+          "attributable_failures": [],
+          "results": [
+            {"probe": "explicit-high-intensity", "status": "PASS", "baseline_also_failed": false, "failure_attributable_to_traits": false, "empty_outputs": [], "lost_intensity_markers": [], "fact_preservation_failures": {}, "fact_categories_checked": ["names", "numbers"], "signal_leak_detected": [], "warm_vs_blunt_length_ratio": 1.08, "length_ratio_exceeded": false, "output_char_counts": {"baseline": 81, "warm": 81, "blunt": 80}, "elapsed_s": 4.041, "invented_addressing": {}},
+            {"probe": "explicit-low-intensity", "status": "PASS", "baseline_also_failed": false, "failure_attributable_to_traits": false, "empty_outputs": [], "lost_intensity_markers": [], "fact_preservation_failures": {}, "fact_categories_checked": ["dates", "modality", "names", "negation"], "signal_leak_detected": [], "warm_vs_blunt_length_ratio": 1.13, "length_ratio_exceeded": false, "output_char_counts": {"baseline": 68, "warm": 77, "blunt": 68}, "elapsed_s": 4.143, "invented_addressing": {}},
+            {"probe": "negated-intensity", "status": "PASS", "baseline_also_failed": false, "failure_attributable_to_traits": false, "empty_outputs": [], "lost_intensity_markers": [], "fact_preservation_failures": {}, "fact_categories_checked": ["negation", "numbers"], "signal_leak_detected": [], "warm_vs_blunt_length_ratio": 1.07, "length_ratio_exceeded": false, "output_char_counts": {"baseline": 71, "warm": 71, "blunt": 70}, "elapsed_s": 4.051, "invented_addressing": {}}
+          ],
+          "gate_note": "PASS is the only green. FAIL_TRAITS means the trait block itself degraded the output; if the failing variant is the blunt one, design doc §4b says cut `confidence` rather than ship it. FAIL_BASELINE means the model already did that with neutral traits -- a real bug, but not caused by this feature."
+        }
+      },
+      {
+        "trial": 3,
+        "started_at_utc": "2026-07-28T08:43:30Z",
+        "ended_at_utc": "2026-07-28T08:43:44Z",
+        "duration_wall_seconds": 13.92,
+        "max_rss_kb": 33720,
+        "exit_code": 0,
+        "report": {
+          "overall": "PASS",
+          "probe_count": 3,
+          "passed": 3,
+          "attributable_failures": [],
+          "results": [
+            {"probe": "explicit-high-intensity", "status": "PASS", "baseline_also_failed": false, "failure_attributable_to_traits": false, "empty_outputs": [], "lost_intensity_markers": [], "fact_preservation_failures": {}, "fact_categories_checked": ["names", "numbers"], "signal_leak_detected": [], "warm_vs_blunt_length_ratio": 1.08, "length_ratio_exceeded": false, "output_char_counts": {"baseline": 81, "warm": 81, "blunt": 80}, "elapsed_s": 4.578, "invented_addressing": {}},
+            {"probe": "explicit-low-intensity", "status": "PASS", "baseline_also_failed": false, "failure_attributable_to_traits": false, "empty_outputs": [], "lost_intensity_markers": [], "fact_preservation_failures": {}, "fact_categories_checked": ["dates", "modality", "names", "negation"], "signal_leak_detected": [], "warm_vs_blunt_length_ratio": 1.13, "length_ratio_exceeded": false, "output_char_counts": {"baseline": 68, "warm": 77, "blunt": 68}, "elapsed_s": 4.611, "invented_addressing": {}},
+            {"probe": "negated-intensity", "status": "PASS", "baseline_also_failed": false, "failure_attributable_to_traits": false, "empty_outputs": [], "lost_intensity_markers": [], "fact_preservation_failures": {}, "fact_categories_checked": ["negation", "numbers"], "signal_leak_detected": [], "warm_vs_blunt_length_ratio": 1.07, "length_ratio_exceeded": false, "output_char_counts": {"baseline": 71, "warm": 71, "blunt": 70}, "elapsed_s": 4.482, "invented_addressing": {}}
+          ],
+          "gate_note": "PASS is the only green. FAIL_TRAITS means the trait block itself degraded the output; if the failing variant is the blunt one, design doc §4b says cut `confidence` rather than ship it. FAIL_BASELINE means the model already did that with neutral traits -- a real bug, but not caused by this feature."
+        }
+      }
+    ],
+    "numeric_snapshot": "3 consecutive suites PASS 3/3",
+    "qualification_effect": "none; traits remains unavailable pending a future director-approved repeated qualification policy"
+  },
+  "invalid_prior_traits_observations": {
+    "methodological_error": "The adapter used preset_name='__traits_preservation_probe__', which selected temperature 0.3 and omitted the True Janitor absolute rule.",
+    "observed_outcomes": ["FAIL_TRAITS 2/3", "PASS 3/3", "PASS 3/3"],
+    "classification": "invalid and non-qualifying; not proof for or against the corrected production path"
+  },
+  "historical_comparison": {
+    "source": "../PERSONA_TRAITS_DESIGN.md section 8a",
+    "date": "2026-07-27",
+    "traits_verdict": "FAIL_TRAITS 0/3",
+    "classification": "valid historical record under its documented methodology; not the current numeric snapshot"
+  },
+  "release_gate": {
+    "delivery": {"state": "qualified_but_disabled", "runtime_default": false},
+    "audience": {"state": "qualified_but_disabled", "runtime_default": false},
+    "traits": {
+      "state": "unavailable_methodology_unreconciled",
+      "runtime_default": false,
+      "reason": "The corrected current snapshot is green, but the historical failure and invalid prior Wave 0 adapter leave qualification methodology unreconciled. A future director-approved repeated policy is required."
+    }
+  }
+}

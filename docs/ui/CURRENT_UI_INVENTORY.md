@@ -33,15 +33,15 @@ actually exercises these paths correctly — re-verify at runtime and fix while 
       three buttons. Given the app is presumably functional today, verify this in a live
       DevTools console before the redesign; if it reproduces, it explains why Rename/Duplicate/
       Export Profile "don't seem to do anything."
-- [ ] **BUG:** `refreshVoiceBlendCapabilityNote()` and `refreshCloneStatusNote()` are called
-      (main.js:3217-3218, inside the Settings sidebar nav-button click handler, `tts-readaloud`
-      branch) but are **never defined** anywhere in the renderer tree (grep-confirmed). The
-      corresponding DOM targets exist (`#voiceBlendBackendNote`, `#voiceCloneStatusNote` in
-      index.html) but nothing populates them. Clicking the "TTS / Read-Aloud" settings sidebar
-      button throws inside that click handler *before* the code that actually shows/hides the
-      section content runs — so clicking that nav button may not switch to the Voice Studio
-      section at all (it may only be reachable today via the settings search box). Re-verify and
-      wire these two notes properly in the rebuild.
+- [ ] **BLOCKED STATUS-NOTE EVIDENCE:** The two undefined renderer refresh calls,
+      `refreshVoiceBlendCapabilityNote()` and `refreshCloneStatusNote()`, were removed from the
+      Settings sidebar `tts-readaloud` branch in `main.js`; no active call remains, so opening
+      that section no longer throws those `ReferenceError`s before its content is shown. The
+      corresponding DOM targets still exist (`#voiceBlendBackendNote`, `#voiceCloneStatusNote`
+      in `index.html`), but the intended production data/status behavior was not reimplemented
+      because its contract was unknown. Keep this item blocked until those status-note surfaces
+      have reachable production behavior plus real-data, failure, keyboard/accessibility, QA,
+      and privacy evidence, or are deliberately retired with release evidence.
 
 Everything else below was verified present and wired (button → handler → endpoint) by reading
 the actual source, not inferred.
