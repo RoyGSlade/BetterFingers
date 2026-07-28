@@ -1303,7 +1303,13 @@ def wait_for_activity(seconds=60):
     seconds = max(1, min(int(seconds or 60), 240))
 
     def running_children():
-        return {n for n, r in _read_json(SPAWNS, {}).items() if spawn_record_alive(r)}
+        # Same owner filter as stop_report(): only children this exact
+        # session spawned count as "its" children in a shared room.
+        me = my_session_id()
+        return {
+            n for n, r in _read_json(SPAWNS, {}).items()
+            if spawn_record_alive(r) and r.get("spawned_by_sid") == me
+        }
 
     before = running_children()
     deadline = time.time() + seconds
@@ -1338,7 +1344,15 @@ def stop_report():
         )
     else:
         up, parent_token = [], None
-    running = sorted(n for n, r in _read_json(SPAWNS, {}).items() if spawn_record_alive(r))
+    # Only sessions THIS caller spawned. spawns.json is room-scoped and a
+    # supervisor's workers share its room, so without the owner filter a leaf
+    # worker's Stop hook attributed its siblings to it and kept it awake for
+    # children it never had (found by w-sweep-qa, Wave 1).
+    me = my_session_id()
+    running = sorted(
+        n for n, r in _read_json(SPAWNS, {}).items()
+        if spawn_record_alive(r) and r.get("spawned_by_sid") == me
+    )
     return msgs, up, running, own_token, parent_token
 
 
