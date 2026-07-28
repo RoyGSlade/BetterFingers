@@ -32,6 +32,73 @@ _lock = threading.Lock()
 _listener = None  # wake_word.WakeListener, once enabled
 _status_reason = "disabled"
 
+# Wave 8B: the wake handoff (D-0013). One per process, armed when the listener
+# starts and wiped when it stops. It holds a bounded, in-memory-only ring of
+# the audio the listener has already heard, so the first word of a command
+# spoken over the tail of the wake phrase survives into the recording.
+# wake_pretrigger owns the buffering rules; this module only arms it, feeds it,
+# and drains it on a detection.
+_handoff = None
+
+
+def get_wake_handoff():
+    """The process's WakeHandoff, built on first use."""
+    global _handoff
+    with _lock:
+        if _handoff is None:
+            import wake_pretrigger
+
+            _handoff = wake_pretrigger.WakeHandoff()
+        return _handoff
+
+
+def _recording_in_progress():
+    """Whether the recorder currently owns the microphone.
+
+    Read through ``server`` rather than held as a reference, because the
+    hotkey manager is constructed and replaced at runtime. Any failure answers
+    False, which only costs a little redundant buffering.
+    """
+    try:
+        import server
+
+        manager = getattr(server, "hotkey_manager", None)
+        return bool(manager is not None and getattr(manager, "is_recording", False))
+    except Exception:
+        return False
+
+
+def _build_chunk_observer(handoff):
+    """Feed the pre-trigger ring, and re-arm it once a command has finished.
+
+    ``WakeHandoff.activate`` deliberately disarms: while the recorder owns the
+    stream, buffering the same audio a second time would waste memory and
+    could duplicate the pre-roll on a second trigger. But wake detection keeps
+    running after that command ends, and an unarmed ring means the NEXT wake
+    loses its first word — so the ring is re-armed as soon as the recording is
+    over. That re-arm belongs here, in the wiring, rather than inside
+    wake_pretrigger, which is deliberately owner-driven.
+    """
+    def _observe(chunk, sample_rate=None):
+        if not handoff.is_armed():
+            if _recording_in_progress():
+                return False
+            handoff.arm()
+        return handoff.on_chunk(chunk, sample_rate)
+
+    return _observe
+
+
+def wipe_wake_pretrigger():
+    """Drop any retained pre-trigger audio. Idempotent, safe when wake word was
+    never enabled, and called by the privacy-wipe path — the ring is the only
+    place in the wake pipeline where raw audio lives at all, so 'no retained
+    audio' has to include it."""
+    handoff = _handoff
+    if handoff is None:
+        return False
+    return bool(handoff.disarm())
+
 # Each entry is a state dict, NOT a bare Thread, so a failed download leaves a
 # durable, queryable record instead of vanishing into the server log the moment
 # the thread exits. Shape:
@@ -89,7 +156,12 @@ def stop_wake_listener():
         _listener = None
         _status_reason = "disabled"
     if listener is not None:
+        listener.chunk_observer = None
         listener.stop()
+    # Disarming wipes the pre-trigger ring: wake detection stopping must leave
+    # no retained audio behind, whether it stopped because the user disabled it
+    # or because a privacy wipe is running.
+    wipe_wake_pretrigger()
     return True
 
 
@@ -168,20 +240,31 @@ async def wake_enable(request: WakeEnableRequest):
     if not available:
         return {"ok": False, "enabled": False, "available": False, "listening": False, "reason": reason}
 
+    handoff = get_wake_handoff()
+
     def on_detect():
         # The SAME entry point keyboard/controller triggers use -- no
         # duplicated recording-start logic (D2 requirement).
         import server
 
         manager = server.hotkey_manager
+        # Drain the pre-roll first and unconditionally: activate() hands over
+        # the audio AND wipes the ring in one step, so even a start that fails
+        # cannot leave retained audio behind.
+        pre_roll = handoff.activate()
         if manager is not None:
-            manager.request_start(reason="wake_word")
+            manager.request_start(reason="wake_word", prepend_audio=pre_roll)
         else:
             logging.warning("Wake word triggered but no hotkey manager is running; ignoring.")
 
     service = wake_word.WakeWordService(detector, on_detect=on_detect, threshold=threshold, cooldown_ms=cooldown_ms)
     listener = wake_word.WakeListener(service, device_index=request.device_index)
+    # Arm before start, so no chunk can arrive at a disarmed ring and be lost.
+    handoff.arm()
+    listener.chunk_observer = _build_chunk_observer(handoff)
     if not listener.start():
+        listener.chunk_observer = None
+        handoff.disarm()
         return {
             "ok": False,
             "enabled": False,

@@ -7,9 +7,17 @@ from hotkey_manager import HotkeyManager
 class _DummyRecorder:
     def __init__(self):
         self.recording = False
+        # Wave 8B: the manager threads the trigger reason and the wake pre-roll
+        # through to the recorder, so the stand-in has to accept both. Recorded
+        # rather than discarded — tests/test_wake_handoff_wiring.py asserts on
+        # exactly this hand-off.
+        self.last_reason = None
+        self.last_prepend_audio = None
 
-    def start_recording(self, profile_name="Default"):
+    def start_recording(self, profile_name="Default", reason="manual", prepend_audio=None):
         del profile_name
+        self.last_reason = reason
+        self.last_prepend_audio = prepend_audio
         self.recording = True
 
     def stop_recording(self, stop_reason="manual"):

@@ -109,6 +109,22 @@ def build_openwakeword_detector(classifier_id=None, classifier_origin="bundled")
     """
     import wake_models
 
+    # License gate, enforced by the code and not only by a test (WMP-3). It
+    # runs first, before any file is hashed or loaded: whether an artifact may
+    # be used at all is a prior question to whether it is intact.
+    for model_id in ("melspectrogram", "embedding_model") + ((classifier_id,) if classifier_id else ()):
+        recorded = wake_models.model_license(model_id)
+        if recorded is None:
+            # Unknown id: not a licensing question. The verification path below
+            # reports it accurately as unknown/missing.
+            continue
+        try:
+            wake_models.assert_license_allowed(model_id, recorded)
+        except wake_models.WakeModelLicenseRefused as exc:
+            # Safe to surface verbatim: it states a policy and a license name,
+            # never internal error text or a path.
+            return None, False, f"unavailable: {exc}"
+
     for backbone_id in ("melspectrogram", "embedding_model"):
         if not wake_models.is_backbone_model_downloaded(backbone_id):
             return None, False, f"unavailable: model not downloaded ({backbone_id})"
@@ -255,6 +271,12 @@ class WakeListener:
         self._lock = None  # lazily built in start() to avoid a hard threading import at module load
         self._running = False
         self._last_error = ""
+        # Wave 8B: the wake handoff's pre-trigger ring is fed from here. Set by
+        # routes_wake when it arms the handoff; a plain callable rather than a
+        # WakeHandoff reference so this module keeps knowing nothing about the
+        # recorder. Never retains audio itself — the ring is bounded and
+        # in-memory, and it is the ring's owner that wipes it.
+        self.chunk_observer = None
 
         from audio_gate import TrailingSilenceDetector
 
@@ -290,6 +312,17 @@ class WakeListener:
         import numpy as np
 
         chunk = np.asarray(indata, dtype=np.float32).reshape(-1)
+        # Feed the pre-trigger ring BEFORE scoring: the phrase is only
+        # recognized a few hundred milliseconds after it finished, so the
+        # audio that must survive the handoff is the audio arriving now, and a
+        # detection inside process_chunk drains the ring synchronously.
+        observer = self.chunk_observer
+        if observer is not None:
+            try:
+                observer(chunk, self.sample_rate)
+            except Exception as exc:
+                # A broken pre-roll must never stop wake detection working.
+                logging.debug(f"Wake pre-trigger observer failed: {exc}")
         try:
             self.service.process_chunk(chunk, self.sample_rate, has_speech=self._has_speech(chunk))
         except Exception as exc:

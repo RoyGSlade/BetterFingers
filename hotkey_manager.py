@@ -163,7 +163,7 @@ class HotkeyManager:
         else:
             self._stop_recording(reason="toggle")
 
-    def _start_recording(self, reason="manual"):
+    def _start_recording(self, reason="manual", prepend_audio=None):
         logging.info("Recording trigger received (%s)", reason)
         if self.is_busy_callback and self.is_busy_callback():
             logging.info("Ignored recording trigger: backend is busy processing a previous draft.")
@@ -178,7 +178,11 @@ class HotkeyManager:
         logging.info(f"Recording START ({reason}) profile={self.current_profile}")
         if self.on_start_ui:
             self.on_start_ui()
-        self.recorder.start_recording(self.current_profile)
+        # The reason reaches the recorder now (Wave 8B): a wake-started
+        # recording needs trailing-silence command capture, because there is
+        # no key release coming to end it, and it needs the wake pre-roll
+        # placed before the first live chunk.
+        self.recorder.start_recording(self.current_profile, reason=reason, prepend_audio=prepend_audio)
         if not self.recorder.recording:
             with self.state_lock:
                 self.is_recording = False
@@ -232,8 +236,8 @@ class HotkeyManager:
         if self.on_complete:
             self.on_complete(result)
 
-    def request_start(self, reason="manual"):
-        self._start_recording(reason=reason)
+    def request_start(self, reason="manual", prepend_audio=None):
+        self._start_recording(reason=reason, prepend_audio=prepend_audio)
 
     def request_stop(self, reason="manual"):
         self._stop_recording(reason=reason)

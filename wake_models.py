@@ -58,6 +58,72 @@ AVAILABLE_WAKE_MODELS = {
 
 ALLOWED_LICENSES = {"Apache-2.0", "CC0-1.0", "MIT", "user-provided"}
 
+# Licenses produced by this machine rather than obtained from anyone. A model
+# the user trained here from their own recordings redistributes nothing, so it
+# is not subject to the redistribution gate above -- but it still has to be a
+# *known* value, because "unknown license" must never load. Kept separate from
+# ALLOWED_LICENSES so the catalog gate (asserted against the provenance
+# manifest in tests/test_wake_model_provenance.py) stays exactly the set of
+# licenses we are willing to redistribute.
+SELF_PRODUCED_LICENSES = {"self-trained"}
+
+# The set the RUNTIME enforces before loading any model file (closes WMP-3:
+# until Wave 8B the gate existed only as a test over the checked-in catalog,
+# so a catalog entry added without running the suite would have loaded
+# anyway).
+RUNTIME_ALLOWED_LICENSES = ALLOWED_LICENSES | SELF_PRODUCED_LICENSES
+
+
+class WakeModelLicenseRefused(RuntimeError):
+    """A model's recorded license is not inside the runtime gate.
+
+    A subclass of nothing else on purpose: it is not a WakeEngineUnavailable,
+    because the engine is fine. Refusing to load is a deliberate policy
+    decision and the caller reports it as one, in plain words, rather than as
+    a mysterious load failure.
+    """
+
+
+def license_allowed(license_name):
+    """True when a recorded license may be loaded at runtime."""
+    return str(license_name or "").strip() in RUNTIME_ALLOWED_LICENSES
+
+
+def assert_license_allowed(model_id, license_name):
+    """Raise :class:`WakeModelLicenseRefused` unless the license is inside the
+    gate. A missing or empty license is refused, not defaulted: an artifact
+    whose licensing we cannot state is exactly the artifact we must not load.
+    """
+    if license_allowed(license_name):
+        return str(license_name).strip()
+    recorded = str(license_name or "").strip() or "(none recorded)"
+    logging.error(
+        "Refusing to load wake model %s: license %s is outside the allowed set.",
+        model_id, recorded,
+    )
+    raise WakeModelLicenseRefused(
+        f"Wake model '{model_id}' records the license {recorded}, which is not one this "
+        f"build is allowed to load ({', '.join(sorted(RUNTIME_ALLOWED_LICENSES))})."
+    )
+
+
+def model_license(model_id):
+    """The recorded license for a catalog or imported model id.
+
+    Returns ``None`` when the id is unknown to both registries — deliberately
+    distinct from ``""``. An unknown id is a *lookup* failure and the existing
+    verification path already reports it accurately; a known model with a
+    blank license is a *policy* failure and must be refused. Collapsing the
+    two would make every typo look like a licensing problem.
+    """
+    info = AVAILABLE_WAKE_MODELS.get(model_id)
+    if info:
+        return str(info.get("license", ""))
+    entry = load_imported_models().get(model_id)
+    if entry:
+        return str(entry.get("license", ""))
+    return None
+
 # Defensive cap for user-imported classifiers -- real wake classifiers are a
 # few hundred KB; this only exists to reject "imported the wrong file".
 MAX_IMPORT_BYTES = 20 * 1024 * 1024
@@ -114,6 +180,9 @@ def download_wake_model(model_id, progress_callback=None):
     info = AVAILABLE_WAKE_MODELS.get(model_id)
     if not info:
         raise KeyError(f"Unknown wake model id: {model_id}")
+    # The gate applies before the bytes arrive, not only before they load: an
+    # incompatibly-licensed artifact should never reach the user's disk.
+    assert_license_allowed(model_id, info.get("license"))
     dest = get_wake_model_path(model_id)
     model_manager.download_file(
         info["url"],
