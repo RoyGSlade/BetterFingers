@@ -1146,5 +1146,76 @@ class ServerDraftTests(unittest.TestCase):
         self.assertTrue(cloned["meta"]["consent"])
 
 
+class DraftContactRouteTests(unittest.TestCase):
+    """POST /drafts/{id}/contact — Wave 5 retroactive contact application.
+
+    Metadata only: the route must never re-run cleanup, must refuse an id
+    that names no existing contact, and clearing must be expressible."""
+
+    def setUp(self):
+        self._load_draft_patcher = patch("server.load_draft_history")
+        self._load_draft_patcher.start()
+        self.addCleanup(self._load_draft_patcher.stop)
+        self._save_draft_patcher = patch("server.save_draft_history")
+        self._save_mock = self._save_draft_patcher.start()
+        self.addCleanup(self._save_draft_patcher.stop)
+        self._queue_snapshot = list(server.draft_queue)
+        server.draft_queue.clear()
+        self.addCleanup(self._restore_queue)
+
+    def _restore_queue(self):
+        server.draft_queue.clear()
+        server.draft_queue.extend(self._queue_snapshot)
+
+    def _patched_store(self, known_ids):
+        class FakeStore:
+            def get(self, contact_id):
+                return {"id": contact_id} if contact_id in known_ids else None
+        return patch("backend.services.contacts.ContactStore", FakeStore)
+
+    def test_applies_existing_contact_and_persists(self):
+        draft = server.create_draft("raw", "final")
+        with self._patched_store({"c-1"}):
+            with TestClient(server.app) as client:
+                response = client.post(f"/drafts/{draft['id']}/contact", json={"contact_id": "c-1"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["contact_id"], "c-1")
+        self.assertEqual(server.get_draft_by_id(draft["id"])["contact_id"], "c-1")
+        self._save_mock.assert_called_with(changed_draft_id=draft["id"])
+
+    def test_final_text_is_untouched(self):
+        draft = server.create_draft("raw", "the exact words the user approved")
+        with self._patched_store({"c-1"}):
+            with TestClient(server.app) as client:
+                client.post(f"/drafts/{draft['id']}/contact", json={"contact_id": "c-1"})
+        self.assertEqual(
+            server.get_draft_by_id(draft["id"])["final_text"],
+            "the exact words the user approved",
+        )
+
+    def test_empty_id_clears_the_contact(self):
+        draft = server.create_draft("raw", "final")
+        draft["contact_id"] = "c-1"
+        with TestClient(server.app) as client:
+            response = client.post(f"/drafts/{draft['id']}/contact", json={"contact_id": ""})
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json()["contact_id"])
+
+    def test_unknown_contact_is_refused_404(self):
+        draft = server.create_draft("raw", "final")
+        draft["contact_id"] = None
+        with self._patched_store(set()):
+            with TestClient(server.app) as client:
+                response = client.post(f"/drafts/{draft['id']}/contact", json={"contact_id": "ghost"})
+        self.assertEqual(response.status_code, 404)
+        self.assertIsNone(server.get_draft_by_id(draft["id"])["contact_id"])
+
+    def test_unknown_draft_is_404(self):
+        with self._patched_store({"c-1"}):
+            with TestClient(server.app) as client:
+                response = client.post("/drafts/999999/contact", json={"contact_id": "c-1"})
+        self.assertEqual(response.status_code, 404)
+
+
 if __name__ == "__main__":
     unittest.main()

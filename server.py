@@ -4269,6 +4269,41 @@ async def edit_draft(draft_id: int, request: DraftEditRequest):
     return response
 
 
+class DraftContactRequest(BaseModel):
+    contact_id: str = ""
+
+
+@app.post("/drafts/{draft_id}/contact")
+async def set_draft_contact(draft_id: int, request: DraftContactRequest):
+    """Apply (or clear) a contact on an existing draft.
+
+    Recording the audience after the fact is the same act as recording it at
+    dictation time -- it is metadata about who the message is for, and it is
+    what lets Library resolve a name on the card. It does NOT re-run cleanup:
+    the draft text was produced without that context and rewriting it here
+    would change the user's words behind their back.
+
+    An empty contact_id clears the field. A non-empty one must name a contact
+    that exists, so a deleted contact cannot be re-attached by id.
+    """
+    contact_id = (request.contact_id or "").strip()
+    if contact_id:
+        from backend.services.contacts import ContactStore
+        if ContactStore().get(contact_id) is None:
+            raise HTTPException(status_code=404, detail=f"Contact '{contact_id}' not found.")
+
+    with draft_lock:
+        draft = get_draft_by_id(draft_id)
+        if draft is None:
+            raise HTTPException(status_code=404, detail="Draft not found")
+        draft["contact_id"] = contact_id or None
+        draft["updated_at"] = datetime.now(timezone.utc).isoformat()
+        response = dict(draft)
+
+    save_draft_history(changed_draft_id=draft_id)
+    return response
+
+
 @app.post("/drafts/{draft_id}/rewrite")
 async def rewrite_draft(draft_id: int, request: DraftRewriteRequest):
     with draft_lock:

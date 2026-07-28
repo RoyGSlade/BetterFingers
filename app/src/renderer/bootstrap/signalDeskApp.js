@@ -508,9 +508,26 @@ export function startSignalDeskApp(doc = document) {
 
   // --- Library workspace ---------------------------------------------------
 
+  // Wave 4. Library now drives the real /library/* surface, so it needs three
+  // things the Phase-3 adapter did without:
+  //
+  //   drafts        -- to hand a reopened record to the Talk editor
+  //   talkWorkspace -- to repaint Talk's action row for that record (a bare
+  //                    renderDraft leaves Send/Revise dead until the next
+  //                    voice-status message, the same defect Wave 2 fixed for
+  //                    the initial load)
+  //   shell         -- to actually take the user to Talk once it is loaded
+  //
+  // All three are public entry points of features constructed above; Library
+  // never reaches into their internals. Reopen is the only caller.
   const libraryWorkspace = createLibraryWorkspaceFeature({
     elements: collectLibraryElements(doc),
-    hooks: { showToast, drafts },
+    hooks: {
+      showToast,
+      drafts,
+      talkWorkspace,
+      shell,
+    },
   });
   libraryWorkspace.init();
 
@@ -526,6 +543,8 @@ export function startSignalDeskApp(doc = document) {
       confirmFn: (message) => doc.defaultView?.confirm?.(message),
       onNewPersonaRequested: () => personaFlow?.openWizard(),
       onOpenFoundryRequested: () => personaFlow?.openFoundry(),
+      onEditPersonaRequested: (name) => personaFlow?.openWizardForEdit(name),
+      getActivePersonaName: () => String(profileSettings?.current_preset ?? '').trim(),
     },
   });
   studioWorkspace.init();
@@ -553,6 +572,13 @@ export function startSignalDeskApp(doc = document) {
       loadedPersonas = {};
     }
     settingsWorkspace.setPersonaOptions(Object.keys(loadedPersonas));
+    // Library's persona filter maps to /library/search?persona=, which the
+    // backend matches against a draft's `preset` (contract Amendment A1) --
+    // the same names this list holds. Sourced from the live list rather than
+    // from whatever personas happen to appear on the loaded page, so a
+    // persona with no messages yet is still selectable (and honestly returns
+    // nothing) instead of being invisible.
+    libraryWorkspace.setPersonaOptions(Object.keys(loadedPersonas));
     await Promise.all([
       studioWorkspace.refresh().catch(() => {}),
       voiceStudio.refreshVoices?.(doc).catch(() => {}),
@@ -565,6 +591,9 @@ export function startSignalDeskApp(doc = document) {
       currentPresetSelect: settingsElements.fields?.current_preset,
     },
     ui: { setMessage, showToast },
+    // The explicit doc stops personas.js's Foundry/step lookups falling back
+    // to the ambient document — there is one document of record here.
+    doc,
     hooks: {
       getLoadedPersonas: () => loadedPersonas,
       refreshPersonasAndVoices,
@@ -579,6 +608,7 @@ export function startSignalDeskApp(doc = document) {
     footer: doc.getElementById('sdPersonaFlowFooter'),
     foundryTrigger: doc.getElementById('openFoundryButton'),
     doc,
+    openPersonaForEdit: personas.openPersonaForEdit,
   });
 
   // --- Contacts + contact wizard (shared with Studio's "Preferred contact") -
@@ -589,8 +619,8 @@ export function startSignalDeskApp(doc = document) {
     doc,
     hooks: {
       setMessage,
-      onSaved: (contact) => {
-        showToast(`Saved contact "${contact?.name || ''}".`, 'success');
+      onSaved: (contact, meta) => {
+        showToast(`${meta?.edited ? 'Updated' : 'Saved'} contact "${contact?.name || ''}".`, 'success');
         // Refresh the picker, but do NOT select the new contact: creating
         // someone is not the same as declaring you are writing to them.
         refreshContactsAndShare().catch(() => {});
@@ -605,6 +635,9 @@ export function startSignalDeskApp(doc = document) {
     hooks: {
       showToast,
       onCreateRequested: () => contactWizard.open(),
+      onEditRequested: (contact) => contactWizard.openForEdit(contact),
+      onManageRequested: () => {},
+      onApplied: (contact) => statusBar.setContact(contact),
       onSelect: async (contactId) => {
         try {
           await api.setActiveContact(contactId);
@@ -618,6 +651,9 @@ export function startSignalDeskApp(doc = document) {
   async function refreshContactsAndShare() {
     const list = await contacts.refresh();
     studioWorkspace.setContacts?.(contacts.getContacts());
+    // Library needs the same list twice over: to resolve a draft's contact_id
+    // into a readable name on the card, and to populate its contact filter.
+    libraryWorkspace.setContacts?.(contacts.getContacts());
     return list;
   }
 
@@ -727,7 +763,10 @@ export function startSignalDeskApp(doc = document) {
   refreshPersonasAndVoices().catch(() => {});
   refreshContactsAndShare()
     .then(() => api.fetchActiveContact())
-    .then((active) => contacts.setSelected(active?.contact_id || ''))
+    .then((active) => {
+      contacts.setSelected(active?.contact_id || '');
+      statusBar.setContact(contacts.getSelected());
+    })
     .catch(() => {});
 
   return {

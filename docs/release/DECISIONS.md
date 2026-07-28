@@ -463,3 +463,71 @@ asserted directly.
 - "Emergency stop releases the privacy lease" waits for Wave 8, which
   introduces the lease; recorder, TTS, pending injection, mute key, and
   (as of D-0020) audio ducking are all released today.
+
+## D-0022 — Gate 4 is accepted
+
+**Owner:** release-director
+
+**Evidence:** Commit `5340c67` plus the Wave 4/5 integration commit;
+director-run: unit `1105/1105`, Library QA `13/13`, full production target
+`42/42`, preview `28/28` and legacy `37/37` unregressed, build green.
+
+**Decision:** Accept Gate 4. `LIBRARY_PLACEMENT_MAP` ends at 26 `wired`,
+2 `intentional_cut`, 0 blocked/false/todo — the Gate 4 rule, enforced by
+tests, not convention.
+
+**Ratifications and recorded follow-ups:**
+
+- The multi-status group filter cut is ratified: `GET /library/search` takes
+  one status, and merging per-status streams would make pagination lie. The
+  un-cut seam (a repeated `status` parameter) is recorded for a later wave.
+- Unconfirmed delete/clear previews are built client-side from data the
+  client already holds, content-free by construction and by test. The route
+  layer's `HTTPException` drops the backend's own preview; returning a JSON
+  body with it is a recorded follow-up if backend authority is wanted.
+- The clear dialog quotes only observed counts and never a reassuring zero;
+  a `GET /library/counts` (or clear-preview counts) is the recorded seam.
+- The Library contact filter remains a declared client-side narrowing with
+  both counts printed; a backend `contact` filter parameter may open now
+  that Wave 5 qualified contacts.
+- Fixed in passing: retained recordings were dated to 1970 (epoch seconds
+  read as milliseconds).
+
+## D-0023 — Gate 5 is accepted
+
+**Owner:** release-director
+
+**Evidence:** Commits `f695fe7` and the integration commit; director-run:
+unit `1105/1105`, Wave 5 QA areas `5/5` + `6/6` + `2/2` inside the `42/42`
+production run, contact/server suites `129 passed` in the qualified venv
+(including five new tests for the retroactive-contact route), build green.
+
+**Decision:** Accept Gate 5. The persona shell is singular (New,
+Build-with-AI, and Edit are three entries to one dialog with one save path;
+the cross-document fallbacks are deleted); tags/"last updated"/preferred
+destinations render nowhere; traits show `Experimental — unavailable` with
+the reason and no enabling control (D-0006); both D-0005 toggles ship OFF
+with the full six-part disclosure; contacts are COMPLETE per D-0004 —
+manage, edit, delete, apply, clear-applied, sticky selection, status-bar
+cell, and retroactive application.
+
+**Rulings:**
+
+- sup-studio's reading of D-0005 is ratified: "Use speech delivery signals"
+  is a live opt-in (its preservation gate holds a current `PASS 3/3`),
+  while the audience control is rendered, disclosed, and unswitchable —
+  `use_audience_context` is deliberately uncollectable by any save path.
+  Enabling audience remains a future director decision at its own gate.
+- Retroactive contact application landed at integration as
+  `POST /drafts/{id}/contact` (WAVE5_INTEGRATION_DIFFS §5 applied verbatim:
+  metadata-only, never re-runs cleanup, refuses ids that name no existing
+  contact, empty id clears; five tests). The renderer affordance that calls
+  it is the one recorded deferral, scheduled with Wave 6's Library/privacy
+  polish; `setDraftContact` is already exported for it.
+- Five QA-fixture corrections at integration, none weakening an assertion:
+  stub handlers that captured the request object as "body"; persona-card
+  clicks that substring-matched the wrong card via trait-slider hints (now
+  `data-persona-name` attribute selectors); the missing `current_preset`
+  stub the active-badge assertion depends on; per-scenario reset of the
+  stateful contacts stub; and `GET /personas/:name` stubs for the Edit
+  loader (the harness matches raw, percent-encoded pathnames).

@@ -50,6 +50,32 @@
 </div>
 
 <!--
+  Library destructive-action confirmation (Wave 4, WAVE3_LIBRARY_CONTRACT §7).
+
+  An in-page dialog rather than window.confirm() because the copy has to be
+  STRUCTURED: what this removes, how many of each thing that is right now, and
+  what it deliberately leaves alone. A native confirm flattens all three into
+  one string, and the "leaves alone" half is exactly the part a user cannot
+  verify any other way -- the contract requires "clear drafts and history" to
+  never touch retained recordings, and vice versa.
+
+  Nothing rendered here quotes message text. The details are counts, statuses
+  and timestamps only (contract §7: previews are content-free).
+-->
+<div id="sdLibraryConfirm" class="sd-confirm" role="dialog" aria-modal="true"
+     aria-labelledby="sdLibraryConfirmTitle" aria-describedby="sdLibraryConfirmBody" hidden>
+  <div class="sd-confirm__card">
+    <h2 class="sd-confirm__title" id="sdLibraryConfirmTitle"></h2>
+    <p class="sd-confirm__body" id="sdLibraryConfirmBody"></p>
+    <div class="sd-confirm__details" id="sdLibraryConfirmDetails"></div>
+    <div class="sd-confirm__actions">
+      <button type="button" class="sd-btn" id="sdLibraryConfirmCancel">Cancel</button>
+      <button type="button" class="sd-btn sd-btn--danger" id="sdLibraryConfirmAccept">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!--
   First-run onboarding (stage 13, docs/ui/SIGNAL_DESK_GUIDED_FLOWS.md 4a) on the
   shared guided-flow shell. Step bodies are markup here rather than template
   strings so no backend text is ever parsed as HTML.
@@ -382,6 +408,23 @@
                 <small class="sd-trait-field__hint">Tentative &harr; assertive (hedges are always kept)</small>
               </label>
             </div>
+              <!--
+                D-0006. The sliders above are real and are saved with the
+                persona, but `use_persona_traits` is false and no control here
+                may set it true, so saved values do not reach the cleanup
+                prompt. A slider that silently does nothing teaches the user
+                their input is being honoured; hiding the sliders would delete
+                persona data they may already have authored. So the values stay
+                editable and this says plainly that they are not in effect.
+
+                There is deliberately NO checkbox, switch or "try it anyway"
+                in this block. Adding one contradicts D-0006.
+              -->
+              <div class="sd-traits-status" id="sdStudioTraitsStatus" role="note">
+                <span class="sd-traits-status__label" id="sdStudioTraitsStatusLabel"></span>
+                <span class="sd-traits-status__reason" id="sdStudioTraitsStatusReason"></span>
+                <span class="sd-traits-status__detail" id="sdStudioTraitsStatusDetail"></span>
+              </div>
             <div class="sd-persona-subsection">
               <span class="sd-field__label">Few-shot examples (optional)</span>
               <p class="sd-persona-step__desc">Show the model example input &rarr; desired output pairs. Up to 5 are used.</p>
@@ -1129,41 +1172,103 @@
           <svg class="sd-library-search__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.5" y2="16.5"></line></svg>
           <input type="search" class="sd-library-search__input" id="sdLibrarySearchInput" placeholder="Search messages, personas, or contacts&hellip;" />
         </div>
-        <button type="button" class="sd-library-filter-btn" id="sdLibraryFilterButton" aria-label="Filter options">
+        <button type="button" class="sd-library-filter-btn" id="sdLibraryFilterButton" aria-label="Filter options"
+                aria-expanded="false" aria-controls="sdLibraryFilterPanel">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"></line><circle cx="9" cy="6" r="2" fill="var(--sd-surface-raised)"></circle><line x1="4" y1="12" x2="20" y2="12"></line><circle cx="15" cy="12" r="2" fill="var(--sd-surface-raised)"></circle><line x1="4" y1="18" x2="20" y2="18"></line><circle cx="7" cy="18" r="2" fill="var(--sd-surface-raised)"></circle></svg>
         </button>
       </div>
 
+      <!-- Wave 4: only the two chips that map EXACTLY onto a
+           GET /library/search parameter survive as chips ("All" = no filter,
+           "Pinned" = pinned=true). The Wave-3 mockup's Unsent / Recoverable /
+           Sent chips each stood for a GROUP of backend statuses, and the route
+           takes a single `status` string -- so they are now individual options
+           inside the Status select below, still grouped under those labels.
+           The Persona / Contact / Date chips opened no menu at all; they are
+           real controls in the filter panel now. -->
       <div class="sd-filter-chips" role="group" aria-label="Filters" id="sdLibraryFilterChips">
-        <button type="button" class="sd-filter-chip is-active" data-filter="all" id="sdFilterAll">All</button>
-        <button type="button" class="sd-filter-chip" data-filter="pinned" id="sdFilterPinned">
+        <button type="button" class="sd-filter-chip is-active" data-filter="all" id="sdFilterAll" aria-pressed="true">All</button>
+        <button type="button" class="sd-filter-chip" data-filter="pinned" id="sdFilterPinned" aria-pressed="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4h6l1 5-3 2v6l-1 3-1-3v-6l-3-2z"></path></svg>
           Pinned
         </button>
-        <button type="button" class="sd-filter-chip" data-filter="unsent" id="sdFilterUnsent">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8"></circle><line x1="6.3" y1="17.7" x2="17.7" y2="6.3"></line></svg>
-          Unsent
-        </button>
-        <button type="button" class="sd-filter-chip sd-filter-chip--recoverable" data-filter="recoverable" id="sdFilterRecoverable">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="8"></circle><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"></circle></svg>
-          Recoverable
-        </button>
-        <button type="button" class="sd-filter-chip sd-filter-chip--sent" data-filter="sent" id="sdFilterSent">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4,12 9,17 20,6"></polyline></svg>
-          Sent
-        </button>
-        <button type="button" class="sd-filter-chip sd-filter-chip--dropdown" id="sdFilterPersona">Persona <span class="sd-filter-chip__chevron" aria-hidden="true">&#9662;</span></button>
-        <button type="button" class="sd-filter-chip sd-filter-chip--dropdown" id="sdFilterContact">Contact <span class="sd-filter-chip__chevron" aria-hidden="true">&#9662;</span></button>
-        <button type="button" class="sd-filter-chip sd-filter-chip--dropdown" id="sdFilterDate">Date <span class="sd-filter-chip__chevron" aria-hidden="true">&#9662;</span></button>
       </div>
+
+      <div class="sd-library-filters" id="sdLibraryFilterPanel" role="group" aria-label="Filter messages" hidden>
+        <label class="sd-library-filters__field">
+          <span class="sd-library-filters__label">Persona</span>
+          <select class="sd-library-filters__control" id="sdLibraryPersonaFilter">
+            <option value="">Any persona</option>
+          </select>
+        </label>
+        <label class="sd-library-filters__field">
+          <span class="sd-library-filters__label">Status</span>
+          <select class="sd-library-filters__control" id="sdLibraryStatusFilter">
+            <option value="">Any status</option>
+          </select>
+        </label>
+        <label class="sd-library-filters__field">
+          <span class="sd-library-filters__label">Contact</span>
+          <select class="sd-library-filters__control" id="sdLibraryContactFilter"
+                  aria-describedby="sdLibraryContactFilterHint">
+            <option value="">Any contact</option>
+          </select>
+          <!-- Stated, not hidden: the Library search route has no contact
+               filter until Wave 5 (WAVE3_LIBRARY_CONTRACT §2), so this one
+               narrows what is already loaded. The footer repeats it with the
+               two counts whenever the filter is active. -->
+          <span class="sd-library-filters__hint" id="sdLibraryContactFilterHint">Narrows the messages already loaded.</span>
+        </label>
+        <label class="sd-library-filters__field">
+          <span class="sd-library-filters__label">From</span>
+          <input type="date" class="sd-library-filters__control" id="sdLibraryDateFrom" />
+        </label>
+        <label class="sd-library-filters__field">
+          <span class="sd-library-filters__label">To</span>
+          <input type="date" class="sd-library-filters__control" id="sdLibraryDateTo" />
+        </label>
+        <button type="button" class="sd-library-filters__reset" id="sdLibraryFilterReset">Clear filters</button>
+      </div>
+
+      <!-- Every async Library outcome is announced here. Without it a screen
+           reader user gets no confirmation that a delete, restore or clear
+           actually happened -- the toast is visual only. -->
+      <p class="sd-visually-hidden" id="sdLibraryStatus" role="status" aria-live="polite"></p>
 
       <div class="sd-timeline" id="sdLibraryTimeline">
       </div>
 
       <div class="sd-library-footer">
         <span class="sd-library-footer__count" id="sdLibraryItemsCount">0 items</span>
-        <button type="button" class="sd-library-footer__load-more" id="sdLibraryLoadMoreButton">Load more <span aria-hidden="true">&#9662;</span></button>
+        <button type="button" class="sd-library-footer__load-more" id="sdLibraryLoadMoreButton" hidden>Load more <span aria-hidden="true">&#9662;</span></button>
       </div>
+
+      <!-- ---------- Retained recordings (SPEC 5's recovery bin) ---------- -->
+      <section class="sd-recordings" id="sdLibraryRecordingsSection" aria-labelledby="sdLibraryRecordingsHeading">
+        <div class="sd-recordings__header">
+          <h2 class="sd-recordings__heading" id="sdLibraryRecordingsHeading">Saved recordings</h2>
+          <span class="sd-recordings__count" id="sdLibraryRecordingsCount">0 retained</span>
+        </div>
+        <p class="sd-recordings__intro">
+          Audio kept on this machine so a lost message can be re-transcribed. Restore turns one back
+          into a pending draft; the draft it makes is the raw transcript, not a cleaned-up message.
+        </p>
+        <div class="sd-recordings__list" id="sdLibraryRecordingsList"></div>
+      </section>
+
+      <!-- ---------- Clear scopes (contract §7: three independent scopes) ---------- -->
+      <section class="sd-library-clear" aria-labelledby="sdLibraryClearHeading">
+        <h2 class="sd-library-clear__heading" id="sdLibraryClearHeading">Clear conversation data</h2>
+        <p class="sd-library-clear__intro">
+          Each scope is confirmed on its own. Confirming one says nothing about the others, and none
+          of them touch your personas, voices, models or profile settings.
+        </p>
+        <div class="sd-library-clear__actions">
+          <button type="button" class="sd-action-btn sd-action-btn--danger" id="sdLibraryClearDraftsButton">Clear drafts &amp; history</button>
+          <button type="button" class="sd-action-btn sd-action-btn--danger" id="sdLibraryClearRecordingsButton">Clear saved recordings</button>
+          <button type="button" class="sd-action-btn sd-action-btn--danger" id="sdLibraryClearAllButton">Clear all conversation data</button>
+        </div>
+      </section>
 
     </section>
 
@@ -2323,6 +2428,54 @@
                   <input type="checkbox" class="sd-set-checkbox" id="sdSetStitchPass" />
                 </div>
               </div>
+
+              <!--
+                D-0005 disclosed toggles. Six required disclosures each: data
+                used, what it may change, what it must preserve, default,
+                inspect path, gate status. All six spans are filled by
+                settingsWorkspace.js's renderDisclosedToggles() from
+                DISCLOSED_TOGGLES -- do not hard-code the text here, or the
+                disclosure and the behaviour can drift apart.
+              -->
+              <div class="sd-set-row sd-set-row--disclosed" data-search-row data-search-label="speech delivery signals">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Use speech delivery signals</span>
+                  <dl class="sd-disclosure">
+                    <dt>Data it uses</dt><dd id="sdSetDeliverySignalsDataUsed"></dd>
+                    <dt>What it may change</dt><dd id="sdSetDeliverySignalsMayChange"></dd>
+                    <dt>What it must preserve</dt><dd id="sdSetDeliverySignalsMustPreserve"></dd>
+                    <dt>Default</dt><dd id="sdSetDeliverySignalsDefault"></dd>
+                    <dt>Preservation gate</dt><dd id="sdSetDeliverySignalsGate"></dd>
+                  </dl>
+                  <button type="button" class="sd-link-btn" id="sdSetDeliverySignalsInspect"></button>
+                </div>
+                <div class="sd-set-row__control">
+                  <input type="checkbox" class="sd-set-checkbox" id="sdSetUseDeliverySignals" />
+                </div>
+              </div>
+
+              <!--
+                The audience control ships DISABLED. Enabling it is a release
+                gate decision that has not been made (D-0005). Note also that
+                `use_audience_context` is absent from SETTINGS_FIELD_KEYS, so
+                no save path can carry it even if this attribute is removed.
+              -->
+              <div class="sd-set-row sd-set-row--disclosed" data-search-row data-search-label="audience context contact">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Use selected contact/audience context</span>
+                  <dl class="sd-disclosure">
+                    <dt>Data it uses</dt><dd id="sdSetAudienceContextDataUsed"></dd>
+                    <dt>What it may change</dt><dd id="sdSetAudienceContextMayChange"></dd>
+                    <dt>What it must preserve</dt><dd id="sdSetAudienceContextMustPreserve"></dd>
+                    <dt>Default</dt><dd id="sdSetAudienceContextDefault"></dd>
+                    <dt>Preservation gate</dt><dd id="sdSetAudienceContextGate"></dd>
+                  </dl>
+                  <button type="button" class="sd-link-btn" id="sdSetAudienceContextInspect"></button>
+                </div>
+                <div class="sd-set-row__control">
+                  <input type="checkbox" class="sd-set-checkbox" id="sdSetUseAudienceContext" disabled />
+                </div>
+              </div>
             </div>
           </section>
 
@@ -2599,9 +2752,9 @@
         The real thing is below: a recipient picker backed by contacts the user
         created (docs/CONTACT_WIZARD_DESIGN.md section 6).
 
-        Still outstanding elsewhere: Library's "Destination" filter chip and its
-        per-card destination chips, and Studio's "Preferred Destinations". Same
-        fiction, different surfaces.
+        (Wave 4 removed Library's "Destination" filter chip and per-card
+        destination chips, and Wave 5 removed Studio's "Preferred
+        Destinations" — the fiction is gone from all three surfaces.)
       -->
 
       <!--
@@ -2623,6 +2776,23 @@
         </select>
         <span class="sd-context__note" id="sdContactPickerNote"></span>
         <button type="button" class="sd-link-btn" id="sdContactNewButton">&#65291; Add a contact</button>
+        <button type="button" class="sd-link-btn" id="sdContactManageButton">Manage contacts</button>
+        <!--
+          Clearing is a separate action from picking "No one in particular"
+          only in how it is reached; both end in the same state and both
+          persist. A sticky selection that un-sticks only in the UI would come
+          back on the next launch.
+        -->
+        <button type="button" class="sd-link-btn" id="sdContactClearButton">Clear applied contact</button>
+
+        <!--
+          The manage list. "Manage" used to open the CREATE wizard, which is
+          how contacts ended up create-only (D-0004): there was no path to an
+          existing contact at all. Rows are built by contacts.js and carry the
+          contact id in a dataset entry.
+        -->
+        <ul class="sd-contact-manage" id="sdContactManageList"></ul>
+        <p class="sd-context__empty-text" id="sdContactManageEmpty" hidden>No contacts yet.</p>
       </div>
 
       <div class="sd-context__section">
@@ -2711,6 +2881,13 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4h6l1 5-3 2v6l-1 3-1-3v-6l-3-2z"></path></svg>
           </button>
         </div>
+
+        <!-- Provenance. D-0020 made this mandatory for a restored recording:
+             that draft's refined text IS the raw transcript, because the
+             restore path skips persona cleanup so it cannot double-create a
+             draft. Duplicate / reopened / revision / restored-draft use the
+             same badge so a copy is never mistaken for the original. -->
+        <p class="sd-provenance-note" id="sdSelectedProvenance" hidden></p>
 
         <div class="sd-context__section">
           <span class="sd-context__section-label">
@@ -2892,17 +3069,9 @@
           </button>
         </div>
 
-        <div class="sd-context__section">
-          <span class="sd-context__section-label">Last Updated</span>
-          <span class="sd-context__description" id="sdCtxLastUpdated">&mdash;</span>
-        </div>
-
-        <div class="sd-context__section">
-          <span class="sd-context__section-label">Tags</span>
-          <div class="sd-tags-row" id="sdCtxTags">
-          </div>
-          <button type="button" class="sd-tags-row__add-btn" id="sdCtxAddTagButton" aria-label="Add tag">&#65291;</button>
-        </div>
+        <!-- Wave 5 (D-0022): Last Updated and Tags panels deleted. Personas
+             carry no updated_at, author, or tags field; a permanently blank
+             panel still tells the user a value is coming. -->
 
       </div><!-- /data-context-for="studio" -->
 
@@ -2992,6 +3161,22 @@
       <span class="sd-statusbar__text">
         <span class="sd-statusbar__label">Persona</span>
         <span class="sd-statusbar__value" id="sdStatusPersonaValue">—</span>
+      </span>
+    </div>
+
+    <!--
+      Hidden until a contact is applied, unlike every other cell. "No one in
+      particular" is the default and a real choice, not an unknown, so a
+      permanent cell reading a dash beside it would turn the default into a
+      gap the user feels invited to fill. statusBar.js toggles [hidden].
+    -->
+    <div class="sd-statusbar__cell" id="sdStatusContactCell" hidden>
+      <span class="sd-statusbar__icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20a7 7 0 0 1 14 0"></path></svg>
+      </span>
+      <span class="sd-statusbar__text">
+        <span class="sd-statusbar__label">Writing to</span>
+        <span class="sd-statusbar__value" id="sdStatusContactValue"></span>
       </span>
     </div>
 

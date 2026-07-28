@@ -5828,3 +5828,434 @@
   border-color: var(--sd-red);
   color: var(--sd-red);
 }
+
+/* ==========================================================================
+   LIBRARY — Wave 4 (Gate 4)
+   Filter panel, provenance badges, retained recordings, clear scopes and the
+   destructive-action confirmation dialog. Everything below reuses the tokens
+   and the modal vocabulary already established above (.sd-shortcut-sheet's
+   fixed overlay + centred card) rather than introducing a second one.
+   ========================================================================== */
+
+/* --- Filter panel ----------------------------------------------------------- */
+
+.sd-library-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--sd-space-12);
+  padding: var(--sd-space-12);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-10);
+  background: var(--sd-surface-raised);
+}
+
+.sd-library-filters[hidden] { display: none; }
+
+.sd-library-filters__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 150px;
+}
+
+.sd-library-filters__label {
+  font-size: var(--sd-font-xs);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--sd-text-secondary);
+}
+
+.sd-library-filters__control {
+  padding: 6px 8px;
+  border-radius: var(--sd-radius-8);
+  border: 1px solid var(--sd-border);
+  background: var(--sd-surface);
+  color: var(--sd-text-primary);
+  font-family: inherit;
+  font-size: var(--sd-font-sm);
+}
+
+.sd-library-filters__control:focus {
+  outline: none;
+  border-color: var(--sd-blue);
+}
+
+.sd-library-filters__hint {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+  max-width: 22ch;
+}
+
+.sd-library-filters__reset {
+  margin-left: auto;
+  align-self: flex-end;
+  padding: 7px 14px;
+  border-radius: var(--sd-radius-pill);
+  border: 1px solid var(--sd-border);
+  background: none;
+  color: var(--sd-text-secondary);
+  font-family: inherit;
+  font-size: var(--sd-font-sm);
+  cursor: pointer;
+}
+
+.sd-library-filters__reset:hover {
+  border-color: var(--sd-border-hover);
+  color: var(--sd-text-primary);
+}
+
+/* --- Empty / error state ----------------------------------------------------
+   A failed load and an empty archive must not look the same: one means the
+   user has nothing, the other means we could not ask. The error variant is
+   amber-bordered and always carries a retry. */
+
+.sd-timeline__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sd-space-8);
+  padding: var(--sd-space-16);
+  color: var(--sd-text-muted);
+  font-size: var(--sd-font-body);
+}
+
+.sd-timeline__empty--error {
+  border: 1px solid rgba(245, 158, 11, .4);
+  border-radius: var(--sd-radius-10);
+  color: var(--sd-amber);
+}
+
+.sd-timeline__empty-text { margin: 0; }
+
+.sd-timeline__empty-action {
+  padding: 6px 12px;
+  border-radius: var(--sd-radius-pill);
+  border: 1px solid var(--sd-border);
+  background: none;
+  color: var(--sd-text-primary);
+  font-family: inherit;
+  font-size: var(--sd-font-sm);
+  cursor: pointer;
+}
+
+.sd-timeline__empty-action:hover { border-color: var(--sd-border-hover); }
+
+/* --- Provenance badges (contract §1, D-0020) --------------------------------
+   "Raw transcript" is the one with a correctness requirement behind it, so it
+   is the one that carries the warning colour: that draft's refined text is an
+   unrefined transcript and must not read as a cleaned-up message. */
+
+.sd-provenance {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--sd-radius-pill);
+  border: 1px solid var(--sd-border);
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-secondary);
+  white-space: nowrap;
+}
+
+.sd-provenance--raw-transcript {
+  border-color: rgba(245, 158, 11, .5);
+  background: rgba(245, 158, 11, .12);
+  color: var(--sd-amber);
+}
+
+.sd-provenance-note {
+  margin: 0 0 var(--sd-space-12);
+  padding: var(--sd-space-8) var(--sd-space-12);
+  border-left: 3px solid var(--sd-border);
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+}
+
+.sd-provenance-note[data-provenance="raw-transcript"] {
+  border-left-color: var(--sd-amber);
+  color: var(--sd-amber);
+}
+
+.sd-provenance-note[hidden] { display: none; }
+
+/* --- Retained recordings ----------------------------------------------------- */
+
+.sd-recordings {
+  margin-top: var(--sd-space-24, 24px);
+  padding-top: var(--sd-space-16);
+  border-top: 1px solid var(--sd-border);
+}
+
+.sd-recordings__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sd-space-12);
+}
+
+.sd-recordings__heading {
+  margin: 0;
+  font-size: var(--sd-font-lg, 1.05rem);
+}
+
+.sd-recordings__count {
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-muted);
+}
+
+.sd-recordings__intro {
+  margin: var(--sd-space-8) 0 var(--sd-space-12);
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-muted);
+  max-width: 70ch;
+}
+
+.sd-recordings__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sd-recordings__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+  padding: 8px 10px;
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-10);
+  background: var(--sd-surface-raised);
+}
+
+.sd-recordings__info {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-12);
+  background: none;
+  border: none;
+  color: var(--sd-text-primary);
+  font-family: inherit;
+  font-size: var(--sd-font-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sd-recordings__info.is-selected { color: var(--sd-blue-light); }
+
+.sd-recordings__duration { color: var(--sd-text-muted); }
+
+.sd-recordings__missing { color: var(--sd-amber); font-size: var(--sd-font-xs); }
+
+.sd-recordings__action {
+  flex: none;
+  padding: 5px 12px;
+  border-radius: var(--sd-radius-pill);
+  border: 1px solid var(--sd-border);
+  background: none;
+  color: var(--sd-text-secondary);
+  font-family: inherit;
+  font-size: var(--sd-font-sm);
+  cursor: pointer;
+}
+
+.sd-recordings__action:hover:not(:disabled) {
+  border-color: var(--sd-border-hover);
+  color: var(--sd-text-primary);
+}
+
+.sd-recordings__action:disabled { opacity: .45; cursor: not-allowed; }
+
+.sd-recordings__action--danger { color: var(--sd-red); border-color: rgba(239, 68, 68, .4); }
+
+.sd-recordings__empty {
+  margin: 0;
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-muted);
+}
+
+.sd-recordings__empty--error { color: var(--sd-amber); }
+
+/* --- Clear scopes ------------------------------------------------------------- */
+
+.sd-library-clear {
+  margin-top: var(--sd-space-24, 24px);
+  padding-top: var(--sd-space-16);
+  border-top: 1px solid var(--sd-border);
+}
+
+.sd-library-clear__heading {
+  margin: 0;
+  font-size: var(--sd-font-lg, 1.05rem);
+}
+
+.sd-library-clear__intro {
+  margin: var(--sd-space-8) 0 var(--sd-space-12);
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-muted);
+  max-width: 70ch;
+}
+
+.sd-library-clear__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sd-space-8);
+}
+
+.sd-library-clear__actions .sd-action-btn { width: auto; }
+
+/* --- Destructive confirmation dialog -------------------------------------------
+   Same overlay vocabulary as .sd-shortcut-sheet. The "keeps" group is styled
+   as reassurance rather than as another casualty list -- it is the half of the
+   contract (§7) a user cannot otherwise verify. */
+
+.sd-confirm {
+  position: fixed;
+  inset: 0;
+  z-index: 10001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 6, 12, .66);
+  padding: var(--sd-space-24, 24px);
+}
+
+.sd-confirm[hidden] { display: none; }
+
+.sd-confirm__card {
+  width: min(520px, 100%);
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: var(--sd-space-20);
+  background: var(--sd-surface-raised);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-16);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .5);
+  color: var(--sd-text-primary);
+}
+
+.sd-confirm__title {
+  margin: 0 0 var(--sd-space-8);
+  font-size: var(--sd-font-lg, 1.05rem);
+}
+
+.sd-confirm__body {
+  margin: 0 0 var(--sd-space-12);
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+}
+
+.sd-confirm__group { margin-bottom: var(--sd-space-12); }
+
+.sd-confirm__group-label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: var(--sd-font-xs);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--sd-text-muted);
+}
+
+.sd-confirm__list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-primary);
+}
+
+.sd-confirm__group--removes .sd-confirm__list { color: var(--sd-red); }
+
+.sd-confirm__group--keeps .sd-confirm__list { color: var(--sd-text-secondary); }
+
+.sd-confirm__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sd-space-8);
+  margin-top: var(--sd-space-16);
+}
+
+.sd-btn--danger {
+  border-color: rgba(239, 68, 68, .5);
+  color: var(--sd-red);
+}
+
+.sd-btn--danger:hover {
+  border-color: var(--sd-red);
+  background: rgba(239, 68, 68, .12);
+}
+
+/* --- Wave 5: traits status, disclosed toggles, contact management --------- */
+
+.sd-traits-status {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--sd-space-8);
+  padding: var(--sd-space-8) var(--sd-space-12);
+  border: 1px dashed var(--sd-border);
+  border-radius: 8px;
+}
+
+.sd-traits-status__label {
+  font-weight: 600;
+  color: var(--sd-amber, #d97706);
+}
+
+.sd-traits-status__reason,
+.sd-traits-status__detail {
+  font-size: 12px;
+  color: var(--sd-text-dim);
+}
+
+.sd-set-row--disclosed {
+  align-items: flex-start;
+}
+
+.sd-disclosure {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px var(--sd-space-8);
+  margin: var(--sd-space-8) 0 0;
+  font-size: 12px;
+}
+
+.sd-disclosure dt {
+  color: var(--sd-text-dim);
+}
+
+.sd-disclosure dd {
+  margin: 0;
+}
+
+.sd-contact-manage {
+  list-style: none;
+  margin: var(--sd-space-8) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-4, 4px);
+}
+
+.sd-contact-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+  padding: var(--sd-space-4, 4px) 0;
+}
+
+.sd-contact-row__name {
+  font-weight: 600;
+}
+
+.sd-contact-row__detail {
+  flex: 1;
+  font-size: 12px;
+  color: var(--sd-text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sd-contact-row__edit,
+.sd-contact-row__delete {
+  font-size: 12px;
+}

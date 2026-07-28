@@ -6,6 +6,8 @@
 - **Gate 1:** **ACCEPTED (2026-07-28, release-director, D-0019)**
 - **Gate 2:** **ACCEPTED (2026-07-28, release-director, D-0021)**
 - **Gate 3:** **ACCEPTED (2026-07-28, release-director, D-0020)**
+- **Gate 4:** **ACCEPTED (2026-07-28, release-director, D-0022)**
+- **Gate 5:** **ACCEPTED (2026-07-28, release-director, D-0023)**
 - **Last updated:** 2026-07-28
 
 Statuses: `DONE`, `IN PROGRESS`, `BLOCKED`, `PENDING`, `CUT`.
@@ -104,8 +106,8 @@ Wave 1 follow-ups recorded: factory-reset executor exists nowhere (Wave 6 backlo
 | 1 | Production Signal Desk composition and durable onboarding | Gate 0 | `DONE` |
 | 2 | Talk completion | Gate 1 | `DONE` |
 | 3 | Library domain semantics | Gate 1 contracts | `DONE` |
-| 4 | Library UI completion | Gate 3 | `IN PROGRESS` |
-| 5 | Studio, contacts/audience, Settings | Gates 1–2 | `IN PROGRESS` |
+| 4 | Library UI completion | Gate 3 | `DONE` |
+| 5 | Studio, contacts/audience, Settings | Gates 1–2 | `DONE` |
 | 6 | Privacy/data lifecycle closure | Final store set from Waves 3/5/7/8/9/10 | `BLOCKED` |
 | 7 | Application context/profiles | Gate 1 | `BLOCKED` |
 | 8 | Audio privacy and wake hardening | AudioInputBroker before isolation/handoff | `BLOCKED` |

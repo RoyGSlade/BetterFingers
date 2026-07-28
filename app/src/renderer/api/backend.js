@@ -522,6 +522,13 @@ async function startRecording(timeoutMs = 120000) {
   return postJson(RUNTIME_RECORDING_START_URL, {}, timeoutMs);
 }
 
+// Apply (or clear, with '') a contact on an existing draft. Metadata only:
+// the backend deliberately does not re-run cleanup (see /drafts/:id/contact).
+async function setDraftContact(draftId, contactId, timeoutMs = 10000) {
+  return postJson(`${DRAFTS_URL}/${encodeURIComponent(draftId)}/contact`,
+    { contact_id: contactId || '' }, timeoutMs);
+}
+
 async function stopRecording(timeoutMs = 120000) {
   return postJson(RUNTIME_RECORDING_STOP_URL, {}, timeoutMs);
 }
@@ -1053,6 +1060,7 @@ export {
   toggleRecording,
   startRecording,
   stopRecording,
+  setDraftContact,
   unloadModel,
   warmupRuntime,
   normalizeHealthPayload,

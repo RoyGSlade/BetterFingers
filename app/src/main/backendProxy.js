@@ -69,6 +69,7 @@ const ROUTE_ALLOWLIST = {
     '/drafts/test-mock',
     '/drafts/:id/accept', '/drafts/:id/decline', '/drafts/:id/retry',
     '/drafts/:id/edit', '/drafts/:id/rewrite', '/drafts/:id/tts',
+    '/drafts/:id/contact',
     '/tts/speak', '/tts/stop',
     '/personas', '/personas/lint', '/personas/test',
     '/personas/refine', '/personas/draft',

@@ -61,6 +61,11 @@ import { personaLearningScenarios } from './persona-learning.mjs';
 // when it is not.
 import { onboardingProdScenarios } from './onboarding-prod.mjs';
 import { signalDeskProdSweepScenarios } from './signal-desk-prod-sweep.mjs';
+// Wave 4 (Gate 4): the Library workspace on the production composition root.
+// Destructive and recovery paths only -- rendering is covered by the pure
+// unit tests. Request capture is stub-side per D-0021; see the file header.
+import { libraryScenarios } from './library.mjs';
+import { wave5StudioScenarios } from './wave5-studio.mjs';
 
 export const scenarios = [
   ...baselineScenarios,
@@ -82,6 +87,8 @@ export const scenarios = [
   ...personaFlowScenarios,
   ...contactsScenarios,
   ...personaLearningScenarios,
+  ...libraryScenarios,
+  ...wave5StudioScenarios,
   ...signalDeskProdSweepScenarios,
   // Ordered last among the prod-target scenarios as belt-and-braces, not as a
   // load-bearing requirement: the auto-dismiss sentinel these use is
