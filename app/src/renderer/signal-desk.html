@@ -864,6 +864,38 @@
         </div>
       </div>
 
+      <!--
+        Capture actions (Wave 2). Until now Talk's ring was display-only and the
+        only way to start or stop a recording from the UI was the OLD dashboard's
+        #toggleRecordingButton, which does not exist on this page -- so on the
+        production Signal Desk the hotkey was the only capture path that worked.
+        These three buttons and the hotkey converge on ONE state machine
+        (features/talkCapture.js): voice-status messages are authoritative, so
+        the button path can never disagree with what the recorder is actually
+        doing.
+
+        Emergency Stop is deliberately never disabled. A stop control that can be
+        greyed out is the exact failure mode this row exists to prevent.
+      -->
+      <div class="sd-capture-actions">
+        <div class="sd-actions-row sd-capture-actions__row">
+          <button type="button" class="sd-btn sd-btn--primary" id="sdCaptureStartButton">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="6"></circle></svg>
+            Start Recording
+          </button>
+          <button type="button" class="sd-btn" id="sdCaptureStopButton">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"></rect></svg>
+            Stop Recording
+          </button>
+          <span class="sd-capture-actions__spacer"></span>
+          <button type="button" class="sd-btn sd-action-btn--danger" id="sdEmergencyStopButton">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><line x1="8" y1="8" x2="16" y2="16"></line></svg>
+            Emergency Stop
+          </button>
+        </div>
+        <p class="sd-capture-actions__message" id="sdCaptureMessage" role="status" aria-live="polite"></p>
+      </div>
+
       <div class="sd-refined-card">
         <div class="sd-refined-card__header">
           <span class="sd-refined-card__eyebrow">
@@ -887,6 +919,12 @@
         <textarea class="sd-refined-card__hero" id="sdRefinedHero" rows="2"
                   spellcheck="true" placeholder="Nothing captured yet. Hold Ctrl + Space and speak naturally."></textarea>
         <p class="sd-refined-card__status" id="sdDraftMessage" role="status" aria-live="polite"></p>
+        <!--
+          Why this draft is being held for review, when it is. The reason comes
+          from send_policy.py via the draft's own force_review / force_review_reason
+          fields -- Talk reports the decision, it does not make one.
+        -->
+        <p class="sd-refined-card__force-review" id="sdForceReviewNotice" role="status" aria-live="polite"></p>
 
         <div class="sd-meta-strip">
           <div class="sd-meta-cell">
@@ -912,18 +950,27 @@
           <div class="sd-meta-cell">
             <span class="sd-meta-cell__label">Delivery</span>
             <div class="sd-delivery-controls">
-              <label class="sd-visually-hidden" for="sdDeliveryMode">Delivery mode</label>
-              <select class="sd-review-select" id="sdDeliveryMode">
-                <option value="review">Review first</option>
-                <option value="immediate">Send immediately</option>
-              </select>
-              <label class="sd-visually-hidden" for="sdDeliveryType">Insert method</label>
-              <select class="sd-review-select" id="sdDeliveryType">
-                <option value="">Profile default</option>
-                <option value="type">Type at cursor</option>
-                <option value="paste">Paste at cursor</option>
-                <option value="clipboard">Copy only</option>
-              </select>
+              <!--
+                Wave 2: this was a <select> offering "Review first" /
+                "Send immediately" that nothing listened to. Same defect as the
+                removed insert-method select and the removed confidence slider:
+                it mimed a setting that is really the profile field `send_mode`,
+                owned by Settings > Review & Drafts behind the save bar. Changing
+                it here did nothing at all, which is worse than not offering it.
+                Shown read-only, with a link to the control that actually works.
+              -->
+              <span class="sd-context__value" id="sdDeliveryModeValue">&mdash;</span>
+              <button type="button" class="sd-link-btn" id="sdDeliveryModeSettingsLink">Change in Settings &rsaquo;</button>
+              <!--
+                Wave 2 (director ruling): the insert-method <select> that used to
+                sit here is GONE. It was the second of two competing delivery
+                controls -- this one and the context panel's segmented Type /
+                Paste / Copy group -- and two controls over one decision means
+                one of them is always lying about what the Send button will do.
+                The segmented control in the context panel is now the single
+                source of truth, and the primary button's label states the
+                selected method outright.
+              -->
             </div>
           </div>
         </div>
@@ -937,17 +984,24 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6,4 20,12 6,20"></polygon></svg>
             Listen
           </button>
-          <button type="button" class="sd-btn" id="sdReviseButton">
+          <button type="button" class="sd-btn" id="sdReviseButton" aria-expanded="false" aria-controls="sdReviseDrawer">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20l4-1 11-11-3-3L5 16z"></path></svg>
             Revise
           </button>
-          <span class="sd-btn-split">
-            <button type="button" class="sd-btn sd-btn--primary" id="sdSendButton">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="20" x2="20" y2="4"></line><polygon points="20,4 12,4 20,12"></polygon></svg>
-              Send / Insert
-            </button>
-            <button type="button" class="sd-btn-split__chevron" id="sdSendChevronButton" aria-label="More send options">&#9662;</button>
-          </span>
+          <!--
+            Wave 2 (director ruling): the split-button chevron is removed, not
+            re-stubbed. It opened nothing -- no popover component existed
+            anywhere in the repo and its handler was a documented no-op -- and a
+            control that looks like it offers choices while offering none is
+            worse than no control. The choice it pretended to host is the
+            context panel's Delivery segmented group, and the label below now
+            names whichever method that group has selected, so the same
+            information arrives without a dead affordance.
+          -->
+          <button type="button" class="sd-btn sd-btn--primary" id="sdSendButton">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="20" x2="20" y2="4"></line><polygon points="20,4 12,4 20,12"></polygon></svg>
+            <span id="sdSendButtonLabel">Send</span>
+          </button>
         </div>
 
         <!--
@@ -966,6 +1020,80 @@
             <span id="sdDraftTokenSummary"></span>
             <span id="sdDraftMetadata"></span>
           </span>
+        </div>
+
+        <!--
+          Send result (Wave 2). The backend already returns all six of these
+          facts on every send (server.py's perform_output_action: requested_action,
+          actual_action, fallback, fallback_reason, clipboard_result,
+          injection_attempted / open_chat_requested + the draft's own status),
+          and until now the production page threw every one of them away -- its
+          renderSendResult() was a documented no-op, so a send that silently fell
+          back to the clipboard because injection was unsupported looked exactly
+          like a send that typed into the target app.
+
+          Hidden until a send actually happens: an empty results panel on a page
+          where nothing has been sent is noise, not an empty state.
+        -->
+        <div class="sd-send-result" id="sdSendResult" hidden>
+          <span class="sd-send-result__title">Send result</span>
+          <dl class="sd-send-result__grid">
+            <div class="sd-send-result__cell">
+              <dt>Requested</dt><dd id="sdSendResultRequested">&mdash;</dd>
+            </div>
+            <div class="sd-send-result__cell">
+              <dt>Actual</dt><dd id="sdSendResultActual">&mdash;</dd>
+            </div>
+            <div class="sd-send-result__cell">
+              <dt>Fallback</dt><dd id="sdSendResultFallback">&mdash;</dd>
+            </div>
+            <div class="sd-send-result__cell">
+              <dt>Fallback reason</dt><dd id="sdSendResultFallbackReason">&mdash;</dd>
+            </div>
+            <div class="sd-send-result__cell">
+              <dt>Clipboard</dt><dd id="sdSendResultClipboard">&mdash;</dd>
+            </div>
+            <div class="sd-send-result__cell">
+              <dt>Submission</dt><dd id="sdSendResultSubmission">&mdash;</dd>
+            </div>
+          </dl>
+        </div>
+
+        <!--
+          Teach from this edit (Wave 2, restores the trigger D-0018 had to
+          substitute). Saving an edit NEVER teaches anything: it only offers.
+          The panel keeps all three texts -- what you said, what the model wrote,
+          what you changed it to -- because a learning example the user cannot
+          read before approving is not consent, and the approval checkbox plus
+          the confirm click are the only path that reaches the network.
+
+          Its ids are `sdTalkTeach*`, deliberately neither personaLearning.js's
+          canonical `personaLearning*` ids (that module self-initialises at
+          import time against those) nor Studio's `sdTeach*` -- three surfaces
+          sharing one id set would give one element three writers.
+        -->
+        <div class="sd-teach-panel" id="sdTalkTeachPanel" hidden>
+          <span class="sd-teach-panel__title">Teach <span id="sdTalkTeachPersonaLabel">this persona</span> from your edit?</span>
+          <dl class="sd-teach-panel__grid">
+            <div class="sd-teach-panel__cell">
+              <dt>You said</dt><dd id="sdTalkTeachRaw"></dd>
+            </div>
+            <div class="sd-teach-panel__cell">
+              <dt>Model wrote</dt><dd id="sdTalkTeachModel"></dd>
+            </div>
+            <div class="sd-teach-panel__cell">
+              <dt>You changed it to</dt><dd id="sdTalkTeachEdited"></dd>
+            </div>
+          </dl>
+          <label class="sd-teach-panel__consent">
+            <input type="checkbox" class="sd-set-checkbox" id="sdTalkTeachConsent" />
+            <span>Save this pair as a learned example for this persona.</span>
+          </label>
+          <div class="sd-actions-row">
+            <button type="button" class="sd-btn sd-btn--primary" id="sdTalkTeachConfirmButton" disabled>Confirm &amp; teach</button>
+            <button type="button" class="sd-btn" id="sdTalkTeachDismissButton">Not this one</button>
+          </div>
+          <span class="sd-set-message" id="sdTalkTeachMessage" role="status" aria-live="polite"></span>
         </div>
       </div>
           <!--
@@ -2436,18 +2564,28 @@
            .is-active-context based on the shell's active workspace, mirroring
            how [data-workspace] already keys the header title tint. -->
       <div class="sd-context__content is-active-context" data-context-for="talk">
+      <!--
+        Persona (Wave 2 ruling: display here, ownership in Settings).
+
+        This was a <button class="sd-dropdown"> with no id, no options and no
+        handler -- it opened nothing and showed an em dash forever. It is now a
+        real, backend-fed display of the ACTIVE persona.
+
+        It is deliberately not an editable picker in this wave. The active
+        persona is the profile field `current_preset`, and that field already has
+        exactly one owner: the Settings workspace, behind its sticky
+        Save/Discard bar. A second writer in Talk would either bypass that bar
+        (silently discarding whatever else the user had typed into Settings and
+        not yet saved) or race it. Per-utterance persona switching is a real
+        product need, but it needs a per-draft persona concept that no draft
+        carries today -- that is Wave 5 (Studio / personas) work, not a control
+        bolted onto a profile field here.
+      -->
       <div class="sd-context__section">
         <span class="sd-context__section-label">Persona <span class="sd-help" aria-hidden="true">?</span></span>
-        <button type="button" class="sd-dropdown">
-          <span class="sd-dropdown__icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="10" x2="4" y2="14"></line><line x1="8" y1="6" x2="8" y2="18"></line><line x1="12" y1="3" x2="12" y2="21"></line><line x1="16" y1="7" x2="16" y2="17"></line><line x1="20" y1="9" x2="20" y2="15"></line></svg>
-          </span>
-          <span class="sd-dropdown__text">
-            <span class="sd-dropdown__name">&mdash;</span>
-            <span class="sd-dropdown__desc"></span>
-          </span>
-          <span class="sd-dropdown__chevron" aria-hidden="true">&#9662;</span>
-        </button>
+        <span class="sd-context__value" id="sdTalkActivePersona">&mdash;</span>
+        <span class="sd-context__note" id="sdTalkActivePersonaNote"></span>
+        <button type="button" class="sd-link-btn" id="sdTalkPersonaSettingsLink">Change persona in Settings &rsaquo;</button>
       </div>
 
       <!--
@@ -2490,27 +2628,53 @@
       <div class="sd-context__section">
         <span class="sd-context__section-label">Delivery <span class="sd-help" aria-hidden="true">?</span></span>
         <div class="sd-segmented" role="group" aria-label="Delivery method" id="sdDeliverySegmented">
-          <button type="button" class="sd-segmented__option is-active" data-delivery-option="send">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="20" x2="20" y2="4"></line><polygon points="20,4 12,4 20,12"></polygon></svg>
-            Send
-          </button>
-          <button type="button" class="sd-segmented__option" data-delivery-option="insert">
+          <!--
+            Wave 2: Send / Insert / Copy became Type / Paste / Copy. The old
+            labels named two things the backend has no notion of; these three map
+            exactly onto the only actions perform_output_action() accepts
+            (type / paste / copy_only), so what the user picks here is literally
+            what gets requested. This group is now the ONLY delivery selector on
+            the page -- see the removed <select> in the refined card.
+          -->
+          <!--
+            No `is-active` in the markup: talkWorkspace.js paints the active
+            segment from the RESOLVED send action once the profile's output
+            settings arrive, so a static default here could only ever disagree
+            with what Send is actually going to do.
+          -->
+          <button type="button" class="sd-segmented__option" data-delivery-option="type" aria-pressed="false">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="4" x2="12" y2="20"></line><line x1="7" y1="4" x2="17" y2="4"></line><line x1="9" y1="20" x2="15" y2="20"></line></svg>
-            Insert
+            Type
           </button>
-          <button type="button" class="sd-segmented__option" data-delivery-option="copy">
+          <button type="button" class="sd-segmented__option" data-delivery-option="paste" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="4" width="10" height="16" rx="2"></rect><line x1="10" y1="2.5" x2="14" y2="2.5"></line></svg>
+            Paste
+          </button>
+          <button type="button" class="sd-segmented__option" data-delivery-option="copy" aria-pressed="false">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="11" height="12" rx="2"></rect><path d="M5 15V4h10"></path></svg>
             Copy
           </button>
         </div>
       </div>
 
+      <!--
+        Confidence (Wave 2). This section used to be an id-less, handler-less
+        <input type="range"> labelled "Confidence threshold": a control that
+        looked like it set the gate and set nothing. Worse, the gate it mimed is
+        real and lives elsewhere -- confidence_force_review_enabled /
+        confidence_force_review_below / confidence_auto_send_above are profile
+        settings, edited in Settings > Review & Drafts and enforced by
+        send_policy.py. Two owners for one threshold is how a user ends up
+        trusting the copy that isn't in charge.
+
+        Talk therefore DISPLAYS and links; Settings OWNS. The summary below is
+        read from the active profile, and shows nothing rather than a plausible
+        default when those settings are unavailable.
+      -->
       <div class="sd-context__section">
-        <span class="sd-context__section-label">Confidence <span class="sd-help" aria-hidden="true">?</span> <span class="sd-value">&mdash;</span></span>
-        <div class="sd-slider-row">
-          <input type="range" class="sd-slider" min="0" max="100" value="0" aria-label="Confidence threshold" />
-          <div class="sd-slider-row__scale"><span>Low</span><span>High</span></div>
-        </div>
+        <span class="sd-context__section-label">Confidence <span class="sd-help" aria-hidden="true">?</span></span>
+        <span class="sd-context__note" id="sdConfidenceThresholds"></span>
+        <button type="button" class="sd-link-btn" id="sdConfidenceSettingsLink">Change these in Settings &rsaquo;</button>
       </div>
 
       <div class="sd-context__section">

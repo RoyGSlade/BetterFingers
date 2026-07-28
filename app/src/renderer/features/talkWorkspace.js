@@ -43,13 +43,28 @@
 //                            editable textarea, which Talk's new markup
 //                            doesn't have a slot for yet. Stubbed until that
 //                            editor surface is designed.
-//   hooks.onSendVariantsRequested(draft)   TODO(phase-integration): the
-//                            Send/Insert split-button's chevron (copy/insert/
-//                            send variants) has no existing popover
-//                            component; SPEC 4's Delivery segmented control
-//                            (context panel, already static markup from
-//                            Phase 1) is the likely eventual source for this
-//                            choice -- see bindDeliverySegmented() below.
+//   hooks.onDeliverySelectionChanged(selection)   Fired whenever the context
+//                            panel's Type/Paste/Copy segmented control
+//                            changes (see bindDeliverySegmented() below), so
+//                            the composition root can feed the same choice
+//                            into drafts.js's hooks.getSelectedSendAction
+//                            (this module's own getSelectedSendAction()
+//                            reproduces the same resolution via the exported
+//                            resolveSendAction() pure helper).
+//   hooks.onOpenConfidenceSettings()       Fired by the confidence-threshold
+//                            summary's "Settings" link. Talk only displays
+//                            the thresholds (owned by Settings, see
+//                            deriveConfidenceThresholdSummary()) -- this hook
+//                            is how the composition root navigates there.
+//
+// DIRECTOR RULING (Wave 2 Gate 2): Talk had two competing delivery controls
+// plus a decorative send-chevron with no popover component anywhere in the
+// repo. Exactly ONE segmented delivery selector survives -- the context
+// panel's #sdDeliverySegmented, relabelled Type/Paste/Copy. The old
+// #sdDeliveryType dropdown and #sdSendChevronButton (and its
+// handleSendChevronClick stub / hooks.onSendVariantsRequested contract) are
+// removed outright, not stubbed -- see TALK_PLACEMENT_MAP's
+// 'delivery.sendVariants' entry.
 //
 // To mount for real (a later phase): pass `elements` from collectTalkElements()
 // (or an equivalent object) plus `hooks.drafts` = the live drafts feature
@@ -198,6 +213,194 @@ export function deriveRefinedViewModel(draft) {
   };
 }
 
+// --- Delivery selector (Type/Paste/Copy) -------------------------------------
+//
+// The backend's perform_output_action (server.py ~line 999) accepts exactly
+// 'copy_only' | 'paste' | 'type' | 'open_chat_then_send' -- anything else is
+// silently coerced to 'copy_only'. DELIVERY_OPTIONS are the only values the
+// context panel's segmented control can carry.
+
+export const DELIVERY_OPTIONS = ['type', 'paste', 'copy'];
+
+/** Segmented-control option -> the send action vocabulary perform_output_action accepts, or null for an unrecognised option. */
+export function deliveryOptionToSendAction(option) {
+  switch (option) {
+    case 'type': return 'type';
+    case 'paste': return 'paste';
+    case 'copy': return 'copy_only';
+    default: return null;
+  }
+}
+
+/**
+ * Resolve the send action to actually use. An explicit segmented `selection`
+ * overrides the profile-derived default; with no selection this reproduces
+ * today's bootstrap/signalDeskApp.js getSelectedSendAction() default exactly
+ * (no injection support => 'copy_only'; send_mode === 'auto_send' =>
+ * 'open_chat_then_send'; else 'paste'; no settings at all => 'copy_only').
+ * If the user explicitly picked type/paste but injection isn't supported,
+ * this degrades to 'copy_only' -- the degradation is made visible via
+ * primaryActionLabel(), never silent.
+ */
+export function resolveSendAction(selection, outputSettings) {
+  const supportsInjection = Boolean(outputSettings?.capabilities?.supports_input_injection);
+
+  if (DELIVERY_OPTIONS.includes(selection)) {
+    const mapped = deliveryOptionToSendAction(selection);
+    if (mapped === 'type' || mapped === 'paste') {
+      return supportsInjection ? mapped : 'copy_only';
+    }
+    return mapped;
+  }
+
+  if (!outputSettings) return 'copy_only';
+  if (!supportsInjection) return 'copy_only';
+  return outputSettings.send_mode === 'auto_send' ? 'open_chat_then_send' : 'paste';
+}
+
+/** The label the primary send button shows -- must always name what the button will ACTUALLY do. */
+export function primaryActionLabel(selection, outputSettings) {
+  const supportsInjection = Boolean(outputSettings?.capabilities?.supports_input_injection);
+
+  if (DELIVERY_OPTIONS.includes(selection)) {
+    if (selection === 'type') {
+      return supportsInjection ? 'Type at Cursor' : 'Copy to Clipboard (injection unavailable)';
+    }
+    if (selection === 'paste') {
+      return supportsInjection ? 'Paste at Cursor' : 'Copy to Clipboard (injection unavailable)';
+    }
+    return 'Copy to Clipboard';
+  }
+
+  if (!outputSettings || !supportsInjection) return 'Copy to Clipboard';
+  return outputSettings.send_mode === 'auto_send' ? 'Send to Chat' : 'Paste at Cursor';
+}
+
+/**
+ * Which segment should read as active given the current selection and settings.
+ *
+ * With no explicit selection the control must still show the method that is
+ * actually in force, or the user is looking at three equal-looking buttons
+ * while the Send button quietly does something none of them names. Returns
+ * null when the resolved action has no segment ('open_chat_then_send' -- there
+ * is deliberately no "Send to chat" segment, because that action is a profile
+ * mode rather than an insertion method), in which case no segment is active
+ * and the button label alone carries the meaning.
+ */
+export function activeDeliverySegment(selection, outputSettings) {
+  if (DELIVERY_OPTIONS.includes(selection)) return selection;
+  switch (resolveSendAction(selection, outputSettings)) {
+    case 'type': return 'type';
+    case 'paste': return 'paste';
+    case 'copy_only': return 'copy';
+    default: return null;
+  }
+}
+
+const FALLBACK_REASON_TEXT = {
+  '': '',
+  input_injection_unsupported: 'Input injection unavailable on this system',
+  injection_failed: 'Input injection failed',
+};
+
+/** send_result.fallback_reason -> human text. An unrecognised reason is passed through verbatim, never swallowed. */
+function fallbackReasonToText(reason) {
+  const key = reason || '';
+  return key in FALLBACK_REASON_TEXT ? FALLBACK_REASON_TEXT[key] : key;
+}
+
+/** send_result.clipboard_result -> a short human-readable clipboard state. */
+function clipboardResultToState(clipboardResult) {
+  if (!clipboardResult) return 'not used';
+  if (clipboardResult.ok) return 'text copied';
+  return `copy failed: ${clipboardResult.message || 'unknown error'}`;
+}
+
+/** draft.status/send_outcome + send_result flags -> a short human-readable submission state. */
+function draftToSubmissionState(draft) {
+  const status = draft?.status;
+  const outcome = draft?.send_outcome;
+  if (status === 'sent' || outcome === 'sent') return 'sent';
+  if (status === 'send_error' || outcome === 'failed') return 'send failed';
+  if (status === 'send_interrupted' || outcome === 'interrupted') return 'interrupted — outcome unknown';
+  return 'not submitted';
+}
+
+// Turns server.py's send_result (perform_output_action / send_draft_by_id,
+// ~line 975-1245) plus the owning draft into a plain view model -- no DOM
+// involved. Every field named here is real (see file's task brief); nothing
+// is invented.
+export function deriveSendResultViewModel(sendResult, draft) {
+  if (!sendResult) {
+    return {
+      hasResult: false,
+      requested: null,
+      actual: null,
+      fallbackUsed: false,
+      fallbackReason: '',
+      fallbackReasonText: '',
+      clipboardState: 'not used',
+      submissionState: draftToSubmissionState(draft),
+      ok: false,
+      message: '',
+    };
+  }
+
+  return {
+    hasResult: true,
+    requested: sendResult.requested_action ?? null,
+    actual: sendResult.actual_action ?? null,
+    fallbackUsed: Boolean(sendResult.fallback),
+    fallbackReason: sendResult.fallback_reason || '',
+    fallbackReasonText: fallbackReasonToText(sendResult.fallback_reason),
+    clipboardState: clipboardResultToState(sendResult.clipboard_result),
+    submissionState: draftToSubmissionState(draft),
+    ok: Boolean(sendResult.ok),
+    message: sendResult.message || '',
+  };
+}
+
+// Confidence thresholds are owned/edited by Settings (settingsWorkspace.js's
+// confidence_force_review_enabled / confidence_force_review_below /
+// confidence_auto_send_above, backed by utils.py's profile defaults and
+// enforced by send_policy.py's evaluate_confidence_send_policy) -- Talk only
+// displays a read-only summary, never its own gate. Returns null (an honest
+// empty state) when the settings aren't available yet, rather than
+// fabricating numbers.
+export function deriveConfidenceThresholdSummary(settings) {
+  if (!settings) return null;
+  const { confidence_force_review_enabled: enabled, confidence_force_review_below: below, confidence_auto_send_above: above } = settings;
+  if (enabled === undefined || enabled === null) return null;
+  if (enabled === false) return 'Confidence gate off';
+  if (below === undefined || below === null || above === undefined || above === null) return null;
+
+  const belowPct = Math.round(Number(below) * 100);
+  const abovePct = Math.round(Number(above) * 100);
+  if (!Number.isFinite(belowPct) || !Number.isFinite(abovePct)) return null;
+
+  return `Review below ${belowPct}% · auto-send above ${abovePct}%`;
+}
+
+const FORCE_REVIEW_REASON_TEXT = {
+  audio_gate: 'No audio was detected before this draft — flagged for review.',
+  long_draft: 'This draft is long — flagged for review.',
+  confidence_missing: 'Confidence score unavailable — flagged for review.',
+  low_confidence: 'Confidence is below the review threshold — flagged for review.',
+  confidence_moderate: 'Confidence is in the moderate range — flagged for review.',
+};
+
+// draft.force_review / draft.force_review_reason (server.py ~line 925,
+// send_policy.py's evaluate_confidence_send_policy) -> a display-only notice.
+// Surfaces the backend's own gate decision; does not invent one.
+export function deriveForceReviewNotice(draft) {
+  if (!draft?.force_review) return null;
+  const reason = draft.force_review_reason || '';
+  const text = reason in FORCE_REVIEW_REASON_TEXT
+    ? FORCE_REVIEW_REASON_TEXT[reason]
+    : reason ? `Flagged for review (${reason}).` : 'Flagged for review.';
+  return { reason, text };
+}
+
 // --- Reusable element lookup -------------------------------------------------
 
 // The DOM ids the Talk workspace markup exposes (see signal-desk-preview.html
@@ -228,8 +431,8 @@ export const TALK_PLACEMENT_MAP = {
   'capture.signalCore': { section: 'capture', control: 'Signal Core ring + live amplitude', wired: true },
   'capture.statusText': { section: 'capture', control: 'Listening / voice-detected status', wired: true },
   'capture.levelMeter': { section: 'capture', control: 'dB level meter', wired: true },
-  'capture.toggleRecording': { section: 'capture', control: 'Start/Stop Recording', wired: false, note: 'SPEC 6: Talk has no recording control of its own; the ring is display-only and #toggleRecordingButton lives on the old dashboard' },
-  'capture.emergencyStop': { section: 'capture', control: 'Emergency Stop', wired: false, note: 'SPEC 6: no action row on Talk yet' },
+  'capture.toggleRecording': { section: 'capture', control: 'Start/Stop Recording', wired: true, note: 'Wave 2: features/talkCapture.js binds #sdCaptureStartButton/#sdCaptureStopButton; the button path and the hotkey path converge on one reducer with voice-status authoritative' },
+  'capture.emergencyStop': { section: 'capture', control: 'Emergency Stop', wired: true, note: 'Wave 2: #sdEmergencyStopButton via features/talkCapture.js -> POST /runtime/emergency-stop; enabled in every capture state by design' },
 
   'refine.refinedText': { section: 'refine', control: 'Refined message text', wired: true },
   'refine.rawTranscript': { section: 'refine', control: 'Raw transcript (collapsible)', wired: true },
@@ -249,19 +452,21 @@ export const TALK_PLACEMENT_MAP = {
   'review.readSelection': { section: 'review', control: 'Read Selection', wired: true },
 
   'delivery.sendInsert': { section: 'delivery', control: 'Send / Insert primary action', wired: true },
-  'delivery.sendVariants': { section: 'delivery', control: 'Send split-button variant popover', wired: false, note: 'DESIGN GAP: no popover component exists anywhere in the repo; hooks.onSendVariantsRequested is a stub' },
-  'delivery.segmented': { section: 'delivery', control: 'Insert method (type/paste/copy) driving getSelectedSendAction()', wired: true },
+  'delivery.sendVariants': { section: 'delivery', control: 'Send split-button variant popover', wired: false, intentional_cut: true, note: 'DIRECTOR RULING (Wave 2 Gate 2): no popover component exists anywhere in the repo; #sdSendChevronButton and hooks.onSendVariantsRequested are removed outright rather than left as a decorative stub. Exactly one delivery selector survives -- see delivery.segmented.' },
+  'delivery.segmented': { section: 'delivery', control: 'Delivery selector (Type/Paste/Copy) driving getSelectedSendAction()', wired: true },
   'delivery.accept': { section: 'delivery', control: 'Accept draft', wired: true },
   'delivery.decline': { section: 'delivery', control: 'Decline draft', wired: true },
   'delivery.retry': { section: 'delivery', control: 'Retry (blocked/error drafts)', wired: true },
   'delivery.copy': { section: 'delivery', control: 'Copy cleaned output', wired: true },
-  'delivery.sendResult': { section: 'delivery', control: 'Send-result detail (requested/used action, fallback reason)', wired: false, note: 'SPEC 6: no send-result panel in Talk markup' },
+  'delivery.sendResult': { section: 'delivery', control: 'Send-result detail (requested/actual action, fallback reason, clipboard + submission state)', wired: true },
 
   'context.persona': { section: 'context', control: 'Active persona', wired: true },
   'context.processingMode': { section: 'context', control: 'Processing mode (local)', wired: true },
-  'delivery.mode': { section: 'delivery', control: 'Review-first vs send-immediately', wired: true },
+  'delivery.mode': { section: 'delivery', control: 'Review-first vs send-immediately', wired: false, intentional_cut: true, note: 'DIRECTOR RULING (Wave 2 Gate 2), same single-owner rule as context.confidenceSlider: this was a <select> nothing listened to. It mimed the profile field `send_mode`, which Settings > Review & Drafts already owns behind its save bar. Talk now shows the active mode read-only (#sdDeliveryModeValue) and links to that control (#sdDeliveryModeSettingsLink) rather than offering a second, non-functional writer.' },
   'context.contact': { section: 'context', control: 'Writing to (recipient picker)', wired: true },
-  'context.confidenceSlider': { section: 'context', control: 'Confidence gate control', wired: false, note: 'Display-only in the mockup; the real gate is a profile setting owned by Settings' },
+  'context.confidenceSlider': { section: 'context', control: 'Fake <input type="range"> confidence gate control', wired: false, intentional_cut: true, note: 'DIRECTOR RULING (Wave 2 Gate 2): had no id and no handler; removed. Confidence thresholds are owned/edited by Settings (confidence_force_review_below / confidence_auto_send_above) -- Talk must not duplicate that gate. Replaced by the read-only context.confidenceThresholds + context.forceReviewNotice entries below.' },
+  'context.confidenceThresholds': { section: 'context', control: 'Read-only confidence threshold summary + link to Settings', wired: true },
+  'context.forceReviewNotice': { section: 'context', control: 'Force-review notice (draft.force_review / force_review_reason)', wired: true },
 };
 
 export const TALK_ELEMENT_IDS = {
@@ -283,8 +488,18 @@ export const TALK_ELEMENT_IDS = {
   listenButton: 'sdListenButton',
   reviseButton: 'sdReviseButton',
   sendButton: 'sdSendButton',
-  sendChevronButton: 'sdSendChevronButton',
+  sendButtonLabel: 'sdSendButtonLabel',
   deliverySegmented: 'sdDeliverySegmented',
+  sendResult: 'sdSendResult',
+  sendResultRequested: 'sdSendResultRequested',
+  sendResultActual: 'sdSendResultActual',
+  sendResultFallback: 'sdSendResultFallback',
+  sendResultFallbackReason: 'sdSendResultFallbackReason',
+  sendResultClipboard: 'sdSendResultClipboard',
+  sendResultSubmission: 'sdSendResultSubmission',
+  confidenceThresholds: 'sdConfidenceThresholds',
+  confidenceSettingsLink: 'sdConfidenceSettingsLink',
+  forceReviewNotice: 'sdForceReviewNotice',
 };
 
 /** Looks up every TALK_ELEMENT_IDS entry by id from `root` (defaults to `document`). Missing ids resolve to null, never throw. */
@@ -311,7 +526,8 @@ export function createTalkWorkspaceFeature({ elements, hooks } = {}) {
   const hks = hooks || {};
 
   let signalCore = null;
-  let deliverySelection = 'send';
+  let deliverySelection = null;
+  let lastOutputSettings = null;
 
   function writeClipboard(text) {
     const fn = hks.writeClipboardText || (typeof window !== 'undefined' ? window.betterFingers?.writeClipboardText : null);
@@ -405,13 +621,42 @@ export function createTalkWorkspaceFeature({ elements, hooks } = {}) {
     const destinationName = draft?.destination_name || draft?.destination?.name;
     if (destinationName && els.destinationLabel) els.destinationLabel.textContent = destinationName;
 
+    const thresholdSummary = deriveConfidenceThresholdSummary(lastOutputSettings);
+    if (els.confidenceThresholds) {
+      els.confidenceThresholds.textContent = thresholdSummary === null ? '' : thresholdSummary;
+    }
+
+    const forceReviewNotice = deriveForceReviewNotice(draft);
+    if (els.forceReviewNotice) {
+      els.forceReviewNotice.hidden = !forceReviewNotice;
+      els.forceReviewNotice.textContent = forceReviewNotice ? forceReviewNotice.text : '';
+    }
+
     setActionsEnabled(vm.hasDraft);
   }
 
   function setActionsEnabled(hasDraft) {
-    for (const btn of [els.rawTranscriptButton, els.listenButton, els.reviseButton, els.sendButton, els.sendChevronButton]) {
+    for (const btn of [els.rawTranscriptButton, els.listenButton, els.reviseButton, els.sendButton]) {
       if (btn) btn.disabled = !hasDraft;
     }
+  }
+
+  // --- Send-result panel (server.py's send_result -- drafts.js's
+  //     ui.renderSendResult contract, currently a documented no-op in
+  //     bootstrap/signalDeskApp.js) ------------------------------------------
+
+  function renderSendResult(sendResult, draft) {
+    const vm = deriveSendResultViewModel(sendResult, draft);
+    if (els.sendResult) els.sendResult.hidden = !vm.hasResult;
+    if (!vm.hasResult) return vm;
+
+    if (els.sendResultRequested) els.sendResultRequested.textContent = vm.requested || '—';
+    if (els.sendResultActual) els.sendResultActual.textContent = vm.actual || '—';
+    if (els.sendResultFallback) els.sendResultFallback.textContent = vm.fallbackUsed ? 'Yes' : 'No';
+    if (els.sendResultFallbackReason) els.sendResultFallbackReason.textContent = vm.fallbackReasonText || '—';
+    if (els.sendResultClipboard) els.sendResultClipboard.textContent = vm.clipboardState;
+    if (els.sendResultSubmission) els.sendResultSubmission.textContent = vm.submissionState;
+    return vm;
   }
 
   async function refresh() {
@@ -468,42 +713,65 @@ export function createTalkWorkspaceFeature({ elements, hooks } = {}) {
       return;
     }
     await hks.drafts.handleSendClick();
-    renderRefinedCard(hks.drafts.getLatestDraft?.() ?? null);
+    const draft = hks.drafts.getLatestDraft?.() ?? null;
+    renderRefinedCard(draft);
+    renderSendResult(draft?.send_result ?? null, draft);
   }
 
-  // TODO(phase-integration): the split-button chevron (copy/insert/send
-  // variant picker) has no existing popover component -- see file header.
-  function handleSendChevronClick() {
-    const draft = hks.drafts?.getLatestDraft?.();
-    if (hks.onSendVariantsRequested) {
-      hks.onSendVariantsRequested(draft);
-      return;
-    }
-    hks.showToast?.('Send variants aren’t wired up yet.', 'warning');
-    if (typeof console !== 'undefined') {
-      console.warn('[talkWorkspace] Send chevron clicked with no hooks.onSendVariantsRequested handler.');
+  // --- Context panel: Delivery segmented (Type/Paste/Copy) --------------------
+
+  function updatePrimaryActionLabel() {
+    if (els.sendButtonLabel) {
+      els.sendButtonLabel.textContent = primaryActionLabel(deliverySelection, lastOutputSettings);
     }
   }
 
-  // --- Context panel: Delivery segmented (local-only state this phase) -------
-  // TODO(phase-integration): this selection isn't fed into
-  // getSelectedSendAction()/drafts.js yet -- main.js currently sources that
-  // from the old #sendActionSelect dropdown. Once integrated, the segmented
-  // control's choice should become (or drive) that source of truth.
+  // Repaints the segmented control from the CURRENT resolved state rather than
+  // trusting whatever `is-active` the markup shipped with. Without this the
+  // page's static default (Type) and the module's initial selection (none, so
+  // the profile default applies) can disagree, and the control would be
+  // advertising a method the Send button is not going to use.
+  function syncDeliverySegmented() {
+    const container = els.deliverySegmented;
+    if (!container || typeof container.querySelectorAll !== 'function') return;
+    const active = activeDeliverySegment(deliverySelection, lastOutputSettings);
+    Array.from(container.querySelectorAll('[data-delivery-option]')).forEach((btn) => {
+      const isActive = btn.dataset?.deliveryOption === active;
+      btn.classList?.toggle?.('is-active', isActive);
+      btn.setAttribute?.('aria-pressed', isActive ? 'true' : 'false');
+    });
+  }
+
   function bindDeliverySegmented() {
     const container = els.deliverySegmented;
     if (!container || typeof container.querySelectorAll !== 'function') return;
     const options = Array.from(container.querySelectorAll('[data-delivery-option]'));
     options.forEach((btn) => {
       btn.addEventListener?.('click', () => {
-        deliverySelection = btn.dataset.deliveryOption || deliverySelection;
-        options.forEach((other) => other.classList?.toggle?.('is-active', other === btn));
+        const option = btn.dataset.deliveryOption;
+        if (!DELIVERY_OPTIONS.includes(option)) return;
+        deliverySelection = option;
+        syncDeliverySegmented();
+        updatePrimaryActionLabel();
+        hks.onDeliverySelectionChanged?.(deliverySelection);
       });
     });
+    syncDeliverySegmented();
   }
 
   function getSelectedDeliveryOption() {
     return deliverySelection;
+  }
+
+  function getSelectedSendAction() {
+    return resolveSendAction(deliverySelection, lastOutputSettings);
+  }
+
+  /** Pushes the profile-derived output settings in -- this module never fetches on its own. */
+  function setOutputSettings(outputSettings) {
+    lastOutputSettings = outputSettings || null;
+    syncDeliverySegmented();
+    updatePrimaryActionLabel();
   }
 
   // --- lifecycle ---------------------------------------------------------------
@@ -513,8 +781,12 @@ export function createTalkWorkspaceFeature({ elements, hooks } = {}) {
     els.listenButton?.addEventListener?.('click', () => handleListenClick());
     els.reviseButton?.addEventListener?.('click', () => handleReviseClick());
     els.sendButton?.addEventListener?.('click', () => handleSendClick());
-    els.sendChevronButton?.addEventListener?.('click', () => handleSendChevronClick());
+    els.confidenceSettingsLink?.addEventListener?.('click', (event) => {
+      event?.preventDefault?.();
+      hks.onOpenConfidenceSettings?.();
+    });
     bindDeliverySegmented();
+    updatePrimaryActionLabel();
   }
 
   function init(signalCoreConfig) {
@@ -535,8 +807,11 @@ export function createTalkWorkspaceFeature({ elements, hooks } = {}) {
     getSignalCore,
     handleVoiceStatusMessage,
     renderRefinedCard,
+    renderSendResult,
     refresh,
     getSelectedDeliveryOption,
+    getSelectedSendAction,
+    setOutputSettings,
     destroy,
   };
 }

@@ -458,14 +458,23 @@ export function createDraftsFeature({ elements, ui, hooks }) {
       return;
     }
 
-    els.saveDraftEditButton.disabled = true;
-    els.saveDraftEditButton.textContent = 'Saving...';
+    // Optional-chained to match setDraftControlsEnabled() above, which already
+    // guards every one of these same elements. A host may legitimately pass a
+    // partial element map (Signal Desk's Talk deliberately does not hand this
+    // module the Send button, since talkWorkspace.js owns it), and an
+    // unguarded write here turns that into a TypeError mid-action instead of a
+    // no-op -- which is exactly how Send came to be dead on the production
+    // Talk page.
+    if (els.saveDraftEditButton) {
+      els.saveDraftEditButton.disabled = true;
+      els.saveDraftEditButton.textContent = 'Saving...';
+    }
     try {
       await saveCurrentDraftEdit();
     } catch (error) {
       setMessage(els.draftMessageEl, `Save failed: ${error.message}`, 'danger');
     } finally {
-      els.saveDraftEditButton.textContent = 'Save Edit';
+      if (els.saveDraftEditButton) els.saveDraftEditButton.textContent = 'Save Edit';
       setDraftControlsEnabled(Boolean(latestDraft));
     }
   }
@@ -525,8 +534,10 @@ export function createDraftsFeature({ elements, ui, hooks }) {
       return;
     }
 
-    els.retryDraftButton.disabled = true;
-    els.retryDraftButton.textContent = 'Retrying...';
+    if (els.retryDraftButton) {
+      els.retryDraftButton.disabled = true;
+      els.retryDraftButton.textContent = 'Retrying...';
+    }
     try {
       const draft = await retryDraft(latestDraft.id);
       renderDraft(draft);
@@ -535,7 +546,7 @@ export function createDraftsFeature({ elements, ui, hooks }) {
     } catch (error) {
       setMessage(els.draftMessageEl, `Retry failed: ${error.message}`, 'danger');
     } finally {
-      els.retryDraftButton.textContent = 'Retry';
+      if (els.retryDraftButton) els.retryDraftButton.textContent = 'Retry';
       setDraftControlsEnabled(Boolean(latestDraft));
     }
   }
@@ -545,8 +556,10 @@ export function createDraftsFeature({ elements, ui, hooks }) {
       return;
     }
 
-    els.sendDraftButton.disabled = true;
-    els.sendDraftButton.textContent = 'Sending...';
+    if (els.sendDraftButton) {
+      els.sendDraftButton.disabled = true;
+      els.sendDraftButton.textContent = 'Sending...';
+    }
     try {
       await saveCurrentDraftEdit({ silent: true });
       const action = getSelectedSendAction();
@@ -557,7 +570,7 @@ export function createDraftsFeature({ elements, ui, hooks }) {
     } catch (error) {
       setMessage(els.draftMessageEl, `Send failed: ${error.message}`, 'danger');
     } finally {
-      els.sendDraftButton.textContent = 'Send / Copy';
+      if (els.sendDraftButton) els.sendDraftButton.textContent = 'Send / Copy';
       setDraftControlsEnabled(Boolean(latestDraft));
     }
   }

@@ -1192,6 +1192,116 @@
 .sd-refined-card__status[data-tone="warning"] { color: var(--sd-amber); }
 .sd-refined-card__status[data-tone="success"] { color: var(--sd-green); }
 
+/* Wave 2: why this draft is held for review (send_policy.py's decision). Amber
+   rather than red -- being asked to look at something is not an error -- and
+   collapsed entirely when empty so an unheld draft carries no blank row. */
+.sd-refined-card__force-review {
+  margin: var(--sd-space-4, 4px) 0 0;
+  font-size: var(--sd-font-sm, .85rem);
+  color: var(--sd-amber);
+}
+
+.sd-refined-card__force-review:empty { display: none; }
+
+/* ---------- Wave 2: capture actions row ---------- */
+
+.sd-capture-actions {
+  margin-top: var(--sd-space-16, 16px);
+}
+
+.sd-capture-actions__row {
+  align-items: center;
+}
+
+/* Pushes Emergency Stop to the far end, away from Start/Stop: the destructive
+   control should not sit under a cursor that is aiming for the ordinary one. */
+.sd-capture-actions__spacer {
+  flex: 1 1 auto;
+}
+
+.sd-capture-actions__message {
+  margin: var(--sd-space-8, 8px) 0 0;
+  min-height: 1.2em;
+  font-size: var(--sd-font-sm, .85rem);
+  color: var(--sd-text-secondary);
+}
+
+.sd-capture-actions__message[data-tone="danger"] { color: var(--sd-red); }
+.sd-capture-actions__message[data-tone="warning"] { color: var(--sd-amber); }
+.sd-capture-actions__message[data-tone="success"] { color: var(--sd-green); }
+
+/* ---------- Wave 2: send result + teach-from-edit panels ---------- */
+
+/* Both panels share one shape on purpose: they answer the same kind of
+   question ("what actually happened / what exactly would be stored") and a
+   user who has read one should not have to re-learn the other. */
+.sd-send-result,
+.sd-teach-panel {
+  margin-top: var(--sd-space-16, 16px);
+  padding: var(--sd-space-12, 12px);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-md, 8px);
+  background: var(--sd-surface-2, transparent);
+}
+
+.sd-send-result__title,
+.sd-teach-panel__title {
+  display: block;
+  margin-bottom: var(--sd-space-8, 8px);
+  font-size: var(--sd-font-sm, .85rem);
+  font-weight: 600;
+  color: var(--sd-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.sd-send-result__grid,
+.sd-teach-panel__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--sd-space-8, 8px) var(--sd-space-16, 16px);
+  margin: 0;
+}
+
+.sd-send-result__cell dt,
+.sd-teach-panel__cell dt {
+  font-size: var(--sd-font-xs, .75rem);
+  color: var(--sd-text-tertiary, var(--sd-text-secondary));
+}
+
+.sd-send-result__cell dd,
+.sd-teach-panel__cell dd {
+  margin: 2px 0 0;
+  font-size: var(--sd-font-sm, .85rem);
+  color: var(--sd-text-primary);
+  /* Long transcripts and fallback reasons wrap instead of widening the card
+     and pushing the whole Talk column into a horizontal scroll. */
+  overflow-wrap: anywhere;
+}
+
+/* The teach panel quotes three full texts, so it stacks rather than sitting in
+   narrow side-by-side columns where every line would wrap mid-phrase. */
+.sd-teach-panel__grid {
+  grid-template-columns: 1fr;
+}
+
+.sd-teach-panel__consent {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sd-space-8, 8px);
+  margin: var(--sd-space-12, 12px) 0;
+  font-size: var(--sd-font-sm, .85rem);
+  color: var(--sd-text-secondary);
+}
+
+/* ---------- Wave 2: context panel single-value rows ---------- */
+
+.sd-context__value {
+  display: block;
+  font-size: var(--sd-font-sm, .85rem);
+  color: var(--sd-text-primary);
+}
+
 .sd-visually-hidden {
   position: absolute;
   width: 1px;

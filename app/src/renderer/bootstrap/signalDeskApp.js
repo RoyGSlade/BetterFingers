@@ -22,6 +22,13 @@ import { createShortcutsFeature, describeShortcuts, ACTIONS } from '../features/
 import { createStatusBarFeature, collectStatusBarElements } from '../features/statusBar.js';
 import { createDraftsFeature } from '../features/drafts.js';
 import { createTalkWorkspaceFeature, collectTalkElements } from '../features/talkWorkspace.js';
+import { createTalkCaptureFeature, collectTalkCaptureElements } from '../features/talkCapture.js';
+// Only the element collector -- talkDrafts.js has no import-time side effects,
+// and its map is the already-reviewed description of which Signal Desk ids
+// drafts.js should own (and which, like Send, it deliberately should not).
+import { collectTalkDraftElements } from '../talkDrafts.js';
+import { createTalkTeachingFeature, collectTalkTeachingElements } from '../features/talkTeaching.js';
+import { createPersonaLearningFeature } from '../features/personaLearning.js';
 import { createLibraryWorkspaceFeature, collectLibraryElements } from '../features/libraryWorkspace.js';
 import {
   createStudioWorkspaceFeature,
@@ -135,34 +142,105 @@ export function startSignalDeskApp(doc = document) {
   const statusBarInterval = setInterval(() => statusBar.refresh().catch(() => {}), 3000);
 
   // --- Shared send-action state (drafts.js's hooks.getSelectedSendAction) --
-  // TODO(phase-integration): talkWorkspace.js's own header comment (see
-  // bindDeliverySegmented) documents that its Send/Insert/Copy segmented
-  // control isn't fed into send-action selection yet -- main.js sources the
-  // real default the same way this does, from the profile's send_mode /
-  // supports_input_injection capability, not from that control.
+  //
+  // Wave 2: the Talk Delivery segmented control is now the single source of
+  // truth for the insertion method, and talkWorkspace.resolveSendAction()
+  // reproduces the profile-derived default this function used to compute on its
+  // own. So the default lives in exactly one place, and an explicit user choice
+  // overrides it instead of being silently ignored (which is what happened when
+  // two competing controls both claimed to own this decision).
+  //
+  // talkWorkspace is constructed further down but only ever CALLED from a later
+  // user interaction or from the initial refresh at the bottom of this
+  // function -- the same hoisting-safe pattern main.js documents for the legacy
+  // dashboard.
 
   let outputSettings = null;
+  let profileSettings = null;
+
+  // talkWorkspace needs both halves of the picture: send_mode/capabilities from
+  // /runtime/output-settings, and the confidence thresholds, which are profile
+  // settings and are NOT part of the output-settings payload. Merging them here
+  // (rather than having the Talk module fetch anything itself) keeps that module
+  // free of network access, which is what makes it unit-testable.
+  function talkSettingsSnapshot() {
+    if (!outputSettings && !profileSettings) return null;
+    return { ...(profileSettings || {}), ...(outputSettings || {}) };
+  }
+
+  function pushTalkSettings() {
+    talkWorkspace?.setOutputSettings?.(talkSettingsSnapshot());
+  }
+
   async function refreshOutputSettings() {
     try {
       outputSettings = await api.fetchOutputSettings();
     } catch (_error) {
       outputSettings = null;
     }
+    pushTalkSettings();
+    renderDeliveryMode();
     return outputSettings;
   }
 
-  function getSelectedSendAction() {
-    if (!outputSettings) return 'copy_only';
-    if (!outputSettings?.capabilities?.supports_input_injection) return 'copy_only';
-    return outputSettings.send_mode === 'auto_send' ? 'open_chat_then_send' : 'paste';
+  // The active profile's settings carry confidence_force_review_enabled /
+  // confidence_force_review_below / confidence_auto_send_above (rendered
+  // read-only in Talk, owned by Settings) and current_preset (the active
+  // persona Talk displays).
+  async function refreshProfileSettings() {
+    try {
+      const payload = await api.fetchProfiles();
+      profileSettings = payload?.settings ?? null;
+    } catch (_error) {
+      profileSettings = null;
+    }
+    pushTalkSettings();
+    renderActivePersona();
+    renderDeliveryMode();
+    return profileSettings;
   }
 
-  // renderSendResult(sendResult) is part of drafts.js's `ui` contract, but
-  // Signal Desk's Talk workspace has no send-result panel (the preview never
-  // added one either) -- the real user-facing feedback is drafts.js's own
-  // setMessage(draftMessageEl, ...) call right after send, so this stays a
-  // deliberate no-op rather than inventing a second panel.
-  function renderSendResult() {}
+  function getSelectedSendAction() {
+    return talkWorkspace?.getSelectedSendAction?.() ?? 'copy_only';
+  }
+
+  // Wave 2: drafts.js's `ui.renderSendResult(sendResult)` contract is finally
+  // honoured. It used to be a deliberate no-op because Talk had no send-result
+  // panel, which meant a send that silently fell back to the clipboard was
+  // indistinguishable from one that typed into the target app. drafts.js passes
+  // only the send_result, so the draft itself (needed for the submission state)
+  // is read back from the same feature instance.
+  function renderSendResult(sendResult) {
+    talkWorkspace?.renderSendResult?.(sendResult ?? null, drafts?.getLatestDraft?.() ?? null);
+  }
+
+  // Talk DISPLAYS the active persona; Settings OWNS it (it is the profile field
+  // `current_preset`, behind the Settings save bar). See the markup comment in
+  // signal-desk.html for why this is not an editable picker in this wave.
+  // Same display-here / own-in-Settings split as persona and the confidence
+  // thresholds: `send_mode` is a profile field behind the Settings save bar.
+  const SEND_MODE_TEXT = {
+    auto_send: 'Send immediately',
+    review_first: 'Review first',
+  };
+
+  function renderDeliveryMode() {
+    const el = doc.getElementById('sdDeliveryModeValue');
+    if (!el) return;
+    const mode = outputSettings?.send_mode ?? profileSettings?.send_mode;
+    el.textContent = mode ? SEND_MODE_TEXT[mode] || mode : '—';
+  }
+
+  function renderActivePersona() {
+    const nameEl = doc.getElementById('sdTalkActivePersona');
+    const noteEl = doc.getElementById('sdTalkActivePersonaNote');
+    if (!nameEl) return;
+    const preset = profileSettings?.current_preset;
+    nameEl.textContent = preset || '—';
+    if (noteEl) {
+      noteEl.textContent = preset ? '' : 'No persona selected for this profile.';
+    }
+  }
 
   // --- Utilities workspace (models, speech input, text tools, diagnostics,
   //     advanced -- constructed before drafts since drafts.hooks.onDraftEdited
@@ -227,34 +305,203 @@ export function startSignalDeskApp(doc = document) {
   syncVoiceCloneConsent();
 
   // --- Drafts (shared state/business logic for Talk + Library) ------------
-  // No legacy-dashboard draft-editor elements exist on this page, so
-  // `elements` is empty -- every DOM write inside drafts.js is already
-  // optional-chained (`if (els.x) ...`), and Talk/Library render the real
-  // state themselves via hooks.drafts.getLatestDraft()/renderDraft(). See
-  // talkWorkspace.js/libraryWorkspace.js's own header comments confirming
-  // this is the one live drafts-feature instance both share.
+  //
+  // Wave 2 correction. This used to pass `elements: {}` on the reasoning that
+  // "Talk renders the real state itself". That was wrong in two ways, and both
+  // shipped as dead controls on the production page:
+  //
+  //   1. drafts.js does NOT bind its own click listeners -- the host does. With
+  //      an empty element map and no listeners here, Save Edit, Accept,
+  //      Decline, Retry, Copy and all four rewrite buttons were inert, and the
+  //      keyboard shortcuts that .click() them (ACTIONS.SAVE_EDIT/ACCEPT/... in
+  //      the map above) clicked buttons nothing was listening to.
+  //   2. Nothing called saveCurrentDraftEdit(), which is the only caller of
+  //      hooks.onDraftEdited -- so the dictionary-suggestion hook below could
+  //      never fire either, and neither could teach-from-edit.
+  //
+  // The element map comes from talkDrafts.js, which already describes exactly
+  // this binding for the preview page (importing only the collector; that
+  // module has no import-time side effects). Note it deliberately omits the
+  // Send button: talkWorkspace.js owns #sdSendButton, and two modules writing
+  // one button's disabled state is how they end up racing.
+
+  const draftElements = collectTalkDraftElements(doc);
+
+  // Assigned below; the hooks that reference it only fire on a later user
+  // action -- the same hoisting-safe pattern documented in this file's header.
+  let talkTeaching;
 
   const drafts = createDraftsFeature({
-    elements: {},
+    elements: draftElements,
     ui: { setMessage, showToast, escapeHtml, renderSendResult },
     hooks: {
       getSelectedSendAction,
       gatherVoiceStudioSettings: () => voiceStudio.gatherVoiceStudioSettings(),
-      onDraftEdited: (rawText, editedText) => utilitiesWorkspace.suggestFromEdit(rawText, editedText),
+      // Two consumers of the same edit, composed rather than one replacing the
+      // other: dictionary suggestions (already real) and teach-from-edit.
+      // Must return a promise: drafts.js calls onDraftEdited(...).catch(...)
+      // directly on the return value.
+      onDraftEdited: async (rawText, editedText) => {
+        // The model output is NOT recoverable here: saveCurrentDraftEdit()
+        // calls renderDraft(draft) -- reassigning latestDraft to the POST-edit
+        // value -- before it fires this hook, so getLatestDraft().final_text is
+        // already the edited text by now. modelTextSnapshot is captured at the
+        // start of whichever user action is about to save (see
+        // snapshotModelText below).
+        talkTeaching?.onDraftEdited?.({ rawText, modelText: modelTextSnapshot, editedText });
+        await utilitiesWorkspace.suggestFromEdit(rawText, editedText);
+      },
       refreshOutputSettings,
     },
   });
+
+  // Teach-from-edit needs all three texts: what the user said, what the MODEL
+  // wrote, and what the user changed it to. Only the middle one is perishable
+  // -- saveCurrentDraftEdit() overwrites latestDraft.final_text before the
+  // onDraftEdited hook runs -- so it is captured here, at the start of every
+  // user action that can trigger a save. A rewrite counts: its output is model
+  // output too, so the snapshot taken before the NEXT save is correctly the
+  // rewritten text.
+  let modelTextSnapshot = '';
+  function snapshotModelText() {
+    modelTextSnapshot = drafts?.getLatestDraft?.()?.final_text ?? '';
+  }
+
+  // The listeners drafts.js expects its host to provide.
+  const bindClick = (el, handler) => el?.addEventListener?.('click', () => handler());
+  const bindSavingClick = (el, handler) =>
+    bindClick(el, () => {
+      snapshotModelText();
+      return handler();
+    });
+
+  bindSavingClick(draftElements.saveDraftEditButton, () => drafts.handleSaveDraftEditClick());
+  bindClick(draftElements.acceptDraftButton, () => drafts.handleAcceptClick());
+  bindClick(draftElements.declineDraftButton, () => drafts.handleDeclineClick());
+  bindClick(draftElements.retryDraftButton, () => drafts.handleRetryClick());
+  bindClick(draftElements.copyDraftButton, () => drafts.handleCopyClick());
+  // runRewriteAction(button, action, customInstruction) takes the button first
+  // so it can show its own in-flight label.
+  bindSavingClick(draftElements.rewriteShorterButton, () =>
+    drafts.runRewriteAction(draftElements.rewriteShorterButton, 'shorter'),
+  );
+  bindSavingClick(draftElements.rewriteClearerButton, () =>
+    drafts.runRewriteAction(draftElements.rewriteClearerButton, 'clearer'),
+  );
+  bindSavingClick(draftElements.rewriteToneButton, () =>
+    drafts.runRewriteAction(draftElements.rewriteToneButton, 'tone'),
+  );
+  bindSavingClick(draftElements.rewriteCustomButton, () =>
+    drafts.runRewriteAction(
+      draftElements.rewriteCustomButton,
+      'custom',
+      draftElements.customRewriteInstructionEl?.value || '',
+    ),
+  );
+  bindSavingClick(draftElements.readSelectionButton, () => drafts.runDraftTts(true));
+  bindSavingClick(draftElements.readFullDraftButton, () => drafts.runDraftTts(false));
+  draftElements.draftFinalTextEl?.addEventListener?.('input', () => drafts.handleDraftTextInput());
+
+  // Start disabled: an editable-looking box with no draft behind it invites
+  // typing that has nowhere to land. drafts.js re-enables on the first draft.
+  drafts.setDraftControlsEnabled?.(false);
 
   // --- Talk workspace -------------------------------------------------------
 
   const talkWorkspace = createTalkWorkspaceFeature({
     elements: collectTalkElements(doc),
-    hooks: { showToast, drafts },
+    hooks: {
+      showToast,
+      // Send performs a silent save first (drafts.js's handleSendClick calls
+      // saveCurrentDraftEdit({silent:true})), so it can fire the edit hook too
+      // and needs the same pre-save snapshot the other saving actions take.
+      drafts: {
+        ...drafts,
+        handleSendClick: () => {
+          snapshotModelText();
+          return drafts.handleSendClick();
+        },
+      },
+      // The segmented control is the single source of truth for the insertion
+      // method; drafts.js reads it back through getSelectedSendAction() at send
+      // time, so nothing needs to be cached here -- this hook exists so the
+      // choice is observable (and so a future per-draft persistence has a seam).
+      onDeliverySelectionChanged: () => {},
+      // The Revise button toggles the rewrite drawer. talkWorkspace owns the
+      // button's click listener, so the drawer toggle arrives as this hook
+      // rather than a second listener on the same element.
+      onReviseRequested: () => {
+        const drawer = doc.getElementById('sdReviseDrawer');
+        const button = doc.getElementById('sdReviseButton');
+        if (!drawer) return;
+        const opening = drawer.hidden;
+        drawer.hidden = !opening;
+        button?.setAttribute('aria-expanded', String(opening));
+      },
+      // Talk links to the threshold owner rather than duplicating it.
+      onOpenConfidenceSettings: () => {
+        shell.goTo('settings');
+        settingsWorkspace.goToSection('review');
+      },
+    },
   });
   talkWorkspace.init();
 
+  // --- Talk capture actions (Start / Stop / Emergency Stop) ----------------
+  //
+  // Before this, the production Signal Desk had NO capture control at all: the
+  // ring was display-only and the legacy dashboard's #toggleRecordingButton
+  // does not exist on this page, so the global hotkey was the only path that
+  // worked. Both paths now converge on talkCapture.js's reducer, with the
+  // voice-status stream authoritative -- so the buttons can never disagree with
+  // what the recorder is actually doing.
+
+  const talkCapture = createTalkCaptureFeature({
+    elements: collectTalkCaptureElements(doc),
+    hooks: { api, showToast },
+  });
+  talkCapture.init();
+
+  // --- Teach from this edit (restores the D-0018 trigger) ------------------
+  //
+  // Saving an edit OFFERS to learn; it never learns. The only path that reaches
+  // the network is personaLearning.js's own prepare -> consent -> confirm
+  // sequence, and this is a dedicated instance of it wired to Talk's live edit
+  // rather than to Studio's teach panel. Two instances, never one shared: they
+  // read different sources and render different ids (talkTeaching.js owns the
+  // sdTalkTeach* elements; personaLearning's own `elements` stays empty so it
+  // renders nothing and cannot fight over them).
+
+  const talkPersonaLearning = createPersonaLearningFeature({
+    elements: {},
+    hooks: {
+      getPersonaName: () => talkTeaching?.getState?.().personaName || '',
+      getDraftPair: () => ({
+        raw: talkTeaching?.getState?.().rawText || '',
+        // The FINAL EDITED text is what gets taught -- teaching the model its
+        // own output back would be a no-op example.
+        out: talkTeaching?.getState?.().editedText || '',
+      }),
+    },
+  });
+
+  talkTeaching = createTalkTeachingFeature({
+    elements: collectTalkTeachingElements(doc),
+    hooks: {
+      showToast,
+      personaLearning: talkPersonaLearning,
+      getActivePersonaName: () => String(profileSettings?.current_preset ?? '').trim(),
+    },
+  });
+  talkTeaching.init();
+
   const voiceStatusConnection = api.connectVoiceStatus({
-    onMessage: (payload) => talkWorkspace.handleVoiceStatusMessage(payload),
+    // Both consumers, not one instead of the other: talkWorkspace owns the
+    // ring/status/meter, talkCapture owns the action row's enablement.
+    onMessage: (payload) => {
+      talkWorkspace.handleVoiceStatusMessage(payload);
+      talkCapture.handleVoiceStatusMessage(payload);
+    },
     onConnectionChange: () => {},
     onError: () => {},
   });
@@ -451,9 +698,29 @@ export function startSignalDeskApp(doc = document) {
 
   // --- Initial real-data population (every list starts empty until this) --
 
-  drafts.refreshLatestDraft().catch(() => {});
+  // Talk's persona chip and its "change it in Settings" link (current_preset
+  // lives in Settings > AI Cleanup).
+  doc.getElementById('sdTalkPersonaSettingsLink')?.addEventListener('click', () => {
+    shell.goTo('settings');
+    settingsWorkspace.goToSection('aicleanup');
+  });
+
+  // send_mode lives in Settings > Review & Drafts, same section as the
+  // confidence thresholds.
+  doc.getElementById('sdDeliveryModeSettingsLink')?.addEventListener('click', () => {
+    shell.goTo('settings');
+    settingsWorkspace.goToSection('review');
+  });
+
+  // Through talkWorkspace.refresh(), not drafts.refreshLatestDraft() alone:
+  // the workspace paints Send/Revise enablement and the confidence strip from
+  // the fetched draft. A bare drafts refresh renders the text but leaves the
+  // action row dead until the first voice-status message — visible to any
+  // user who restarts with a pending draft.
+  talkWorkspace.refresh().catch(() => {});
   libraryWorkspace.refresh().catch(() => {});
   refreshOutputSettings().catch(() => {});
+  refreshProfileSettings().catch(() => {});
   studioWorkspace.refresh().catch(() => {});
   utilitiesWorkspace.refreshAll().catch(() => {});
   settingsWorkspace.refreshAll().catch(() => {});
@@ -468,6 +735,7 @@ export function startSignalDeskApp(doc = document) {
       clearInterval(statusBarInterval);
       voiceStatusConnection.close?.();
       talkWorkspace.destroy?.();
+      talkCapture.destroy?.();
     },
   };
 }
