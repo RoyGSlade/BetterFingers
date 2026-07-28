@@ -465,3 +465,99 @@ def run_audience_preservation_suite(
             "feature and not evidence against it."
         ),
     }
+
+
+# --- Traits axis (Stage 10's gate) -------------------------------------------
+#
+# The third thing that can change the words a user sends. Traits differ from the
+# other two in that they need no default-off toggle -- neutral emits nothing, so
+# the feature is inert until a user drags a slider -- but the RENDERING still
+# needs the same evidence, because "a slider the user set" is no protection
+# against the model over-applying it.
+#
+# The two variants are opposite corners, chosen because they are the ones most
+# likely to editorialise in opposite directions. The blunt one deliberately
+# pins confidence at 100: design doc §4b makes passing WITH it the condition of
+# that axis shipping at all, since raising assurance on someone else's dictation
+# is how "I think maybe we can ship Friday" becomes a promise they never made.
+
+WARM_TRAITS = {"warmth": 95, "directness": 10, "detail": 85, "formality": 90, "confidence": 15}
+BLUNT_TRAITS = {"warmth": 5, "directness": 95, "detail": 15, "formality": 10, "confidence": 100}
+
+# If any of these surface, the trait instructions reached the user's message.
+_TRAITS_LEAK_TOKENS = (
+    "persona traits", "these affect wording", "register only", "take precedence",
+)
+
+
+def run_traits_probe(
+    process_fn: Callable[..., str],
+    *,
+    probe: dict[str, Any],
+    warm_traits: dict = None,
+    blunt_traits: dict = None,
+) -> dict[str, Any]:
+    """Clean one transcript three ways -- neutral, warm/indirect, blunt/confident.
+
+    Traits reach the prompt through the PERSONA rather than a process_fast_lane
+    kwarg, so ``process_fn(text, traits=...)`` is expected to compose a persona
+    from them. ``None`` for the baseline must compose to a prompt
+    byte-identical to today's (design doc §8.1).
+    """
+    return _run_axis_probe(
+        process_fn,
+        probe=probe,
+        axis="traits",
+        variants=(
+            ("baseline", None),
+            ("warm", warm_traits or WARM_TRAITS),
+            ("blunt", blunt_traits or BLUNT_TRAITS),
+        ),
+        leak_tokens=_TRAITS_LEAK_TOKENS,
+        ratio_key="warm_vs_blunt_length_ratio",
+        attributable_key="failure_attributable_to_traits",
+        # Traits can invent a greeting for the same reason audience can: a
+        # "notably warm and encouraging" instruction is an invitation to open
+        # with one.
+        addressing_check=True,
+    )
+
+
+def run_traits_preservation_suite(
+    process_fn: Callable[..., str],
+    *,
+    probes=PROBES,
+) -> dict[str, Any]:
+    """Every probe against the traits axis, plus one overall verdict.
+
+    Only an all-PASS run is evidence that the trait block renders safely -- and
+    per design doc §8.3, a failure attributable to the blunt variant (which
+    pins confidence at 100) is the condition under which `confidence` is cut
+    rather than shipped.
+    """
+    results = [run_traits_probe(process_fn, probe=p) for p in probes]
+    statuses = {r["status"] for r in results}
+    attributable = [r for r in results if r.get("failure_attributable_to_traits")]
+
+    if "CALL_FAILED" in statuses:
+        overall = "CALL_FAILED"
+    elif statuses == {"PASS"}:
+        overall = "PASS"
+    elif attributable:
+        overall = "FAIL_TRAITS"
+    else:
+        overall = "FAIL_BASELINE"
+
+    return {
+        "overall": overall,
+        "probe_count": len(results),
+        "passed": sum(1 for r in results if r["status"] == "PASS"),
+        "attributable_failures": [r["probe"] for r in attributable],
+        "results": results,
+        "gate_note": (
+            "PASS is the only green. FAIL_TRAITS means the trait block itself degraded the "
+            "output; if the failing variant is the blunt one, design doc §4b says cut "
+            "`confidence` rather than ship it. FAIL_BASELINE means the model already did "
+            "that with neutral traits -- a real bug, but not caused by this feature."
+        ),
+    }

@@ -20,6 +20,34 @@ import {
   runFoundryStressTest,
 } from '../api/backend.js';
 
+// --- Persona traits (Stage 10) ------------------------------------------------
+//
+// Five user-set register dials on the wizard's Advanced section. The band
+// boundaries mirror persona_traits.py: a slider offers 101 values, a model acts
+// on about five, and the label beside it is what shows the user which drags
+// change the prompt. See docs/PERSONA_TRAITS_DESIGN.md §3.
+
+export const WIZARD_TRAIT_KEYS = ['warmth', 'directness', 'detail', 'formality', 'confidence'];
+
+/** Trait key -> the element-map key its slider is injected under. */
+export function traitElementKey(key) {
+  return `wizardTrait${key.charAt(0).toUpperCase()}${key.slice(1)}`;
+}
+
+export function traitBandLabel(value) {
+  // '' is checked before Number(): Number('') is 0, not NaN, so an input with
+  // no value would otherwise read "Very low" rather than unset.
+  if (value === null || value === undefined || value === '') return '';
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '';
+  const clamped = Math.max(0, Math.min(100, number));
+  if (clamped < 20) return 'Very low';
+  if (clamped < 40) return 'Low';
+  if (clamped < 60) return 'Neutral';
+  if (clamped < 80) return 'High';
+  return 'Very high';
+}
+
 // --- Persona Foundry: guided interview -> compile -> stress-test -> save.
 // Separate DOM tree and state from the manual persona wizard below; ends by
 // calling the same savePersona() the wizard uses. ---
@@ -657,7 +685,32 @@ export function createPersonasFeature({ elements, ui, hooks }) {
       const fewShot = collectFewShotExamples();
       if (fewShot.length) extra.few_shot = fewShot;
 
+      // Traits (Stage 10). Always sent, like the selects above, so a user can
+      // drag an axis back to neutral and have that stick -- omitting them at
+      // neutral would make "reset this slider" a no-op on save.
+      extra.traits = collectTraitValues();
+
       return extra;
+    }
+
+    /** Read the five sliders. Absent controls fall back to neutral, which
+     * composes to nothing, so a page without them behaves as if untouched. */
+    function collectTraitValues() {
+      const traits = {};
+      for (const key of WIZARD_TRAIT_KEYS) {
+        const el = els[traitElementKey(key)];
+        const raw = el ? Number(el.value) : NaN;
+        traits[key] = Number.isFinite(raw) ? Math.max(0, Math.min(100, Math.round(raw))) : 50;
+      }
+      return traits;
+    }
+
+    function renderTraitBands() {
+      for (const key of WIZARD_TRAIT_KEYS) {
+        const el = els[traitElementKey(key)];
+        const out = els[`${traitElementKey(key)}Band`];
+        if (out) out.textContent = traitBandLabel(el ? el.value : null);
+      }
     }
 
     function addFewShotRow(raw = '', out = '') {
@@ -713,6 +766,11 @@ export function createPersonasFeature({ elements, ui, hooks }) {
       if (els.wizardSafetyMode) els.wizardSafetyMode.value = 'strict';
       if (els.wizardMaxCompletionTokens) els.wizardMaxCompletionTokens.value = '';
       if (els.wizardChunkSize) els.wizardChunkSize.value = '';
+      for (const key of WIZARD_TRAIT_KEYS) {
+        const el = els[traitElementKey(key)];
+        if (el) el.value = '50';
+      }
+      renderTraitBands();
       renderFewShotRows([]);
       if (els.wizardLintWarnings) { els.wizardLintWarnings.textContent = ''; delete els.wizardLintWarnings.dataset.tone; }
       if (els.wizardTestResult) els.wizardTestResult.textContent = '';
@@ -743,6 +801,14 @@ export function createPersonasFeature({ elements, ui, hooks }) {
         els.wizardChunkSize.value = (persona.chunk_size === null || persona.chunk_size === undefined)
           ? '' : String(persona.chunk_size);
       }
+      const traits = (persona.traits && typeof persona.traits === 'object') ? persona.traits : {};
+      for (const key of WIZARD_TRAIT_KEYS) {
+        const el = els[traitElementKey(key)];
+        if (!el) continue;
+        const value = Number(traits[key]);
+        el.value = String(Number.isFinite(value) ? value : 50);
+      }
+      renderTraitBands();
       renderFewShotRows(persona.few_shot);
     }
 
@@ -946,6 +1012,13 @@ export function createPersonasFeature({ elements, ui, hooks }) {
     });
 
     els.wizardAddFewShotButton?.addEventListener('click', () => addFewShotRow());
+
+      // Live band label. Without this the slider would move while the words
+      // beside it went stale -- the exact mismatch the label exists to prevent.
+      for (const key of WIZARD_TRAIT_KEYS) {
+        els[traitElementKey(key)]?.addEventListener('input', renderTraitBands);
+      }
+      renderTraitBands();
 
     els.wizardLintButton?.addEventListener('click', async () => {
       const prompt = els.wizardPromptPreview?.value?.trim() || '';

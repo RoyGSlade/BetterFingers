@@ -348,6 +348,59 @@
             </div>
             <label class="sd-check"><input id="wizardFormatPunctuation" type="checkbox" checked /> <span>Enforce punctuation</span></label>
 
+
+            <!--
+              Persona traits (Stage 10). Five register dials, neutral by
+              default -- and neutral emits NOTHING into the prompt, so a persona
+              whose sliders were never touched composes exactly as it always
+              did. The band label beside each slider is the honest part: a
+              slider offers 101 values and the prompt distinguishes five, so
+              dragging 44 to 56 reads "Neutral" the whole way.
+            -->
+            <div class="sd-persona-subsection">
+              <span class="sd-field__label">Traits (optional)</span>
+              <p class="sd-persona-step__desc">How this persona sounds. Your prompt above wins wherever they disagree, and none of these change what was said.</p>
+              <label class="sd-field sd-trait-field">
+                <span class="sd-field__label">Warmth</span>
+                <span class="sd-trait-field__control">
+                  <input id="wizardTraitWarmth" class="sd-trait-slider" type="range" min="0" max="100" step="1" value="50" />
+                  <span class="sd-trait-field__band" id="wizardTraitWarmthBand">Neutral</span>
+                </span>
+                <small class="sd-trait-field__hint">Impersonal &harr; encouraging</small>
+              </label>
+              <label class="sd-field sd-trait-field">
+                <span class="sd-field__label">Directness</span>
+                <span class="sd-trait-field__control">
+                  <input id="wizardTraitDirectness" class="sd-trait-slider" type="range" min="0" max="100" step="1" value="50" />
+                  <span class="sd-trait-field__band" id="wizardTraitDirectnessBand">Neutral</span>
+                </span>
+                <small class="sd-trait-field__hint">Indirect &harr; blunt</small>
+              </label>
+              <label class="sd-field sd-trait-field">
+                <span class="sd-field__label">Detail</span>
+                <span class="sd-trait-field__control">
+                  <input id="wizardTraitDetail" class="sd-trait-slider" type="range" min="0" max="100" step="1" value="50" />
+                  <span class="sd-trait-field__band" id="wizardTraitDetailBand">Neutral</span>
+                </span>
+                <small class="sd-trait-field__hint">Minimal &harr; every specific the speaker gave</small>
+              </label>
+              <label class="sd-field sd-trait-field">
+                <span class="sd-field__label">Formality</span>
+                <span class="sd-trait-field__control">
+                  <input id="wizardTraitFormality" class="sd-trait-slider" type="range" min="0" max="100" step="1" value="50" />
+                  <span class="sd-trait-field__band" id="wizardTraitFormalityBand">Neutral</span>
+                </span>
+                <small class="sd-trait-field__hint">Casual &harr; formal</small>
+              </label>
+              <label class="sd-field sd-trait-field">
+                <span class="sd-field__label">Confidence</span>
+                <span class="sd-trait-field__control">
+                  <input id="wizardTraitConfidence" class="sd-trait-slider" type="range" min="0" max="100" step="1" value="50" />
+                  <span class="sd-trait-field__band" id="wizardTraitConfidenceBand">Neutral</span>
+                </span>
+                <small class="sd-trait-field__hint">Tentative &harr; assertive (hedges are always kept)</small>
+              </label>
+            </div>
             <div class="sd-persona-subsection">
               <span class="sd-field__label">Few-shot examples (optional)</span>
               <p class="sd-persona-step__desc">Show the model example input &rarr; desired output pairs. Up to 5 are used.</p>

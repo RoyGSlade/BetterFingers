@@ -1,6 +1,9 @@
 # Persona traits — design doc
 
-**Status:** proposal, awaiting owner sign-off.
+**Status:** owner-signed-off (§10), **implemented, and the gate FAILED.** The schema, storage,
+UI and band model shipped; the prompt rendering is behind a default-off `use_persona_traits`
+because the preservation differential does not pass on a real model. See §8a — that section is
+the important one.
 **Required by:** `DESIGN.md` §14 — this adds a field to the persona v2 schema, which is beyond
 §11's persona paragraph, so the doc gates the code rather than following it.
 **Plan item:** Stage 10.
@@ -199,6 +202,49 @@ Acceptance, all three required:
 3. It passes **with confidence at 100 specifically**. If it does not, `confidence` is cut and
    the remaining four ship (§4b).
 
+### 8a. Gate result — FAILED (Gemma 4 12B Q4, 2026-07-27)
+
+Acceptance 1 **passes**: an all-neutral persona composes byte-identically to a persona with no
+traits field. Verified against the real engine, not just in unit tests. Every existing persona
+is untouched.
+
+Acceptance 2 **fails**. `FAIL_TRAITS`, 0/3 probes, with 2 of 3 failures attributable to the
+trait block rather than to pre-existing cleanup behaviour:
+
+| Probe | What went wrong |
+|---|---|
+| explicit-high-intensity | Both variants dropped a stated-intensity marker the baseline kept |
+| explicit-low-intensity | The warm variant dropped an intensity marker *and* a modality fact |
+| negated-intensity | Baseline also failed (numbers), so not attributable |
+
+Two things were tried, and both are recorded because the negative results are the useful part:
+
+1. **Aligning the wording with the delivery-signal block.** The traits footer was missing
+   *"preserve the speaker's own wording of how strongly they feel, neither amplifying nor
+   softening it"* — a sentence the delivery block carries and which passes this gate 3/3. Its
+   absence was an oversight, not a decision, so adding it was principled rather than tuning.
+   It fixed the third probe's attribution. The first two still failed.
+2. **Narrowing to the moderate bands.** The hypothesis was that only `very_low`/`very_high`
+   were dangerous, in which case the honest fix would be to ship the proven range. Re-running
+   with every axis in the low/high bands **still failed 2 of 3**. The hypothesis was wrong;
+   this is not a matter of turning the dials down.
+
+Stopping there was deliberate. A third round of prompt rewording aimed at the same three
+probes would be tuning until green, which is how a gate stops being evidence.
+
+**What this changes.** §7 argued no `use_persona_traits` toggle was needed, because neutral
+emits nothing so the feature is inert until a slider moves. That reasoning was sound and its
+premise was wrong: it assumed a *moved* slider was safe. It is not yet proven to be, so the
+rendering now ships behind a default-off profile flag, exactly as delivery signals and
+audience do. Storing traits, showing them, and editing them are all live; only the prompt
+waits.
+
+**Open, and the owner's call:**
+
+- Keep iterating on the phrasing (with the risk above made explicit), or
+- ship the four non-`confidence` axes and re-gate, or
+- treat traits as an authoring/record feature and leave the prompt path off indefinitely.
+
 ## 9. Migration and compatibility
 
 - `normalize_persona()` fills `traits` with neutral, like `voice` and `format`, so every
@@ -210,7 +256,15 @@ Acceptance, all three required:
   from its interview: that would be the model choosing values the user never saw, which is the
   §6 boundary in a different coat.
 
-## 10. Decisions needed before code
+## 10. Decisions taken (owner, 2026-07-27)
+
+1. **`confidence` ships, gated.** Phrasing-not-claims, with the gate as the condition. *(The
+   gate then failed for reasons not specific to `confidence` — see §8a.)*
+2. **`detail` and `output_policy` are split**, not merged: length vs specificity, with a lint
+   warning on the contradictory corners.
+3. **Band labels are shown** beside the sliders, accepting the mockup-03 deviation.
+
+### Originally-open questions, for the record
 
 1. **`confidence` — ship it, or cut it now?** §4b argues it can ship *if* the gate passes with
    it at maximum. The alternative is cutting it up front and shipping four axes, which is

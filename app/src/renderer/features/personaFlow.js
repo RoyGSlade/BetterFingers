@@ -40,6 +40,13 @@ export const WIZARD_ELEMENT_IDS = [
   'wizardApplyRefinedButton', 'wizardDismissRefinedButton',
   'wizardRefinePromptBlock', 'wizardRefineActions',
   'wizardDescribeInput', 'wizardDescribeButton', 'wizardDescribeStatus', 'wizardAdvanced',
+  // Stage 10 trait sliders + their band labels. Listed explicitly rather than
+  // generated so adding an axis is a reviewed edit in one place.
+  'wizardTraitWarmth', 'wizardTraitWarmthBand',
+  'wizardTraitDirectness', 'wizardTraitDirectnessBand',
+  'wizardTraitDetail', 'wizardTraitDetailBand',
+  'wizardTraitFormality', 'wizardTraitFormalityBand',
+  'wizardTraitConfidence', 'wizardTraitConfidenceBand',
 ];
 
 export function collectPersonaWizardElements(doc = globalThis.document) {

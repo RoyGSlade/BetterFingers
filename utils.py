@@ -319,6 +319,10 @@ def _sanitize_profile_values(config, defaults):
         cfg.get("use_audience_context", d["use_audience_context"]),
         d["use_audience_context"],
     )
+    cfg["use_persona_traits"] = _coerce_bool(
+        cfg.get("use_persona_traits", d["use_persona_traits"]),
+        d["use_persona_traits"],
+    )
     cfg["active_contact_id"] = _coerce_str(cfg.get("active_contact_id") or "", "").strip() or None
     cfg["streaming_batch_min_seconds"] = _coerce_float(
         cfg.get("streaming_batch_min_seconds", d["streaming_batch_min_seconds"]),
@@ -842,6 +846,13 @@ def _profile_defaults():
         # captured or stored -- a contact is saved and selectable either way,
         # it just does not reach the prompt.
         "use_audience_context": False,
+        # Persona traits (Stage 10). The design doc argued this needed no
+        # toggle -- neutral emits nothing, so the feature is inert until a
+        # slider moves. The gate disagreed: non-neutral traits degraded
+        # preservation on 2 of 3 probes on a real model, at moderate bands as
+        # well as extreme ones. A persona whose sliders HAVE been moved is not
+        # proven safe yet, so the rendering ships behind this.
+        "use_persona_traits": False,
         # Which contact is currently selected, or None. Sticky like
         # current_preset above, deliberately: rule 2 is about who decides, not
         # how often they are interrupted, and re-confirming a standing choice

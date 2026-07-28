@@ -1895,6 +1895,7 @@ def process_recording_result(
                     stitch_pass=stitch_enabled,
                     delivery_summary=delivery_summary,
                     audience_summary=audience_summary,
+                    include_traits=bool(profile_config.get("use_persona_traits")),
                 )
         finally:
             if heartbeat is not None:

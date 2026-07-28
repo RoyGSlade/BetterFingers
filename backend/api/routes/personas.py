@@ -78,6 +78,9 @@ class PersonaRequest(BaseModel):
     chunk_size: Optional[int] = None
     # Persona Foundry field:
     persona_card: Optional[dict] = None
+    # Stage 10: five user-set register dials. Optional like every other v2
+    # field, so a client that has never heard of traits keeps working.
+    traits: Optional[dict] = None
 
 
 @router.get("/personas")
@@ -109,6 +112,7 @@ async def save_persona_route(request: PersonaRequest):
     for key in (
         "temperature", "model_hint", "dictionary_scope", "voice", "format", "few_shot",
         "output_policy", "safety_mode", "max_completion_tokens", "chunk_size", "persona_card",
+        "traits",
     ):
         value = getattr(request, key)
         if value is not None:
@@ -125,6 +129,8 @@ class PersonaLintRequest(BaseModel):
     safety_mode: Optional[str] = None
     output_policy: Optional[str] = None
     chunk_size: Optional[int] = None
+    # Lint needs traits to warn about the detail/output_policy corners.
+    traits: Optional[dict] = None
 
 
 @router.post("/personas/lint")

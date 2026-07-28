@@ -173,7 +173,7 @@ export const STUDIO_PLACEMENT_MAP = {
   'personas.new': { section: 'personas', control: 'New Persona', wired: true },
   'personas.foundry': { section: 'personas', control: 'Build with AI / Persona Foundry', wired: true },
   'personas.wizard': { section: 'personas', control: 'Manual persona wizard (~40 controls)', wired: true },
-  'personas.traits': { section: 'personas', control: '5-axis trait sliders (warmth/directness/detail/formality/confidence)', wired: false, note: 'No persona.traits field exists in the backend schema, so every axis reports null and renders as an empty track (the archetype-preset fabrication has been removed). Becomes wired when the schema gains a user-authored traits field -- derivePersonaTraits() already reads it. Needs a design doc first' },
+  'personas.traits': { section: 'personas', control: '5-axis trait sliders (warmth/directness/detail/formality/confidence)', wired: true },
 
   'detail.description': { section: 'detail', control: 'Persona description', wired: true },
   'detail.exampleRewrites': { section: 'detail', control: 'Example rewrites table', wired: true },
@@ -216,6 +216,26 @@ export const TRAIT_LABELS = {
 };
 
 export const NEUTRAL_TRAITS = { warmth: 50, directness: 50, detail: 50, formality: 50, confidence: 50 };
+
+// Band boundaries, mirroring persona_traits.py. A slider offers 101 values and
+// a model acts on about five, so warmth 63 and 67 produce an identical prompt.
+// The label is what makes that visible: dragging 44 -> 56 reads "Neutral" the
+// whole way, which is the truth.
+export const TRAIT_BAND_LABELS = ['Very low', 'Low', 'Neutral', 'High', 'Very high'];
+
+/** 0-100 -> the band label the UI shows, or '' when the axis is unset. */
+export function traitBandLabel(value) {
+  // '' is checked explicitly: Number('') is 0, not NaN, so an empty value would
+  // otherwise read "Very low" rather than unset.
+  if (value === null || value === undefined || value === '') return '';
+  if (Number.isNaN(Number(value))) return '';
+  const number = clampPercent(value, 50);
+  if (number < 20) return TRAIT_BAND_LABELS[0];
+  if (number < 40) return TRAIT_BAND_LABELS[1];
+  if (number < 60) return TRAIT_BAND_LABELS[2];
+  if (number < 80) return TRAIT_BAND_LABELS[3];
+  return TRAIT_BAND_LABELS[4];
+}
 
 // SPEC 2's persona signature colors -- the only 5 names the spec assigns an
 // exact color to.
@@ -734,12 +754,23 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
     const known = value !== null && value !== undefined;
     fill.style.width = known ? `${value}%` : '0%';
     row.dataset.known = known ? 'true' : 'false';
-    if (!known) {
-      row.title = 'Not set — personas have no trait data yet';
-      bar.setAttribute('aria-label', `${TRAIT_LABELS[key]}: not set`);
-    }
     bar.append(fill);
     row.append(label, bar);
+
+    if (!known) {
+      row.title = 'Not set';
+      bar.setAttribute('aria-label', `${TRAIT_LABELS[key]}: not set`);
+      return row;
+    }
+
+    // The band, not the number. Showing "72" would imply a precision the
+    // prompt does not have -- every value from 60 to 79 composes to the same
+    // instruction.
+    const band = document.createElement('span');
+    band.className = 'sd-trait-row__band';
+    band.textContent = traitBandLabel(value);
+    bar.setAttribute('aria-label', `${TRAIT_LABELS[key]}: ${band.textContent}`);
+    row.append(band);
     return row;
   }
 

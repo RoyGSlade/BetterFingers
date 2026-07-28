@@ -163,7 +163,11 @@ class TestPreservationClause:
         # what most users actually run -- would be free to break the invariant.
         source = self._source()
         internal = source.index("INTERNAL_PRESETS[preset_name]")
-        composed = source.index("compose_persona_system_prompt(persona)")
+        # Matched on the call, not its full argument list: the arguments have
+        # changed twice now (include_traits, Stage 10) while the ORDERING this
+        # test is about stayed correct, and a test that breaks on an unrelated
+        # signature change trains people to edit it without reading it.
+        composed = source.index("compose_persona_system_prompt(persona")
         applied = source.index("PRESERVATION_CLAUSE")
         assert applied > internal and applied > composed
 

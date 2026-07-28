@@ -36,6 +36,7 @@ import {
   collectStudioElements,
   createStudioWorkspaceFeature,
   contactsPreferring,
+  traitBandLabel,
 } from '../src/renderer/features/studioWorkspace.js';
 
 // --- personaSignatureKey / personaSignatureColorVar --------------------------
@@ -460,4 +461,50 @@ test('a persona nobody prefers gets an empty list, not a fabricated one', () => 
 
 test('contactsPreferring ignores contacts with no name', () => {
   assert.deepEqual(contactsPreferring('Natural', [{ id: 'x', preferred_persona: 'Natural' }]), []);
+});
+
+// --- trait bands (Stage 10) ---------------------------------------------------
+//
+// A slider offers 101 values and a model acts on about five. The band label is
+// what makes that visible instead of implying a precision the prompt lacks.
+
+test('traitBandLabel mirrors the backend band boundaries', () => {
+  assert.equal(traitBandLabel(0), 'Very low');
+  assert.equal(traitBandLabel(19), 'Very low');
+  assert.equal(traitBandLabel(20), 'Low');
+  assert.equal(traitBandLabel(39), 'Low');
+  assert.equal(traitBandLabel(40), 'Neutral');
+  assert.equal(traitBandLabel(59), 'Neutral');
+  assert.equal(traitBandLabel(60), 'High');
+  assert.equal(traitBandLabel(79), 'High');
+  assert.equal(traitBandLabel(80), 'Very high');
+  assert.equal(traitBandLabel(100), 'Very high');
+});
+
+test('values inside one band read identically', () => {
+  // 63 and 67 compose to the same prompt, so they must read the same too.
+  assert.equal(traitBandLabel(63), traitBandLabel(67));
+  assert.equal(traitBandLabel(44), traitBandLabel(56));
+});
+
+test('an unset axis has no band label rather than a default one', () => {
+  // Unknown is reported as unknown -- the rule that replaced the archetype
+  // fabrication.
+  assert.equal(traitBandLabel(null), '');
+  assert.equal(traitBandLabel(undefined), '');
+  assert.equal(traitBandLabel('nonsense'), '');
+  // Number('') is 0, not NaN -- an empty value must not read "Very low".
+  assert.equal(traitBandLabel(''), '');
+});
+
+test('derivePersonaTraits still reports unknown for a persona with no traits', () => {
+  const traits = derivePersonaTraits({ prompt: 'x' });
+  assert.equal(traitsAreUnknown(traits), true);
+});
+
+test('derivePersonaTraits reads a real traits field', () => {
+  const traits = derivePersonaTraits({ traits: { warmth: 90, directness: 10 } });
+  assert.equal(traits.warmth, 90);
+  assert.equal(traits.directness, 10);
+  assert.equal(traits.formality, null, 'an axis the persona omits stays unknown');
 });

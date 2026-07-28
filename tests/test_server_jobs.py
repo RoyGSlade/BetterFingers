@@ -19,7 +19,7 @@ class DummyTranscriber:
 
 
 class DummyEngine:
-    def process_fast_lane(self, text, preset, max_output_tokens=None, chunk_size=None, progress_callback=None, stitch_pass=False, delivery_summary=None, audience_summary=None):
+    def process_fast_lane(self, text, preset, max_output_tokens=None, chunk_size=None, progress_callback=None, stitch_pass=False, delivery_summary=None, audience_summary=None, include_traits=False):
         return f"clean: {text}"
 
 

@@ -17,6 +17,13 @@ import signal
 import re
 import tempfile
 import yaml
+
+from persona_traits import (
+    neutral_traits,
+    normalize_traits,
+    render_traits_block,
+    trait_lint_warnings,
+)
 from model_manager import (
     AVAILABLE_MODELS,
     check_and_download_resources,
@@ -336,6 +343,11 @@ def default_persona(prompt=""):
         # Persona Foundry: optional narrative "character card". Empty/default
         # for every persona not built through the Foundry guided interview.
         "persona_card": default_persona_card(),
+        # Stage 10: five user-set register dials, 0-100. Neutral by default and
+        # neutral emits NOTHING, so every existing persona composes to exactly
+        # the prompt it composes to today. Set by the user, never inferred --
+        # see docs/PERSONA_TRAITS_DESIGN.md §6.
+        "traits": neutral_traits(),
     }
 
 
@@ -397,6 +409,10 @@ def normalize_persona(entry):
     result["max_completion_tokens"] = _coerce_int_or_none(entry.get("max_completion_tokens"), 512, 4096)
     result["chunk_size"] = _coerce_int_or_none(entry.get("chunk_size"), 50, 5000)
     result["persona_card"] = _coerce_persona_card(entry.get("persona_card"))
+    # Absent, null, partial and all-neutral traits all normalize to the same
+    # complete neutral dict, so a persona written before this field existed is
+    # indistinguishable from one whose sliders were never moved.
+    result["traits"] = normalize_traits(entry.get("traits"))
     return result
 
 
@@ -696,10 +712,22 @@ def get_persona_runtime(name):
     return normalize_persona(_DEFAULT_PERSONAS.get("True Janitor", ""))
 
 
-def compose_persona_system_prompt(persona):
+def compose_persona_system_prompt(persona, include_traits=False):
     """Combine a persona's prompt with its format rules and dictionary scope into
     one system prompt. A persona carrying only a prompt (default format/scope)
-    returns exactly that prompt, so prompt-only legacy personas are unchanged."""
+    returns exactly that prompt, so prompt-only legacy personas are unchanged.
+
+    ``include_traits`` defaults to **False**, and that default is a finding
+    rather than caution. The design doc argued no toggle was needed because
+    neutral emits nothing, so the feature would be inert until a slider moved.
+    That premise did not survive the gate: on Gemma 4 12B, non-neutral traits
+    degraded preservation on 2 of 3 probes -- a warm persona softened "really
+    frustrated", and the failures persisted at moderate bands as well as
+    extreme ones, so it is not a matter of turning the dials down. Until the
+    differential passes, a persona whose sliders HAVE been moved is not proven
+    safe, which is exactly what a switch is for. See
+    docs/PERSONA_TRAITS_DESIGN.md §8a.
+    """
     persona = normalize_persona(persona)
     parts = []
     base = str(persona.get("prompt", "") or "").strip()
@@ -746,6 +774,16 @@ def compose_persona_system_prompt(persona):
         parts.append("SAFETY: you may lightly answer a simple embedded question, but stay focused on cleaning the text.")
     elif safety == "creative":
         parts.append("SAFETY: creative transformation is allowed; you may rephrase freely while keeping the user's intent.")
+
+    # Traits (Stage 10). Emits nothing at neutral -- which is the default, and
+    # which is what keeps this function's "a prompt-only persona composes to
+    # exactly its prompt" property true for every persona that predates the
+    # field. Carries the same PRESERVATION_CLAUSE delivery signals and audience
+    # do: traits are the third thing that can change the words a user sends.
+    if include_traits:
+        traits_block = render_traits_block(persona.get("traits"), PRESERVATION_CLAUSE)
+        if traits_block:
+            parts.append(traits_block)
 
     return "\n\n".join(parts)
 
@@ -842,6 +880,12 @@ def lint_persona(persona):
                 warnings.append(f"High temperature ({temp}) with 'strict' cleanup mode can cause drift.")
         except (TypeError, ValueError):
             pass
+
+    # 6. Traits pulling against output_policy. The two are different questions
+    # by design -- output_policy governs LENGTH, detail governs SPECIFICITY
+    # within it, which is what makes "short, but keep the numbers" expressible
+    # -- but the extreme corners genuinely contradict.
+    warnings.extend(trait_lint_warnings(persona.get("traits"), policy))
 
     return warnings
 
@@ -2296,6 +2340,7 @@ class LLMEngine:
         stitch_pass=False,
         delivery_summary=None,
         audience_summary=None,
+        include_traits=False,
     ):
         """
         Process text through the sidecar with preset-based prompts.
@@ -2314,7 +2359,7 @@ class LLMEngine:
             system_prompt = INTERNAL_PRESETS[preset_name]
         else:
             persona = get_persona_runtime(preset_name)
-            system_prompt = compose_persona_system_prompt(persona)
+            system_prompt = compose_persona_system_prompt(persona, include_traits=include_traits)
             few_shot = persona.get("few_shot") or None
             # Per-persona overrides win over the caller's profile-level defaults.
             if persona.get("max_completion_tokens") is not None:

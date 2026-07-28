@@ -242,3 +242,14 @@ test('reopening after a close works from either entry', () => {
   assert.equal(h.classes.has('hidden'), false);
   assert.deepEqual(h.visible(), ['interview']);
 });
+
+// --- trait sliders (Stage 10) -------------------------------------------------
+
+test('the wizard element map carries all five trait sliders and their bands', () => {
+  // A slider the composition root never looks up is a control the user can drag
+  // that changes nothing on save.
+  for (const key of ['Warmth', 'Directness', 'Detail', 'Formality', 'Confidence']) {
+    assert.ok(WIZARD_ELEMENT_IDS.includes(`wizardTrait${key}`), `wizardTrait${key} missing`);
+    assert.ok(WIZARD_ELEMENT_IDS.includes(`wizardTrait${key}Band`), `wizardTrait${key}Band missing`);
+  }
+});

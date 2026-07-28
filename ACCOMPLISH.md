@@ -134,6 +134,14 @@ The plan is based on the live repository, not only the older roadmap.
 3. **Emotion is presented as an uncertain signal.** Show observable evidence and
    confidence. Never present frustration, sadness, excitement, happiness, or similar
    labels as a diagnosis.
+
+   **Persona-trait clarification (2026-07-27).** A persona's traits — warmth, directness,
+   detail, formality, confidence — are **set by the user and never inferred**. Nothing may
+   derive a trait value from speech signals, transcripts, draft history, or edit patterns.
+   `arousal`, `urgency` and `hesitation` already exist as numbers on a comparable scale, and
+   wiring "detected arousal" into a confidence trait would be a diagnosis wearing a slider —
+   the exact behaviour this rule forbids. A trait describes a persona the user configured,
+   never a claim about the person speaking.
 4. **Voice learning is opt-in.** An approved edit becomes a persona example only after a
    clear user action. Examples are inspectable and removable.
 5. **Facts survive rewriting.** Names, numbers, dates, negation, commitments, requests,

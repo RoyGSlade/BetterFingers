@@ -391,3 +391,110 @@ class TestAudienceSuite:
         blob = repr(report)
         for probe in PROBES:
             assert probe["transcript"] not in blob
+
+
+# --- Traits axis (Stage 10's gate) -------------------------------------------
+#
+# The third thing that can change the words a user sends. Traits need no
+# default-off toggle -- neutral emits nothing, so the feature is inert until a
+# slider moves -- but the RENDERING still needs the same evidence: "a slider the
+# user set" is no protection against the model over-applying it.
+
+from delivery_preservation import (  # noqa: E402
+    BLUNT_TRAITS,
+    WARM_TRAITS,
+    run_traits_preservation_suite,
+    run_traits_probe,
+)
+
+
+def _echo_traits(text, traits=None, **_kwargs):
+    return text
+
+
+class TestTraitsProbe:
+    def test_a_model_that_ignores_traits_passes(self):
+        result = run_traits_probe(_echo_traits, probe=PROBE)
+        assert result["status"] == "PASS"
+        assert result["failure_attributable_to_traits"] is False
+
+    def test_the_probe_varies_traits_neutral_warm_blunt(self):
+        seen = []
+
+        def record(text, traits=None, **_k):
+            seen.append(traits)
+            return text
+
+        run_traits_probe(record, probe=PROBE)
+        assert seen == [None, WARM_TRAITS, BLUNT_TRAITS]
+
+    def test_the_blunt_variant_pins_confidence_at_maximum(self):
+        # Design doc §4b makes passing WITH confidence at 100 the condition of
+        # that axis shipping at all.
+        assert BLUNT_TRAITS["confidence"] == 100
+
+    def test_a_hedge_upgraded_to_a_promise_fails(self):
+        # The specific rule-5 risk confidence carries. Run against the
+        # NEGATED-intensity probe, not PROBE: the high-intensity transcript
+        # contains neither "not" nor "just", so the same transform against it
+        # would change nothing and the test would pass without testing
+        # anything.
+        negated = next(p for p in PROBES if p["name"] == "negated-intensity")
+
+        def overconfident(text, traits=None, **_k):
+            if traits is BLUNT_TRAITS:
+                return text.replace("not ", "").replace("just ", "")
+            return text
+
+        result = run_traits_probe(overconfident, probe=negated)
+        assert result["status"] == "FAIL"
+        assert result["failure_attributable_to_traits"] is True
+
+    def test_an_invented_greeting_fails(self):
+        # "Be notably warm and encouraging" is an invitation to open with one.
+        def effusive(text, traits=None, **_k):
+            return text if traits is None else f"Hi there! {text}"
+
+        result = run_traits_probe(effusive, probe=PROBE)
+        assert result["status"] == "FAIL"
+        assert result["invented_addressing"]
+
+    def test_the_trait_block_leaking_into_output_fails(self):
+        def leaky(text, traits=None, **_k):
+            return text if traits is None else f"{text} (persona traits applied)"
+
+        result = run_traits_probe(leaky, probe=PROBE)
+        assert result["status"] == "FAIL"
+        assert result["signal_leak_detected"]
+
+    def test_a_pre_existing_failure_is_not_blamed_on_traits(self):
+        def always_drops_number(text, traits=None, **_k):
+            return text.replace("20", "").replace("3", "")
+
+        result = run_traits_probe(always_drops_number, probe=PROBE)
+        assert result["baseline_also_failed"] is True
+        assert result["failure_attributable_to_traits"] is False
+
+
+class TestTraitsSuite:
+    def test_all_pass_is_the_only_green(self):
+        report = run_traits_preservation_suite(_echo_traits)
+        assert report["overall"] == "PASS"
+
+    def test_a_traits_caused_failure_blocks_the_gate(self):
+        def effusive(text, traits=None, **_k):
+            return text if traits is None else f"Hello, {text}"
+
+        report = run_traits_preservation_suite(effusive)
+        assert report["overall"] == "FAIL_TRAITS"
+
+    def test_the_gate_note_names_the_confidence_decision(self):
+        # A reader of a red run should not have to go find the design doc to
+        # learn what the failure means for shipping.
+        note = run_traits_preservation_suite(_echo_traits)["gate_note"]
+        assert "confidence" in note
+
+    def test_the_suite_never_returns_model_text(self):
+        blob = repr(run_traits_preservation_suite(_echo_traits))
+        for probe in PROBES:
+            assert probe["transcript"] not in blob

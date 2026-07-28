@@ -2470,6 +2470,17 @@
   background: var(--sd-persona-color, var(--sd-cyan));
 }
 
+/* The band, not the number. Showing "72" would imply a precision the prompt does
+   not have: every value from 60 to 79 composes to the same instruction, so the
+   label is what tells the user which drags matter. */
+.sd-trait-row__band {
+  flex: none;
+  width: 58px;
+  text-align: right;
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+}
+
 /* --- Center: selected-persona detail card ----------------------------------- */
 
 .sd-studio-detail {
@@ -5139,6 +5150,30 @@
 
 .sd-persona-advanced > summary { cursor: pointer; }
 .sd-persona-advanced[open] > summary { margin-bottom: var(--sd-space-12); }
+
+.sd-trait-field__control {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-12);
+}
+
+.sd-trait-slider {
+  flex: 1;
+  accent-color: var(--sd-cyan);
+}
+
+.sd-trait-field__band {
+  flex: none;
+  width: 64px;
+  text-align: right;
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-secondary);
+}
+
+.sd-trait-field__hint {
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+}
 
 .sd-persona-subsection {
   display: flex;
