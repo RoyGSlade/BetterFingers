@@ -15,6 +15,7 @@
 // absent or fails to load, since the two scripts are independent entries.
 
 import { formatMessageRescueViewModel } from './messageRescue.js';
+import { shouldAutowire } from '../lib/autowire.mjs';
 
 export const MESSAGE_RESCUE_FLAG_KEY = 'pref_message_rescue_enabled';
 
@@ -317,6 +318,9 @@ export function initMessageRescuePanel({ doc, storage } = {}) {
   }
 }
 
-if (typeof document !== 'undefined') {
+// Import-time self-init is opt-in only: see lib/autowire.mjs. This keeps
+// importing this module (e.g. from a test, or from a page that hasn't
+// opted in) from binding controls it doesn't own.
+if (shouldAutowire()) {
   initMessageRescuePanel();
 }

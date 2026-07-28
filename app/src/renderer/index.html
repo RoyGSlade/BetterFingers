@@ -1,5 +1,16 @@
 <!doctype html>
-<html lang="en">
+<!--
+  data-bf-autowire="legacy" opts this document in to the legacy self-init
+  contract used by features/personaLearning.js, features/messageRescuePanel.js,
+  and features/textPlayground.js (see src/renderer/lib/autowire.mjs): each of
+  those modules wires its DOM automatically at import time ONLY when the host
+  document carries this marker. index.html is the only page that still relies
+  on that automatic wiring (it loads those modules via bare <script
+  type="module"> tags with no explicit init call), so it is the only page
+  that sets it. Do not copy this marker onto a new page without first reading
+  autowire.mjs -- other pages should prefer calling init*() explicitly.
+-->
+<html lang="en" data-bf-autowire="legacy">
   <head>
     <meta charset="UTF-8" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* http://localhost:* ws://localhost:*; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" />

@@ -33,6 +33,7 @@ import {
 } from '../api/backend.js';
 import { formatMessageRescueViewModel, formatVariants } from './messageRescue.js';
 import { buildMessageRescuePanelModel, renderMessageRescuePanel, escapeHtml } from './messageRescuePanel.js';
+import { shouldAutowire } from '../lib/autowire.mjs';
 
 const STATUS = {
   IDLE: 'idle',
@@ -636,6 +637,9 @@ export function initTextPlayground({ doc } = {}) {
   return feature;
 }
 
-if (typeof document !== 'undefined') {
+// Import-time self-init is opt-in only: see lib/autowire.mjs. This keeps
+// importing this module (e.g. from a test, or from a page that hasn't
+// opted in) from binding controls it doesn't own.
+if (shouldAutowire()) {
   initTextPlayground();
 }

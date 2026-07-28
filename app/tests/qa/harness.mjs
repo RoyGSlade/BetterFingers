@@ -40,10 +40,25 @@ const FIXED_VIEWPORT = { width: 1280, height: 800 };
 
 // --- UI target ---------------------------------------------------------------
 //
-// The app ships two dashboards: the default `index.html` and the Signal Desk
-// workspace UI behind BF_UI=signal-desk (see main/windows.js loadDashboard).
-// They share ZERO element ids, so window discovery and the readiness sentinel
-// cannot be hard-coded to either one.
+// The app ships three dashboards, and they share ZERO element ids with each
+// other, so window discovery and the readiness sentinel cannot be hard-coded
+// to any one of them:
+//
+//   - `index`: the default, shipping `index.html` dashboard.
+//   - `signal-desk`: the Signal Desk DESIGN/mockup preview page
+//     (signal-desk-preview.html, behind BF_UI=signal-desk). Pinned here by
+//     binding decision D-0007 -- existing scenarios (signal-desk-shell/
+//     -sections/-talk) depend on this exact target continuing to point at
+//     the preview page, so it must never be repointed at the production
+//     composition root below.
+//   - `signal-desk-prod`: the production Signal Desk composition root
+//     (signal-desk.html, behind BF_UI=signal-desk-prod) that actually ships
+//     to users once mounted. Scenarios that only make sense against real
+//     production wiring (e.g. persona-learning's Studio "Teach from my
+//     edits" panel, which lives only in signal-desk.html's Studio workspace,
+//     never in the preview page) target this instead of `signal-desk` --
+//     that keeps them from clobbering the preview target's committed
+//     screenshots or asserting against markup the preview page never had.
 //
 // This is a RUN-level choice, not a per-scenario one, and deliberately so:
 // launchApp's own close() comment documents that quitting Electron kills the
@@ -51,8 +66,9 @@ const FIXED_VIEWPORT = { width: 1280, height: 800 };
 // whole suite reuses a single launch. Switching target mid-run would require
 // relaunching with different env, so `BF_QA_UI` picks one target per run:
 //
-//   node tests/qa/run.mjs <area>                       # default UI
-//   BF_QA_UI=signal-desk node tests/qa/run.mjs <area>  # Signal Desk
+//   node tests/qa/run.mjs <area>                            # default UI
+//   BF_QA_UI=signal-desk node tests/qa/run.mjs <area>       # Signal Desk preview
+//   BF_QA_UI=signal-desk-prod node tests/qa/run.mjs <area>  # Signal Desk production root
 export const UI_TARGETS = {
   index: {
     name: 'index',
@@ -82,6 +98,21 @@ export const UI_TARGETS = {
     // Namespaced so a Signal Desk run cannot clobber the default UI's
     // committed screenshots.
     outSubdir: 'signal-desk',
+  },
+  'signal-desk-prod': {
+    name: 'signal-desk-prod',
+    page: 'signal-desk.html',
+    env: { BF_UI: 'signal-desk-prod' },
+    // Same shell + status-bar contract as 'signal-desk' above (both are the
+    // Signal Desk redesign, just different pages) -- see that target's
+    // comments for why each selector/pattern is what it is.
+    attachedSelector: '.sd-shell',
+    readyTextSelector: '#sdStatusSttValue',
+    readyTextPattern: /loaded/i,
+    // Own subdir, distinct from BOTH 'index' and 'signal-desk': a
+    // signal-desk-prod run must not clobber the preview target's committed
+    // screenshots (D-0007) or the default UI's.
+    outSubdir: 'signal-desk-prod',
   },
 };
 

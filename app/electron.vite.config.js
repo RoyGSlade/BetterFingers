@@ -16,6 +16,8 @@ module.exports = defineConfig({
           hotkeys: resolve(__dirname, 'src/main/hotkeys.js'),
           senderValidation: resolve(__dirname, 'src/main/senderValidation.js'),
           backendProxy: resolve(__dirname, 'src/main/backendProxy.js'),
+          userDataRoot: resolve(__dirname, 'src/main/userDataRoot.js'),
+          onboardingStore: resolve(__dirname, 'src/main/onboardingStore.js'),
         },
       },
     },
@@ -45,6 +47,13 @@ module.exports = defineConfig({
           // real feature modules never mounted and nothing could be verified
           // against the actual Electron bridge.
           signalDeskPreview: resolve(__dirname, 'src/renderer/signal-desk-preview.html'),
+          // Production Signal Desk build (binding decision D-0007: the
+          // preview stays untouched and keeps shipping as its own entry
+          // above; this is the real single-script page, opt-in behind a
+          // separate BF_UI value once main/windows.js and
+          // main/senderValidation.js are updated to route/allowlist it — see
+          // the W1-COMP-ROOT handoff for that exact diff).
+          signalDesk: resolve(__dirname, 'src/renderer/signal-desk.html'),
         },
       },
     },

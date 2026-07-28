@@ -36,6 +36,7 @@ import {
   clearPersonaExamples,
 } from '../api/backend.js';
 import { escapeHtml } from './messageRescuePanel.js';
+import { shouldAutowire } from '../lib/autowire.mjs';
 
 // Mirrors backend/api/routes/personas.py's MAX_LEARNING_EXAMPLE_CHARS
 // exactly -- truncating here to the same bound means the preview shown to
@@ -537,6 +538,10 @@ export function initPersonaLearning({ doc } = {}) {
   return feature;
 }
 
-if (typeof document !== 'undefined') {
+// Import-time self-init is opt-in only: see lib/autowire.mjs. This keeps
+// importing this module (e.g. from a test, or from another page that
+// happens to reuse a matching id) from double-binding controls it doesn't
+// own -- exactly the hazard studioWorkspace.js's ID-COLLISION NOTE documents.
+if (shouldAutowire()) {
   initPersonaLearning();
 }

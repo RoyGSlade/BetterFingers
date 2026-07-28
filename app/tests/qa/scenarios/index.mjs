@@ -37,19 +37,18 @@ import { onboardingScenarios } from './onboarding.mjs';
 import { firstRunBannerScenarios } from './first-run-banner.mjs';
 import { personaFlowScenarios } from './persona-flow.mjs';
 import { contactsScenarios } from './contacts.mjs';
-// NOT imported on purpose: ./persona-learning.mjs (3 scenarios, area
-// 'persona-learning'). They drive #personaLearningSection /
-// #personaLearningConfirmButton / #personaLearningPersonaLabel, none of which
-// exist in index.html -- those ids live only in features/personaLearning.js
-// and features/studioWorkspace.js, i.e. the Signal Desk STUDIO workspace,
-// which is not in electron.vite.config.js's build inputs and therefore never
-// ships. Verified 2026-07-25: wiring them in yields 0/3, failing on
-// "#personaLearningSection ... element(s) not found" -- a true report that the
-// feature is unreachable, not a scenario bug. Registering them today would
-// make `npm run qa:screens` permanently red and train people to ignore it,
-// which is the exact failure the run.mjs exit-code fix just removed. Re-enable
-// this import in the same change that mounts the Studio workspace in the
-// shipping renderer.
+// Persona-learning scenarios carry `ui: 'signal-desk-prod'` (harness.mjs's
+// third UI target, BF_QA_UI=signal-desk-prod): they drive the "Teach this
+// persona from my edit" panel inside Studio (features/studioWorkspace.js),
+// which reuses features/personaLearning.js's feature logic verbatim but
+// binds it to distinct `sdTeach*` ids rather than personaLearning.js's own
+// canonical `personaLearning*` ids -- see studioWorkspace.js's
+// ID-COLLISION NOTE for why (reusing the canonical ids would let
+// personaLearning.js's own import-time self-init IIFE double-wire the same
+// elements with the wrong default hooks). Those `sdTeach*` ids exist only in
+// the production Signal Desk composition root (signal-desk.html), never in
+// index.html, hence the dedicated UI target instead of the default one.
+import { personaLearningScenarios } from './persona-learning.mjs';
 
 export const scenarios = [
   ...baselineScenarios,
@@ -70,4 +69,5 @@ export const scenarios = [
   ...firstRunBannerScenarios,
   ...personaFlowScenarios,
   ...contactsScenarios,
+  ...personaLearningScenarios,
 ];
