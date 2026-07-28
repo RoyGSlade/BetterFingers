@@ -54,6 +54,10 @@ const ROUTE_ALLOWLIST = {
     '/library/search', '/library/drafts/:id/reopen',
     // Wave 7 application context: read-only status + profile list.
     '/app-context/status', '/app-context/profiles',
+    // Wave 9 restricted actions. Read-only: the closed action vocabulary, the
+    // saved workflows, and the code-only run history. Nothing here launches
+    // anything -- execution is the main process's job, not a route's.
+    '/workflows', '/workflows/vocabulary', '/workflows/history',
   ],
   POST: [
     '/runtime/audio-devices/refresh', '/runtime/warmup',
@@ -90,6 +94,12 @@ const ROUTE_ALLOWLIST = {
     '/library/drafts/:id/reopen', '/library/drafts/:id/resend',
     '/library/drafts/:id/restore', '/library/recordings/:id/restore',
     '/library/clear',
+    // Wave 9. compile writes nothing; save always stores unapproved; approve
+    // records the exact preview lines the user read; run is the gate, and
+    // run/record files the per-step status codes.
+    '/workflows/compile', '/workflows/save', '/workflows/approve',
+    '/workflows/enable', '/workflows/delete',
+    '/workflows/run', '/workflows/run/record',
   ],
   DELETE: [
     '/settings/profiles/:name',

@@ -53,6 +53,14 @@ const api = {
       ipcRenderer.invoke('onboarding:migrate-legacy', { legacyComplete }),
     quit: () => ipcRenderer.invoke('app:quit'),
   },
+  // Wave 9. Discovery returns UNCONFIRMED candidates; confirm is the only
+  // writer. Nothing here launches anything.
+  applications: {
+    list: () => ipcRenderer.invoke('applications:list'),
+    discover: () => ipcRenderer.invoke('applications:discover'),
+    confirm: (entry) => ipcRenderer.invoke('applications:confirm', entry),
+    remove: (id) => ipcRenderer.invoke('applications:remove', { id }),
+  },
   getSidecarStatus: () => ipcRenderer.invoke('sidecar:get-status'),
   getSidecarLogs: () => ipcRenderer.invoke('sidecar:get-logs'),
   onSidecarStatus: (callback) =>

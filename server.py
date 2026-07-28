@@ -1435,6 +1435,16 @@ def emergency_stop_runtime():
     except Exception as exc:
         logging.warning(f"Emergency broker stop failed: {exc}")
 
+    # Release the voice-privacy lease for the same reason: an emergency stop
+    # that left another application's microphone muted would be the worst
+    # possible outcome of pressing the panic button. Idempotent — the recorder
+    # has usually released it already via request_stop above.
+    try:
+        from backend.platform.audio_privacy import lease as privacy_lease
+        privacy_lease.get_lease().release(reason="emergency_stop")
+    except Exception as exc:
+        logging.warning(f"Emergency voice-privacy release failed: {exc}")
+
     pending_manual_send_ids.clear()
     broadcast_status_threadsafe("emergency_stop", {"message": "Emergency stop completed."})
     return {"ok": True, "message": "Emergency stop completed."}
@@ -2239,6 +2249,18 @@ async def startup_event():
         except Exception as exc:
             logging.warning(f"Legacy data migration skipped: {exc}")
     loop = asyncio.get_event_loop()
+    # D-0010 crash recovery: a previous run that died while holding the voice
+    # privacy lease left other applications' capture streams muted, and the
+    # journal is the only record of it. Undo it before anything else opens
+    # audio, then clear it. Content-free; safe when no journal exists.
+    if not _is_test_env():
+        try:
+            from backend.platform.audio_privacy import lease as privacy_lease
+            recovery = privacy_lease.recover_on_startup()
+            if recovery.get("streams"):
+                logging.info("Audio privacy crash recovery: %s", recovery)
+        except Exception as exc:
+            logging.warning(f"Audio privacy crash recovery skipped: {exc}")
     # SQLite-first (history_store is canonical); load_draft_history() falls
     # back to draft_history.json only if the DB is empty/unrecoverable, and
     # imports+retires the JSON as a migration backup when it does (C8/P1).
@@ -2293,6 +2315,15 @@ def shutdown_event():
     # idempotent, safe even if wake word was never enabled this run.
     import routes_wake
     routes_wake.stop_wake_listener()
+    # Last chance to put another application's microphone back. A clean
+    # shutdown that skipped this would leave a journal for the next startup to
+    # recover from, which works — but recovering from a crash we did not have
+    # is not a good look, and the user's meeting app is muted in the meantime.
+    try:
+        from backend.platform.audio_privacy import lease as privacy_lease
+        privacy_lease.get_lease().release(reason="shutdown")
+    except Exception as exc:
+        logging.warning(f"Shutdown voice-privacy release failed: {exc}")
     # Join the background warmup thread so it can't outlive this app instance and
     # mutate global model state afterwards (also keeps tests deterministic).
     thread = _warmup_thread
@@ -2893,8 +2924,9 @@ async def capabilities():
 
     payload = get_capabilities()
     push_to_mute_available = bool(payload.get("supports_input_injection", False))
+    from backend.platform.audio_privacy import lease as privacy_lease
     payload["voice_privacy_status"] = audio_status.voice_privacy_capability(
-        isolation_available=False,  # no capture-isolation adapter yet (Wave 8B)
+        isolation_available=privacy_lease.get_lease().isolation_available(),
         push_to_mute_available=push_to_mute_available,
     )
     payload["wake_status"] = audio_status.wake_capability(
@@ -2913,14 +2945,19 @@ async def audio_runtime_status():
     import audio_status
     import routes_wake
 
+    from backend.platform.audio_privacy import lease as privacy_lease
+    lease = privacy_lease.get_lease()
+
     config = load_profile(get_last_active_profile())
     return audio_status.audio_status_snapshot(
         config,
         broker_status=audio_input_broker.get_broker().status(),
-        isolation_available=False,
+        isolation_available=lease.isolation_available(),
         push_to_mute_available=bool(get_capabilities().get("supports_input_injection", False)),
-        engaged=output_injector is not None and bool(output_injector._held_voice_mute_key),
-        restore_complete=True,  # becomes real with Wave 8B's journaled lease
+        # The lease knows about both mechanisms; the injector only knows about
+        # the key. `held` is true for an isolation lease too.
+        engaged=lease.is_held(),
+        restore_complete=lease.restore_complete(),
         enabled=bool(config.get("wake_word_enabled", False)),
         listening=routes_wake.is_wake_listening(),
     )
@@ -3552,10 +3589,19 @@ def _perform_privacy_wipe(wipe_voices: bool):
         #    Idempotent/no-op-safe: True even if wake word was never enabled.
         import routes_wake
         cleared["wake_listener_stopped"] = bool(routes_wake.stop_wake_listener())
+        # The pre-trigger ring is the only place in the wake pipeline where raw
+        # audio lives at all, so "no retained audio" has to include it.
+        # stop_wake_listener() already wipes it; this is the explicit,
+        # reportable call for the case where the listener was never running.
+        cleared["wake_pretrigger_wiped"] = bool(routes_wake.wipe_wake_pretrigger())
         # Quiesce the shared capture stream unconditionally: "no live capture"
         # must hold without knowing who was holding the broker.
         import audio_input_broker
         audio_input_broker.get_broker().stop_all()
+        # And release voice privacy: a wipe must not leave another
+        # application's capture stream muted by a lease nothing will release.
+        from backend.platform.audio_privacy import lease as privacy_lease
+        privacy_lease.get_lease().release(reason="privacy_wipe")
 
         # 1. Drain the recorder: stop it and confirm it actually stopped.
         cleared["recorder_stopped"] = _drain_recorder()
@@ -5262,6 +5308,7 @@ from backend.api.routes import message_rescue as routes_message_rescue  # noqa: 
 from backend.api.routes import contacts as routes_contacts  # noqa: E402
 from backend.api.routes import library as routes_library  # noqa: E402
 from backend.api.routes import app_context as routes_app_context  # noqa: E402
+from backend.api.routes import actions as routes_actions  # noqa: E402
 
 app.include_router(routes_foundry.router)
 app.include_router(routes_user_config.router)
@@ -5272,6 +5319,7 @@ app.include_router(routes_message_rescue.router)
 app.include_router(routes_contacts.router)
 app.include_router(routes_library.router)
 app.include_router(routes_app_context.router)
+app.include_router(routes_actions.router)
 _foundry_sessions = routes_foundry._foundry_sessions
 
 

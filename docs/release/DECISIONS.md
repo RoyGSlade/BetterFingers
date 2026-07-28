@@ -592,3 +592,86 @@ WMP-3 (allowed-licenses enforced only by test, not runtime) and WMP-4
 (Kokoro license asserted, not verified) are recorded, neither blocking.
 The taskSafe allowlist gains the `.venv/bin/python` pytest/py_compile
 patterns so no future lane has to smuggle site-packages through a plugin.
+
+## D-0026 — Gate 8 is accepted
+
+**Owner:** release-director
+
+**Evidence:** Commits from the Wave 8B lane and integration; director-run:
+full backend suite `2772 passed / 0 failed`, renderer `1216/1216`,
+production QA `63/63`, preview `28/28`, legacy `37/37`, build green — and a
+LIVE capture-isolation qualification on this machine (PipeWire 1.0.5 via the
+PulseAudio compatibility server, pactl 16.1): a second application's real
+capture stream was muted while engaged and restored exactly
+(`restored: 1, gone: 0, failed: []`), with the journal written before the
+first mute and cleared on release. The crash-recovery path was exercised
+twice against genuine crash artifacts (a driver error mid-qualification left
+a real journal; `recover_on_startup()` read it, classified the vanished
+stream `gone`, and cleared it).
+
+**Decision:** Accept Gate 8. Every checklist bullet holds: no stop path
+leaks a held mute key (the lease releases on normal stop, silence auto-stop,
+watchdog, failed start, emergency stop, wipe, shutdown, and crash-via-journal);
+prior mute states restore exactly and already-muted streams are never
+recorded so restore can never unmute a user's own choice; BetterFingers'
+own stream is identified by process identity, never name; the wake detector
+and recorder share the broker's single stream; the first command word
+survives activation through the wired pre-trigger ring (which re-arms after
+each command so the second wake keeps its first word too); wake model
+licensing is manifest-guarded with runtime enforcement (WMP-3 closed); and
+the privacy wipe closes the wake stream, wipes the pre-trigger ring, and
+releases the lease.
+
+**Recorded residuals, none blocking:** Windows isolation is a documented
+feasibility design and Windows ships push_to_mute with honest status (as
+D-0010 always allowed); `partially_restored` is produced but not yet
+surfaced in the renderer (Wave 11 parity work); measured wake qualification
+does not exist, so `wake_status.qualified` stays false and no wake support
+claim may ship without it; WMP-4 (Kokoro license verification) stays open in
+the TTS lane. One genuine discovery from the live run: PipeWire's
+per-application stream-restore memory re-applies a remembered mute to an
+application that REOPENS its stream after a BetterFingers crash — the
+index-keyed journal correctly restores live streams and classifies vanished
+ones, but cannot reach the audio server's own per-app memory. Recorded as a
+known limitation with the design tension noted (fixing it needs application
+identity in the journal, which is content-free by design).
+
+## D-0027 — Gate 9 is accepted
+
+**Owner:** release-director
+
+**Evidence:** The Wave 9 lane commit and integration; director-run: backend
+`2772/0` including the 158 Wave 9 tests, renderer `1216/1216`, the eleven
+`wave9-actions` scenarios passing on first execution inside the `63/63`
+production board.
+
+**Decision:** Accept Gate 9. The validator rejects every unsupported verb
+with a reason (never by silently dropping); URI and path inputs are
+normalized and bounded (dot-dot refused, dangerous schemes refused by name);
+workflows cannot name anything outside the user-confirmed registry; unknown
+commands are unexecutable by construction and explain themselves without
+ever showing command syntax; partial launch failure reports per step with
+two-of-three as `partial`, never success; run history holds status codes
+only, with a sanitizer that drops prose rather than trusting callers; and
+launching only ever passes argument arrays with `shell: false`, asserted
+against fields packed with shell metacharacters.
+
+**Rulings:**
+
+- The lane's decision to withhold a bare `applications:launch` IPC channel
+  is ratified emphatically — it would bypass the approval gate the wave
+  exists to build. The main-process run executor (call `/workflows/run`,
+  execute the approved steps, post per-step codes to `/workflows/run/record`)
+  is the named follow-up, scheduled with Wave 10 so controller/Stream Deck
+  invocation and execution land against the same contract.
+- The registry IPC channels were registered through `handleTrusted` rather
+  than the doc's raw `ipcMain.handle`, matching the repo's sender-validation
+  convention for privilege surface.
+- Voice/keyboard/controller/Stream Deck invoking the same action ID is
+  deferred to Wave 10 exactly as D-0021 deferred controller capture — the
+  contract exists; the devices come next.
+- The pre-existing `parse_command` over-trigger (an unanchored "use …"
+  pattern resolving to switch_persona) is pinned by a regression test and
+  assigned to Wave 11 polish; it cannot reach a launcher workflow.
+- Windows launch adapters are designed and mockable but unqualified, and
+  say so in the plan object itself, not only in comments.

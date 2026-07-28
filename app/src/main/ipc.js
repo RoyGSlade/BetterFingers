@@ -175,6 +175,31 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthT
     return APP_VERSION;
   });
 
+  // Wave 9 restricted actions. The registry is the ONLY thing a workflow may
+  // name, so these channels are the boundary: discovery returns unconfirmed
+  // candidates, and only applications:confirm writes an entry. Registered
+  // through handleTrusted (not raw ipcMain.handle) so the sender-frame check
+  // applies — the registry is privilege surface. There is DELIBERATELY no
+  // launch channel here: execution must pass through POST /workflows/run's
+  // approval gate first (see WAVE9_INTEGRATION_DIFFS §D-4).
+  const { createApplicationRegistry } = require('./applicationRegistry');
+  const { execFile } = require('node:child_process');
+
+  let _applicationRegistry = null;
+  function applicationRegistry() {
+    if (!_applicationRegistry) {
+      _applicationRegistry = createApplicationRegistry({ execFile });
+    }
+    return _applicationRegistry;
+  }
+
+  handleTrusted('applications:list', () => ({ ok: true, entries: applicationRegistry().list() }));
+  handleTrusted('applications:discover', async () => ({
+    ok: true, candidates: await applicationRegistry().discover(),
+  }));
+  handleTrusted('applications:confirm', (_event, payload) => applicationRegistry().confirm(payload));
+  handleTrusted('applications:remove', (_event, { id } = {}) => applicationRegistry().remove(id));
+
   onTrusted('update-hotkeys', (_event, config) => {
     const { registerHotkeys } = require('./hotkeys');
     const token = typeof getAuthToken === 'function' ? getAuthToken() : null;

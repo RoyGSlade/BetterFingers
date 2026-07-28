@@ -116,6 +116,15 @@ CATEGORIES: list[DataCategory] = [
          in_export=True, user_text=True),
     _cat("wake_models", "Wake models & training artifacts", "python", "sensitive",
          "Kept until personal data is cleared.", _PERSONAL),
+    # Audio privacy crash-recovery journal (Wave 8B, D-0010). Written before
+    # any capture stream is muted and cleared on the next clean release or at
+    # the next startup, so it is normally absent. Declared "configuration"
+    # sensitivity and user_text=False because it holds only audio-server
+    # stream indices and a boolean prior mute state — no names, no audio, no
+    # prose. Cleared by a personal wipe rather than only a factory reset,
+    # because it is operational state, not a setting.
+    _cat("audio_privacy_journal", "Audio privacy recovery journal", "python", "configuration",
+         "Transient; cleared when voice privacy is released and on wipe.", _PERSONAL),
     _cat("mcp_config", "MCP configuration", "python", "sensitive",
          "Kept until personal data is cleared; may contain credentials/tokens.", _PERSONAL),
     _cat("graph_data", "Graph data", "python", "personal",
@@ -147,6 +156,20 @@ CATEGORIES: list[DataCategory] = [
     # preset names only.
     _cat("app_profiles", "Application profiles & pins", "python", "personal",
          "Kept until personal data is cleared.", _PERSONAL,
+         in_export=True, user_text=False),
+    # Launcher workflows (Wave 9). Personal rather than configuration: a
+    # workflow names the applications this person runs and the folders they
+    # keep work in, and the same file holds the run history. user_text because
+    # trigger phrases and notification/confirmation messages are prose the user
+    # wrote. Run history itself holds status CODES only -- never speech.
+    _cat("launcher_workflows", "Launch workflows & run history", "python", "personal",
+         "Kept until personal data is cleared.", _PERSONAL,
+         in_export=True, user_text=True),
+    # Confirmed application registry (Wave 9). Electron-owned: the main process
+    # is the side that can see the desktop. A behavioural fingerprint -- which
+    # applications this person has installed and confirmed -- with no prose.
+    _cat("application_registry", "Confirmed applications", "electron", "personal",
+         "Kept until personal data is cleared (Electron-owned).", _PERSONAL,
          in_export=True, user_text=False),
     _cat("model_runtime_metadata", "Model / runtime metadata", "python", "configuration",
          "Settings; removed on factory reset.", _FACTORY),

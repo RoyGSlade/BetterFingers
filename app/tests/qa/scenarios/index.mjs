@@ -71,6 +71,14 @@ import { wave5StudioScenarios } from './wave5-studio.mjs';
 // the api/backend.js helpers -- see this module's header for why, and
 // docs/release/WAVE7_INTEGRATION_DIFFS.md for the exact diffs.
 import { wave7AppContextScenarios } from './wave7-app-context.mjs';
+// Wave 9 (Gate 9): the restricted action engine and the workflow builder.
+// Requires the /workflows/* entries in app/src/main/backendProxy.js's
+// ROUTE_ALLOWLIST and the api/backend.js helpers -- see this module's header
+// for why, and docs/release/WAVE9_INTEGRATION_DIFFS.md for the exact diffs.
+// Several of these scenarios use per-scenario STATEFUL stubs, because the
+// property under test is that saving does not approve and approving changes
+// what a later call returns; a stateless stub cannot tell those apart.
+import { wave9ActionScenarios } from './wave9-actions.mjs';
 
 export const scenarios = [
   ...baselineScenarios,
@@ -95,6 +103,7 @@ export const scenarios = [
   ...libraryScenarios,
   ...wave5StudioScenarios,
   ...wave7AppContextScenarios,
+  ...wave9ActionScenarios,
   ...signalDeskProdSweepScenarios,
   // Ordered last among the prod-target scenarios as belt-and-braces, not as a
   // load-bearing requirement: the auto-dismiss sentinel these use is

@@ -542,6 +542,36 @@ async function pinAppProfile(profileId, timeoutMs = 2500) {
   return postJson(`${APP_CONTEXT_URL}/pin`, { profile_id: profileId ?? null }, timeoutMs);
 }
 
+// --- Restricted workflows (Wave 9) -----------------------------------------
+// compile writes nothing; save always stores the workflow UNAPPROVED; approve
+// binds to the exact preview the user read; run is the only gate to execution.
+const WORKFLOWS_URL = `${BACKEND_ORIGIN}/workflows`;
+
+async function fetchWorkflows(timeoutMs = 2500) {
+  return fetchJson(WORKFLOWS_URL, timeoutMs);
+}
+
+async function fetchWorkflowHistory(workflowId = '', limit = 20, timeoutMs = 2500) {
+  const query = `?workflow_id=${encodeURIComponent(workflowId)}&limit=${limit}`;
+  return fetchJson(`${WORKFLOWS_URL}/history${query}`, timeoutMs);
+}
+
+async function compileWorkflow(workflow, context, timeoutMs = 4000) {
+  return postJson(`${WORKFLOWS_URL}/compile`, { workflow, context }, timeoutMs);
+}
+
+async function saveWorkflow(workflow, enabled = false, timeoutMs = 2500) {
+  return postJson(`${WORKFLOWS_URL}/save`, { workflow, enabled }, timeoutMs);
+}
+
+async function approveWorkflow(workflowId, preview, timeoutMs = 2500) {
+  return postJson(`${WORKFLOWS_URL}/approve`, { workflow_id: workflowId, preview }, timeoutMs);
+}
+
+async function runWorkflow(workflowId, context, timeoutMs = 4000) {
+  return postJson(`${WORKFLOWS_URL}/run`, { workflow_id: workflowId, context }, timeoutMs);
+}
+
 // Apply (or clear, with '') a contact on an existing draft. Metadata only:
 // the backend deliberately does not re-run cleanup (see /drafts/:id/contact).
 async function setDraftContact(draftId, contactId, timeoutMs = 10000) {
@@ -1085,6 +1115,12 @@ export {
   fetchAppProfiles,
   overrideAppProfile,
   pinAppProfile,
+  fetchWorkflows,
+  fetchWorkflowHistory,
+  compileWorkflow,
+  saveWorkflow,
+  approveWorkflow,
+  runWorkflow,
   unloadModel,
   warmupRuntime,
   normalizeHealthPayload,

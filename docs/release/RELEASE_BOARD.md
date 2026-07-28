@@ -9,7 +9,8 @@
 - **Gate 4:** **ACCEPTED (2026-07-28, release-director, D-0022)**
 - **Gate 5:** **ACCEPTED (2026-07-28, release-director, D-0023)**
 - **Gate 7:** **ACCEPTED (2026-07-28, release-director, D-0024)**
-- **Gate 8:** Wave 8A checkpoint accepted (D-0025); open pending Wave 8B
+- **Gate 8:** **ACCEPTED (2026-07-28, release-director, D-0026 — live-qualified on PipeWire)**
+- **Gate 9:** **ACCEPTED (2026-07-28, release-director, D-0027)**
 - **Last updated:** 2026-07-28
 
 Statuses: `DONE`, `IN PROGRESS`, `BLOCKED`, `PENDING`, `CUT`.
@@ -112,8 +113,8 @@ Wave 1 follow-ups recorded: factory-reset executor exists nowhere (Wave 6 backlo
 | 5 | Studio, contacts/audience, Settings | Gates 1–2 | `DONE` |
 | 6 | Privacy/data lifecycle closure | Final store set from Waves 3/5/7/8/9/10 | `BLOCKED` |
 | 7 | Application context/profiles | Gate 1 | `DONE` |
-| 8 | Audio privacy and wake hardening | AudioInputBroker before isolation/handoff | `IN PROGRESS` (8A landed; 8B: isolation, lease, wake handoff wiring, qualification) |
-| 9 | Restricted action engine | Approved action schema | `BLOCKED` |
+| 8 | Audio privacy and wake hardening | AudioInputBroker before isolation/handoff | `DONE` |
+| 9 | Restricted action engine | Approved action schema | `DONE` (run executor follows with Wave 10) |
 | 10 | Controller and Stream Deck | Shared action IDs from Waves 2/9 | `BLOCKED` |
 | 11 | Strict 438-item parity closure, version, default flip | Gates 1–10 | `BLOCKED` |
 | 12 | Windows/Linux package qualification | Gate 11 | `BLOCKED` |
