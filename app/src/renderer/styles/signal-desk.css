@@ -6372,3 +6372,91 @@
   border-color: var(--sd-accent);
   color: var(--sd-accent);
 }
+
+/* ---------------------------------------------------------------------------
+   Launch Workflows (Wave 9) — Utilities > Advanced.
+
+   The preview is the most prominent thing in the group on purpose: it is what
+   the user is being asked to approve, and a preview that reads as incidental
+   detail next to a bright Approve button is an approval nobody really gave.
+   Refusals sit directly under it, because a refused step is the one thing that
+   must not be scrolled past.
+   --------------------------------------------------------------------------- */
+
+.sd-workflow-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 var(--sd-space-8);
+  padding: var(--sd-space-8) var(--sd-space-8) var(--sd-space-8) 28px;
+  border: 1px solid var(--sd-border);
+  border-radius: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sd-workflow-preview:empty {
+  display: none;
+}
+
+.sd-workflow-preview__row {
+  line-height: 1.5;
+}
+
+.sd-workflow-refusals {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 var(--sd-space-8);
+  padding: 0;
+}
+
+.sd-workflow-refusal {
+  padding: var(--sd-space-8);
+  border: 1px solid var(--sd-danger, #c0392b);
+  border-radius: 6px;
+  line-height: 1.5;
+}
+
+.sd-workflow-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "name    load"
+    "summary load"
+    "blocked load";
+  align-items: center;
+  gap: 2px var(--sd-space-8);
+  padding: var(--sd-space-8);
+  border: 1px solid var(--sd-border);
+  border-radius: 6px;
+}
+
+.sd-workflow-row__name { grid-area: name; font-weight: 600; }
+.sd-workflow-row__summary { grid-area: summary; font-size: 12px; opacity: 0.85; }
+
+/* Not colour alone: an unapproved workflow also SAYS it is unapproved, so the
+   state survives a monochrome display and a colour-blind reader. */
+.sd-workflow-row__blocked {
+  grid-area: blocked;
+  font-size: 12px;
+  color: var(--sd-danger, #c0392b);
+}
+
+.sd-workflow-row__load { grid-area: load; }
+
+.sd-workflow-history {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sd-workflow-run[data-workflow-run-status="partial"],
+.sd-workflow-run[data-workflow-run-status="failed"] {
+  color: var(--sd-danger, #c0392b);
+}

@@ -18,6 +18,13 @@ module.exports = defineConfig({
           backendProxy: resolve(__dirname, 'src/main/backendProxy.js'),
           userDataRoot: resolve(__dirname, 'src/main/userDataRoot.js'),
           onboardingStore: resolve(__dirname, 'src/main/onboardingStore.js'),
+          // Wave 9 restricted actions. Listed here for the Wave 1 lesson: a
+          // main-process module that is required at runtime but missing from
+          // these inputs is not a build error -- it is a silent no-window
+          // startup, because the require resolves to nothing in the bundled
+          // output and main.js dies before a window is created.
+          applicationRegistry: resolve(__dirname, 'src/main/applicationRegistry.js'),
+          applicationLauncher: resolve(__dirname, 'src/main/applicationLauncher.js'),
         },
       },
     },

@@ -2099,6 +2099,60 @@
               <span class="sd-util-message" id="sdUtilSendInjectionMessage"></span>
             </div>
 
+            <!-- Launch Workflows (Wave 9, D-0011). A GROUP inside the existing
+                 Advanced section rather than a sixth Utilities sub-section: the
+                 sub-nav ids and the section map are owned by
+                 features/utilitiesWorkspace.js (UTILITIES_SECTIONS), so a nav
+                 button it does not know would never be hidden when another
+                 section is active and would render on top of every other one --
+                 the same resolution Wave 7 documented for the Settings nav.
+                 Promoting it is a utilitiesWorkspace.js change, written out in
+                 docs/release/WAVE9_INTEGRATION_DIFFS.md as an optional diff. -->
+            <div class="sd-util-group" id="sdUtilWorkflowGroup" data-workflow-approved="false" data-workflow-saved="false">
+              <div class="sd-util-group__header"><span class="sd-util-group__title">Launch Workflows</span></div>
+              <p class="sd-util-group__desc">
+                A workflow is a fixed list of approved actions — open an application, a folder or a link,
+                or switch a BetterFingers setting. It is never a script: BetterFingers does not run shell
+                commands, delete or move files, close programs, or type credentials, and it will say so
+                rather than doing something approximately like what you asked.
+              </p>
+              <p class="sd-util-banner sd-util-banner--warn" id="sdUtilWorkflowUnavailable" hidden></p>
+
+              <label class="sd-util-row">
+                <span class="sd-util-row__label-text">Name</span>
+                <input type="text" class="sd-util-input sd-util-input--wide" id="sdUtilWorkflowName" placeholder="Studio setup" />
+              </label>
+              <label class="sd-util-row">
+                <span class="sd-util-row__label-text">Trigger phrases</span>
+                <textarea class="sd-util-input sd-util-input--wide" id="sdUtilWorkflowTriggers" rows="2" placeholder="open my studio"></textarea>
+              </label>
+              <label class="sd-util-row">
+                <span class="sd-util-row__label-text">Steps</span>
+                <textarea class="sd-util-input sd-util-input--wide" id="sdUtilWorkflowSteps" rows="4" placeholder="launch_app: obsidian&#10;activate_writing_preset: casual"></textarea>
+              </label>
+
+              <div class="sd-actions-row">
+                <button type="button" class="sd-btn" id="sdUtilWorkflowCompileButton">Build preview</button>
+                <button type="button" class="sd-btn" id="sdUtilWorkflowSaveButton" disabled>Save</button>
+                <button type="button" class="sd-btn sd-btn--primary" id="sdUtilWorkflowApproveButton" disabled>Approve preview</button>
+                <button type="button" class="sd-btn" id="sdUtilWorkflowRunButton" data-approved="false" disabled>Run</button>
+              </div>
+              <label class="sd-util-row">
+                <span class="sd-util-row__label-text">Turn on when saved</span>
+                <input type="checkbox" class="sd-util-checkbox" id="sdUtilWorkflowEnabled" />
+              </label>
+
+              <p class="sd-util-group__desc">This is exactly what will run, in order:</p>
+              <ol class="sd-workflow-preview" id="sdUtilWorkflowPreview" data-step-count="0"></ol>
+              <ul class="sd-workflow-refusals" id="sdUtilWorkflowRefusals" hidden></ul>
+              <span class="sd-util-message" id="sdUtilWorkflowMessage"></span>
+
+              <div class="sd-util-group__header"><span class="sd-util-group__title">Saved workflows</span></div>
+              <div class="sd-util-list" id="sdUtilWorkflowList"></div>
+              <div class="sd-util-group__header"><span class="sd-util-group__title">Recent runs</span></div>
+              <ul class="sd-workflow-history" id="sdUtilWorkflowHistory"></ul>
+            </div>
+
             <div class="sd-util-grid-2">
               <div class="sd-util-group">
                 <div class="sd-util-group__header"><span class="sd-util-group__title">Capabilities Dump</span></div>

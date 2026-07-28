@@ -47,6 +47,10 @@ import {
   createApplicationProfilesFeature,
   collectAppProfileElements,
 } from '../features/applicationProfiles.js';
+import {
+  createWorkflowBuilderFeature,
+  collectWorkflowElements,
+} from '../features/workflowBuilder.js';
 import { createContactsFeature, collectContactElements } from '../features/contacts.js';
 import { createContactWizard, collectContactWizardElements } from '../features/contactWizard.js';
 import { createOnboardingFlow, collectOnboardingElements } from '../features/onboardingFlow.js';
@@ -587,6 +591,59 @@ export function startSignalDeskApp(doc = document) {
     },
   });
   applicationProfiles.init();
+
+  // --- Launch workflows (Wave 9) ------------------------------------------
+  //
+  // Owns Utilities > Advanced > Launch Workflows: describe, compile, validate,
+  // exact preview, explicit approval, save disabled-or-enabled, run only after
+  // approval.
+  //
+  // WHERE THE VALIDATION CONTEXT COMES FROM. The confirmed application registry
+  // is owned by the Electron main process (main/applicationRegistry.js), which
+  // is the side that can see the desktop; it reaches the renderer over the
+  // typed IPC bridge. Until that bridge lands (documented as D-4 in
+  // docs/release/WAVE9_INTEGRATION_DIFFS.md) the registry is EMPTY, and empty
+  // is the safe answer rather than a broken one: the backend fails closed, so
+  // every launch step is refused with "that is not one of the applications you
+  // confirmed" instead of being assumed valid. Profiles come from the Wave 7
+  // feature, which already has them.
+  // The bridge call is async (every preload channel is an ipcRenderer.invoke),
+  // and the validation context has to be readable synchronously the moment the
+  // user presses "Build preview". So the confirmed registry is cached here and
+  // refreshed whenever the bridge exists. The cache starts EMPTY, and empty is
+  // the safe answer rather than a broken one: the backend fails closed, so every
+  // launch step is refused with "that is not one of the applications you
+  // confirmed" instead of being assumed valid.
+  let confirmedApplications = [];
+
+  async function refreshConfirmedApplications() {
+    const bridge = typeof window !== 'undefined' ? window.betterFingers?.applications : null;
+    if (typeof bridge?.list !== 'function') return confirmedApplications;
+    try {
+      const payload = await bridge.list();
+      confirmedApplications = Array.isArray(payload?.entries) ? payload.entries : [];
+    } catch (_error) {
+      confirmedApplications = [];
+    }
+    return confirmedApplications;
+  }
+
+  const workflowBuilder = createWorkflowBuilderFeature({
+    elements: collectWorkflowElements(doc),
+    api,
+    hooks: {
+      showToast,
+      escapeHtml,
+      getValidationContext: () => ({
+        registry: confirmedApplications,
+        profile_ids: applicationProfiles.getProfiles().map((profile) => profile.id),
+        personas: Object.keys(loadedPersonas || {}),
+        writing_presets: [],
+      }),
+    },
+  });
+  workflowBuilder.init();
+  refreshConfirmedApplications().catch(() => {});
 
   // --- Persona wizard / Foundry + persona list refresh (shared) -----------
 
