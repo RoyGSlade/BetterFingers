@@ -6,8 +6,9 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 import numpy as np
-import sounddevice as sd
 
+import audio_input_broker
+import audio_schema
 from audio_device_resolver import resolve_input_device
 from audio_ducker import AudioDucker
 from audio_gate import TrailingSilenceDetector
@@ -27,14 +28,24 @@ class RecordingResult:
 
 
 class AudioRecorder:
-    def __init__(self, sample_rate=16000, channels=1, device_index=None):
+    def __init__(self, sample_rate=16000, channels=1, device_index=None, broker=None):
         self.sample_rate = sample_rate
+        # `channels` is retained for API compatibility; the broker owns the
+        # capture format and opens the shared stream as 16 kHz mono float32 —
+        # the same format this recorder has always requested.
         self.channels = channels
         self.device_index = device_index
         self.recording = False
         self.frames = []
         self.lock = threading.Lock()
-        self.stream = None
+        # Since Wave 8A the recorder does not open the microphone itself: it
+        # subscribes to audio_input_broker, the one process-wide device owner
+        # (D-0013), so a running wake-word listener and a live dictation share
+        # a single capture stream instead of competing for the hardware.
+        # Injectable for tests; resolved lazily so importing the recorder never
+        # constructs the broker.
+        self._broker = broker
+        self._subscription = None
         self.ducker = AudioDucker()
         self.started_at = 0.0
 
@@ -46,6 +57,11 @@ class AudioRecorder:
         # Hands-free auto-stop (Phase 10): built per-recording from the profile.
         self.on_auto_stop: Optional[Callable[[str], None]] = None
         self._auto_stop_detector: Optional[TrailingSilenceDetector] = None
+
+    def _get_broker(self):
+        if self._broker is None:
+            self._broker = audio_input_broker.get_broker()
+        return self._broker
 
     def set_chunk_callback(self, callback: Optional[Callable[[np.ndarray, int], None]]):
         self.chunk_callback = callback
@@ -108,11 +124,15 @@ class AudioRecorder:
                                 f"{configured_device} to {resolved}; using the current index."
                             )
                         device = resolved
-                if config.get("audio_ducking", False):
-                    duck_level_percent = float(config.get("audio_ducking_level_percent", 18.0))
-                    restore_fallback_percent = float(
-                        config.get("audio_ducking_fallback_return_percent", 100.0)
-                    )
+                # Output ducking only (D-0010): lowering the speakers is a
+                # separate setting from input voice privacy, which the injector
+                # drives from voice_privacy.mode. audio_schema reads the new
+                # block and falls back to the legacy flat keys, so a profile
+                # that has not been migrated yet behaves exactly as before.
+                ducking = audio_schema.output_ducking_of(config)
+                if ducking["enabled"]:
+                    duck_level_percent = float(ducking["target_percent"])
+                    restore_fallback_percent = float(ducking["restore_fallback_percent"])
                     # Fire-and-forget ducking to avoid blocking recording start.
                     # The generation captured here lets a stop that lands before
                     # the thread commits cancel the duck instead of losing the
@@ -134,38 +154,20 @@ class AudioRecorder:
 
             self._start_chunk_worker()
 
-            def _open_stream(dev):
-                stream = sd.InputStream(
-                    samplerate=self.sample_rate,
-                    device=dev,
-                    channels=self.channels,
-                    dtype="float32",
-                    callback=self._audio_callback,
-                )
-                stream.start()
-                return stream
-
-            try:
-                self.stream = _open_stream(device)
-            except Exception as exc:
-                # A selected microphone may be unplugged, busy, or invalid — fall
-                # back to the system default rather than dropping the recording.
-                if device is not None:
-                    logging.warning(
-                        f"Input device {device} failed ({exc}); falling back to the system default microphone."
-                    )
-                    try:
-                        self.stream = _open_stream(None)
-                    except Exception as exc2:
-                        logging.error(f"Error starting audio stream: {exc2}")
-                        self.recording = False
-                        self._stop_chunk_worker()
-                        self.ducker.unduck()
-                else:
-                    logging.error(f"Error starting audio stream: {exc}")
-                    self.recording = False
-                    self._stop_chunk_worker()
-                    self.ducker.unduck()
+            # The broker owns device selection from here: it opens the shared
+            # stream, and a selected microphone that is unplugged, busy, or
+            # invalid still falls back to the system default rather than
+            # dropping the recording (the behavior this path has always had).
+            subscription = self._get_broker().subscribe(
+                "recorder", self._on_chunk, device=device, allow_default_fallback=True
+            )
+            if subscription is None:
+                logging.error("Error starting audio capture: no input device could be opened.")
+                self.recording = False
+                self._stop_chunk_worker()
+                self.ducker.unduck()
+                return
+            self._subscription = subscription
 
     def stop_recording(self, stop_reason="manual") -> RecordingResult:
         with self.lock:
@@ -186,10 +188,12 @@ class AudioRecorder:
             logging.info(f"Recording stopped. reason={stop_reason}")
 
             try:
-                if self.stream:
-                    self.stream.stop()
-                    self.stream.close()
-                    self.stream = None
+                subscription = self._subscription
+                self._subscription = None
+                if subscription is not None:
+                    # Releases the microphone unless another subscriber (a
+                    # running wake-word listener) still holds it.
+                    subscription.close()
             finally:
                 self._stop_chunk_worker()
                 self.ducker.unduck()
@@ -285,16 +289,19 @@ class AudioRecorder:
         except Exception as exc:
             logging.debug(f"Auto-stop detector error: {exc}")
 
-    def _audio_callback(self, indata, frames, time_info, status):
-        del frames, time_info
-        if status:
-            logging.warning(f"Audio status: {status}")
+    def _on_chunk(self, indata, sample_rate):
+        """Broker subscriber callback. ``indata`` is the broker's single copy
+        of the captured block, shared read-only with every other subscriber —
+        appended as-is and never modified in place."""
+        del sample_rate
+        if not self.recording:
+            # A late in-flight callback after stop: don't extend the clip.
+            return
 
-        chunk = indata.copy()
-        self.frames.append(chunk)
+        self.frames.append(indata)
 
         if self.chunk_callback:
             try:
-                self.chunk_queue.put_nowait(np.asarray(chunk, dtype=np.float32).flatten())
+                self.chunk_queue.put_nowait(np.asarray(indata, dtype=np.float32).flatten())
             except Exception:
                 pass

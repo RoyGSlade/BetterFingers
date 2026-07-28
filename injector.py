@@ -9,6 +9,7 @@ import sys
 import keyboard
 import pyperclip
 
+import audio_schema
 import clipboard_capture
 import injection_pacing
 import platform_capabilities
@@ -194,8 +195,9 @@ class InputInjector:
         self._update_params()
 
         if old_held_key:
-            ducking_enabled = bool(self.config.get("audio_ducking", False))
-            if not ducking_enabled:
+            # A profile switch that turns voice privacy off must not leave the
+            # mute key stuck down.
+            if not self._push_to_mute_binding():
                 self.release_mute_key()
 
     def stop_typing(self):
@@ -554,10 +556,21 @@ class InputInjector:
 
         self.close_chat(close_action)
 
+    def _push_to_mute_binding(self):
+        """The key to hold for input voice privacy, or "" when privacy is off.
+
+        Driven by ``voice_privacy.mode`` since Wave 8A (D-0010) instead of the
+        old ``audio_ducking`` flag, which conflated output ducking with input
+        privacy. audio_schema reads either representation, so a profile that
+        has not been migrated yet resolves to exactly the behavior it had
+        before: a key is held only when ducking was on AND a key was set.
+        """
+        if audio_schema.effective_privacy_mode(self.config) == audio_schema.PRIVACY_MODE_OFF:
+            return ""
+        return audio_schema.voice_privacy_of(self.config)["mute_binding"]
+
     def hold_mute_key(self):
-        if not self.config.get("audio_ducking", False):
-            return
-        key = (self.config.get("voice_mute_key", "") or "").strip()
+        key = self._push_to_mute_binding()
         if not key:
             return
         with self._voice_mute_lock:

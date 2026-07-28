@@ -8,10 +8,12 @@ Disabled by default (see wake_word_enabled in the profile schema).
 WakeWordService itself only decides whether a given audio chunk should
 trigger `on_detect` — the cooldown/threshold/VAD state machine is fully
 testable with a FakeWakeDetector and no real microphone or ML dependency.
-WakeListener (below) is the thing that actually owns the mic stream; it is
-constructed/started/stopped at runtime by routes_wake.py's /wake/enable and
-/wake/disable (not tied to app startup), so enabling wake word never
-requires an app restart and disabling it fully releases the microphone.
+WakeListener (below) is the thing that consumes live audio; since Wave 8A it
+subscribes to audio_input_broker (the one process-wide microphone owner,
+D-0013) instead of opening its own stream. It is constructed/started/stopped
+at runtime by routes_wake.py's /wake/enable and /wake/disable (not tied to
+app startup), so enabling wake word never requires an app restart and
+disabling it releases the microphone as soon as nothing else holds it.
 """
 import logging
 import time
@@ -216,27 +218,43 @@ class WakeWordService:
 
 
 class WakeListener:
-    """Owns the continuous background microphone stream that feeds a
-    WakeWordService. Fully runtime-controlled (start()/stop() are called by
-    routes_wake.py's /wake/enable and /wake/disable, and by the privacy-wipe
-    path) rather than tied to app startup/shutdown -- enabling wake word
-    never needs a restart, and disabling it (or wiping privacy data) always
-    leaves the mic stream fully closed, never just paused.
+    """Feeds a WakeWordService from the shared microphone stream. Fully
+    runtime-controlled (start()/stop() are called by routes_wake.py's
+    /wake/enable and /wake/disable, and by the privacy-wipe path) rather than
+    tied to app startup/shutdown -- enabling wake word never needs a restart,
+    and disabling it (or wiping privacy data) always releases the listener's
+    hold on the microphone, never just pauses it.
+
+    Since Wave 8A the listener does NOT open the device itself: it subscribes
+    to :mod:`audio_input_broker`, the single process-wide microphone owner
+    (D-0013). That is what lets wake detection and an active dictation share
+    one capture stream instead of racing for the device, and it means
+    stopping the listener releases the hardware only when nothing else (a
+    live recording, a level meter) still holds it.
 
     VAD gating reuses audio_gate.py's existing near-silent thresholds (the
     same ones TrailingSilenceDetector and the no-audio gate use) rather than
     inventing a second definition of "silence".
     """
 
-    def __init__(self, service, sample_rate=16000, channels=1, device_index=None, chunk_frames=1280):
+    def __init__(self, service, sample_rate=16000, channels=1, device_index=None, chunk_frames=1280,
+                 broker=None):
         self.service = service
         self.sample_rate = sample_rate
+        # channels/chunk_frames are retained for API compatibility with
+        # routes_wake.py and existing callers. The broker owns the capture
+        # format now and opens the shared stream at the same 16 kHz mono /
+        # 1280-frame settings this listener always used, so nothing changes.
         self.channels = channels
         self.device_index = device_index
         self.chunk_frames = chunk_frames
-        self._stream = None
+        # Injectable so a test can hand in its own broker; defaults to the
+        # process-wide owner, resolved lazily in start().
+        self._broker = broker
+        self._subscription = None
         self._lock = None  # lazily built in start() to avoid a hard threading import at module load
         self._running = False
+        self._last_error = ""
 
         from audio_gate import TrailingSilenceDetector
 
@@ -245,7 +263,15 @@ class WakeListener:
         self._peak_threshold = _gate_defaults.peak_threshold
 
     def is_listening(self):
-        return bool(self._running and self._stream is not None)
+        subscription = self._subscription
+        return bool(self._running and subscription is not None and subscription.active)
+
+    def _get_broker(self):
+        if self._broker is None:
+            import audio_input_broker
+
+            self._broker = audio_input_broker.get_broker()
+        return self._broker
 
     def _has_speech(self, chunk):
         import numpy as np
@@ -256,17 +282,21 @@ class WakeListener:
         peak = float(np.max(np.abs(chunk)))
         return not (rms < self._rms_threshold and peak < self._peak_threshold)
 
-    def _audio_callback(self, indata, frames, time_info, status):
-        del frames, time_info
+    def _on_chunk(self, indata, sample_rate):
+        """Broker subscriber callback: one shared capture block in, one
+        scoring decision out. The block is shared read-only with the other
+        subscribers, so it is never modified in place here."""
+        del sample_rate
         import numpy as np
 
-        if status:
-            logging.debug(f"Wake listener stream status: {status}")
         chunk = np.asarray(indata, dtype=np.float32).reshape(-1)
         try:
             self.service.process_chunk(chunk, self.sample_rate, has_speech=self._has_speech(chunk))
         except Exception as exc:
             logging.error(f"Wake listener chunk processing failed: {exc}")
+
+    def _on_stream_error(self, reason):
+        self._last_error = str(reason or "")
 
     def start(self, device_index=None):
         """Idempotent: returns True if already listening. Never persists raw
@@ -274,51 +304,51 @@ class WakeListener:
         (score log only, no audio retained) per the privacy requirement."""
         import threading
 
-        import sounddevice as sd
-
         if self._lock is None:
             self._lock = threading.Lock()
         with self._lock:
-            if self._running and self._stream is not None:
+            if self.is_listening():
                 return True
             device = device_index if device_index is not None else self.device_index
-            try:
-                stream = sd.InputStream(
-                    samplerate=self.sample_rate,
-                    device=device,
-                    channels=self.channels,
-                    dtype="float32",
-                    blocksize=self.chunk_frames,
-                    callback=self._audio_callback,
+            self._last_error = ""
+            subscription = self._get_broker().subscribe(
+                "wake",
+                self._on_chunk,
+                device=device,
+                on_stream_error=self._on_stream_error,
+            )
+            if subscription is None:
+                logging.error(
+                    "Wake listener could not acquire the microphone: %s", self._last_error or "unknown"
                 )
-                stream.start()
-            except Exception as exc:
-                logging.error(f"Wake listener failed to start microphone stream: {exc}")
                 return False
-            self._stream = stream
+            self._subscription = subscription
             self._running = True
             return True
 
     def stop(self):
-        """Full quiesce: stop and close the mic stream. Idempotent and safe
-        to call even if never started (used unconditionally by the
-        privacy-wipe path, mirroring how it drains the recorder)."""
+        """Full quiesce: release this listener's hold on the shared microphone.
+        Idempotent and safe to call even if never started (used
+        unconditionally by the privacy-wipe path, mirroring how it drains the
+        recorder). The device itself closes once no other subscriber -- a live
+        recording, say -- still needs it."""
         if self._lock is None:
             import threading
 
             self._lock = threading.Lock()
         with self._lock:
             self._running = False
-            stream = self._stream
-            self._stream = None
-        if stream is not None:
+            subscription = self._subscription
+            self._subscription = None
+        if subscription is not None:
             try:
-                stream.stop()
-                stream.close()
+                subscription.close()
             except Exception as exc:
-                logging.warning(f"Wake listener stream close failed: {exc}")
+                logging.warning(f"Wake listener failed to release the microphone: {exc}")
 
     def status(self, now=None):
         merged = self.service.status(now=now)
         merged["listening"] = self.is_listening()
+        if self._last_error:
+            merged["input_error"] = self._last_error
         return merged

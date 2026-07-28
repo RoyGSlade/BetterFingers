@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "document": "docs/release/WAKE_MODEL_PROVENANCE.md",
+  "audited_at": "2026-07-28",
+  "audit_scope": "Every wake-word model artifact this repository ships, downloads, generates, or accepts from the user.",
+  "license_gate": {
+    "source": "wake_models.ALLOWED_LICENSES",
+    "allowed": ["Apache-2.0", "CC0-1.0", "MIT", "user-provided"],
+    "enforced_by": "tests/test_wake_models.py::test_catalog_licenses (authoring-time gate over AVAILABLE_WAKE_MODELS)",
+    "runtime_enforcement": false,
+    "note": "The gate is asserted over the checked-in catalog, not evaluated at runtime. That is sufficient because the catalog is a source-code constant, but adding a runtime assertion in list_wake_models() would make the invariant self-defending."
+  },
+  "repository_bundled_binaries": {
+    "count": 0,
+    "detail": "No .onnx / .tflite / .npz / .pth / .safetensors artifact is tracked in this repository. Every wake model file arrives at runtime: downloaded from a pinned upstream URL, imported by the user, or trained locally."
+  },
+  "artifacts": [
+    {
+      "id": "melspectrogram",
+      "name": "Melspectrogram feature extractor",
+      "filename": "melspectrogram.onnx",
+      "kind": "backbone",
+      "origin": "bundled",
+      "license": "Apache-2.0",
+      "license_verified": true,
+      "source": "openWakeWord (Apache-2.0), re-hosting Google TFHub speech_embedding (Apache-2.0)",
+      "source_url": "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/melspectrogram.onnx",
+      "sha256": "ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f",
+      "size_bytes": 1087958,
+      "distribution": "runtime_download_from_pinned_upstream_url",
+      "redistributed_by_project": false,
+      "phrase_specific": false,
+      "shippable": true
+    },
+    {
+      "id": "embedding_model",
+      "name": "Speech embedding model",
+      "filename": "embedding_model.onnx",
+      "kind": "backbone",
+      "origin": "bundled",
+      "license": "Apache-2.0",
+      "license_verified": true,
+      "source": "openWakeWord (Apache-2.0), re-hosting Google TFHub speech_embedding (Apache-2.0)",
+      "source_url": "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/embedding_model.onnx",
+      "sha256": "70d164290c1d095d1d4ee149bc5e00543250a7316b59f31d056cff7bd3075c1f",
+      "size_bytes": 1326578,
+      "distribution": "runtime_download_from_pinned_upstream_url",
+      "redistributed_by_project": false,
+      "phrase_specific": false,
+      "shippable": true
+    }
+  ],
+  "excluded": [
+    {
+      "ids": ["alexa", "hey_mycroft", "hey_jarvis", "hey_rhasspy", "timer", "weather"],
+      "name": "openWakeWord pre-trained wake-phrase classifiers",
+      "kind": "classifier",
+      "license": "CC-BY-NC-SA-4.0",
+      "license_verified": true,
+      "verified_against": "https://github.com/dscripka/openWakeWord README, \"License of Pre-trained Models\" section (retrieved 2026-07-15)",
+      "reason": "Non-commercial. Fails the Apache-2.0 / CC0-1.0 / MIT gate. Not listed in AVAILABLE_WAKE_MODELS and not downloadable through the app.",
+      "shippable": false
+    },
+    {
+      "ids": ["openwakeword-community-library"],
+      "name": "openwakeword.com/library community models",
+      "kind": "classifier",
+      "license": "unknown",
+      "license_verified": false,
+      "reason": "Per-model license metadata could not be verified programmatically (JS-rendered page, no accessible license field). Nothing from it is listed without verified license text.",
+      "shippable": false
+    }
+  ],
+  "user_supplied": [
+    {
+      "class": "user-imported",
+      "origin": "user-imported",
+      "license": "user-provided",
+      "recorded_in": "<user data>/wake_models/imported_models.json",
+      "provenance_shown_to_user": true,
+      "integrity": "SHA-256 recorded at import and re-verified on every load (wake_models.verify_imported_model); a digest mismatch quarantines the file and drops the manifest entry.",
+      "redistributed_by_project": false,
+      "note": "The user chose and supplied the file; the app states plainly that its licensing is the user's own responsibility and never redistributes it."
+    },
+    {
+      "class": "trained",
+      "origin": "trained",
+      "license": "self-trained",
+      "recorded_in": "<user data>/wake_models/imported_models.json",
+      "provenance_shown_to_user": true,
+      "integrity": "SHA-256 recorded at registration and re-verified on every load (same manifest and helpers as user-imported).",
+      "redistributed_by_project": false,
+      "note": "A local NumPy classifier head over the Apache-2.0 backbone. Positives come from the user's own recordings plus Kokoro-synthesized renderings; no third-party weights are incorporated, so there is nothing of anyone else's to redistribute."
+    }
+  ],
+  "training_inputs": [
+    {
+      "id": "kokoro",
+      "role": "Synthetic positive/negative audio for locally-trained wake phrases",
+      "distribution": "pip dependency (kokoro, kokoro-onnx); weights fetched by that library, not by this repository",
+      "recorded_license_claim": "Apache-2.0 / MIT (as stated in wake_trainer.py and wake_training_service.py)",
+      "license_verified_in_this_audit": false,
+      "redistributed_by_project": false,
+      "note": "Chosen specifically to avoid Piper (GPL), which openWakeWord uses for the same purpose. Independent verification of the Kokoro weights' license belongs to the TTS lane, not this wake audit — recorded here as an open item rather than asserted."
+    }
+  ],
+  "findings": [
+    {
+      "id": "WMP-1",
+      "severity": "info",
+      "status": "clean",
+      "summary": "Zero wake model binaries are tracked in the repository; nothing unlicensed is bundled."
+    },
+    {
+      "id": "WMP-2",
+      "severity": "info",
+      "status": "clean",
+      "summary": "The catalog ships zero wake-phrase classifiers, so a fresh install has no phrase model. That is a deliberate license outcome, and audio_status.wake_status reports it as the distinct 'classifier_missing' state rather than a failure."
+    },
+    {
+      "id": "WMP-3",
+      "severity": "low",
+      "status": "open",
+      "summary": "wake_models.ALLOWED_LICENSES is enforced only by a test over the checked-in catalog, never at runtime. A future catalog entry added without running the suite would not be refused by the code itself."
+    },
+    {
+      "id": "WMP-4",
+      "severity": "low",
+      "status": "open",
+      "summary": "Kokoro's weights license is asserted in source comments but was not independently verified in this audit. It affects locally-trained models' provenance story, not anything this repository redistributes."
+    }
+  ]
+}
