@@ -5016,6 +5016,259 @@
 }
 
 /* ==========================================
+   Persona creation dialog (GUIDED_FLOWS §4c)
+
+   The wizard and the Persona Foundry ported onto the guided-flow shell. Their
+   ids are index.html's, unchanged, because features/personas.js addresses them
+   by id; only the classes are new. Everything here is scoped under
+   .sd-persona-flow so the ported markup cannot leak styling into the rest of
+   the workspace.
+   ========================================== */
+
+/* personas.js hides and shows by toggling `.hidden`, which base.css defines for
+   index.html and this stylesheet deliberately does not define globally. Scoped
+   here so the ported module's own show/hide works without giving every element
+   on the page a class that silently removes it. */
+.sd-persona-flow .hidden { display: none !important; }
+
+.sd-persona-flow__card { width: min(760px, 100%); max-height: min(86vh, 780px); }
+
+.sd-persona-flow__delete {
+  border-color: transparent;
+  color: var(--sd-red);
+}
+
+.sd-persona-flow__delete:hover { border-color: var(--sd-red); color: var(--sd-red); }
+
+.sd-persona-flow__message {
+  padding: 0 var(--sd-space-24) var(--sd-space-16);
+}
+
+.sd-persona-flow__message:empty { display: none; }
+
+.sd-persona-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-16);
+}
+
+.sd-persona-step__desc {
+  margin: 0;
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+}
+
+.sd-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sd-field__label {
+  font-size: var(--sd-label-font-size);
+  letter-spacing: var(--sd-label-letter-spacing);
+  text-transform: uppercase;
+  color: var(--sd-label-color);
+}
+
+.sd-input {
+  width: 100%;
+  padding: var(--sd-space-8) var(--sd-space-12);
+  background: var(--sd-surface-inset);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-chip);
+  color: var(--sd-text-primary);
+  font-family: inherit;
+  font-size: var(--sd-font-sm);
+}
+
+.sd-input:focus-visible {
+  outline: none;
+  border-color: var(--sd-cyan);
+}
+
+.sd-input--area { min-height: 76px; resize: vertical; }
+.sd-input--area-tall { min-height: 160px; resize: vertical; }
+
+.sd-check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sd-space-12);
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-primary);
+  cursor: pointer;
+}
+
+.sd-check input { margin-top: 3px; accent-color: var(--sd-cyan); }
+
+.sd-persona-assist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-8);
+  padding: var(--sd-space-16);
+  background: var(--sd-surface-inset);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-chip);
+}
+
+.sd-persona-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sd-space-8);
+}
+
+/* .sd-btn--primary's toolbar margin-left:auto would push every primary action
+   to the far right of its row, away from the button it belongs beside. */
+.sd-persona-flow .sd-btn--primary { margin-left: 0; }
+
+/* Named __grid, not .sd-persona-grid: that class is already Studio's persona
+   CARD grid (#sdPersonaGrid), and a second definition would have quietly
+   restyled it. */
+.sd-persona-flow__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--sd-space-12);
+}
+
+.sd-persona-advanced {
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-chip);
+  padding: var(--sd-space-12);
+}
+
+.sd-persona-advanced > summary { cursor: pointer; }
+.sd-persona-advanced[open] > summary { margin-bottom: var(--sd-space-12); }
+
+.sd-persona-subsection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-8);
+  margin-top: var(--sd-space-16);
+}
+
+.sd-persona-refine {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-8);
+  padding: var(--sd-space-12);
+  border: 1px solid var(--sd-border);
+  border-left: 3px solid var(--sd-cyan);
+  border-radius: var(--sd-radius-chip);
+}
+
+.sd-persona-list {
+  margin: 0;
+  padding-left: var(--sd-space-20);
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+}
+
+.sd-persona-list li { margin-bottom: 4px; }
+.sd-persona-list:empty { display: none; }
+
+.sd-persona-message {
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+}
+
+.sd-persona-message:empty { display: none; }
+.sd-persona-message[data-tone="success"] { color: var(--sd-green); }
+.sd-persona-message[data-tone="warning"] { color: var(--sd-amber); }
+.sd-persona-message[data-tone="danger"] { color: var(--sd-red); }
+
+.sd-persona-result {
+  min-height: 60px;
+  padding: var(--sd-space-12);
+  background: var(--sd-surface-inset);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-chip);
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-primary);
+  white-space: pre-wrap;
+}
+
+/* --- Foundry-specific --------------------------------------------------- */
+
+.sd-foundry-log {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-8);
+  min-height: 220px;
+  max-height: 42vh;
+  overflow-y: auto;
+  padding: var(--sd-space-12);
+  background: var(--sd-surface-inset);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-chip);
+}
+
+/* Class names set by personas.js (foundryAppendBubble) -- not renameable here. */
+.sd-foundry-log .foundry-bubble {
+  max-width: 82%;
+  padding: var(--sd-space-8) var(--sd-space-12);
+  border-radius: var(--sd-radius-chip);
+  font-size: var(--sd-font-sm);
+  line-height: 1.5;
+}
+
+.sd-foundry-log .foundry-bubble.question {
+  align-self: flex-start;
+  background: var(--sd-surface-raised);
+  border: 1px solid var(--sd-border);
+  color: var(--sd-text-primary);
+}
+
+.sd-foundry-log .foundry-bubble.answer {
+  align-self: flex-end;
+  background: rgba(34, 211, 238, .12);
+  border: 1px solid var(--sd-cyan);
+  color: var(--sd-text-primary);
+}
+
+/* Pushback is the model saying "that answer will not build a usable persona".
+   It has to read as a correction, not as another question. */
+.sd-foundry-log .foundry-bubble.pushback {
+  align-self: flex-start;
+  background: rgba(245, 158, 11, .12);
+  border: 1px solid var(--sd-amber);
+  color: var(--sd-text-primary);
+}
+
+.sd-foundry-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sd-space-8);
+}
+
+.sd-foundry-answer {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sd-space-8);
+}
+
+.sd-foundry-answer .sd-btn { flex: none; }
+
+.sd-foundry-cases {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-12);
+}
+
+.sd-foundry-card {
+  padding: var(--sd-space-16);
+  background: var(--sd-surface-inset);
+  border: 1px solid var(--sd-border);
+  border-left: 3px solid var(--sd-cyan);
+  border-radius: var(--sd-radius-card);
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+}
+
+.sd-foundry-card:empty { display: none; }
+.sd-foundry-card strong { color: var(--sd-text-primary); }
+
+/* ==========================================
    First-run setup banner (GUIDED_FLOWS §4b)
 
    Deliberately a banner in Talk, not a modal: it is live status, and hiding
@@ -5259,6 +5512,12 @@
 
 .sd-flow[hidden] { display: none; }
 
+/* personas.js hides the persona dialog by adding `.hidden` to its root, and the
+   shell hides it with the `hidden` property. `.sd-persona-flow .hidden` is a
+   descendant rule and does not match the root itself, so without this the class
+   path would set a flag that changed nothing. */
+.sd-flow.hidden { display: none; }
+
 .sd-flow__card {
   display: flex;
   flex-direction: column;
@@ -5372,6 +5631,12 @@
   padding: var(--sd-space-16) var(--sd-space-24);
   border-top: 1px solid var(--sd-border);
 }
+
+/* An author `display` beats the UA stylesheet's [hidden] rule, so setting the
+   attribute alone left the Foundry path showing the wizard's footer. Every
+   `display` declaration in this file that can be hidden by attribute needs its
+   own guard -- see the same pairing on __step, __progress and the banner. */
+.sd-flow__footer[hidden] { display: none; }
 
 .sd-flow__spacer { flex: 1; }
 

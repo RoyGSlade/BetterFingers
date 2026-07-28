@@ -339,3 +339,91 @@ test('createStudioWorkspaceFeature: selectPersona() switches selection; selectin
   feature.selectPersona('Nonexistent');
   assert.equal(feature.getSelectedName(), 'Direct');
 });
+
+// --- persona entry points: injected hook beats the cross-document fallback ----
+//
+// Both handlers can either call an injected hook or reach across the document
+// for the shipping dashboard's own trigger. handleOpenFoundryClick had those in
+// the opposite order to handleNewPersonaClick, which broke the moment Signal
+// Desk mounted the Foundry: the trigger existed, so the guess won over the
+// host's explicit decision, clicked it directly, and started an interview
+// inside a dialog nothing had opened -- leaving the dialog hidden and the
+// interview's error message off screen.
+
+function stubButton() {
+  const listeners = [];
+  return {
+    clicked: 0,
+    addEventListener: (_evt, fn) => listeners.push(fn),
+    click() { this.clicked += 1; listeners.forEach((fn) => fn()); },
+  };
+}
+
+function withFakeDocument(trigger, fn) {
+  const had = 'document' in globalThis;
+  const previous = globalThis.document;
+  globalThis.document = { getElementById: () => trigger };
+  try {
+    fn();
+  } finally {
+    if (had) globalThis.document = previous;
+    else delete globalThis.document;
+  }
+}
+
+test('Build with AI prefers the injected hook over #openFoundryButton', () => {
+  const openFoundryButton = stubButton();
+  const fallbackTrigger = stubButton();
+  const calls = [];
+  const toasts = [];
+
+  withFakeDocument(fallbackTrigger, () => {
+    const feature = createStudioWorkspaceFeature({
+      elements: { openFoundryButton },
+      hooks: {
+        onOpenFoundryRequested: () => calls.push('hook'),
+        showToast: (m) => toasts.push(m),
+      },
+    });
+    feature.init();
+    openFoundryButton.click();
+  });
+
+  assert.deepEqual(calls, ['hook']);
+  assert.equal(fallbackTrigger.clicked, 0, 'the DOM fallback must not also fire');
+  assert.deepEqual(toasts, []);
+});
+
+test('New Persona prefers the injected hook too', () => {
+  const newPersonaButton = stubButton();
+  const calls = [];
+
+  withFakeDocument(stubButton(), () => {
+    const feature = createStudioWorkspaceFeature({
+      elements: { newPersonaButton },
+      hooks: { onNewPersonaRequested: () => calls.push('hook'), showToast: () => {} },
+    });
+    feature.init();
+    newPersonaButton.click();
+  });
+
+  assert.deepEqual(calls, ['hook']);
+});
+
+test('with no hook, Build with AI still falls back to the dashboard trigger', () => {
+  // The fallback is what keeps this adapter usable on index.html; removing it
+  // would trade one broken page for another.
+  const openFoundryButton = stubButton();
+  const fallbackTrigger = stubButton();
+
+  withFakeDocument(fallbackTrigger, () => {
+    const feature = createStudioWorkspaceFeature({
+      elements: { openFoundryButton },
+      hooks: { showToast: () => {} },
+    });
+    feature.init();
+    openFoundryButton.click();
+  });
+
+  assert.equal(fallbackTrigger.clicked, 1);
+});

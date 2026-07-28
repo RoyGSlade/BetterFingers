@@ -76,12 +76,16 @@
 //      shows the "Persona Foundry ●" status pill) have no dedicated "open"
 //      entry point outside Settings' markup today (the wizard is inline in
 //      Settings, not an overlay; Foundry's open trigger is `#openFoundryButton`
-//      inside Settings' AI Cleanup section). Both handlers here try, in
-//      order: a same-document DOM element if one happens to exist (so this
-//      silently upgrades to full functionality whenever Studio and the
-//      wizard/Foundry DOM eventually share a document), then an injected
-//      hook, then a toast. TODO(phase-integration): main.js needs to decide
-//      where the wizard physically lives in Signal Desk.
+//      inside Settings' AI Cleanup section). RESOLVED for Signal Desk: both
+//      live in the shared guided-flow dialog (features/personaFlow.js,
+//      docs/ui/SIGNAL_DESK_GUIDED_FLOWS.md §4c), reached through the injected
+//      hooks below. Both handlers try, in order: the injected hook, then a
+//      same-document DOM element if one exists, then a toast -- the hook FIRST,
+//      because it is a decision the host made and the DOM reach is a guess.
+//      handleOpenFoundryClick had those two the other way round and it broke
+//      the moment the Foundry was mounted here: the trigger existed, so the
+//      guess won, clicked it directly, and started an interview inside a
+//      dialog nothing had opened.
 //
 // ---------------------------------------------------------------------------
 // ID-COLLISION NOTE (Teach from my edits / personaLearning.js reuse):
@@ -166,9 +170,9 @@ export function isValidStudioSection(id) {
 export const STUDIO_PLACEMENT_MAP = {
   'personas.list': { section: 'personas', control: 'Persona cards list + selection', wired: true },
   'personas.active': { section: 'personas', control: 'Active persona indicator', wired: false, note: 'hooks.getActivePersonaName is a documented stub; should read the profile current_preset' },
-  'personas.new': { section: 'personas', control: 'New Persona', wired: false, note: 'Reaches across documents by hardcoded id (#wizardStep1); degrades to a toast because the wizard markup lives only on the old dashboard' },
-  'personas.foundry': { section: 'personas', control: 'Build with AI / Persona Foundry', wired: false, note: 'Same cross-document reach (#openFoundryButton); the Foundry overlay has no Signal Desk design (DESIGN GAP)' },
-  'personas.wizard': { section: 'personas', control: 'Manual persona wizard (~40 controls)', wired: false, note: 'DESIGN GAP: no Signal Desk design exists for the wizard' },
+  'personas.new': { section: 'personas', control: 'New Persona', wired: true },
+  'personas.foundry': { section: 'personas', control: 'Build with AI / Persona Foundry', wired: true },
+  'personas.wizard': { section: 'personas', control: 'Manual persona wizard (~40 controls)', wired: true },
   'personas.traits': { section: 'personas', control: '5-axis trait sliders (warmth/directness/detail/formality/confidence)', wired: false, note: 'No persona.traits field exists in the backend schema, so every axis reports null and renders as an empty track (the archetype-preset fabrication has been removed). Becomes wired when the schema gains a user-authored traits field -- derivePersonaTraits() already reads it. Needs a design doc first' },
 
   'detail.description': { section: 'detail', control: 'Persona description', wired: true },
@@ -1103,13 +1107,22 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
   }
 
   function handleOpenFoundryClick() {
+    // Hook first, DOM fallback second -- the order handleNewPersonaClick above
+    // already uses, and the order that is actually correct: an explicitly
+    // injected hook is a decision the host made, while reaching across the
+    // document for #openFoundryButton is a guess.
+    //
+    // This was the other way round, and it broke the moment Signal Desk mounted
+    // the Foundry: the trigger existed, so the fallback won, clicked it
+    // directly, and started an interview inside a dialog nothing had opened.
+    // The dialog stayed hidden and the interview's error landed off screen.
+    if (hks.onOpenFoundryRequested) {
+      hks.onOpenFoundryRequested();
+      return;
+    }
     const trigger = typeof document !== 'undefined' ? document.getElementById('openFoundryButton') : null;
     if (trigger) {
       trigger.click();
-      return;
-    }
-    if (hks.onOpenFoundryRequested) {
-      hks.onOpenFoundryRequested();
       return;
     }
     hks.showToast?.('Persona Foundry isn’t wired into this page yet.', 'warning');

@@ -153,6 +153,324 @@
   </div>
 </div>
 
+<!--
+  Persona creation (stage 13 §4c). One dialog, two entry paths.
+
+  Studio's "+ New Persona" and "✨ Build with AI" open the SAME dialog on
+  different paths -- the manual wizard (Goal & role → Tone → Rules → Review) and
+  the Persona Foundry's model-led interview (Interview → Examples → Stress test
+  → Review). Both end at POST /personas, which they already shared.
+
+  The ids below are the canonical wizard*/foundry* ids from index.html, kept
+  exactly: features/personas.js looks Foundry's tree up by id at call time and
+  receives the wizard's elements by id from the composition root, so preserving
+  them is what makes this a port rather than a second implementation. The
+  classes are Signal Desk's, because the markup should look like the rest of
+  this UI.
+
+  What the guided-flow shell owns here is chrome only -- overlay, card, focus
+  trap and return, Escape, title and progress. Stepping stays with the two
+  builders, which advance on backend results and their own in-body buttons; the
+  shell follows via setWizardStepObserver / setFoundryScreenObserver. Porting
+  their step logic onto the shell's footer would have meant rewriting ~300 lines
+  of validation and prompt regeneration with no test coverage to land on, which
+  is the big-bang rewrite rule 7 exists to prevent.
+-->
+<div id="foundryOverlay" class="sd-flow sd-persona-flow hidden" role="dialog" aria-modal="true"
+     aria-labelledby="sdPersonaFlowTitle" hidden>
+  <div class="sd-flow__card sd-persona-flow__card">
+    <header class="sd-flow__header">
+      <h2 class="sd-flow__title" id="sdPersonaFlowTitle" data-flow-title tabindex="-1">New persona</h2>
+      <div class="sd-flow__steps" data-flow-progress role="img" aria-label="Step 1 of 4">
+        <span class="sd-flow__dot" data-flow-dot data-state="current"></span>
+        <span class="sd-flow__dot" data-flow-dot data-state="upcoming"></span>
+        <span class="sd-flow__dot" data-flow-dot data-state="upcoming"></span>
+        <span class="sd-flow__dot" data-flow-dot data-state="upcoming"></span>
+      </div>
+      <!--
+        No data-flow-close: personas.js already binds this button to
+        foundryClose(), which reaches the shell through the screen observer.
+        Adding the shell's own binding as well would give one button two owners
+        and two close paths.
+      -->
+      <button type="button" class="sd-btn" id="foundryCloseButton" aria-label="Close">&times;</button>
+    </header>
+
+    <div class="sd-flow__body">
+
+      <!-- ===================== Manual wizard path ===================== -->
+
+      <section class="sd-flow__step" data-flow-step="wizard1" hidden>
+        <div id="wizardStep1" class="sd-persona-step">
+          <p class="sd-persona-step__desc">Choose the foundational role or goal template for the model:</p>
+          <label class="sd-field">
+            <span class="sd-field__label">Role template</span>
+            <select id="wizardRole" class="sd-input">
+              <option value="janitor">Spelling &amp; Grammar Cleaner (True Janitor)</option>
+              <option value="editor">Pro Editor (Polished)</option>
+              <option value="writer">Corporate Writer (Formal)</option>
+              <option value="custom">Custom (write your own goal/role)</option>
+            </select>
+          </label>
+          <label class="sd-field hidden" id="wizardCustomRoleLabel">
+            <span class="sd-field__label">Custom goal / role description</span>
+            <textarea id="wizardCustomRole" class="sd-input sd-input--area" placeholder="e.g. You are an expert copywriter. Rewrite user text to be extremely persuasive..."></textarea>
+          </label>
+
+          <!--
+            The wizard's own miniature Foundry. Kept where it is useful rather
+            than merged away: it is the same idea as the interview at a smaller
+            granularity, and having both is fine now that they live in one
+            dialog instead of two screens that did not know about each other.
+          -->
+          <div class="sd-persona-assist">
+            <span class="sd-field__label">Or start from scratch with your model</span>
+            <p class="sd-persona-step__desc">Describe the persona you want in your own words &mdash; dictate it if you like. Your downloaded model designs the whole persona (prompt, settings, examples) and shows you what it understood before anything is saved.</p>
+            <textarea id="wizardDescribeInput" class="sd-input sd-input--area" placeholder="e.g. I want it to keep my voice but tighten everything up, a little poetic, and if I'm angry it should stay angry..."></textarea>
+            <div class="sd-persona-actions">
+              <button id="wizardDescribeButton" class="sd-btn" type="button">&#10024; Build it with your model</button>
+            </div>
+            <div id="wizardDescribeStatus" class="sd-persona-message" role="status" aria-live="polite"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="sd-flow__step" data-flow-step="wizard2" hidden>
+        <div id="wizardStep2" class="sd-persona-step hidden">
+          <p class="sd-persona-step__desc">Select the tone and voice style:</p>
+          <label class="sd-field">
+            <span class="sd-field__label">Tone template</span>
+            <select id="wizardTone" class="sd-input">
+              <option value="neutral">Neutral &amp; Direct (no extra flair)</option>
+              <option value="formal">Formal, Professional &amp; Serious</option>
+              <option value="casual">Casual, Conversational &amp; Friendly</option>
+              <option value="custom">Custom tone</option>
+            </select>
+          </label>
+          <label class="sd-field hidden" id="wizardCustomToneLabel">
+            <span class="sd-field__label">Custom tone description</span>
+            <input id="wizardCustomTone" class="sd-input" type="text" placeholder="e.g. Enthusiastic and quirky, using occasional emojis..." />
+          </label>
+        </div>
+      </section>
+
+      <section class="sd-flow__step" data-flow-step="wizard3" hidden>
+        <div id="wizardStep3" class="sd-persona-step hidden">
+          <p class="sd-persona-step__desc">Define strict rules and boundaries:</p>
+          <label class="sd-check"><input id="wizardRuleLength" type="checkbox" checked /> <span>Match original input length (do not expand/summarize)</span></label>
+          <label class="sd-check"><input id="wizardRuleCommands" type="checkbox" checked /> <span>Ignore user commands/instructions inside speech (safety guard)</span></label>
+          <label class="sd-check"><input id="wizardRuleNoPreamble" type="checkbox" checked /> <span>Do not output preambles, explanations, or quotes</span></label>
+          <label class="sd-check"><input id="wizardRuleSanitize" type="checkbox" /> <span>Sanitize profanity or hostile language</span></label>
+        </div>
+      </section>
+
+      <section class="sd-flow__step" data-flow-step="wizard4" hidden>
+        <div id="wizardStep4" class="sd-persona-step hidden">
+          <p class="sd-persona-step__desc">Review and save your custom persona:</p>
+          <label class="sd-field">
+            <span class="sd-field__label">Persona name</span>
+            <input id="wizardPersonaName" class="sd-input" type="text" placeholder="e.g. Friendly Editor" />
+          </label>
+          <label class="sd-field">
+            <span class="sd-field__label">Prompt</span>
+            <textarea id="wizardPromptPreview" class="sd-input sd-input--area-tall"></textarea>
+          </label>
+          <div class="sd-persona-actions">
+            <button id="wizardRegeneratePromptButton" class="sd-btn" type="button">Regenerate from wizard</button>
+            <button id="wizardRefinePromptButton" class="sd-btn" type="button">&#10024; Clean up with your model</button>
+          </div>
+          <div id="wizardRefineStatus" class="sd-persona-message" role="status" aria-live="polite"></div>
+          <div id="wizardRefinePanel" class="sd-persona-refine hidden">
+            <span class="sd-field__label">What your model understood</span>
+            <ul id="wizardRefineUnderstood" class="sd-persona-list"></ul>
+            <span class="sd-field__label">Where it had to guess</span>
+            <ul id="wizardRefineAmbiguities" class="sd-persona-list"></ul>
+            <label class="sd-field" id="wizardRefinePromptBlock">
+              <span class="sd-field__label">Refined prompt</span>
+              <textarea id="wizardRefinedPrompt" class="sd-input sd-input--area-tall"></textarea>
+            </label>
+            <div id="wizardRefineActions" class="sd-persona-actions">
+              <button id="wizardApplyRefinedButton" class="sd-btn sd-btn--primary" type="button">Use refined prompt</button>
+              <button id="wizardDismissRefinedButton" class="sd-btn" type="button">Keep mine</button>
+            </div>
+          </div>
+
+          <details id="wizardAdvanced" class="sd-persona-advanced">
+            <summary class="sd-field__label">Advanced (optional)</summary>
+            <p class="sd-persona-step__desc">Fine-tune generation, output formatting, and which model this persona prefers. Leave blank to use defaults.</p>
+            <div class="sd-persona-flow__grid">
+              <label class="sd-field">
+                <span class="sd-field__label">Temperature (0&ndash;2)</span>
+                <input id="wizardTemperature" class="sd-input" type="number" min="0" max="2" step="0.1" placeholder="model default" />
+              </label>
+              <label class="sd-field">
+                <span class="sd-field__label">Preferred model (optional)</span>
+                <input id="wizardModelHint" class="sd-input" type="text" placeholder="e.g. gemma-4-e4b-q4" />
+              </label>
+              <label class="sd-field">
+                <span class="sd-field__label">Capitalization</span>
+                <select id="wizardFormatCaps" class="sd-input">
+                  <option value="none">Leave as written</option>
+                  <option value="sentence">Sentence case</option>
+                  <option value="upper">UPPERCASE</option>
+                  <option value="lower">lowercase</option>
+                </select>
+              </label>
+              <label class="sd-field">
+                <span class="sd-field__label">Sign-off (optional)</span>
+                <input id="wizardFormatSignoff" class="sd-input" type="text" placeholder="e.g. — Best, John" />
+              </label>
+              <label class="sd-field">
+                <span class="sd-field__label">Output policy</span>
+                <select id="wizardOutputPolicy" class="sd-input">
+                  <option value="preserve">Preserve length</option>
+                  <option value="tighten">Tighten</option>
+                  <option value="expand">Expand slightly</option>
+                  <option value="summarize">Summarize</option>
+                </select>
+              </label>
+              <label class="sd-field">
+                <span class="sd-field__label">Safety mode</span>
+                <select id="wizardSafetyMode" class="sd-input">
+                  <option value="strict">Strict rewrite only</option>
+                  <option value="light">Allow light answering</option>
+                  <option value="creative">Creative transformation</option>
+                </select>
+              </label>
+              <label class="sd-field">
+                <span class="sd-field__label">Max completion tokens (optional)</span>
+                <input id="wizardMaxCompletionTokens" class="sd-input" type="number" min="512" max="4096" placeholder="profile default" />
+              </label>
+              <label class="sd-field">
+                <span class="sd-field__label">Chunk size words (optional)</span>
+                <input id="wizardChunkSize" class="sd-input" type="number" min="50" max="5000" placeholder="profile default" />
+              </label>
+            </div>
+            <label class="sd-check"><input id="wizardFormatPunctuation" type="checkbox" checked /> <span>Enforce punctuation</span></label>
+
+            <div class="sd-persona-subsection">
+              <span class="sd-field__label">Few-shot examples (optional)</span>
+              <p class="sd-persona-step__desc">Show the model example input &rarr; desired output pairs. Up to 5 are used.</p>
+              <div id="wizardFewShotList"></div>
+              <button id="wizardAddFewShotButton" class="sd-btn" type="button">Add example</button>
+            </div>
+
+            <div class="sd-persona-subsection">
+              <button id="wizardLintButton" class="sd-btn" type="button">Check prompt</button>
+              <div id="wizardLintWarnings" class="sd-persona-message" role="status" aria-live="polite"></div>
+            </div>
+
+            <div class="sd-persona-subsection">
+              <span class="sd-field__label">Test panel</span>
+              <textarea id="wizardTestSample" class="sd-input sd-input--area" placeholder="Type a sample utterance to test this persona..."></textarea>
+              <div class="sd-persona-actions">
+                <button id="wizardTestButton" class="sd-btn" type="button">Run sample</button>
+              </div>
+              <div id="wizardTestResult" class="sd-persona-result"></div>
+            </div>
+          </details>
+        </div>
+      </section>
+
+      <!-- ===================== Persona Foundry path ===================== -->
+
+      <section class="sd-flow__step" data-flow-step="interview" hidden>
+        <div id="foundryScreenInterview" class="sd-persona-step">
+          <div id="foundryChatLog" class="sd-foundry-log" aria-live="polite"></div>
+          <div id="foundryChoiceRow" class="sd-foundry-choices hidden"></div>
+          <div id="foundryTextRow" class="sd-foundry-answer hidden">
+            <textarea id="foundryAnswerInput" class="sd-input sd-input--area" placeholder="Type your answer..."></textarea>
+            <button id="foundrySubmitAnswerButton" class="sd-btn sd-btn--primary" type="button">Send</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="sd-flow__step" data-flow-step="collection" hidden>
+        <div id="foundryScreenCollection" class="sd-persona-step hidden">
+          <p id="foundryCollectionPrompt" class="sd-persona-step__desc"></p>
+          <div id="foundryExamplePairRow" class="sd-persona-flow__grid hidden">
+            <label class="sd-field">
+              <span class="sd-field__label">Raw (what you might actually say)</span>
+              <textarea id="foundryExampleRaw" class="sd-input sd-input--area"></textarea>
+            </label>
+            <label class="sd-field">
+              <span class="sd-field__label">Desired (what this persona writes)</span>
+              <textarea id="foundryExampleDesired" class="sd-input sd-input--area"></textarea>
+            </label>
+          </div>
+          <label class="sd-field hidden" id="foundryAntiExampleRow">
+            <span class="sd-field__label">This persona would never say&hellip;</span>
+            <textarea id="foundryAntiExampleText" class="sd-input sd-input--area"></textarea>
+          </label>
+          <ul id="foundryCollectionList" class="sd-persona-list"></ul>
+          <div class="sd-persona-actions">
+            <button id="foundryAddCollectionItemButton" class="sd-btn" type="button">Add</button>
+            <button id="foundryCollectionNextButton" class="sd-btn sd-btn--primary" type="button">Continue</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="sd-flow__step" data-flow-step="stressTest" hidden>
+        <div id="foundryScreenStressTest" class="sd-persona-step hidden">
+          <p class="sd-persona-step__desc">Here&rsquo;s how your persona handles hard inputs. Approve, reject, or edit each one.</p>
+          <div class="sd-persona-actions">
+            <button id="foundryRunStressTestButton" class="sd-btn" type="button">Run stress test</button>
+          </div>
+          <div id="foundryStressCases" class="sd-foundry-cases"></div>
+          <div class="sd-persona-actions">
+            <button id="foundryStressContinueButton" class="sd-btn sd-btn--primary" type="button">Continue to character card</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="sd-flow__step" data-flow-step="review" hidden>
+        <div id="foundryScreenReview" class="sd-persona-step hidden">
+          <div id="foundryCharacterCard" class="sd-foundry-card"></div>
+          <label class="sd-field">
+            <span class="sd-field__label">Persona name</span>
+            <input id="foundryPersonaName" class="sd-input" type="text" placeholder="e.g. Vivian Glass" />
+          </label>
+          <details class="sd-persona-advanced">
+            <summary class="sd-field__label">Compiled prompt (read-only)</summary>
+            <textarea id="foundryCompiledPrompt" class="sd-input sd-input--area-tall" readonly></textarea>
+          </details>
+          <div id="foundryCompileWarnings" class="sd-persona-message" role="status" aria-live="polite"></div>
+          <div class="sd-persona-actions">
+            <button id="foundrySaveButton" class="sd-btn sd-btn--primary" type="button">Save persona</button>
+          </div>
+        </div>
+      </section>
+
+      <div id="foundryMessage" class="sd-persona-message" role="status" aria-live="polite"></div>
+    </div>
+
+    <!--
+      Path-specific footer. The wizard's Back/Next/Delete drive its own step
+      machine, so they live here rather than the shell's data-flow-primary --
+      two things advancing the same wizard would fight. The Foundry has no
+      footer controls at all: every one of its advances is a Continue button
+      inside the screen that produced the thing being continued from.
+    -->
+    <footer class="sd-flow__footer" id="sdPersonaFlowFooter" data-persona-footer="wizard">
+      <button id="wizardPrevButton" class="sd-btn" type="button" disabled>Back</button>
+      <span class="sd-flow__spacer"></span>
+      <button id="wizardDeleteButton" class="sd-btn sd-persona-flow__delete hidden" type="button">Delete custom persona</button>
+      <button id="wizardNextButton" class="sd-btn sd-btn--primary" type="button">Next</button>
+    </footer>
+    <div id="wizardMessage" class="sd-persona-message sd-persona-flow__message" role="status" aria-live="polite"></div>
+  </div>
+</div>
+
+<!--
+  Hidden compatibility triggers. features/personas.js binds #openFoundryButton
+  in initFoundry(), and studioWorkspace.js's fallback path reaches for it by id.
+  Signal Desk's real entry points are Studio's own buttons, which go through the
+  injected hooks instead -- this exists so the module's own binding still has
+  something to bind, and is never shown.
+-->
+<button type="button" id="openFoundryButton" hidden aria-hidden="true" tabindex="-1"></button>
+<div id="wizardStepProgress" hidden></div>
+
 <div class="sd-shell" id="sdShell" data-workspace="talk">
 
   <!-- ============================== 3a. Left nav rail ============================== -->
@@ -3091,7 +3409,19 @@
   ];
 
   const elements = collectStudioElements(document);
-  const studioWorkspace = createStudioWorkspaceFeature({ elements, hooks: { showToast, confirmFn: (m) => window.confirm(m) } });
+  const studioWorkspace = createStudioWorkspaceFeature({
+    elements,
+    hooks: {
+      showToast,
+      confirmFn: (m) => window.confirm(m),
+      // The persona dialog is mounted by a later script, so these resolve at
+      // click time rather than at construction. Without them studioWorkspace
+      // falls back to reaching across the document for #openFoundryButton,
+      // which would start an interview inside a dialog nothing had opened.
+      onNewPersonaRequested: () => window.__personaFlow?.openWizard(),
+      onOpenFoundryRequested: () => window.__personaFlow?.openFoundry(),
+    },
+  });
 
   // Voice Studio (§7.9). settingsWorkspace.js delegates the whole section here,
   // but Studio only had the blend strip -- presets, modulation, cloning and
@@ -3453,6 +3783,51 @@
 
   firstRun.init().catch(() => {});
   window.__firstRun = firstRun;
+</script>
+
+<!--
+  Stage 13 §4c: mount the real persona wizard + Persona Foundry inside the
+  guided-flow dialog, and give Studio's two buttons somewhere to go.
+
+  studioWorkspace.js has always had onNewPersonaRequested / onOpenFoundryRequested
+  hooks with a documented TODO ("main.js needs to decide where the wizard
+  physically lives in Signal Desk"). This is that decision. Its fallback path --
+  reaching across the document for #wizardStep1 / #openFoundryButton and
+  otherwise showing a toast -- is now dead code on this page, which is the point:
+  those three placement-map entries stop being `wired: false`.
+-->
+<script type="module">
+  import { createPersonasFeature } from './features/personas.js';
+  import { createPersonaFlow, collectPersonaWizardElements } from './features/personaFlow.js';
+  import { showToast } from './lib/toast.mjs';
+  import { setMessage } from './lib/message.mjs';
+
+  const personaFlow = createPersonaFlow({
+    root: document.getElementById('foundryOverlay'),
+    footer: document.getElementById('sdPersonaFlowFooter'),
+    foundryTrigger: document.getElementById('openFoundryButton'),
+  });
+
+  const personas = createPersonasFeature({
+    elements: collectPersonaWizardElements(document),
+    ui: { setMessage, showToast },
+    hooks: {
+      getLoadedPersonas: () => [],
+      // Studio owns the persona list on this page; a save should refresh it.
+      refreshPersonasAndVoices: async () => {
+        await window.__studioWorkspace?.refreshAll?.();
+      },
+      markProfileDirty: () => {},
+    },
+  });
+  personas.initWizard();
+  personas.initFoundry();
+
+  // Studio's two buttons reach this through the hooks it was constructed with
+  // (see the Studio mount above), which read window.__personaFlow at click
+  // time -- this script runs after that one.
+  window.__personaFlow = personaFlow;
+  window.__personas = personas;
 </script>
 
 </body>

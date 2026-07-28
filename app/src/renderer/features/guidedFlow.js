@@ -111,8 +111,18 @@ export function createGuidedFlow({
     const step = steps[index];
     if (!step) return;
 
-    for (const [i, el] of [...(root?.querySelectorAll?.('[data-flow-step]') || [])].entries()) {
-      el.hidden = i !== index;
+    // Step elements are addressed by id when the markup supplies one
+    // (data-flow-step="interview"), falling back to position otherwise.
+    //
+    // Position alone is not enough for the persona flow: its two entry paths
+    // are different four-step subsets of the same eight-section markup, so
+    // "step 2" means a different element depending on how the dialog was
+    // opened. Onboarding's markup uses bare data-flow-step and keeps the
+    // index behaviour unchanged.
+    const stepEls = [...(root?.querySelectorAll?.('[data-flow-step]') || [])];
+    const byId = stepEls.some((el) => el.dataset?.flowStep);
+    for (const [i, el] of stepEls.entries()) {
+      el.hidden = byId ? el.dataset.flowStep !== step.id : i !== index;
     }
 
     const heading = q('[data-flow-title]');
@@ -166,6 +176,26 @@ export function createGuidedFlow({
   function goBack() {
     index = prevIndex(index);
     render();
+  }
+
+  /**
+   * Move to a step by id or index, bypassing gates.
+   *
+   * For flows whose stepping is driven by something other than the footer --
+   * the persona wizard and the Persona Foundry both advance on backend results
+   * and their own in-body buttons. Gates guard the user's Next button; they are
+   * not a lock against the owner that already decided where the user is. An
+   * unknown id is a no-op rather than a jump to step 1, because silently
+   * rewinding a half-finished interview is worse than not moving.
+   */
+  function goTo(target) {
+    const next = typeof target === 'number'
+      ? Math.min(Math.max(FIRST_STEP, target), Math.max(0, steps.length - 1))
+      : steps.findIndex((s) => s.id === target);
+    if (next < 0) return false;
+    index = next;
+    render();
+    return true;
   }
 
   function trapTab(event) {
@@ -229,6 +259,7 @@ export function createGuidedFlow({
     close,
     goNext,
     goBack,
+    goTo,
     refresh,
     getIndex: () => index,
     getStep: () => steps[index] ?? null,

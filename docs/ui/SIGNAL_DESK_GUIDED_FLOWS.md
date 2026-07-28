@@ -142,10 +142,42 @@ which step it starts on:
 | `✨ Build with AI` | Interview (model-led Q&A) | → Examples → Stress test → Review & save |
 | `+ New Persona` | Basics (role / tone / rules) | → Review & save |
 
-Both converge on **Review & save**, which is the existing Foundry review screen: character
-card where one exists, editable name, compiled prompt behind a disclosure, warnings banner,
-Save. One save path (`POST /personas`), which is already true today — the two builders always
-shared it.
+Both end on a step named **Review & save**, and both save through the one `POST /personas`
+they always shared.
+
+**Correction, made during implementation.** This section originally said both paths would
+converge on *the Foundry's* review screen. They do not, and should not. The Foundry's review
+renders a compiled character card — archetype, temperament, signature moves, reliability —
+produced by the interview. The wizard's step 4 carries the editable prompt, Regenerate,
+Clean-up-with-your-model, the advanced knobs, lint, sample test and the few-shot editor.
+Collapsing them into one screen would have deleted real capability from one side, which is a
+parity loss dressed up as a simplification.
+
+What genuinely converges is the **dialog, the entry points, and the save call**. That is the
+duplication worth removing; two review screens doing two different jobs is not duplication.
+
+**How it is wired.** The shell supplies chrome only — overlay, focus trap and return, Escape,
+title, progress. It does not own stepping: the wizard advances from its own Back/Next plus a
+jump to step 4 when the model drafts a persona from a description, and the Foundry advances on
+backend results and per-screen Continue buttons. `personas.js` now exposes
+`setWizardStepObserver` / `setFoundryScreenObserver`, and the dialog *follows*.
+
+Rewriting either builder's stepping onto the shell's footer would have meant rewriting ~300
+lines of validation and prompt regeneration with no unit coverage to land on — the big-bang
+rewrite rule 7 exists to prevent. Two things advancing the same wizard would also simply
+fight.
+
+Consequences worth recording:
+
+- Step elements are addressed by `data-flow-step="<id>"`, not by position. The two paths are
+  different four-step subsets of the same eight-section markup, so "step 2" means a different
+  element depending on how the dialog was opened.
+- `flow.goTo(id)` bypasses gates. Gates guard the user's Next button; they are not a lock
+  against the owner that already decided where the user is. An unknown id is a no-op rather
+  than a jump to step 1 — silently rewinding a half-finished interview is the worse failure.
+- The footer is path-specific. The Foundry has no footer controls at all, because every one
+  of its advances is a Continue button inside the screen that produced the thing being
+  continued from.
 
 The wizard's model assists (`Build it with your model`, `Clean up with your model`) stay
 exactly where they are useful; they are the same idea as the interview, at a smaller
@@ -171,8 +203,12 @@ even for users who never click it.
    harness skipped it because there was no way to ask for it on a configured profile.
 3. ~~First-Run banner in Talk.~~ **Done** — `tests/qa/scenarios/first-run-banner.mjs` covers
    both directions: present when models are missing, absent when they are not.
-4. Persona flow (both entry paths converging on Review & save). **← next**
-5. Contact flow, when contacts land.
+4. ~~Persona flow (both entry paths converging on Review & save).~~ **Done** —
+   `features/personaFlow.js`, `tests/personaFlow.test.mjs` (15),
+   `tests/qa/scenarios/persona-flow.mjs` (4). Flips `personas.new`, `personas.foundry` and
+   `personas.wizard` in `STUDIO_PLACEMENT_MAP` from `wired: false` to `wired: true`. See the
+   correction in §4c: the two review screens stay separate.
+5. Contact flow, when contacts land. **← next, and blocked on contacts existing**
 
 Each is independently shippable, and the parity maps get their entries flipped as each lands
 rather than in one batch at the end.

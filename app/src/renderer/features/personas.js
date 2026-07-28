@@ -47,6 +47,39 @@ function foundryResetState() {
   foundryState.stressCases = [];
 }
 
+// --- Step observers ----------------------------------------------------------
+//
+// Both builders drive their own stepping: the wizard from Prev/Next plus a jump
+// to step 4 when the model drafts a persona, the Foundry from backend results
+// and its per-screen Continue buttons. Signal Desk hosts them inside the shared
+// guided-flow dialog (docs/ui/SIGNAL_DESK_GUIDED_FLOWS.md), whose header, title
+// and progress dots have to follow that stepping rather than compete with it.
+//
+// A callback is how it follows. The alternative -- watching the DOM for class
+// changes -- would infer state from styling, and would break the moment either
+// builder is restyled. Optional, so the dashboard is unaffected.
+let foundryScreenObserver = null;
+let wizardStepObserver = null;
+
+/** @param {(screen: 'interview'|'collection'|'stressTest'|'review'|'closed') => void} fn */
+export function setFoundryScreenObserver(fn) {
+  foundryScreenObserver = typeof fn === 'function' ? fn : null;
+}
+
+/** @param {(step: 1|2|3|4) => void} fn */
+export function setWizardStepObserver(fn) {
+  wizardStepObserver = typeof fn === 'function' ? fn : null;
+}
+
+function notifyObserver(fn, value) {
+  if (!fn) return;
+  try {
+    fn(value);
+  } catch (_error) {
+    // A host's chrome failing to update must never stop the builder itself.
+  }
+}
+
 function foundryShowScreen(name) {
   const screens = {
     interview: foundryEl('foundryScreenInterview'),
@@ -57,6 +90,7 @@ function foundryShowScreen(name) {
   for (const [key, el] of Object.entries(screens)) {
     el?.classList.toggle('hidden', key !== name);
   }
+  notifyObserver(foundryScreenObserver, name);
 }
 
 function foundryAppendBubble(text, kind) {
@@ -332,6 +366,11 @@ async function foundryOpen() {
 
 function foundryClose() {
   foundryEl('foundryOverlay')?.classList.add('hidden');
+  // 'closed' rather than a separate observer: a host that mirrors Foundry's
+  // screens also needs to know when there is no longer a screen. foundrySave()
+  // closes on success, so without this the dialog chrome would outlive the
+  // thing it was wrapping.
+  notifyObserver(foundryScreenObserver, 'closed');
 }
 
 /**
@@ -481,6 +520,7 @@ export function createPersonasFeature({ elements, ui, hooks }) {
 
     function showStep(stepNum) {
       currentStep = stepNum;
+      notifyObserver(wizardStepObserver, stepNum);
       for (let i = 1; i <= 4; i++) {
         const stepEl = document.getElementById(`wizardStep${i}`);
         if (stepEl) {

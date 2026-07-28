@@ -239,3 +239,89 @@ test('opening at a later step is clamped to the available range', () => {
   h.flow.open(-5);
   assert.equal(h.flow.getIndex(), FIRST_STEP);
 });
+
+// --- id-addressable steps + owner-driven navigation --------------------------
+//
+// Added for the persona flow, whose two entry paths are different four-step
+// subsets of the same eight-section markup: "step 2" is a different element
+// depending on how the dialog was opened, so position alone cannot resolve it.
+
+function makeIdHarness(steps, stepIds) {
+  const primary = makeEl();
+  const title = makeEl();
+  const stepEls = stepIds.map((id) => makeEl({ dataset: { flowStep: id } }));
+  const root = {
+    hidden: true,
+    querySelector: (sel) => ({ '[data-flow-primary]': primary, '[data-flow-title]': title }[sel] ?? null),
+    querySelectorAll: (sel) => (sel === '[data-flow-step]' ? stepEls : []),
+  };
+  const doc = { activeElement: null, addEventListener() {}, removeEventListener() {} };
+  return { flow: createGuidedFlow({ root, steps, doc }), stepEls, title };
+}
+
+const EIGHT = ['w1', 'w2', 'w3', 'w4', 'interview', 'collection', 'stress', 'review'];
+
+test('steps resolve by id when the markup supplies one', () => {
+  const h = makeIdHarness(
+    [{ id: 'interview', title: 'Interview' }, { id: 'review', title: 'Review' }],
+    EIGHT,
+  );
+  h.flow.open();
+  const shown = EIGHT.filter((_id, i) => !h.stepEls[i].hidden);
+  assert.deepEqual(shown, ['interview'], 'index-based matching would have shown w1');
+});
+
+test('two step subsets over one markup set stay independent', () => {
+  const wizard = makeIdHarness(
+    [{ id: 'w1', title: 'A' }, { id: 'w2', title: 'B' }],
+    EIGHT,
+  );
+  wizard.flow.open();
+  wizard.flow.goNext();
+  assert.deepEqual(EIGHT.filter((_id, i) => !wizard.stepEls[i].hidden), ['w2']);
+});
+
+test('goTo moves by id and reports whether it could', () => {
+  const h = makeIdHarness(
+    [{ id: 'interview', title: 'Interview' }, { id: 'review', title: 'Review' }],
+    EIGHT,
+  );
+  h.flow.open();
+  assert.equal(h.flow.goTo('review'), true);
+  assert.equal(h.flow.getStep().id, 'review');
+  assert.equal(h.title.textContent, 'Review');
+});
+
+test('goTo to an unknown id is a no-op, not a rewind', () => {
+  // The failure this prevents: an unrecognised screen name silently dropping a
+  // half-finished interview back to step 1.
+  const h = makeIdHarness(
+    [{ id: 'interview', title: 'Interview' }, { id: 'review', title: 'Review' }],
+    EIGHT,
+  );
+  h.flow.open();
+  h.flow.goTo('review');
+  assert.equal(h.flow.goTo('nonsense'), false);
+  assert.equal(h.flow.getStep().id, 'review', 'unknown id must not move the flow');
+});
+
+test('goTo bypasses gates — the owner already decided where the user is', () => {
+  const steps = [
+    { id: 'a', title: 'A', canAdvance: () => false },
+    { id: 'b', title: 'B' },
+  ];
+  const h = makeIdHarness(steps, ['a', 'b']);
+  h.flow.open();
+  assert.equal(h.flow.goNext !== undefined && h.flow.getStep().id, 'a');
+  assert.equal(h.flow.goTo('b'), true, 'a gate must not block owner-driven navigation');
+  assert.equal(h.flow.getStep().id, 'b');
+});
+
+test('goTo accepts an index and clamps it', () => {
+  const h = makeIdHarness([{ id: 'a', title: 'A' }, { id: 'b', title: 'B' }], ['a', 'b']);
+  h.flow.open();
+  h.flow.goTo(99);
+  assert.equal(h.flow.getStep().id, 'b');
+  h.flow.goTo(-3);
+  assert.equal(h.flow.getStep().id, 'a');
+});
