@@ -255,6 +255,118 @@
     <!-- ---------- TALK workspace (populated, SPEC 4) ---------- -->
     <section class="sd-workspace" id="workspace-talk" data-workspace="talk">
 
+      <!--
+        First-run setup, as a banner rather than a fourth modal
+        (docs/ui/SIGNAL_DESK_GUIDED_FLOWS.md 4b).
+
+        This is the one stage-13 surface that deliberately did NOT become a
+        guided flow. It is status -- runtime / language model / speech model,
+        each present-or-missing with a download action -- and it is exactly what
+        a new user needs in front of them, not behind a dialog they dismissed.
+        Talk is where they start and where a missing model actually stops them,
+        so it sits above the Signal Core, and it is not rendered at all once
+        nothing is missing.
+
+        Same feature module as the dashboard panel (features/firstRun.js),
+        mounted through collectFirstRunElements(doc, { prefix: 'sdFirstRun' }) --
+        the ids differ, the contract does not.
+      -->
+      <section class="sd-first-run" id="sdFirstRunPanel" aria-labelledby="sdFirstRunHeading" hidden>
+        <div class="sd-first-run__head">
+          <div class="sd-first-run__headline">
+            <span class="sd-first-run__label">First-run setup</span>
+            <h2 id="sdFirstRunHeading">BetterFingers needs a couple of local models</h2>
+          </div>
+          <span class="sd-first-run__badge" id="sdFirstRunOverallBadge" data-tone="warning">Checking&hellip;</span>
+          <button type="button" class="sd-btn" id="sdFirstRunRefreshButton">Check again</button>
+        </div>
+
+        <p class="sd-first-run__note">
+          These are multi-gigabyte downloads &mdash; keep the app open while they run.
+        </p>
+
+        <div class="sd-first-run__warning" id="sdFirstRunDiskWarning" role="alert" hidden>
+          <strong>Not enough disk space:</strong>
+          <span id="sdFirstRunDiskWarningMessage"></span>
+        </div>
+
+        <div class="sd-first-run__stats">
+          <div class="sd-first-run__stat">
+            <span class="sd-first-run__stat-label">Runtime</span>
+            <strong class="sd-first-run__stat-value" id="sdFirstRunRuntimeBadge" data-tone="warning">Checking&hellip;</strong>
+            <small class="sd-first-run__stat-detail" id="sdFirstRunRuntimeDetail">llama-server binary</small>
+          </div>
+          <div class="sd-first-run__stat">
+            <span class="sd-first-run__stat-label">Language model</span>
+            <strong class="sd-first-run__stat-value" id="sdFirstRunLlmBadge" data-tone="warning">Checking&hellip;</strong>
+            <small class="sd-first-run__stat-detail" id="sdFirstRunLlmDetail">&mdash;</small>
+          </div>
+          <div class="sd-first-run__stat">
+            <span class="sd-first-run__stat-label">Speech model</span>
+            <strong class="sd-first-run__stat-value" id="sdFirstRunWhisperBadge" data-tone="warning">Checking&hellip;</strong>
+            <small class="sd-first-run__stat-detail" id="sdFirstRunWhisperDetail">&mdash;</small>
+          </div>
+        </div>
+
+        <div class="sd-first-run__downloads">
+          <div class="sd-first-run__download">
+            <div class="sd-first-run__download-head">
+              <div>
+                <h3>Language model (LLM)</h3>
+                <p>Cleans up dictated text. Downloading it also installs the matching llama-server runtime.</p>
+              </div>
+              <button type="button" class="sd-btn sd-btn--primary" id="sdFirstRunDownloadLlmButton">Download language model</button>
+            </div>
+            <div class="sd-first-run__progress" id="sdFirstRunLlmProgress" hidden>
+              <div class="sd-first-run__progress-head">
+                <span id="sdFirstRunLlmProgressLabel">Download pending</span>
+                <strong id="sdFirstRunLlmProgressPercent">0%</strong>
+              </div>
+              <div class="sd-first-run__progress-track" aria-hidden="true">
+                <div class="sd-first-run__progress-fill" id="sdFirstRunLlmProgressFill"></div>
+              </div>
+              <small id="sdFirstRunLlmProgressBytes"></small>
+            </div>
+          </div>
+
+          <div class="sd-first-run__download">
+            <div class="sd-first-run__download-head">
+              <div>
+                <h3>Speech model (Whisper)</h3>
+                <p>Transcribes your recorded speech to text.</p>
+              </div>
+              <button type="button" class="sd-btn sd-btn--primary" id="sdFirstRunDownloadWhisperButton">Download speech model</button>
+            </div>
+            <div class="sd-first-run__progress" id="sdFirstRunWhisperProgress" hidden>
+              <div class="sd-first-run__progress-head">
+                <span id="sdFirstRunWhisperProgressLabel">Download pending</span>
+                <strong id="sdFirstRunWhisperProgressPercent">0%</strong>
+              </div>
+              <div class="sd-first-run__progress-track" aria-hidden="true">
+                <div class="sd-first-run__progress-fill" id="sdFirstRunWhisperProgressFill"></div>
+              </div>
+              <small id="sdFirstRunWhisperProgressBytes"></small>
+            </div>
+          </div>
+        </div>
+
+        <div class="sd-first-run__message" id="sdFirstRunMessage" role="status" aria-live="polite"></div>
+
+        <div class="sd-first-run__actions">
+          <button type="button" class="sd-btn sd-first-run__quiet" id="sdFirstRunDismissButton">I&rsquo;ll set this up myself</button>
+          <span class="sd-first-run__spacer"></span>
+          <!--
+            Labelled "Done", not the dashboard panel's "Continue to app": this
+            banner is already inside the app, so "continue to" it means nothing
+            here. Same control, same behaviour (enabled only once setup is
+            complete, hides the banner without setting the dismissed flag) --
+            firstRun.js sets its disabled state but never its text, so the
+            wording is the host's to choose.
+          -->
+          <button type="button" class="sd-btn sd-btn--primary" id="sdFirstRunContinueButton" disabled>Done</button>
+        </div>
+      </section>
+
       <div class="sd-signal-core-wrap">
         <div class="sd-signal-core-status" style="color: var(--sd-green);">
           <span class="sd-signal-core-status__dot" aria-hidden="true"></span>
@@ -2986,15 +3098,11 @@
   // read-aloud speed had no markup, so voiceStudio.js could not bind to
   // anything. Mounted against the canonical voice* ids it self-queries.
   const { createVoiceStudioFeature } = await import('./features/voiceStudio.js');
+  const { setMessage } = await import('./lib/message.mjs');
   const voiceStudio = createVoiceStudioFeature({
-    ui: {
-      setMessage: (target, text, tone = 'info') => {
-        if (!target) return;
-        target.textContent = text || '';
-        if (tone) target.dataset.tone = tone;
-      },
-      showToast,
-    },
+    // Was a local copy that set data-tone but never removed it, so an element
+    // that had shown an error stayed styled red under every later success.
+    ui: { setMessage, showToast },
     hooks: {
       markProfileDirty: () => {},
       renderVoiceCloningPanel: () => {},
@@ -3308,6 +3416,43 @@
 
   // Debug handle: window.__onboarding.flow.open() to inspect it without a reload.
   window.__onboarding = onboarding;
+</script>
+
+<!--
+  Stage 13: mount the real first-run checklist as Talk's banner. Same feature
+  module as the dashboard panel, different ids, no second implementation.
+
+  It talks to real endpoints (/health, /runtime/status, /models/llm,
+  /models/whisper) through backend.js, so under the QA harness it reports the
+  stub's state and under a plain http:// open with no Electron bridge every
+  fetch fails and the banner says so -- which is the honest answer, not a bug.
+-->
+<script type="module">
+  import { createFirstRunFeature, collectFirstRunElements } from './features/firstRun.js';
+  import { showToast } from './lib/toast.mjs';
+  import { setMessage } from './lib/message.mjs';
+
+  const firstRun = createFirstRunFeature({
+    elements: collectFirstRunElements(document, { prefix: 'sdFirstRun' }),
+    ui: { setMessage, showToast },
+    hooks: {
+      // Setup finished while the banner was open: take it off screen rather
+      // than leave a "Ready" strip sitting above the Signal Core forever.
+      onReady: () => {
+        const panel = document.getElementById('sdFirstRunPanel');
+        if (panel) panel.hidden = true;
+      },
+      // "I'll set this up myself" -> Utilities' Models section, which is where
+      // Signal Desk keeps what the old Models tab held.
+      goToModelsTab: () => {
+        document.querySelector('.sd-nav__button[data-nav="utilities"]')?.click();
+        document.querySelector('[data-util-nav="models"]')?.click();
+      },
+    },
+  });
+
+  firstRun.init().catch(() => {});
+  window.__firstRun = firstRun;
 </script>
 
 </body>

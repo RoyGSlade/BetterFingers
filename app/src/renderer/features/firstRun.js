@@ -156,6 +156,49 @@ export function isDiskSpaceMessage(message) {
   return typeof message === 'string' && /not enough disk space|disk space.*(free|available)/i.test(message);
 }
 
+// --- Element collection -------------------------------------------------------
+
+/**
+ * Build the `elements` map from a document by id, given an id prefix.
+ *
+ * The default prefix reproduces index.html's ids exactly, so this is a faithful
+ * extraction of the 24 lookups main.js does by hand rather than a new naming
+ * scheme. Signal Desk mounts the same feature against `sdFirstRun*`, which is
+ * the whole reason this takes a prefix: two pages, one contract, no second copy
+ * of the element map to keep in step.
+ */
+export function collectFirstRunElements(doc = globalThis.document, { prefix = 'firstRun' } = {}) {
+  const $ = (suffix) => doc.getElementById(`${prefix}${suffix}`);
+  const progress = (kind) => ({
+    container: $(`${kind}Progress`),
+    label: $(`${kind}ProgressLabel`),
+    percent: $(`${kind}ProgressPercent`),
+    fill: $(`${kind}ProgressFill`),
+    bytes: $(`${kind}ProgressBytes`),
+  });
+
+  return {
+    panelEl: $('Panel'),
+    overallBadgeEl: $('OverallBadge'),
+    diskWarningEl: $('DiskWarning'),
+    diskWarningMessageEl: $('DiskWarningMessage'),
+    runtimeBadgeEl: $('RuntimeBadge'),
+    runtimeDetailEl: $('RuntimeDetail'),
+    llmBadgeEl: $('LlmBadge'),
+    llmDetailEl: $('LlmDetail'),
+    whisperBadgeEl: $('WhisperBadge'),
+    whisperDetailEl: $('WhisperDetail'),
+    downloadLlmButton: $('DownloadLlmButton'),
+    llmProgress: progress('Llm'),
+    downloadWhisperButton: $('DownloadWhisperButton'),
+    whisperProgress: progress('Whisper'),
+    messageEl: $('Message'),
+    refreshButton: $('RefreshButton'),
+    continueButton: $('ContinueButton'),
+    dismissButton: $('DismissButton'),
+  };
+}
+
 // --- DOM-wiring feature ------------------------------------------------------
 
 /**
@@ -168,6 +211,9 @@ export function isDiskSpaceMessage(message) {
  *   - afterModelsChanged(): called after a successful download so the Models tab / dashboard
  *     badges (owned by main.js) refresh too. Optional.
  *   - goToModelsTab(): called when the user dismisses to configure manually. Optional.
+ *   - onReady(status): called once when setup transitions from incomplete to ready, so a
+ *     host that renders this as a transient banner can remove it. Optional; the dashboard
+ *     panel does not pass one and keeps its "Continue to app" button instead.
  * @param {object} [deps.api] backend.js module (or a stub) -- override point for unit tests.
  * @param {object} [deps.storage] Web Storage-shaped object (getItem/setItem/removeItem) used to
  *   persist the dismiss flag. Defaults to the real `localStorage` when present. Injectable so
@@ -183,7 +229,7 @@ export function createFirstRunFeature({
 } = {}) {
   const els = elements || {};
   const { setMessage, showToast } = ui;
-  const { afterModelsChanged, goToModelsTab } = hooks;
+  const { afterModelsChanged, goToModelsTab, onReady } = hooks;
 
   let lastStatus = null;
 
@@ -374,11 +420,24 @@ export function createFirstRunFeature({
     // Reached it, so any armed retry has done its job.
     stopReachRetry();
 
+    const previouslyReady = lastStatus?.ready === true;
     const status = computeFirstRunStatus({ health, runtime, llmModels, whisperModels });
     lastStatus = status;
     renderChecklist(status);
     if (status.ready) {
       setMessage?.(els.messageEl, "Everything's installed and ready to go.", 'success');
+      // Fires on the transition only, so a caller that reacts by hiding itself
+      // is not fighting the poller every refresh. Additive and optional: the
+      // dashboard panel keeps today's behaviour of staying put with "Continue
+      // to app" enabled, while Signal Desk's banner uses this to take itself
+      // off screen the moment it has nothing left to say.
+      if (!previouslyReady) {
+        try {
+          onReady?.(status);
+        } catch (_error) {
+          // A caller's own render failure must not blank the checklist.
+        }
+      }
     }
     return status;
   }

@@ -196,3 +196,40 @@ export function coldBoot() {
     'GET /models/recommend': { ok: true, recommendation: { model_id: 'gemma-4-e2b-q4', tier_label: 'Standard', tier_guidance: '' } },
   };
 }
+
+/**
+ * cold-boot with every model installed and ready.
+ *
+ * Added when the first-run banner landed in Talk (stage 13 §4b). The banner is
+ * live status, so on cold-boot state it correctly appears and pushes the
+ * workspace down -- which broke a Talk scenario that measures where the Decline
+ * button sits.
+ *
+ * The fix is the state, not the assertion. A scenario about editing a
+ * transcribed draft was running on a profile with no Whisper model installed,
+ * which could not have produced that draft in the first place. Any scenario
+ * whose subject presupposes a working install should spread this instead.
+ */
+export function readyProfile() {
+  const state = coldBoot();
+  return {
+    ...state,
+    'GET /health': { ...state['GET /health'], transcriber: true, llm_engine: true },
+    'GET /runtime/status': {
+      ...state['GET /runtime/status'],
+      transcriber_initialized: true,
+      llm_initialized: true,
+      transcriber_loaded: true,
+      llm_ready: true,
+    },
+    'GET /models/llm': {
+      ...state['GET /models/llm'],
+      models: [{ ...state['GET /models/llm'].models[0], installed: true, ready: true }],
+      llama_server_exists: true,
+    },
+    'GET /models/whisper': {
+      ...state['GET /models/whisper'],
+      models: [{ model_size: 'base.en', installed: true }],
+    },
+  };
+}

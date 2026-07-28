@@ -10,7 +10,7 @@
 // convincing-looking card that displays text and does nothing with it.
 
 import { expect } from '@playwright/test';
-import { coldBoot } from './fixtures/cold-boot.mjs';
+import { readyProfile } from './fixtures/cold-boot.mjs';
 
 const DRAFT = {
   id: 42,
@@ -24,8 +24,11 @@ const DRAFT = {
   metadata: { duration_seconds: 4.2, stop_reason: 'silence' },
 };
 
+// readyProfile, not coldBoot: these scenarios are about editing a transcribed
+// draft, which a profile with no speech model could not have produced. It also
+// keeps the first-run banner off screen, where it belongs for a set-up install.
 const withDraft = () => ({
-  ...coldBoot(),
+  ...readyProfile(),
   'GET /drafts/latest': { draft: DRAFT },
   'GET /drafts': { drafts: [DRAFT] },
 });

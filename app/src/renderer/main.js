@@ -63,6 +63,7 @@ import {
 } from './api/backend.js';
 import { summarizeWipeFailure } from './lib/wipeSummary.mjs';
 import { showToast as showToastImpl } from './lib/toast.mjs';
+import { setMessage as setMessageImpl } from './lib/message.mjs';
 import { createDraftsFeature } from './features/drafts.js';
 import { createPersonasFeature } from './features/personas.js';
 import { createRuntimeFeature } from './features/runtime.js';
@@ -944,17 +945,10 @@ function setWarmupMessage(message = '', tone = '') {
   }
 }
 
+// Compatibility wrapper around lib/message.mjs (rule 7), keeping this file's
+// existing call sites and their default arguments untouched.
 function setMessage(el, message = '', tone = '') {
-  if (!el) {
-    return;
-  }
-
-  el.textContent = message;
-  if (tone) {
-    el.dataset.tone = tone;
-  } else {
-    delete el.dataset.tone;
-  }
+  return setMessageImpl(el, message, tone);
 }
 
 // Transient toast notifications — the app-wide way to surface events/errors that

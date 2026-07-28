@@ -18,6 +18,7 @@ import {
   formatDownloadOutcomeMessage,
   isDiskSpaceMessage,
   createFirstRunFeature,
+  collectFirstRunElements,
 } from '../src/renderer/features/firstRun.js';
 
 // --- formatBytes --------------------------------------------------------------
@@ -601,4 +602,115 @@ test('stops retrying rather than spinning forever', async () => {
   await new Promise((resolve) => setTimeout(resolve, 2300));
   const added = flaky.calls - before;
   assert.ok(added <= 4, `expected a single armed retry loop, saw ${added} extra probes`);
+});
+
+// --- collectFirstRunElements ---------------------------------------------------
+//
+// The dashboard builds this map with 24 hand-written getElementById calls in
+// main.js. Signal Desk needs the same map against different ids, and a second
+// hand-written copy is a guarantee of drift, so the lookup is now derived from a
+// prefix. The default prefix must reproduce index.html EXACTLY -- if it does
+// not, this is a refactor that quietly unwires the shipping panel.
+
+test('collectFirstRunElements default prefix reproduces index.html ids', () => {
+  const asked = [];
+  const doc = { getElementById: (id) => { asked.push(id); return { id }; } };
+  const els = collectFirstRunElements(doc);
+
+  assert.deepEqual(asked.sort(), [
+    'firstRunContinueButton',
+    'firstRunDismissButton',
+    'firstRunDiskWarning',
+    'firstRunDiskWarningMessage',
+    'firstRunDownloadLlmButton',
+    'firstRunDownloadWhisperButton',
+    'firstRunLlmBadge',
+    'firstRunLlmDetail',
+    'firstRunLlmProgress',
+    'firstRunLlmProgressBytes',
+    'firstRunLlmProgressFill',
+    'firstRunLlmProgressLabel',
+    'firstRunLlmProgressPercent',
+    'firstRunMessage',
+    'firstRunOverallBadge',
+    'firstRunPanel',
+    'firstRunRefreshButton',
+    'firstRunRuntimeBadge',
+    'firstRunRuntimeDetail',
+    'firstRunWhisperBadge',
+    'firstRunWhisperDetail',
+    'firstRunWhisperProgress',
+    'firstRunWhisperProgressBytes',
+    'firstRunWhisperProgressFill',
+    'firstRunWhisperProgressLabel',
+    'firstRunWhisperProgressPercent',
+  ].sort());
+
+  assert.equal(els.panelEl.id, 'firstRunPanel');
+  assert.equal(els.llmProgress.fill.id, 'firstRunLlmProgressFill');
+  assert.equal(els.whisperProgress.bytes.id, 'firstRunWhisperProgressBytes');
+});
+
+test('collectFirstRunElements honours a prefix', () => {
+  const doc = { getElementById: (id) => ({ id }) };
+  const els = collectFirstRunElements(doc, { prefix: 'sdFirstRun' });
+  assert.equal(els.panelEl.id, 'sdFirstRunPanel');
+  assert.equal(els.continueButton.id, 'sdFirstRunContinueButton');
+  assert.equal(els.whisperProgress.percent.id, 'sdFirstRunWhisperProgressPercent');
+});
+
+// --- hooks.onReady -------------------------------------------------------------
+
+test('onReady fires once on the transition to ready, not every refresh', async () => {
+  // Signal Desk's banner removes itself on this. Firing it every poll would
+  // make it fight any host that re-renders in response.
+  const elements = makeElements();
+  const ui = makeUi();
+  const calls = [];
+  const feature = createFirstRunFeature({
+    elements,
+    ui: ui.ui,
+    hooks: { onReady: (status) => calls.push(status.ready) },
+    api: makeApiStub(),
+    storage: makeFakeStorage(),
+  });
+
+  await feature.refreshStatus();
+  await feature.refreshStatus();
+  await feature.refreshStatus();
+  assert.deepEqual(calls, [true], 'onReady should fire exactly once');
+});
+
+test('onReady is not called while setup is still incomplete', async () => {
+  const elements = makeElements();
+  const ui = makeUi();
+  const calls = [];
+  const feature = createFirstRunFeature({
+    elements,
+    ui: ui.ui,
+    hooks: { onReady: () => calls.push('ready') },
+    api: makeApiStub({
+      fetchWhisperModels: async () => ({ models: [{ model_size: 'base.en', installed: false }], selected_model_size: 'base.en' }),
+    }),
+    storage: makeFakeStorage(),
+  });
+
+  await feature.refreshStatus();
+  assert.deepEqual(calls, []);
+});
+
+test('a throwing onReady does not blank the checklist', async () => {
+  const elements = makeElements();
+  const ui = makeUi();
+  const feature = createFirstRunFeature({
+    elements,
+    ui: ui.ui,
+    hooks: { onReady: () => { throw new Error('host render failed'); } },
+    api: makeApiStub(),
+    storage: makeFakeStorage(),
+  });
+
+  const status = await feature.refreshStatus();
+  assert.equal(status.ready, true);
+  assert.equal(elements.overallBadgeEl.textContent, 'Ready');
 });

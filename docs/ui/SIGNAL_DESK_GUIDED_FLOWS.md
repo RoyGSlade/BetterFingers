@@ -114,6 +114,24 @@ This also fixes the bug found earlier in this work: the panel currently latches 
 failed probe and advertises "Get BetterFingers set up" on a fully-configured machine. As a
 banner driven by live status, "everything installed" simply means it is not rendered.
 
+**Landed.** Same feature module as the dashboard panel — `features/firstRun.js`, mounted via
+the new `collectFirstRunElements(doc, { prefix })`. The dashboard builds that element map with
+24 hand-written `getElementById` calls in `main.js`; a second hand-written copy for Signal Desk
+would have been a guarantee of drift, so the lookup is derived from an id prefix and a test
+asserts the default prefix reproduces `index.html`'s ids exactly.
+
+Two additions, both small and both additive (rule 6):
+
+- `hooks.onReady(status)` fires once on the transition to ready, so the banner can take itself
+  off screen. The dashboard panel passes none and keeps today's behaviour.
+- `lib/message.mjs` — `setMessage` extracted from `main.js`, because the preview page had grown
+  a near-copy that set `data-tone` but never removed it: an element that had once shown an error
+  stayed red under every later success message.
+
+Its "Continue to app" button is labelled **Done** here. The banner is already inside the app,
+so "continue to" it means nothing; `firstRun.js` sets that button's disabled state but never
+its text, so the wording belongs to the host.
+
 ### 4c. Persona creation — one flow, two entry paths, in Studio
 
 Studio's `+ New Persona` and `✨ Build with AI` both open the same flow. They differ only in
@@ -151,8 +169,9 @@ even for users who never click it.
    **Done** — `features/onboardingFlow.js`, `tests/onboardingFlow.test.mjs` (19),
    `tests/qa/scenarios/onboarding.mjs` (4). First QA coverage onboarding has ever had; the
    harness skipped it because there was no way to ask for it on a configured profile.
-3. First-Run banner in Talk. **← next**
-4. Persona flow (both entry paths converging on Review & save).
+3. ~~First-Run banner in Talk.~~ **Done** — `tests/qa/scenarios/first-run-banner.mjs` covers
+   both directions: present when models are missing, absent when they are not.
+4. Persona flow (both entry paths converging on Review & save). **← next**
 5. Contact flow, when contacts land.
 
 Each is independently shippable, and the parity maps get their entries flipped as each lands

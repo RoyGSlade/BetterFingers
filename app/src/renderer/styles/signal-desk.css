@@ -5016,6 +5016,230 @@
 }
 
 /* ==========================================
+   First-run setup banner (GUIDED_FLOWS §4b)
+
+   Deliberately a banner in Talk, not a modal: it is live status, and hiding
+   status behind a dialog the user dismissed is how "no speech model installed"
+   becomes "the app is broken". Reads as an inset card rather than a workspace
+   surface so it is clearly temporary furniture.
+   ========================================== */
+.sd-first-run {
+  margin: 0 0 var(--sd-space-24);
+  padding: var(--sd-space-20);
+  background: var(--sd-surface-raised);
+  border: 1px solid var(--sd-border);
+  border-left: 3px solid var(--sd-amber);
+  border-radius: var(--sd-radius-card);
+}
+
+.sd-first-run[hidden] { display: none; }
+
+.sd-first-run__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-12);
+}
+
+.sd-first-run__headline { flex: 1; min-width: 0; }
+
+.sd-first-run__label {
+  display: block;
+  font-size: var(--sd-label-font-size);
+  letter-spacing: var(--sd-label-letter-spacing);
+  text-transform: uppercase;
+  color: var(--sd-label-color);
+}
+
+.sd-first-run__head h2 {
+  margin: 2px 0 0;
+  font-size: var(--sd-font-body);
+  font-weight: 600;
+  color: var(--sd-text-primary);
+}
+
+.sd-first-run__note {
+  margin: var(--sd-space-8) 0 0;
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+}
+
+/* Tone tokens are shared by the overall badge and the three stat values --
+   firstRun.js sets data-tone on both, so they must mean the same thing. */
+.sd-first-run__badge,
+.sd-first-run__stat-value {
+  color: var(--sd-text-primary);
+}
+
+.sd-first-run__badge {
+  flex: none;
+  font-size: var(--sd-font-xs);
+  font-weight: 600;
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-chip);
+  padding: 3px 10px;
+}
+
+.sd-first-run__badge[data-tone="success"],
+.sd-first-run__stat-value[data-tone="success"] { color: var(--sd-green); }
+.sd-first-run__badge[data-tone="warning"],
+.sd-first-run__stat-value[data-tone="warning"] { color: var(--sd-amber); }
+.sd-first-run__badge[data-tone="danger"],
+.sd-first-run__stat-value[data-tone="danger"] { color: var(--sd-red); }
+
+.sd-first-run__badge[data-tone="success"] { border-color: var(--sd-green); }
+.sd-first-run__badge[data-tone="warning"] { border-color: var(--sd-amber); }
+.sd-first-run__badge[data-tone="danger"] { border-color: var(--sd-red); }
+
+.sd-first-run__warning {
+  margin-top: var(--sd-space-12);
+  padding: var(--sd-space-12);
+  border: 1px solid var(--sd-red);
+  border-radius: var(--sd-radius-chip);
+  color: var(--sd-text-primary);
+  font-size: var(--sd-font-sm);
+}
+
+.sd-first-run__warning[hidden] { display: none; }
+
+.sd-first-run__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--sd-space-12);
+  margin-top: var(--sd-space-16);
+}
+
+.sd-first-run__stat {
+  background: var(--sd-surface-inset);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-chip);
+  padding: var(--sd-space-12);
+}
+
+.sd-first-run__stat-label {
+  display: block;
+  font-size: var(--sd-label-font-size);
+  letter-spacing: var(--sd-label-letter-spacing);
+  text-transform: uppercase;
+  color: var(--sd-label-color);
+}
+
+.sd-first-run__stat-value {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--sd-font-body);
+}
+
+.sd-first-run__stat-detail {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.sd-first-run__downloads {
+  display: grid;
+  gap: var(--sd-space-12);
+  margin-top: var(--sd-space-16);
+}
+
+.sd-first-run__download {
+  background: var(--sd-surface-inset);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-chip);
+  padding: var(--sd-space-12);
+}
+
+.sd-first-run__download-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sd-space-16);
+}
+
+.sd-first-run__download-head h3 {
+  margin: 0;
+  font-size: var(--sd-font-sm);
+  font-weight: 600;
+  color: var(--sd-text-primary);
+}
+
+.sd-first-run__download-head p {
+  margin: 2px 0 0;
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+}
+
+.sd-first-run__download-head .sd-btn { flex: none; margin-left: 0; }
+
+.sd-first-run__progress { margin-top: var(--sd-space-12); }
+.sd-first-run__progress[hidden] { display: none; }
+
+.sd-first-run__progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sd-space-12);
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-secondary);
+}
+
+.sd-first-run__progress-track {
+  height: 6px;
+  margin-top: 6px;
+  border-radius: 3px;
+  background: var(--sd-border);
+  overflow: hidden;
+}
+
+.sd-first-run__progress-fill {
+  width: 0;
+  height: 100%;
+  background: var(--sd-cyan);
+  transition: width .2s ease;
+}
+
+.sd-first-run__progress-fill[data-tone="success"] { background: var(--sd-green); }
+.sd-first-run__progress-fill[data-tone="danger"] { background: var(--sd-red); }
+
+@media (prefers-reduced-motion: reduce) {
+  .sd-first-run__progress-fill { transition: none; }
+}
+
+.sd-first-run__progress small {
+  display: block;
+  margin-top: 4px;
+  font-size: var(--sd-font-xs);
+  color: var(--sd-text-muted);
+}
+
+.sd-first-run__message {
+  margin-top: var(--sd-space-12);
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+}
+
+.sd-first-run__message:empty { display: none; }
+.sd-first-run__message[data-tone="success"] { color: var(--sd-green); }
+.sd-first-run__message[data-tone="warning"] { color: var(--sd-amber); }
+.sd-first-run__message[data-tone="danger"] { color: var(--sd-red); }
+
+.sd-first-run__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-12);
+  margin-top: var(--sd-space-16);
+}
+
+.sd-first-run__spacer { flex: 1; }
+.sd-first-run__actions .sd-btn--primary { margin-left: 0; }
+
+.sd-first-run__quiet {
+  background: transparent;
+  border-color: transparent;
+  color: var(--sd-text-muted);
+}
+
+/* ==========================================
    Guided flows (docs/ui/SIGNAL_DESK_GUIDED_FLOWS.md)
 
    One shell for onboarding, persona creation and the contact wizard. Same
