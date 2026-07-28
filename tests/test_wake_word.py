@@ -279,14 +279,27 @@ class _StubInputStream:
 
 
 class WakeListenerTests(unittest.TestCase):
+    """Wave 8A: the listener no longer opens the device itself — it subscribes
+    to the shared audio_input_broker. Each test gets its OWN broker so a
+    subscription left open by one test can't keep the "device" open for the
+    next, and the stubbed sounddevice.InputStream still stands in for the real
+    stream underneath."""
+
     def setUp(self):
+        import audio_input_broker
+
         _StubInputStream.instances = []
+        self.broker = audio_input_broker.AudioInputBroker()
         self.detector = FakeWakeDetector(scores=[0.9])
         calls = []
         self.service = WakeWordService(self.detector, on_detect=lambda: calls.append(1))
         self.trigger_calls = calls
 
+    def tearDown(self):
+        self.broker.stop_all()
+
     def _listener(self, **kwargs):
+        kwargs.setdefault("broker", self.broker)
         return WakeListener(self.service, **kwargs)
 
     def test_not_listening_before_start(self):

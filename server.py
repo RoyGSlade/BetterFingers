@@ -630,6 +630,23 @@ def warm_start_resident_models(settings=None):
     return results
 
 
+def _publish_recording_state(active: bool) -> bool:
+    """Tell the application-context service whether a recording is running.
+
+    A profile that changed the injection policy underneath an in-flight
+    dictation would change where that dictation lands, so the service holds
+    profile changes while this is True and applies them when it clears.
+    Returns the value unchanged so the caller reads as it did before.
+    """
+    try:
+        from backend.services.app_context import get_service
+
+        get_service().set_recording_active(active)
+    except Exception:  # best-effort; never fail /runtime/status on it
+        pass
+    return active
+
+
 def get_runtime_status_snapshot():
     engine = get_engine_if_initialized()
     engine_ready = False
@@ -647,7 +664,9 @@ def get_runtime_status_snapshot():
             hotkey_manager is not None and not getattr(hotkey_manager, "keyboard_hook_errors", [])
         ) if hotkey_manager_started else False,
         "hotkey_keyboard_hook_errors": list(getattr(hotkey_manager, "keyboard_hook_errors", [])) if hotkey_manager else [],
-        "recording_active": bool(getattr(hotkey_manager, "is_recording", False)) if hotkey_manager else False,
+        "recording_active": _publish_recording_state(
+            bool(getattr(hotkey_manager, "is_recording", False)) if hotkey_manager else False
+        ),
         "transcriber_loaded": bool(getattr(transcriber, "model", None)),
         "llm_ready": engine_ready,
     }
@@ -1001,6 +1020,19 @@ def perform_output_action(text, action="copy_only", open_chat=False):
     requested_action = str(action or "copy_only").strip().lower()
     if requested_action not in {"copy_only", "paste", "type", "open_chat_then_send"}:
         requested_action = "copy_only"
+
+    # Wave 7 gaming policy: never type into a game. Synthetic keystrokes reach
+    # whatever has focus, and in a game that is the movement keys.
+    try:
+        from backend.domain.gaming_policy import resolve_send_action
+        from backend.services.app_context import get_service
+
+        _ctx = get_service().current()
+        requested_action = resolve_send_action(
+            requested_action, active=bool((_ctx.get("gaming_policy") or {}).get("active")),
+        )
+    except Exception:  # best-effort; a context failure must not block delivery
+        pass
 
     capabilities = get_capabilities()
     payload = {
@@ -1394,6 +1426,14 @@ def emergency_stop_runtime():
                 ducker.unduck()
         except Exception as exc:
             logging.warning(f"Emergency unduck failed: {exc}")
+
+    # Quiesce the shared capture stream: emergency stop must leave no live
+    # audio consumer regardless of who held the broker.
+    try:
+        import audio_input_broker
+        audio_input_broker.get_broker().stop_all()
+    except Exception as exc:
+        logging.warning(f"Emergency broker stop failed: {exc}")
 
     pending_manual_send_ids.clear()
     broadcast_status_threadsafe("emergency_stop", {"message": "Emergency stop completed."})
@@ -2848,7 +2888,42 @@ async def settings_export_profile(profile_name: str):
 
 @app.get("/capabilities")
 async def capabilities():
-    return get_capabilities()
+    import audio_status
+    import routes_wake
+
+    payload = get_capabilities()
+    push_to_mute_available = bool(payload.get("supports_input_injection", False))
+    payload["voice_privacy_status"] = audio_status.voice_privacy_capability(
+        isolation_available=False,  # no capture-isolation adapter yet (Wave 8B)
+        push_to_mute_available=push_to_mute_available,
+    )
+    payload["wake_status"] = audio_status.wake_capability(
+        engine_available=True,
+        classifier_available=bool(routes_wake.selected_classifier_id()),
+        # Deliberately false until a measured wake qualification exists
+        # (false accepts/rejects, latency, CPU, handoff, device recovery).
+        qualified=False,
+    )
+    return payload
+
+
+@app.get("/audio/status")
+async def audio_runtime_status():
+    import audio_input_broker
+    import audio_status
+    import routes_wake
+
+    config = load_profile(get_last_active_profile())
+    return audio_status.audio_status_snapshot(
+        config,
+        broker_status=audio_input_broker.get_broker().status(),
+        isolation_available=False,
+        push_to_mute_available=bool(get_capabilities().get("supports_input_injection", False)),
+        engaged=output_injector is not None and bool(output_injector._held_voice_mute_key),
+        restore_complete=True,  # becomes real with Wave 8B's journaled lease
+        enabled=bool(config.get("wake_word_enabled", False)),
+        listening=routes_wake.is_wake_listening(),
+    )
 
 
 class LlmModelSelectRequest(BaseModel):
@@ -3477,6 +3552,10 @@ def _perform_privacy_wipe(wipe_voices: bool):
         #    Idempotent/no-op-safe: True even if wake word was never enabled.
         import routes_wake
         cleared["wake_listener_stopped"] = bool(routes_wake.stop_wake_listener())
+        # Quiesce the shared capture stream unconditionally: "no live capture"
+        # must hold without knowing who was holding the broker.
+        import audio_input_broker
+        audio_input_broker.get_broker().stop_all()
 
         # 1. Drain the recorder: stop it and confirm it actually stopped.
         cleared["recorder_stopped"] = _drain_recorder()
@@ -5182,6 +5261,7 @@ from backend.api.routes import personas as routes_personas  # noqa: E402
 from backend.api.routes import message_rescue as routes_message_rescue  # noqa: E402
 from backend.api.routes import contacts as routes_contacts  # noqa: E402
 from backend.api.routes import library as routes_library  # noqa: E402
+from backend.api.routes import app_context as routes_app_context  # noqa: E402
 
 app.include_router(routes_foundry.router)
 app.include_router(routes_user_config.router)
@@ -5191,6 +5271,7 @@ app.include_router(routes_personas.router)
 app.include_router(routes_message_rescue.router)
 app.include_router(routes_contacts.router)
 app.include_router(routes_library.router)
+app.include_router(routes_app_context.router)
 _foundry_sessions = routes_foundry._foundry_sessions
 
 

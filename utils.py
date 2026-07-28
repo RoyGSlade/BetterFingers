@@ -8,6 +8,8 @@ import re
 import math
 import yaml
 
+import audio_schema
+
 from store_migration import load_versioned_store, write_atomic
 
 def get_app_path():
@@ -400,6 +402,8 @@ def _sanitize_profile_values(config, defaults):
         cfg.get("input_device_fingerprint", d["input_device_fingerprint"])
     )
     cfg["audio_ducking"] = _coerce_bool(cfg.get("audio_ducking", d["audio_ducking"]), d["audio_ducking"])
+    cfg["output_ducking"] = audio_schema.sanitize_output_ducking(cfg.get("output_ducking"))
+    cfg["voice_privacy"] = audio_schema.sanitize_voice_privacy(cfg.get("voice_privacy"))
     cfg["auto_submit"] = _coerce_bool(cfg.get("auto_submit", d["auto_submit"]), d["auto_submit"])
     cfg["instant_typing"] = _coerce_bool(cfg.get("instant_typing", d["instant_typing"]), d["instant_typing"])
     cfg["per_app_pacing_enabled"] = _coerce_bool(
@@ -815,6 +819,11 @@ def _profile_defaults():
         "audio_ducking": False,
         "audio_ducking_level_percent": 18.0,
         "audio_ducking_fallback_return_percent": 100.0,
+        # D-0010: output ducking and input voice privacy are separate
+        # settings. The three keys above are the legacy projection of these
+        # two blocks and are kept in sync by audio_schema on every load/save.
+        "output_ducking": audio_schema.output_ducking_defaults(),
+        "voice_privacy": audio_schema.voice_privacy_defaults(),
         "auto_submit": False,
         "sign_off_text": "",
         "send_mode": "review_first",
@@ -986,6 +995,8 @@ def load_profile(profile_name="Default"):
                         migrated.update(data)
                         _migrate_controller_binding(migrated)
                         _migrate_output_delivery(migrated)
+                        audio_schema.migrate_audio_settings(migrated)
+                        audio_schema.project_legacy_audio_keys(migrated)
                         _sanitize_profile_values(migrated, defaults)
                         save_profile("Default", migrated)
                         return migrated
@@ -995,6 +1006,8 @@ def load_profile(profile_name="Default"):
             migrated = copy.deepcopy(defaults)
             _migrate_controller_binding(migrated)
             _migrate_output_delivery(migrated)
+            audio_schema.migrate_audio_settings(migrated)
+            audio_schema.project_legacy_audio_keys(migrated)
             _sanitize_profile_values(migrated, defaults)
             save_profile("Default", migrated)
             return migrated
@@ -1026,6 +1039,8 @@ def load_profile(profile_name="Default"):
         final_data.update(data)
         _migrate_controller_binding(final_data)
         _migrate_output_delivery(final_data)
+        audio_schema.migrate_audio_settings(final_data)
+        audio_schema.project_legacy_audio_keys(final_data)
         _sanitize_profile_values(final_data, defaults)
         if report["action"] == "quarantined":
             # Recreate the file on disk, same as the "file didn't exist"
@@ -1158,7 +1173,7 @@ def validate_profile_settings(data: dict):
         "Primary Action": data.get("manual_send_hotkey"),
         "Review TTS Hotkey": data.get("review_tts_hotkey"),
         "Open Chat Key": data.get("chat_open_key"),
-        "Voice Mute Key": data.get("voice_mute_key"),
+        "Voice Mute Key": audio_schema.voice_privacy_of(data)["mute_binding"],
     }
     cleaned_keys = {}
     for name, key in hotkey_fields.items():
@@ -1212,6 +1227,8 @@ def save_profile(profile_name, data):
         defaults = _profile_defaults()
         _migrate_controller_binding(payload)
         _migrate_output_delivery(payload)
+        audio_schema.migrate_audio_settings(payload)
+        audio_schema.project_legacy_audio_keys(payload)
         _sanitize_profile_values(payload, defaults)
         _refresh_input_device_fingerprint(payload)
         payload["schema_version"] = _PROFILE_SCHEMA_VERSION

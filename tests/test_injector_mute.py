@@ -161,5 +161,92 @@ class InjectorMuteKeyLinuxTests(unittest.TestCase):
         run_tool.assert_called_once()
 
 
+class InjectorVoicePrivacyModeTests(unittest.TestCase):
+    """Wave 8A / D-0010: the hold is driven by voice_privacy.mode, and every
+    legacy profile still behaves exactly as it did before the split."""
+
+    def setUp(self):
+        p = patch.object(injector_mod, "IS_WINDOWS", True)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _injector(self, config):
+        with patch("injector.load_profile", return_value=config):
+            return InputInjector(profile_name="Default")
+
+    def _binding_for(self, config):
+        return self._injector(config)._push_to_mute_binding()
+
+    # -- new schema --------------------------------------------------
+
+    def test_push_to_mute_mode_holds_the_configured_binding(self):
+        self.assertEqual(
+            self._binding_for({"voice_privacy": {"mode": "push_to_mute", "mute_binding": "f10"}}),
+            "f10",
+        )
+
+    def test_mode_off_holds_nothing_even_with_a_binding_saved(self):
+        self.assertEqual(
+            self._binding_for({"voice_privacy": {"mode": "off", "mute_binding": "f10"}}),
+            "",
+        )
+
+    def test_push_to_mute_without_a_binding_holds_nothing(self):
+        self.assertEqual(
+            self._binding_for({"voice_privacy": {"mode": "push_to_mute", "mute_binding": ""}}),
+            "",
+        )
+
+    def test_reserved_isolation_mode_falls_back_to_the_mute_key(self):
+        # No capture-isolation adapter exists yet (Wave 8B), so a profile that
+        # selected it must still get push-to-mute rather than silently nothing.
+        self.assertEqual(
+            self._binding_for(
+                {"voice_privacy": {"mode": "isolate_capture_streams", "mute_binding": "f9"}}
+            ),
+            "f9",
+        )
+
+    def test_output_ducking_alone_never_holds_a_key(self):
+        # The split's whole point: ducking the speakers is not a privacy action.
+        self.assertEqual(
+            self._binding_for({
+                "output_ducking": {"enabled": True},
+                "voice_privacy": {"mode": "off", "mute_binding": "f10"},
+            }),
+            "",
+        )
+
+    # -- unmigrated legacy profiles ----------------------------------
+
+    def test_legacy_ducking_on_with_a_key_still_holds_it(self):
+        self.assertEqual(self._binding_for({"audio_ducking": True, "voice_mute_key": "f10"}), "f10")
+
+    def test_legacy_ducking_off_still_holds_nothing(self):
+        self.assertEqual(self._binding_for({"audio_ducking": False, "voice_mute_key": "f10"}), "")
+
+    def test_legacy_ducking_on_without_a_key_still_holds_nothing(self):
+        self.assertEqual(self._binding_for({"audio_ducking": True, "voice_mute_key": ""}), "")
+
+    def test_an_empty_profile_holds_nothing(self):
+        self.assertEqual(self._binding_for({}), "")
+
+    # -- end to end --------------------------------------------------
+
+    @patch("injector.keyboard.release")
+    @patch("injector.keyboard.press")
+    def test_switching_privacy_off_releases_a_held_key_on_reload(self, press_key, release_key):
+        configs = [
+            {"voice_privacy": {"mode": "push_to_mute", "mute_binding": "f10"}},
+            {"voice_privacy": {"mode": "off", "mute_binding": "f10"}},
+        ]
+        with patch("injector.load_profile", side_effect=configs):
+            injector = InputInjector(profile_name="Default")
+            injector.hold_mute_key()
+            injector.reload_config(profile_name="Default")
+        press_key.assert_called_once_with("f10")
+        release_key.assert_called_once_with("f10")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -117,6 +117,11 @@ TASK_SAFE_ALLOWED_TOOLS = (
     "Bash(python3 -m py_compile *)",
     "Bash(python3 -m pytest *)",
     "Bash(python -m pytest *)",
+    # The qualified interpreter lives in .venv; system python3 lacks the
+    # project deps (Wave 8A finding — a lane had to smuggle site-packages in
+    # through a pytest plugin because these two were missing).
+    "Bash(.venv/bin/python -m pytest *)",
+    "Bash(.venv/bin/python -m py_compile *)",
     "Bash(npm test *)",
     "Bash(npm run test *)",
     # `npm run test *` only matches a script literally named "test"; this

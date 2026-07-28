@@ -531,3 +531,64 @@ cell, and retroactive application.
   stub the active-badge assertion depends on; per-scenario reset of the
   stateful contacts stub; and `GET /personas/:name` stubs for the Edit
   loader (the harness matches raw, percent-encoded pathnames).
+
+## D-0024 — Gate 7 is accepted
+
+**Owner:** release-director
+
+**Evidence:** Commit `b8a670e` plus the integration commit; director-run:
+109 targeted python tests plus the full cheap suite `2382 passed / 0
+failed`, renderer unit `1137/1137`, Wave 7 QA `10/10` on first execution
+inside the `52/52` production board, preview `28/28` and legacy `37/37`
+unregressed, build green.
+
+**Decision:** Accept Gate 7. Every checklist bullet is evidenced:
+deterministic resolution, honest Default for unknown/Wayland, debounce,
+recording-hold (the recording state is pushed into the service from the
+runtime-status builder, applied at integration), disable-able one-sentence
+announcements, per-application pin and temporary override, and the 50-token
+gaming completion ceiling now actually consumed by `_call_api` after its
+64-token floor — order is load-bearing and commented. The no-recipient rule
+is enforced three ways (schema rejection, closed snapshot vocabulary walked
+by test, class-only window detection), and `perform_output_action` maps every
+input-synthesising action to `copy_only` while a game is focused.
+
+**Also recorded:** the `app_profiles` store is declared `personal` in the
+privacy registry — the pinned map records which applications the person
+runs, and under-claiming that as configuration would defeat the report.
+sup-appcontext caught the director's own D-3b defect (helpers defined but
+missing from backend.js's export block) and adapted to the authoritative
+integration naming; the honest-degradation path it shipped (feature reports
+"unavailable", never invents a profile) worked exactly as designed while
+the export was missing.
+
+## D-0025 — Wave 8A checkpoint accepted; Gate 8 remains open
+
+**Owner:** release-director
+
+**Evidence:** Commit `c23ae28` plus the integration commit; director-run:
+the lane's 288-test set re-run under the qualified venv inside the
+404-test targeted run and the `2382`-test cheap suite; provenance manifest
+guarded by test.
+
+**Decision:** Accept the Wave 8A checkpoint. Landed and wired: the
+D-0010 schema split with unconditional idempotent migration and legacy
+projection at all four profile call sites (migrate-then-project order is
+load-bearing); the AudioInputBroker as the one microphone owner with the
+recorder and wake listener subscribing; push-to-mute driven by
+`voice_privacy.mode`; `/capabilities` audio words, the `/audio/status`
+snapshot, and unconditional broker quiesce in both the privacy-wipe and
+emergency-stop paths; the wake model provenance manifest (zero bundled
+model binaries; CC-BY-NC-SA classifiers excluded; runtime downloads pinned
+and hash-verified).
+
+**Explicitly not yet Gate 8:** the pre-trigger ring and trailing-silence
+command capture are unit-tested but unwired (the recorder needs a
+prepend-audio entry point — Wave 8B work); capture isolation has no
+adapter (`isolate_capture_streams` is reserved and degrades visibly);
+`restore_complete` is constant `True` until 8B's journaled lease; wake
+`qualified` stays false until measured qualification exists. Low findings
+WMP-3 (allowed-licenses enforced only by test, not runtime) and WMP-4
+(Kokoro license asserted, not verified) are recorded, neither blocking.
+The taskSafe allowlist gains the `.venv/bin/python` pytest/py_compile
+patterns so no future lane has to smuggle site-packages through a plugin.

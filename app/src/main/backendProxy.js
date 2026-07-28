@@ -52,6 +52,8 @@ const ROUTE_ALLOWLIST = {
     // Wave 4 Library UI (contract §5): backend-driven search + read-only
     // reopen payload.
     '/library/search', '/library/drafts/:id/reopen',
+    // Wave 7 application context: read-only status + profile list.
+    '/app-context/status', '/app-context/profiles',
   ],
   POST: [
     '/runtime/audio-devices/refresh', '/runtime/warmup',
@@ -83,6 +85,7 @@ const ROUTE_ALLOWLIST = {
     '/message-rescue/generate', '/message-rescue/generate/:id/cancel',
     '/contacts', '/contacts/:id', '/contacts/active',
     '/contacts/interview/start', '/contacts/interview/answer', '/contacts/compile',
+    '/app-context/override', '/app-context/pin',
     '/library/drafts/:id/pin', '/library/drafts/:id/duplicate',
     '/library/drafts/:id/reopen', '/library/drafts/:id/resend',
     '/library/drafts/:id/restore', '/library/recordings/:id/restore',

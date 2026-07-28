@@ -522,6 +522,26 @@ async function startRecording(timeoutMs = 120000) {
   return postJson(RUNTIME_RECORDING_START_URL, {}, timeoutMs);
 }
 
+// --- Application context (Wave 7). Override/pin accept null or '' as the
+// first-class "stop overriding / unpin" state, mirroring the route models.
+const APP_CONTEXT_URL = `${BACKEND_ORIGIN}/app-context`;
+
+async function fetchAppContextStatus(refresh = true, timeoutMs = 2500) {
+  return fetchJson(`${APP_CONTEXT_URL}/status?refresh=${refresh}`, timeoutMs);
+}
+
+async function fetchAppProfiles(timeoutMs = 2500) {
+  return fetchJson(`${APP_CONTEXT_URL}/profiles`, timeoutMs);
+}
+
+async function overrideAppProfile(profileId, timeoutMs = 2500) {
+  return postJson(`${APP_CONTEXT_URL}/override`, { profile_id: profileId ?? null }, timeoutMs);
+}
+
+async function pinAppProfile(profileId, timeoutMs = 2500) {
+  return postJson(`${APP_CONTEXT_URL}/pin`, { profile_id: profileId ?? null }, timeoutMs);
+}
+
 // Apply (or clear, with '') a contact on an existing draft. Metadata only:
 // the backend deliberately does not re-run cleanup (see /drafts/:id/contact).
 async function setDraftContact(draftId, contactId, timeoutMs = 10000) {
@@ -1061,6 +1081,10 @@ export {
   startRecording,
   stopRecording,
   setDraftContact,
+  fetchAppContextStatus,
+  fetchAppProfiles,
+  overrideAppProfile,
+  pinAppProfile,
   unloadModel,
   warmupRuntime,
   normalizeHealthPayload,

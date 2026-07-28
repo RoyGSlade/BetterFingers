@@ -73,6 +73,12 @@ def is_wake_listening():
     return bool(_listener and _listener.is_listening())
 
 
+def selected_classifier_id():
+    """The classifier the profile selects, or None — lets /capabilities ask
+    without duplicating the profile read."""
+    return (_profile_config().get("wake_word_model") or "") or None
+
+
 def stop_wake_listener():
     """Full quiesce: close the mic stream if running. Idempotent. Called by
     /wake/disable AND server.py's privacy-wipe path (mirrors how that path

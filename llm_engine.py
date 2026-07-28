@@ -2511,6 +2511,21 @@ class LLMEngine:
             safe_max_tokens = DEFAULT_MAX_OUTPUT_TOKENS
         safe_max_tokens = max(64, min(4096, safe_max_tokens))
 
+        # Wave 7 gaming policy. While a game is focused a generation that spans
+        # a teamfight instead of finishing inside a lull is the defect, so the
+        # cap is hard. clamp_completion_tokens is a ceiling and is a no-op when
+        # the active profile is not a gaming one. It must run AFTER the max(64,
+        # ...) floor above, or the 50-token cap would be lifted back to 64.
+        try:
+            from backend.domain.gaming_policy import clamp_completion_tokens
+            from backend.services.app_context import get_service
+
+            _ctx = get_service().current()
+            _gaming = bool((_ctx.get("gaming_policy") or {}).get("active"))
+            safe_max_tokens = clamp_completion_tokens(safe_max_tokens, active=_gaming)
+        except Exception:  # app context is best-effort; never fail a generation on it
+            pass
+
         payload = {
             "messages": _build_chat_messages(system_prompt, text, few_shot),
             "temperature": safe_temperature,

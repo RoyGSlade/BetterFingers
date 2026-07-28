@@ -140,6 +140,14 @@ CATEGORIES: list[DataCategory] = [
          "Settings; removed on factory reset (Electron-owned).", _FACTORY),
     _cat("onboarding_consent", "Onboarding consent record", "electron", "configuration",
          "Consent record; removed only on factory reset (Electron-owned).", _FACTORY),
+    # Application profiles (Wave 7). The profile BODIES are settings, but the
+    # same store holds the pinned map -- which applications this person runs --
+    # so it is declared personal rather than configuration. Under-claiming that
+    # would defeat the privacy report. No user prose: ids, process names and
+    # preset names only.
+    _cat("app_profiles", "Application profiles & pins", "python", "personal",
+         "Kept until personal data is cleared.", _PERSONAL,
+         in_export=True, user_text=False),
     _cat("model_runtime_metadata", "Model / runtime metadata", "python", "configuration",
          "Settings; removed on factory reset.", _FACTORY),
 

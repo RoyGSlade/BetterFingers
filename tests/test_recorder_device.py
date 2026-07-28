@@ -1,8 +1,16 @@
-"""The recorder honors the profile's selected input microphone."""
+"""The recorder honors the profile's selected input microphone.
+
+Since Wave 8A the recorder no longer opens ``sd.InputStream`` itself — it
+subscribes to :mod:`audio_input_broker`, the single process-wide microphone
+owner. The device-selection contract asserted here is unchanged; only the
+component that performs the open moved, so these tests now stub the stream
+through a broker built for each test rather than the shared singleton.
+"""
 
 import unittest
 from unittest.mock import patch
 
+import audio_input_broker
 import recorder
 import utils
 from recorder import AudioRecorder
@@ -19,11 +27,19 @@ class _FakeStream:
         pass
 
 
+def _broker_with(inputstream):
+    """A private broker whose stream factory is the test's stub, so no test
+    shares capture state with another (or touches real audio hardware)."""
+    def factory(**kwargs):
+        return inputstream(**kwargs)
+
+    return audio_input_broker.AudioInputBroker(stream_factory=factory)
+
+
 class RecorderDeviceSelectionTests(unittest.TestCase):
     def _record_once(self, config, inputstream):
-        rec = AudioRecorder()
+        rec = AudioRecorder(broker=_broker_with(inputstream))
         with patch.object(recorder, "load_profile", return_value=config), \
-             patch.object(recorder.sd, "InputStream", side_effect=inputstream), \
              patch.object(rec, "_start_chunk_worker"):
             rec.start_recording("Default")
         rec.recording = False
@@ -89,10 +105,9 @@ class RecorderFingerprintResolutionTests(unittest.TestCase):
             captured.update(kwargs)
             return _FakeStream()
 
-        rec = AudioRecorder()
+        rec = AudioRecorder(broker=_broker_with(fake))
         with patch.object(recorder, "load_profile", return_value=config), \
              patch.object(recorder, "resolve_input_device", return_value=resolved) as resolve, \
-             patch.object(recorder.sd, "InputStream", side_effect=fake), \
              patch.object(rec, "_start_chunk_worker"):
             rec.start_recording("Default")
         rec.recording = False
