@@ -203,9 +203,15 @@ See `BACKBURNER.md` for the preserved rationale and promotion gates.
 
 ## 5. Team topology
 
-The intended maximum is four simultaneous coding sessions: two or three Claude Sonnet
-sessions and one Codex GPT-5.6 session. The plan still works with fewer agents; lanes are
-collapsed sequentially, never made broader.
+The active hierarchy is one interactive director, up to two spawned Claude Opus
+supervisors, and up to four spawned Claude Sonnet workers repo-wide. The spawn caps
+(`COLLAB_MAX_OPUS=2`, `COLLAB_MAX_SONNET=4`) count running spawned sessions across every
+private room; the interactive director is not a spawned fleet slot. The plan still works
+with fewer agents: logical lanes collapse sequentially and never become broader.
+
+The names below are logical ownership lanes from the release plan, not an alternative
+concurrency budget. A director may map them onto generation-specific supervisor/worker
+names while preserving the same file boundaries.
 
 | Session name | Suggested model | Primary lane | Must not own concurrently |
 |---|---|---|---|
@@ -257,34 +263,30 @@ Claude Code also loads `.claude/skills/collab/SKILL.md` and hooks from
 
 ### Codex entry point
 
-Codex officially supports stdio MCP servers in `config.toml`. Phase 0 must add and verify
-a trusted project-scoped `.codex/config.toml` entry for this server plus Codex-compatible
-hooks. Until that lands, the CLI fallback is:
+Codex supports stdio MCP servers in `config.toml`. This repository now includes the
+trusted project-scoped `.codex/config.toml` entry and Codex-compatible `.codex/hooks.json`.
+Start Codex from the repository root and verify the project is trusted and the `collab`
+server appears in `/mcp` (or `codex mcp list`).
+
+The CLI fallback for a client that cannot load project configuration is:
 
 ```bash
 codex mcp add collab -- python3 .claude/collab-mcp/server.py
 codex mcp list
 ```
 
-Then start Codex from the repository root and verify the `collab` server with `/mcp`.
-The current review environment does not include the `codex` executable, so the first real
-Codex terminal session must verify the command and record the result in the Build Week log.
+### Cross-client hardening contract
 
-### Cross-client hardening required in Phase 0
+The implementation now uses a client-neutral identity with safe hashed state filenames,
+shared repo-global claims, and client-specific hook output. Keep these guarantees:
 
-The existing implementation names `my_claude_pid()` and searches for a `claude` ancestor.
-It also blocks Claude edit tools but does not yet parse Codex `apply_patch` requests. Before
-parallel Codex work:
-
-- introduce a client-neutral session identity, preferably an explicit environment session
-  ID with a safe process-ancestor fallback for both `claude` and `codex`;
-- configure the Codex project MCP server;
-- add Codex project instructions in `AGENTS.md`;
-- add Codex hooks for session status, inbox delivery, and `apply_patch` claim checks;
-- make the hook reject an `apply_patch` touching any path claimed by another session;
+- retain the explicit environment session ID plus safe `claude`/`codex` ancestor fallback;
+- retain the project MCP configuration, AGENTS instructions, and client-specific hooks;
+- parse every Codex `apply_patch` source and `*** Move to:` destination and emit a loud
+  `WARNING — NOT ENFORCED` for conflicts. Codex PreToolUse cannot deny the call, so the
+  session must stop itself; Claude edit hooks continue to hard-deny conflicts;
 - document that shell commands may not write source files;
-- extend the collaboration E2E test to simulate one Claude client and one Codex client;
-- verify both clients see the same sessions, claims, and messages.
+- keep the cross-client E2E proving both clients see the same sessions, claims, and messages.
 
 ### Mandatory lifecycle for every worker task
 
@@ -314,8 +316,9 @@ Risks: <known limitations, fallbacks, follow-ups>
 Diff ready: yes; no files staged or committed
 ```
 
-Use `urgent` only for an active contract break, shared-file hazard, privacy/security bug,
-or merge-blocking discovery. Everything else is `question`, `handoff`, or `info`.
+Message kinds are `urgent` (active contract/shared-file/privacy/merge blocker), `wake`
+(wake a sleeping/finishing Claude owner), `question`, `bug` (finding for a supervisor),
+`handoff`, and `info`. Use `urgent` and `wake` sparingly.
 
 ---
 
@@ -356,6 +359,10 @@ CLAIM
 
 DO NOT TOUCH
 <hotspot files and neighboring concerns explicitly excluded>
+
+GIT
+Workers do not run git add/commit/switch/checkout/rebase/merge/reset/stash/clean,
+or tag/release commands. Leave all changes uncommitted for the coordinator.
 
 CONTRACT
 <inputs, outputs, schema, events, compatibility requirements, privacy rules>

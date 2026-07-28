@@ -5,16 +5,14 @@
 # the TUI, or `codex mcp list` / `/mcp` after starting Codex from the repo
 # root to confirm the `collab` server is registered.
 #
-# Coordinator decision 2026-07-18: this points at the MACHINE-WIDE collab
-# server (~/.claude/collab-mcp/server.py, room ~/.claude/collab) — the room
-# the Claude Code sessions on this machine actually occupy — NOT the
-# repo-local copy. The machine-wide server also carries the director
-# tooling (collab_board, collab_spawn, collab_agents, collab_perms,
-# collab_decide) so a Codex session can act as room director; the repo-local
-# server (.claude/collab-mcp/server.py, exercised by its own test_collab.py)
-# remains the client-neutral reference implementation for the hackathon
-# deliverable. See AGENTS.md and ~/.codex/AGENTS.md.
+# This intentionally uses a repository-relative argument instead of a
+# workstation-specific home path. Codex starts stdio MCP processes relative
+# to its current working directory, so start Codex from the BetterFingers
+# repository root; `cwd = "."` records that assumption explicitly. The
+# repo-local server provides both the core claim/message lifecycle and the
+# hierarchy tools described in `.claude/skills/hierarchy/SKILL.md`.
 
 [mcp_servers.collab]
 command = "python3"
-args = ["/home/roygslade/.claude/collab-mcp/server.py"]
+args = [".claude/collab-mcp/server.py"]
+cwd = "."

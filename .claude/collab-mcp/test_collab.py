@@ -19,7 +19,7 @@ Runnable two ways:
                                                (one test_collab_e2e() item;
                                                 same checks, pytest reporting)
 """
-import json, os, pathlib, shutil, socket, subprocess, sys, tempfile, time, urllib.request
+import importlib.util, json, os, pathlib, shutil, socket, subprocess, sys, tempfile, time, urllib.request
 
 ROOT = str(pathlib.Path(__file__).resolve().parents[2])
 MCP = f"{ROOT}/.claude/collab-mcp/server.py"
@@ -92,9 +92,11 @@ class Client:
     ancestor process name used for client-neutral identity resolution
     ('claude' or 'codex'); client picks which hook output schema hooks.py
     replies with (--client=<client>)."""
-    def __init__(self, ws, comm="claude", client="claude"):
+    def __init__(self, ws, comm="claude", client="claude", extra_env=None):
         self.client = client
         env = dict(os.environ, COLLAB_WS_DIR=ws.dir, COLLAB_VIEWER_PORT=str(ws.port))
+        if extra_env:
+            env.update(extra_env)
         self.p = subprocess.Popen([sys.executable, "-u", WPATH, MCP, HOOKS, comm],
                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1,
                                   env=env)
@@ -119,17 +121,169 @@ class Client:
 
 def _run():
     # ============================================================
+    # Part 0: claim normalization (including explicit symlink policy)
+    # ============================================================
+    spec = importlib.util.spec_from_file_location(
+        "collab_lib_normalize_test", f"{ROOT}/.claude/collab-mcp/collab_lib.py"
+    )
+    unit_cl = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(unit_cl)
+    with tempfile.TemporaryDirectory(prefix="collab-normalize-root-") as root_dir, \
+            tempfile.TemporaryDirectory(prefix="collab-normalize-outside-") as outside_dir:
+        unit_cl.REPO_ROOT = pathlib.Path(root_dir)
+        inside = pathlib.Path(root_dir, "inside")
+        inside.mkdir()
+        pathlib.Path(root_dir, "inside-link").symlink_to(inside, target_is_directory=True)
+        pathlib.Path(root_dir, "outside-link").symlink_to(outside_dir, target_is_directory=True)
+        check("in-repo symlink aliases canonicalize",
+              unit_cl.normalize("inside-link/file.py") == "inside/file.py")
+        try:
+            unit_cl.normalize("outside-link/file.py")
+        except ValueError:
+            escaped_symlink_rejected = True
+        else:
+            escaped_symlink_rejected = False
+        check("symlink escape rejected", escaped_symlink_rejected)
+        check("pseudo claim is preserved",
+              unit_cl.normalize("__full-test-suite__") == "__full-test-suite__")
+
+    # Safe session ids are hashed into fixed filename components. Explicit ids
+    # with traversal/control syntax are rejected before any state path is made.
+    check("session state filenames are collision-resistant and path-safe",
+          unit_cl.session_state_key("env:a:b") != unit_cl.session_state_key("env:a_b")
+          and "/" not in unit_cl.session_state_key("env:a:b")
+          and "\\" not in unit_cl.session_state_key("env:a:b"))
+    previous_sid = os.environ.get("COLLAB_SESSION_ID")
+    os.environ["COLLAB_SESSION_ID"] = "../../cursor-escape"
+    try:
+        unit_cl.my_session_id()
+    except ValueError:
+        invalid_explicit_sid_rejected = True
+    else:
+        invalid_explicit_sid_rejected = False
+    if previous_sid is None:
+        os.environ.pop("COLLAB_SESSION_ID", None)
+    else:
+        os.environ["COLLAB_SESSION_ID"] = previous_sid
+    check("explicit traversal session id rejected", invalid_explicit_sid_rejected)
+
+    # Startup privacy migration is bounded to ROOT_WS, does not follow a
+    # symlink outside it, and tightens retained legacy state.
+    ws_priv = Workspace()
+    priv_root = pathlib.Path(ws_priv.dir)
+    legacy_room = priv_root / "rooms" / "legacy-room"
+    legacy_cursor = legacy_room / "cursors"
+    legacy_log_dir = priv_root / "spawn-logs"
+    legacy_cursor.mkdir(parents=True)
+    legacy_log_dir.mkdir()
+    legacy_files = [
+        priv_root / "fleet.json",
+        priv_root / "spawns.json",
+        priv_root / "messages.jsonl",
+        legacy_cursor / "old-cursor",
+        legacy_log_dir / "old.log",
+    ]
+    for path in legacy_files:
+        path.write_text("{}")
+        os.chmod(path, 0o664)
+    for path in (priv_root, priv_root / "rooms", legacy_room, legacy_cursor, legacy_log_dir):
+        os.chmod(path, 0o775)
+    outside_priv = pathlib.Path(tempfile.mkdtemp(prefix="collab-privacy-outside-"))
+    outside_file = outside_priv / "must-stay-public"
+    outside_file.write_text("outside")
+    os.chmod(outside_priv, 0o775)
+    os.chmod(outside_file, 0o664)
+    (priv_root / "outside-link").symlink_to(outside_priv, target_is_directory=True)
+    PRIV = Client(ws_priv)
+    check("legacy collab directories migrate to 0700",
+          all((path.stat().st_mode & 0o777) == 0o700 for path in
+              (priv_root, priv_root / "rooms", legacy_room, legacy_cursor, legacy_log_dir)))
+    check("legacy collab files migrate to 0600",
+          all((path.stat().st_mode & 0o777) == 0o600 for path in legacy_files))
+    check("privacy migration never follows links outside ROOT_WS",
+          (outside_priv.stat().st_mode & 0o777) == 0o775
+          and (outside_file.stat().st_mode & 0o777) == 0o664)
+    PRIV.stop()
+    ws_priv.cleanup()
+    shutil.rmtree(outside_priv, ignore_errors=True)
+
+    # Exact cursor tokens close the hook peek/consume race in both own and
+    # parent rooms: messages appended after the peek remain unread.
+    race_root = tempfile.mkdtemp(prefix="collab-race-root-")
+    race_room = pathlib.Path(race_root, "rooms", "sup-race-generation")
+    saved_env = {key: os.environ.get(key) for key in (
+        "COLLAB_ROOT_DIR", "COLLAB_WS_DIR", "COLLAB_PARENT_WS_DIR",
+    )}
+    os.environ["COLLAB_ROOT_DIR"] = race_root
+    os.environ["COLLAB_WS_DIR"] = str(race_room)
+    os.environ["COLLAB_PARENT_WS_DIR"] = race_root
+    race_spec = importlib.util.spec_from_file_location(
+        "collab_lib_race_test", f"{ROOT}/.claude/collab-mcp/collab_lib.py"
+    )
+    race_cl = importlib.util.module_from_spec(race_spec)
+    race_spec.loader.exec_module(race_cl)
+    for key, value in saved_env.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+    race_cl.my_session_id = lambda: "env:race-reader"
+    race_cl.register_session("race-reader", "token regression")
+    race_cl.post_message("urgent", "own-before", sender="other")
+    race_cl.post_message("urgent", "parent-before", sender="other", base=race_cl.PARENT_WS)
+    own_batch, own_token = race_cl.read_new_messages(mark_read=False, with_token=True)
+    parent_batch, parent_token = race_cl.read_new_messages(
+        mark_read=False, base=race_cl.PARENT_WS, with_token=True
+    )
+    race_cl.post_message("info", "own-after", sender="other")
+    race_cl.post_message("info", "parent-after", sender="other", base=race_cl.PARENT_WS)
+    race_cl.consume_pending(own_token, parent_token)
+    own_after = race_cl.read_new_messages()
+    parent_after = race_cl.read_new_messages(base=race_cl.PARENT_WS)
+    check("own-room hook batch consumes through exact token",
+          [m["text"] for m in own_batch] == ["own-before"]
+          and [m["text"] for m in own_after] == ["own-after"])
+    check("parent-room hook batch consumes through exact token",
+          [m["text"] for m in parent_batch] == ["parent-before"]
+          and [m["text"] for m in parent_after] == ["parent-after"])
+    race_cl.my_session_id = lambda: "env:a:b"
+    race_cl.stop_block_count(bump=True)
+    race_cl.my_session_id = lambda: "env:a_b"
+    race_cl.stop_block_count(bump=True)
+    stop_files = sorted(path.name for path in race_cl.STOPSTATE.iterdir())
+    check("colon and underscore session ids do not alias stop-state",
+          len(stop_files) == 2 and all(name.startswith("sid-") for name in stop_files),
+          str(stop_files))
+    private_runtime_files = (
+        list(race_cl.STOPSTATE.iterdir())
+        + list((race_room / "cursors").iterdir())
+        + list((pathlib.Path(race_root) / "cursors").iterdir())
+    )
+    check("new cursor and stop-state files are private",
+          all((path.stat().st_mode & 0o777) == 0o600 for path in private_runtime_files),
+          str(private_runtime_files))
+    shutil.rmtree(race_root, ignore_errors=True)
+
+    # ============================================================
     # Part 1: two simulated Claude sessions (original regression coverage)
     # ============================================================
     ws1 = Workspace()
 
     A = Client(ws1)
     r = A.rpc("tools/list")
-    check("tools/list has 8 tools", len(r["result"]["tools"]) == 8, str(r)[:200])
+    check("tools/list has 15 tools", len(r["result"]["tools"]) == 15, str(r)[:200])
     out = A.call("collab_register", {"name": "sess-a", "focus": "refactoring backend.js"})
     check("A registered", "Registered as 'sess-a'" in out, out)
-    out = A.call("collab_claim", {"paths": ["app/src/renderer/api/backend.js"], "reason": "refactor"})
+    out = A.call("collab_register", {"name": "sess-a", "focus": "updated backend focus"})
+    check("same session can re-register to update focus",
+          "sess-a (you): updated backend focus" in out, out)
+    out = A.call("collab_claim", {
+        "paths": ["app/src/renderer/api/../api/backend.js"],
+        "reason": "refactor",
+    })
     check("A claimed backend.js", "Claimed: app/src/renderer/api/backend.js" in out, out)
+    out = A.call("collab_claim", {"paths": ["__full-test-suite__"], "reason": "heavy suite"})
+    check("A claimed pseudo-resource", "Claimed: __full-test-suite__" in out, out)
 
     B = Client(ws1)
     out = B.call("collab_register", {"name": "sess-b", "focus": "voice command tests"})
@@ -137,8 +291,48 @@ def _run():
     check("B distinct identity from A", "sess-b (you)" in out and "sess-a (you)" not in out, out)
     out = B.call("collab_claim", {"paths": ["app/src/renderer/api/backend.js"], "reason": "also want it"})
     check("B claim conflicts", "CONFLICTS" in out and "sess-a" in out, out)
+    out = B.call("collab_claim", {
+        "paths": [f"{ROOT}/app/src/renderer/api/backend.js"],
+        "reason": "absolute alias",
+    })
+    check("absolute and relative claims conflict",
+          "CONFLICTS" in out and "app/src/renderer/api/backend.js" in out, out)
+    out = B.call("collab_claim", {
+        "paths": ["app/src/renderer/./api/../api/backend.js"],
+        "reason": "relative alias",
+    })
+    check("equivalent relative aliases conflict",
+          "CONFLICTS" in out and "app/src/renderer/api/backend.js" in out, out)
+    out = B.call("collab_claim", {"paths": ["__full-test-suite__"], "reason": "heavy suite"})
+    check("pseudo-resource claims conflict repo-wide",
+          "CONFLICTS" in out and "__full-test-suite__" in out, out)
+    for bad_path in ("", ".", "../outside.py", "/tmp/collab-outside.py"):
+        r = B.rpc("tools/call", {
+            "name": "collab_claim",
+            "arguments": {"paths": [bad_path], "reason": "must reject"},
+        })
+        check(f"dangerous claim rejected: {bad_path!r}",
+              r["result"].get("isError") is True, str(r)[:240])
     out = B.call("collab_claim", {"paths": ["voice_commands.py"], "reason": "tests"})
     check("B claims free file", "Claimed: voice_commands.py" in out, out)
+
+    DUP = Client(ws1)
+    r = DUP.rpc("tools/call", {
+        "name": "collab_register",
+        "arguments": {"name": "sess-a", "focus": "ambiguous duplicate"},
+    })
+    check("duplicate live name in one room rejected",
+          r["result"].get("isError") is True and "already used" in
+          r["result"]["content"][0]["text"], str(r)[:240])
+    for bad_name in ("Not-Kebab", "not_kebab", "a" * 49):
+        r = DUP.rpc("tools/call", {
+            "name": "collab_register",
+            "arguments": {"name": bad_name, "focus": "invalid routing name"},
+        })
+        check(f"invalid session name rejected: {bad_name!r}",
+              r["result"].get("isError") is True and "kebab-case" in
+              r["result"]["content"][0]["text"], str(r)[:240])
+    DUP.stop()
 
     # B's hook should block editing A's file
     h = B.hook("pre_tool", {"tool_name": "Edit", "tool_input": {"file_path": f"{ROOT}/app/src/renderer/api/backend.js"}})
@@ -272,6 +466,25 @@ def _run():
     check("Codex warning is a plain systemMessage, not a deny (Codex hooks can't block)",
           "permissionDecision" not in hout, str(h))
 
+    CL.call("collab_claim", {
+        "paths": ["move/source.py", "move/destination.py"],
+        "reason": "move regression",
+    })
+    move_patch = (
+        "*** Begin Patch\n"
+        "*** Update File: move/dir/../source.py\n"
+        "*** Move to: move/out/../destination.py\n"
+        "@@\n-old\n+new\n"
+        "*** End Patch\n"
+    )
+    h = CX.hook("pre_tool", {"tool_name": "apply_patch", "tool_input": {"patch": move_patch}})
+    hout = json.loads(h["out"]) if h["out"].strip() else {}
+    move_warning = hout.get("systemMessage", "")
+    check("Codex move patch checks normalized source and destination claims",
+          "move/source.py claimed by" in move_warning
+          and "move/destination.py claimed by" in move_warning,
+          move_warning)
+
     CL.stop(); CX.stop()
     ws2.cleanup()
 
@@ -322,6 +535,350 @@ def _run():
 
     OLD.stop(); NEW.stop()
     ws3.cleanup()
+
+    # ============================================================
+    # Part 4: hierarchy — roles, rooms, repo-global caps and claims
+    # ============================================================
+    ws4 = Workspace()
+    fake_cli = os.path.join(SCRATCH, "fake-claude")
+    fake_record = os.path.join(SCRATCH, "fake-claude-record.jsonl")
+    fake_source = r'''#!/usr/bin/env python3
+import json, os, sys, time
+record = os.environ.get("FAKE_CLAUDE_RECORD")
+if record:
+    with open(record, "a") as fh:
+        fh.write(json.dumps({
+            "argv": sys.argv[1:],
+            "env": {k: os.environ.get(k) for k in (
+                "COLLAB_ROOT_DIR", "COLLAB_WS_DIR", "COLLAB_PARENT_WS_DIR",
+                "COLLAB_PARENT_NAME", "COLLAB_SESSION_ID",
+            )},
+        }) + "\n")
+if sys.argv[1:] == ["auth", "status", "--json"]:
+    logged_in = os.environ.get("FAKE_CLAUDE_AUTH", "1") == "1"
+    print(json.dumps({"loggedIn": logged_in, "authMethod": "fake" if logged_in else "none",
+                      "apiProvider": "test"}))
+    raise SystemExit(0 if logged_in else 1)
+if "--permission-mode" in sys.argv:
+    mode = sys.argv[sys.argv.index("--permission-mode") + 1]
+    if mode not in {"acceptEdits", "auto", "bypassPermissions", "manual"}:
+        print("invalid permission mode", mode)
+        raise SystemExit(2)
+if os.environ.get("FAKE_CLAUDE_FAIL") == "1":
+    print("model startup rejected; Authorization: Bearer super-secret-token")
+    raise SystemExit(37)
+time.sleep(60)
+'''
+    open(fake_cli, "w").write(fake_source)
+    os.chmod(fake_cli, 0o755)
+    henv = {
+        "COLLAB_CLAUDE_CLI": fake_cli,
+        "COLLAB_SPAWN_HEALTHCHECK_S": "0.12",
+        "FAKE_CLAUDE_RECORD": fake_record,
+    }
+
+    D = Client(ws4, extra_env=henv)
+    D.call("collab_register", {"name": "director", "focus": "phase orchestration"})
+    NAME_TAKEN = Client(ws4, extra_env=henv)
+    NAME_TAKEN.call("collab_register", {
+        "name": "reserved-worker", "focus": "live routing reservation",
+    })
+
+    tools = D.rpc("tools/list")["result"]["tools"]
+    spawn_schema = next(t for t in tools if t["name"] == "collab_spawn")["inputSchema"]
+    check("spawn schema has no cwd override", "cwd" not in spawn_schema["properties"])
+    check("spawn schema exposes installed permission contract",
+          spawn_schema["properties"]["permission_mode"]["enum"] ==
+          ["taskSafe", "acceptEdits", "auto", "manual", "bypassPermissions"],
+          str(spawn_schema["properties"]["permission_mode"]))
+    r = D.rpc("tools/call", {
+        "name": "collab_spawn",
+        "arguments": {"name": "reserved-worker", "task": "must reject", "role": "worker"},
+    })
+    name_error = r["result"]["content"][0]["text"]
+    check("worker spawn reserves live destination-room session names",
+          r["result"].get("isError") is True
+          and "live session in the destination room" in name_error,
+          name_error)
+    short_task = "objective A for dev@example.com"
+    out = D.call("collab_spawn", {
+        "name": "sup-a", "task": short_task, "role": "supervisor",
+        "cwd": "/tmp",
+    })
+    check("supervisor spawns as opus with generation room",
+          "claude-opus-5" in out and "rooms/sup-a-" in out, out)
+    fleet = json.loads(pathlib.Path(ws4.dir, "fleet.json").read_text())
+    sup_a_rec = next(rec for rec in fleet.values() if rec["name"] == "sup-a")
+    sup_a_room = pathlib.Path(sup_a_rec["room"])
+    check("supervisor generation room created", (sup_a_room / "cursors").is_dir())
+    check("raw cwd argument cannot move spawn outside repo",
+          sup_a_rec["cwd"] == ROOT, sup_a_rec["cwd"])
+    check("fleet metadata omits full task",
+          "task" not in sup_a_rec and short_task not in json.dumps(sup_a_rec)
+          and short_task not in pathlib.Path(ws4.dir, "spawns.json").read_text()
+          and short_task not in pathlib.Path(ws4.dir, "fleet.json").read_text()
+          and short_task not in pathlib.Path(ws4.dir, "messages.jsonl").read_text()
+          and set(sup_a_rec["task_summary"]) == {"sha256_12", "chars"},
+          json.dumps(sup_a_rec))
+    check("spawn metadata and log are private",
+          (pathlib.Path(ws4.dir, "fleet.json").stat().st_mode & 0o777) == 0o600
+          and (pathlib.Path(ws4.dir, "spawns.json").stat().st_mode & 0o777) == 0o600
+          and (pathlib.Path(sup_a_rec["log"]).stat().st_mode & 0o777) == 0o600)
+    records = [json.loads(line) for line in pathlib.Path(fake_record).read_text().splitlines()]
+    sup_a_argv = next(r["argv"] for r in records if "-p" in r["argv"] and "sup-a" in r["argv"][1])
+    check("taskSafe argv uses supported manual mode",
+          sup_a_argv[sup_a_argv.index("--permission-mode") + 1] == "manual"
+          and "--allow-dangerously-skip-permissions" not in sup_a_argv, str(sup_a_argv))
+    allowed_arg = sup_a_argv[sup_a_argv.index("--allowedTools") + 1]
+    check("taskSafe argv allows targeted pytest without global Bash",
+          "Bash(python3 -m pytest *)" in allowed_arg and allowed_arg != "Bash",
+          allowed_arg)
+    sup_a_launch = next(r for r in records if r["argv"] == sup_a_argv)
+    check("spawn env isolates identity and wires generated room",
+          sup_a_launch["env"]["COLLAB_SESSION_ID"] is None
+          and sup_a_launch["env"]["COLLAB_WS_DIR"] == str(sup_a_room), str(sup_a_launch))
+
+    BAD_AUTH = Client(ws4, extra_env={**henv, "FAKE_CLAUDE_AUTH": "0"})
+    BAD_AUTH.call("collab_register", {"name": "auth-checker", "focus": "auth failure seam"})
+    r = BAD_AUTH.rpc("tools/call", {"name": "collab_spawn",
+                                    "arguments": {"name": "auth-fail", "task": "must not start",
+                                                  "role": "worker"}})
+    auth_error = r["result"]["content"][0]["text"]
+    check("unauthenticated preflight fails clearly",
+          r["result"].get("isError") is True and "loggedIn=false" in auth_error
+          and "No session or fleet record" in auth_error, auth_error)
+    fleet = json.loads(pathlib.Path(ws4.dir, "fleet.json").read_text())
+    check("auth failure creates no fleet record",
+          not any(rec.get("name") == "auth-fail" for rec in fleet.values()), str(fleet))
+
+    FAIL_FAST = Client(ws4, extra_env={**henv, "FAKE_CLAUDE_FAIL": "1"})
+    FAIL_FAST.call("collab_register", {"name": "fail-fast", "focus": "health failure seam"})
+    logs_before_failure = set(pathlib.Path(ws4.dir, "spawn-logs").glob("*.log"))
+    r = FAIL_FAST.rpc("tools/call", {"name": "collab_spawn",
+                                     "arguments": {"name": "instant-fail", "task": "must not persist",
+                                                   "role": "worker"}})
+    fail_error = r["result"]["content"][0]["text"]
+    check("immediate child failure is synchronous and redacted",
+          r["result"].get("isError") is True and "status 37" in fail_error
+          and "super-secret-token" not in fail_error and "[redacted]" in fail_error,
+          fail_error)
+    fleet = json.loads(pathlib.Path(ws4.dir, "fleet.json").read_text())
+    check("immediate failure creates no running or fleet record",
+          not any(rec.get("name") == "instant-fail" for rec in fleet.values())
+          and set(pathlib.Path(ws4.dir, "spawn-logs").glob("*.log")) == logs_before_failure,
+          str(fleet))
+
+    D.call("collab_spawn", {"name": "sup-b", "task": "objective B", "role": "supervisor"})
+    r = D.rpc("tools/call", {"name": "collab_spawn",
+                             "arguments": {"name": "sup-c", "task": "objective C", "role": "supervisor"}})
+    t = r["result"]["content"][0]["text"]
+    check("3rd supervisor blocked by opus cap", r["result"].get("isError") is True
+          and "opus cap reached: 2/2" in t, t)
+
+    # Reusing a display name must never reuse the prior private room.
+    (sup_a_room / "messages.jsonl").write_text('{"text":"stale generation secret"}\n')
+    D.call("collab_stop", {"name": "sup-a"})
+    time.sleep(0.35)
+    out = D.call("collab_spawn", {"name": "sup-a", "task": "objective A generation 2",
+                                  "role": "supervisor"})
+    spawns_now = json.loads(pathlib.Path(ws4.dir, "spawns.json").read_text())
+    sup_a_room_2 = pathlib.Path(spawns_now["sup-a"]["room"])
+    check("repeated supervisor name gets a clean unique room",
+          sup_a_room_2 != sup_a_room and (sup_a_room_2 / "cursors").is_dir()
+          and not (sup_a_room_2 / "messages.jsonl").exists(),
+          f"old={sup_a_room} new={sup_a_room_2}")
+
+    out = D.call("collab_spawn", {"name": "w0", "task": "task 0", "role": "worker"})
+    check("worker spawns as sonnet in this room", "claude-sonnet-5" in out and "this room" in out, out)
+    for i in range(1, 4):
+        D.call("collab_spawn", {"name": f"w{i}", "task": f"task {i}", "role": "worker"})
+    r = D.rpc("tools/call", {"name": "collab_spawn",
+                             "arguments": {"name": "w4", "task": "task 4", "role": "worker"}})
+    t = r["result"]["content"][0]["text"]
+    check("5th worker blocked by sonnet cap", r["result"].get("isError") is True
+          and "sonnet cap reached: 4/4" in t, t)
+
+    r = D.rpc("tools/call", {"name": "collab_spawn",
+                             "arguments": {"name": "x", "task": "t", "role": "boss"}})
+    check("invalid role rejected", r["result"].get("isError") is True
+          and "role must be one of" in r["result"]["content"][0]["text"], str(r)[:200])
+
+    out = D.call("collab_fleet")
+    check("fleet shows caps at limit", "opus 2/2" in out and "sonnet 4/4" in out, out)
+
+    r = BAD_AUTH.rpc("tools/call", {"name": "collab_stop", "arguments": {"name": "w2"}})
+    stop_error = r["result"]["content"][0]["text"]
+    check("sibling session cannot stop another session's child",
+          r["result"].get("isError") is True and "not authorized" in stop_error, stop_error)
+
+    spawns_file = pathlib.Path(ws4.dir, "spawns.json")
+    raw_spawns = json.loads(spawns_file.read_text())
+    real_identity = raw_spawns["w2"]["process_identity"]
+    raw_spawns["w2"]["process_identity"] = "different-boot:1"
+    spawns_file.write_text(json.dumps(raw_spawns))
+    fleet_file = pathlib.Path(ws4.dir, "fleet.json")
+    raw_fleet = json.loads(fleet_file.read_text())
+    w2_fleet_id = next(key for key, rec in raw_fleet.items() if rec.get("name") == "w2")
+    raw_fleet[w2_fleet_id]["process_identity"] = "different-boot:1"
+    fleet_file.write_text(json.dumps(raw_fleet))
+    out_workers = D.call("collab_workers")
+    out_fleet = D.call("collab_fleet")
+    check("PID mismatch is dead for liveness and cap counting",
+          "w2 [exited" in out_workers and "sonnet 3/4" in out_fleet,
+          out_workers + "\n" + out_fleet)
+    r = D.rpc("tools/call", {"name": "collab_stop", "arguments": {"name": "w2"}})
+    mismatch_error = r["result"]["content"][0]["text"]
+    check("PID identity mismatch refuses to signal",
+          r["result"].get("isError") is True and "refusing to signal" in mismatch_error
+          and "PID reuse" in mismatch_error, mismatch_error)
+    raw_spawns["w2"]["process_identity"] = real_identity
+    spawns_file.write_text(json.dumps(raw_spawns))
+    raw_fleet[w2_fleet_id]["process_identity"] = real_identity
+    fleet_file.write_text(json.dumps(raw_fleet))
+
+    D.call("collab_stop", {"name": "w3"})
+    time.sleep(0.5)
+    out = D.call("collab_spawn", {"name": "w4", "task": "task 4", "role": "worker"})
+    check("sonnet slot frees after collab_stop", "Spawned worker 'w4'" in out, out)
+    D.call("collab_stop", {"name": "w4"})
+    time.sleep(0.35)
+    out = D.call("collab_spawn", {
+        "name": "w-bypass", "task": "explicitly approved bypass test", "role": "worker",
+        "permission_mode": "bypassPermissions",
+    })
+    check("explicit bypass call spawns", "bypassPermissions" in out, out)
+    records = [json.loads(line) for line in pathlib.Path(fake_record).read_text().splitlines()]
+    bypass_argv = next(r["argv"] for r in reversed(records)
+                       if "-p" in r["argv"] and "w-bypass" in r["argv"][1])
+    check("bypass argv requires both explicit flags",
+          "--allow-dangerously-skip-permissions" in bypass_argv
+          and bypass_argv[bypass_argv.index("--permission-mode") + 1] == "bypassPermissions"
+          and "--allowedTools" not in bypass_argv, str(bypass_argv))
+
+    # a live supervisor session in its own room, wired back to the director
+    room = pathlib.Path(ws4.dir, "rooms", "sup-live")
+    (room / "cursors").mkdir(parents=True)
+    S = Client(ws4, extra_env={**henv, "COLLAB_WS_DIR": str(room), "COLLAB_ROOT_DIR": ws4.dir,
+                               "COLLAB_PARENT_WS_DIR": ws4.dir, "COLLAB_PARENT_NAME": "director"})
+    S.call("collab_register", {"name": "sup-live", "focus": "objective C"})
+    out = S.call("collab_status")
+    check("supervisor status shows parent-room wiring", "parent room wired" in out, out)
+    S.call("collab_report_up", {"kind": "info", "text": "objective C underway"})
+    out = D.call("collab_inbox")
+    check("director receives report-up in main room", "objective C underway" in out and "sup-live" in out, out)
+    D.call("collab_post", {"kind": "info", "text": "priority update for C", "to": "sup-live"})
+    out = S.call("collab_check_up")
+    check("supervisor check_up sees director directive", "priority update for C" in out, out)
+
+    S.call("collab_claim", {"paths": ["shared/core.py"], "reason": "objective C"})
+    out = D.call("collab_claim", {"paths": ["shared/core.py"], "reason": "director edit"})
+    check("cross-room claim conflict includes supervisor route",
+          "CONFLICTS" in out and "sup-live@rooms/sup-live" in out
+          and "collab_report_up" in out, out)
+    h = D.hook("pre_tool", {"tool_name": "Edit", "tool_input": {"file_path": "shared/core.py"}})
+    hout = json.loads(h["out"]) if h["out"].strip() else {}
+    check("hook denies cross-room claimed edit",
+          hout.get("hookSpecificOutput", {}).get("permissionDecision") == "deny", str(h))
+
+    route_room_1 = pathlib.Path(ws4.dir, "rooms", "route-one-generation")
+    route_room_2 = pathlib.Path(ws4.dir, "rooms", "route-two-generation")
+    WROUTE1 = Client(ws4, extra_env={
+        **henv, "COLLAB_WS_DIR": str(route_room_1), "COLLAB_ROOT_DIR": ws4.dir,
+        "COLLAB_PARENT_WS_DIR": str(route_room_1), "COLLAB_PARENT_NAME": "supervisor-one",
+    })
+    WROUTE2 = Client(ws4, extra_env={
+        **henv, "COLLAB_WS_DIR": str(route_room_2), "COLLAB_ROOT_DIR": ws4.dir,
+        "COLLAB_PARENT_WS_DIR": str(route_room_2), "COLLAB_PARENT_NAME": "supervisor-two",
+    })
+    WROUTE1.call("collab_register", {"name": "duplicate-worker", "focus": "route one"})
+    WROUTE2.call("collab_register", {"name": "duplicate-worker", "focus": "route two"})
+    WROUTE1.call("collab_claim", {"paths": ["shared/route-one.py"], "reason": "one"})
+    WROUTE2.call("collab_claim", {"paths": ["shared/route-two.py"], "reason": "two"})
+    out = D.call("collab_claim", {
+        "paths": ["shared/route-one.py", "shared/route-two.py"], "reason": "route audit",
+    })
+    check("duplicate private-room display names have unambiguous routes",
+          "duplicate-worker" in out
+          and "supervisor-one@rooms/route-one-generation" in out
+          and "supervisor-two@rooms/route-two-generation" in out,
+          out)
+    persisted_claims = json.loads(pathlib.Path(ws4.dir, "claims.json").read_text())
+    route_blob = json.dumps({
+        "one": persisted_claims["shared/route-one.py"]["route"],
+        "two": persisted_claims["shared/route-two.py"]["route"],
+    })
+    check("claim routing metadata is safe and root-relative",
+          ws4.dir not in route_blob
+          and persisted_claims["shared/route-one.py"]["route"]["room"]
+          == "rooms/route-one-generation"
+          and persisted_claims["shared/route-two.py"]["route"]["room"]
+          == "rooms/route-two-generation",
+          route_blob)
+
+    S.call("collab_report_up", {"kind": "handoff", "text": "objective C done, reviewed"})
+    out = D.call("collab_wait", {"seconds": 5})
+    check("collab_wait returns the pending handoff", "objective C done" in out, out)
+
+    try:  # kill every fake spawned process group before cleanup
+        for rec in json.loads(pathlib.Path(ws4.dir, "fleet.json").read_text()).values():
+            for sig_target in (rec.get("pid", -1),):
+                try:
+                    os.killpg(sig_target, 15)
+                except Exception:
+                    try:
+                        os.kill(sig_target, 15)
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    D.stop(); S.stop(); BAD_AUTH.stop(); FAIL_FAST.stop(); NAME_TAKEN.stop()
+    WROUTE1.stop(); WROUTE2.stop()
+    ws4.cleanup()
+
+    # ============================================================
+    # Part 5: wake watcher — interrupts, Stop-blocking, keepalive
+    # ============================================================
+    ws5 = Workspace()
+    A = Client(ws5, extra_env=henv)
+    A.call("collab_register", {"name": "wake-target", "focus": "supervising"})
+    B = Client(ws5)
+    B.call("collab_register", {"name": "waker", "focus": "directing"})
+
+    B.call("collab_post", {"kind": "wake", "text": "WAKE: review sup-a handoff", "to": "wake-target"})
+    h = A.hook("post_tool", {"tool_name": "Bash", "tool_response": {}})
+    hout = json.loads(h["out"]) if h["out"].strip() else {}
+    ictx = hout.get("hookSpecificOutput", {}).get("additionalContext", "")
+    check("wake interrupts mid-work", "INTERRUPT" in ictx and "review sup-a handoff" in ictx, str(h))
+
+    B.call("collab_post", {"kind": "wake", "text": "WAKE: still need that review", "to": "wake-target"})
+    h = A.hook("stop", {"hook_event_name": "Stop"})
+    hout = json.loads(h["out"]) if h["out"].strip() else {}
+    check("wake blocks Stop", hout.get("decision") == "block"
+          and "still need that review" in hout.get("reason", ""), str(h))
+    h = A.hook("stop", {"hook_event_name": "Stop"})
+    check("quiet Stop allowed after wake consumed", not h["out"].strip() and h["code"] == 0, str(h))
+
+    B.call("collab_post", {"kind": "info", "text": "fyi direct", "to": "wake-target"})
+    h = A.hook("stop", {"hook_event_name": "Stop"})
+    hout = json.loads(h["out"]) if h["out"].strip() else {}
+    check("direct message blocks Stop (flush semantics)", hout.get("decision") == "block"
+          and "fyi direct" in hout.get("reason", ""), str(h))
+    B.call("collab_post", {"kind": "info", "text": "fyi broadcast"})
+    h = A.hook("stop", {"hook_event_name": "Stop"})
+    check("broadcast info does not block Stop", not h["out"].strip() and h["code"] == 0, str(h))
+
+    A.call("collab_spawn", {"name": "kid", "task": "spin"})
+    h = A.hook("stop", {"hook_event_name": "Stop"})
+    hout = json.loads(h["out"]) if h["out"].strip() else {}
+    check("keepalive blocks while children run", hout.get("decision") == "block"
+          and "KEEPALIVE" in hout.get("reason", ""), str(h))
+    A.call("collab_stop", {"name": "kid"})
+    time.sleep(0.5)
+    h = A.hook("stop", {"hook_event_name": "Stop"})
+    check("Stop allowed again after children exit", not h["out"].strip() and h["code"] == 0, str(h))
+
+    A.stop(); B.stop()
+    ws5.cleanup()
 
 
 def test_collab_e2e():

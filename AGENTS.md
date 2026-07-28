@@ -34,22 +34,26 @@ summarizes the Codex-relevant parts of.
 
 ## Collaboration protocol (mandatory lifecycle)
 
-The `collab` MCP server (configured in `.codex/config.toml`; per coordinator
-decision 2026-07-18 it points at the MACHINE-WIDE server/room
-`~/.claude/collab` — the room this machine's Claude sessions actually
-occupy) is your session's window into who else is active. Core tools:
+The repo-local `collab` MCP server (`.claude/collab-mcp/server.py`, configured
+in `.codex/config.toml`) is your session's window into who else is active.
+Start Codex from the repository root so its relative MCP command and project
+hooks resolve correctly. Core tools:
 `collab_register`, `collab_status`, `collab_claim`, `collab_release`,
 `collab_post`, `collab_inbox`. Workspace hygiene: `collab_clear` (archive
 the stale message log to `backlog/` — or discard it — and reset all read
 cursors) and `collab_backlog` (list archives); clear only stale/finished
 conversation — if other sessions look mid-task in `collab_status`, ask via
-`collab_post` first. Director tooling (`collab_board` notes/side-task board,
-`collab_spawn`/`collab_agents` sonnet worker spawner max 3 alive,
-`collab_perms`/`collab_decide` permission review): see `~/.codex/AGENTS.md`
-— any Codex session may act as room director.
+`collab_post` first.
 
-1. Call `collab_register` with a short kebab-case session name and a one-line
-   focus, before any edits.
+The same server exposes the actual hierarchy tools: `collab_spawn`,
+`collab_workers`, `collab_fleet`, `collab_stop`, `collab_wait`,
+`collab_report_up`, and `collab_check_up`. The director can spawn supervisors
+into private rooms; workers join their supervisor's room; claims and fleet
+limits remain repo-global. See `.claude/skills/hierarchy/SKILL.md` for the
+director/supervisor workflow and current model-family caps.
+
+1. Call `collab_register` with a short kebab-case session name that is unique
+   among live sessions in the room and a one-line focus, before any edits.
 2. Call `collab_status` and `collab_inbox`. If another session's focus
    overlaps yours, message them (`collab_post`) before starting.
 3. Call `collab_claim` with the exact repo-relative paths you're about to
@@ -66,9 +70,11 @@ conversation — if other sessions look mid-task in `collab_status`, ask via
    coordinator posts `ACCEPTED`.
 
 Message kinds: `urgent` (active contract break, shared-file hazard, or
-merge-blocking discovery — interrupts other sessions), `question` (need input
-from a specific session, set `to`), `handoff` (finished work another session
-should pick up), `info` (FYI). Don't cry wolf with `urgent`.
+merge-blocking discovery — interrupts other sessions), `wake` (wake a
+sleeping/finishing Claude session), `question` (need input from a specific
+session, set `to`), `bug` (finding for a supervisor), `handoff` (finished work
+another session should pick up), and `info` (FYI). Don't cry wolf with
+`urgent`.
 
 ## Session identity
 
@@ -104,6 +110,10 @@ Before these run, Codex will ask you to review and trust them (`/hooks` in an
 interactive session). Trust them — they're read-only against your working
 tree; they only ever read `.claude/collab/` state and never mutate source.
 
+Claude Code also wires a `Stop` hook for wake/keepalive behavior. Codex does
+not currently provide an equivalent blockable Stop hook, so a Codex director
+must continue calling `collab_wait` while spawned sessions remain active.
+
 ### Known gap: `PreToolUse` cannot block `apply_patch`
 
 As of the current Codex CLI, `PreToolUse` hooks support only a `systemMessage`
@@ -121,6 +131,15 @@ proceed with that `apply_patch`. Coordinate via `collab_post` first. This is
 exactly the same discipline Claude Code sessions already follow for claim
 conflicts (`.claude/skills/collab/SKILL.md`) — Codex just doesn't get an
 enforced backstop for it yet.
+
+## Collaboration tooling platform scope
+
+This developer-only collaboration server currently targets POSIX/Linux
+workstations: it uses `fcntl` file locking, `/proc` process ancestry, POSIX
+signals/process groups, and `/bin/sh` for spawned-session logging. Do not
+describe this coordination tooling as Windows-native without replacing those
+dependencies. That limitation does not change BetterFingers' separate product
+support requirements for Windows.
 
 ## Heavy shared resources
 
