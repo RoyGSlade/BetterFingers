@@ -119,6 +119,11 @@ TASK_SAFE_ALLOWED_TOOLS = (
     "Bash(python -m pytest *)",
     "Bash(npm test *)",
     "Bash(npm run test *)",
+    # `npm run test *` only matches a script literally named "test"; this
+    # repo's renderer suite is "test:unit" (Wave 1 finding — three sessions
+    # were unable to run any test and honestly reported UNRUN).
+    "Bash(npm run test:*)",
+    "Bash(node --test *)",
     "Bash(npx vitest *)",
     "mcp__collab__collab_register",
     "mcp__collab__collab_status",
