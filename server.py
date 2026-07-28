@@ -1384,6 +1384,17 @@ def emergency_stop_runtime():
         except Exception as exc:
             logging.warning(f"Emergency injector stop failed: {exc}")
 
+    # Always release audio ducking, even when not recording: a stop that raced
+    # the async duck thread, or a stale ducked state, has no other
+    # user-reachable release path. unduck() is idempotent.
+    if hotkey_manager is not None:
+        try:
+            ducker = getattr(getattr(hotkey_manager, "recorder", None), "ducker", None)
+            if ducker is not None:
+                ducker.unduck()
+        except Exception as exc:
+            logging.warning(f"Emergency unduck failed: {exc}")
+
     pending_manual_send_ids.clear()
     broadcast_status_threadsafe("emergency_stop", {"message": "Emergency stop completed."})
     return {"ok": True, "message": "Emergency stop completed."}
@@ -5135,6 +5146,7 @@ import routes_wake  # noqa: E402
 from backend.api.routes import personas as routes_personas  # noqa: E402
 from backend.api.routes import message_rescue as routes_message_rescue  # noqa: E402
 from backend.api.routes import contacts as routes_contacts  # noqa: E402
+from backend.api.routes import library as routes_library  # noqa: E402
 
 app.include_router(routes_foundry.router)
 app.include_router(routes_user_config.router)
@@ -5143,6 +5155,7 @@ app.include_router(routes_wake.router)
 app.include_router(routes_personas.router)
 app.include_router(routes_message_rescue.router)
 app.include_router(routes_contacts.router)
+app.include_router(routes_library.router)
 _foundry_sessions = routes_foundry._foundry_sessions
 
 
