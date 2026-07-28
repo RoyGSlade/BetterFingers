@@ -1,8 +1,9 @@
 # True BetterFingers Release Board
 
 - **Release:** `v0.2.0-alpha.1`
-- **Current wave:** Wave 1 — production Signal Desk composition and durable onboarding
+- **Current wave:** Waves 2 (Talk) and 3 (Library domain), in parallel per D-0014
 - **Gate 0:** **ACCEPTED (2026-07-28, release-director)**
+- **Gate 1:** **ACCEPTED (2026-07-28, release-director, D-0019)**
 - **Last updated:** 2026-07-28
 
 Statuses: `DONE`, `IN PROGRESS`, `BLOCKED`, `PENDING`, `CUT`.
@@ -57,7 +58,7 @@ No implementation wave may start while Gate 0 is not passed.
 | W1-A | Production composition root: `signal-desk.html` + `bootstrap/signalDeskApp.js`, live feature instances into all five workspaces, self-init containment, no production mocks, persona-learning QA rider. | sup-composition | `DONE` | Supervisor handoff reviewed; director reran: unit `856/856`, build green, persona-learning `3/3` on the new `signal-desk-prod` QA target after integration wiring. Static audits confirm zero `MOCK_*`/fixtures/hardcoded version in the production page. |
 | W1-B | Durable onboarding/consent: `onboardingStore.js` + `userDataRoot.js` + `onboardingConsent.js`, atomic 0600 writes under the unified data root, one-shot legacy migration, factory-reset clear, fail-closed consent. | sup-onboarding | `DONE` | Supervisor handoff reviewed (supervisor caught 5 defects in its own review; all fixed). Director ran the 78 store/consent/flow tests (`node --test`) green — supervisors could not run them (see allowlist note). Live proof: QA run wrote a correct migrated consent record into an isolated `BETTERFINGERS_DATA_DIR` while real roots stayed untouched. |
 | W1-I1 | Integration wiring (director): BF_UI=`signal-desk-prod` route + sender allowlist, onboarding IPC (`handleTrusted`) + preload bridge + version bridge, durable-gate wiring in the composition root, `onboarding_consent` privacy category, vite main inputs. | release-director | `DONE` | `test_data_categories` 11/11; unit `856/856`; build emits `onboardingStore.js`/`userDataRoot.js`; legacy QA `37/37` and preview QA `28/28` unregressed; prod QA `3/3`. Two defects caught at integration: the new main-process modules were missing from `electron.vite.config.js` main inputs (app started without a window — MODULE_NOT_FOUND inside `registerIpc`), and the handoff-suggested `isConsented` wiring dead-locked first-run advance (fixed by OR-ing the live checkbox). |
-| W1-G1 | Remaining Gate 1 evidence: consent-gate QA scenarios on the prod target, real-Python-backend dev boot, full section-reachability + console-error sweep, privacy-wipe reachability on the prod page; then Gate 1 decision. | release-director | `PENDING` | Gate 1 is not yet accepted; Wave 1 stays `IN PROGRESS` until these run. |
+| W1-G1 | Remaining Gate 1 evidence: consent-gate QA scenarios on the prod target, real-Python-backend dev boot, full section-reachability + console-error sweep, privacy-wipe reachability on the prod page; then Gate 1 decision. | sup-gate1 / release-director | `DONE` | sup-gate1's lane authored 8 prod-target scenarios (no production debug handles; QA-only harness seam that refuses to run without an isolated `BETTERFINGERS_DATA_DIR`). Director ran everything: prod QA `11/11`, unit `866/866`, preview `28/28` / legacy `37/37` unregressed, plus a real-backend boot probe with a live consent click-through writing a schema-correct durable record. Gate 1 `ACCEPTED` (D-0019); Windows consent evidence deferred to the Wave 12 matrix per D-0009. |
 
 Wave 1 follow-ups recorded: factory-reset executor exists nowhere (Wave 6 backlog); QA prod-target runs must set `BF_QA_USER_DATA_DIR` + `BETTERFINGERS_DATA_DIR` (harness default worth adding); regenerated screenshots from a different rendering environment must not overwrite committed Wave 0 baselines (46 PNGs restored after visual diff); collab Stop-hook misattributed "still running" keepalives to leaf workers (infra follow-up); `accepted_at` on migrated consent records is the migration time, not original consent time (schema v2 candidate); Talk context-panel persona dropdown/confidence slider remain unwired (Wave 2); Library no-selection and privacy-report empty states (Waves 3–6).
 
@@ -98,9 +99,9 @@ Wave 1 follow-ups recorded: factory-reset executor exists nowhere (Wave 6 backlo
 | Wave | Objective | Dependency | Status |
 |---:|---|---|---|
 | 0 | Repository truth, measurements, scope freeze | None | `DONE` |
-| 1 | Production Signal Desk composition and durable onboarding | Gate 0 | `IN PROGRESS` |
-| 2 | Talk completion | Gate 1 | `BLOCKED` |
-| 3 | Library domain semantics | Gate 1 contracts | `BLOCKED` |
+| 1 | Production Signal Desk composition and durable onboarding | Gate 0 | `DONE` |
+| 2 | Talk completion | Gate 1 | `IN PROGRESS` |
+| 3 | Library domain semantics | Gate 1 contracts | `IN PROGRESS` |
 | 4 | Library UI completion | Gate 3 | `BLOCKED` |
 | 5 | Studio, contacts/audience, Settings | Gates 1–2 | `BLOCKED` |
 | 6 | Privacy/data lifecycle closure | Final store set from Waves 3/5/7/8/9/10 | `BLOCKED` |

@@ -349,3 +349,42 @@ defect classes are recorded for future waves: new main-process modules must be
 added to `electron.vite.config.js` main inputs (a missing input fails at
 runtime as a silent no-window startup), and consent-step advance predicates
 must incorporate live user intent, not only boot-time durable state.
+
+## D-0019 — Gate 1 is accepted
+
+**Owner:** release-director
+
+**Evidence:** Director-run 2026-07-28: renderer unit `866/866`; production
+`signal-desk-prod` QA `11/11` — consent gate `5/5` (first run, seeded
+completed record, legacy-flag migration, decline/next separation, Escape
+cannot dismiss), section reachability + privacy-wipe control `2/2`,
+zero-exclusion console sweep `1/1`, persona-learning `3/3`
+([report](../../app/tests/qa/out/signal-desk-prod/qa-report.md)); regressions
+preview `28/28` and legacy `37/37` unchanged. Real-backend probe: the page
+booted with `server.py` from the qualified `.venv` (Uvicorn up, the app's
+authenticated calls all 200, unauthenticated callers correctly 401,
+voice-status WebSocket open), the first-run consent gate appeared with a blank
+data root and blocked all navigation until a real click-through wrote a
+schema-correct `accepted: true` record, after which all sections navigated
+with zero console/page errors.
+
+**Decision:** Accept Gate 1. Wave 1 is complete; Waves 2 (Talk) and 3
+(Library domain semantics) open under D-0014.
+
+**Scope notes, recorded honestly:**
+
+- The consent scenarios drive the real durable gate — no production debug
+  handle exists; the preview's `window.__onboarding`-driven scenarios remain
+  preview-only.
+- Windows first-run consent has no evidence yet; per D-0009 platform claims
+  stay `unknown` until the Wave 12 qualification matrix runs it.
+- The QA harness first-run seam refuses to operate without an explicit
+  `BETTERFINGERS_DATA_DIR` override, so consent QA can never touch a real
+  profile; its auto-dismiss sentinel is single-shot so scenario order is not
+  load-bearing (supervisor-caught defect, fixed before handoff).
+- Same-environment screenshot determinism held: the persona-learning PNGs
+  were byte-identical across two runs on this machine, supporting D-0018's
+  environment-pinned baseline rule.
+- The collab Stop-hook sibling misattribution that cost worker cycles in both
+  Wave 1 lanes is root-caused and fixed: room-scoped `spawns.json` records
+  now filter on `spawned_by_sid` in `stop_report()` and `wait_for_activity()`.
