@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>BetterFingers key settings</title>
+  <style>
+    body { font: 13px system-ui, sans-serif; margin: 12px; color: #ddd; background: #2d2d2d; }
+    label { display: block; margin: 10px 0 4px; }
+    input { width: 100%; box-sizing: border-box; padding: 6px; background: #1c1c1c;
+            color: #eee; border: 1px solid #444; border-radius: 4px; }
+    .note { margin-top: 12px; color: #999; line-height: 1.5; }
+    .pair { border-top: 1px solid #444; margin-top: 16px; padding-top: 12px; }
+  </style>
+</head>
+<body>
+  <!--
+    Two things live here and nothing else: WHICH persona/preset/profile/workflow
+    a parameterised key means, and the pairing token.
+
+    There is deliberately no field that describes WORK. A key cannot be given a
+    command, a message, a path or a step list. `workflow.run` takes the id of a
+    workflow the user already approved inside BetterFingers; if they have not
+    approved it, BetterFingers refuses when the key is pressed and says so on
+    the key. That refusal is the feature.
+  -->
+  <label for="param">Which one (persona, preset, profile or workflow name)</label>
+  <input id="param" type="text" placeholder="e.g. True Janitor" />
+
+  <div class="note">
+    Only keys that need a choice use this. Dictation, commands, cancel, copy,
+    read, type and emergency stop take no setting.
+  </div>
+
+  <div class="pair">
+    <label for="token">Pairing code from BetterFingers</label>
+    <input id="token" type="password" placeholder="Settings &rarr; Devices &rarr; Stream Deck" />
+    <label for="origin">BetterFingers address</label>
+    <input id="origin" type="text" placeholder="http://127.0.0.1:8000" />
+    <div class="note">
+      The code is stored by the Stream Deck software for this plugin. BetterFingers
+      keeps only a fingerprint of it, so it is never written twice.
+    </div>
+  </div>
+
+  <script>
+    let socket = null;
+    let uuid = null;
+    let action = null;
+    let context = null;
+    let settings = {};
+
+    function save() {
+      settings.param = document.getElementById('param').value;
+      socket.send(JSON.stringify({ event: 'setSettings', context: uuid, payload: settings }));
+    }
+
+    function saveGlobal() {
+      socket.send(JSON.stringify({
+        event: 'setGlobalSettings',
+        context: uuid,
+        payload: {
+          token: document.getElementById('token').value,
+          origin: document.getElementById('origin').value || 'http://127.0.0.1:8000',
+        },
+      }));
+    }
+
+    // eslint-disable-next-line no-unused-vars
+    function connectElgatoStreamDeckSocket(inPort, inUUID, inRegisterEvent, inInfo, inActionInfo) {
+      uuid = inUUID;
+      const info = inActionInfo ? JSON.parse(inActionInfo) : {};
+      action = info.action;
+      context = info.context;
+      settings = (info.payload || {}).settings || {};
+
+      socket = new WebSocket('ws://127.0.0.1:' + inPort);
+      socket.onopen = () => {
+        socket.send(JSON.stringify({ event: inRegisterEvent, uuid: inUUID }));
+        socket.send(JSON.stringify({ event: 'getGlobalSettings', context: inUUID }));
+        document.getElementById('param').value = settings.param || '';
+      };
+      socket.onmessage = (event) => {
+        const message = JSON.parse(event.data);
+        if (message.event === 'didReceiveGlobalSettings') {
+          const global = (message.payload || {}).settings || {};
+          document.getElementById('token').value = global.token || '';
+          document.getElementById('origin').value = global.origin || '';
+        }
+      };
+
+      document.getElementById('param').addEventListener('change', save);
+      document.getElementById('token').addEventListener('change', saveGlobal);
+      document.getElementById('origin').addEventListener('change', saveGlobal);
+    }
+  </script>
+</body>
+</html>

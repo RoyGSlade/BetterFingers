@@ -51,8 +51,34 @@ const REQUIRED_API_METHODS = [
   'compileWorkflow',
   'saveWorkflow',
   'approveWorkflow',
-  'runWorkflow',
+  // Wave 10 / D-0027: running goes through the main-process executor, not
+  // through a route the renderer calls. A build whose bridge has no
+  // `executeWorkflow` cannot run anything, and this section should say so
+  // rather than offer a Run button that reports success and does nothing.
+  'executeWorkflow',
 ];
+
+/**
+ * One sentence for the user, from the executor's summary.
+ *
+ * Mirrors backend/services/action_validator.py's describe_run rule: never
+ * "done" unless every step is done. Launching two of three applications is a
+ * partial run, and saying "done" would be exactly the lie Wave 9 wrote its
+ * summariser to prevent.
+ */
+export function describeRun(summary) {
+  if (!summary || typeof summary !== 'object') {
+    return 'BetterFingers could not tell how that run went.';
+  }
+  const total = Number(summary.total) || 0;
+  const completed = Number(summary.completed) || 0;
+  if (total === 0) return 'That workflow had no steps to run.';
+  if (summary.ok && completed === total) {
+    return total === 1 ? 'Done — one step.' : `Done — all ${total} steps.`;
+  }
+  if (completed === 0) return `Nothing ran. None of the ${total} steps worked.`;
+  return `Partly done — ${completed} of ${total} steps.`;
+}
 
 /**
  * The closed vocabulary, mirrored from backend/domain/actions.py.
@@ -465,14 +491,26 @@ export function createWorkflowBuilderFeature({
     }
   }
 
+  /**
+   * Run, through the Wave 10 executor.
+   *
+   * Wave 9 called `POST /workflows/run` from here and then said "Running the
+   * steps in the order shown above" — which was not true, because nothing in the
+   * product could yet perform a step. D-0027 built the executor in the main
+   * process; this now hands it a workflow id and reports what actually happened.
+   *
+   * The renderer sends an ID and nothing else. The main process re-fetches,
+   * re-validates through the same gate, executes, and files the per-step codes,
+   * so the refusal shown here is still the backend's own sentence — it just
+   * arrives via the executor rather than from a call the renderer made itself.
+   */
   async function run() {
     if (!availability.available || !computeFlowState(state).canRun) return null;
     try {
-      const result = await api.runWorkflow(workflowId, validationContext());
+      const result = await api.executeWorkflow(workflowId);
       if (!result?.ok) {
-        // The backend refused at the gate. Show ITS reason: it knows things the
-        // renderer does not, such as the registry having changed underneath an
-        // approved workflow.
+        // Show the gate's reason: it knows things the renderer does not, such as
+        // the registry having changed underneath an approved workflow.
         setMessage(result?.reason || 'That workflow cannot run right now.', 'danger');
         if (Array.isArray(result?.refusals)) {
           refusals = result.refusals;
@@ -480,7 +518,7 @@ export function createWorkflowBuilderFeature({
         }
         return result;
       }
-      setMessage('Approved. Running the steps in the order shown above.', 'success');
+      setMessage(describeRun(result.summary), 'success');
       return result;
     } catch (error) {
       setMessage(`Could not run the workflow: ${error.message}`, 'danger');

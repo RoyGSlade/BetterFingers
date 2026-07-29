@@ -115,12 +115,57 @@ class SanitizeTests(unittest.TestCase):
         self.assertEqual(fields["match"]["window_patterns"], ["^ok$"])
 
     def test_unknown_binding_slots_are_dropped_and_reported(self):
+        """Wave 10 widened the slots to the shared input-action ids, so
+        `record_toggle` now MIGRATES to `dictation.toggle` rather than being kept
+        under its old name. It is not dropped: the user chose that button, and
+        silently forgetting it during an upgrade is worse than schema tidiness.
+        An unknown slot is still dropped and still reported."""
         fields, dropped = ap.sanitize_profile({
             "id": "x",
             "bindings": {"record_toggle": {"events": ["button:4"]}, "taunt": {}},
         })
-        self.assertEqual(set(fields["bindings"]), {"record_toggle"})
+        self.assertEqual(set(fields["bindings"]), {"dictation.toggle"})
+        self.assertEqual(fields["bindings"]["dictation.toggle"]["input"]["events"], ["button:4"])
         self.assertIn("bindings.taunt", dropped)
+
+    def test_the_per_application_layer_speaks_the_shared_action_vocabulary(self):
+        """Wave 10 deliverable 2: application-profile bindings live in the slot
+        Wave 7 reserved, in the SAME row shape the device and global layers use,
+        so one resolver folds all three."""
+        from backend.domain.input_actions import BINDABLE_ACTION_IDS
+
+        for action_id in BINDABLE_ACTION_IDS:
+            self.assertIn(action_id, ap.BINDING_SLOTS)
+
+        fields, dropped = ap.sanitize_profile({
+            "id": "x",
+            "bindings": {
+                "command.begin": {"mode": "hold", "input": {"style": "single", "events": ["button:5"]}},
+                "persona.activate": {"param": "True Janitor",
+                                     "input": {"style": "single", "events": ["button:6"]}},
+            },
+        })
+        row = fields["bindings"]["command.begin"]
+        self.assertEqual(row["action_id"], "command.begin")
+        self.assertEqual(row["mode"], "hold")
+        self.assertEqual(fields["bindings"]["persona.activate"]["param"], "True Janitor")
+        self.assertEqual(dropped, [])
+
+    def test_a_profile_binding_row_with_no_button_is_dropped_not_defaulted(self):
+        """A row that merely names an action must not silently claim button 4."""
+        fields, dropped = ap.sanitize_profile({
+            "id": "x", "bindings": {"dictation.begin": {"mode": "hold"}},
+        })
+        self.assertEqual(fields["bindings"], {})
+        self.assertIn("bindings.dictation.begin", dropped)
+
+    def test_a_profile_cannot_bind_a_release_half(self):
+        fields, dropped = ap.sanitize_profile({
+            "id": "x",
+            "bindings": {"dictation.end": {"input": {"style": "single", "events": ["button:1"]}}},
+        })
+        self.assertEqual(fields["bindings"], {})
+        self.assertIn("bindings.dictation.end", dropped)
 
     def test_normalize_profile_id_rejects_junk(self):
         self.assertEqual(ap.normalize_profile_id("Rocket League"), "rocket_league")

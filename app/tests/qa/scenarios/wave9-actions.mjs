@@ -78,6 +78,9 @@ let compileCalls = [];
 let saveCalls = [];
 let approveCalls = [];
 let runCalls = [];
+// Wave 10: the executor's per-step filing. Captured so a scenario can assert
+// that a run which reached the steps also reported them.
+let recordRunCalls = [];
 
 /**
  * A stateful workflow backend.
@@ -135,6 +138,27 @@ function workflowBackend({ compile = null, run = null, extra = {} } = {}) {
         }
         return { ok: true, workflow: record, preview_lines: [PREVIEW_LINE] };
       },
+      // Wave 10 / D-0027. Wave 9's flow ended at the gate because nothing could
+      // yet perform a step; the executor now runs the approved steps in the MAIN
+      // process and files the per-step codes here. The stub needs this route or
+      // an otherwise-successful run reports "could not tell how that went" —
+      // which would be the harness lying about the product rather than the
+      // product lying about the run.
+      'POST /workflows/run/record': (_req, { body }) => {
+        recordRunCalls.push(body);
+        const results = (body && body.results) || [];
+        const completed = results.filter((row) => row.status === 'ok').length;
+        const total = results.length;
+        return {
+          ok: true,
+          summary: {
+            ok: total > 0 && completed === total,
+            status: total > 0 && completed === total ? 'success' : 'partial',
+            completed,
+            total,
+          },
+        };
+      },
       ...extra,
     };
   };
@@ -145,6 +169,7 @@ function resetCaptures() {
   saveCalls = [];
   approveCalls = [];
   runCalls = [];
+  recordRunCalls = [];
 }
 
 async function openWorkflows(page) {

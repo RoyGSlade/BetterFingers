@@ -94,6 +94,40 @@ async def app_context_profiles_route():
     }
 
 
+class ProfileRequest(BaseModel):
+    """One profile document, as ``sanitize_profile`` will read it.
+
+    Deliberately typed as a free dict rather than field by field: the store's
+    ``PROFILE_FIELDS`` tuple is the one authority on what a profile may carry,
+    and a pydantic model listing the same fields would be a second one that can
+    disagree with it. Anything not in that tuple is DROPPED and REPORTED back --
+    which is how a caller trying to stash a recipient or a conversation summary
+    on a profile is told rather than believing it worked.
+    """
+
+    profile: dict
+
+
+@router.post("/app-context/profiles")
+async def app_context_save_profile_route(request: ProfileRequest):
+    """Create or replace one profile (Wave 10).
+
+    WHY THIS LANDS IN WAVE 10 AND NOT WAVE 7. Wave 7 shipped the profile store,
+    the schema and the read routes, and left writing to a later wave because
+    nothing yet needed to write one. Wave 10's game setup wizard does: the
+    per-application binding layer lives in ``profile["bindings"]``, so a wizard
+    that cannot save a profile cannot deliver deliverable 2 at all.
+
+    The response carries the store's ``dropped_fields`` verbatim. A UI that
+    ignores it is a UI that silently loses a field the user set, so it is
+    returned rather than logged.
+    """
+    result = _store().save(request.profile)
+    if not result.get("ok"):
+        _fail(result)
+    return result
+
+
 @router.post("/app-context/override")
 async def app_context_override_route(request: OverrideRequest):
     """Temporary override. Not persisted -- see the service's set_override."""

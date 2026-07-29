@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>BetterFingers</title>
+</head>
+<body>
+  <!--
+    The Stream Deck's JavaScript plugin host loads this page and calls the global
+    connectElgatoStreamDeckSocket that connect.js defines. Load order matters:
+    plugin.js publishes globalThis.BetterFingersStreamDeck, and connect.js reads
+    it at connect time.
+  -->
+  <script src="plugin.js"></script>
+  <script src="connect.js"></script>
+</body>
+</html>

@@ -675,3 +675,84 @@ against fields packed with shell metacharacters.
   assigned to Wave 11 polish; it cannot reach a launcher workflow.
 - Windows launch adapters are designed and mockable but unqualified, and
   say so in the plan object itself, not only in comments.
+
+## D-0028 — Gate 6 is accepted
+
+**Owner:** release-director
+
+**Evidence:** The Wave 6 lane handoff and integration; director-run: backend
+`2990 passed / 0 failed`, renderer `1288/1288`, production QA `71/71`,
+preview `28/28`, legacy `37/37`, build green.
+
+**Decision:** Accept Gate 6. The registry is complete in both directions —
+30 categories with real paths/size/wipe/verify callables (the Phase-2.1
+stubs are gone and a test forbids their return), reconciled against the
+filesystem with the report-cannot-lie-by-omission agreement test now also
+surfaced to the user as an unmapped-file warning. `_perform_privacy_wipe`
+is registry-driven with the quiescence protocol intact; the factory-reset
+executor finally exists behind the typed phrase `DELETE EVERYTHING`
+(never a boolean anywhere in the chain) and covers Python and Electron
+state; persona-learning gains its full disclosure surface; export reads
+`included_in_export` instead of ignoring it; and the D-0023 retroactive-
+contact affordance landed.
+
+**Ratified lane rulings:** persona_learning and contacts move to
+conversation-tier — the shipped wipe has ALWAYS deleted both, and
+declaring them personal-tier would have silently stopped clearing user
+text; the registry follows the code, not the other way. Any string the
+user typed sets `may_contain_user_text` (`stream_deck_config` True for
+its key titles, `controller_bindings` False as a closed-enum document).
+
+**Notable fixes accepted:** undeclared `.bak-v<N>`/`.corrupt` migration
+siblings — verbatim user text invisible to every wipe — now declared for
+all 14 versioned stores; verifications no longer create the files they
+check, with a byte-identical-directory test; the wipe tests' vacuous
+split-root arrangement fixed at `app_paths.resolve_base` with a
+declared-path-matches-store guard.
+
+**Recorded deferrals:** dedicated QA scenarios for the five new privacy
+Settings groups (unit-covered; the prod sweep's zero-console-error nav
+covers them indirectly) fold into Wave 11's audit; the legacy
+`index.html` privacy section keeps its copy-fix only, with Wave 11
+ruling whether the rollback surface needs more or an intentional cut.
+
+## D-0029 — Gate 10 is accepted (software); hardware stays unqualified
+
+**Owner:** release-director
+
+**Evidence:** The Wave 10 lane handoff, correction note, and integration;
+the same suite totals as D-0028, with the eight `wave10-input` scenarios
+green inside the `71/71` production board.
+
+**Decision:** Accept Gate 10's software contract. Controller reconnect,
+device-loss release through the SAME Wave 8 lease/broker path (no second
+release mechanism), bounce debounce, chord/sequence timing to the
+millisecond, the game-setup wizard whose test step drives a rehearsal
+dispatcher with no handlers (it cannot fire a send by construction), the
+Stream Deck plugin as a thin adapter owning no workflow definitions, and
+the D-0027 run executor as the launcher's only caller behind a
+workflow_id-only typed channel — all landed and tested. The dispatcher
+is wired to the same functions the HTTP routes call; `cancel_capture`
+and `inject_latest` are deliberately unset rather than second-implemented,
+reporting `unavailable` honestly.
+
+**Unqualified, stated plainly:** no controller or Stream Deck hardware is
+attached to this machine (pygame enumerates zero joysticks), so both
+device matrices remain UNQUALIFIED with the 16-step manual pass in
+WAVE10_QA.md as the operator's checklist — priority item: unplug the
+controller mid-dictation and confirm the microphone releases through the
+lease. `command.begin/end` and the two settings-activation actions
+report `unavailable` pending backend entry points; Wave 11's ledger
+resolves each as wired-later or intentional_cut. Accepted defects fixed
+in passing: the dead chord-window constant hiding real input lag, the
+phantom button-4 default, Wave 9's Run button claiming execution before
+an executor existed, and the Stream Deck store that could not read its
+own output.
+
+**Also recorded:** both lanes edited shared/integration-owned files
+directly this wave, coordinating the swaps between themselves through
+claims and the room rather than through documented diffs. The work
+arrived tested, cross-reviewed, and green, and the director reviewed it
+at integration — the discipline's purpose (serialized shared-file access
+with review) was served by a different mechanism, and this record keeps
+that deviation visible rather than silent.

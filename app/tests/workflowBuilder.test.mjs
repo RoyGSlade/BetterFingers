@@ -97,7 +97,7 @@ test('the feature reports itself unavailable when the api has no workflow method
 test('the feature is available when every required method exists', () => {
   const api = {
     fetchWorkflows() {}, compileWorkflow() {}, saveWorkflow() {},
-    approveWorkflow() {}, runWorkflow() {},
+    approveWorkflow() {}, executeWorkflow() {},
   };
   assert.equal(computeAvailability(api).available, true);
 });
@@ -231,7 +231,9 @@ function fakeApi(overrides = {}) {
     async approveWorkflow() {
       return { ok: true, workflow: { id: 'studio_setup', approved: true, enabled: true } };
     },
-    async runWorkflow() { return { ok: true }; },
+    async executeWorkflow() {
+      return { ok: true, summary: { ok: true, status: 'success', total: 1, completed: 1 } };
+    },
     async fetchWorkflowHistory() { return { history: [] }; },
     ...overrides,
   };
@@ -343,7 +345,7 @@ test('a run the backend refuses shows the backend reason rather than claiming su
   const feature = createWorkflowBuilderFeature({
     elements,
     api: fakeApi({
-      async runWorkflow() {
+      async executeWorkflow() {
         return { ok: false, error: 'preview_changed', reason: 'What this workflow would do has changed since you approved it.' };
       },
     }),

@@ -1,0 +1,109 @@
+{
+  "SDKVersion": 2,
+  "Author": "BetterFingers",
+  "Name": "BetterFingers",
+  "Description": "Put BetterFingers dictation, commands, personas and approved workflows on your Stream Deck. The plugin is a thin adapter: it holds no workflow definitions and can only ask BetterFingers to do things BetterFingers already does.",
+  "Category": "BetterFingers",
+  "CategoryIcon": "images/category",
+  "Icon": "images/plugin",
+  "URL": "https://github.com/betterfingers/betterfingers",
+  "Version": "0.1.0",
+  "CodePath": "src/plugin.html",
+  "PropertyInspectorPath": "pi/index.html",
+  "OS": [
+    { "Platform": "linux", "MinimumVersion": "0" },
+    { "Platform": "windows", "MinimumVersion": "10" },
+    { "Platform": "mac", "MinimumVersion": "11" }
+  ],
+  "Software": { "MinimumVersion": "6.0" },
+  "Actions": [
+    {
+      "UUID": "com.betterfingers.streamdeck.dictation.begin",
+      "Name": "Hold to dictate",
+      "Tooltip": "Hold the key to record what you say as text; let go to stop.",
+      "Icon": "images/dictate",
+      "States": [{ "Image": "images/dictate", "TitleAlignment": "bottom" }]
+    },
+    {
+      "UUID": "com.betterfingers.streamdeck.dictation.toggle",
+      "Name": "Start or stop dictation",
+      "Tooltip": "Press to start, press again to stop.",
+      "Icon": "images/dictate",
+      "States": [{ "Image": "images/dictate", "TitleAlignment": "bottom" }]
+    },
+    {
+      "UUID": "com.betterfingers.streamdeck.command.begin",
+      "Name": "Hold to give a command",
+      "Tooltip": "A separate key from dictation, on purpose: a key that meant both could issue a command you were only trying to say.",
+      "Icon": "images/command",
+      "States": [{ "Image": "images/command", "TitleAlignment": "bottom" }]
+    },
+    {
+      "UUID": "com.betterfingers.streamdeck.capture.cancel",
+      "Name": "Cancel",
+      "Tooltip": "Throw away what is being captured right now. Nothing is kept.",
+      "Icon": "images/cancel",
+      "States": [{ "Image": "images/cancel", "TitleAlignment": "bottom" }]
+    },
+    {
+      "UUID": "com.betterfingers.streamdeck.latest.read",
+      "Name": "Read the latest draft aloud",
+      "Tooltip": "Hear the most recent draft without looking.",
+      "Icon": "images/read",
+      "States": [{ "Image": "images/read", "TitleAlignment": "bottom" }]
+    },
+    {
+      "UUID": "com.betterfingers.streamdeck.latest.copy",
+      "Name": "Copy the latest draft",
+      "Tooltip": "Put the most recent draft on the clipboard.",
+      "Icon": "images/copy",
+      "States": [{ "Image": "images/copy", "TitleAlignment": "bottom" }]
+    },
+    {
+      "UUID": "com.betterfingers.streamdeck.latest.inject",
+      "Name": "Type the latest draft",
+      "Tooltip": "Deliver the most recent draft to whatever window has focus.",
+      "Icon": "images/inject",
+      "States": [{ "Image": "images/inject", "TitleAlignment": "bottom" }]
+    },
+    {
+      "UUID": "com.betterfingers.streamdeck.persona.activate",
+      "Name": "Switch persona",
+      "Tooltip": "Switch to a persona you already made. Choose which one in the key's settings.",
+      "Icon": "images/persona",
+      "PropertyInspectorPath": "pi/index.html",
+      "States": [{ "Image": "images/persona", "TitleAlignment": "bottom" }]
+    },
+    {
+      "UUID": "com.betterfingers.streamdeck.writing_preset.activate",
+      "Name": "Switch writing preset",
+      "Tooltip": "Switch to a writing preset you already made.",
+      "Icon": "images/preset",
+      "PropertyInspectorPath": "pi/index.html",
+      "States": [{ "Image": "images/preset", "TitleAlignment": "bottom" }]
+    },
+    {
+      "UUID": "com.betterfingers.streamdeck.application_profile.activate",
+      "Name": "Switch application profile",
+      "Tooltip": "Use a specific application profile until you switch again.",
+      "Icon": "images/profile",
+      "PropertyInspectorPath": "pi/index.html",
+      "States": [{ "Image": "images/profile", "TitleAlignment": "bottom" }]
+    },
+    {
+      "UUID": "com.betterfingers.streamdeck.workflow.run",
+      "Name": "Run a saved workflow",
+      "Tooltip": "Run a workflow you already approved in BetterFingers. This key cannot create one.",
+      "Icon": "images/workflow",
+      "PropertyInspectorPath": "pi/index.html",
+      "States": [{ "Image": "images/workflow", "TitleAlignment": "bottom" }]
+    },
+    {
+      "UUID": "com.betterfingers.streamdeck.emergency.stop",
+      "Name": "Emergency stop",
+      "Tooltip": "Stop everything now: recording, speech, and typing.",
+      "Icon": "images/stop",
+      "States": [{ "Image": "images/stop", "TitleAlignment": "bottom" }]
+    }
+  ]
+}

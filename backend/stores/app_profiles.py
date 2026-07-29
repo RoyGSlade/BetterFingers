@@ -90,11 +90,28 @@ INJECTION_POLICIES = ("auto", "type", "paste", "clipboard_only", "review_only")
 
 # Controller binding slots a profile may address.
 #
-# Exactly one, because exactly one exists: hotkey_manager holds a single
-# InputBinding (``controller_binding``) that starts/stops recording. Listing
-# aspirational slots here would be inventing a controller subsystem in a schema
-# and shipping the invention as configuration.
-BINDING_SLOTS = ("record_toggle",)
+# WAVE 7 RESERVED THE SLOT; WAVE 10 FILLS IT. When this store was written the
+# only thing a controller could do was start and stop recording, so listing more
+# slots would have been inventing a subsystem in a schema. Wave 10 built that
+# subsystem, so the slot names are now exactly the shared input-action ids that
+# a controller or a Stream Deck can be bound to -- the same vocabulary, not a
+# parallel one. This is the "use them, don't fork" requirement: the per-
+# application binding layer lives HERE, on the profile the user already opens to
+# say "behave differently in this game", and ``controller_bindings.resolve_bindings``
+# folds it over the device and global layers.
+#
+# ``record_toggle`` survives as a legacy alias so a profile written by Wave 7
+# keeps working; it means ``dictation.toggle``.
+LEGACY_BINDING_SLOTS = {"record_toggle": "dictation.toggle"}
+
+
+def _binding_slots() -> tuple:
+    from backend.domain.input_actions import BINDABLE_ACTION_IDS
+
+    return tuple(BINDABLE_ACTION_IDS) + tuple(LEGACY_BINDING_SLOTS)
+
+
+BINDING_SLOTS = _binding_slots()
 
 MAX_ID_LEN = 64
 MAX_NAME_LEN = 120
@@ -164,17 +181,33 @@ def _clean_patterns(value) -> list:
 
 
 def _clean_bindings(value) -> tuple[dict, list]:
-    """Keep only slots that exist. Returns (bindings, dropped_slot_names)."""
+    """Keep only slots that exist, as full binding rows.
+
+    Returns ``(bindings, dropped_slot_names)``. A kept row has the SAME shape the
+    device and global layers use -- ``{action_id, mode, param, input}`` -- so
+    ``controller_bindings.resolve_bindings`` can fold all three layers together
+    with one sanitiser and one notion of what a binding is. Storing a bare
+    ``InputBinding`` here instead (which is what Wave 7's placeholder did) would
+    mean the per-application layer could not express ``hold`` or carry the
+    parameter that ``persona.activate`` needs, and the resolver would have to
+    know which layer a row came from to read it.
+
+    A legacy ``record_toggle`` slot is rewritten to ``dictation.toggle`` rather
+    than dropped: the user chose that button, and silently forgetting it during
+    an upgrade is worse than any schema tidiness.
+    """
     if not isinstance(value, dict):
         return {}, []
-    from input_binding import InputBinding
+    from backend.stores.controller_bindings import sanitize_binding
 
     bindings, dropped = {}, []
     for slot, spec in value.items():
-        if slot not in BINDING_SLOTS:
+        action_id = LEGACY_BINDING_SLOTS.get(slot, slot)
+        row, _reason = sanitize_binding(action_id, spec)
+        if row is None:
             dropped.append(f"bindings.{slot}")
             continue
-        bindings[slot] = InputBinding.from_dict(spec if isinstance(spec, dict) else None).to_dict()
+        bindings[row["action_id"]] = row
     return bindings, dropped
 
 

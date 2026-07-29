@@ -11,6 +11,8 @@
 - **Gate 7:** **ACCEPTED (2026-07-28, release-director, D-0024)**
 - **Gate 8:** **ACCEPTED (2026-07-28, release-director, D-0026 — live-qualified on PipeWire)**
 - **Gate 9:** **ACCEPTED (2026-07-28, release-director, D-0027)**
+- **Gate 6:** **ACCEPTED (2026-07-28, release-director, D-0028)**
+- **Gate 10:** **ACCEPTED — software (2026-07-28, D-0029); hardware matrices unqualified pending operator pass**
 - **Last updated:** 2026-07-28
 
 Statuses: `DONE`, `IN PROGRESS`, `BLOCKED`, `PENDING`, `CUT`.
@@ -111,12 +113,12 @@ Wave 1 follow-ups recorded: factory-reset executor exists nowhere (Wave 6 backlo
 | 3 | Library domain semantics | Gate 1 contracts | `DONE` |
 | 4 | Library UI completion | Gate 3 | `DONE` |
 | 5 | Studio, contacts/audience, Settings | Gates 1–2 | `DONE` |
-| 6 | Privacy/data lifecycle closure | Final store set from Waves 3/5/7/8/9/10 | `BLOCKED` |
+| 6 | Privacy/data lifecycle closure | Final store set from Waves 3/5/7/8/9/10 | `DONE` |
 | 7 | Application context/profiles | Gate 1 | `DONE` |
 | 8 | Audio privacy and wake hardening | AudioInputBroker before isolation/handoff | `DONE` |
 | 9 | Restricted action engine | Approved action schema | `DONE` (run executor follows with Wave 10) |
-| 10 | Controller and Stream Deck | Shared action IDs from Waves 2/9 | `BLOCKED` |
-| 11 | Strict 438-item parity closure, version, default flip | Gates 1–10 | `BLOCKED` |
+| 10 | Controller and Stream Deck | Shared action IDs from Waves 2/9 | `DONE` (software; hardware pass = operator checklist WAVE10_QA.md) |
+| 11 | Strict 438-item parity closure, version, default flip | Gates 1–10 | `IN PROGRESS` |
 | 12 | Windows/Linux package qualification | Gate 11 | `BLOCKED` |
 | 13 | Source Arcanum publication | Gates 0–12 | `BLOCKED` |
 | 14 | One-release legacy cleanup and later backend split | One completed Signal Desk release | `BLOCKED` |
