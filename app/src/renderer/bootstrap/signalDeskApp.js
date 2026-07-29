@@ -945,26 +945,52 @@ export function startSignalDeskApp(doc = document) {
   // the fetched draft. A bare drafts refresh renders the text but leaves the
   // action row dead until the first voice-status message — visible to any
   // user who restarts with a pending draft.
-  talkWorkspace.refresh().catch(() => {});
-  libraryWorkspace.refresh().catch(() => {});
-  refreshOutputSettings().catch(() => {});
-  refreshProfileSettings().catch(() => {});
-  studioWorkspace.refresh().catch(() => {});
-  utilitiesWorkspace.refreshAll().catch(() => {});
-  settingsWorkspace.refreshAll().catch(() => {});
-  refreshPersonasAndVoices().catch(() => {});
-  refreshContactsAndShare()
-    .then(() => api.fetchActiveContact())
-    .then((active) => {
-      contacts.setSelected(active?.contact_id || '');
-      statusBar.setContact(contacts.getSelected());
-    })
-    .catch(() => {});
+  function populateInitialData() {
+    talkWorkspace.refresh().catch(() => {});
+    libraryWorkspace.refresh().catch(() => {});
+    refreshOutputSettings().catch(() => {});
+    refreshProfileSettings().catch(() => {});
+    studioWorkspace.refresh().catch(() => {});
+    utilitiesWorkspace.refreshAll().catch(() => {});
+    settingsWorkspace.refreshAll().catch(() => {});
+    refreshPersonasAndVoices().catch(() => {});
+    refreshContactsAndShare()
+      .then(() => api.fetchActiveContact())
+      .then((active) => {
+        contacts.setSelected(active?.contact_id || '');
+        statusBar.setContact(contacts.getSelected());
+      })
+      .catch(() => {});
+  }
+  populateInitialData();
+
+  // The window is up seconds before the Python sidecar accepts connections, so
+  // the population above can lose that race wholesale: every loader swallows
+  // its error and none of them re-fire on their own — only the panels with
+  // their own 3s poll (status bar, banner, app-context) ever recovered, which
+  // left profiles, personas, settings and every list empty until a manual
+  // refresh. Watch /health on the same cadence and re-populate on each
+  // down->up transition; that heals the cold-start race and a mid-session
+  // backend restart alike.
+  let backendWasHealthy = false;
+  const initialPopulateInterval = setInterval(() => {
+    api.fetchHealth()
+      .then(() => {
+        if (!backendWasHealthy) {
+          backendWasHealthy = true;
+          populateInitialData();
+        }
+      })
+      .catch(() => {
+        backendWasHealthy = false;
+      });
+  }, 3000);
 
   return {
     destroy() {
       clearInterval(statusBarInterval);
       clearInterval(backendBannerInterval);
+      clearInterval(initialPopulateInterval);
       applicationProfiles.destroy?.();
       voiceStatusConnection.close?.();
       talkWorkspace.destroy?.();

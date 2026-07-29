@@ -46,7 +46,28 @@ def _estimate_llm_runtime_mb(model_id):
     return _estimate_runtime_mb(size_mb) if size_mb else 0
 
 # --- Configuration ---
-SIDECAR_PORT = 8080
+def _resolve_sidecar_port():
+    """Loopback port for the llama-server sidecar.
+
+    Not 8080: half the dev tools in the world default to it (proxies, tunnel
+    daemons, other local servers). When something else holds the port,
+    llama-server dies at bind time ("exiting due to HTTP server error") and
+    every LLM feature fails — so the default stays out of that traffic and
+    BETTERFINGERS_LLAMA_PORT overrides it for setups that need a specific one.
+    """
+    raw = os.getenv("BETTERFINGERS_LLAMA_PORT", "").strip()
+    if raw:
+        try:
+            port = int(raw)
+            if 1 <= port <= 65535:
+                return port
+        except ValueError:
+            pass
+        logging.warning(f"Ignoring invalid BETTERFINGERS_LLAMA_PORT={raw!r}; using 18080.")
+    return 18080
+
+
+SIDECAR_PORT = _resolve_sidecar_port()
 CHUNK_SIZE = 2000
 DEFAULT_MAX_OUTPUT_TOKENS = 1100
 # Assumed generation speed for sizing the HTTP read timeout. Deliberately
@@ -1772,10 +1793,18 @@ _init_lock = threading.Lock()
 
 
 def is_server_running():
-    """Check if llama-server is already responding on our port."""
+    """Check if a ready llama-server is responding on our port.
+
+    Requires llama-server's own health shape ({"status": "ok"}), not just any
+    200: a foreign service squatting on the port must never be "reused" as the
+    LLM engine, or chat requests would be sent into something that cannot
+    answer them.
+    """
     try:
         response = requests.get(f"http://127.0.0.1:{SIDECAR_PORT}/health", timeout=2)
-        return response.status_code == 200
+        if response.status_code != 200:
+            return False
+        return str(response.json().get("status", "")).lower() == "ok"
     except Exception:
         return False
 
