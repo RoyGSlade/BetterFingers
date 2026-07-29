@@ -122,6 +122,15 @@ TASK_SAFE_ALLOWED_TOOLS = (
     # through a pytest plugin because these two were missing).
     "Bash(.venv/bin/python -m pytest *)",
     "Bash(.venv/bin/python -m py_compile *)",
+    # Repo tooling and the Electron QA runner. Wave 11C finding: a lane asked
+    # to make a QA area pass standalone could not run that area at all, and a
+    # lane owning a generated ledger could not invoke its own generator except
+    # through `python3 -` stdin. Verification a lane cannot perform is
+    # verification the director inherits by default.
+    "Bash(python3 tools/*)",
+    "Bash(node tests/qa/run.mjs *)",
+    "Bash(node app/tests/qa/run.mjs *)",
+    "Bash(npm --prefix app run *)",
     "Bash(npm test *)",
     "Bash(npm run test *)",
     # `npm run test *` only matches a script literally named "test"; this
