@@ -194,53 +194,99 @@ export function createRuntimeFeature({ elements, ui, hooks }) {
     }
   }
 
-  async function loadInitialData() {
-    const results = await Promise.allSettled([
-      refreshRuntime().catch(() => {
+  // Every panel the initial load fans out to, by name. `pendingInitialLoaders`
+  // holds the names that have not succeeded yet: the health poll retries
+  // exactly those, so a panel that lost the startup race (models, doctor,
+  // drafts…) heals on a later poll instead of staying empty until the user
+  // manually refreshes it — previously only a profiles failure ever triggered
+  // a retry, and it re-ran the whole load.
+  const initialLoaders = [
+    {
+      name: 'runtime',
+      run: () => refreshRuntime(),
+      onError: () => {
         setBadgeState(els.transcriberStatusEl, 'offline', 'danger');
         setBadgeState(els.llmStatusEl, 'offline', 'danger');
         renderDetailList(els.runtimeStatusListEl, {});
-        throw new Error('runtime');
-      }),
-      refreshCapabilities().catch(() => {
+      },
+    },
+    {
+      name: 'capabilities',
+      run: () => refreshCapabilities(),
+      onError: () => {
         renderDetailList(els.capabilitiesListEl, {});
-        throw new Error('capabilities');
-      }),
-      refreshDrafts().catch(() => {
+      },
+    },
+    {
+      name: 'drafts',
+      run: () => refreshDrafts(),
+      onError: () => {
         renderDraft(null);
-        throw new Error('drafts');
-      }),
-      refreshOutputSettings().catch(() => {
+      },
+    },
+    {
+      name: 'output-settings',
+      run: () => refreshOutputSettings(),
+      onError: () => {
         if (els.outputSettingsSummaryEl) {
           els.outputSettingsSummaryEl.textContent = 'Output settings unavailable.';
         }
-        throw new Error('output-settings');
-      }),
-      refreshProfiles().catch((error) => {
+      },
+    },
+    {
+      name: 'profiles',
+      run: () => refreshProfiles(),
+      onError: (error) => {
         setMessage(els.profileMessageEl, `Profiles unavailable: ${error.message}`, 'danger');
-        throw error;
-      }),
-      refreshModels().catch((error) => {
+      },
+    },
+    {
+      name: 'models',
+      run: () => refreshModels(),
+      onError: (error) => {
         setMessage(els.modelMessageEl, `Models unavailable: ${error.message}`, 'danger');
-        throw error;
-      }),
-      refreshDiagnostics().catch(() => {
-        throw new Error('diagnostics');
-      }),
-      refreshDoctor().catch(() => {
-        throw new Error('doctor');
-      }),
-      refreshSidecarLogs().catch(() => {
-        throw new Error('sidecar-logs');
-      }),
-      refreshPttAvailability().catch(() => {
-        throw new Error('ptt-availability');
-      }),
-    ]);
+      },
+    },
+    { name: 'diagnostics', run: () => refreshDiagnostics() },
+    { name: 'doctor', run: () => refreshDoctor() },
+    { name: 'sidecar-logs', run: () => refreshSidecarLogs() },
+    { name: 'ptt-availability', run: () => refreshPttAvailability() },
+  ];
+  const pendingInitialLoaders = new Set(initialLoaders.map((loader) => loader.name));
+  let initialLoadInFlight = false;
+
+  async function loadInitialData({ onlyPending = false } = {}) {
+    // A pass can outlive the 3s poll interval (chained request timeouts), so
+    // overlapping passes would stampede the same endpoints. Skip instead.
+    if (initialLoadInFlight) {
+      return initialDataLoaded;
+    }
+    if (!onlyPending) {
+      for (const loader of initialLoaders) {
+        pendingInitialLoaders.add(loader.name);
+      }
+    }
+    const toRun = initialLoaders.filter((loader) => pendingInitialLoaders.has(loader.name));
+    if (!toRun.length) {
+      return initialDataLoaded;
+    }
+    initialLoadInFlight = true;
+    try {
+      await Promise.allSettled(toRun.map((loader) =>
+        loader.run()
+          .then(() => {
+            pendingInitialLoaders.delete(loader.name);
+          })
+          .catch((error) => {
+            loader.onError?.(error);
+          }),
+      ));
+    } finally {
+      initialLoadInFlight = false;
+    }
     // Consider the load a success only if the profile settings actually loaded —
     // that's what backs the settings form (and its save-blocking validation).
-    const profilesResult = results[4];
-    initialDataLoaded = profilesResult.status === 'fulfilled';
+    initialDataLoaded = !pendingInitialLoaders.has('profiles');
     return initialDataLoaded;
   }
 
@@ -255,10 +301,10 @@ export function createRuntimeFeature({ elements, ui, hooks }) {
         setBadgeState(els.transcriberStatusEl, 'offline', 'danger');
         setBadgeState(els.llmStatusEl, 'offline', 'danger');
       });
-      // Fallback: if the startup race left us un-loaded and we never caught the
-      // sidecar 'ready' push, retry the load as soon as a poll succeeds.
-      if (!initialDataLoaded) {
-        loadInitialData().catch(() => {});
+      // Fallback: if the startup race left any panel un-loaded and we never
+      // caught the sidecar 'ready' push, retry exactly those panels each poll.
+      if (pendingInitialLoaders.size) {
+        loadInitialData({ onlyPending: true }).catch(() => {});
       }
     };
 
