@@ -878,6 +878,11 @@ anchors.
   counted as evidence, and the reachability of the overlay windows rests
   instead on `production-page-drives-both-overlay-windows`, which passed on
   every run.
+  **Update (2026-07-29):** it now fails inside the full board as well
+  (`96/97`, empty rewrite capture). So this is not merely order dependence —
+  the scenario is genuinely broken, and the earlier board passes were the
+  lucky side of a race. Still not counted as evidence; it needs a real fix,
+  not a rerun.
 - Two rows (`UI-12-008`, `UI-15-007`) assert *negative* properties — "no
   backend calls", "no donation prompt exists anywhere" — which have no handle
   by construction. They need a director ruling in Wave 12, not a ledger row.
