@@ -74,6 +74,25 @@ _isolated = tempfile.mkdtemp(prefix="betterfingers-tests-")
 for _var in ("XDG_DATA_HOME", "XDG_CONFIG_HOME", "APPDATA"):
     os.environ[_var] = _isolated
 
+# NOT pinned here: BETTERFINGERS_DATA_DIR. It was tried (2026-07-28) as a
+# belt-and-braces session-wide pin, on the reasoning that it is the FIRST rule
+# app_paths.resolve_base() checks and would therefore hold even if a later
+# branch were wrong. Measured result: 43 failures across 12 files.
+#
+# The reason is structural, not incidental. ~40 test modules isolate themselves
+# by re-pointing APPDATA at their own per-test temp dir. A session-wide
+# BETTERFINGERS_DATA_DIR out-ranks every one of them, so they all collapse onto
+# ONE shared root and leak state into each other — test_voice_presets alone went
+# from 28 passing to 8 failing with "3 != 1" preset counts, because every test
+# in the file was writing into the same file. A pin that silently destroys
+# per-test isolation buys nothing: it protects the real root by breaking the
+# thing that was already protecting it.
+#
+# The protection that does work is _forbid_real_data_root() below, which checks
+# the ANSWER rather than trusting any environment variable, and so cannot be
+# out-ranked or forgotten. Tests wanting an explicit root use the
+# `isolated_data_root` fixture, which sets both vars together.
+
 # keep-loaded defaults to True for LLM/STT (server.warm_start_resident_models),
 # so even a pristine profile warm-loads real multi-GB models on every server
 # TestClient startup. Seed the isolated profile with residency off; tests that
@@ -86,6 +105,82 @@ with open(os.path.join(_profiles, "Default.yaml"), "w") as _fh:
         "model_keep_stt_loaded: false\n"
         "model_keep_tts_loaded: false\n"
     )
+
+
+def _temp_roots():
+    """Every prefix a test is allowed to resolve a data root under."""
+    roots = {os.path.realpath(tempfile.gettempdir()), os.path.realpath(_isolated)}
+    # Honour the platform temp vars too — CI and sandboxes re-point these, and
+    # a guard that fired on a legitimately-isolated root would be worse than no
+    # guard at all, because the first fix would be to delete it.
+    for var in ("TMPDIR", "TEMP", "TMP", "PYTEST_DEBUG_TEMPROOT"):
+        value = os.environ.get(var)
+        if value:
+            roots.add(os.path.realpath(value))
+    return roots
+
+
+def _is_under_temp(path):
+    resolved = os.path.realpath(str(path))
+    return any(resolved == root or resolved.startswith(root + os.sep)
+               for root in _temp_roots())
+
+
+@pytest.fixture(autouse=True)
+def _forbid_real_data_root(monkeypatch):
+    """Fail loudly if a test ever resolves a data root outside a temp dir.
+
+    The suite contains genuinely destructive coverage — privacy wipe, factory
+    reset, store migration — and those tests delete whatever
+    ``app_paths.resolve_base()`` hands them. Isolation is currently spread
+    across four environment variables set at import time, ~40 test modules that
+    re-point APPDATA at their own temp dirs, and every branch of the resolver
+    agreeing to honour them. Any one of those going wrong points a recursive
+    delete at a real install, and the failure is silent: the test still passes,
+    because it deleted exactly what it was asked to delete.
+
+    So this does not trust the environment. It wraps the resolver itself and
+    checks the ANSWER, which is the only thing that actually matters. A test
+    that reaches a real root now fails with a message naming the path, instead
+    of quietly destroying it.
+    """
+    import app_paths
+
+    real_resolve = app_paths.resolve_base
+
+    def guarded_resolve_base():
+        base = real_resolve()
+        if not _is_under_temp(base):
+            raise RuntimeError(
+                "REFUSING to run a test against a real data root.\n"
+                f"  app_paths.resolve_base() returned: {base}\n"
+                f"  allowed temp prefixes:            {sorted(_temp_roots())}\n"
+                "  BETTERFINGERS_DATA_DIR="
+                f"{os.environ.get('BETTERFINGERS_DATA_DIR')!r}\n"
+                f"  APPDATA={os.environ.get('APPDATA')!r}\n"
+                "This suite deletes what it resolves (privacy wipe / factory "
+                "reset / migration). If this test needs its own root, point "
+                "BETTERFINGERS_DATA_DIR at a tmp_path — do not remove this guard."
+            )
+        return base
+
+    monkeypatch.setattr(app_paths, "resolve_base", guarded_resolve_base)
+    yield
+
+
+@pytest.fixture
+def isolated_data_root(tmp_path, monkeypatch):
+    """Point every data-root lookup at this test's own tmp_path.
+
+    Sets BETTERFINGERS_DATA_DIR (the highest-priority rule) alongside APPDATA,
+    so a test cannot end up half-redirected — which is what happens when a test
+    sets only APPDATA while conftest's session pin is still in force.
+    """
+    root = tmp_path / "BetterFingers"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("BETTERFINGERS_DATA_DIR", str(root))
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    return root
 
 
 @pytest.fixture(autouse=True)

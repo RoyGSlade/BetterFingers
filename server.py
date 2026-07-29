@@ -5759,10 +5759,29 @@ _controller_thread_stop = threading.Event()
 
 def _controller_poll_loop():
     pygame_module = _pygame_or_none()
+    if pygame_module is None:
+        return
+    # SDL's joystick subsystem must be initialised before any device can be
+    # enumerated. Without this the poll thread died on its first
+    # refresh_devices() with "joystick system not initialized", taking
+    # controller support with it while the app looked healthy — the failure
+    # was a dead daemon thread and a stack trace in the log, nothing a user
+    # would see. Init here rather than at import so a headless or
+    # joystick-less build never pays for it.
+    try:
+        pygame_module.init()
+        pygame_module.joystick.init()
+    except Exception as exc:
+        logging.info("Controller support unavailable (SDL joystick init failed: %s)", exc)
+        return
     source = PygameEventSource(_CONTROLLER_ENGINE, pygame_module=pygame_module)
     if not source.available:
         return
-    source.refresh_devices()
+    try:
+        source.refresh_devices()
+    except Exception as exc:
+        logging.info("Controller enumeration failed; controller input is off: %s", exc)
+        return
     while not _controller_thread_stop.is_set():
         for event in pygame_module.event.get():
             source.handle(event)
