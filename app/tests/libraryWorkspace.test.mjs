@@ -30,6 +30,7 @@ import {
   collectLibraryElements,
   createLibraryWorkspaceFeature,
 } from '../src/renderer/features/libraryWorkspace.js';
+import { makeDocument, installDomGlobals } from './helpers/rendererDom.mjs';
 
 const NOW = new Date(2026, 6, 24, 12, 0, 0); // Fri Jul 24 2026, noon local time
 
@@ -819,6 +820,145 @@ test('recordings failing does not blank the timeline, and does not claim "none r
   const { feature } = makeFeature({ api });
   await feature.refresh();
   assert.equal(feature.getVisibleItems().length, 1);
+});
+
+// --- Wave 12 collab task B: a repopulate must not discard a staged, --------
+// unapplied contact-picker choice on the item the user is still looking at.
+
+test('the contact picker keeps a staged, unapplied choice when the same item repopulates mid-session', async () => {
+  const doc = makeDocument(['selectedContactPicker']);
+  const restore = installDomGlobals({ document: doc, betterFingers: {} });
+  try {
+    const api = recordingApi({
+      librarySearch: () => Promise.resolve({ ok: true, results: [draftRecord({ id: 9, contact_id: 'c1' })], total: 1 }),
+    });
+    const elements = { ...stubElements(), selectedContactPicker: doc.getElementById('selectedContactPicker') };
+    const { feature } = makeFeature({ api, elements });
+    feature.setContacts([{ id: 'c1', name: 'Alex' }, { id: 'c2', name: 'Sam' }]);
+    await feature.loadPage();
+    feature.selectItem('draft-9');
+
+    const picker = elements.selectedContactPicker;
+    assert.equal(picker.value, 'c1', 'sanity: rebuilt to the persisted contact');
+
+    // The user opens the dropdown and picks someone else, but has not clicked
+    // Apply yet -- nothing has been sent to the backend.
+    picker.value = 'c2';
+
+    // A cold-start/health-poll repopulate re-fetches and re-renders the SAME
+    // item (bootstrap/signalDeskApp.js re-calls libraryWorkspace.refresh() on
+    // every backend down->up transition).
+    await feature.loadPage();
+
+    assert.equal(picker.value, 'c2', 'an unapplied dropdown change must survive a repopulate of the same item');
+  } finally {
+    restore();
+  }
+});
+
+test('the contact picker resets normally once a genuinely different item is selected', async () => {
+  const doc = makeDocument(['selectedContactPicker']);
+  const restore = installDomGlobals({ document: doc, betterFingers: {} });
+  try {
+    const api = recordingApi({
+      librarySearch: () => Promise.resolve({
+        ok: true,
+        results: [draftRecord({ id: 9, contact_id: 'c1' }), draftRecord({ id: 10, contact_id: '' })],
+        total: 2,
+      }),
+    });
+    const elements = { ...stubElements(), selectedContactPicker: doc.getElementById('selectedContactPicker') };
+    const { feature } = makeFeature({ api, elements });
+    feature.setContacts([{ id: 'c1', name: 'Alex' }, { id: 'c2', name: 'Sam' }]);
+    await feature.loadPage();
+    feature.selectItem('draft-9');
+    elements.selectedContactPicker.value = 'c2'; // staged, unapplied on item 9
+
+    feature.selectItem('draft-10');
+    assert.equal(
+      elements.selectedContactPicker.value, '',
+      "switching to a different item must not carry over the previous item's staged value",
+    );
+  } finally {
+    restore();
+  }
+});
+
+// --- Wave 12 collab task A: retry-once + keep-last-good on a real failure ---
+
+test('loadPage retries once before giving up on a slow/failed first response', async () => {
+  let attempts = 0;
+  const api = recordingApi({
+    librarySearch: () => {
+      attempts += 1;
+      return attempts === 1
+        ? Promise.reject(new Error('socket hang up'))
+        : Promise.resolve({ ok: true, results: [draftRecord()], total: 1 });
+    },
+  });
+  const { feature } = makeFeature({ api });
+  await feature.loadPage();
+  assert.equal(attempts, 2, 'a slow first response must be retried once, not surfaced as a permanent failure');
+  assert.equal(feature.getVisibleItems().length, 1);
+});
+
+test('a refresh that fails AFTER a good page was already showing keeps that page on screen', async () => {
+  let call = 0;
+  const api = recordingApi({
+    librarySearch: () => {
+      call += 1;
+      if (call <= 1) return Promise.resolve({ ok: true, results: [draftRecord()], total: 1 });
+      // Every attempt from here on fails -- exhausts the retry too.
+      return Promise.reject(new Error('socket hang up'));
+    },
+  });
+  const { feature } = makeFeature({ api });
+  await feature.loadPage();
+  assert.equal(feature.getVisibleItems().length, 1, 'sanity: the first load succeeded');
+
+  await feature.loadPage();
+  assert.equal(
+    feature.getVisibleItems().length, 1,
+    'a later failed refresh must not blank a timeline that was already showing real items',
+  );
+  assert.match(feature.getLastAnnouncement(), /Loading your Library failed/);
+});
+
+test('loadRecordings retries once before giving up', async () => {
+  let attempts = 0;
+  const api = recordingApi({
+    fetchRecordings: () => {
+      attempts += 1;
+      return attempts === 1
+        ? Promise.reject(new Error('down'))
+        : Promise.resolve({ ok: true, recordings: [{ id: 'rec-1', created_at: 1785000000 }] });
+    },
+  });
+  const { feature } = makeFeature({ api });
+  const result = await feature.loadRecordings();
+  assert.equal(attempts, 2, 'a slow first response must be retried once');
+  assert.equal(result.length, 1);
+});
+
+test('a recordings refresh that fails AFTER a good list was already showing keeps that list', async () => {
+  let call = 0;
+  const api = recordingApi({
+    fetchRecordings: () => {
+      call += 1;
+      if (call <= 1) return Promise.resolve({ ok: true, recordings: [{ id: 'rec-1', created_at: 1785000000 }] });
+      return Promise.reject(new Error('down'));
+    },
+  });
+  const { feature } = makeFeature({ api });
+  const first = await feature.loadRecordings();
+  assert.equal(first.length, 1, 'sanity: the first load succeeded');
+
+  const second = await feature.loadRecordings();
+  assert.equal(
+    second.length, 1,
+    'a later failed recordings refresh must not wipe a list that was already showing real items',
+  );
+  assert.match(feature.getLastAnnouncement(), /Loading saved recordings failed/);
 });
 
 test('pin persists through the backend, not a session Set', async () => {

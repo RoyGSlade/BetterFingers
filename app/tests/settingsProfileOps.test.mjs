@@ -452,6 +452,59 @@ test('#sdSetStitchPass round-trips through render and save like any other profil
   assert.equal(saved[0].settings.long_recording_stitch_pass_enabled, false);
 });
 
+// --- Task B: refreshAll() must not destroy in-progress user input -----------
+//
+// refreshAll() is called on the cold-start race AND on every mid-session
+// backend-restart re-populate (bootstrap/signalDeskApp.js's 3s /health
+// poll). renderSettings() clears dirty state and overwrites every field, so
+// it must not fire while the user is mid-edit or has navigated the dropdown
+// to a profile they have not yet activated.
+
+test('refreshAll() does not clobber a field the user is mid-edit on', async (t) => {
+  const ctx = mount();
+  t.after(ctx.restore);
+  ctx.feature.init();
+  ctx.feature.renderSettings(STORED_SETTINGS);
+  ctx.el('sdSetProfileSelect').value = 'Work';
+
+  const recordingMode = ctx.el('sdSetRecordingMode');
+  recordingMode.value = 'ptt';
+  recordingMode.emit('change');
+  assert.equal(ctx.feature.isDirty(), true);
+
+  await ctx.feature.refreshAll();
+  assert.equal(recordingMode.value, 'ptt', 'a background repopulate must not discard an unsaved edit');
+  assert.equal(ctx.feature.isDirty(), true, 'the dirty flag (and the visible "Unsaved changes" bar) must survive the repopulate too');
+});
+
+test('refreshAll() keeps the dropdown on a profile the user is viewing but has not activated', async (t) => {
+  const ctx = mount({
+    routes: defaultRoutes({
+      // active_profile stays 'Work' throughout -- the user merely selected a
+      // different, not-yet-activated profile in the dropdown.
+      'GET /settings/profiles': { profiles: ['Default', 'Work'], active_profile: 'Work', settings: STORED_SETTINGS },
+    }),
+  });
+  t.after(ctx.restore);
+  ctx.feature.init();
+  await ctx.feature.refreshAll();
+  ctx.el('sdSetProfileSelect').value = 'Default';
+
+  await ctx.feature.refreshAll();
+  assert.equal(ctx.el('sdSetProfileSelect').value, 'Default', 'a background repopulate must not snap the dropdown back to the real active profile out from under the user');
+});
+
+test('refreshAll() still resyncs normally once the user is neither dirty nor viewing a different profile', async (t) => {
+  const ctx = mount();
+  t.after(ctx.restore);
+  ctx.feature.init();
+
+  await ctx.feature.refreshAll();
+  const workOption = ctx.el('sdSetProfileSelect').children.find((o) => o.value === 'Work');
+  assert.equal(workOption.selected, true, 'the ordinary cold-start/health-recovery resync must still select the active profile');
+  assert.equal(ctx.el('sdSetProfileMessage').textContent, 'Active profile: Work');
+});
+
 // --- UI-07-018: the PTT availability note ------------------------------------
 
 test('#sdSetPttAvailabilityNote states the limitation when the session cannot do push-to-talk', async (t) => {

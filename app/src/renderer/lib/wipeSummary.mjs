@@ -41,7 +41,35 @@ export function isPreDeleteAbort(payload) {
 function isDeletionOutcome(key, value) {
   if (typeof value === 'number') return value > 0;
   if (typeof value === 'boolean') return value && /_(removed|wiped|cleared)$/.test(key);
+  // Some entries report a RESULT OBJECT rather than a flag. `history_db_wiped`
+  // is the live one: server.py sets it to `{ok, recreated}` because wiping the
+  // conversation database and rebuilding its schema are two different claims
+  // and a store that could not be recreated is a broken install even though
+  // the old file really is gone.
+  //
+  // Treating that object as "not a deletion" is a privacy-honesty bug, not a
+  // formatting one: a user wiped their conversation history, the wipe SUCCEEDED,
+  // and the "what was deleted" summary silently omitted it — the one thing the
+  // summary exists to confirm. Anything with an explicit truthy `ok` counts.
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value.ok === true && /_(removed|wiped|cleared)$/.test(key);
+  }
   return false;
+}
+
+/**
+ * The human-readable form of one cleared{} entry.
+ *
+ * Object-shaped outcomes carry detail worth surfacing: a history database that
+ * was wiped but NOT recreated is a real half-state the user should hear about
+ * from the success list rather than discover later.
+ */
+function describeDeletion(key, value) {
+  if (typeof value === 'number') return `${key}: ${value}`;
+  if (value && typeof value === 'object' && value.recreated === false) {
+    return `${key} (store not recreated — reopen the app to rebuild it)`;
+  }
+  return key;
 }
 
 // "What WAS deleted" — the positive side of a partial wipe, drawn from the
@@ -51,7 +79,7 @@ export function summarizeWipeCleared(payload) {
   const done = [];
   for (const [key, value] of Object.entries(cleared)) {
     if (!isDeletionOutcome(key, value)) continue;
-    done.push(typeof value === 'number' ? `${key}: ${value}` : key);
+    done.push(describeDeletion(key, value));
   }
   return done;
 }

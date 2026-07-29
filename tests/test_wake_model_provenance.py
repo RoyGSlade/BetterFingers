@@ -6,6 +6,7 @@ entry, or a model binary quietly added to the tree, makes it fail.
 
 import json
 import os
+import subprocess
 import unittest
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -14,11 +15,6 @@ DOC_PATH = os.path.join(REPO_ROOT, "docs", "release", "WAKE_MODEL_PROVENANCE.md"
 
 # Extensions that would indicate a model artifact checked into the tree.
 MODEL_SUFFIXES = (".onnx", ".tflite", ".npz", ".pth", ".pt", ".safetensors", ".h5", ".pb", ".gguf")
-# Directories that are not this repository's shipped source.
-PRUNED_DIRS = {
-    ".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache",
-    "out", "dist", "release", "build", ".mypy_cache", ".ruff_cache",
-}
 
 
 def load_manifest():
@@ -105,16 +101,31 @@ class CatalogSyncTests(unittest.TestCase):
 
 class NoBundledBinariesTests(unittest.TestCase):
     def test_no_model_artifact_is_checked_into_the_tree(self):
-        found = []
-        for dirpath, dirnames, filenames in os.walk(REPO_ROOT):
-            dirnames[:] = [d for d in dirnames if d not in PRUNED_DIRS]
-            for name in filenames:
-                if name.lower().endswith(MODEL_SUFFIXES):
-                    found.append(os.path.relpath(os.path.join(dirpath, name), REPO_ROOT))
+        # "Checked into the tree" is a property of what git TRACKS, so ask git
+        # rather than walking the filesystem. The walk this replaced could not
+        # tell a committed model from an ignored one, and failed on any machine
+        # that had run the llama runtime setup: `.betterfingers/` is the
+        # documented repo-local runtime cache (.gitignore:34) and holds real
+        # .gguf files, none of which ship. Pruning that one directory by name
+        # would only have deferred the same false positive to the next ignored
+        # cache, and -- worse -- the walk would still have missed a model that
+        # really was committed inside a pruned directory name.
+        listing = subprocess.run(
+            ["git", "ls-files", "-z"],
+            cwd=REPO_ROOT, capture_output=True, text=True,
+        )
+        if listing.returncode != 0:
+            self.skipTest("not a git checkout, cannot determine tracked files")
+        tracked = [name for name in listing.stdout.split("\0") if name]
+        found = sorted(
+            name for name in tracked
+            if name.lower().endswith(MODEL_SUFFIXES)
+        )
         self.assertEqual(
             found, [],
-            "A model artifact appeared in the tree. Record its provenance in "
-            "docs/release/WAKE_MODEL_PROVENANCE.md before shipping it.",
+            "A model artifact is committed to the repository. Record its "
+            "provenance in docs/release/WAKE_MODEL_PROVENANCE.md before "
+            "shipping it.",
         )
 
     def test_the_manifest_still_claims_zero_bundled_binaries(self):

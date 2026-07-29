@@ -244,6 +244,17 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
   // html button" and "the dropdowns look like blank html". The names below are
   // the Signal Desk primitives, all defined in styles/signal-desk.css.
   function renderVoiceBlendRows(doc) {
+    // The Add button's click handler already refuses past MAX_BLEND_LAYERS,
+    // but nothing disabled the button itself -- a user at the cap could click
+    // it forever with no feedback at all (Wave 12 collab task C). Kept ahead
+    // of the container guard below so it stays in sync even on a host that
+    // omits the rows container.
+    const addButton = doc.getElementById('addVoiceLayerButton');
+    if (addButton) {
+      const atMax = voiceBlendLayers.length >= MAX_BLEND_LAYERS;
+      addButton.disabled = atMax;
+      addButton.title = atMax ? `Up to ${MAX_BLEND_LAYERS} extra voices can be blended with the base.` : '';
+    }
     const container = doc.getElementById('voiceBlendRows');
     if (!container) return;
     container.innerHTML = '';
@@ -427,8 +438,27 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
   }
 
   // --- Presets ------------------------------------------------------------
+  // Retried once (a slow first response, not a dead endpoint) before giving
+  // up. On total failure `loadedVoicePresets` and the DOM are left as they
+  // were -- kept separate from the voices failure below: presets failing
+  // must not blank the base/blend controls, and must not silently leave the
+  // presets dropdown/list looking stale with no explanation either.
   async function refreshVoicePresets(doc) {
-    const data = await fetchVoicePresets();
+    let data = null;
+    let lastError = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        data = await fetchVoicePresets();
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (lastError) {
+      showToast?.(`Could not refresh voice presets: ${lastError.message}`, 'danger');
+      return;
+    }
     loadedVoicePresets = Array.isArray(data.presets) ? data.presets : [];
     renderVoicePresetSelect(doc);
     renderVoicePresetList(doc);
@@ -513,10 +543,32 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
   }
 
   // --- Voices ---------------------------------------------------------
+  // Retried once (a slow first response against api/backend.js's timeout
+  // budget, not a dead endpoint -- mirrors bootstrap/signalDeskApp.js's
+  // loadPersonaList) before giving up. On total failure the existing
+  // voiceOptionsCache/DOM are left untouched: bootstrap only re-fires this on
+  // a backend DOWN->UP transition, so a one-off slow response while the
+  // backend was never actually down would otherwise get no second chance at
+  // all, leaving the voice picker/blend rows/presets unpopulated indefinitely
+  // with no explanation.
   async function refreshVoices(doc) {
     const activeDoc = doc || (typeof document !== 'undefined' ? document : null);
     if (!activeDoc) return;
-    const voicesData = await fetchTtsVoices();
+    let voicesData = null;
+    let lastError = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        voicesData = await fetchTtsVoices();
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (lastError) {
+      showToast?.(`Could not refresh voices: ${lastError.message}`, 'danger');
+      return;
+    }
     renderVoiceCloningPanel?.(voicesData.cloning);
     voiceOptionsCache = [
       ...(Array.isArray(voicesData.defaults) ? voicesData.defaults : []),

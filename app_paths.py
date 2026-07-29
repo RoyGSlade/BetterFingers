@@ -305,14 +305,60 @@ def describe_locations():
     return out
 
 
+# Reasons (from ``resolve_base_report``) under which consolidating other roots
+# into the chosen base is what the user meant. Migration is an *upgrade* step:
+# "your data is in the old place, move it to the new default". It only makes
+# sense when the app picked the base by its own defaulting rules.
+#
+# P0 (2026-07-29): it used to run for every reason, including ``env_override``.
+# ``BETTERFINGERS_DATA_DIR`` is how tests, probes and this project's own agents
+# isolate a boot -- and ``_known_legacy_roots`` always includes
+# ``_legacy_home_base()``, which on any non-Windows machine is the user's REAL
+# ``~/BetterFingers`` (``APPDATA`` is Windows-only, so the fallback at
+# ``_legacy_home_base`` always fires). So pointing the override at a throwaway
+# directory did not isolate the boot: it shutil.move()d the real install INTO
+# the throwaway one, and shutil.move across filesystems is copytree + rmtree of
+# the source. Isolating the destination never isolated the *source*. Observed
+# live: a boot with the override set to a temp dir was caught mid-move of the
+# owner's ~/BetterFingers/studio_projects, and only stopped because of an
+# unrelated permission error on one file.
+#
+# ``appdata`` is included only on Windows, where ``APPDATA`` is set by the OS
+# and is therefore the genuine platform location rather than someone pinning
+# the root; on POSIX an ``APPDATA`` value is always artificial.
+_MIGRATION_REASONS = ("platform_default", "legacy_install")
+
+
+def _may_migrate_into(resolution):
+    """Whether ``resolution`` is a base the app chose, not one it was handed."""
+    if resolution.reason in _MIGRATION_REASONS:
+        return True
+    return resolution.reason == "appdata" and os.name == "nt"
+
+
 def migrate_legacy_data():
     """Consolidate any legacy/split root into the current base.
 
     Idempotent: an entry already present in the target is left where it is
     (never clobbered), so re-running is a no-op. Same-filesystem moves are
     instant renames. Returns {target, moved:[...], skipped:[...]}.
+
+    No-ops when the base came from an explicit override rather than the app's
+    own defaulting -- see ``_MIGRATION_REASONS``. An explicit root means "use
+    this directory", never "gather every other install into this directory".
     """
-    base = resolve_base()
+    resolution = resolve_base_report()
+    base = resolution.base
+    if not _may_migrate_into(resolution):
+        logging.info(
+            "app_paths: skipping legacy migration into %s (root came from %s, "
+            "not from the app's own defaulting), leaving %s untouched",
+            base, resolution.reason,
+            ", ".join(str(root) for root in _known_legacy_roots(base)) or "no other root",
+        )
+        return {"target": str(base), "moved": [], "skipped": [],
+                "skipped_reason": resolution.reason}
+
     try:
         base.mkdir(parents=True, exist_ok=True)
     except OSError as exc:

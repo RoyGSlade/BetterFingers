@@ -642,6 +642,12 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
   let personaOrder = []; // insertion order (stable render order)
   let builtinNames = new Set();
   let selectedName = null;
+  // True only when the LAST persona fetch failed and there is still nothing
+  // loaded -- lets renderPersonaGrid() tell "the request failed" apart from
+  // "the backend truthfully has none", the same distinction
+  // bootstrap/signalDeskApp.js's loadPersonaList doc comment names as the
+  // reason an empty payload must never be presented as a legitimate state.
+  let personasLoadFailed = false;
 
   // Contacts, supplied by the host rather than fetched here: Talk already owns
   // the picker and its list, and two independent fetches would let the two
@@ -718,25 +724,65 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
 
   // --- data loading -----------------------------------------------------------
 
-  async function refresh() {
-    try {
-      const [personas, builtins, voices] = await Promise.all([
-        fetchPersonas().catch(() => ({})),
-        fetchBuiltinPersonaNames().catch(() => ({ builtins: [] })),
-        fetchTtsVoices().catch(() => ({ defaults: [], cloned: [] })),
-      ]);
-      personaMap = personas && typeof personas === 'object' ? personas : {};
-      personaOrder = Object.keys(personaMap);
-      builtinNames = new Set(Array.isArray(builtins?.builtins) ? builtins.builtins : []);
-      voiceOptionsCache = [
-        ...(Array.isArray(voices?.defaults) ? voices.defaults : []),
-        ...(Array.isArray(voices?.cloned) ? voices.cloned.map((v) => ({ id: v.id, name: `${v.name} (Cloned)` })) : []),
-      ];
-      if (!blendBase.voiceId && voiceOptionsCache[0]) {
-        blendBase = { voiceId: voiceOptionsCache[0].id, label: voiceOptionsCache[0].name };
+  // Retries once (a slow first response against api/backend.js's timeout
+  // budget, not a dead endpoint) and reports failure rather than letting a
+  // rejected promise or an empty/malformed payload look like a legitimate
+  // "nothing here" -- the exact antipattern bootstrap/signalDeskApp.js's
+  // loadPersonaList() doc comment describes, applied here because Studio
+  // fetches its OWN persona/builtin-name/voice lists independently of that
+  // helper (this grid, not the Settings dropdown loadPersonaList guards).
+  async function fetchResilient(fetchFn, isUsable) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const payload = await fetchFn();
+        if (isUsable(payload)) return { payload, failed: false };
+      } catch (_error) {
+        // fall through to the retry / to the caller's last-good state
       }
-    } catch (error) {
-      hks.showToast?.(`Failed to load personas: ${error.message}`, 'danger');
+    }
+    return { payload: null, failed: true };
+  }
+
+  async function refresh() {
+    const [personasResult, builtinsResult, voicesResult] = await Promise.all([
+      fetchResilient(fetchPersonas, (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length > 0),
+      fetchResilient(fetchBuiltinPersonaNames, (v) => Array.isArray(v?.builtins)),
+      fetchResilient(fetchTtsVoices, (v) => Boolean(v) && typeof v === 'object' && (Array.isArray(v.defaults) || Array.isArray(v.cloned))),
+    ]);
+
+    const failed = [];
+    if (personasResult.failed) {
+      failed.push('personas');
+      // personaMap/personaOrder are left as they were: a working grid must
+      // not be blanked by a failed refresh, and there is nothing to keep on
+      // the very first (cold-start) load either way.
+      personasLoadFailed = !personaOrder.length;
+    } else {
+      personaMap = personasResult.payload;
+      personaOrder = Object.keys(personaMap);
+      personasLoadFailed = false;
+    }
+    if (builtinsResult.failed) {
+      failed.push('builtin names');
+      // builtinNames left as-is (only affects the delete-button/"is builtin"
+      // check, so a stale set is harmless compared to an empty one).
+    } else {
+      builtinNames = new Set(builtinsResult.payload.builtins);
+    }
+    if (voicesResult.failed) {
+      failed.push('voices');
+      // voiceOptionsCache left as-is -- see the same reasoning as personaMap.
+    } else {
+      voiceOptionsCache = [
+        ...(Array.isArray(voicesResult.payload.defaults) ? voicesResult.payload.defaults : []),
+        ...(Array.isArray(voicesResult.payload.cloned) ? voicesResult.payload.cloned.map((v) => ({ id: v.id, name: `${v.name} (Cloned)` })) : []),
+      ];
+    }
+    if (!blendBase.voiceId && voiceOptionsCache[0]) {
+      blendBase = { voiceId: voiceOptionsCache[0].id, label: voiceOptionsCache[0].name };
+    }
+    if (failed.length) {
+      hks.showToast?.(`Could not refresh Studio ${failed.join(', ')}. Showing the last known data.`, 'warning');
     }
     if (!selectedName && personaOrder.length) selectedName = personaOrder[0];
     renderAll();
@@ -748,6 +794,7 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
   function setPersonas(map, { builtins, voices, blend } = {}) {
     personaMap = map && typeof map === 'object' ? map : {};
     personaOrder = Object.keys(personaMap);
+    personasLoadFailed = false;
     if (builtins) builtinNames = new Set(builtins);
     if (Array.isArray(voices)) voiceOptionsCache = voices;
     if (blend) {
@@ -777,8 +824,15 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
     container.replaceChildren();
     if (!personaOrder.length) {
       const empty = document.createElement('p');
-      empty.className = 'sd-persona-grid__empty';
-      empty.textContent = 'No personas yet — create one to get started.';
+      // A failed fetch and a genuinely empty persona set are different facts
+      // -- only one of them means the user has nothing configured yet.
+      if (personasLoadFailed) {
+        empty.className = 'sd-persona-grid__empty sd-persona-grid__empty--error';
+        empty.textContent = 'Could not load your personas. Check your connection and try again.';
+      } else {
+        empty.className = 'sd-persona-grid__empty';
+        empty.textContent = 'No personas yet — create one to get started.';
+      }
       container.append(empty);
       return;
     }

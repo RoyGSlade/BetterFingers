@@ -382,6 +382,105 @@ test('the saved list marks approval state by attribute, not by its label text', 
   assert.match(elements.list.innerHTML, /data-workflow-blocked/);
 });
 
+// --- Wave 12 collab task A: refreshList()/refreshHistory() retry-once + ------
+// keep-last-good. init() is called exactly once for this feature (unlike
+// library/studio/persona it is NOT re-fired by the health-poll repopulate),
+// so a cold-start race against the Python sidecar has no automatic second
+// chance -- making the retry matter more here than almost anywhere else.
+
+test('refreshList retries once before giving up on a slow/failed first response', async () => {
+  const elements = fakeElements();
+  let attempts = 0;
+  const feature = createWorkflowBuilderFeature({
+    elements,
+    api: fakeApi({
+      async fetchWorkflows() {
+        attempts += 1;
+        if (attempts === 1) throw new Error('socket hang up');
+        return { workflows: [{ id: 'stream', name: 'Stream', steps: [1], enabled: true, approved: true }] };
+      },
+    }),
+  });
+  await feature.refreshList();
+  assert.equal(attempts, 2, 'a slow first response must be retried once, not treated as a dead endpoint');
+  assert.equal(feature.getWorkflows().length, 1);
+});
+
+test('a refreshList failure AFTER workflows were already loaded keeps them, and says so', async () => {
+  const elements = fakeElements();
+  const toasts = [];
+  let call = 0;
+  const feature = createWorkflowBuilderFeature({
+    elements,
+    api: fakeApi({
+      async fetchWorkflows() {
+        call += 1;
+        if (call <= 1) return { workflows: [{ id: 'stream', name: 'Stream', steps: [1], enabled: true, approved: true }] };
+        throw new Error('backend down');
+      },
+    }),
+    hooks: { showToast: (msg, tone) => toasts.push({ msg, tone }) },
+  });
+  await feature.refreshList();
+  assert.equal(feature.getWorkflows().length, 1, 'sanity: the first refresh succeeded');
+
+  await feature.refreshList();
+  assert.equal(
+    feature.getWorkflows().length, 1,
+    'a later failed refresh must not blank a saved-workflow list that was already populated',
+  );
+  assert.match(elements.list.innerHTML, /data-workflow="stream"/, 'the rendered row must survive too');
+  assert.ok(
+    toasts.some((t) => /Could not load your saved workflows/.test(t.msg)),
+    'a total failure must be reported honestly, not silently swallowed',
+  );
+});
+
+test('a genuinely empty (but available) workflow list renders an honest empty state, not a silent blank', async () => {
+  const elements = fakeElements();
+  const feature = createWorkflowBuilderFeature({ elements, api: fakeApi() });
+  await feature.refreshList();
+  assert.match(elements.list.innerHTML, /No workflows saved yet/);
+});
+
+test('refreshHistory retries once before giving up on a slow/failed first response', async () => {
+  const elements = fakeElements();
+  let attempts = 0;
+  const feature = createWorkflowBuilderFeature({
+    elements,
+    api: fakeApi({
+      async fetchWorkflowHistory() {
+        attempts += 1;
+        if (attempts === 1) throw new Error('socket hang up');
+        return { history: [{ workflow_id: 'stream', status: 'success', completed: 1, total: 1 }] };
+      },
+    }),
+  });
+  const first = await feature.refreshHistory();
+  assert.equal(attempts, 2, 'a slow first response must be retried once');
+  assert.equal(first.length, 1);
+});
+
+test('a refreshHistory failure AFTER history was already loaded keeps it rather than blanking it', async () => {
+  const elements = fakeElements();
+  let call = 0;
+  const feature = createWorkflowBuilderFeature({
+    elements,
+    api: fakeApi({
+      async fetchWorkflowHistory() {
+        call += 1;
+        if (call <= 1) return { history: [{ workflow_id: 'stream', status: 'success', completed: 1, total: 1 }] };
+        throw new Error('backend down');
+      },
+    }),
+  });
+  const first = await feature.refreshHistory();
+  assert.equal(first.length, 1, 'sanity: the first refresh succeeded');
+
+  const second = await feature.refreshHistory();
+  assert.equal(second.length, 1, 'a later failed refresh must not blank a history that was already loaded');
+});
+
 // --- the markup actually carries the ids the feature collects -----------------
 
 test('every element id the feature collects exists in signal-desk.html', async () => {

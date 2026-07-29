@@ -19,6 +19,77 @@ import { createRequire } from 'node:module';
 // and a scenario that wants a disagreement states one explicitly.
 const APP_VERSION = createRequire(import.meta.url)('../../../../package.json').version;
 
+// Shared by `GET /settings/profiles` (the list, which carries the active
+// profile's settings inline) and `GET /settings/profiles/Default` (the
+// per-profile read). One object rather than two copies so the two routes cannot
+// drift into disagreeing about the same profile -- which the Settings panel
+// would render as a profile whose fields do not match the one it thinks is
+// selected.
+const DEFAULT_PROFILE_SETTINGS = {
+  hotkey: 'f8',
+  force_stop_key: '',
+  manual_send_hotkey: 'f9',
+  recording_mode: 'toggle',
+  send_mode: 'review_first',
+  confidence_force_review_enabled: true,
+  confidence_force_review_below: 0.55,
+  confidence_auto_send_above: 0.85,
+  auto_stop_after_silence_enabled: false,
+  auto_stop_silence_ms: 900,
+  auto_stop_min_recording_ms: 700,
+  max_completion_tokens: 1600,
+  long_draft_warning_words: 1200,
+  long_recording_stitch_pass_enabled: true,
+  llm_chunk_size: 750,
+  whisper_chunk_size: 1000,
+  review_tts_enabled: true,
+  review_tts_hotkey: 'ctrl+shift+space',
+  review_tts_speed: 1.5,
+  review_tts_voice_hint: 'english',
+  no_audio_min_duration_sec: 0.3,
+  no_audio_min_rms: 0.003,
+  no_audio_min_peak: 0.015,
+  auto_submit: false,
+  instant_typing: false,
+  restore_clipboard_after_paste: true,
+  voice_commands_enabled: true,
+  macros_enabled: true,
+  input_device_index: -1,
+  audio_ducking: false,
+  status_indicator_enabled: true,
+  notification_overlay_enabled: true,
+  preview_overlay_enabled: true,
+  model_keep_llm_loaded: false,
+  model_keep_stt_loaded: false,
+  model_keep_tts_loaded: false,
+  wake_word_enabled: false,
+  wake_word_model: '',
+  wake_word_sensitivity: 0.55,
+  wake_word_cooldown_s: 2.5,
+  wake_word_max_recording_s: 60,
+};
+
+// One built-in persona in the schema v2 shape `llm_engine.default_persona()`
+// returns. Only the fields the renderer actually reads are spelled out; the
+// point is a well-formed persona object, not a byte-copy of the backend's
+// defaults.
+const BUILTIN_PERSONA = {
+  prompt: 'You are a verbatim text cleaning machine.',
+  temperature: null,
+  few_shot: [],
+  voice: {
+    preset: '', base: '', blend: {}, speed: 1.0, pitch: 0.0,
+    energy: 0.5, warmth: 0.0, brightness: 0.0, pause_style: 'natural', stability: 0.5,
+  },
+  format: { caps: 'none', punctuation: true, signoff: '' },
+  dictionary_scope: 'global',
+  model_hint: '',
+  output_policy: 'preserve',
+  safety_mode: 'strict',
+  max_completion_tokens: null,
+  chunk_size: null,
+};
+
 export function coldBoot() {
   return {
     'GET /health': {
@@ -67,6 +138,56 @@ export function coldBoot() {
       injection_hint: '',
     },
     'GET /drafts': { drafts: [] },
+    'GET /drafts/latest': { draft: null },
+
+    // --- Wave 12: routes the walkbook was photographing as 404s --------------
+    //
+    // These eight were missing from the stub, so on every production-target
+    // scenario the composition root's cold-start population hit them, failed,
+    // and (correctly, after this wave's resilient-loading work) reported the
+    // failure to the user. The result was a walkbook whose screenshots showed
+    // a stack of honest error toasts over a partly-404 backend -- an accurate
+    // photograph of the stub, and a misleading one of the product. A walkbook
+    // is read as "this is what a healthy cold start looks like", so the stub
+    // has to be healthy.
+    //
+    // Shapes copied from the real handlers, per this file's standing rule --
+    // NOT guessed:
+    //   backend/api/routes/app_context.py  (app_context_status_route,
+    //                                       app_context_profiles_route)
+    //   backend/api/routes/contacts.py     (list_contacts_route,
+    //                                       get_active_contact_route)
+    //   backend/api/routes/actions.py      (list_workflows_route,
+    //                                       workflow_history_route)
+    //   server.py                          (settings_profile)
+    //
+    // Values are the pristine-profile case that matches the rest of this
+    // fixture: nothing configured yet, but every envelope well-formed, so a
+    // panel renders its honest EMPTY state rather than its error state.
+    'GET /app-context/status': { ok: true, context: null },
+    'GET /app-context/profiles': {
+      ok: true,
+      profiles: [],
+      builtin_ids: [],
+      pinned: {},
+      performance_presets: [],
+      injection_policies: [],
+      gaming_policy: {},
+    },
+    'GET /contacts': { ok: true, contacts: [] },
+    // A dangling/absent selection reports as "nobody in particular", which the
+    // handler treats as a first-class state rather than a missing value.
+    'GET /contacts/active': { ok: true, contact_id: null, contact: null },
+    'GET /workflows': { ok: true, workflows: [] },
+    'GET /workflows/history': { ok: true, history: [] },
+    // The per-profile read. `active: true` because 'GET /settings/profiles'
+    // above reports Default as the active one -- the two must agree or the
+    // Settings panel renders a profile it does not believe is selected.
+    'GET /settings/profiles/Default': {
+      profile: 'Default',
+      active: true,
+      settings: DEFAULT_PROFILE_SETTINGS,
+    },
     'GET /runtime/output-settings': {
       send_mode: 'review_first',
       auto_submit: false,
@@ -77,49 +198,7 @@ export function coldBoot() {
     'GET /settings/profiles': {
       active_profile: 'Default',
       profiles: ['Default'],
-      settings: {
-        hotkey: 'f8',
-        force_stop_key: '',
-        manual_send_hotkey: 'f9',
-        recording_mode: 'toggle',
-        send_mode: 'review_first',
-        confidence_force_review_enabled: true,
-        confidence_force_review_below: 0.55,
-        confidence_auto_send_above: 0.85,
-        auto_stop_after_silence_enabled: false,
-        auto_stop_silence_ms: 900,
-        auto_stop_min_recording_ms: 700,
-        max_completion_tokens: 1600,
-        long_draft_warning_words: 1200,
-        long_recording_stitch_pass_enabled: true,
-        llm_chunk_size: 750,
-        whisper_chunk_size: 1000,
-        review_tts_enabled: true,
-        review_tts_hotkey: 'ctrl+shift+space',
-        review_tts_speed: 1.5,
-        review_tts_voice_hint: 'english',
-        no_audio_min_duration_sec: 0.3,
-        no_audio_min_rms: 0.003,
-        no_audio_min_peak: 0.015,
-        auto_submit: false,
-        instant_typing: false,
-        restore_clipboard_after_paste: true,
-        voice_commands_enabled: true,
-        macros_enabled: true,
-        input_device_index: -1,
-        audio_ducking: false,
-        status_indicator_enabled: true,
-        notification_overlay_enabled: true,
-        preview_overlay_enabled: true,
-        model_keep_llm_loaded: false,
-        model_keep_stt_loaded: false,
-        model_keep_tts_loaded: false,
-        wake_word_enabled: false,
-        wake_word_model: '',
-        wake_word_sensitivity: 0.55,
-        wake_word_cooldown_s: 2.5,
-        wake_word_max_recording_s: 60,
-      },
+      settings: DEFAULT_PROFILE_SETTINGS,
     },
     'GET /models/llm': {
       selected_model_id: 'gemma-4-e2b-q4',
@@ -178,8 +257,27 @@ export function coldBoot() {
       recovery: {},
     },
     'GET /runtime/audio-devices': { devices: [], default_input_device: -1, default_output_device: -1, error: null },
-    'GET /personas': {},
-    'GET /personas-builtins': { builtins: [] },
+    // `{}` here was the FAILURE shape, not a healthy empty state.
+    //
+    // bootstrap/signalDeskApp.js's loadPersonaList() treats an empty or
+    // non-object payload as a failed request on purpose, and its doc comment
+    // explains why: llm_engine.load_personas_v2() falls back to
+    // _DEFAULT_PERSONAS whenever personas.yaml is missing, empty or corrupt, so
+    // a healthy backend ALWAYS answers with at least the built-ins. An empty
+    // map can therefore only mean the request failed.
+    //
+    // So the stub was handing every scenario the one response that means
+    // "broken", and the walkbook photographed the resulting honest warnings
+    // ("Could not load the persona list", "Could not refresh Studio personas")
+    // as though they were the product's normal cold start. Two built-ins,
+    // shaped like llm_engine.default_persona()'s schema v2 dict, are what a
+    // real pristine install returns. Scenarios that need particular personas
+    // already override this key and are unaffected.
+    'GET /personas': {
+      'True Janitor': BUILTIN_PERSONA,
+      Formal: BUILTIN_PERSONA,
+    },
+    'GET /personas-builtins': { builtins: ['True Janitor', 'Formal'] },
     'GET /tts/voices': { voices: [], cloned: [] },
     'GET /voice-presets': { presets: [] },
     'GET /recordings': { ok: true, recordings: [] },

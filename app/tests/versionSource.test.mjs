@@ -38,6 +38,25 @@ test('package.json version equals the VERSION file', () => {
   );
 });
 
+// The contract config.js must satisfy for APP_VERSION: it must be DERIVED from
+// app.getVersion() — either an eager `const APP_VERSION = app.getVersion()`,
+// or a getter/property that calls through to it lazily (needed so this module
+// can be `require`d outside a running Electron app, e.g. under `node --test`,
+// without throwing before anything even reads APP_VERSION — see config.js).
+// Neither form is "the" contract; deriving from app.getVersion() is. A getter
+// that returns a hardcoded literal (e.g. `get() { return '0.2.0-alpha.1'; }`)
+// must NOT satisfy this — see the negative-case test below. Do not loosen
+// this to a bare `/APP_VERSION/` or `/app\.getVersion/` presence check; both
+// would pass for code that merely mentions the name/call without wiring one
+// to the other.
+const APP_VERSION_EAGER = /\bconst\s+APP_VERSION\s*=\s*app\.getVersion\(\)/;
+const APP_VERSION_LAZY_GETTER =
+  /Object\.defineProperty\(\s*module\.exports\s*,\s*['"]APP_VERSION['"][\s\S]{0,200}?get\s*\(\s*\)\s*\{[\s\S]{0,200}?return\s+app\.getVersion\(\)\s*;?[\s\S]{0,60}?\}/;
+
+function derivesAppVersionFromGetVersion(source) {
+  return APP_VERSION_EAGER.test(source) || APP_VERSION_LAZY_GETTER.test(source);
+}
+
 test('the app version reaches the renderer through the IPC bridge, not a literal', () => {
   const preload = readFileSync(join(APP_DIR, 'src/preload/preload.js'), 'utf8');
   const ipc = readFileSync(join(APP_DIR, 'src/main/ipc.js'), 'utf8');
@@ -46,8 +65,40 @@ test('the app version reaches the renderer through the IPC bridge, not a literal
 
   assert.match(preload, /getAppVersion:\s*\(\)\s*=>\s*ipcRenderer\.invoke\('app:get-version'\)/);
   assert.match(ipc, /handleTrusted\('app:get-version'/);
-  assert.match(config, /APP_VERSION\s*=\s*app\.getVersion\(\)/);
+  assert.ok(
+    derivesAppVersionFromGetVersion(config),
+    'config.js must derive APP_VERSION from app.getVersion() (eager const or a delegating getter)',
+  );
   assert.match(bootstrap, /getAppVersion\?\.\(\)/);
+});
+
+test('the APP_VERSION contract rejects a hard-coded literal disguised as either form', () => {
+  const literalConst = `
+    const APP_VERSION = '0.2.0-alpha.1';
+    module.exports = { APP_VERSION };
+  `;
+  const literalGetterDisguise = `
+    Object.defineProperty(module.exports, 'APP_VERSION', {
+      enumerable: true,
+      get() {
+        return '0.2.0-alpha.1';
+      },
+    });
+  `;
+  assert.equal(derivesAppVersionFromGetVersion(literalConst), false);
+  assert.equal(derivesAppVersionFromGetVersion(literalGetterDisguise), false);
+
+  // And the positive lazy-getter case this test suite now accepts really is
+  // wired to app.getVersion(), not just structurally similar to it.
+  const realLazyGetter = `
+    Object.defineProperty(module.exports, 'APP_VERSION', {
+      enumerable: true,
+      get() {
+        return app.getVersion();
+      },
+    });
+  `;
+  assert.equal(derivesAppVersionFromGetVersion(realLazyGetter), true);
 });
 
 test('no renderer page hardcodes a version number', () => {

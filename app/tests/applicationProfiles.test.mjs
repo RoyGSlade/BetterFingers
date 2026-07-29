@@ -110,7 +110,7 @@ function mkEl() {
   };
 }
 
-function harness(api = fakeApi()) {
+function harness(api = fakeApi(), hooksOverride = {}) {
   const elements = {
     section: mkEl(),
     currentValue: mkEl(),
@@ -125,13 +125,18 @@ function harness(api = fakeApi()) {
     unavailable: mkEl(),
   };
   const changes = [];
+  const toasts = [];
   const feature = createApplicationProfilesFeature({
     elements,
     api,
-    hooks: { onContextChanged: (c) => changes.push(c), showToast: () => {} },
+    hooks: {
+      onContextChanged: (c) => changes.push(c),
+      showToast: (msg, tone) => toasts.push({ msg, tone }),
+      ...hooksOverride,
+    },
     pollMs: 0, // no timers in unit tests
   });
-  return { elements, feature, changes, api };
+  return { elements, feature, changes, toasts, api };
 }
 
 // --- pure display rules -------------------------------------------------------
@@ -215,6 +220,59 @@ test('init lists the profiles and paints the current resolution', async () => {
   for (const id of ['default', 'discord', 'rocket_league']) {
     assert.ok(h.elements.list.innerHTML.includes(`data-app-profile="${id}"`), id);
   }
+});
+
+// --- Wave 12 collab task A: refreshProfiles() retry-once + keep-last-good --
+
+test('refreshProfiles retries once before giving up on a slow/failed first response', async () => {
+  let attempts = 0;
+  const api = fakeApi({
+    fetchAppProfiles: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('socket hang up');
+      return { ok: true, profiles: PROFILES };
+    },
+  });
+  const h = harness(api);
+  await h.feature.refreshProfiles();
+  assert.equal(attempts, 2, 'a slow first response must be retried once, not treated as a dead endpoint');
+  assert.equal(h.feature.getProfiles().length, 3);
+});
+
+test('a refreshProfiles failure AFTER profiles were already loaded keeps them on screen', async () => {
+  let call = 0;
+  const api = fakeApi({
+    fetchAppProfiles: async () => {
+      call += 1;
+      if (call <= 1) return { ok: true, profiles: PROFILES };
+      throw new Error('backend down');
+    },
+  });
+  const h = harness(api);
+  await h.feature.refreshProfiles();
+  assert.equal(h.feature.getProfiles().length, 3, 'sanity: the first refresh succeeded');
+
+  await h.feature.refreshProfiles();
+  assert.equal(
+    h.feature.getProfiles().length, 3,
+    'a later failed refresh must not blank a profile list that was already populated',
+  );
+  assert.ok(
+    h.toasts.some((t) => /Could not refresh application profiles/.test(t.msg)),
+    'a total failure must be reported honestly, not silently swallowed',
+  );
+  assert.ok(
+    h.elements.list.innerHTML.includes('data-app-profile="discord"'),
+    'the rendered rows must still reflect the last known list, not be wiped',
+  );
+});
+
+test('a genuinely empty (but available) profile list renders an honest empty state, not a silent blank', async () => {
+  const api = fakeApi({ fetchAppProfiles: async () => ({ ok: true, profiles: [] }) });
+  const h = harness(api);
+  h.feature.init();
+  await h.feature.refreshProfiles();
+  assert.match(h.elements.list.innerHTML, /No application profiles are configured/);
 });
 
 test('exactly one row is marked active, and it is the resolved one', async () => {

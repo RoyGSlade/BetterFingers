@@ -216,12 +216,29 @@ export function createContactsFeature({
   }
 
   async function refresh() {
-    try {
-      const payload = await api.fetchContacts();
+    // Retried once (a slow first response, not a dead endpoint -- mirrors
+    // bootstrap/signalDeskApp.js's loadPersonaList) before giving up. On a
+    // genuine failure `contacts` is left as whatever it already held: a
+    // contact list that cannot be loaded must not stop anyone dictating, AND
+    // must not blank a picker (here, and in libraryWorkspace.js/
+    // studioWorkspace.js's contact pickers, both fed from getContacts())
+    // that was already working. There is nothing to keep on the very first,
+    // cold-start call, so that case is unchanged: an honestly empty list.
+    let payload = null;
+    let lastError = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        payload = await api.fetchContacts();
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (lastError) {
+      hooks.showToast?.('Could not refresh your contacts. Showing the last known list.', 'warning');
+    } else {
       contacts = Array.isArray(payload?.contacts) ? payload.contacts : [];
-    } catch (_error) {
-      // A contact list that cannot be loaded must not stop anyone dictating.
-      contacts = [];
     }
     renderAll();
     return contacts;

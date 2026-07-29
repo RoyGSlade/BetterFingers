@@ -359,6 +359,13 @@ export function createWorkflowBuilderFeature({
 
   function renderList() {
     if (!elements.list) return;
+    if (!workflows.length) {
+      // Distinct from renderUnavailable()'s blank list: the feature IS
+      // reachable, there is just nothing saved (or the last refresh failed
+      // and reported it separately via a toast) -- never a silent blank.
+      elements.list.innerHTML = '<div class="sd-workflow-row__empty">No workflows saved yet.</div>';
+      return;
+    }
     elements.list.innerHTML = workflows
       .map((workflow) => {
         const blocked = describeBlockedReason(workflow);
@@ -526,13 +533,31 @@ export function createWorkflowBuilderFeature({
     }
   }
 
+  // Retried once (a slow first response against the Python sidecar's own
+  // startup race, not a dead endpoint -- see bootstrap/signalDeskApp.js's
+  // loadPersonaList) before giving up. This feature's init() is called
+  // exactly once (unlike library/studio/persona, it is not re-fired by the
+  // health-poll's down->up repopulate), so a failed FIRST call here has no
+  // second chance to self-heal -- making the retry, and not silently
+  // blanking a list that may already hold real saved workflows, matter more
+  // here than almost anywhere else in this audit.
   async function refreshList() {
     if (!availability.available) return [];
-    try {
-      const payload = await api.fetchWorkflows();
+    let payload = null;
+    let lastError = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        payload = await api.fetchWorkflows();
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (lastError) {
+      hooks.showToast?.(`Could not load your saved workflows: ${lastError.message}`, 'danger');
+    } else {
       workflows = Array.isArray(payload?.workflows) ? payload.workflows : [];
-    } catch (_error) {
-      workflows = [];
     }
     renderList();
     return workflows;
@@ -540,12 +565,23 @@ export function createWorkflowBuilderFeature({
 
   async function refreshHistory() {
     if (!availability.available || typeof api.fetchWorkflowHistory !== 'function') return [];
-    try {
-      const payload = await api.fetchWorkflowHistory();
-      history = Array.isArray(payload?.history) ? payload.history : [];
-    } catch (_error) {
-      history = [];
+    let payload = null;
+    let lastError = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        payload = await api.fetchWorkflowHistory();
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+      }
     }
+    // History failing is quieter than the workflow list failing: it is a log,
+    // not something the user configured, so a toast for it would just be
+    // noise on top of the list's own failure toast when both happen at once
+    // (e.g. the same cold-start race). It still keeps whatever was already
+    // loaded rather than blanking it.
+    if (!lastError) history = Array.isArray(payload?.history) ? payload.history : [];
     renderHistory();
     return history;
   }

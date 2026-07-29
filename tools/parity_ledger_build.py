@@ -88,6 +88,101 @@ def _block(stable_id: str, reason: str) -> None:
     OVERRIDES[stable_id] = ("blocked", reason)
 
 
+# --- rows evidenced by a static contract test (Wave 12, director Ruling A) ----
+#
+# A handful of inventory rows assert a NEGATIVE property -- "no backend calls",
+# "no donation prompt exists anywhere". Those have no production anchor BY
+# CONSTRUCTION: you cannot point at the call that is not there. classify()
+# requires an anchor, so however well evidenced such a row is it could only ever
+# be reported `blocked`, which said the product was missing something when the
+# truth was that the ledger had no way to express the evidence.
+#
+# This is that way. It is deliberately NOT a hand-claimed status: the binding is
+# checked, and `verify_test_evidence()` raises if the named file stops existing
+# or stops naming the row. Delete the test, rename its assertion away from the
+# stable id, or move the file, and the ledger build FAILS rather than silently
+# keeping a `wired` nobody is checking any more.
+#
+# What it does NOT do is run the test. The suite proves it passes; this proves
+# the evidence still exists and still names the thing it claims to evidence.
+# stable_id -> (test_path, subject_files, why). `subject_files` are the real
+# production files the property is asserted OVER. They matter for two reasons:
+# a negative property is only meaningful once you say what it is negative about
+# ("no backend calls" -- in WHAT?), and parity_validator requires every `wired`
+# row to carry a production-file evidence pointer. That rule is a good one and
+# is not weakened here; the subject files satisfy it honestly.
+EVIDENCED_BY_TEST: dict[str, tuple[str, tuple[str, ...], str]] = {}
+
+
+class EvidenceBindingError(RuntimeError):
+    """A declared test-evidence binding no longer holds."""
+
+
+def _evidenced_by_test(stable_id: str, test_path: str, subject_files: tuple[str, ...], why: str) -> None:
+    EVIDENCED_BY_TEST[stable_id] = (test_path, subject_files, why)
+
+
+def verify_test_evidence() -> None:
+    """Fail loudly on any binding whose test file is gone or no longer names the row."""
+    for stable_id, (test_path, subjects, _why) in sorted(EVIDENCED_BY_TEST.items()):
+        path = ROOT / test_path
+        if not path.is_file():
+            raise EvidenceBindingError(
+                f"{stable_id} is declared evidenced by `{test_path}`, but that file does not "
+                f"exist. Either restore the test or drop the declaration -- a row may not stay "
+                f"`wired` on evidence that has been deleted."
+            )
+        if stable_id not in path.read_text(encoding="utf-8"):
+            raise EvidenceBindingError(
+                f"{stable_id} is declared evidenced by `{test_path}`, but that file no longer "
+                f"mentions {stable_id}. The binding is what makes this auditable: the test must "
+                f"name the row it evidences, so a renamed or removed assertion cannot leave a "
+                f"stale `wired` behind."
+            )
+        if not subjects:
+            raise EvidenceBindingError(
+                f"{stable_id} declares no subject files. A negative property is meaningless "
+                f"without saying what it is negative ABOUT."
+            )
+        for subject in subjects:
+            if not (ROOT / subject).is_file():
+                raise EvidenceBindingError(
+                    f"{stable_id} asserts its property over `{subject}`, which does not exist. "
+                    f"A property proved about a deleted file evidences nothing."
+                )
+
+
+_NEGATIVE_PROPERTY_TEST = "app/tests/negativeProperties.test.mjs"
+
+_evidenced_by_test(
+    "UI-12-008",
+    _NEGATIVE_PROPERTY_TEST,
+    ("app/src/renderer/overlay.html", "app/src/renderer/review-overlay.html"),
+    "The overlay windows make no backend call of their own: the test asserts `overlay.html` and "
+    "`review-overlay.html` contain no `fetch(`, `XMLHttpRequest`, `new WebSocket`, `EventSource` "
+    "or `sendBeacon`, and pairs that absence with a POSITIVE assertion that `review-overlay.html` "
+    "DOES route through `window.betterFingers.backendRequest` -- otherwise a file making no calls "
+    "at all would satisfy the absence trivially. A third test feeds known violations to the same "
+    "detectors so a broken detector fails loudly instead of going quietly green",
+)
+
+_evidenced_by_test(
+    "UI-15-007",
+    _NEGATIVE_PROPERTY_TEST,
+    (
+        "app/src/renderer/signal-desk.html",
+        "app/src/renderer/overlay.html",
+        "app/src/renderer/review-overlay.html",
+    ),
+    "No donation or monetisation prompt exists anywhere in the renderer: the test walks every "
+    "`.js`/`.mjs`/`.html`/`.css` under `app/src/renderer` case-insensitively for donate/patreon/"
+    "ko-fi/paypal/buymeacoffee/'tip jar'/gofundme/opencollective. This is STRONGER than the source "
+    "row, which was hand-scoped to index.html + main.js + features/* + overlays and left the "
+    "caveat 'if one exists it must live outside this scope' -- the walk settles that caveat. It "
+    "asserts it visited >20 files, so an empty traversal cannot masquerade as a clean result",
+)
+
+
 # The four Gate 0 cuts, carried forward unchanged: the static, fixture-only
 # Message Rescue example surface. Directive §§3.5/11 forbid production mock
 # data, and Wave 11 removes preview pages as production targets.
@@ -207,6 +302,19 @@ def cell_safe(text: str) -> str:
 
 def build_evidence_cell(row: pe.RowEvidence, status: str, reason: str) -> str:
     parts: list[str] = []
+    if row.stable_id in EVIDENCED_BY_TEST:
+        test_path, subjects, why = EVIDENCED_BY_TEST[row.stable_id]
+        parts.append(
+            "Property asserted over: " + ", ".join(f"`{path}`" for path in subjects)
+        )
+        # Stated as its own kind of evidence rather than dressed up as an
+        # anchor, because it is not one: this row asserts an ABSENCE, which has
+        # no production location by construction. The binding to the test file
+        # is verified by verify_test_evidence() on every build.
+        parts.append(
+            f"Evidenced by static contract test (`{test_path}`, binding checked on every "
+            f"ledger build): {why}"
+        )
     if row.anchors:
         shown = ", ".join(f"`{anchor}`" for anchor in row.anchors[:6])
         more = "" if len(row.anchors) <= 6 else f" (+{len(row.anchors) - 6} more)"
@@ -241,6 +349,10 @@ def classify(row: pe.RowEvidence) -> tuple[str, str]:
     if row.stable_id in OVERRIDES:
         status, text = OVERRIDES[row.stable_id]
         return status, text
+    # Checked by verify_test_evidence() before any row is classified, so this
+    # can never be a bare assertion: the named test exists and names this row.
+    if row.stable_id in EVIDENCED_BY_TEST:
+        return ("wired", "")
     if not row.anchored:
         return (
             "blocked",
@@ -275,6 +387,11 @@ def classify(row: pe.RowEvidence) -> tuple[str, str]:
 
 
 def main() -> int:
+    # Before anything is classified: a test-evidence binding that no longer
+    # holds must stop the build, not quietly produce a `wired` row resting on a
+    # deleted assertion.
+    verify_test_evidence()
+
     source_rows = pv.parse_source()
     evidence = {row.stable_id: row for row in pe.collect(source_rows)}
 

@@ -1,3 +1,4 @@
+import contextlib
 import hmac
 import os
 import queue
@@ -2239,7 +2240,6 @@ def _recording_dispatcher_loop():
         except Exception as exc:
             logging.error(f"Recording dispatcher failed: {redact_exc(exc)}")
 
-@app.on_event("startup")
 async def startup_event():
     global loop, _warmup_thread
     # Auth gate first: covers `uvicorn server:app` as well as `python
@@ -2304,22 +2304,21 @@ async def startup_event():
 
     if lazy_startup:
         logging.info("Lazy startup enabled; deferring Hotkey Manager startup.")
-        return
+    else:
+        try:
+            manager = start_hotkey_manager()
+            hook_errors = list(getattr(manager, "keyboard_hook_errors", [])) if manager else []
+            if hook_errors:
+                message = "Hotkey Manager started, but keyboard hooks are unavailable: " + "; ".join(hook_errors)
+                logging.warning(message)
+                record_runtime_error("hotkeys", message, {"action": "startup", "degraded": True})
+            else:
+                logging.info("Hotkey Manager started.")
+        except Exception as e:
+            logging.error(f"Hotkey Manager startup failure: {e}")
+            record_runtime_error("hotkeys", str(e))
 
-    try:
-        manager = start_hotkey_manager()
-        hook_errors = list(getattr(manager, "keyboard_hook_errors", [])) if manager else []
-        if hook_errors:
-            message = "Hotkey Manager started, but keyboard hooks are unavailable: " + "; ".join(hook_errors)
-            logging.warning(message)
-            record_runtime_error("hotkeys", message, {"action": "startup", "degraded": True})
-        else:
-            logging.info("Hotkey Manager started.")
-    except Exception as e:
-        logging.error(f"Hotkey Manager startup failure: {e}")
-        record_runtime_error("hotkeys", str(e))
 
-@app.on_event("shutdown")
 def shutdown_event():
     stop_hotkey_manager()
     # Safety net in case /wake/disable was never called before shutdown --
@@ -2348,6 +2347,23 @@ def shutdown_event():
     thread = _warmup_thread
     if thread is not None and thread.is_alive():
         thread.join(timeout=5)
+
+
+@contextlib.asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Thin ASGI adapter over startup_event()/shutdown_event(): both are kept
+    # as plain callables (not decorated) because tests/test_server_lazy_startup.py
+    # calls server.startup_event() directly to drive startup without a live
+    # ASGI lifespan. If startup_event() raises, this never reaches yield, so
+    # shutdown_event() correctly does not run -- matching prior on_event
+    # semantics, where a startup handler exception aborts serving before any
+    # shutdown handler fires.
+    await startup_event()
+    yield
+    shutdown_event()
+
+
+app.router.lifespan_context = lifespan
 
 from fastapi import Query, status
 
@@ -2626,7 +2642,16 @@ async def run_doctor(refresh_audio: bool = False):
         "runtime_outdated": "The selected model requires a newer llama.cpp runtime. Download or reinstall the LLM runtime from the Models screen.",
         "port_conflict": "Port 8000 is occupied by another process. Please close the conflicting application or configure a different port.",
         "microphone_unavailable": "No input audio devices were detected, or microphone permission was denied. Please connect a microphone and ensure BetterFingers has permission to access it.",
-        "unsupported_wayland_injection": "Typing and pasting injection are not supported under Wayland. BetterFingers has safely fallen back to copying text to the clipboard.",
+        # This fires on `is_wayland && !supports_input_injection`, and
+        # supports_input_injection is False only when injection_method ==
+        # "none" -- which platform_capabilities reaches solely when the
+        # clipboard fallback ALSO failed (no wl-clipboard/xclip/xsel). The
+        # previous text told that user "BetterFingers has safely fallen back
+        # to copying text to the clipboard", i.e. it reassured them that the
+        # one path that had also just failed was working. Nothing reaches the
+        # target application in this state, so say so and give the install
+        # that actually fixes it.
+        "unsupported_wayland_injection": "Text cannot be delivered to other applications: this Wayland session has no typing tool (wtype or ydotool) and no clipboard tool (wl-clipboard), so both the typing path and the clipboard fallback are unavailable. Install wl-clipboard to restore copy-to-clipboard, and wtype (or ydotool) for direct typing; then restart BetterFingers. Dictation, transcription and drafts keep working — only delivery into another window is affected.",
         "failed_clipboard": "The clipboard manager is not responding. On Linux, ensure xclip or xsel is installed.",
         "failed_tts_dependency": "Sound playback dependencies are missing. Ensure libsndfile1 is installed on Linux."
     }

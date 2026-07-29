@@ -855,6 +855,12 @@ export function createLibraryWorkspaceFeature({ elements, hooks, api } = {}) {
   let total = 0;
   let filters = { ...DEFAULT_LIBRARY_FILTERS };
   let selectedId = null;
+  // The item id the contact picker was last rebuilt for, so renderSelectedItem()
+  // can tell "the user changed the dropdown but hasn't hit Apply yet" apart
+  // from "a different item is selected now" -- a cold-start/health-poll
+  // repopulate re-rendering the SAME item must not silently discard a staged,
+  // uncommitted contact choice back to whatever is actually persisted.
+  let contactPickerRenderedForId = null;
   let searchTimer = null;
   let loadError = null;
   let recordingsError = null;
@@ -948,8 +954,29 @@ export function createLibraryWorkspaceFeature({ elements, hooks, api } = {}) {
     const offset = append ? items.length : 0;
     const query = buildSearchQuery(filters, { limit: PAGE_SIZE, offset });
     setBusy(true);
-    try {
-      const payload = await net.librarySearch(query);
+    // Retried once before giving up: the field failure is a slow first
+    // response against api/backend.js's timeout budget, not a dead endpoint
+    // (mirrors bootstrap/signalDeskApp.js's loadPersonaList).
+    let payload = null;
+    let lastError = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        payload = await net.librarySearch(query);
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (lastError) {
+      // A failed request must never render as "No messages yet" -- an empty
+      // archive and an unreachable backend are different facts, and only one
+      // of them means the user has lost nothing. `items` is left untouched
+      // (there is nothing to preserve on the very first, cold-start load, so
+      // that case still falls through to buildEmptyState's honest error+retry).
+      loadError = describeLibraryError(lastError, 'Loading your Library');
+      announce(loadError, 'danger');
+    } else {
       const page = (payload?.results || []).map((record) => deriveLibraryItemFromDraft(record, contactsById));
       items = append ? [...items, ...page] : page;
       total = Number(payload?.total ?? items.length);
@@ -960,31 +987,35 @@ export function createLibraryWorkspaceFeature({ elements, hooks, api } = {}) {
       if (append) {
         announce(`Loaded ${page.length} more. Showing ${items.length} of ${total}.`, 'silent');
       }
-    } catch (error) {
-      // A failed request must never render as "No messages yet" -- an empty
-      // archive and an unreachable backend are different facts, and only one
-      // of them means the user has lost nothing.
-      loadError = describeLibraryError(error, 'Loading your Library');
-      if (!append) items = [];
-      announce(loadError, 'danger');
-    } finally {
-      setBusy(false);
-      renderAll();
     }
+    setBusy(false);
+    renderAll();
     return items;
   }
 
   async function loadRecordings() {
-    try {
-      const payload = await net.fetchRecordings();
-      recordingItems = (payload?.recordings || []).map(deriveLibraryItemFromRecording);
-      recordingsError = null;
-    } catch (error) {
+    let payload = null;
+    let lastError = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        payload = await net.fetchRecordings();
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (lastError) {
       // Kept separate from loadError: recordings failing must not blank the
       // timeline, and the recordings section must not claim "none retained"
-      // when the truth is "we could not ask".
-      recordingItems = [];
-      recordingsError = describeLibraryError(error, 'Loading saved recordings');
+      // when the truth is "we could not ask". Retried once already; on total
+      // failure keep whatever was already listed (renderRecordings() only
+      // falls back to the full error state when there is nothing to keep).
+      recordingsError = describeLibraryError(lastError, 'Loading saved recordings');
+      announce(recordingsError, 'danger');
+    } else {
+      recordingItems = (payload?.recordings || []).map(deriveLibraryItemFromRecording);
+      recordingsError = null;
     }
     renderRecordings();
     return recordingItems;
@@ -1345,16 +1376,23 @@ export function createLibraryWorkspaceFeature({ elements, hooks, api } = {}) {
     if (!list || !document_ || typeof list.replaceChildren !== 'function') return;
     list.replaceChildren();
 
+    // A refresh failure with nothing already loaded has nothing to fall back
+    // to and gets the full error state below; a failure that struck AFTER a
+    // good list was already on screen keeps showing that list (with a toast
+    // already fired from loadRecordings()) rather than replacing known-good
+    // rows with an error paragraph.
+    const showErrorState = Boolean(recordingsError) && !recordingItems.length;
+
     if (els.recordingsCount) {
-      els.recordingsCount.textContent = recordingsError
+      els.recordingsCount.textContent = showErrorState
         ? 'Unavailable'
         : `${recordingItems.length} retained`;
     }
     if (els.clearRecordingsButton) {
-      els.clearRecordingsButton.disabled = Boolean(recordingsError) || recordingItems.length === 0;
+      els.clearRecordingsButton.disabled = showErrorState || recordingItems.length === 0;
     }
 
-    if (recordingsError) {
+    if (showErrorState) {
       const error = document_.createElement('p');
       error.className = 'sd-recordings__empty sd-recordings__empty--error';
       error.textContent = recordingsError;
@@ -1441,6 +1479,12 @@ export function createLibraryWorkspaceFeature({ elements, hooks, api } = {}) {
     if (els.selectedContactPicker) {
       const picker = els.selectedContactPicker;
       const current = item.contactId || '';
+      // A staged-but-not-yet-Applied choice on the SAME item survives a
+      // repopulate; a genuinely different item (or a value that already
+      // matches what's persisted) rebuilds normally.
+      const staged = contactPickerRenderedForId === item.id && picker.value !== current
+        ? picker.value
+        : null;
       picker.innerHTML = '';
       const none = doc()?.createElement('option');
       if (none) {
@@ -1456,8 +1500,9 @@ export function createLibraryWorkspaceFeature({ elements, hooks, api } = {}) {
         option.textContent = contact.name || contact.id;
         picker.appendChild(option);
       }
-      picker.value = current;
+      picker.value = staged ?? current;
       picker.disabled = !pinnable;
+      contactPickerRenderedForId = item.id;
     }
     if (els.selectedContactApplyButton) {
       els.selectedContactApplyButton.disabled = !pinnable;

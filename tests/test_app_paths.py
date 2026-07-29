@@ -304,6 +304,15 @@ class AppPathsShapeTests(unittest.TestCase):
             ap.data = Path("/tmp/elsewhere")
 
 
+def _resolution(base, reason="platform_default"):
+    """A BaseResolution standing in for a real election of ``base``.
+
+    Migration now reads the *reason* a root was chosen, not just the path, so
+    these tests hand it a full resolution rather than patching ``resolve_base``.
+    """
+    return app_paths.BaseResolution(base=base, reason=reason, detail="test", candidates=[])
+
+
 class MigrationTests(unittest.TestCase):
     def test_migrate_moves_legacy_entries_and_is_idempotent(self):
         with tempfile.TemporaryDirectory() as root:
@@ -314,7 +323,8 @@ class MigrationTests(unittest.TestCase):
             (legacy / "voices" / "a.wav").write_text("x")
             (legacy / "graph.json").write_text("{}")
 
-            with patch.object(app_paths, "resolve_base", return_value=current), \
+            with patch.object(app_paths, "resolve_base_report",
+                              return_value=_resolution(current)), \
                  patch.object(app_paths, "_known_legacy_roots", return_value=[legacy]):
                 report = app_paths.migrate_legacy_data()
                 self.assertIn("voices", report["moved"])
@@ -333,11 +343,95 @@ class MigrationTests(unittest.TestCase):
             legacy.mkdir()
             (legacy / "graph.json").write_text("OLD")
 
-            with patch.object(app_paths, "resolve_base", return_value=current), \
+            with patch.object(app_paths, "resolve_base_report",
+                              return_value=_resolution(current)), \
                  patch.object(app_paths, "_known_legacy_roots", return_value=[legacy]):
                 report = app_paths.migrate_legacy_data()
             self.assertIn("graph.json", report["skipped"])
             self.assertEqual((current / "graph.json").read_text(), "KEEP")
+
+    # --- P0 (2026-07-29): an explicit root is a destination, never a magnet ---
+    #
+    # BETTERFINGERS_DATA_DIR is how every test, probe and agent in this project
+    # isolates a boot. Migration used to run regardless of *why* the base was
+    # chosen, and _known_legacy_roots always includes ~/BetterFingers on POSIX
+    # (APPDATA is Windows-only, so _legacy_home_base always falls back to the
+    # home directory). So setting the override to a scratch directory moved the
+    # user's REAL install into the scratch directory -- and shutil.move across
+    # filesystems deletes the source. These tests pin the repair.
+
+    def test_env_override_never_pulls_the_real_install_into_itself(self):
+        with tempfile.TemporaryDirectory() as root:
+            scratch = Path(root) / "scratch"
+            real = Path(root) / "home" / "BetterFingers"
+            (real / "voices").mkdir(parents=True)
+            (real / "voices" / "cloned.wav").write_text("irreplaceable")
+            (real / "history.db").write_text("real history")
+
+            env = dict(os.environ)
+            env["BETTERFINGERS_DATA_DIR"] = str(scratch)
+            env.pop("APPDATA", None)
+            with patch.dict(os.environ, env, clear=True), \
+                 patch.object(app_paths.Path, "home",
+                              staticmethod(lambda: Path(root) / "home")):
+                report = app_paths.migrate_legacy_data()
+
+            # Nothing moved, and the real install is untouched.
+            self.assertEqual(report["moved"], [])
+            self.assertEqual(report["skipped_reason"], "env_override")
+            self.assertTrue((real / "voices" / "cloned.wav").exists())
+            self.assertEqual((real / "voices" / "cloned.wav").read_text(),
+                             "irreplaceable")
+            self.assertEqual((real / "history.db").read_text(), "real history")
+            self.assertFalse((scratch / "voices").exists())
+
+    def test_appdata_on_posix_does_not_pull_the_real_install_in(self):
+        # On POSIX an APPDATA value is always something a caller set, so it is
+        # a pin, not the platform location. Only Windows treats it as native.
+        with tempfile.TemporaryDirectory() as root:
+            pinned = Path(root) / "pinned"
+            real = Path(root) / "home" / "BetterFingers"
+            (real / "profiles").mkdir(parents=True)
+            (real / "profiles" / "me.json").write_text("{}")
+
+            env = dict(os.environ)
+            env.pop("BETTERFINGERS_DATA_DIR", None)
+            env["APPDATA"] = str(pinned)
+            with patch.dict(os.environ, env, clear=True), \
+                 patch.object(app_paths.Path, "home",
+                              staticmethod(lambda: Path(root) / "home")), \
+                 patch.object(app_paths.os, "name", "posix"):
+                report = app_paths.migrate_legacy_data()
+
+            self.assertEqual(report["moved"], [])
+            self.assertEqual(report["skipped_reason"], "appdata")
+            self.assertTrue((real / "profiles" / "me.json").exists())
+
+    def test_windows_appdata_still_consolidates(self):
+        # The guard must not break the genuine Windows upgrade path, where the
+        # OS itself sets APPDATA and it really is the platform location.
+        with tempfile.TemporaryDirectory() as root:
+            appdata = Path(root) / "AppData"
+            legacy = Path(root) / "legacy"
+            legacy.mkdir()
+            (legacy / "graph.json").write_text("{}")
+
+            with patch.object(app_paths, "resolve_base_report",
+                              return_value=_resolution(appdata / "BetterFingers",
+                                                       reason="appdata")), \
+                 patch.object(app_paths, "_known_legacy_roots", return_value=[legacy]), \
+                 patch.object(app_paths.os, "name", "nt"):
+                report = app_paths.migrate_legacy_data()
+
+            self.assertIn("graph.json", report["moved"])
+
+    def test_only_app_chosen_roots_are_migration_targets(self):
+        allowed = {"platform_default", "legacy_install"}
+        for reason in ("platform_default", "legacy_install", "env_override", "appdata"):
+            with patch.object(app_paths.os, "name", "posix"):
+                may = app_paths._may_migrate_into(_resolution(Path("/tmp/x"), reason))
+            self.assertEqual(may, reason in allowed,
+                             "reason {!r} changed migration eligibility".format(reason))
 
     # Both directions, under the repaired election rule: whichever root the
     # resolver picks must be the migration *target*, never the source. Getting

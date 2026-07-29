@@ -1100,8 +1100,30 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
 
   // --- profile operations ---------------------------------------------------
 
+  /**
+   * Real network refresh for the Profile section, called by refreshAll() --
+   * which fires on the cold-start race AND on every mid-session
+   * backend-restart re-populate (bootstrap/signalDeskApp.js's 3s /health
+   * poll). renderSettings() clears dirty/validation state and overwrites
+   * every field, so calling it unconditionally here used to mean a backend
+   * blip while the user was mid-edit (or had merely navigated the profile
+   * dropdown to a profile they had not yet activated, e.g. via
+   * handleProfileSelectChange) silently discarded that in-progress work the
+   * next time the health poll ticked. Either condition means "leave the form
+   * and selection alone" rather than "resync to the backend's active
+   * profile" -- the option LIST is still refreshed (a profile may have been
+   * added/removed elsewhere), just not the selection or the field values.
+   */
   async function refreshProfilesList() {
     const payload = await fetchProfiles();
+    const viewedName = els.profileSelect?.value;
+    const viewingUnactivatedProfile = Boolean(viewedName)
+      && viewedName !== payload.active_profile
+      && (payload.profiles || []).includes(viewedName);
+    if (profileDirty || viewingUnactivatedProfile) {
+      fillSelect(els.profileSelect, payload.profiles ?? [], viewedName);
+      return payload;
+    }
     setProfilesList(payload.profiles ?? [], payload.active_profile);
     renderSettings(payload.settings ?? {});
     setMessage(els.profileMessage, `Active profile: ${payload.active_profile}`, 'success');
@@ -1464,8 +1486,12 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
     if (els.privacyDataList) {
       els.privacyDataList.innerHTML = '';
       const locations = r.data_locations || [];
-      for (const d of locations) {
-        appendDetailRow(els.privacyDataList, d.name, `${formatBytesShort(d.bytes)} · ${d.path}`);
+      if (!locations.length) {
+        els.privacyDataList.innerHTML = '<span class="empty-state">No on-device data reported.</span>';
+      } else {
+        for (const d of locations) {
+          appendDetailRow(els.privacyDataList, d.name, `${formatBytesShort(d.bytes)} · ${d.path}`);
+        }
       }
     }
     if (els.privacyWakeListenerStatus) {
@@ -1613,12 +1639,29 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
     }
   }
 
+  /**
+   * Retries once (the field failure is a slow first response against
+   * api/backend.js's 2500ms budget, not a dead endpoint -- same house
+   * standard as bootstrap/signalDeskApp.js's loadPersonaList()). On
+   * exhausted retries: a report that has already rendered once stays on
+   * screen untouched -- refreshAll() re-runs this on every mid-session
+   * backend-restart re-populate, and a transient hiccup must not blank the
+   * network/data/store lists a user might be reading. Only the very first
+   * load, with nothing yet to preserve, falls back to an in-place error.
+   */
   async function refreshPrivacyReport() {
-    try {
-      const report = await fetchPrivacy();
-      renderPrivacyReport(report);
-    } catch (error) {
-      if (els.privacyNetworkList) els.privacyNetworkList.innerHTML = `<span class="empty-state">Privacy report unavailable: ${String(error.message || error)}</span>`;
+    let lastError = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const report = await fetchPrivacy();
+        renderPrivacyReport(report);
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (!lastPrivacyReport && els.privacyNetworkList) {
+      els.privacyNetworkList.innerHTML = `<span class="empty-state">Privacy report unavailable: ${String(lastError?.message || lastError)}</span>`;
     }
   }
 

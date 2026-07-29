@@ -618,8 +618,18 @@ class PygameEventSource:
         """Enumerate what is plugged in now. Safe to call repeatedly."""
         if not self.available:
             return []
+        try:
+            count = self.pygame.joystick.get_count()
+        except Exception as exc:
+            # joystick.init() can return without raising while the subsystem
+            # still isn't usable (headless/no-driver environments) -- the
+            # first sign of that is get_count() itself raising
+            # pygame.error("joystick system not initialized"). Degrade to "no
+            # devices" rather than let it traceback out of the poll thread.
+            logger.debug("Joystick subsystem unavailable: %s", exc)
+            return []
         added = []
-        for index in range(self.pygame.joystick.get_count()):
+        for index in range(count):
             try:
                 joystick = self.pygame.joystick.Joystick(index)
                 joystick.init()

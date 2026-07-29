@@ -11,6 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  MAX_BLEND_LAYERS,
   normalizeBlendForSend,
   resolveAvailableVoiceId,
   filterAvailableBlendLayers,
@@ -335,6 +336,104 @@ test('gatherVoiceStudioSettings and the Audition button use the same values (pre
   assert.equal(gathered.speed, 1.3);
   assert.equal(gathered.energy, 0.8);
   assert.equal(fakeDoc.elements.testTtsButton.textContent, 'Audition Voice / Test TTS API');
+});
+
+// --- Wave 12 collab task A: refreshVoices()/refreshVoicePresets() retry-once +
+// keep-last-good. Unlike library/studio/persona, bootstrap/signalDeskApp.js
+// only re-fires refreshVoices() on a backend DOWN->UP transition, so a
+// one-off slow response while the backend was never actually down would
+// otherwise get no second chance at all.
+
+test('refreshVoices retries once before giving up on a slow/failed first response', async () => {
+  const fakeDoc = makeFakeDoc();
+  let attempts = 0;
+  const feature = createVoiceStudioFeature({
+    ui: {},
+    hooks: {},
+    api: makeApiStub({
+      fetchTtsVoices: async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('socket hang up');
+        return { defaults: [{ id: 'af_heart', name: 'Heart' }], cloned: [], cloning: { installed: false } };
+      },
+    }),
+  });
+  await feature.refreshVoices(fakeDoc);
+  assert.equal(attempts, 2, 'a slow first response must be retried once, not treated as a dead endpoint');
+  assert.equal(fakeDoc.elements.voiceActiveVoiceName.textContent, 'Heart');
+});
+
+test('a refreshVoices failure AFTER voices were already loaded keeps the picker as it was, and says so', async () => {
+  const fakeDoc = makeFakeDoc();
+  const toasts = [];
+  let call = 0;
+  const feature = createVoiceStudioFeature({
+    ui: { setMessage() {}, showToast: (msg, tone) => toasts.push({ msg, tone }) },
+    hooks: {},
+    api: makeApiStub({
+      fetchTtsVoices: async () => {
+        call += 1;
+        if (call <= 1) return { defaults: [{ id: 'af_heart', name: 'Heart' }], cloned: [], cloning: { installed: false } };
+        throw new Error('backend down');
+      },
+    }),
+  });
+  await feature.refreshVoices(fakeDoc);
+  assert.equal(fakeDoc.elements.voiceActiveVoiceName.textContent, 'Heart', 'sanity: the first refresh succeeded');
+
+  await feature.refreshVoices(fakeDoc);
+  assert.equal(
+    fakeDoc.elements.voiceActiveVoiceName.textContent, 'Heart',
+    'a later failed refresh must not blank a voice picker that was already populated',
+  );
+  assert.ok(
+    toasts.some((t) => /Could not refresh voices/.test(t.msg)),
+    'a total failure must be reported honestly, not silently swallowed',
+  );
+});
+
+test('refreshVoicePresets retries once, and reports a total failure honestly', async () => {
+  const fakeDoc = makeFakeDoc();
+  const toasts = [];
+  let attempts = 0;
+  const feature = createVoiceStudioFeature({
+    ui: { setMessage() {}, showToast: (msg, tone) => toasts.push({ msg, tone }) },
+    hooks: {},
+    api: makeApiStub({
+      fetchVoicePresets: async () => {
+        attempts += 1;
+        throw new Error('backend down');
+      },
+    }),
+  });
+  await feature.refreshVoices(fakeDoc);
+  assert.equal(attempts, 2, 'a slow first response must be retried once before it is treated as a failure');
+  assert.ok(
+    toasts.some((t) => /Could not refresh voice presets/.test(t.msg)),
+    'a total presets failure must be reported honestly, separately from a voices failure',
+  );
+});
+
+// --- Wave 12 collab task C: the Add-voice-layer button was a dead control --
+// past the cap: its handler already refused a third layer, but nothing
+// disabled the button, so a user at MAX_BLEND_LAYERS could click it forever
+// with no feedback at all.
+
+test('the Add voice layer button disables itself once MAX_BLEND_LAYERS is reached, with a reason', async () => {
+  const fakeDoc = makeFakeDoc();
+  const feature = createVoiceStudioFeature({ ui: {}, hooks: {}, api: makeApiStub() });
+  await feature.refreshVoices(fakeDoc);
+  feature.init({ doc: fakeDoc });
+
+  assert.equal(fakeDoc.elements.addVoiceLayerButton.disabled, false, 'not at the cap yet');
+
+  for (let i = 0; i < MAX_BLEND_LAYERS - 1; i += 1) {
+    fireClick(fakeDoc.elements.addVoiceLayerButton);
+    assert.equal(fakeDoc.elements.addVoiceLayerButton.disabled, false, `still under the cap after click ${i + 1}`);
+  }
+  fireClick(fakeDoc.elements.addVoiceLayerButton); // the MAX_BLEND_LAYERS-th layer
+  assert.equal(fakeDoc.elements.addVoiceLayerButton.disabled, true, 'the button must go dead-and-honest, not dead-and-silent');
+  assert.notEqual(fakeDoc.elements.addVoiceLayerButton.title, '', 'the reason must be stated, not just implied by disabled');
 });
 
 test('reset button clears blend layers (blend normalization/reset)', async () => {

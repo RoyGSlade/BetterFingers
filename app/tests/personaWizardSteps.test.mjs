@@ -277,3 +277,120 @@ test('#wizardRefineStatus refuses an empty draft and reports a failed refine', a
   assert.equal(ctx.el('wizardRefineStatus').textContent, 'Persona helper failed: refine crashed');
   assert.equal(ctx.el('wizardRefinePromptButton').disabled, false);
 });
+
+// --- Wave 12 collab task A: resilient loading for the wizard's own fetches --
+// (the persona LIST dropdown itself is bootstrap/signalDeskApp.js's
+// loadPersonaList(); what lives here is the builtin-name fallback set and the
+// per-persona Advanced-fields fetch that loadExistingPersonaAdvanced() runs.)
+
+const TIMEOUT_FAILURE = { ok: false, status: 0, error: 'timeout' };
+
+async function flush(times = 4) {
+  for (let i = 0; i < times; i += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
+function mountWithMessages({ routes = {}, loadedPersonas = {} } = {}) {
+  const doc = makeDocument([...WIZARD_ELEMENT_IDS, ...STEP_IDS], {
+    wizardRole: { tagName: 'select', value: 'assistant' },
+    wizardCustomRole: { tagName: 'input', type: 'text' },
+    wizardTone: { tagName: 'select', value: 'neutral' },
+    wizardCustomTone: { tagName: 'input', type: 'text' },
+    wizardPersonaName: { tagName: 'input', type: 'text' },
+    wizardPromptPreview: { tagName: 'textarea', value: '' },
+    wizardRefinedPrompt: { tagName: 'textarea', value: '' },
+    wizardDescribeInput: { tagName: 'textarea', value: '' },
+    wizardTemperature: { tagName: 'input', type: 'number', value: '' },
+    wizardModelHint: { tagName: 'input', type: 'text' },
+    wizardFormatCaps: { tagName: 'select', value: 'none' },
+    wizardFormatPunctuation: { tagName: 'input', type: 'checkbox' },
+    wizardFormatSignoff: { tagName: 'input', type: 'text' },
+    wizardOutputPolicy: { tagName: 'select', value: 'preserve' },
+    wizardSafetyMode: { tagName: 'select', value: 'standard' },
+    wizardMaxCompletionTokens: { tagName: 'input', type: 'number' },
+    wizardChunkSize: { tagName: 'input', type: 'number' },
+    wizardTestSample: { tagName: 'textarea', value: '' },
+    wizardRuleLength: { tagName: 'input', type: 'checkbox' },
+    wizardRuleCommands: { tagName: 'input', type: 'checkbox' },
+    wizardRuleNoPreamble: { tagName: 'input', type: 'checkbox' },
+    wizardRuleSanitize: { tagName: 'input', type: 'checkbox' },
+    wizardAdvanced: { tagName: 'details', open: false },
+  });
+  const bridge = makeBackendBridge({ 'GET /personas-builtins': { builtins: ['True Janitor', 'Formal'] }, ...routes });
+  const restore = installDomGlobals({ document: doc, betterFingers: { backendRequest: bridge.request } });
+  const feature = createPersonasFeature({
+    elements: collectPersonaWizardElements(doc),
+    ui: {
+      setMessage: (el, message = '', tone = '') => {
+        if (!el) return;
+        el.textContent = message;
+        if (tone) el.dataset.tone = tone; else delete el.dataset.tone;
+      },
+      showToast: () => {},
+    },
+    hooks: { getLoadedPersonas: () => loadedPersonas, refreshPersonasAndVoices: async () => {}, markProfileDirty: () => {} },
+    doc,
+  });
+  feature.initWizard();
+  return { doc, feature, bridge, restore, el: (id) => doc.getElementById(id) };
+}
+
+test('the builtin persona name list retries once before it would otherwise fall back', async (t) => {
+  let attempts = 0;
+  const ctx = mountWithMessages({
+    routes: {
+      'GET /personas-builtins': () => {
+        attempts += 1;
+        return attempts === 1 ? TIMEOUT_FAILURE : { builtins: ['Only One'] };
+      },
+    },
+  });
+  t.after(ctx.restore);
+  await flush();
+  assert.equal(attempts, 2, 'a slow first response must be retried once, not treated as a dead endpoint');
+});
+
+test('loadExistingPersonaAdvanced retries once, then reports a failure honestly instead of leaving the Advanced fields silently stale', async (t) => {
+  let attempts = 0;
+  const ctx = mountWithMessages({
+    loadedPersonas: { 'My Persona': true },
+    routes: {
+      'GET /personas/My%20Persona': () => {
+        attempts += 1;
+        return TIMEOUT_FAILURE;
+      },
+    },
+  });
+  t.after(ctx.restore);
+
+  ctx.el('wizardPersonaName').value = 'My Persona';
+  ctx.el('wizardPersonaName').emit('change');
+  await flush();
+
+  assert.equal(attempts, 2, 'must retry once before giving up');
+  assert.match(ctx.el('wizardMessage').textContent, /Could not load "My Persona"/);
+  assert.equal(ctx.el('wizardMessage').dataset.tone, 'danger');
+});
+
+test('loadExistingPersonaAdvanced succeeds normally once the retry lands', async (t) => {
+  let attempts = 0;
+  const ctx = mountWithMessages({
+    loadedPersonas: { 'My Persona': true },
+    routes: {
+      'GET /personas/My%20Persona': () => {
+        attempts += 1;
+        return attempts === 1 ? TIMEOUT_FAILURE : { prompt: 'Saved prompt text.', temperature: 0.4 };
+      },
+    },
+  });
+  t.after(ctx.restore);
+
+  ctx.el('wizardPersonaName').value = 'My Persona';
+  ctx.el('wizardPersonaName').emit('change');
+  await flush();
+
+  assert.equal(attempts, 2);
+  assert.equal(ctx.el('wizardPromptPreview').value, 'Saved prompt text.');
+  assert.match(ctx.el('wizardMessage').textContent, /Loaded "My Persona"/);
+});

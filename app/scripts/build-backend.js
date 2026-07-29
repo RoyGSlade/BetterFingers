@@ -36,13 +36,58 @@ const hiddenImports = [
   'av',
 ];
 
+function repoVenvPython() {
+  const venvPython = process.platform === 'win32'
+    ? path.join(repoRoot, '.venv', 'Scripts', 'python.exe')
+    : path.join(repoRoot, '.venv', 'bin', 'python');
+  return fs.existsSync(venvPython) ? venvPython : null;
+}
+
+// This repo's runtime dependencies (fastapi, PyInstaller, etc.) live ONLY in
+// the repo-local .venv. A bare `python3`/`python` resolves to the system
+// interpreter, which lacks them — that either fails outright or produces a
+// sidecar broken in ways that only surface at runtime. Prefer, in order: an
+// explicit override, the repo venv, then the platform default (documented as
+// a last resort, not something this build is actually expected to work with).
 function resolvePython() {
   const explicit = process.env.BETTERFINGERS_PYTHON;
   if (explicit) {
+    console.log(`[build-backend] Using BETTERFINGERS_PYTHON override: ${explicit}`);
     return explicit;
   }
-  // The build hosts (Linux/macOS) ship `python3`; Windows ships `python`.
-  return process.platform === 'win32' ? 'python' : 'python3';
+
+  const venvPython = repoVenvPython();
+  if (venvPython) {
+    console.log(`[build-backend] Using repo-local venv interpreter: ${venvPython}`);
+    return venvPython;
+  }
+
+  const platformDefault = process.platform === 'win32' ? 'python' : 'python3';
+  console.warn(
+    `[build-backend] No repo-local .venv found at ${path.join(repoRoot, '.venv')}; ` +
+    `falling back to platform default "${platformDefault}". This is unlikely to have ` +
+    'the required dependencies — set BETTERFINGERS_PYTHON or create the venv.',
+  );
+  return platformDefault;
+}
+
+// PyInstaller failures deep inside its own traceback (missing fastapi, etc.)
+// are confusing and don't name the interpreter that caused them. Check the
+// two things that actually need to be true — PyInstaller itself, and one
+// representative runtime dependency — before spending time on a build.
+async function verifyPythonEnvironment(python) {
+  const probeModules = ['PyInstaller', 'fastapi'];
+  for (const moduleName of probeModules) {
+    try {
+      await run(python, ['-c', `import ${moduleName}`], { cwd: repoRoot });
+    } catch (error) {
+      throw new Error(
+        `[build-backend] The interpreter "${python}" cannot import "${moduleName}". ` +
+        `Set BETTERFINGERS_PYTHON to an interpreter that has the project's dependencies ` +
+        `installed, or create the repo venv (.venv) and install requirements into it.`,
+      );
+    }
+  }
 }
 
 function run(command, args, options = {}) {
@@ -128,12 +173,22 @@ async function main() {
   pyinstallerArgs.push(backendSource);
 
   const python = resolvePython();
+  await verifyPythonEnvironment(python);
   console.log(`[build-backend] Building sidecar with ${python} (PyInstaller onefile)…`);
   await run(python, pyinstallerArgs, { cwd: repoRoot });
   console.log(`[build-backend] Backend written to ${backendOutputDir}`);
 }
 
-main().catch((error) => {
-  console.error(error.message || error);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error.message || error);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  repoRoot,
+  repoVenvPython,
+  resolvePython,
+  verifyPythonEnvironment,
+};

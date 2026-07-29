@@ -75,6 +75,49 @@ publication.
 > `signal-desk-preview.html` is a QA target only. Current limitations are the
 > two Wave 11 bullets at the end of this section.
 
+### Wave 12 additions (2026-07-29)
+
+- **BetterFingers ships a dark theme only.** `#sdSetTheme` offered "System
+  Preference" and "Light Theme", and `settingsWorkspace.js`'s
+  `computeAppearanceClasses()` duly put a `theme-light` class on `<body>` for
+  either — but no stylesheet in the renderer defines a single `theme-light`
+  rule, and `color-scheme: dark` is hard-pinned on `:root`. Selecting either
+  option therefore did nothing at all, which a user reasonably reads as their
+  click not registering. **Both options are now disabled and labelled "not
+  built yet", with a note stating that accent, density, font size and high
+  contrast do all work.** They are disabled rather than removed because the
+  preference is real and persisted (`pref_theme`) — hiding it would
+  misrepresent an unbuilt setting as one that was never offered. Pinned by
+  `app/tests/uiControlContract.test.mjs`, which asserts no `theme-light` rule
+  exists; building the light theme will fail that test and tell whoever does it
+  to re-enable the options. Residual: `normalizeAppearancePrefs()` still
+  defaults to `system`, so a profile carrying that preference shows the
+  disabled option as selected. That is honest (it says the saved preference
+  needs a theme that is not built) and changing the default would alter a
+  contract shared with the legacy rollback page, so it is left as follow-up.
+
+- **Roughly 40 muted-text surfaces are below WCAG AA.** `--sd-text-muted`
+  (`#5B6B7C`) measures **3.20–3.54:1** against every surface token in the
+  palette, short of the 4.5:1 body-text bar, and is used as real text colour in
+  descriptions, hints, empty states, meta lines and timestamps. Wave 12 fixed
+  the highest-leverage consumers — the `--sd-label-color` token itself (the
+  section/field label colour, `.sd-field__label` alone appears 39 times), 14
+  uppercase-label selectors that hardcoded the muted token, two search
+  placeholders, and `.sd-badge--error` (4.07:1 → 5.53:1 via a new
+  `--sd-red-bright`) — all now 5.53–7.53:1 and asserted by computed-contrast
+  tests. The remaining consumers were deliberately NOT bulk-changed: the blast
+  radius is large and the change wants visual sign-off, not a blind sweep. The
+  clean fix is either a scoped follow-up or re-tuning the token itself.
+
+- **The primary workspace nav is an incomplete ARIA tablist.**
+  `.sd-nav__primary` carries `role="tablist"` but its buttons use
+  `aria-current="page"` (a navigation-landmark idiom) rather than
+  `aria-selected`, have no `role="tab"`, and there is no arrow-key handling.
+  Every item is a real `<button>` and fully reachable and operable by
+  Tab/Enter, so this is an ARIA-correctness gap for screen-reader users, not a
+  keyboard-reachability blocker. Fixing it properly needs a roving-tabindex and
+  arrow-key handler in `features/signalDeskShell.js`.
+
 - **Legacy is the production default.** *(Gate 0 record; superseded by the
   Wave 11 flip.)* Signal Desk was reachable only through `BF_UI=signal-desk`.
 - **Signal Desk is a QA preview, not a production composition root.** It mixes
@@ -170,12 +213,106 @@ evidence.
 | Stream Deck | `unavailable` | `unavailable` | Official thin adapter is not implemented. |
 | Wake word | `experimental` | `experimental` | Detector/training foundations exist; shared audio broker, first-word protection, license manifest, and field qualification do not. |
 
-### Linux-specific limitations
+### GPU acceleration (Linux) — CPU-only is an accepted state, not a defect
 
-- Wayland injection may be `clipboard_only` or `unavailable` depending on the
-  compositor and installed tooling. This must be detected live.
-- X11/Wayland, PulseAudio/PipeWire, `xdotool`, `wtype`, `ydotool`, clipboard
-  present/absent, and AppImage launch/upgrade evidence are pending.
+**This is not a bug to fix; it is a supported configuration with honest
+performance expectations.** `hardware_report.py` models acceleration as a
+named tier ladder, `TIER_ORDER = ["cpu-only", "igpu", "dgpu-8g", "dgpu-12g+"]`
+(`hardware_report.py:387`), and `cpu-only` is a first-class member of it, not
+an error branch: when no CUDA/Vulkan-capable device is detected, the tier
+resolves to `"cpu-only"` with `guidance = "No GPU acceleration detected.
+Stick to small models (4B Q4, Whisper base/small); expect a few seconds per
+utterance."` (`hardware_report.py:421-423`). `llm_engine.py` sizes its HTTP
+read timeout off the same assumption: the comment at `llm_engine.py:73-76`
+calls the CPU-only case the "deliberately pessimistic... floor tier" the
+system is tuned around, not a fallback bolted on afterward. This machine (per
+[[user-hardware]] memory: 4B model, no GPU) runs in exactly this tier. No code
+path treats "no GPU" as a verdict downgrade — `assess_model_fit()` appends an
+informational reason string, it does not fail the assessment
+(`hardware_report.py:329-333`).
+
+### Linux-specific limitations — Wayland vs. X11
+
+**Global hotkeys.** The live path is Electron's `app/src/main/hotkeys.js`,
+which prefers `uiohook-napi` (gives key-up events, so push-to-talk works).
+When it can't load or start — Wayland is the named example, alongside a
+missing `libXtst` — the app degrades at runtime (a try/catch around
+`ensureHookRunning`, not an upfront session-type check) to
+`globalShortcut`, which only supports toggle mode, not push-to-talk
+(`app/src/main/hotkeys.js:18-21`, `223-245`). `getHotkeyCapabilities()`
+reports which backend is active and whether push-to-talk is supported
+(`app/src/main/hotkeys.js:340-347`). The Python-side
+`platform_capabilities.supports_global_hotkeys` flag
+(`platform_capabilities.py:91`, gated on `is_linux and is_x11`) is vestigial:
+`hotkey_manager.py:651` logs that native keyboard hooks are disabled and
+hotkeys run via Electron IPC instead, so this Python flag is not what
+actually gates the live capability.
+
+**Text injection**, in `platform_capabilities.detect_injection_method()`
+(`platform_capabilities.py:45-84`):
+- X11: `xdotool` only.
+- Wayland: `wtype` → `ydotool` → `xdotool` (only if an XWayland `DISPLAY` is
+  also present) → clipboard paste.
+- Clipboard backend selection (`_detect_clipboard_backend`,
+  `platform_capabilities.py:22-42`): Wayland prefers `wl-copy`; otherwise
+  `xclip`/`xsel`; falls back to `wl-copy` again for the XWayland case.
+- `"none"` — no injection at all — is returned only when clipboard paste
+  itself is unavailable too (`platform_capabilities.py:84`).
+
+At runtime, if the chosen tool fails mid-session, `injector.py:264-280` falls
+back to clipboard paste; if even that Ctrl+V path fails, the user is told
+directly: *"No input-injection tool available to send Ctrl+V; the dictated
+text is on the clipboard — press Ctrl+V to paste it."*
+(`injector.py:362-365`, `507-508`). Detection is live, not cached at import:
+`/doctor` re-runs `shutil.which()` on every call
+(`platform_capabilities.py:140-172`), so a tool installed mid-session is
+picked up without a restart.
+
+**Doctor recovery guidance actually shown to the user**
+(`server.py`, `recovery_guidelines`):
+- `unsupported_wayland_injection`: *"Text cannot be delivered to other
+  applications: this Wayland session has no typing tool (wtype or ydotool) and
+  no clipboard tool (wl-clipboard), so both the typing path and the clipboard
+  fallback are unavailable. Install wl-clipboard to restore copy-to-clipboard,
+  and wtype (or ydotool) for direct typing; then restart BetterFingers.
+  Dictation, transcription and drafts keep working — only delivery into
+  another window is affected."*
+- `failed_clipboard`: *"The clipboard manager is not responding. On Linux,
+  ensure xclip or xsel is installed."*
+- `platform_capabilities.injection_hint` (`platform_capabilities.py:117-120`)
+  adds a targeted install hint when the method is `"none"`: `wl-clipboard` on
+  Wayland, `xclip`/`xsel` on X11.
+
+**Two doc/code mismatches found while verifying this section, reported to the
+release supervisor rather than fixed here (this pass is docs-only):**
+1. The vocabulary this document previously used — `clipboard_only` /
+   `unavailable` — does not match what the injection status API actually
+   returns. Those tokens belong to a different capability vocabulary
+   (`audio_status.py`'s D-0009 `CAPABILITY_STATUSES`, used for voice-privacy
+   and wake status), never applied to injection. The live injection status
+   reports concrete method names (`wtype`, `ydotool`, `xdotool`, `paste`,
+   `none`) plus booleans, not that enum — corrected above.
+2. **Code-level finding — now FIXED (2026-07-29, sup-backend).** The
+   `unsupported_wayland_injection` card only fires when
+   `is_wayland && !supports_input_injection`
+   (`app/src/renderer/features/utilitiesWorkspace.js:489`), and
+   `supports_input_injection` is false only when clipboard paste has *also*
+   failed (`platform_capabilities.py:84,102`). The old text claimed
+   *"BetterFingers has safely fallen back to copying text to the clipboard"*
+   — reassuring the user about the one path that had just failed too, so
+   nothing reached the target application while the doctor said all was well.
+   The recovery text in `server.py` now states that delivery is unavailable
+   and names the packages that restore it (`wl-clipboard`, `wtype`/`ydotool`),
+   while making clear dictation/transcription/drafts are unaffected.
+   Pinned by `tests/test_server_platform_runtime.py::
+   test_wayland_recovery_text_does_not_claim_a_fallback_that_also_failed`,
+   which drives `/doctor` in the exact triggering state (Wayland, no tools)
+   and asserts the text does not claim a fallback succeeded.
+   Verified: `.venv/bin/python -m pytest
+   tests/test_server_platform_runtime.py -q` -> 16 passed.
+- AppImage launch/upgrade evidence on Linux is still pending (Wave 12
+  packaging, unrelated to the injection/hotkey behavior above, which is
+  implemented and unit-testable today).
 
 ### Windows-specific limitations
 

@@ -94,6 +94,49 @@ SCHEMA_VERSION = 1
 # resolution has failed.
 
 HANDLE_ANCHORS: dict[str, dict[str, str]] = {
+    # --- Wave 12 (D-0034 / Ruling B): legacy ids that never shipped ----------
+    #
+    # tools/anchor_audit.py found rows naming a DOM id present in NO shipping
+    # page -- only in legacy `index.html` -- yet reported as anchored in
+    # `signal-desk.html`. They resolved through the collector's old
+    # "an id may live in JS" rule, which accepted any quoted mention in the
+    # reachable module text, so a `getElementById('draftFinalText')` LOOKUP in
+    # a features/*.js module counted as evidence the element ships.
+    # parity_evidence.js_creates_id() now requires the JS to CREATE the id, so
+    # these stopped resolving on their own and can finally be mapped honestly.
+    #
+    # Declared per HANDLE rather than per row: `#draftFinalText` is cited by
+    # both UI-06-023 and UI-06-057, and a per-row declaration is rejected for
+    # UI-06-057 (its other four handles resolve on their own, so the row is not
+    # wholly unanchored). Mapping the handle fixes every row that cites it.
+    #
+    # Every capability below SHIPS. Only the id naming it was stale.
+    '#draftRawText': {
+        'anchor': '#sdRawTranscriptText',
+        'why': 'The read-only raw transcript, rebuilt as the Talk meta strip\'s raw cell (features/talkWorkspace.js TALK_ELEMENT_IDS `rawTranscriptText`)',
+    },
+    '#draftFinalText': {
+        'anchor': '#sdRefinedHero',
+        'why': 'The cleaned-output editor, shipping as the Refined Message card\'s editable textarea, labelled "Cleaned message, editable"',
+    },
+    '#voiceStatus': {
+        'anchor': '#sdSignalCoreStatusLabel',
+        'why': 'The latest status keyword, shipping as the Signal Core\'s status label (TALK_ELEMENT_IDS `statusLabel`), with its detail line in `#sdSignalCoreStatusDetail`',
+    },
+    '#personaLearningSection': {
+        'anchor': '#sdTeachSection',
+        'why': (
+            'Persona Learning ships as Studio\'s "Teach from my edits" panel. The distinct '
+            '`sdTeach*` naming is deliberate and documented in features/studioWorkspace.js: '
+            'personaLearning.js self-initialises at import time and queries '
+            '`#personaLearningSection`, so reusing that canonical id would make the self-init '
+            'IIFE wire the same DOM a second time with the wrong default hooks and double-fire '
+            'every click. By that same design the legacy id exists in NO shipping page, which '
+            'is why it was the clearest proof the old id-in-JS rule was wrong by design rather '
+            'than by accident'
+        ),
+    },
+
     # --- inventory §7.3 Hotkeys: moved to Utilities / Speech Input ----------
     #
     # This is the group the Wave 11 blockers doc named as a substantive product
@@ -662,6 +705,29 @@ ROW_ANCHORS: dict[str, dict] = {
         'anchors': ['#statusBadge', '#ttsBackendBadge', '#commandBadge'],
         'why': 'The review overlay\'s three badges: session status, TTS backend and voice command, cross-referenced from §12.2',
     },
+
+    # --- Wave 12 (D-0034 / director Ruling B): legacy-id re-anchors -----------
+    #
+    # tools/anchor_audit.py found seven rows naming a DOM id that exists in no
+    # shipping page -- only in legacy `index.html` -- yet reported as anchored
+    # "in signal-desk.html". They resolved through the collector's old
+    # "an id may live in JS" rule, which accepted any quoted mention in the
+    # reachable module text: a `getElementById('draftConfidence')` LOOKUP in a
+    # features/*.js module counted as evidence the element SHIPS.
+    #
+    # parity_evidence.js_creates_id() now requires the JS to CREATE the id
+    # (`.id =`, `setAttribute('id', …)`, or `id="…"` inside built markup)
+    # rather than merely look it up, so these five stopped resolving on their
+    # own -- which is what finally allows them to be re-anchored here. Until
+    # that fix, the collector's "already resolves in production" guard rejected
+    # every one of these declarations, so the guard against redundancy was the
+    # thing preserving the mislabelling.
+    #
+    # The five legacy-id rows this audit found (UI-06-020, UI-06-023,
+    # UI-06-057, UI-06-061, UI-15-001) are re-anchored by HANDLE at the top of
+    # HANDLE_ANCHORS rather than per row, because `#draftFinalText` is cited by
+    # two of them and a per-row declaration is rejected for the row whose other
+    # handles already resolve. See that block for the rulings and rationale.
 }
 
 
@@ -787,6 +853,30 @@ CUTS: dict[str, str] = {
         'Utilities / Models, which are genuinely populated from clone provisioning/status data. '
         'This §0 row is the umbrella over those two and is cut consistently with them: an element '
         'that never had a data source is not a capability being removed.'
+    ),
+
+    # --- Wave 12 ruling C-6 (release director) --------------------------------
+    #
+    # Both rows are the same capability seen from §6 and §14. Declared here
+    # rather than hand-written into the ledger so regeneration reproduces the
+    # ruling. See docs/release/DECISIONS.md D-0032.
+    'UI-06-021': (
+        'Intentional cut: Wave 12 ruling C-6 — the `#draftConfidence` badge is superseded by '
+        'the Talk meta strip on the shipping page. `#draftConfidence` occurs zero times in '
+        '`signal-desk.html`; it resolved only through the "an id may live in JS" fallback, '
+        'matching features/drafts.js\'s getElementById call, so `renderConfidenceBadge()` is a '
+        'permanent no-op on the page a user actually sees. The CAPABILITY is not removed: the '
+        'confidence read-out ships live as `#sdConfidenceValue` / `#sdConfidenceBarFill`, '
+        'evidenced by app/tests/talkDraftSurfaces.test.mjs, which also pins the honest case — '
+        'an unknown score reads as an em dash, not 0%. The legacy element and its behaviour '
+        'are deliberately RETAINED in index.html, which is the rollback path.'
+    ),
+    'UI-14-007': (
+        'Intentional cut: Wave 12 ruling C-6, same capability as UI-06-021 seen from §14 — the '
+        'confidence badge is superseded by Talk\'s meta strip (`#sdConfidenceValue` / '
+        '`#sdConfidenceBarFill`, evidenced by app/tests/talkDraftSurfaces.test.mjs). The id '
+        'this row named, `#draftConfidence`, exists only in the legacy `index.html` rollback '
+        'page and never in the production composition root.'
     ),
 }
 
