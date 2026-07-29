@@ -736,6 +736,29 @@ export function collectUtilitiesElements(root) {
   return els;
 }
 
+/**
+ * Calls `fetchFn`, retrying once on rejection before giving up.
+ *
+ * The house standard from bootstrap/signalDeskApp.js's loadPersonaList(): the
+ * field failure mode is a slow first response against api/backend.js's
+ * 2500ms budget, not a permanently dead endpoint, so one retry recovers most
+ * transient failures before a panel has to fall back to stale-or-error
+ * handling at all.
+ *
+ * @returns {Promise<{ok: true, value: any} | {ok: false, error: Error}>}
+ */
+async function attemptFetch(fetchFn) {
+  let lastError = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return { ok: true, value: await fetchFn() };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  return { ok: false, error: lastError };
+}
+
 // --- DOM-wiring feature ------------------------------------------------------
 
 /**
@@ -761,6 +784,25 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
   let micStream = null;
   let micAnimationFrame = null;
   let messageRescueDraftFeature = null;
+  // True once the audio-device select has shown a real (even if legitimately
+  // empty) result at least once -- distinguishes "nothing to protect yet, so
+  // show the loading/unavailable placeholder" from "a working picker exists,
+  // so a transient failure must leave it alone."
+  let audioDevicesLoaded = false;
+  // Same "has this panel ever shown real data" tracking for the Diagnostics
+  // surfaces below, each of which used to overwrite its own last-good render
+  // with an error (or, worse, an indistinguishable-from-real-data empty
+  // state) the moment a single fetch failed.
+  let doctorLoaded = false;
+  let jobsLoaded = false;
+  let sidecarLogsLoaded = false;
+  let runtimeErrorsLoaded = false;
+  let diagnosticsPathsLoaded = false;
+  let debugLogTailLoaded = false;
+  let metricsLoaded = false;
+  let capabilitiesDumpLoaded = false;
+  let runtimeStatusDumpLoaded = false;
+  let outputSettingsSummaryLoaded = false;
 
   function setMessage(el, text = '', tone = '') {
     if (!el) return;
@@ -794,24 +836,51 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
 
   // --- generic profile-settings patch (Hotkeys / Wake tuning / Advanced residency / Send&Injection ducking / Macros enabled) ---
 
+  /**
+   * A failure here must NOT be cached: `activeProfileName` used to be set to
+   * the 'Default' fallback permanently on a failed fetch (the guard clause
+   * above returns early once it's truthy), so a transient cold-start miss
+   * pinned every later call to the wrong profile forever, even after the
+   * backend came back up. Only a successful fetch is remembered.
+   */
   async function ensureActiveProfile() {
     if (activeProfileName) return activeProfileName;
     try {
       const res = await fetchProfiles();
-      activeProfileName = res?.active || (Array.isArray(res?.profiles) && res.profiles[0]) || 'Default';
+      const active = res?.active || (Array.isArray(res?.profiles) && res.profiles[0]);
+      if (active) {
+        activeProfileName = active;
+        return activeProfileName;
+      }
     } catch (_e) {
-      activeProfileName = 'Default';
+      // fall through -- don't cache a fallback, so the next call retries
     }
-    return activeProfileName;
+    return 'Default';
   }
 
+  /**
+   * This cache backs Hotkeys, Wake tuning, Macros-enabled, Residency and the
+   * Audio device's persisted selection -- every one of them read it via this
+   * function. It used to reset to `{}` on ANY failed fetch, which meant a
+   * single slow/failed backend tick during refreshAll() (the cold-start race
+   * or a mid-session backend-restart re-populate) blanked every hotkey field,
+   * wake-tuning number and residency checkbox on screen, even though nothing
+   * about the user's actual saved settings had changed. A failure now keeps
+   * whatever was last known good, same as loadPersonaList()'s house standard.
+   */
   async function refreshProfileSettings() {
     const name = await ensureActiveProfile();
-    try {
-      const res = await fetchProfile(name);
-      profileSettingsCache = (res && res.settings) || {};
-    } catch (_e) {
-      profileSettingsCache = {};
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const res = await fetchProfile(name);
+        const settings = res && res.settings;
+        if (settings && typeof settings === 'object') {
+          profileSettingsCache = settings;
+        }
+        return profileSettingsCache;
+      } catch (_e) {
+        // retry once before giving up and keeping the last known-good cache
+      }
     }
     return profileSettingsCache;
   }
@@ -923,16 +992,26 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
     els.modelsStatusSummary.textContent = `LLM: ${llmReady ? 'ready' : 'needs download'} · Whisper: ${whisperReady ? 'ready' : 'needs download'}`;
   }
 
-  /** Real refresh: fetches LLM + Whisper model lists and re-renders both panels. */
+  /**
+   * Real refresh: fetches LLM + Whisper model lists and re-renders both
+   * panels. Retries once before giving up; on exhausted retries `llmPayload`/
+   * `whisperPayload` are left untouched (they're only ever reassigned inside
+   * the try), so a transient failure keeps whatever was last rendered rather
+   * than blanking the pickers and the user's current selection.
+   */
   async function refreshModels() {
-    try {
-      [llmPayload, whisperPayload] = await Promise.all([fetchLlmModels(), fetchWhisperModels()]);
+    const hadData = Boolean(llmPayload || whisperPayload);
+    const result = await attemptFetch(() => Promise.all([fetchLlmModels(), fetchWhisperModels()]));
+    if (result.ok) {
+      [llmPayload, whisperPayload] = result.value;
       renderLlmPanel();
       renderWhisperPanel();
       renderModelStatusSummary();
       setMessage(els.modelsMessage, '', '');
-    } catch (error) {
-      setMessage(els.modelsMessage, `Could not load models: ${error.message}`, 'danger');
+    } else {
+      setMessage(els.modelsMessage, hadData
+        ? `Could not refresh models — showing the last known list: ${result.error.message}`
+        : `Could not load models: ${result.error.message}`, 'danger');
     }
   }
 
@@ -1019,12 +1098,15 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
   }
 
   async function refreshWakeBackbones() {
-    try {
-      const res = await fetchWakeModels();
+    const result = await attemptFetch(() => fetchWakeModels());
+    if (result.ok) {
+      const res = result.value;
       if (els.wakeEngineBadge) els.wakeEngineBadge.textContent = Array.isArray(res?.backbones) && res.backbones.some((b) => b.installed) ? 'Ready' : 'Not installed';
       renderWakeBackbones(res?.backbones || []);
-    } catch (error) {
-      setMessage(els.modelsMessage, `Wake models unavailable: ${error.message}`, 'danger');
+    } else {
+      // No render call on failure -- the badge and list keep showing whatever
+      // was last successfully loaded rather than being blanked.
+      setMessage(els.modelsMessage, `Wake models unavailable: ${result.error.message}`, 'danger');
     }
   }
 
@@ -1191,27 +1273,38 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
    */
   async function refreshAudioDevices_() {
     if (!els.audioDeviceSelect) return null;
-    renderAudioDevicePlaceholder('Loading devices…');
-    let payload = null;
-    try {
-      payload = await fetchAudioDevices();
-    } catch (error) {
-      renderAudioDevicePlaceholder('Device list unavailable');
-      setMessage(els.audioMessage, `Could not list audio devices: ${error.message}`, 'danger');
+    // Only show the loading placeholder if there is nothing real on screen
+    // yet -- a background refreshAll() re-populate (cold start recovering, or
+    // the 3s /health poll healing a mid-session backend restart) must not
+    // interrupt a working, already-populated picker with "Loading…" while the
+    // user might be about to pick from it.
+    const hadDevices = audioDevicesLoaded;
+    if (!hadDevices) renderAudioDevicePlaceholder('Loading devices…');
+    const result = await attemptFetch(() => fetchAudioDevices());
+    if (!result.ok) {
+      // A failed fetch must not blank a working dropdown (and the user's
+      // current selection with it) -- same house standard as
+      // loadPersonaList(). Only fall back to the "unavailable" placeholder
+      // when there was never a good list to begin with.
+      if (!hadDevices) renderAudioDevicePlaceholder('Device list unavailable');
+      setMessage(els.audioMessage, `Could not list audio devices: ${result.error.message}`, 'danger');
       return null;
     }
+    const payload = result.value;
     // The backend reports its own probe failure in `error` rather than raising,
     // so an empty list with a reason must not be shown as "no microphones".
     if (payload?.error) {
-      renderAudioDevicePlaceholder('Device list unavailable');
+      if (!hadDevices) renderAudioDevicePlaceholder('Device list unavailable');
       setMessage(els.audioMessage, `Could not list audio devices: ${payload.error}`, 'danger');
       return null;
     }
     const inputs = (payload?.devices || []).filter((d) => Number(d?.max_input_channels) > 0);
     if (!inputs.length) {
+      audioDevicesLoaded = true;
       renderAudioDevicePlaceholder('No input devices found');
       return payload;
     }
+    audioDevicesLoaded = true;
     setAudioDevices(inputs, payload?.default_input_device);
     // Read the profile explicitly rather than trusting profileSettingsCache to
     // be warm: refreshAll() runs every section's refresh concurrently, so
@@ -1383,11 +1476,19 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
     });
   }
 
+  /**
+   * refreshAll() re-runs this on every cold-start retry and every mid-session
+   * backend-restart re-populate (bootstrap/signalDeskApp.js's 3s /health
+   * poll), so a field the user is actively focused on -- mid-typing, or
+   * mid-way through the click-to-record chord capture, which also parks focus
+   * on the input while it shows "Press a key…" -- is left alone rather than
+   * overwritten out from under them.
+   */
   async function refreshHotkeys() {
     const settings = await refreshProfileSettings();
     for (const key of HOTKEY_FIELD_KEYS) {
       const input = els.hotkeyFields?.[key]?.input;
-      if (input) input.value = settings[key] || '';
+      if (input && document.activeElement !== input) input.value = settings[key] || '';
     }
     renderHotkeyCollisions();
   }
@@ -1428,11 +1529,12 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
     }
   }
 
+  /** Same focus guard as refreshHotkeys() -- a background refreshAll() must not overwrite a number the user is mid-typing. */
   async function refreshWakeTuningFromProfile() {
     const settings = await refreshProfileSettings();
-    if (els.wakeSensitivity) els.wakeSensitivity.value = settings.wake_word_sensitivity ?? '';
-    if (els.wakeCooldown) els.wakeCooldown.value = settings.wake_word_cooldown_s ?? '';
-    if (els.wakeMaxRecording) els.wakeMaxRecording.value = settings.wake_word_max_recording_s ?? '';
+    if (els.wakeSensitivity && document.activeElement !== els.wakeSensitivity) els.wakeSensitivity.value = settings.wake_word_sensitivity ?? '';
+    if (els.wakeCooldown && document.activeElement !== els.wakeCooldown) els.wakeCooldown.value = settings.wake_word_cooldown_s ?? '';
+    if (els.wakeMaxRecording && document.activeElement !== els.wakeMaxRecording) els.wakeMaxRecording.value = settings.wake_word_max_recording_s ?? '';
     if (els.wakeModelSelect) els.wakeModelSelect.value = settings.wake_word_model ?? '';
   }
 
@@ -1608,11 +1710,12 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
   }
 
   async function refreshDictionary() {
-    try {
-      const payload = await fetchDictionary();
-      renderDictionaryList(payload?.terms || []);
-    } catch (error) {
-      setMessage(els.dictionaryMessage, `Dictionary unavailable: ${error.message}`, 'danger');
+    const result = await attemptFetch(() => fetchDictionary());
+    if (result.ok) {
+      renderDictionaryList(result.value?.terms || []);
+    } else {
+      // No render call -- the chip list keeps whatever was last loaded.
+      setMessage(els.dictionaryMessage, `Dictionary unavailable: ${result.error.message}`, 'danger');
     }
   }
 
@@ -1668,11 +1771,12 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
   }
 
   async function refreshMacros() {
-    try {
-      const payload = await fetchMacros();
-      renderMacrosList(payload?.macros || []);
-    } catch (error) {
-      setMessage(els.macrosMessage, `Macros unavailable: ${error.message}`, 'danger');
+    const result = await attemptFetch(() => fetchMacros());
+    if (result.ok) {
+      renderMacrosList(result.value?.macros || []);
+    } else {
+      // No render call -- the macro list keeps whatever was last loaded.
+      setMessage(els.macrosMessage, `Macros unavailable: ${result.error.message}`, 'danger');
     }
   }
 
@@ -1769,16 +1873,31 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
       els.doctorRefreshButton.disabled = true;
       els.doctorRefreshButton.textContent = 'Running check…';
     }
+    // try/finally, not a plain trailing block: the button re-enable has to
+    // survive a throw. attemptFetch() cannot reject, but renderDoctorCards()
+    // builds the whole 8-card grid and can, and a re-enable placed after the
+    // branches would then be skipped -- leaving "Running check…" disabled with
+    // no way back, which is a worse dead control than the blank grid this
+    // function was rewritten to avoid.
     try {
-      const doctor = await fetchDoctor(true);
-      renderDoctorCards(doctor);
-    } catch (error) {
-      if (els.doctorCardsGrid) {
-        els.doctorCardsGrid.replaceChildren();
-        const err = document.createElement('span');
-        err.className = 'sd-util-list__empty';
-        err.textContent = `Doctor check failed: ${error.message}`;
-        els.doctorCardsGrid.append(err);
+      const result = await attemptFetch(() => fetchDoctor(true));
+      if (result.ok) {
+        doctorLoaded = true;
+        renderDoctorCards(result.value);
+      } else if (!doctorLoaded) {
+        // Nothing has ever rendered here -- an empty grid would be
+        // indistinguishable from "everything is fine", so say what happened.
+        if (els.doctorCardsGrid) {
+          els.doctorCardsGrid.replaceChildren();
+          const err = document.createElement('span');
+          err.className = 'sd-util-list__empty';
+          err.textContent = `Doctor check failed: ${result.error.message}`;
+          els.doctorCardsGrid.append(err);
+        }
+      } else {
+        // A working set of cards is already on screen -- a failed re-check
+        // must not wipe it out. Say so without touching the grid.
+        setMessage(els.diagnosticsMessage, `Doctor re-check failed — showing the last known result: ${result.error.message}`, 'danger');
       }
     } finally {
       if (els.doctorRefreshButton) {
@@ -1814,12 +1933,14 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
   }
 
   async function refreshMetrics() {
-    try {
-      const metrics = await fetchMetrics();
-      renderMetricsHud(metrics);
-    } catch (error) {
-      if (els.metricsHud) els.metricsHud.textContent = `Metrics unavailable: ${error.message}`;
+    const result = await attemptFetch(() => fetchMetrics());
+    if (result.ok) {
+      metricsLoaded = true;
+      renderMetricsHud(result.value);
+    } else if (!metricsLoaded) {
+      if (els.metricsHud) els.metricsHud.textContent = `Metrics unavailable: ${result.error.message}`;
     }
+    // Already-loaded + still-failing: leave the last known HUD on screen.
   }
 
   function renderRecordingsList(recordings) {
@@ -1875,11 +1996,12 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
   }
 
   async function refreshRecordings() {
-    try {
-      const payload = await fetchRecordings();
-      renderRecordingsList(payload?.recordings || []);
-    } catch (error) {
-      setMessage(els.recordingsMessage, `Recordings unavailable: ${error.message}`, 'danger');
+    const result = await attemptFetch(() => fetchRecordings());
+    if (result.ok) {
+      renderRecordingsList(result.value?.recordings || []);
+    } else {
+      // No render call -- the recordings list keeps whatever was last loaded.
+      setMessage(els.recordingsMessage, `Recordings unavailable: ${result.error.message}`, 'danger');
     }
   }
 
@@ -1919,11 +2041,17 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
   }
 
   async function refreshJobsList() {
-    try {
-      const payload = await fetchJobs(true);
-      renderJobsList(payload?.jobs || []);
-    } catch (error) {
-      if (els.jobsList) els.jobsList.textContent = `Jobs unavailable: ${error.message}`;
+    const result = await attemptFetch(() => fetchJobs(true));
+    if (result.ok) {
+      jobsLoaded = true;
+      renderJobsList(result.value?.jobs || []);
+    } else if (!jobsLoaded) {
+      if (els.jobsList) els.jobsList.textContent = `Jobs unavailable: ${result.error.message}`;
+    } else {
+      // A job list is already on screen -- possibly with a live Cancel
+      // button on something still running. Overwriting it with error text
+      // would both lie (the jobs didn't vanish) and strand that control.
+      setMessage(els.diagnosticsMessage, `Could not refresh jobs — showing the last known list: ${result.error.message}`, 'danger');
     }
   }
 
@@ -1936,9 +2064,17 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
   async function refreshSidecarLogs() {
     try {
       const logs = await window.betterFingers?.getSidecarLogs?.();
+      sidecarLogsLoaded = true;
       renderSidecarLogs(Array.isArray(logs) ? logs : logs?.lines);
-    } catch (_error) {
-      renderSidecarLogs([]);
+    } catch (error) {
+      // "No sidecar logs yet." (renderSidecarLogs([])) is what the empty
+      // Clear button intentionally shows -- reusing it here on a genuine
+      // fetch failure would tell the user their logs are empty when the
+      // truth is the read itself failed. Only fall back to it if nothing
+      // real has ever loaded; otherwise keep the last tail on screen.
+      if (!sidecarLogsLoaded && els.sidecarLogsTail) {
+        els.sidecarLogsTail.textContent = `Sidecar logs unavailable: ${error.message}`;
+      }
     }
   }
 
@@ -1972,11 +2108,14 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
   }
 
   async function refreshDiagnosticsPaths() {
-    try {
-      const paths = await fetchDiagnosticsPaths();
-      renderDetailList(els.diagnosticsPathsList, paths);
-    } catch (error) {
-      if (els.diagnosticsPathsList) els.diagnosticsPathsList.textContent = `Paths unavailable: ${error.message}`;
+    const result = await attemptFetch(() => fetchDiagnosticsPaths());
+    if (result.ok) {
+      diagnosticsPathsLoaded = true;
+      renderDetailList(els.diagnosticsPathsList, result.value);
+    } else if (!diagnosticsPathsLoaded) {
+      if (els.diagnosticsPathsList) els.diagnosticsPathsList.textContent = `Paths unavailable: ${result.error.message}`;
+    } else {
+      setMessage(els.diagnosticsMessage, `Could not refresh diagnostics paths — showing the last known values: ${result.error.message}`, 'danger');
     }
   }
 
@@ -2000,23 +2139,35 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
   }
 
   async function refreshRuntimeErrors() {
-    try {
-      const payload = await fetchRuntimeErrors();
-      renderRuntimeErrors(payload?.errors || []);
-    } catch (_error) {
-      renderRuntimeErrors([]);
+    const result = await attemptFetch(() => fetchRuntimeErrors());
+    if (result.ok) {
+      runtimeErrorsLoaded = true;
+      renderRuntimeErrors(result.value?.errors || []);
+    } else if (!runtimeErrorsLoaded && els.runtimeErrorsList) {
+      // renderRuntimeErrors([]) reads as "No runtime errors recorded." --
+      // exactly backwards for a list whose OWN fetch just failed. Only fall
+      // back to it once nothing real has ever loaded, and say plainly that
+      // the check itself failed rather than claiming a clean bill of health.
+      els.runtimeErrorsList.replaceChildren();
+      const err = document.createElement('span');
+      err.className = 'sd-util-list__empty';
+      err.textContent = `Could not check for runtime errors: ${result.error.message}`;
+      els.runtimeErrorsList.append(err);
     }
+    // Already-loaded + still-failing: leave the last known error list alone.
   }
 
   async function refreshDebugLogTail() {
     if (!els.debugLogTail) return;
-    try {
-      const payload = await fetchDiagnosticsLogs(80);
-      const lines = payload?.lines || payload?.text || '';
+    const result = await attemptFetch(() => fetchDiagnosticsLogs(80));
+    if (result.ok) {
+      debugLogTailLoaded = true;
+      const lines = result.value?.lines || result.value?.text || '';
       els.debugLogTail.textContent = Array.isArray(lines) ? lines.join('\n') : String(lines || 'No log lines.');
-    } catch (error) {
-      els.debugLogTail.textContent = `Log unavailable: ${error.message}`;
+    } else if (!debugLogTailLoaded) {
+      els.debugLogTail.textContent = `Log unavailable: ${result.error.message}`;
     }
+    // Already-loaded + still-failing: leave the last known tail on screen.
   }
 
   async function refreshAllDiagnostics() {
@@ -2071,8 +2222,10 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
   }
 
   async function refreshCapabilitiesDump() {
-    try {
-      const capabilities = await fetchCapabilities();
+    const result = await attemptFetch(() => fetchCapabilities());
+    if (result.ok) {
+      capabilitiesDumpLoaded = true;
+      const capabilities = result.value;
       renderDetailList(els.capabilitiesList, capabilities, [
         'platform', 'session_type', 'is_linux', 'is_wayland', 'is_x11',
         'supports_basic_clipboard', 'supports_rich_clipboard_restore',
@@ -2084,27 +2237,32 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
       if (els.injectionUnavailableWarning) els.injectionUnavailableWarning.hidden = capabilities.supports_input_injection !== false;
       if (els.audioDucking) els.audioDucking.disabled = capabilities.supports_audio_ducking === false;
       if (els.audioDuckingWarning) els.audioDuckingWarning.hidden = capabilities.supports_audio_ducking !== false;
-    } catch (error) {
-      if (els.capabilitiesList) els.capabilitiesList.textContent = `Capabilities unavailable: ${error.message}`;
+    } else if (!capabilitiesDumpLoaded) {
+      if (els.capabilitiesList) els.capabilitiesList.textContent = `Capabilities unavailable: ${result.error.message}`;
     }
+    // Already-loaded + still-failing: leave the last known dump (and its
+    // derived Wayland/injection/ducking warnings) exactly as they were.
   }
 
   async function refreshRuntimeStatusDump() {
-    try {
-      const status = await fetchRuntimeStatus();
-      renderDetailList(els.runtimeStatusList, status);
-    } catch (error) {
-      if (els.runtimeStatusList) els.runtimeStatusList.textContent = `Runtime status unavailable: ${error.message}`;
+    const result = await attemptFetch(() => fetchRuntimeStatus());
+    if (result.ok) {
+      runtimeStatusDumpLoaded = true;
+      renderDetailList(els.runtimeStatusList, result.value);
+    } else if (!runtimeStatusDumpLoaded) {
+      if (els.runtimeStatusList) els.runtimeStatusList.textContent = `Runtime status unavailable: ${result.error.message}`;
     }
   }
 
   async function refreshOutputSettingsSummary() {
     if (!els.outputSettingsSummary) return;
-    try {
-      const settings = await fetchOutputSettings();
+    const result = await attemptFetch(() => fetchOutputSettings());
+    if (result.ok) {
+      outputSettingsSummaryLoaded = true;
+      const settings = result.value;
       els.outputSettingsSummary.textContent = `Send mode: ${settings?.send_mode ?? 'unknown'} · Auto-submit: ${settings?.auto_submit ? 'on' : 'off'} · Pending sends: ${settings?.pending_sends ?? 0}`;
-    } catch (error) {
-      els.outputSettingsSummary.textContent = `Unavailable: ${error.message}`;
+    } else if (!outputSettingsSummaryLoaded) {
+      els.outputSettingsSummary.textContent = `Unavailable: ${result.error.message}`;
     }
   }
 
@@ -2222,6 +2380,7 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
     refreshHotkeys,
     refreshHotkeyCapabilities,
     refreshWakeStatus,
+    refreshWakeTuningFromProfile,
     refreshDictionary,
     refreshMacros,
     refreshDoctor,

@@ -66,6 +66,29 @@ export function createDraftsFeature({ elements, ui, hooks }) {
   let latestDraft = null;
   let draftHistory = [];
   let historySearchTimer = null;
+  // Set whenever the editor's live text diverges from the last-saved
+  // final_text, cleared on a successful save or when a genuinely different
+  // draft loads. Guards renderDraft() below from clobbering an in-progress,
+  // unsaved edit when a cold-start/health-poll repopulate re-fetches the same
+  // draft mid-session (see the module doc + Wave 12 collab task B).
+  let editorDirty = false;
+
+  // Retries once (the field failure is a slow first response, not a dead
+  // endpoint -- mirrors bootstrap/signalDeskApp.js's loadPersonaList) and
+  // never lets a fetch failure or malformed payload downgrade to an empty
+  // render; the caller decides what "keep the previous state" means for its
+  // own DOM.
+  async function fetchResilient(fetchFn, isUsable) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const payload = await fetchFn();
+        if (isUsable(payload)) return { payload, failed: false };
+      } catch (_error) {
+        // fall through to the retry / to the caller's fallback
+      }
+    }
+    return { payload: null, failed: true };
+  }
 
   function getLatestDraft() {
     return latestDraft;
@@ -184,7 +207,16 @@ export function createDraftsFeature({ elements, ui, hooks }) {
   }
 
   function renderDraft(draft) {
-    latestDraft = draft ?? null;
+    const incoming = draft ?? null;
+    // Same draft the user is already mid-edit on: a repopulate (health-poll
+    // recovery, another panel's refresh) must not overwrite what they've
+    // typed but not saved yet. A genuinely different (or cleared) draft
+    // always takes over normally.
+    const preserveEditorText = Boolean(incoming && latestDraft && incoming.id === latestDraft.id && editorDirty);
+    latestDraft = incoming;
+    if (!preserveEditorText) {
+      editorDirty = false;
+    }
 
     if (!latestDraft) {
       if (els.draftStatusEl) {
@@ -216,7 +248,7 @@ export function createDraftsFeature({ elements, ui, hooks }) {
     if (els.draftRawTextEl) {
       els.draftRawTextEl.textContent = latestDraft.raw_text || '(empty transcript)';
     }
-    if (els.draftFinalTextEl) {
+    if (els.draftFinalTextEl && !preserveEditorText) {
       els.draftFinalTextEl.value = latestDraft.final_text || '';
     }
     renderTokenSummary(latestDraft);
@@ -338,21 +370,44 @@ export function createDraftsFeature({ elements, ui, hooks }) {
     }, 250);
   }
 
+  // A `{draft: null}` response is a legitimate "nothing recorded yet" state
+  // (a fresh install has no drafts); only a thrown request or a payload
+  // missing the `draft` key entirely counts as a failure worth retrying.
   async function refreshLatestDraft() {
-    const payload = await fetchLatestDraft();
-    renderDraft(payload?.draft ?? null);
-    return payload?.draft ?? null;
+    const { payload, failed } = await fetchResilient(
+      fetchLatestDraft,
+      (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value) && 'draft' in value,
+    );
+    if (failed) {
+      // Nothing was ever loaded -- say so instead of silently looking like
+      // "you have no draft" when the real story is "the request failed".
+      if (!latestDraft) {
+        setMessage(els.draftMessageEl, 'Could not load your last draft. Retrying automatically.', 'warning');
+      }
+      return latestDraft;
+    }
+    renderDraft(payload.draft ?? null);
+    return payload.draft ?? null;
   }
 
   async function refreshDrafts() {
-    const payload = await fetchDrafts();
-    renderDraftHistory(payload?.drafts ?? []);
-    if (payload?.drafts?.length) {
+    const { payload, failed } = await fetchResilient(
+      fetchDrafts,
+      (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value) && Array.isArray(value.drafts),
+    );
+    if (failed) {
+      if (!draftHistory.length && els.draftHistoryListEl) {
+        els.draftHistoryListEl.innerHTML = '<span class="empty-state">Could not load draft history. Retrying automatically.</span>';
+      }
+      return draftHistory;
+    }
+    renderDraftHistory(payload.drafts);
+    if (payload.drafts.length) {
       renderDraft(payload.drafts[payload.drafts.length - 1]);
     } else {
       renderDraft(null);
     }
-    return payload?.drafts ?? [];
+    return payload.drafts;
   }
 
   async function saveCurrentDraftEdit({ silent = false } = {}) {
@@ -367,6 +422,7 @@ export function createDraftsFeature({ elements, ui, hooks }) {
 
     const rawTextBefore = latestDraft.raw_text ?? '';
     const draft = await editDraft(latestDraft.id, finalText);
+    editorDirty = false;
     renderDraft(draft);
     await refreshDrafts();
     if (!silent) {
@@ -576,6 +632,7 @@ export function createDraftsFeature({ elements, ui, hooks }) {
   }
 
   function handleDraftTextInput() {
+    editorDirty = getDraftEditorText() !== (latestDraft?.final_text ?? '');
     const words = getDraftEditorText().trim().split(/\s+/).filter(Boolean).length;
     const tokenLimit = Number(latestDraft?.token_limit ?? 0);
     renderTokenSummary({

@@ -180,9 +180,28 @@ async function main() {
   // quitting was found to be able to take the whole runner process down with
   // it (see harness.mjs's close() comment), so anything that still needs to
   // run must happen first, not in a finally block after close().
-  const reportPath = writeReportFile('qa-report.md', renderReport(results));
+  // A FILTERED run must never overwrite the full-board walkbook.
+  //
+  // `qa-report.md` is read as the evidence of record for the whole board. An
+  // area run produces a report covering only that area, and writing it to the
+  // same filename silently replaced 97 scenarios' evidence with 6 -- the file
+  // still looked like the walkbook, still had a plausible pass line, and the
+  // only clue was that it had got much shorter. That happened during this wave:
+  // a single `run.mjs overlay-windows` truncated the committed aggregate by 589
+  // lines, and it was caught by reading `git status`, not by anything here.
+  //
+  // Filtered runs now write `qa-report.<area>.md` instead. The aggregate can
+  // only ever be produced by a run that actually covered the whole board, which
+  // is the only run entitled to claim it.
+  const reportName = areaFilter ? `qa-report.${areaFilter}.md` : 'qa-report.md';
+  const reportPath = writeReportFile(reportName, renderReport(results));
   const failed = results.filter((r) => r.status === 'FAIL');
   console.log(`\n${results.length - failed.length}/${results.length} passed. Report: ${reportPath}`);
+  if (areaFilter) {
+    console.log(
+      `(filtered run: wrote ${reportName}, leaving the full-board qa-report.md untouched)`,
+    );
+  }
   const exitCode = failed.length ? 1 : 0;
   // Stage the code on the process BEFORE closing Electron, not just in a
   // local: closing can terminate this process outright (harness.mjs close()),

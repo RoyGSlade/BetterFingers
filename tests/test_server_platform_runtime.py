@@ -248,6 +248,49 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
         self.assertFalse(injection["is_x11"])
         self.assertIn("wl-clipboard", injection["hint"])
 
+    def test_wayland_recovery_text_does_not_claim_a_fallback_that_also_failed(self):
+        """The recovery text must match the state that triggers it.
+
+        The renderer raises `unsupported_wayland_injection` on
+        `is_wayland && !supports_input_injection`
+        (utilitiesWorkspace.js:489). `supports_input_injection` is False only
+        when `injection_method == "none"`, and platform_capabilities reaches
+        "none" solely when the clipboard fallback is ALSO unavailable. The
+        text used to read "BetterFingers has safely fallen back to copying
+        text to the clipboard" -- reassuring the user about the exact path
+        that had just failed too, so nothing reached the target application
+        while the doctor said all was well.
+        """
+        with patch("sys.platform", "linux"), patch.object(
+            platform_capabilities, "is_linux", True
+        ), patch.object(platform_capabilities, "is_windows", False), patch.object(
+            platform_capabilities, "is_macos", False
+        ), patch.object(platform_capabilities, "is_wayland", True
+        ), patch.object(platform_capabilities, "is_x11", False), patch.object(
+            platform_capabilities, "session_type", "wayland"
+        ), patch("platform_capabilities.shutil.which", return_value=None):
+            with TestClient(server.app) as client:
+                response = client.get("/doctor")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        # Precondition: this is exactly the state that fires the trigger.
+        self.assertTrue(payload["injection"]["is_wayland"])
+        self.assertFalse(payload["injection"]["supports_input_injection"])
+
+        text = payload["recovery"]["unsupported_wayland_injection"]
+        lowered = text.lower()
+        self.assertNotIn("safely fallen back", lowered)
+        self.assertNotIn("has fallen back", lowered)
+        # It must name the packages that actually restore delivery...
+        self.assertIn("wl-clipboard", lowered)
+        self.assertIn("wtype", lowered)
+        # ...and must not imply text is still reaching other applications.
+        self.assertTrue(
+            "cannot be delivered" in lowered or "unavailable" in lowered,
+            "recovery text should state that delivery is unavailable, got: " + text,
+        )
+
     def test_doctor_reports_injection_status_wayland_with_wtype(self):
         with patch("sys.platform", "linux"), patch.object(
             platform_capabilities, "is_linux", True

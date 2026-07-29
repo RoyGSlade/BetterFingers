@@ -168,6 +168,43 @@ test('a list that fails to load leaves the picker usable', async () => {
   assert.equal(h.feature.getSelectedId(), null);
 });
 
+test('refresh retries once before giving up on a slow/failed first response', async () => {
+  let attempts = 0;
+  const h = harness({
+    fetchImpl: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('socket hang up');
+      return { ok: true, contacts: CONTACTS };
+    },
+  });
+  await h.feature.refresh();
+  assert.equal(attempts, 2, 'a slow first response must be retried once, not treated as a dead endpoint');
+  assert.equal(h.feature.getContacts().length, 2);
+});
+
+test('a refresh that fails AFTER contacts were already loaded keeps them, not just "None"', async () => {
+  let call = 0;
+  const h = harness({
+    fetchImpl: async () => {
+      call += 1;
+      if (call <= 1) return { ok: true, contacts: CONTACTS };
+      throw new Error('backend down');
+    },
+  });
+  await h.feature.refresh();
+  assert.equal(h.feature.getContacts().length, 2, 'sanity: the first refresh succeeded');
+
+  await h.feature.refresh();
+  assert.equal(
+    h.feature.getContacts().length, 2,
+    'a later failed refresh must not blank a contact picker that was already populated',
+  );
+  assert.ok(
+    h.toasts.some((t) => /Could not refresh your contacts/.test(t.msg)),
+    'a total failure must be reported honestly, not silently swallowed',
+  );
+});
+
 test('selecting a contact reports it once for persisting', async () => {
   const h = harness();
   await h.feature.refresh();

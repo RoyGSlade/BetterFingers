@@ -488,9 +488,45 @@ export const overlayProdScenarios = [
       expect(ttsCalls, 'one read').toHaveLength(1);
       expect(ttsCalls[0].id).toBe('7');
 
+      // The second press. This is where this scenario failed deterministically
+      // at HEAD, and the failure was real on BOTH sides:
+      //
+      //   * PRODUCT: the Stop handler posted /tts/stop and then never reset the
+      //     overlay state, because it was relying on a `draft_tts_stopped` push
+      //     that only arrives when playback ends on its own. So the button
+      //     stayed "Stop" and the badge stayed "Speaking" after a manual stop,
+      //     and a third press posted another stop instead of re-reading. Fixed
+      //     in review-overlay.html's readButton handler.
+      //   * SCENARIO: `expect(ttsStops).toHaveLength(1)` ran flat, immediately
+      //     after the click. Playwright's click() resolves when the click is
+      //     DISPATCHED, not when the async handler's awaited POST completes, so
+      //     the check raced a round trip that goes out over IPC to the main
+      //     process and back -- it essentially never won. This file's own rule
+      //     (see the rewrite block above) is to poll capture counts and to
+      //     anchor flat checks behind an awaited UI assertion the response has
+      //     already driven. That rule was simply never applied to this site.
+      //
+      // The two were the same root cause: there was no UI transition to await
+      // here because the product forgot to make one. Now there is, so the
+      // button state is asserted first and the captures follow it.
       await review.click('#readButton');
-      expect(ttsStops, 'second press stopped rather than re-read').toHaveLength(1);
+      await expect(review.locator('#readButton'), 'a stopped read must offer Read again, not a dead Stop')
+        .toHaveText('Read');
+      await expect(review.locator('#statusBadge')).not.toHaveText('Speaking');
+      await expect.poll(() => ttsStops.length, {
+        message: 'the second press must post exactly one /tts/stop',
+      }).toBe(1);
       expect(ttsCalls, 'second press did not start another read').toHaveLength(1);
+
+      // And the control is genuinely reusable rather than one-shot: a third
+      // press starts a NEW read. This is the half the old assertions could not
+      // reach, and the half a user hits first.
+      await review.click('#readButton');
+      await expect(review.locator('#readButton')).toHaveText('Stop');
+      await expect.poll(() => ttsCalls.length, {
+        message: 'after a stop, Read must read again rather than stop again',
+      }).toBe(2);
+      expect(ttsStops, 'the third press was a read, not another stop').toHaveLength(1);
     },
     screenshots: [
       {

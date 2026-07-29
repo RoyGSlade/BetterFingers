@@ -26,8 +26,13 @@
   --sd-text-secondary: #94A3B8;
   --sd-text-muted: #5B6B7C;
 
-  /* Section labels: uppercase, tracked -- color reuses --sd-text-muted. */
-  --sd-label-color: #5B6B7C;
+  /* Section labels: uppercase, tracked. Was a straight copy of --sd-text-muted
+     (#5B6B7C), which computes to 3.20-3.54:1 against every surface token this
+     app uses -- below WCAG AA's 4.5:1 floor for normal-size text -- and this
+     token labels EVERY field and panel on the page (39 .sd-field__label uses
+     alone). Re-pointed at --sd-text-secondary (6.82-7.53:1 against the same
+     surfaces), computed by app/tests/uiControlContract.test.mjs. */
+  --sd-label-color: var(--sd-text-secondary);
   --sd-label-font-size: 11px;
   --sd-label-letter-spacing: 0.12em;
 
@@ -40,6 +45,12 @@
   --sd-blue-light: #60A5FA;
   --sd-amber: #F59E0B;        /* Warn amber */
   --sd-red: #EF4444;          /* Danger red */
+  /* --sd-red on a 14%-alpha red chip over --sd-surface-raised computes to
+     ~4.07:1 -- below WCAG AA 4.5:1 for the 12px bold badge text that uses it
+     (.sd-badge--error). --sd-green and --sd-amber clear the same chip
+     treatment (their base luminance is higher) so only red needs a lighter
+     variant, mirroring the existing --sd-green-bright pattern below. */
+  --sd-red-bright: #F87171;
 
   /* Persona signature colors (SPEC 2) */
   --sd-persona-natural: #22D3EE;
@@ -200,7 +211,10 @@
   font-size: 9px;
   font-weight: 600;
   letter-spacing: var(--sd-label-letter-spacing);
-  color: var(--sd-text-muted);
+  /* text-muted measured 3.35:1 on this rail's --sd-surface background,
+     below WCAG AA 4.5:1 for this 9px label; text-secondary clears it at
+     ~7.1:1 (app/tests/uiControlContract.test.mjs). */
+  color: var(--sd-text-secondary);
   text-transform: uppercase;
 }
 
@@ -313,6 +327,13 @@
 .sd-center {
   grid-area: center;
   overflow-y: auto;
+  /* Grid items default to min-width: auto, i.e. their content's min-content
+     size -- so unbreakable content deep inside (long words, wide rows) can
+     force this 1fr track past the viewport width and put a horizontal
+     scrollbar on the whole page instead of wrapping/scrolling locally. The
+     file already uses this exact min-width: 0 fix ~15 times for the same
+     class of bug; the shell's own center/context tracks were missing it. */
+  min-width: 0;
   padding: var(--sd-space-24) var(--sd-space-32);
   display: flex;
   flex-direction: column;
@@ -419,6 +440,9 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* See .sd-center: same fixed-track overflow guard for the 320px context
+     column. */
+  min-width: 0;
   background: var(--sd-surface);
   border-left: 1px solid var(--sd-border);
 }
@@ -434,7 +458,9 @@
   font-size: var(--sd-font-label);
   letter-spacing: var(--sd-label-letter-spacing);
   text-transform: uppercase;
-  color: var(--sd-text-muted);
+  /* See .sd-nav__kicker above: text-muted fails AA on every surface token
+     in this palette (3.20-3.54:1); text-secondary clears it. */
+  color: var(--sd-text-secondary);
 }
 
 .sd-context__collapse-btn {
@@ -509,7 +535,7 @@
   font-size: var(--sd-font-label);
   letter-spacing: var(--sd-label-letter-spacing);
   text-transform: uppercase;
-  color: var(--sd-text-muted);
+  color: var(--sd-text-secondary);
 }
 
 .sd-context__section-label .sd-context__value {
@@ -808,7 +834,7 @@
   font-size: var(--sd-font-label);
   letter-spacing: var(--sd-label-letter-spacing);
   text-transform: uppercase;
-  color: var(--sd-text-muted);
+  color: var(--sd-text-secondary);
 }
 
 .sd-statusbar__value {
@@ -1121,7 +1147,7 @@
   font-size: var(--sd-font-label);
   letter-spacing: var(--sd-label-letter-spacing);
   text-transform: uppercase;
-  color: var(--sd-text-muted);
+  color: var(--sd-text-secondary);
 }
 
 .sd-refined-card__eyebrow-icon {
@@ -1156,7 +1182,10 @@
 
 .sd-badge--error {
   background: rgba(239, 68, 68, 0.14);
-  color: var(--sd-red);
+  /* --sd-red measures ~4.07:1 on this chip's composited background, below
+     AA's 4.5:1 for 12px bold text -- see --sd-red-bright's definition above.
+     --sd-red-bright clears it at ~5.53:1. */
+  color: var(--sd-red-bright);
   border: 1px solid rgba(239, 68, 68, 0.3);
 }
 
@@ -1407,7 +1436,15 @@
   color: var(--sd-text-secondary);
 }
 
-.sd-voice-studio__slider input[type="range"] { width: 100%; }
+.sd-voice-studio__slider input[type="range"] { width: 100%; accent-color: var(--sd-cyan); }
+
+/* Live numeric read-out beside each modulation slider's name, driven by
+   voiceStudio.js's updateModulationLabels(). Tabular figures so the value
+   does not shuffle the label left and right as the user drags. */
+.sd-voice-studio__value {
+  color: var(--sd-text-primary);
+  font-variant-numeric: tabular-nums;
+}
 
 .sd-voice-studio__mix {
   margin-left: auto;
@@ -1428,6 +1465,11 @@
   font-size: var(--sd-font-sm, .85rem);
   color: var(--sd-text-primary);
   line-height: 1.4;
+}
+
+.sd-voice-studio__consent input {
+  accent-color: var(--sd-cyan);
+  margin-top: 3px;
 }
 
 .sd-voice-studio__result {
@@ -1530,7 +1572,7 @@
   font-size: var(--sd-font-label);
   letter-spacing: var(--sd-label-letter-spacing);
   text-transform: uppercase;
-  color: var(--sd-text-muted);
+  color: var(--sd-text-secondary);
 }
 
 .sd-meta-cell__raw {
@@ -1719,7 +1761,9 @@
 }
 
 .sd-library-search__input::placeholder {
-  color: var(--sd-text-muted);
+  /* text-muted measures 3.20:1 on this input's surface-raised background,
+     below AA 4.5:1 -- text-secondary clears it at ~6.82:1. */
+  color: var(--sd-text-secondary);
 }
 
 .sd-library-search__input:focus {
@@ -1836,7 +1880,7 @@
   font-size: var(--sd-font-label);
   letter-spacing: var(--sd-label-letter-spacing);
   text-transform: uppercase;
-  color: var(--sd-text-muted);
+  color: var(--sd-text-secondary);
   margin: 0 0 var(--sd-space-12) 80px;
 }
 
@@ -2041,7 +2085,7 @@
   font-size: var(--sd-font-label);
   letter-spacing: var(--sd-label-letter-spacing);
   text-transform: uppercase;
-  color: var(--sd-text-muted);
+  color: var(--sd-text-secondary);
 }
 
 .sd-message-card__confidence-value {
@@ -2439,7 +2483,7 @@
   font-size: var(--sd-font-label);
   letter-spacing: var(--sd-label-letter-spacing);
   text-transform: uppercase;
-  color: var(--sd-text-muted);
+  color: var(--sd-text-secondary);
 }
 
 /* --- Studio's own left(personas)/center(detail) split, nested inside the
@@ -2472,7 +2516,7 @@
   font-size: var(--sd-font-label);
   letter-spacing: var(--sd-label-letter-spacing);
   text-transform: uppercase;
-  color: var(--sd-text-muted);
+  color: var(--sd-text-secondary);
 }
 
 .sd-studio-personas__header-actions {
@@ -2846,7 +2890,7 @@
   font-size: var(--sd-font-label);
   letter-spacing: var(--sd-label-letter-spacing);
   text-transform: uppercase;
-  color: var(--sd-text-muted);
+  color: var(--sd-text-secondary);
 }
 
 .sd-example-column__live-badge {
@@ -2938,7 +2982,7 @@
   font-size: var(--sd-font-label);
   letter-spacing: var(--sd-label-letter-spacing);
   text-transform: uppercase;
-  color: var(--sd-text-muted);
+  color: var(--sd-text-secondary);
 }
 
 .sd-stress-result__output {
@@ -3192,6 +3236,10 @@
   gap: var(--sd-space-8);
   font-size: var(--sd-font-sm);
   color: var(--sd-text-secondary);
+}
+
+.sd-teach-panel__checkbox-row input {
+  accent-color: var(--sd-cyan);
 }
 
 .sd-teach-panel__feedback {
@@ -4068,6 +4116,10 @@ select.sd-util-input {
   color: var(--sd-text-secondary);
 }
 
+.sd-message-rescue-variant-option input {
+  accent-color: var(--sd-cyan);
+}
+
 .sd-message-rescue-columns {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -4088,7 +4140,7 @@ select.sd-util-input {
   font-size: var(--sd-font-label);
   letter-spacing: var(--sd-label-letter-spacing);
   text-transform: uppercase;
-  color: var(--sd-text-muted);
+  color: var(--sd-text-secondary);
 }
 
 /* ==========================================================================
@@ -4142,7 +4194,8 @@ select.sd-util-input {
 }
 
 .sd-set-search__input::placeholder {
-  color: var(--sd-text-muted);
+  /* See .sd-library-search__input::placeholder: text-muted fails AA here too. */
+  color: var(--sd-text-secondary);
 }
 
 .sd-set-search__input:focus {
@@ -4331,6 +4384,29 @@ select.sd-util-input {
   display: flex;
   align-items: center;
   gap: var(--sd-space-8);
+}
+
+/* An availability note under a control — used where an option exists in the
+   contract but is not built yet, so the row can say WHY rather than leave the
+   user clicking a setting that does nothing (see #sdSetTheme).
+   --sd-text-secondary, not --sd-text-muted: the muted token measures 3.20:1
+   against these surfaces, below the 4.5:1 body-text bar. */
+.sd-set-row__note {
+  margin: 0;
+  max-width: 34ch;
+  text-align: right;
+  font-size: var(--sd-font-xs, .75rem);
+  line-height: 1.4;
+  color: var(--sd-text-secondary);
+}
+
+/* The row's control area is a horizontal flex; a note has to stack under the
+   control rather than sit beside it. Scoped with :has() so every other
+   control row keeps its existing single-line layout untouched. */
+.sd-set-row__control:has(.sd-set-row__note) {
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--sd-space-4, 4px);
 }
 
 .sd-set-input,
@@ -4927,7 +5003,7 @@ select.sd-set-select {
   font-size: var(--sd-font-label);
   letter-spacing: var(--sd-label-letter-spacing);
   text-transform: uppercase;
-  color: var(--sd-text-muted);
+  color: var(--sd-text-secondary);
 }
 
 .sd-review-meta-cell__value {
@@ -6872,6 +6948,30 @@ button:not([class]) {
 button:not([class]):hover {
   border-color: var(--sd-border-hover);
   color: var(--sd-text-primary);
+}
+
+/* A <textarea> with no class is a control nobody styled -- the same failure
+   mode as `button:not([class])` above, found on the same page: #sdTestSampleInput
+   (Studio's persona test panel) carries no class at all, so it fell back to
+   the UA's white-on-black-text textarea widget sitting inside this otherwise
+   dark app. Give it the .sd-input/.sd-input--area look. */
+textarea:not([class]) {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 76px;
+  padding: var(--sd-space-8) var(--sd-space-12);
+  background-color: var(--sd-surface-inset);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-chip);
+  color: var(--sd-text-primary);
+  font-family: inherit;
+  font-size: var(--sd-font-sm);
+  resize: vertical;
+}
+
+textarea:not([class]):focus-visible {
+  outline: none;
+  border-color: var(--sd-cyan);
 }
 
 /* --- The `.sd-select` that was never defined ------------------------------

@@ -90,6 +90,55 @@ test('summarizeWipeCleared enumerates deletions but not quiesce/state steps', ()
   );
 });
 
+// --- object-shaped outcomes (Wave 12) ----------------------------------------
+//
+// Routed from sup-backend: server.py sets `cleared.history_db_wiped` to a
+// RESULT OBJECT `{ok, recreated}`, not a flag, because wiping the conversation
+// database and rebuilding its schema are two different claims. isDeletionOutcome
+// handled numbers and booleans only, so the object fell through to `false` and
+// a SUCCESSFUL history wipe was silently omitted from "what was deleted".
+//
+// That is a privacy-honesty bug, not a formatting one: confirming the deletion
+// is the entire job of this summary, and the one category a user is most likely
+// to be checking on is their conversation history.
+
+test('a successful object-shaped wipe is reported as deleted', () => {
+  const items = summarizeWipeCleared({
+    cleared: { history_db_wiped: { ok: true, recreated: true } },
+  });
+  assert.deepEqual(items, ['history_db_wiped']);
+});
+
+test('a FAILED object-shaped wipe is not claimed as deleted', () => {
+  // The mirror image, and the reason `ok` is checked explicitly rather than the
+  // object merely being truthy — every object is truthy, so a naive fix would
+  // report a failed wipe as a success. That would be worse than the original
+  // bug: silence is bad, a false all-clear on a privacy deletion is dangerous.
+  const items = summarizeWipeCleared({
+    cleared: { history_db_wiped: { ok: false, recreated: false } },
+  });
+  assert.deepEqual(items, []);
+});
+
+test('a wipe that succeeded but could not recreate the store says so', () => {
+  // The half-state: the data really is gone, but the store was not rebuilt.
+  // The user should hear that from the success line, not discover it later.
+  const items = summarizeWipeCleared({
+    cleared: { history_db_wiped: { ok: true, recreated: false } },
+  });
+  assert.deepEqual(items, ['history_db_wiped (store not recreated — reopen the app to rebuild it)']);
+});
+
+test('an object whose key is not a deletion verb is still excluded', () => {
+  // The `_removed|_wiped|_cleared` suffix rule holds for objects exactly as it
+  // does for booleans, so a future object-shaped STATE step cannot sneak into
+  // the deletion list just by carrying `ok: true`.
+  const items = summarizeWipeCleared({
+    cleared: { pipeline_quiesced_detail: { ok: true } },
+  });
+  assert.deepEqual(items, []);
+});
+
 test('failure summary lists what was already cleared (plan 1.2 "what WAS deleted")', () => {
   const payload = {
     ok: false,

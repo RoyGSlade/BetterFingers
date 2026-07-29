@@ -621,6 +621,16 @@
         if (currentState === 'speaking') {
           try {
             await postJson(`${BACKEND_ORIGIN}/tts/stop`, {}, 5000);
+            // Reset the state HERE rather than waiting for a `draft_tts_stopped`
+            // push. The push arrives when playback ends on its own; a user who
+            // presses Stop has ended it themselves, and nothing guarantees a
+            // stopped-event for a stop the user asked for. Without this the
+            // button stayed reading "Stop" and the badge stayed "Speaking"
+            // forever after a manual stop, so the next press posted a SECOND
+            // /tts/stop instead of starting a new read -- the Read control was
+            // a dead end after one use. Mirrors stopTtsIfSpeaking(), which
+            // always got this right; only this handler was missing it.
+            setOverlayState('pending', 'Playback stopped.');
           } catch (error) {
             setOverlayState('error', `Failed to stop TTS: ${error.message}`);
           }

@@ -244,6 +244,14 @@ export function createApplicationProfilesFeature({
 
   function renderList() {
     if (!elements.list) return;
+    if (!profiles.length) {
+      // Distinct from renderUnavailable()'s blank list: the feature IS
+      // reachable, there is just nothing configured (or the last refresh
+      // failed and reported it separately via a toast) -- never a silent
+      // blank with no explanation at all.
+      elements.list.innerHTML = '<div class="sd-appprofile-row__empty">No application profiles are configured yet.</div>';
+      return;
+    }
     elements.list.innerHTML = profiles
       .map((profile) => {
         const active = context?.profile_id === profile.id;
@@ -308,11 +316,26 @@ export function createApplicationProfilesFeature({
 
   async function refreshProfiles() {
     if (!availability.available) return [];
-    try {
-      const payload = await api.fetchAppProfiles();
+    // Retried once (a slow first response, not a dead endpoint) before giving
+    // up. On a genuine failure `profiles` is left as whatever it already
+    // held -- the same "don't blank a working rail" rule refreshStatus()
+    // above already follows for context polls, now applied consistently to
+    // the profile list and override dropdown too.
+    let payload = null;
+    let lastError = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        payload = await api.fetchAppProfiles();
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (lastError) {
+      hooks.showToast?.(`Could not refresh application profiles: ${lastError.message}`, 'danger');
+    } else {
       profiles = Array.isArray(payload?.profiles) ? payload.profiles : [];
-    } catch (_error) {
-      profiles = [];
     }
     if (!selectedId && profiles.length) selectedId = profiles[0].id;
     renderOverrideOptions();

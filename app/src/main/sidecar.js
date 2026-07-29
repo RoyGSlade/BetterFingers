@@ -16,6 +16,16 @@ const HEALTH_FAILURES_BEFORE_RESTART_BUSY = 120; // ~10min: last health showed a
 const MAX_AUTO_RESTARTS = 3; // give up (and tell the user) after this many
 const RESTART_COUNTER_RESET_MS = 5 * 60 * 1000; // a clean 5min resets the count
 
+// A dev backend is a python process already resident on disk. A packaged
+// backend is a PyInstaller --onefile binary that must self-extract to a temp
+// dir before Python even starts — on a cold, RAM-constrained, CPU-only Linux
+// box that extraction + interpreter startup + FastAPI import can plausibly
+// exceed 30s on its own, before the app has done any real work. Give the
+// packaged path more room; keep dev tight since a hang there usually means a
+// real bug, not I/O.
+const DEV_HEALTH_TIMEOUT_MS = 30000;
+const PACKAGED_HEALTH_TIMEOUT_MS = 90000;
+
 function isChildAlive(child) {
   return Boolean(child) && !child.killed && child.exitCode === null && child.signalCode === null;
 }
@@ -96,6 +106,28 @@ async function tryReadHealth(url, headers = {}) {
   }
 }
 
+// build-backend.js runs PyInstaller with --onefile --name betterfingers-backend,
+// so the packaged artifact is a single executable by that name; the other
+// preferred names are legacy/alternate build fallbacks, not the normal case.
+// electron-builder's extraResources ("from": "resources/backend", "to":
+// "backend" in app/package.json's build block) copies build:backend's output
+// into <packaged-resources>/backend, and process.resourcesPath is exactly
+// that packaged resources directory on every platform electron-builder
+// targets here (Linux AppImage included) — so backendDir below is correct.
+function isExecutableFile(candidatePath) {
+  try {
+    if (!fs.statSync(candidatePath).isFile()) {
+      return false;
+    }
+    // X_OK on Windows only checks existence (no unix permission bits), which
+    // is the right degradation there — .exe files don't carry a +x bit.
+    fs.accessSync(candidatePath, fs.constants.X_OK);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
 function resolveBackendExecutable() {
   const backendDir = path.join(process.resourcesPath, 'backend');
   const preferredNames = [
@@ -105,25 +137,40 @@ function resolveBackendExecutable() {
     'server',
   ];
 
+  if (!fs.existsSync(backendDir)) {
+    throw new Error(
+      `Backend directory not found: ${backendDir}. Expected electron-builder's ` +
+      `extraResources ("resources/backend" -> "backend") to have populated it from ` +
+      'a prior `npm run build:backend`.',
+    );
+  }
+
   for (const candidate of preferredNames) {
     const candidatePath = path.join(backendDir, candidate);
     if (fs.existsSync(candidatePath)) {
+      if (!isExecutableFile(candidatePath)) {
+        throw new Error(
+          `Backend executable found at ${candidatePath} but it is not marked executable ` +
+          '(missing +x). Check the permissions PyInstaller/build-backend.js produced, or ' +
+          'the packaging step that copied it into extraResources.',
+        );
+      }
       return candidatePath;
     }
-  }
-
-  if (!fs.existsSync(backendDir)) {
-    throw new Error(`Backend directory not found: ${backendDir}`);
   }
 
   const fallback = fs
     .readdirSync(backendDir)
     .filter((name) => !name.startsWith('.'))
     .map((name) => path.join(backendDir, name))
-    .find((candidatePath) => fs.statSync(candidatePath).isFile());
+    .find((candidatePath) => isExecutableFile(candidatePath));
 
   if (!fallback) {
-    throw new Error(`No backend executable found in ${backendDir}`);
+    throw new Error(
+      `No executable backend found in ${backendDir}. Expected one of: ` +
+      `${preferredNames.join(', ')} (built via \`npm run build:backend\`), or at least one ` +
+      'executable file in that directory.',
+    );
   }
 
   return fallback;
@@ -391,8 +438,9 @@ function createSidecar({
       }
 
       try {
+        const healthTimeoutMs = isPackaged ? PACKAGED_HEALTH_TIMEOUT_MS : DEV_HEALTH_TIMEOUT_MS;
         const result = await Promise.race([
-          waitForHealthy(healthUrl, backendHeaders),
+          waitForHealthy(healthUrl, backendHeaders, healthTimeoutMs),
           exitPromise,
         ].filter(Boolean));
 
@@ -660,4 +708,7 @@ function createSidecar({
 module.exports = {
   createSidecar,
   waitForHealthy,
+  resolveBackendExecutable,
+  DEV_HEALTH_TIMEOUT_MS,
+  PACKAGED_HEALTH_TIMEOUT_MS,
 };

@@ -553,3 +553,27 @@ def test_the_engine_is_importable_and_usable_with_no_pygame_at_all():
     assert src.available is False
     assert src.refresh_devices() == []
     assert src.handle(types.SimpleNamespace(type=1)) == []
+
+
+# --- joystick subsystem uninitialised (the boot-time traceback) -------------
+
+
+class _FakePygameError(Exception):
+    """Stands in for pygame.error without importing real pygame (see module
+    docstring)."""
+
+
+class UninitializedJoystickPygame:
+    """joystick.init() can return without raising while the subsystem still
+    isn't usable -- the first sign of that is get_count() itself raising."""
+
+    class joystick:
+        @classmethod
+        def get_count(cls):
+            raise _FakePygameError("joystick system not initialized")
+
+
+def test_refresh_devices_survives_an_uninitialized_joystick_subsystem():
+    engine, _ = engine_for([binding("dictation.toggle", ["button:4"])])
+    src = PygameEventSource(engine, UninitializedJoystickPygame)
+    assert src.refresh_devices() == []

@@ -41,6 +41,7 @@ import {
   PERSONA_TRAITS_STATUS,
   personaTraitsDisclosureLines,
 } from '../src/renderer/features/studioWorkspace.js';
+import { installDomGlobals, makeBackendBridge, makeDocument } from './helpers/rendererDom.mjs';
 
 // --- personaSignatureKey / personaSignatureColorVar --------------------------
 
@@ -343,6 +344,147 @@ test('createStudioWorkspaceFeature: selectPersona() switches selection; selectin
   assert.equal(feature.getSelectedName(), 'Direct');
   feature.selectPersona('Nonexistent');
   assert.equal(feature.getSelectedName(), 'Direct');
+});
+
+// --- Wave 12 collab task A: refresh() retry-once + keep-last-good ------------
+//
+// refresh() fetches Studio's OWN persona/builtin-name/voice lists directly
+// (api/backend.js's fetchPersonas/fetchBuiltinPersonaNames/fetchTtsVoices),
+// independently of bootstrap/signalDeskApp.js's loadPersonaList (which only
+// guards the Settings dropdown, a separate surface). These exercise the same
+// house standard applied to Studio's own fetch: retry once, never let a
+// failure or an empty/malformed payload blank a working grid.
+
+const TIMEOUT_FAILURE = { ok: false, status: 0, error: 'timeout' };
+
+function mountStudio({ routes = {}, elements = {}, document: docParam } = {}) {
+  const bridge = makeBackendBridge({
+    'GET /personas': { Natural: { prompt: 'p1' } },
+    'GET /personas-builtins': { builtins: ['Natural'] },
+    'GET /tts/voices': { defaults: [{ id: 'af_bella', name: 'Bella' }], cloned: [] },
+    ...routes,
+  });
+  const restore = installDomGlobals({ document: docParam, betterFingers: { backendRequest: bridge.request } });
+  const toasts = [];
+  const feature = createStudioWorkspaceFeature({
+    elements,
+    hooks: { showToast: (msg, tone) => toasts.push({ msg, tone }) },
+  });
+  return { feature, bridge, toasts, restore };
+}
+
+test('refresh() retries once before giving up on a slow/failed first response', async () => {
+  let attempts = 0;
+  const ctx = mountStudio({
+    routes: {
+      'GET /personas': () => {
+        attempts += 1;
+        return attempts === 1 ? TIMEOUT_FAILURE : { Natural: { prompt: 'p1' } };
+      },
+    },
+  });
+  try {
+    await ctx.feature.refresh();
+    assert.equal(attempts, 2, 'a slow first response must be retried once, not treated as a dead endpoint');
+    assert.equal(ctx.feature.getSelectedName(), 'Natural');
+  } finally {
+    ctx.restore();
+  }
+});
+
+test('a refresh that fails AFTER personas were already loaded keeps them on screen', async () => {
+  let call = 0;
+  const ctx = mountStudio({
+    routes: {
+      'GET /personas': () => {
+        call += 1;
+        return call <= 1 ? { Natural: { prompt: 'p1' } } : TIMEOUT_FAILURE;
+      },
+    },
+  });
+  try {
+    await ctx.feature.refresh();
+    assert.equal(ctx.feature.getSelectedName(), 'Natural', 'sanity: the first refresh succeeded');
+
+    await ctx.feature.refresh();
+    assert.equal(
+      ctx.feature.getSelectedName(), 'Natural',
+      'a later failed refresh must not blank a persona grid that was already populated',
+    );
+    assert.ok(
+      ctx.toasts.some((t) => /Could not refresh Studio personas/.test(t.msg)),
+      'a total failure must be reported honestly, not silently swallowed',
+    );
+  } finally {
+    ctx.restore();
+  }
+});
+
+test('refresh() treats an empty {} personas payload as a failure, not as "no personas configured"', async () => {
+  const ctx = mountStudio({ routes: { 'GET /personas': {} } });
+  try {
+    await ctx.feature.refresh();
+    assert.equal(ctx.feature.getSelectedName(), null);
+    assert.ok(ctx.toasts.some((t) => /Could not refresh Studio personas/.test(t.msg)));
+  } finally {
+    ctx.restore();
+  }
+});
+
+test('refresh() keeps the previously-loaded voice roster when a later voices fetch fails', async () => {
+  let call = 0;
+  const ctx = mountStudio({
+    routes: {
+      'GET /tts/voices': () => {
+        call += 1;
+        return call <= 1 ? { defaults: [{ id: 'af_bella', name: 'Bella' }], cloned: [] } : TIMEOUT_FAILURE;
+      },
+    },
+  });
+  try {
+    await ctx.feature.refresh();
+    await ctx.feature.refresh();
+    assert.ok(
+      ctx.toasts.some((t) => /Could not refresh Studio voices/.test(t.msg)),
+      'the voices failure must be reported too',
+    );
+  } finally {
+    ctx.restore();
+  }
+});
+
+test('a cold-start refresh failure renders an honest error in the grid, not "No personas yet"', async () => {
+  const doc = makeDocument(['personaGrid']);
+  const ctx = mountStudio({
+    routes: { 'GET /personas': TIMEOUT_FAILURE },
+    elements: { personaGrid: doc.getElementById('personaGrid') },
+    document: doc,
+  });
+  try {
+    await ctx.feature.refresh();
+    const text = doc.getElementById('personaGrid').textContent;
+    assert.match(text, /Could not load your personas/);
+    assert.doesNotMatch(text, /No personas yet/);
+  } finally {
+    ctx.restore();
+  }
+});
+
+test('a genuinely empty (real) persona set still renders the honest empty-state copy', async () => {
+  const doc = makeDocument(['personaGrid']);
+  const ctx = mountStudio({
+    // setPersonas() (not refresh()) is the test/preview-only direct seed path
+    // -- confirms it is unaffected by the new failure-tracking flag.
+    elements: { personaGrid: doc.getElementById('personaGrid') },
+    document: doc,
+  });
+  try {
+    ctx.feature.setPersonas({});
+    const text = doc.getElementById('personaGrid').textContent;
+    assert.match(text, /No personas yet/);
+  } finally {
+    ctx.restore();
+  }
 });
 
 // --- Wave 12A: the blend roster is named on screen (product-owner finding 3) --

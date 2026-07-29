@@ -2,6 +2,12 @@
 
 Supervisor: `sup-ui-polish`. Opus-only, no workers spawned (budget directive).
 
+Objective B (data-root/persona-loading probes, `sup-dataroot`) is covered
+separately in [`WAVE12A_PROBE_EVIDENCE.md`](WAVE12A_PROBE_EVIDENCE.md), which
+also folds in what `probe_wave12a/`'s scratch scripts established. That
+directory is still on disk as of 2026-07-29 — its removal is blocked on an
+operator action; see the probe-evidence doc's opening note.
+
 Source: five verbatim product-owner findings from a hand-test of the flipped
 build. These are user reports, not audit rows.
 

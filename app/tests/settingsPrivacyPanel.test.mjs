@@ -266,6 +266,29 @@ test('changing #sdSetPrivacyWipeMode re-reads the preview so the list matches th
   assert.deepEqual(rowsOf(ctx.el('sdSetPrivacyWipePreview')), ['Drafts -> 2.0 KB', 'Personas -> 2.0 KB']);
 });
 
+// --- resilient loading: keep-last-good + honest empty state ------------------
+
+test('#sdSetPrivacyDataList says plainly when there is no on-device data instead of leaving a blank list', async (t) => {
+  const ctx = mount({ report: { ...PRIVACY_REPORT, data_locations: [] } });
+  t.after(ctx.restore);
+  ctx.feature.renderPrivacyReport({ ...PRIVACY_REPORT, data_locations: [] });
+  assert.match(ctx.el('sdSetPrivacyDataList').innerHTML, /No on-device data reported\./);
+});
+
+test('a privacy report that fails after a previous successful load keeps the last lists on screen', async (t) => {
+  let succeed = true;
+  const ctx = mount({ report: () => (succeed ? PRIVACY_REPORT : { ok: false, status: 500, body: { detail: 'privacy backend down' } }) });
+  t.after(ctx.restore);
+  ctx.feature.init();
+  await ctx.feature.refreshAll();
+  assert.equal(rowsOf(ctx.el('sdSetPrivacyDataList')).length, 2);
+
+  succeed = false;
+  await ctx.feature.refreshAll();
+  assert.equal(rowsOf(ctx.el('sdSetPrivacyDataList')).length, 2, 'a transient privacy-report failure must not blank a working list');
+  assert.equal(ctx.el('sdSetPrivacyNetworkList').innerHTML.includes('privacy backend down'), false, 'the last-good network list must not be overwritten with the new failure');
+});
+
 test('a file no category claims is surfaced as an incompleteness, not hidden', async (t) => {
   const ctx = mount();
   t.after(ctx.restore);

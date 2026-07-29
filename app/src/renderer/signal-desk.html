@@ -1565,22 +1565,46 @@
 
             <section class="sd-voice-studio__group">
               <span class="sd-panel-label">Modulation</span>
+              <!--
+                RANGES ARE PART OF THE CONTRACT, not cosmetic. Energy/warmth/
+                brightness are 0..1 floats everywhere else in the stack:
+                voiceStudio.js's MODULATION_PRESETS use 0.35/0.55/0.7,
+                gatherVoiceStudioSettingsFromInputs() defaults energy to 0.5,
+                and buildPersistableVoiceStudioSettings() writes them straight
+                through to review_tts_energy / _warmth / _brightness.
+
+                These three shipped as min=0 max=100 step=1 value=50, which
+                broke the contract in BOTH directions on the production page:
+                loading a saved 0.5 set .value="0.5" on an integer 0..100
+                range, so the browser snapped the thumb to the bottom and the
+                user saw their setting as off; and saving read the raw slider
+                value back, persisting review_tts_energy=50 -- fifty times its
+                maximum legal value. The legacy page always had these right
+                (index.html: min=0 max=1 step=0.05), so this was a Signal Desk
+                transcription error, not a design change.
+
+                The value read-outs are equally load-bearing: voiceStudio.js's
+                updateModulationLabels() looks up #voicePitchValue and friends
+                and no-ops when the label is missing, so on this page every
+                slider was a bare unlabelled track with no numeric feedback at
+                all. Adding the spans is what makes that function do its job.
+              -->
               <div class="sd-voice-studio__sliders">
                 <label class="sd-voice-studio__slider">
-                  <span>Pitch</span>
-                  <input type="range" id="voicePitch" min="-12" max="12" step="1" value="0" />
+                  <span>Pitch <span class="sd-voice-studio__value" id="voicePitchValue">0</span> st</span>
+                  <input type="range" id="voicePitch" min="-12" max="12" step="0.5" value="0" />
                 </label>
                 <label class="sd-voice-studio__slider">
-                  <span>Energy</span>
-                  <input type="range" id="voiceEnergy" min="0" max="100" step="1" value="50" />
+                  <span>Energy <span class="sd-voice-studio__value" id="voiceEnergyValue">0.50</span></span>
+                  <input type="range" id="voiceEnergy" min="0" max="1" step="0.05" value="0.5" />
                 </label>
                 <label class="sd-voice-studio__slider">
-                  <span>Warmth</span>
-                  <input type="range" id="voiceWarmth" min="0" max="100" step="1" value="50" />
+                  <span>Warmth <span class="sd-voice-studio__value" id="voiceWarmthValue">0.00</span></span>
+                  <input type="range" id="voiceWarmth" min="0" max="1" step="0.05" value="0" />
                 </label>
                 <label class="sd-voice-studio__slider">
-                  <span>Brightness</span>
-                  <input type="range" id="voiceBrightness" min="0" max="100" step="1" value="50" />
+                  <span>Brightness <span class="sd-voice-studio__value" id="voiceBrightnessValue">0.00</span></span>
+                  <input type="range" id="voiceBrightness" min="0" max="1" step="0.05" value="0" />
                 </label>
               </div>
               <div class="sd-voice-studio__row">
@@ -2823,11 +2847,32 @@
               <div class="sd-set-row" data-search-row data-search-label="theme mode system dark light">
                 <div class="sd-set-row__label"><span class="sd-set-row__label-text">Theme Mode</span></div>
                 <div class="sd-set-row__control">
+                  <!--
+                    HONESTY: only Dark actually exists.
+
+                    `settingsWorkspace.js`'s computeAppearanceClasses() puts a
+                    `theme-light` class on <body> for Light (and for System when
+                    the OS prefers light) — but NO stylesheet in the renderer
+                    defines a single `theme-light` rule. Selecting either option
+                    applied a class that styled nothing and left the app dark,
+                    so the control silently did nothing and the user was left to
+                    conclude their click had not registered.
+
+                    Disabled rather than removed: the preference is real and
+                    persisted (`pref_theme`), the values are part of the
+                    appearance contract, and hiding them would misrepresent this
+                    as a setting that was never offered rather than one that is
+                    not built yet. Say which it is.
+                  -->
                   <select class="sd-set-select" id="sdSetTheme">
-                    <option value="system">System Preference</option>
                     <option value="dark">Dark Theme</option>
-                    <option value="light">Light Theme</option>
+                    <option value="system" disabled>System Preference — needs a light theme (not built yet)</option>
+                    <option value="light" disabled>Light Theme — not built yet</option>
                   </select>
+                  <p class="sd-set-row__note" id="sdSetThemeNote">
+                    BetterFingers ships a dark theme only. Accent, density, font size and high
+                    contrast below all work and apply live.
+                  </p>
                 </div>
               </div>
 

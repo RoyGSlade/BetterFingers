@@ -204,17 +204,49 @@ out of the ASAR. No old installer is present in this checkout.
 
 ## 7. Artifact ledger
 
+### Windows x64 (unchanged from the Wave 0 snapshot)
+
 | Target | Required artifact | State | Count | Exact bytes |
 |---|---|---|---:|---:|
 | Windows x64 | NSIS `.exe` | **ABSENT/UNBUILT** | 0 | 0 |
-| Linux x64 | `.AppImage` | **ABSENT/UNBUILT** | 0 | 0 |
 
-`app/release` does not exist. A checkout-wide search outside `.git`, `.venv`,
-and `app/node_modules` found no `.AppImage`, `.exe`, `.msi`, `.deb`, `.rpm`,
-`.snap`, `.blockmap`, or `latest*.yml` package artifacts. Therefore there is
-no local installer checksum, provenance attestation, SBOM, unpacked payload
-measurement, signing evidence, or install/launch evidence. Workflow comments
-or historical approximate sizes are not substituted for current artifacts.
+### Linux x64 — PENDING SUPERVISOR BUILD
+
+The Wave 0 snapshot recorded Linux at **ABSENT/UNBUILT, 0 artifacts / 0
+bytes**, same as Windows. As of this 2026-07-29 reconciliation pass that is
+still the last *measured* state in this document — but the release
+supervisor (`sup-backend`) is running a real `dist:linux` electron-builder
+build concurrently with this doc pass. Rather than leave a stale "0 bytes"
+line that will silently go wrong the moment that build lands, or fabricate
+numbers nobody has measured, the fields the supervisor needs to fill are laid
+out here as an explicit placeholder:
+
+| Field | Value |
+|---|---|
+| AppImage path | `PENDING SUPERVISOR BUILD` |
+| Byte size | `PENDING SUPERVISOR BUILD` |
+| SHA-256 | `PENDING SUPERVISOR BUILD` |
+| Build date (UTC) | `PENDING SUPERVISOR BUILD` |
+| electron-builder version | `PENDING SUPERVISOR BUILD` |
+
+**Do not treat this table as evidence of a successful build.** It is a slot
+to fill with real measurements from a real `dist:linux` run — path under
+`app/release/`, `stat`'d byte size, `sha256sum` of the artifact, the build
+timestamp, and `electron-builder --version` (§3 above already records the
+installed dev dependency as `26.15.3`, but the version that actually produced
+the artifact should be confirmed at build time, not assumed from that). Until
+the supervisor fills every field, the Linux artifact conclusion remains
+**ABSENT/UNBUILT** exactly as it was at the Wave 0 snapshot; no byte count is
+asserted here that this document's author did not personally measure.
+
+`app/release` does not exist at the time of this doc pass. A checkout-wide
+search outside `.git`, `.venv`, and `app/node_modules` found no `.AppImage`,
+`.exe`, `.msi`, `.deb`, `.rpm`, `.snap`, `.blockmap`, or `latest*.yml` package
+artifacts. Therefore there is no local installer checksum, provenance
+attestation, SBOM, unpacked payload measurement, signing evidence, or
+install/launch evidence yet. Workflow comments or historical approximate
+sizes are not substituted for current artifacts, and neither is a guess at
+what the pending build will produce.
 
 ## 8. Gate conclusions
 

@@ -573,6 +573,61 @@ def resolve_id(needle: str, closure: Closure, index: dict[str, list[str]]) -> st
     return None
 
 
+# --- the id-in-JS rule (Wave 12, D-0034 / director Ruling B) ------------------
+#
+# This used to accept ANY quoted or selector-shaped mention of an id anywhere in
+# the reachable module text:
+#
+#     re.search(rf'''['"#]{needle}\b''', closure.text)
+#
+# which meant `document.getElementById('draftConfidence')` in a features/*.js
+# module counted as production evidence that `#draftConfidence` SHIPS. It does
+# not. A lookup is evidence that something LOOKS FOR an element; only the markup
+# (or JS that builds it) is evidence the element exists. The ledger then printed
+# the location as `signal-desk.html`, turning "a user can see this" into "this
+# string appears somewhere in the renderer".
+#
+# UI-15-001 proved the rule wrong by design rather than by accident:
+# features/studioWorkspace.js documents that Studio's teach panel deliberately
+# uses distinct `sdTeach*` ids SO THAT personaLearning.js's self-init IIFE --
+# which queries `#personaLearningSection` -- never matches. That guarantees
+# `#personaLearningSection` exists in no page at all, and the old rule still
+# reported it as a production anchor.
+#
+# The fix is not to drop JS-created ids wholesale: some elements really are
+# built at runtime and never appear in markup, and un-anchoring those would
+# swap one false report for another. The distinction that matters is CREATION
+# vs LOOKUP.
+_ID_CREATION_PATTERNS = (
+    # el.id = 'name'
+    r"""\.id\s*=\s*['"]{needle}['"]""",
+    # setAttribute('id', 'name')
+    r"""setAttribute\(\s*['"]id['"]\s*,\s*['"]{needle}['"]""",
+    # id="name" / id='name' written inside a JS string or template literal
+    # (innerHTML / insertAdjacentHTML markup built in JS)
+    r"""id=\\?['"]{needle}\\?['"]""",
+)
+
+# Lookups, listed only to document what deliberately does NOT count:
+#   getElementById('name'), querySelector('#name'), closest('#name'),
+#   matches('#name'), getElementById(`name`)
+
+
+def js_creates_id(needle: str, text: str) -> bool:
+    """True when the reachable JS BUILDS an element carrying `needle` as its id.
+
+    Deliberately narrow. A false positive here fabricates production evidence,
+    which is the failure this function exists to stop; a false negative merely
+    sends a genuinely-dynamic row back for a hand-declared anchor, which is
+    auditable.
+    """
+    escaped = re.escape(needle)
+    return any(
+        re.search(pattern.replace("{needle}", escaped), text)
+        for pattern in _ID_CREATION_PATTERNS
+    )
+
+
 def resolve(identifier: Identifier, closure: Closure, index: dict[str, list[str]] | None = None) -> str | None:
     """The concrete production anchor for `identifier`, or None.
 
@@ -583,9 +638,9 @@ def resolve(identifier: Identifier, closure: Closure, index: dict[str, list[str]
         anchor = resolve_id(identifier.needle, closure, index)
         if anchor:
             return f"#{anchor}"
-        # An id can also live only in JS (created dynamically); accept a
-        # quoted/selector reference in the reachable module text.
-        if re.search(rf"""['"#]{re.escape(identifier.needle)}\b""", closure.text):
+        # An id can also live only in JS -- but only when the JS CREATES it.
+        # See js_creates_id() for why a lookup no longer counts.
+        if js_creates_id(identifier.needle, closure.text):
             return identifier.raw
         return None
     if identifier.kind == "class":

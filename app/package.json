@@ -28,6 +28,7 @@
     "productName": "BetterFingers",
     "icon": "build/icon.png",
     "asar": true,
+    "npmRebuild": false,
     "asarUnpack": [
       "**/node_modules/uiohook-napi/**"
     ],
@@ -64,7 +65,8 @@
     "linux": {
       "target": [
         "AppImage"
-      ]
+      ],
+      "category": "Utility"
     },
     "mac": {
       "target": [

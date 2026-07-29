@@ -27,6 +27,21 @@ import {
 // on about five, and the label beside it is what shows the user which drags
 // change the prompt. See docs/PERSONA_TRAITS_DESIGN.md §3.
 
+// Retries once (the field failure is a slow first response, not a dead
+// endpoint -- mirrors bootstrap/signalDeskApp.js's loadPersonaList) before a
+// caller falls back to whatever it already has on screen.
+async function fetchResilient(fetchFn, isUsable = (v) => v !== undefined && v !== null) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const payload = await fetchFn();
+      if (isUsable(payload)) return { payload, failed: false };
+    } catch (_error) {
+      // fall through to the retry / to the caller's fallback
+    }
+  }
+  return { payload: null, failed: true };
+}
+
 export const WIZARD_TRAIT_KEYS = ['warmth', 'directness', 'detail', 'formality', 'confidence'];
 
 /** Trait key -> the element-map key its slider is injected under. */
@@ -557,17 +572,18 @@ export function createPersonasFeature({ elements, ui, hooks, doc }) {
     const BUILTIN_PERSONAS = new Set(["True Janitor", "Formal", "Polished", "Unhinged", "Pompous 1800s Lord"]);
 
     (async function refreshBuiltinPersonaNames() {
-      try {
-        const payload = await fetchBuiltinPersonaNames();
-        const names = Array.isArray(payload?.builtins) ? payload.builtins : null;
-        if (names && names.length) {
-          BUILTIN_PERSONAS.clear();
-          names.forEach((name) => BUILTIN_PERSONAS.add(name));
-        }
-      } catch (err) {
-        // Non-fatal: keep the hardcoded fallback set above.
-        console.warn('Could not load builtin persona names:', err);
+      const { payload, failed } = await fetchResilient(
+        fetchBuiltinPersonaNames,
+        (v) => Array.isArray(v?.builtins) && v.builtins.length > 0,
+      );
+      if (failed) {
+        // Non-fatal: keep the hardcoded fallback set declared above -- it is
+        // itself a "known-good previous list", not a blank.
+        console.warn('Could not load builtin persona names; using the built-in fallback list.');
+        return;
       }
+      BUILTIN_PERSONAS.clear();
+      payload.builtins.forEach((name) => BUILTIN_PERSONAS.add(name));
     })();
 
     function showStep(stepNum) {
@@ -845,27 +861,37 @@ export function createPersonasFeature({ elements, ui, hooks, doc }) {
       if (!name || !loadedPersonas || !loadedPersonas[name]) {
         return;
       }
-      try {
-        const persona = await getPersonaV2(name);
-        // The name field may have changed (or the user moved on) while this
-        // request was in flight — don't apply a stale response.
-        if (els.wizardPersonaName?.value?.trim() !== name) {
-          return;
-        }
-        populateAdvancedPersonaFields(persona);
-        if (persona && typeof persona.prompt === 'string' && els.wizardPromptPreview) {
-          els.wizardPromptPreview.value = persona.prompt;
-        }
-        editingExistingPersona = true;
+      const { payload: persona, failed } = await fetchResilient(
+        () => getPersonaV2(name),
+        (v) => Boolean(v) && typeof v === 'object',
+      );
+      // The name field may have changed (or the user moved on) while this
+      // request was in flight — don't apply a stale response either way.
+      if (els.wizardPersonaName?.value?.trim() !== name) {
+        return;
+      }
+      if (failed) {
+        // Previously a silent console.warn: the Advanced fields were left
+        // showing whatever they already held (defaults, or a prior persona's
+        // values), which reads as "this persona has no special settings"
+        // when the real story is the fetch failed. Say so instead.
         setMessage(
           els.wizardMessage,
-          `Loaded "${name}" — its existing prompt is shown below. Use "Regenerate from wizard" to replace it instead.`,
-          'info',
+          `Could not load "${name}"'s saved settings. The Advanced fields below may not reflect what is actually saved.`,
+          'danger',
         );
-      } catch (err) {
-        // Non-fatal: leave Advanced fields as-is if the fetch fails.
-        console.warn('Could not load persona advanced fields:', err);
+        return;
       }
+      populateAdvancedPersonaFields(persona);
+      if (persona && typeof persona.prompt === 'string' && els.wizardPromptPreview) {
+        els.wizardPromptPreview.value = persona.prompt;
+      }
+      editingExistingPersona = true;
+      setMessage(
+        els.wizardMessage,
+        `Loaded "${name}" — its existing prompt is shown below. Use "Regenerate from wizard" to replace it instead.`,
+        'info',
+      );
     }
 
     els.wizardRole?.addEventListener('change', () => {
