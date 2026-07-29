@@ -194,6 +194,12 @@ import {
   fetchPrivacy,
   wipeData,
   fetchPersonas,
+  // Wave 6 privacy closure.
+  factoryReset,
+  verifyFactoryReset,
+  clearPersonaLearning,
+  verifyPersonaLearning,
+  exportPrivacyData,
 } from '../api/backend.js';
 import { summarizeWipeFailure } from '../lib/wipeSummary.mjs';
 
@@ -384,6 +390,16 @@ export const INVENTORY_PLACEMENT_MAP = {
   'privacy.dataList': { section: 'privacy', control: 'On-device data locations list', wired: true },
   'privacy.wakeListenerStatus': { section: 'privacy', control: 'Wake-listener status note', wired: true },
   'privacy.wipe': { section: 'privacy', control: 'Wipe my data (+ delete cloned voices) with truthful postcondition summary', wired: true },
+  // --- Wave 6 (Gate 6) ---
+  'privacy.storeList': { section: 'privacy', control: 'Complete store inventory (path, size, sensitivity, which clear removes it)', wired: true, note: 'Generated from the backend data registry via fetchPrivacy().stores -- NOT a hand-written renderer list, which is how a store ends up shipped, wiped, and never mentioned on the screen that claims to describe them all' },
+  'privacy.unmappedWarning': { section: 'privacy', control: 'Warning when a file on disk is not covered by any declared category', wired: true, note: 'fetchPrivacy().unmapped_files -- the lie-by-omission guard surfaced to the user rather than left in a test' },
+  'privacy.personaLearningDisclosure': { section: 'privacy', control: 'Learned-example disclosure with per-persona counts', wired: true, note: 'fetchPrivacy().persona_learning. Counts and paths only, never example text' },
+  'privacy.wipeMode': { section: 'privacy', control: 'Wipe mode selector with a live per-mode preview', wired: true, note: 'fetchPrivacy().wipe_modes -- the confirmation and the sweep read one source, closing the gap where the old dialog named three stores and deleted five' },
+  'privacy.personaLearningClear': { section: 'privacy', control: 'Delete all learned examples', wired: true, note: 'DELETE /privacy/persona-learning through a TYPED IPC operation (not an allowlisted DELETE) because it erases the user\'s own sentences. Success wording comes from the independent re-read, never from the delete call' },
+  'privacy.personaLearningVerify': { section: 'privacy', control: 'Verify learned examples are gone', wired: true, note: 'GET /privacy/persona-learning/verify -- read-only by construction, so a user re-checking can never trigger a second delete' },
+  'privacy.export': { section: 'privacy', control: 'Export my data', wired: true, note: 'GET /privacy/export, generated from the registry\'s included_in_export flags. Stores that cannot be inlined (the transcription DB, recordings, voices) are reported with paths and counted in `skipped` rather than silently dropped' },
+  'privacy.factoryReset': { section: 'privacy', control: 'Factory reset behind a typed confirmation phrase', wired: true, note: 'POST /privacy/factory-reset via a typed IPC channel taking the exact phrase as a STRING end to end -- never a boolean, since a stray `true` would erase an install. Failure names the stores and files still present rather than claiming a clean reset' },
+  'privacy.factoryResetVerify': { section: 'privacy', control: 'Check what is left after a reset', wired: true, note: 'GET /privacy/factory-reset/verify -- a separate read-only route with no deletion path' },
 };
 
 // --- Pure helpers: appearance -----------------------------------------------
@@ -703,6 +719,24 @@ export const SETTINGS_ELEMENT_IDS = {
   privacyWipeVoices: 'sdSetPrivacyWipeVoices',
   privacyWipeButton: 'sdSetPrivacyWipeButton',
   privacyMessage: 'sdSetPrivacyMessage',
+  // --- Wave 6: registry-driven inventory, disclosure, modes, factory reset ---
+  privacyStoreList: 'sdSetPrivacyStoreList',
+  privacyUnmappedWarning: 'sdSetPrivacyUnmappedWarning',
+  privacyPersonaLearningWhat: 'sdSetPrivacyPersonaLearningWhat',
+  privacyPersonaLearningCounts: 'sdSetPrivacyPersonaLearningCounts',
+  privacyPersonaLearningList: 'sdSetPrivacyPersonaLearningList',
+  privacyPersonaLearningClearButton: 'sdSetPrivacyPersonaLearningClear',
+  privacyPersonaLearningVerifyButton: 'sdSetPrivacyPersonaLearningVerify',
+  privacyPersonaLearningMessage: 'sdSetPrivacyPersonaLearningMessage',
+  privacyExportButton: 'sdSetPrivacyExportButton',
+  privacyWipeMode: 'sdSetPrivacyWipeMode',
+  privacyWipePreview: 'sdSetPrivacyWipePreview',
+  privacyFactoryResetPreview: 'sdSetPrivacyFactoryResetPreview',
+  privacyFactoryResetModels: 'sdSetPrivacyFactoryResetModels',
+  privacyFactoryResetConfirm: 'sdSetPrivacyFactoryResetConfirm',
+  privacyFactoryResetButton: 'sdSetPrivacyFactoryResetButton',
+  privacyFactoryResetVerifyButton: 'sdSetPrivacyFactoryResetVerify',
+  privacyFactoryResetMessage: 'sdSetPrivacyFactoryResetMessage',
 
   // --- Appearance (§7.11) ---
   theme: 'sdSetTheme',
@@ -832,6 +866,9 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
   const fieldErrorEls = els.fieldErrors || {};
   const hks = hooks || {};
   const confirmFn = hks.confirmFn || (typeof window !== 'undefined' && window.confirm ? window.confirm.bind(window) : () => true);
+  // The most recent fetchPrivacy() payload (Wave 6), so the wipe confirmation
+  // and the on-screen preview describe the same stores.
+  let lastPrivacyReport = null;
   const overlayBridge = hks.overlayBridge || (typeof window !== 'undefined' ? window.betterFingers : undefined);
 
   let sectionState = { active: SETTINGS_SECTIONS[0] };
@@ -1401,6 +1438,10 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
   /** Renders a fetchPrivacy()-shaped report into the network/data lists + wake-listener note. Exposed for real refreshAll() and preview mocking. */
   function renderPrivacyReport(report) {
     const r = report || {};
+    // Held so the wipe confirmation can name the same stores the preview list
+    // is showing, from the same fetch. Re-fetching at confirm time would open
+    // a window where the dialog and the visible list disagree.
+    lastPrivacyReport = r;
     if (els.privacyNetworkList) {
       els.privacyNetworkList.innerHTML = '';
       const touchpoints = r.network_touchpoints || [];
@@ -1430,6 +1471,140 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
         els.privacyWakeListenerStatus.textContent = 'Not reported by the backend.';
       }
     }
+    renderPrivacyStores(r);
+    renderPersonaLearningDisclosure(r);
+    renderWipePreview(r);
+  }
+
+  /**
+   * The complete store table (Wave 6 / Gate 6), generated from the backend's
+   * data registry.
+   *
+   * `data_locations` above is a six-entry summary that predates the registry;
+   * this renders every declared store. It is deliberately NOT a hand-written
+   * list in the renderer — that is precisely how a store ends up shipped,
+   * wiped, and never mentioned on the screen that claims to describe them all.
+   */
+  function renderPrivacyStores(report) {
+    if (!els.privacyStoreList) return;
+    els.privacyStoreList.innerHTML = '';
+    const stores = report?.stores || [];
+    if (!stores.length) {
+      els.privacyStoreList.innerHTML = '<span class="empty-state">Store inventory unavailable.</span>';
+    } else {
+      for (const s of stores) {
+        const where = s.present ? (s.path || 'on this device') : 'nothing stored yet';
+        const size = s.present ? formatBytesShort(s.bytes) : '0 B';
+        // Say plainly which clear removes it, and flag the stores that can
+        // hold words the user wrote — that is the fact a reader actually
+        // needs, and it is the one a size column hides.
+        const modes = (s.wipe_modes || []).map(describeWipeMode).filter(Boolean);
+        const removedBy = modes.length ? modes.join(' / ') : 'kept until you delete it separately';
+        const text = s.may_contain_user_text ? ' · can contain text you wrote' : '';
+        appendDetailRow(els.privacyStoreList, s.name,
+          `${size} · ${where} · cleared by: ${removedBy}${text}`);
+      }
+    }
+    // Lie-by-omission guard, surfaced rather than buried in a test: if the
+    // backend found a file under the data root that no category declares,
+    // this screen says so instead of presenting a tidy table over it.
+    if (els.privacyUnmappedWarning) {
+      const unmapped = report?.unmapped_files || [];
+      if (unmapped.length) {
+        els.privacyUnmappedWarning.hidden = false;
+        els.privacyUnmappedWarning.textContent =
+          `${unmapped.length} file(s) on this device are not covered by the list above, `
+          + 'so this report is incomplete. Please report this: '
+          + unmapped.slice(0, 3).join(', ');
+      } else {
+        els.privacyUnmappedWarning.hidden = true;
+        els.privacyUnmappedWarning.textContent = '';
+      }
+    }
+  }
+
+  function describeWipeMode(mode) {
+    if (mode === 'clear_conversations') return 'clearing conversations';
+    if (mode === 'clear_personal_data') return 'clearing personal data';
+    if (mode === 'factory_reset') return 'a factory reset';
+    return '';
+  }
+
+  /**
+   * The learned-examples disclosure. A table row understates this store: it
+   * holds sentences the user dictated AND the rewrites they approved, which
+   * is why the privacy screen states in words what ticking the "teach this
+   * persona" box actually persisted.
+   *
+   * Counts only, never example text — the content stays behind the
+   * per-persona API the user opens deliberately.
+   */
+  function renderPersonaLearningDisclosure(report) {
+    const learning = report?.persona_learning;
+    if (els.privacyPersonaLearningWhat) {
+      els.privacyPersonaLearningWhat.textContent = learning?.what_is_stored
+        || 'Not reported by the backend.';
+    }
+    if (els.privacyPersonaLearningCounts) {
+      if (!learning) {
+        els.privacyPersonaLearningCounts.textContent = '';
+      } else if (!learning.total_examples) {
+        els.privacyPersonaLearningCounts.textContent =
+          'Nothing is stored right now — you have not approved any examples.';
+      } else {
+        els.privacyPersonaLearningCounts.textContent =
+          `${learning.total_examples} example(s) across ${learning.personas} persona(s), `
+          + `${formatBytesShort(learning.bytes || 0)} at ${learning.path || 'this device'}.`;
+      }
+    }
+    if (els.privacyPersonaLearningList) {
+      els.privacyPersonaLearningList.innerHTML = '';
+      const perPersona = learning?.examples_per_persona || {};
+      for (const [name, count] of Object.entries(perPersona)) {
+        // appendDetailRow builds nodes with textContent, so a persona name
+        // (user-authored) cannot inject markup here.
+        appendDetailRow(els.privacyPersonaLearningList, name, `${count} example(s)`);
+      }
+    }
+  }
+
+  /**
+   * What the selected wipe mode would actually delete, from the backend's own
+   * preview of the disk right now.
+   *
+   * The old confirmation named three things and deleted five. Reading the
+   * preview means the sentence the user agrees to and the sweep that runs come
+   * from one source, which is the entire point of the registry.
+   */
+  function renderWipePreview(report) {
+    if (!els.privacyWipePreview) return;
+    const mode = els.privacyWipeMode?.value || 'clear_conversations';
+    const preview = report?.wipe_modes?.[mode];
+    els.privacyWipePreview.innerHTML = '';
+    if (!preview) {
+      els.privacyWipePreview.innerHTML = '<span class="empty-state">Preview unavailable.</span>';
+      return;
+    }
+    const present = (preview.categories || []).filter((c) => c.present);
+    if (!present.length) {
+      els.privacyWipePreview.innerHTML = '<span class="empty-state">Nothing to delete — these stores are already empty.</span>';
+    } else {
+      for (const c of present) {
+        appendDetailRow(els.privacyWipePreview, c.label, formatBytesShort(c.bytes));
+      }
+    }
+    if (els.privacyFactoryResetPreview) {
+      const factory = report?.wipe_modes?.factory_reset;
+      els.privacyFactoryResetPreview.innerHTML = '';
+      const all = (factory?.categories || []).filter((c) => c.present);
+      if (!all.length) {
+        els.privacyFactoryResetPreview.innerHTML = '<span class="empty-state">This install already looks fresh.</span>';
+      } else {
+        appendDetailRow(els.privacyFactoryResetPreview,
+          `${all.length} store(s) would be erased`,
+          `${formatBytesShort(factory.bytes || 0)} total`);
+      }
+    }
   }
 
   async function refreshPrivacyReport() {
@@ -1443,17 +1618,29 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
 
   async function handleWipe() {
     const wipeVoices = els.privacyWipeVoices?.checked || false;
-    // Same destructive-action gate as main.js's handleWipeData() -- NOT
-    // downgraded to a generic message; states exactly what will be deleted.
+    const mode = els.privacyWipeMode?.value || 'clear_conversations';
+    // Same destructive-action gate as main.js's handleWipeData(), but the list
+    // is now read from the backend's own preview of the selected mode rather
+    // than written out here. The old wording named three stores while the
+    // endpoint deleted five -- contacts and learned persona examples went
+    // without ever being mentioned. Naming them from the same source the sweep
+    // uses is the only way those two can't drift apart again.
+    const preview = lastPrivacyReport?.wipe_modes?.[mode];
+    const names = (preview?.categories || [])
+      .filter((c) => c.present)
+      .map((c) => c.label);
+    const list = names.length
+      ? names.join(', ')
+      : 'your drafts, transcription history and recordings';
     const confirmed = confirmFn(
-      'Permanently delete your drafts, transcription history, and in-memory recordings' +
+      `Permanently delete ${list}` +
         (wipeVoices ? ', plus your cloned voices' : '') +
         '? This cannot be undone.',
     );
     if (!confirmed) return;
     if (els.privacyWipeButton) els.privacyWipeButton.disabled = true;
     try {
-      const result = await wipeData(wipeVoices, undefined, { confirmed: true });
+      const result = await wipeData(wipeVoices, undefined, { confirmed: true, mode });
       if (!result?.ok) {
         const summary = summarizeWipeFailure(result);
         throw new Error(`${result?.message || 'The privacy wipe did not complete.'} ${summary}`.trim());
@@ -1474,9 +1661,165 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
     }
   }
 
+  /**
+   * Delete every learned persona example, then prove it independently.
+   *
+   * The store's own "ok" is what it believes about its write; the verify call
+   * re-reads the file. Both are reported, and the success wording is taken
+   * from the verification — never from the delete.
+   */
+  async function handleClearPersonaLearning() {
+    const ok = confirmFn(
+      'Delete every learned example for every persona?\n\n'
+      + 'These are the raw-and-final pairs you approved. Deleting them cannot be undone; '
+      + 'personas keep working, they just stop having your examples to imitate.');
+    if (!ok) return;
+    setPersonaLearningMessage('Deleting…');
+    try {
+      const result = await clearPersonaLearning(undefined, { confirmed: true });
+      if (!result?.ok) {
+        throw new Error(result?.message || 'The examples were not all deleted.');
+      }
+      const verified = await verifyPersonaLearning();
+      setPersonaLearningMessage(verified?.ok
+        ? 'Deleted. Re-checked the file: no learned examples remain.'
+        : `Deleted, but the re-check still found something: ${verified?.detail || 'unknown'}`);
+      await refreshPrivacyReport();
+    } catch (error) {
+      setPersonaLearningMessage(`Could not delete: ${String(error?.message || error)}`);
+    }
+  }
+
+  async function handleVerifyPersonaLearning() {
+    setPersonaLearningMessage('Checking…');
+    try {
+      const verified = await verifyPersonaLearning();
+      setPersonaLearningMessage(verified?.ok
+        ? 'Checked: no learned examples are stored.'
+        : `Still stored: ${verified?.detail || 'examples remain'}`);
+    } catch (error) {
+      setPersonaLearningMessage(`Could not check: ${String(error?.message || error)}`);
+    }
+  }
+
+  async function handleExport() {
+    setPersonaLearningMessage('Building your export…');
+    try {
+      const bundle = await exportPrivacyData();
+      const count = bundle?.category_count ?? 0;
+      const skipped = (bundle?.skipped || []).length;
+      // Say plainly what could not be inlined rather than presenting a
+      // partial bundle as complete.
+      setPersonaLearningMessage(skipped
+        ? `Exported ${count} store(s). ${skipped} could not be included as text `
+          + '(the transcription database, recordings and voices are listed with their paths instead).'
+        : `Exported ${count} store(s).`);
+      return bundle;
+    } catch (error) {
+      setPersonaLearningMessage(`Could not export: ${String(error?.message || error)}`);
+      return null;
+    }
+  }
+
+  function setPersonaLearningMessage(text) {
+    if (els.privacyPersonaLearningMessage) {
+      els.privacyPersonaLearningMessage.textContent = text;
+    }
+  }
+
+  function setFactoryResetMessage(text) {
+    if (els.privacyFactoryResetMessage) {
+      els.privacyFactoryResetMessage.textContent = text;
+    }
+  }
+
+  /**
+   * The factory reset. Two gates, deliberately: the typed phrase (which the
+   * backend re-checks and is the real one) and a final confirmation naming
+   * what is about to go.
+   */
+  async function handleFactoryReset() {
+    const phrase = els.privacyFactoryResetConfirm?.value || '';
+    if (phrase !== FACTORY_RESET_CONFIRMATION) {
+      setFactoryResetMessage(`Type ${FACTORY_RESET_CONFIRMATION} first. Nothing was deleted.`);
+      return;
+    }
+    const alsoModels = els.privacyFactoryResetModels?.checked || false;
+    const ok = confirmFn(
+      'Reset this install to a fresh state?\n\n'
+      + 'This deletes your recordings, drafts, history, contacts, personas, dictionary, '
+      + 'macros, settings, application profiles, workflows and the onboarding record'
+      + (alsoModels ? ', and your downloaded models' : ' (downloaded models are kept)')
+      + '.\n\nThis cannot be undone.');
+    if (!ok) return;
+    if (els.privacyFactoryResetButton) els.privacyFactoryResetButton.disabled = true;
+    setFactoryResetMessage('Resetting…');
+    try {
+      const result = await factoryReset(phrase, { deleteDownloadedModels: alsoModels });
+      if (result?.ok) {
+        setFactoryResetMessage('Done. This install was reset and re-checked: nothing remains. '
+          + 'Restart BetterFingers to begin from first run.');
+      } else {
+        // Never claim a clean reset that did not happen: name what is left.
+        const residual = (result?.residual_files || []).slice(0, 3).join(', ');
+        const failed = (result?.reset?.failed || []).join(', ');
+        setFactoryResetMessage(
+          `${result?.message || 'The reset did not fully complete.'}`
+          + (failed ? ` Stores still present: ${failed}.` : '')
+          + (residual ? ` Files still on disk: ${residual}.` : ''));
+      }
+    } catch (error) {
+      setFactoryResetMessage(`The reset failed: ${String(error?.message || error)}. `
+        + 'Some data may have been deleted — use "Check what\'s left".');
+    } finally {
+      if (els.privacyFactoryResetConfirm) els.privacyFactoryResetConfirm.value = '';
+      if (els.privacyFactoryResetButton) els.privacyFactoryResetButton.disabled = true;
+      await refreshPrivacyReport();
+    }
+  }
+
+  async function handleVerifyFactoryReset() {
+    setFactoryResetMessage('Checking…');
+    try {
+      const result = await verifyFactoryReset();
+      if (result?.ok) {
+        setFactoryResetMessage('Checked: nothing from a previous install remains.');
+      } else {
+        const failed = (result?.failed || []).join(', ');
+        const residual = (result?.residual_files || []).slice(0, 3).join(', ');
+        setFactoryResetMessage(
+          `Still present${failed ? `: ${failed}` : ''}`
+          + (residual ? `. Unaccounted files: ${residual}` : '.'));
+      }
+    } catch (error) {
+      setFactoryResetMessage(`Could not check: ${String(error?.message || error)}`);
+    }
+  }
+
   function bindPrivacyControls() {
     els.privacyWipeButton?.addEventListener?.('click', () => handleWipe());
+    els.privacyPersonaLearningClearButton?.addEventListener?.('click', () => handleClearPersonaLearning());
+    els.privacyPersonaLearningVerifyButton?.addEventListener?.('click', () => handleVerifyPersonaLearning());
+    els.privacyExportButton?.addEventListener?.('click', () => handleExport());
+    els.privacyFactoryResetButton?.addEventListener?.('click', () => handleFactoryReset());
+    els.privacyFactoryResetVerifyButton?.addEventListener?.('click', () => handleVerifyFactoryReset());
+    // Changing the mode re-reads the preview so the list the user is looking
+    // at always describes the mode the button will run.
+    els.privacyWipeMode?.addEventListener?.('change', () => { refreshPrivacyReport(); });
+    // The factory-reset button stays disabled until the exact phrase is typed.
+    // Enforced again on the backend (which is the real gate); this is the
+    // affordance, not the check.
+    els.privacyFactoryResetConfirm?.addEventListener?.('input', () => {
+      if (!els.privacyFactoryResetButton) return;
+      els.privacyFactoryResetButton.disabled =
+        (els.privacyFactoryResetConfirm.value || '') !== FACTORY_RESET_CONFIRMATION;
+    });
   }
+
+  // Must match server.FACTORY_RESET_CONFIRMATION exactly. Duplicated here only
+  // to gate the button; the backend rejects anything else regardless, so a
+  // drift between the two disables the button rather than erasing an install.
+  const FACTORY_RESET_CONFIRMATION = 'DELETE EVERYTHING';
 
   // --- Recording: PTT availability note (best-effort, informational) --------
 

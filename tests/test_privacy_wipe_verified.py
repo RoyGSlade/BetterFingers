@@ -8,6 +8,7 @@ route and in the module.
 """
 
 import os
+import pathlib
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -68,6 +69,20 @@ class TempDataDirMixin(unittest.TestCase):
             # PersonaLearningStore().clear_all() call stays inside this test's
             # throwaway dir instead of the session-wide conftest isolation dir.
             patch("utils.get_user_data_path", return_value=self._tmp.name),
+            # Wave 6: redirect the ROOT as well, not only the four
+            # get_user_data_path callers.
+            #
+            # In production these are one location -- get_user_data_path() is a
+            # thin wrapper over app_paths.resolve_base(). But data_paths (which
+            # the registry, the privacy report and every wipe mode read) resolves
+            # the base directly, precisely so a path lookup never mkdirs. Patching
+            # only the wrapper therefore split the world in two: the stores wrote
+            # to this temp directory while the registry looked in the session
+            # isolation directory, so category wipes found nothing, verified
+            # vacuously, and these tests passed without exercising the sweep they
+            # claim to. Pinning the root keeps both resolvers on one directory,
+            # which is the production arrangement.
+            patch("app_paths.resolve_base", return_value=pathlib.Path(self._tmp.name)),
         ]
         for p in patchers:
             p.start()
@@ -144,18 +159,38 @@ class VerifiedWipeTests(TempDataDirMixin):
         self.assertTrue(report["cleared"]["pipeline_quiesced"])
 
     def test_wipe_reports_failure_when_files_remain(self):
+        """A file that will not delete must make the wipe report failure.
+
+        The injection point moved in Wave 6. Neutering
+        ``recordings.clear_recordings`` alone no longer leaves anything behind:
+        the raw_recordings category declares the whole directory, so its wipe
+        sweeps whatever clear_recordings did not recognise (a stray file in a
+        declared directory is still that category's data). Deletion itself is
+        therefore what has to fail here — which is the condition the test is
+        really about.
+        """
         history_store.init()
         directory = recordings.get_recordings_dir()
-        with open(os.path.join(directory, "stubborn.wav"), "w") as fh:
+        stubborn = os.path.join(directory, "stubborn.wav")
+        with open(stubborn, "w") as fh:
             fh.write("x")
+
+        real_unlink = pathlib.Path.unlink
+
+        def _unlink(self, *args, **kwargs):
+            if self.name == "stubborn.wav":
+                raise OSError("device is busy")
+            return real_unlink(self, *args, **kwargs)
 
         with patch.object(server, "save_draft_history"), \
              patch.object(server, "broadcast_status_threadsafe"), \
-             patch.object(server.recordings, "clear_recordings", return_value=0):
+             patch.object(server.recordings, "clear_recordings", return_value=0), \
+             patch.object(pathlib.Path, "unlink", _unlink):
             report = server._perform_privacy_wipe(wipe_voices=False)
 
         self.assertFalse(report["ok"])
         self.assertIn("stubborn.wav", report["postconditions"]["leftover_recordings"])
+        self.assertTrue(os.path.exists(stubborn))
 
     def test_wipe_waits_for_pipeline_gate(self):
         history_store.init()

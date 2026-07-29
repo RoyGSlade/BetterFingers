@@ -58,6 +58,12 @@ class WipeResult:
     removed: list[str] = field(default_factory=list)
     error: Optional[str] = None
     message: str = ""
+    # Store-specific facts a generic wipe cannot know — e.g. the history DB
+    # reporting whether its schema was successfully recreated, which is a
+    # different question from whether the old file was deleted. Kept as a free
+    # dict so a store can be honest about its own outcome without every other
+    # store growing a field it does not use.
+    detail: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

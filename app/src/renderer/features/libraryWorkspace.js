@@ -51,6 +51,7 @@ import {
   restoreLibraryDraft,
   clearLibrary,
   fetchRecordings,
+  setDraftContact,
 } from '../api/backend.js';
 
 // Reuse the shared confidence-band/color logic from Talk (SPEC 2's
@@ -78,6 +79,7 @@ export const DEFAULT_LIBRARY_API = {
   restoreLibraryDraft,
   clearLibrary,
   fetchRecordings,
+  setDraftContact,
 };
 
 // --- Status vocabulary --------------------------------------------------------
@@ -740,6 +742,7 @@ export const LIBRARY_PLACEMENT_MAP = {
   'selected.duplicate': { section: 'selected', control: 'Duplicate', wired: true, note: 'Wave 4: POST /library/drafts/{id}/duplicate; the copy is always pending and carries duplicated_from_id, shown as a provenance badge' },
   'selected.delete': { section: 'selected', control: 'Delete item', wired: true, note: 'Wave 4: DELETE /library/{drafts|history|recordings}/{id}?confirm=true behind a content-free confirmation dialog; an already-absent target reports "already gone" rather than an error' },
   'selected.pin': { section: 'selected', control: 'Pin / unpin', wired: true, note: 'Wave 4: POST /library/drafts/{id}/pin -- persisted in both the queue and the archive, so it survives a restart' },
+  'selected.setContact': { section: 'selected', control: 'Attach this message to a contact (retroactive)', wired: true, note: 'Wave 6 (D-0023 deferral): calls api.setDraftContact. The Contact row only displayed the capture-time contact, so a draft dictated before that person existed as a contact could never be attributed; the route shipped in Wave 5 with no caller. Drafts only -- history entries and recordings have no contact_id, so the control is disabled rather than failing at the network. An empty value detaches' },
 
   'recovery.recordings': { section: 'recovery', control: 'Retained recordings list', wired: true, note: 'Wave 4: its own section in Library, from GET /recordings, with per-row Restore and Delete' },
   'recovery.retranscribe': { section: 'recovery', control: 'Retranscribe a retained recording', wired: true, note: 'Wave 4: POST /library/recordings/{id}/restore re-transcribes and creates a pending draft labelled a raw transcript' },
@@ -797,6 +800,10 @@ export const LIBRARY_ELEMENT_IDS = {
   selectedStatusTime: 'sdSelectedStatusTime',
   selectedPersonaName: 'sdSelectedPersonaName',
   selectedContactName: 'sdSelectedContactName',
+  // Retroactive contact attachment (D-0023).
+  selectedContactPicker: 'sdSelectedContactPicker',
+  selectedContactApplyButton: 'sdSelectedContactApply',
+  selectedContactMessage: 'sdSelectedContactMessage',
   selectedAudioDuration: 'sdSelectedAudioDuration',
   selectedAudioPlayButton: 'sdSelectedAudioPlayButton',
   reopenButton: 'sdSelectedReopenButton',
@@ -1428,6 +1435,38 @@ export function createLibraryWorkspaceFeature({ elements, hooks, api } = {}) {
     }
 
     const pinnable = item.sourceType === 'draft';
+    // Retroactive contact picker (D-0023). Rebuilt from the same contactsById
+    // map the display name resolves through, so the option list and the label
+    // can never disagree. Only drafts carry a contact_id.
+    if (els.selectedContactPicker) {
+      const picker = els.selectedContactPicker;
+      const current = item.contactId || '';
+      picker.innerHTML = '';
+      const none = doc()?.createElement('option');
+      if (none) {
+        none.value = '';
+        none.textContent = 'No one in particular';
+        picker.appendChild(none);
+      }
+      for (const contact of contactsById.values()) {
+        const option = doc()?.createElement('option');
+        if (!option) continue;
+        option.value = contact.id;
+        // textContent, never innerHTML: a contact name is user-authored.
+        option.textContent = contact.name || contact.id;
+        picker.appendChild(option);
+      }
+      picker.value = current;
+      picker.disabled = !pinnable;
+    }
+    if (els.selectedContactApplyButton) {
+      els.selectedContactApplyButton.disabled = !pinnable;
+    }
+    if (els.selectedContactMessage) {
+      els.selectedContactMessage.textContent = pinnable
+        ? ''
+        : 'Only drafts can be attached to a contact.';
+    }
     if (els.selectedPinButton) {
       els.selectedPinButton.setAttribute('aria-pressed', String(Boolean(item.pinned)));
       els.selectedPinButton.disabled = !pinnable;
@@ -1575,6 +1614,41 @@ export function createLibraryWorkspaceFeature({ elements, hooks, api } = {}) {
   }
 
   // --- actions ----------------------------------------------------------------------
+
+  /**
+   * Attach (or detach) a contact on an already-captured draft — the D-0023
+   * deferral.
+   *
+   * The Contact row in the selected-item panel has only ever DISPLAYED the
+   * contact a draft was captured against. A message dictated before that
+   * person existed as a contact therefore stayed unattributed permanently,
+   * with the route to fix it (`api.setDraftContact`) shipped and unreachable.
+   *
+   * Only drafts carry a contact_id, so the control is disabled for history
+   * entries and recordings rather than failing at the network. An empty value
+   * detaches, which is why "" is a real option and not a placeholder.
+   */
+  async function handleSetContact(contactId, item = getSelectedItem()) {
+    if (!item || item.sourceType !== 'draft') return null;
+    const next = typeof contactId === 'string' ? contactId : '';
+    try {
+      const result = await net.setDraftContact(item.backendId, next);
+      const record = result?.draft || null;
+      // Update in place, like the pin toggle: re-running the search would
+      // reshuffle the list under the user mid-interaction.
+      item.contactId = record ? (record.contact_id || '') : next;
+      item.contact = contactNameFor(item.contactId, contactsById);
+      if (item.raw) item.raw.contact_id = item.contactId;
+      announce(item.contactId
+        ? `Attached to ${item.contact || 'that contact'}.`
+        : 'Detached from any contact.', 'success');
+      renderAll();
+      return item;
+    } catch (error) {
+      reportError(error, 'Attaching a contact');
+      return null;
+    }
+  }
 
   async function handlePinToggle(item = getSelectedItem()) {
     if (!item || item.sourceType !== 'draft') return null;
@@ -1923,6 +1997,9 @@ export function createLibraryWorkspaceFeature({ elements, hooks, api } = {}) {
     });
 
     els.selectedPinButton?.addEventListener?.('click', () => handlePinToggle());
+    els.selectedContactApplyButton?.addEventListener?.('click', () => {
+      handleSetContact(els.selectedContactPicker?.value ?? '');
+    });
     els.pinActionButton?.addEventListener?.('click', () => handlePinToggle());
     els.reopenButton?.addEventListener?.('click', () => handleReopen());
     els.listenButton?.addEventListener?.('click', () => handleListenClick());

@@ -26,6 +26,18 @@ class WipeSendRaceMixin(unittest.TestCase):
         server.next_draft_id = 1
         server.privacy_wipe_in_progress.clear()
         server.output_coordinator.release()
+        # Start from an empty history database.
+        #
+        # These tests stub history_store.wipe_database (they are scoped to the
+        # send/output drain and deliberately do not touch the DB). Since Wave 6
+        # the wipe's history postcondition VERIFIES by re-reading the disk
+        # instead of copying the stub's return value, so any row another test
+        # left in the suite-shared database now makes this test report a wipe
+        # failure that has nothing to do with the race it is exercising —
+        # tests/test_server_drafts.py leaves exactly one. Clearing here fixes
+        # the dependency at its source rather than weakening the assertion.
+        import history_store
+        history_store.wipe_database()
         self.addCleanup(server.draft_queue.clear)
         self.addCleanup(server.draft_recordings.clear)
         self.addCleanup(server.pending_manual_send_ids.clear)
