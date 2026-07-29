@@ -9,6 +9,16 @@
 // Keep this in sync as those handlers change -- the D5 handshake posts to
 // each owning session exist specifically to catch drift here.
 
+import { createRequire } from 'node:module';
+
+// The app's real version, not a literal. Wave 11 centralized the release
+// version on one source (D-0008); this fixture had been pinned to the retired
+// `0.1.0`, so the moment the version became real the version-mismatch banner
+// fired on EVERY production scenario -- a stale fixture accusing a correct
+// product. Deriving it here means the healthy case stays healthy for free,
+// and a scenario that wants a disagreement states one explicitly.
+const APP_VERSION = createRequire(import.meta.url)('../../../../package.json').version;
+
 export function coldBoot() {
   return {
     'GET /health': {
@@ -21,8 +31,8 @@ export function coldBoot() {
       runtime_leases: {},
     },
     'GET /runtime/version': {
-      backend_version: '0.1.0',
-      expected_electron_api_version: '0.1.0',
+      backend_version: APP_VERSION,
+      expected_electron_api_version: APP_VERSION,
       schema_version: 1,
       config_version: 1,
     },

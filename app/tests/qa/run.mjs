@@ -26,16 +26,25 @@ import { scenarios } from './scenarios/index.mjs';
 // Electron/Playwright version combo (see harness.mjs's close() comment), so a
 // per-scenario launch/quit loop would die after scenario 1. Between
 // scenarios the SAME window gets a fresh backend state + reload instead.
-async function runScenario(scenario, { page, stub }) {
+// `ctx` is the second argument every navigate()/expects()/screenshot hook gets.
+// It exists for the two floating production windows (overlay.html,
+// review-overlay.html): they are separate BrowserWindows, so a scenario that
+// only ever received the dashboard `page` could not reach them at all, which is
+// why they had zero QA before Wave 11B. `ctx.app` is the ElectronApplication,
+// which already tracks every window the app owns -- see harness.mjs's
+// auxiliaryWindow(). Scenarios that do not need it ignore the argument, so this
+// is additive to all pre-existing ones.
+async function runScenario(scenario, { page, stub, app }) {
   const backendState =
     typeof scenario.backendState === 'function' ? scenario.backendState() : scenario.backendState;
   const screenshots = [];
+  const ctx = { app, stub };
   let error = null;
   let negativeControlOutcome = null;
 
   try {
     await resetBackendState(page, stub, backendState);
-    await scenario.navigate(page);
+    await scenario.navigate(page, ctx);
 
     if (scenario.kind === 'negative-control') {
       // The expectation is SUPPOSED to fail against a deliberately-lying
@@ -43,18 +52,23 @@ async function runScenario(scenario, { page, stub }) {
       // its own `expects` means the harness failed to catch the lie, which
       // is the actual failure mode here (not the inverse).
       try {
-        await scenario.expects(page);
+        await scenario.expects(page, ctx);
         negativeControlOutcome = 'FAILED: expectation unexpectedly passed against the lying stub';
         error = new Error('negative-control expectation unexpectedly passed (harness did not catch the lie)');
       } catch (_assertionError) {
         negativeControlOutcome = 'OK: correctly caught the lie';
       }
     } else {
-      await scenario.expects(page);
+      await scenario.expects(page, ctx);
     }
 
     for (const shot of scenario.screenshots || []) {
-      const filePath = await snap(page, scenario.area, shot.name, shot.opts || {});
+      // `shot.of` lets a scenario photograph a window other than the dashboard
+      // (the overlays). Default stays `page`, so every existing entry is
+      // unchanged. Resolved per shot rather than per scenario because a
+      // scenario may legitimately want both windows in its walkbook entry.
+      const target = shot.of ? await shot.of(ctx) : page;
+      const filePath = await snap(target, scenario.area, shot.name, shot.opts || {});
       screenshots.push(filePath);
     }
   } catch (e) {
@@ -154,7 +168,7 @@ async function main() {
   const results = [];
   for (const scenario of selected) {
     process.stdout.write(`Running ${scenario.area}/${scenario.name}... `);
-    const result = await runScenario(scenario, { page: harness.page, stub });
+    const result = await runScenario(scenario, { page: harness.page, stub, app: harness.app });
     results.push(result);
     console.log(result.status);
     if (result.error) {

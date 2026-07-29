@@ -456,6 +456,55 @@ export async function resetBackendState(page, stub, newState, target = TARGET) {
   }
 }
 
+// --- the OTHER windows (Wave 11B, B-2) ---------------------------------------
+//
+// launchApp above finds and returns the DASHBOARD window, which is what every
+// scenario before Wave 11B needed. But the app ships two more real production
+// windows -- `overlay.html` (the always-on-top capture ring, created at startup
+// by main.js and kept hidden until something pushes it a status) and
+// `review-overlay.html` (created on demand by windows.js's showReviewWindow) --
+// and neither had any QA at all, because a scenario only ever received `page`.
+//
+// This is the whole seam: an ElectronApplication already tracks every window it
+// owns, hidden ones included, so reaching the second window needs no new IPC, no
+// debug handle and no app change -- only a scenario that is handed `app`. run.mjs
+// passes it as the second argument to navigate()/expects(); scenarios that do not
+// want it simply ignore it.
+//
+// Matching is on the URL's last path segment, NOT a substring: `overlay.html` is
+// a suffix of `review-overlay.html`, so a substring match would hand back
+// whichever of the two happened to be created first and the scenario would assert
+// against the wrong window while looking perfectly healthy.
+function windowMatcher(pageFile) {
+  return (win) => {
+    try {
+      return new URL(win.url()).pathname.split('/').pop() === pageFile;
+    } catch (_e) {
+      return false;
+    }
+  };
+}
+
+/**
+ * The already-open BrowserWindow serving `pageFile`, or the next one to open.
+ *
+ * Checks the current window list before waiting, because the window may already
+ * exist (overlay.html is created during startup) -- waiting first would hang for
+ * the full timeout on the common case.
+ */
+export async function auxiliaryWindow(app, pageFile, { timeout = 15000 } = {}) {
+  const matches = windowMatcher(pageFile);
+  const existing = app.windows().find(matches);
+  const win = existing || (await app.waitForEvent('window', { predicate: matches, timeout }));
+  await win.waitForLoadState('domcontentloaded');
+  return win;
+}
+
+/** True when a window for `pageFile` exists right now. Never waits. */
+export function hasAuxiliaryWindow(app, pageFile) {
+  return app.windows().some(windowMatcher(pageFile));
+}
+
 export async function waitForText(locator, pattern, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let lastText = '';

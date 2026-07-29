@@ -54,6 +54,81 @@ PROD_EXTRA_PAGES = (
 QA_DIR = ROOT / "app/tests/qa/scenarios"
 UNIT_DIR = ROOT / "app/tests"
 
+
+# --- the human anchor table (Wave 11B) --------------------------------------
+#
+# This module's docstring has always promised an ``ANCHORS`` escape hatch for
+# rows the mechanical rules cannot follow, and until Wave 11B it did not exist.
+# Two real defects need it, and neither is fixable by loosening the matcher:
+#
+#   * a workspace MOVE. The namespace rule below strips ONE `sd<workspace>`
+#     token, so it follows a rename inside a workspace (`#settingRecordingMode`
+#     -> `#sdSetRecordingMode`) but cannot follow a control that moved to a
+#     different workspace on the way (`#settingHotkey` ->
+#     `#sdUtilHotkeyRecordingInput`). Widening the tail match to cover that
+#     would let unrelated ids collide, which is how an audit starts lying.
+#   * a PROSE row. `App shell header — logo/title/tagline + Quit button` names
+#     no handle at all, so there is nothing to resolve however clever the rule.
+#
+# The answer to both is a human naming the concrete production element, with
+# the reason, in a data-only table -- `tools/parity_anchors.py`. A declared
+# anchor is a claim about a specific production element, so it is CHECKED:
+# `validate_anchor_table()` below fails loudly if a declared anchor is not in
+# the production closure, if a declared legacy handle already resolves on its
+# own (a redundant mapping is a mapping nobody re-derived), or if a row anchor
+# is attached to a row that was never unanchored. A table that silently rots
+# would be worse than no table.
+#
+# The module is imported optionally so this collector still runs in a checkout
+# that does not have it yet. Once it is present, every rule above is hard.
+
+ANCHOR_SCHEMA_VERSION = 1
+
+
+class AnchorError(RuntimeError):
+    """A declared anchor does not hold against the production closure."""
+
+
+ANCHOR_MODULE = Path(__file__).with_name("parity_anchors.py")
+
+
+def load_anchor_table():
+    """`tools.parity_anchors` as (handle_anchors, row_anchors, cuts).
+
+    A table that is ABSENT FROM DISK yields three empty dicts, so this collector
+    still runs in a checkout that predates it. A table that is on disk but fails
+    to import is an ERROR, not an empty.
+
+    That distinction is not hypothetical. While this was still a bare
+    `except ImportError: return {}, {}, {}`, a regeneration that happened to land
+    during another session's atomic rewrite of the module read it as absent and
+    produced a ledger 60 rows lighter — no warning, no failure, a clean-looking
+    file with the wrong numbers in it. The ledger is only checkable if the
+    difference between "there is no table" and "the table did not load" is
+    visible.
+    """
+    try:
+        from tools import parity_anchors as pa  # noqa: PLC0415 - optional dependency
+    except ImportError:
+        if ANCHOR_MODULE.exists():
+            raise AnchorError(
+                f"{ANCHOR_MODULE} exists but could not be imported. Refusing to regenerate from an "
+                "empty anchor table — that silently drops every hand-declared anchor and cut."
+            ) from None
+        return {}, {}, {}
+
+    declared = getattr(pa, "SCHEMA_VERSION", None)
+    if declared != ANCHOR_SCHEMA_VERSION:
+        raise AnchorError(
+            f"tools/parity_anchors.py declares SCHEMA_VERSION={declared!r}, but this collector "
+            f"speaks {ANCHOR_SCHEMA_VERSION}. Reconcile the two rather than guessing."
+        )
+    return (
+        dict(getattr(pa, "HANDLE_ANCHORS", {})),
+        dict(getattr(pa, "ROW_ANCHORS", {})),
+        dict(getattr(pa, "CUTS", {})),
+    )
+
 # The only QA target that exercises the production composition root.
 #
 # `signal-desk` is the mockup preview and is pinned there by D-0007. Untagged
@@ -63,6 +138,96 @@ UNIT_DIR = ROOT / "app/tests"
 # were written against index.html's ids. Counting them would credit the
 # production page with coverage that never touches it.
 PROD_QA_TARGETS = {"signal-desk-prod"}
+
+# --- comments are not evidence (Wave 11B) ------------------------------------
+#
+# The collector resolves an id by looking for it anywhere in reachable source.
+# Until this was fixed, "anywhere" included COMMENTS -- so a module that merely
+# mentioned `#backendStatus` while explaining what replaced it was enough to make
+# that row resolve in production, and the row could then reach `wired` on a
+# sentence. That does not merely under-report; it silently INFLATES the wired
+# count, which is the one number this gate exists to make trustworthy.
+#
+# So every file is stripped of its comments before anything is matched against
+# it -- markup, module source, QA scenarios and unit tests alike. Only real
+# markup and real code can anchor a row or cover one. Stripping replaces each
+# comment with a space rather than deleting it, so nothing on either side of a
+# comment is accidentally joined into a new token.
+
+HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+SCRIPT_BLOCK_RE = re.compile(r"(<script\b[^>]*>)(.*?)(</script>)", re.DOTALL | re.IGNORECASE)
+
+
+def strip_js_comments(text: str) -> str:
+    """`text` with // and /* */ comments blanked, string literals preserved.
+
+    A hand-written scanner rather than a regex because the two things that must
+    not be confused -- `//` starting a comment and `//` inside `"https://..."` --
+    are indistinguishable without tracking string state. Quotes, apostrophes in
+    template literals and escapes are all handled; a `/` is treated as a comment
+    opener only when the next character is `/` or `*`, which keeps regex literals
+    like `/foo/` intact.
+    """
+    out: list[str] = []
+    i = 0
+    length = len(text)
+    quote: str | None = None
+    while i < length:
+        char = text[i]
+        if quote:
+            out.append(char)
+            if char == "\\" and i + 1 < length:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if char == quote:
+                quote = None
+            i += 1
+            continue
+        if char in "\"'`":
+            quote = char
+            out.append(char)
+            i += 1
+            continue
+        if char == "/" and i + 1 < length:
+            nxt = text[i + 1]
+            if nxt == "/":
+                end = text.find("\n", i)
+                end = length if end == -1 else end
+                out.append(" " * (end - i))
+                i = end
+                continue
+            if nxt == "*":
+                end = text.find("*/", i + 2)
+                end = length if end == -1 else end + 2
+                # Keep newlines so line-based tooling and error messages that
+                # index into this text stay aligned with the original file.
+                out.append("".join("\n" if c == "\n" else " " for c in text[i:end]))
+                i = end
+                continue
+        out.append(char)
+        i += 1
+    return "".join(out)
+
+
+def strip_comments(path: Path, text: str) -> str:
+    """`text` with comments blanked, dispatched on file type.
+
+    HTML is handled precisely rather than by running the JS scanner over the
+    whole document: prose apostrophes ("the user's draft") would open a string
+    that never closes and swallow the rest of the page. So HTML comments are
+    removed by pattern, and the JS scanner is applied only inside <script>
+    blocks, where quoting really is JavaScript quoting.
+    """
+    if path.suffix in (".html", ".htm"):
+        text = HTML_COMMENT_RE.sub(
+            lambda m: "".join("\n" if c == "\n" else " " for c in m.group(0)), text
+        )
+        return SCRIPT_BLOCK_RE.sub(
+            lambda m: m.group(1) + strip_js_comments(m.group(2)) + m.group(3), text
+        )
+    return strip_js_comments(text)
+
 
 IMPORT_RE = re.compile(r"""["']((?:\.{1,2}/)[^"']+)["']""")
 SCRIPT_SRC_RE = re.compile(r"""<script[^>]+src=["']([^"']+)["']""")
@@ -96,7 +261,9 @@ def module_closure(entry_html: Path, entry_js: Path) -> set[Path]:
 
     if entry_html.exists():
         seen.add(entry_html)
-        html = entry_html.read_text(encoding="utf-8", errors="replace")
+        # Stripped, so a commented-out <script src> cannot drag a file that is
+        # not in the product into the production closure.
+        html = strip_comments(entry_html, entry_html.read_text(encoding="utf-8", errors="replace"))
         for src in SCRIPT_SRC_RE.findall(html):
             if src.startswith(("http:", "https:", "//")):
                 continue
@@ -112,7 +279,7 @@ def module_closure(entry_html: Path, entry_js: Path) -> set[Path]:
             continue
         seen.add(current)
         try:
-            text = current.read_text(encoding="utf-8", errors="replace")
+            text = strip_comments(current, current.read_text(encoding="utf-8", errors="replace"))
         except OSError:
             continue
         for spec in IMPORT_RE.findall(text):
@@ -142,7 +309,7 @@ class Closure:
         classes: set[str] = set()
         for path in sorted(files):
             try:
-                text = path.read_text(encoding="utf-8", errors="replace")
+                text = strip_comments(path, path.read_text(encoding="utf-8", errors="replace"))
             except OSError:
                 continue
             chunks.append(text)
@@ -291,12 +458,29 @@ def _namespace_tails(prod_id: str) -> set[str]:
     return tails
 
 
-def _legacy_aliases(legacy_id: str) -> set[str]:
+def _legacy_aliases(legacy_id: str) -> list[str]:
+    """Aliases to try, MOST SPECIFIC FIRST and in a stable order.
+
+    This returns a list, not a set, and the order is load-bearing. When more
+    than one alias resolves, whichever is tried first becomes the anchor the
+    ledger prints -- so a set here made the generated file depend on the
+    interpreter's hash seed: `#onboardingTitle` cited `#sdOnboardingTitle` in
+    one process and `#sdHeaderTitle` in the next, from identical sources. A
+    gate artifact that does not reproduce byte-for-byte cannot be audited, and
+    the staleness test that guards it becomes a coin flip.
+
+    The full id is tried before any prefix-stripped tail, because the longer
+    name is the more specific claim; ties among tails are broken by the
+    LEGACY_DROPPED_PREFIXES order, and `resolve_id` already sorts the matches
+    within one alias.
+    """
     lower = legacy_id.lower()
-    out = {lower}
+    out = [lower]
     for prefix in LEGACY_DROPPED_PREFIXES:
         if lower.startswith(prefix) and len(lower) > len(prefix):
-            out.add(lower[len(prefix):])
+            tail = lower[len(prefix):]
+            if tail not in out:
+                out.append(tail)
     return out
 
 
@@ -354,6 +538,92 @@ def resolve(identifier: Identifier, closure: Closure, index: dict[str, list[str]
     return None
 
 
+def anchor_identifier(anchor: str) -> Identifier | None:
+    """A hand-DECLARED anchor string parsed as if the inventory had written it.
+
+    Declared anchors are written the way the inventory writes handles
+    (`#sdUtilHotkeyRecordingInput`, `.sd-nav__button`, `GET /wake/status`,
+    `applyAppearance`), so they go through the same extractor and the same
+    resolver. Nothing about being hand-written earns a looser check -- if
+    anything the opposite, since there is no source row backing it up.
+    """
+    identifiers = extract_identifiers(f"`{anchor}`")
+    if len(identifiers) != 1 or identifiers[0].kind == "other":
+        return None
+    return identifiers[0]
+
+
+def resolve_anchor_text(anchor: str, closure: Closure, index: dict[str, list[str]]) -> str | None:
+    identifier = anchor_identifier(anchor)
+    return None if identifier is None else resolve(identifier, closure, index)
+
+
+def validate_anchor_table(handle_anchors, row_anchors, cuts, prod, prod_index, source_ids):
+    """Fail loudly on any declared anchor that does not hold.
+
+    Six ways a table can lie, all of them fatal:
+
+      1. a declared production anchor that is not in the production closure --
+         the whole point of the table is to name something real;
+      2. a legacy handle that ALREADY resolves in production -- the mapping is
+         then either redundant or, worse, redirecting a row away from the
+         anchor the collector found on its own;
+      3. a row anchor keyed to a stable id the source inventory does not have;
+      4. a cut keyed to a stable id the source inventory does not have;
+      5. an entry with no stated reason -- an unexplained anchor is an
+         assertion, which is the thing this ledger exists to avoid;
+      6. the same stable id claimed by both ROW_ANCHORS and CUTS, which would
+         make the ruling depend on evaluation order.
+    """
+    problems: list[str] = []
+
+    for handle, entry in sorted(handle_anchors.items()):
+        anchor = (entry or {}).get("anchor", "")
+        why = (entry or {}).get("why", "")
+        if not why.strip():
+            problems.append(f"HANDLE_ANCHORS[{handle!r}] states no reason")
+        if not anchor:
+            problems.append(f"HANDLE_ANCHORS[{handle!r}] declares no anchor")
+            continue
+        if resolve_anchor_text(anchor, prod, prod_index) is None:
+            problems.append(
+                f"HANDLE_ANCHORS[{handle!r}] -> {anchor!r} does not resolve in the production closure"
+            )
+        if resolve_anchor_text(handle, prod, prod_index) is not None:
+            problems.append(
+                f"HANDLE_ANCHORS[{handle!r}] is redundant: that handle already resolves in production"
+            )
+
+    for stable_id, entry in sorted(row_anchors.items()):
+        if stable_id not in source_ids:
+            problems.append(f"ROW_ANCHORS[{stable_id!r}] is not a source inventory row")
+        if stable_id in cuts:
+            problems.append(f"{stable_id!r} is claimed by both ROW_ANCHORS and CUTS")
+        why = (entry or {}).get("why", "")
+        anchors = list((entry or {}).get("anchors", []))
+        if not why.strip():
+            problems.append(f"ROW_ANCHORS[{stable_id!r}] states no reason")
+        if not anchors:
+            problems.append(f"ROW_ANCHORS[{stable_id!r}] declares no anchors")
+        for anchor in anchors:
+            if resolve_anchor_text(anchor, prod, prod_index) is None:
+                problems.append(
+                    f"ROW_ANCHORS[{stable_id!r}] -> {anchor!r} does not resolve in the production closure"
+                )
+
+    for stable_id, rationale in sorted(cuts.items()):
+        if stable_id not in source_ids:
+            problems.append(f"CUTS[{stable_id!r}] is not a source inventory row")
+        if not str(rationale or "").strip():
+            problems.append(f"CUTS[{stable_id!r}] states no rationale")
+
+    if problems:
+        raise AnchorError(
+            "tools/parity_anchors.py declares anchors that do not hold:\n  - "
+            + "\n  - ".join(problems)
+        )
+
+
 # --- QA / unit coverage -----------------------------------------------------
 
 
@@ -387,7 +657,10 @@ class Coverage:
         for path in sorted(QA_DIR.glob("*.mjs")):
             if path.name == "index.mjs":
                 continue
-            text = path.read_text(encoding="utf-8", errors="replace")
+            # Same rule as the closure: a scenario that only MENTIONS a control
+            # in its header comment does not exercise it, and must not be
+            # reported as covering it.
+            text = strip_comments(path, path.read_text(encoding="utf-8", errors="replace"))
             targets = set(re.findall(r"ui:\s*'([a-z\-]+)'", text))
             # No `ui:` tag at all means the file rides the DEFAULT SCENARIO
             # target, which is `legacy` -- see app/tests/qa/run.mjs. Those
@@ -396,16 +669,34 @@ class Coverage:
             if targets & {t for t in PROD_QA_TARGETS if t}:
                 qa.append((str(path.relative_to(ROOT)), text))
         unit = [
-            (str(path.relative_to(ROOT)), path.read_text(encoding="utf-8", errors="replace"))
+            (
+                str(path.relative_to(ROOT)),
+                strip_comments(path, path.read_text(encoding="utf-8", errors="replace")),
+            )
             for path in sorted(UNIT_DIR.glob("*.test.mjs"))
         ]
         return cls(qa, unit)
 
     def files_naming(self, needle: str) -> tuple[list[str], list[str]]:
-        """(qa files, unit files) that mention `needle` as a whole word."""
+        """(qa files, unit files) that mention `needle` as a whole token.
+
+        Boundaries are lookarounds rather than `\\b`, because `\\b` silently
+        could not match an ENDPOINT needle at all. `\\b` asserts a word/non-word
+        transition, so `\\b/personas/interview/answer` requires a word character
+        immediately before the leading slash -- and a QA stub writes it as
+        `'POST /personas/interview/answer'`, where the slash is preceded by a
+        space. Every endpoint row was therefore reported as uncovered no matter
+        how thoroughly a scenario exercised it, which is the same defect as the
+        comment hole pointing the other way: it under-reported instead of
+        inflating, and it was just as invisible.
+
+        The lookarounds are no looser than `\\b` for identifier needles -- they
+        additionally refuse a `/` neighbour, so `answer` still does not match
+        inside `/answers` or `foundryAnswer`.
+        """
         if not needle:
             return [], []
-        pattern = re.compile(rf"\b{re.escape(needle)}\b")
+        pattern = re.compile(rf"(?<![A-Za-z0-9_/]){re.escape(needle)}(?![A-Za-z0-9_/])")
         return (
             [path for path, text in self.qa_files if pattern.search(text)],
             [path for path, text in self.unit_files if pattern.search(text)],
@@ -427,6 +718,11 @@ class RowEvidence:
     unresolvable: list[str]
     qa_hits: list[str]  # repo-relative production-target QA scenario files
     unit_hits: list[str]  # repo-relative renderer unit test files
+    # Anchors this row got from tools/parity_anchors.py rather than from its own
+    # text, kept separate so the ledger can say so out loud: a hand-declared
+    # anchor is a human's verified claim, not something the collector derived.
+    declared: list[str] = field(default_factory=list)
+    declared_why: str = ""
 
     @property
     def anchored(self) -> bool:
@@ -448,6 +744,35 @@ def collect(source_rows) -> list[RowEvidence]:
     legacy_index = build_id_index(legacy)
     coverage = Coverage.build()
 
+    handle_anchors, row_anchors, cuts = load_anchor_table()
+    validate_anchor_table(
+        handle_anchors,
+        row_anchors,
+        cuts,
+        prod,
+        prod_index,
+        {row.stable_id for row in source_rows},
+    )
+
+    def credit(anchor: str, needle: str, anchors, qa_hits, unit_hits) -> None:
+        """Record `anchor` and everything that names it, once."""
+        if anchor not in anchors:
+            anchors.append(anchor)
+        qa_files, unit_files = coverage.files_naming(needle)
+        # The production anchor is the name QA scenarios and unit tests
+        # actually use (they were written against `#sdSet...`, not the
+        # legacy id), so look it up under that name too.
+        if anchor.startswith(("#", ".")):
+            extra_qa, extra_unit = coverage.files_naming(anchor[1:])
+            qa_files = sorted(set(qa_files) | set(extra_qa))
+            unit_files = sorted(set(unit_files) | set(extra_unit))
+        for path in qa_files:
+            if path not in qa_hits:
+                qa_hits.append(path)
+        for path in unit_files:
+            if path not in unit_hits:
+                unit_hits.append(path)
+
     out: list[RowEvidence] = []
     for row in source_rows:
         identifiers = extract_identifiers(row.text)
@@ -458,34 +783,50 @@ def collect(source_rows) -> list[RowEvidence]:
         unresolvable: list[str] = []
         qa_hits: list[str] = []
         unit_hits: list[str] = []
+        declared: list[str] = []
+        declared_why = ""
 
         for identifier in identifiers:
             if identifier.kind == "other":
                 unresolvable.append(identifier.raw)
                 continue
             anchor = resolve(identifier, prod, prod_index)
+            if anchor is None and identifier.raw in handle_anchors:
+                # A control that MOVED workspace: the tail rule cannot follow it,
+                # a human verified where it went. Credited as production, and the
+                # ledger prints which handle was redirected where.
+                entry = handle_anchors[identifier.raw]
+                anchor = resolve_anchor_text(entry["anchor"], prod, prod_index)
+                if anchor and entry["anchor"] not in declared:
+                    declared.append(f"{identifier.raw} → {entry['anchor']}")
+                    declared_why = declared_why or entry["why"]
             if anchor:
                 in_prod.append(identifier.raw)
-                if anchor not in anchors:
-                    anchors.append(anchor)
-                qa_files, unit_files = coverage.files_naming(identifier.needle)
-                # The production anchor is the name QA scenarios and unit tests
-                # actually use (they were written against `#sdSet...`, not the
-                # legacy id), so look it up under that name too.
-                if anchor.startswith("#"):
-                    extra_qa, extra_unit = coverage.files_naming(anchor[1:])
-                    qa_files = sorted(set(qa_files) | set(extra_qa))
-                    unit_files = sorted(set(unit_files) | set(extra_unit))
-                for path in qa_files:
-                    if path not in qa_hits:
-                        qa_hits.append(path)
-                for path in unit_files:
-                    if path not in unit_hits:
-                        unit_hits.append(path)
+                credit(anchor, identifier.needle, anchors, qa_hits, unit_hits)
             elif resolve(identifier, legacy, legacy_index):
                 legacy_only.append(identifier.raw)
             else:
                 not_in_prod.append(identifier.raw)
+
+        # Prose rows: the source names no handle, so a human named the
+        # production element instead. Only ever applied to a row the collector
+        # could not anchor by itself -- a declared anchor on a row that already
+        # resolved would be overriding real evidence with an assertion, which
+        # is a table bug, not a ruling.
+        if row.stable_id in row_anchors:
+            entry = row_anchors[row.stable_id]
+            if in_prod:
+                raise AnchorError(
+                    f"ROW_ANCHORS[{row.stable_id!r}] is declared, but that row already resolves "
+                    f"in production on its own ({', '.join(anchors)}). Remove the declaration."
+                )
+            declared_why = entry["why"]
+            for declared_anchor in entry["anchors"]:
+                identifier = anchor_identifier(declared_anchor)
+                resolved = resolve(identifier, prod, prod_index)
+                declared.append(declared_anchor)
+                in_prod.append(declared_anchor)
+                credit(resolved, identifier.needle, anchors, qa_hits, unit_hits)
 
         out.append(
             RowEvidence(
@@ -499,6 +840,8 @@ def collect(source_rows) -> list[RowEvidence]:
                 unresolvable=unresolvable,
                 qa_hits=qa_hits,
                 unit_hits=unit_hits,
+                declared=declared,
+                declared_why=declared_why,
             )
         )
     return out

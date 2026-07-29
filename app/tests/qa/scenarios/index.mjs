@@ -87,6 +87,25 @@ import { wave10InputScenarios } from './wave10-input.mjs';
 // so a single `node tests/qa/run.mjs` proves the app boots to Signal Desk and
 // `BF_QA_UI=legacy node tests/qa/run.mjs` proves the revert path still works.
 import { defaultFlipScenarios } from './default-flip.mjs';
+// Wave 11B (B-1): the Persona Foundry on the production composition root.
+// `ui: 'signal-desk-prod'`. NOT a retarget of personas.mjs -- that file covers
+// the manual persona WIZARD (`#wizard*`) and names no `#foundry*` id at all, so
+// pointing it at production would have moved none of §3 while dropping the
+// legacy rollback coverage it does provide. See foundry-prod.mjs's header.
+import { foundryProdScenarios } from './foundry-prod.mjs';
+// Wave 11B (B-2): the two floating overlay WINDOWS (overlay.html,
+// review-overlay.html). The first scenarios in this suite to drive a window
+// other than the dashboard -- run.mjs hands them `ctx.app` for that. Read the
+// file header before treating them as parity evidence: writing them surfaced
+// that the production page has no caller for `overlay:update-status` or
+// `review:show` at all, which makes those rows a product gap, not an audit one.
+import { overlayProdScenarios } from './overlay-prod.mjs';
+// Wave 11B (sup-surfaces): the production status cells, the version banner, and
+// reachability of the controls the Wave 11 blockers list wrongly reported as
+// missing (hotkey/wake capture, model manager, Quit). `ui: 'signal-desk-prod'`.
+// Quit is asserted present and labelled, never clicked -- clicking it would quit
+// the Electron app the whole suite is running inside.
+import { shellStatusProdScenarios } from './shell-status-prod.mjs';
 
 export const scenarios = [
   ...baselineScenarios,
@@ -114,7 +133,10 @@ export const scenarios = [
   ...wave9ActionScenarios,
   ...wave10InputScenarios,
   ...defaultFlipScenarios,
+  ...foundryProdScenarios,
+  ...overlayProdScenarios,
   ...signalDeskProdSweepScenarios,
+  ...shellStatusProdScenarios,
   // Ordered last among the prod-target scenarios as belt-and-braces, not as a
   // load-bearing requirement: the auto-dismiss sentinel these use is
   // single-shot (harness.mjs), so a first-run scenario cannot leave the shared

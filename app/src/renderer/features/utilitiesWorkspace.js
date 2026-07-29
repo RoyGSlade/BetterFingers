@@ -57,7 +57,7 @@
 //   models.voiceCloning.provision "Install voice cloning" + status/hint            -> provisionVoiceCloning()               [wired]
 //
 // --- SPEECH INPUT section (audio device + hotkeys + wake word, inventory §7.7/§7.3/§7.8) ---
-//   speech.audioDevice.select     Input device picker                              -> GET /runtime/audio-devices (no backend.js export -- see SPEC GAP below) [stub: TODO(phase-integration)]
+//   speech.audioDevice.select     Input device picker (input-capable only)         -> fetchAudioDevices() -> GET /runtime/audio-devices; persists `input_device_index` [wired, Wave 11B]
 //   speech.audioDevice.micTest    "Test Browser Microphone Access" + level meter    -> navigator.mediaDevices.getUserMedia (browser API, no backend/IPC needed) [wired]
 //   speech.hotkeys.sessionIndicator platform/session readout                       -> fetchCapabilities()                   [wired]
 //   speech.hotkeys.waylandWarning  Wayland fallback banner                         -> fetchCapabilities() (is_wayland)      [wired]
@@ -119,26 +119,29 @@
 //      it is placed under ADVANCED here (injection/ducking/paste-test read as
 //      developer-adjacent settings, same shelf as warmup/residency/dumps in
 //      inventory §7.16's neighbor section §7.6). Flagged, not hidden.
-//   2. Audio device SELECT (`speech.audioDevice.select`): main.js populates
-//      `#settingInputDevice` via a local, unexported `fetchJson('/runtime/
-//      audio-devices')` helper -- api/backend.js has NO exported wrapper for
-//      this route (only `refreshAudioDevices()`, the POST /refresh variant).
-//      Rather than reach around backend.js's public export surface with a
-//      raw `window.betterFingers.backendRequest(...)` call (a pattern none of
-//      Talk/Library/Studio use), this is left a clearly-labeled
-//      TODO(phase-integration) stub: the <select> markup + mount point exist,
-//      wireAudioDevice() renders a "device list needs a backend.js export"
-//      placeholder option, and the REAL microphone test + live level meter
-//      below it (getUserMedia-based, no backend involved) is fully wired.
-//   3. Dictionary auto-suggest (`textTools.dictionary.suggest`): the real
-//      inventory trigger is "auto-surfaced from an edited DRAFT" (main.js's
-//      `maybeLearnFromEdit` diffing raw vs. edited draft text on Save Edit) --
-//      Utilities has no draft editor of its own to diff. The mount point +
-//      `renderDictionarySuggestions()` + click-to-add wiring are all real and
-//      exported (`suggestFromEdit(rawText, editedText)` on the returned
-//      feature object), but nothing in Utilities itself calls it
-//      automatically; TODO(phase-integration): main.js's draft-edit save path
-//      should call it once Talk's real draft editor exists.
+//   2. Audio device SELECT (`speech.audioDevice.select`): RESOLVED in Wave 11B,
+//      and the resolution is worth recording because the gap was fictional.
+//      This note used to say api/backend.js had "NO exported wrapper" for GET
+//      /runtime/audio-devices, so the control was left a disabled stub
+//      rendering "device list needs a backend.js export". `fetchAudioDevices`
+//      IS exported (and was, by the time anyone read this note again) -- the
+//      comment went stale and nobody re-checked it, with the result that a user
+//      with two microphones could not choose between them on the shipping page.
+//      refreshAudioDevices_() now loads the real list, filters to
+//      input-capable devices, marks the OS default, keeps a "System default"
+//      choice that stores null rather than pinning an index, and persists
+//      `input_device_index` through patchProfileSetting(). A stale comment is a
+//      cheap way to ship a hole; re-grep before believing one.
+//   3. Dictionary auto-suggest (`textTools.dictionary.suggest`): also RESOLVED,
+//      and also previously described as unwired. The inventory trigger is
+//      "auto-surfaced from an edited DRAFT" (legacy main.js's
+//      `maybeLearnFromEdit`, diffing raw vs. edited text on Save Edit).
+//      Utilities has no draft editor of its own, but it does not need one: the
+//      production bootstrap calls `utilitiesWorkspace.suggestFromEdit(rawText,
+//      editedText)` from Talk's draft-edit save path
+//      (bootstrap/signalDeskApp.js), which is exactly the integration this note
+//      once listed as a TODO. The mount point, renderDictionarySuggestions()
+//      and click-to-add wiring were already real.
 //   4. Hotkey "controller binding": CURRENT_UI_INVENTORY.md's orphan list
 //      (§15) and SPEC §8 both mention "hotkey/controller binding" in the same
 //      breath as the 6 keyboard hotkey fields, but no dedicated
@@ -184,6 +187,9 @@ import {
   fetchWakeModelDownloadState,
   provisionVoiceCloning,
   fetchCapabilities,
+  // Wave 11B: both of these were already exported by api/backend.js; the audio
+  // device picker was left a disabled stub on a comment claiming they were not.
+  fetchAudioDevices,
   fetchProfiles,
   fetchProfile,
   saveProfile,
@@ -273,7 +279,7 @@ export const INVENTORY_PLACEMENT_MAP = {
   'models.runtimeMemory.unloadTts': { section: 'models', control: 'Unload TTS (Runtime Memory)', wired: true },
   'models.voiceCloning.provision': { section: 'models', control: 'Voice Cloning provisioning', wired: true },
 
-  'speech.audioDevice.select': { section: 'speech', control: 'Input device select', wired: false, note: 'TODO(phase-integration): no backend.js export for GET /runtime/audio-devices' },
+  'speech.audioDevice.select': { section: 'speech', control: 'Input device select', wired: true, note: 'Wave 11B: was a disabled stub on a stale comment claiming api/backend.js had no export for GET /runtime/audio-devices. It does. Now lists input-capable devices, marks the OS default, and persists input_device_index (null for System default)' },
   'speech.audioDevice.micTest': { section: 'speech', control: 'Mic test + live level meter', wired: true },
   'speech.hotkeys.sessionIndicator': { section: 'speech', control: 'Hotkey session indicator', wired: true },
   'speech.hotkeys.waylandWarning': { section: 'speech', control: 'Wayland hotkey warning', wired: true },
@@ -1151,26 +1157,97 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
   // SPEECH INPUT section: audio device
   // ===========================================================================
 
-  function renderAudioDeviceStub() {
+  /**
+   * The placeholder shown only while the device list is being fetched, or when
+   * the fetch failed.
+   *
+   * Wave 11B: this used to be the PERMANENT state of the control. The select
+   * rendered one disabled option reading "device list needs main.js
+   * composition" and never asked the backend for anything, on the strength of
+   * a comment saying api/backend.js had no export for GET
+   * /runtime/audio-devices. It does — `fetchAudioDevices`/`refreshAudioDevices`
+   * are exported — so the comment was stale and the consequence was a real
+   * product gap: a user with two microphones could not choose between them from
+   * the shipping page. `reason` is stated rather than generic, because "no
+   * devices" and "we could not ask" are different problems for the user.
+   */
+  function renderAudioDevicePlaceholder(reason) {
     if (!els.audioDeviceSelect) return;
     els.audioDeviceSelect.replaceChildren();
     const opt = document.createElement('option');
     opt.value = '';
-    opt.textContent = 'System default (device list needs main.js composition)';
+    opt.textContent = reason;
     els.audioDeviceSelect.append(opt);
     els.audioDeviceSelect.disabled = true;
   }
 
-  /** Preview/test seeding: populate the device select from plain data (bypasses the TODO(phase-integration) network gap above). */
-  function setAudioDevices(devices) {
+  /**
+   * Load the real input-device list and select the profile's current choice.
+   *
+   * Only INPUT-capable devices are offered (`max_input_channels > 0`), matching
+   * the inventory's "input-capable devices only" — listing speakers in a
+   * microphone picker is how a user ends up recording silence and blaming the
+   * app.
+   */
+  async function refreshAudioDevices_() {
+    if (!els.audioDeviceSelect) return null;
+    renderAudioDevicePlaceholder('Loading devices…');
+    let payload = null;
+    try {
+      payload = await fetchAudioDevices();
+    } catch (error) {
+      renderAudioDevicePlaceholder('Device list unavailable');
+      setMessage(els.audioMessage, `Could not list audio devices: ${error.message}`, 'danger');
+      return null;
+    }
+    // The backend reports its own probe failure in `error` rather than raising,
+    // so an empty list with a reason must not be shown as "no microphones".
+    if (payload?.error) {
+      renderAudioDevicePlaceholder('Device list unavailable');
+      setMessage(els.audioMessage, `Could not list audio devices: ${payload.error}`, 'danger');
+      return null;
+    }
+    const inputs = (payload?.devices || []).filter((d) => Number(d?.max_input_channels) > 0);
+    if (!inputs.length) {
+      renderAudioDevicePlaceholder('No input devices found');
+      return payload;
+    }
+    setAudioDevices(inputs, payload?.default_input_device);
+    // Read the profile explicitly rather than trusting profileSettingsCache to
+    // be warm: refreshAll() runs every section's refresh concurrently, so
+    // depending on another one having populated the cache first would be a race
+    // that shows the right list with the wrong device selected.
+    const settings = await refreshProfileSettings();
+    const stored = settings?.input_device_index;
+    if (stored !== undefined && stored !== null && stored !== '') {
+      els.audioDeviceSelect.value = String(stored);
+    }
+    return payload;
+  }
+
+  /**
+   * Preview/test seeding, and the render half of refreshAudioDevices_().
+   *
+   * Keeps a "System default" entry at the top with an EMPTY value: that is a
+   * real, distinct choice (follow whatever the OS default is, including when it
+   * changes) rather than a synonym for the device that happens to be default
+   * right now, and storing an index would silently pin the user to it.
+   */
+  function setAudioDevices(devices, defaultInputIndex) {
     if (!els.audioDeviceSelect) return;
     const list = Array.isArray(devices) ? devices : [];
     els.audioDeviceSelect.disabled = false;
+    const systemDefault = document.createElement('option');
+    systemDefault.value = '';
+    systemDefault.textContent = 'System default';
     els.audioDeviceSelect.replaceChildren(
+      systemDefault,
       ...list.map((d) => {
         const opt = document.createElement('option');
         opt.value = String(d.index);
-        opt.textContent = d.name;
+        opt.textContent = Number(d.index) === Number(defaultInputIndex)
+          ? `${d.name} (default)`
+          : d.name;
         return opt;
       }),
     );
@@ -1222,7 +1299,16 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
   }
 
   function bindAudioDeviceSection() {
-    renderAudioDeviceStub();
+    renderAudioDevicePlaceholder('Loading devices…');
+    // `input_device_index` is stored as a NUMBER when a device is chosen and as
+    // null for "System default" -- never as the empty string, which would make
+    // the backend's `is None` default check fail and pin the user to device 0.
+    els.audioDeviceSelect?.addEventListener?.('change', () => {
+      const raw = els.audioDeviceSelect.value;
+      patchProfileSetting('input_device_index', raw === '' ? null : Number(raw), {
+        messageEl: els.audioMessage,
+      });
+    });
     els.audioTestMicButton?.addEventListener?.('click', () => {
       if (micStream) stopMicTest();
       else startMicTest();
@@ -2113,6 +2199,7 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
       refreshWakeStatus(),
       refreshWakeTuningFromProfile(),
       refreshMacrosEnabled(),
+      refreshAudioDevices_(),
       refreshDictionary(),
       refreshMacros(),
       refreshAllDiagnostics(),

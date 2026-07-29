@@ -20,6 +20,7 @@ import { autowireMode, AUTOWIRE_SIGNAL_DESK_VALUE } from '../lib/autowire.mjs';
 import { createSignalDeskShellFeature, collectShellElements } from '../features/signalDeskShell.js';
 import { createShortcutsFeature, describeShortcuts, ACTIONS } from '../features/shortcuts.js';
 import { createStatusBarFeature, collectStatusBarElements } from '../features/statusBar.js';
+import { createBackendBannerFeature, collectBackendBannerElements } from '../features/backendBanner.js';
 import { createDraftsFeature } from '../features/drafts.js';
 import { createTalkWorkspaceFeature, collectTalkElements } from '../features/talkWorkspace.js';
 import { createTalkCaptureFeature, collectTalkCaptureElements } from '../features/talkCapture.js';
@@ -152,6 +153,21 @@ export function startSignalDeskApp(doc = document) {
   const statusBar = createStatusBarFeature({ elements: collectStatusBarElements(doc), api });
   statusBar.refresh().catch(() => {});
   const statusBarInterval = setInterval(() => statusBar.refresh().catch(() => {}), 3000);
+
+  // --- Backend health / version banner + Quit (Wave 11B) -------------------
+  //
+  // Polled on the same 3s cadence as the status bar and for the same reason:
+  // the conditions it reports (sidecar crashed, restarting, not answering,
+  // built for a different app version) all arise between user actions, so
+  // there is no event to hang it on. It renders nothing until one is real.
+  const backendBanner = createBackendBannerFeature({
+    elements: collectBackendBannerElements(doc),
+    api,
+    hooks: { confirmFn: (message) => doc.defaultView?.confirm?.(message) ?? true },
+  });
+  backendBanner.init();
+  backendBanner.refresh().catch(() => {});
+  const backendBannerInterval = setInterval(() => backendBanner.refresh().catch(() => {}), 3000);
 
   // --- Shared send-action state (drafts.js's hooks.getSelectedSendAction) --
   //
@@ -514,8 +530,13 @@ export function startSignalDeskApp(doc = document) {
       talkWorkspace.handleVoiceStatusMessage(payload);
       talkCapture.handleVoiceStatusMessage(payload);
     },
-    onConnectionChange: () => {},
-    onError: () => {},
+    // Wave 11B: these two were empty closures, which meant a dropped voice
+    // stream was completely invisible -- the Signal Core simply stopped moving
+    // and nothing on screen said why. Both now report into the status bar's
+    // Stream cell. onError carries the reason as the cell's detail rather than
+    // swallowing it.
+    onConnectionChange: (state, detail) => statusBar.setStreamState(state, detail),
+    onError: (error) => statusBar.setStreamState('error', error?.message || ''),
   });
 
   // --- Library workspace ---------------------------------------------------
@@ -873,6 +894,7 @@ export function startSignalDeskApp(doc = document) {
   return {
     destroy() {
       clearInterval(statusBarInterval);
+      clearInterval(backendBannerInterval);
       applicationProfiles.destroy?.();
       voiceStatusConnection.close?.();
       talkWorkspace.destroy?.();

@@ -16,6 +16,8 @@ import {
   mapMic,
   mapPersona,
   mapStt,
+  mapBackend,
+  mapStream,
   mapTargetApp,
   mapContact,
   mapAppProfile,
@@ -177,15 +179,23 @@ test('a contact with no id or no name yields no cell', () => {
   assert.equal(mapContact({ id: 'a1', name: '   ' }), null);
 });
 
-function railHarness() {
-  const mk = () => ({ textContent: '', dataset: {}, hidden: false });
+// `removeAttribute` is real rather than a stub because Wave 11B's paint()
+// CLEARS a stale title, and a no-op fake would let that regress silently.
+function railHarness({ api = null } = {}) {
+  const mk = () => ({
+    textContent: '',
+    dataset: {},
+    hidden: false,
+    removeAttribute(name) { delete this[name]; },
+  });
   const elements = {
+    backendValue: mk(), backendDot: mk(), streamValue: mk(), streamDot: mk(),
     micValue: mk(), sttValue: mk(), sttDot: mk(), llmValue: mk(), llmDot: mk(),
     personaValue: mk(), targetAppValue: mk(), latencyValue: mk(),
     contactCell: mk(), contactValue: mk(),
     appProfileCell: mk(), appProfileValue: mk(),
   };
-  return { elements, feature: createStatusBarFeature({ elements }) };
+  return { elements, feature: createStatusBarFeature({ elements, api }) };
 }
 
 test('the cell is hidden until a contact is applied', () => {
@@ -333,4 +343,147 @@ test('a rail with no app-profile elements still renders everything else', () => 
   feature.setAppContext({ profile_id: 'discord' });
   feature.render({ runtime: { recording_active: false } });
   assert.equal(elements.micValue.textContent, 'Idle');
+});
+
+// --- backend cell (Wave 11B) -------------------------------------------------
+//
+// Replaces the legacy dashboard's three-card status grid. The whole point of
+// this cell is the distinction the tests below pin: "we asked and it did not
+// answer" must not read the same as "we have not asked yet".
+
+test('an unreachable backend says so rather than showing a dash', () => {
+  const cell = mapBackend(null, false);
+  assert.equal(cell.text, 'Unreachable');
+  assert.equal(cell.tone, 'warning');
+  assert.match(cell.detail, /health/);
+});
+
+test('a backend that has not been asked yet is unknown, not unreachable', () => {
+  // A fresh launch must not accuse the backend of being down before the first
+  // poll returns.
+  assert.equal(mapBackend(null, null).text, UNKNOWN);
+  assert.equal(mapBackend(null, null).tone, 'muted');
+});
+
+test('an active backend reads Active', () => {
+  const cell = mapBackend({ status: 'active', active_job_count: 0 }, true);
+  assert.equal(cell.text, 'Active');
+  assert.equal(cell.tone, 'success');
+});
+
+test('a busy backend is still Active, and says how busy in its detail', () => {
+  // A backend running jobs is not a degraded backend -- the legacy card made
+  // the same distinction, and /health carries active_job_count for it.
+  const cell = mapBackend({ status: 'active', active_job_count: 3 }, true);
+  assert.equal(cell.text, 'Active');
+  assert.equal(cell.tone, 'success');
+  assert.match(cell.detail, /3 jobs/);
+  assert.match(mapBackend({ status: 'active', active_job_count: 1 }, true).detail, /1 job\b/);
+});
+
+test('any status other than active is reported verbatim as a warning', () => {
+  // Reporting the backend's own word beats mapping it to a friendlier one we
+  // then have to keep in sync.
+  const cell = mapBackend({ status: 'degraded' }, true);
+  assert.equal(cell.text, 'degraded');
+  assert.equal(cell.tone, 'warning');
+});
+
+test('a reachable backend with no status field is unknown, not Active', () => {
+  assert.equal(mapBackend({}, true).text, UNKNOWN);
+});
+
+// --- stream cell (Wave 11B) --------------------------------------------------
+
+test('no stream state yet reads as unknown', () => {
+  assert.equal(mapStream(null).text, UNKNOWN);
+  assert.equal(mapStream('').text, UNKNOWN);
+});
+
+test('the four documented connection states map to their own labels', () => {
+  assert.equal(mapStream('connecting').text, 'Connecting');
+  assert.equal(mapStream('connected').text, 'Connected');
+  assert.equal(mapStream('reconnecting').text, 'Reconnecting');
+  assert.equal(mapStream('error').text, 'Error');
+});
+
+test('only a connected stream is a success tone', () => {
+  // Reconnecting is recoverable, but while it lasts the meter and the capture
+  // controls are showing stale truth -- that is worth a warning.
+  assert.equal(mapStream('connected').tone, 'success');
+  assert.equal(mapStream('reconnecting').tone, 'warning');
+  assert.equal(mapStream('error').tone, 'warning');
+  assert.equal(mapStream('connecting').tone, 'muted');
+});
+
+test('an unrecognised state is surfaced as a warning rather than swallowed', () => {
+  const cell = mapStream('quiesced');
+  assert.equal(cell.text, 'quiesced');
+  assert.equal(cell.tone, 'warning');
+});
+
+test('a detail rides along for the cell title', () => {
+  assert.equal(mapStream('error', 'socket closed').detail, 'socket closed');
+  assert.equal(mapStream('connected').detail, undefined);
+});
+
+test('setStreamState paints immediately and survives the next poll', () => {
+  // The regression this pins: the stream state is PUSHED in by the main-process
+  // bridge and is not part of the snapshot refresh() fetches, so a render()
+  // triggered by the 3s health poll must not wipe a live "Reconnecting".
+  const h = railHarness();
+  h.feature.setStreamState('reconnecting', 'retrying in 2s');
+  assert.equal(h.elements.streamValue.textContent, 'Reconnecting');
+  assert.equal(h.elements.streamValue.title, 'retrying in 2s');
+  assert.equal(h.elements.streamDot.dataset.tone, 'warning');
+
+  h.feature.render({ runtime: { recording_active: false } });
+  assert.equal(h.elements.streamValue.textContent, 'Reconnecting', 'a health poll must not clear it');
+});
+
+test('an explicit stream in a snapshot still wins', () => {
+  const h = railHarness();
+  h.feature.setStreamState('connected');
+  h.feature.render({ stream: { state: 'error', detail: 'bridge unavailable' } });
+  assert.equal(h.elements.streamValue.textContent, 'Error');
+});
+
+test('a stale title is cleared when the cell no longer has a detail', () => {
+  // Otherwise a recovered connection keeps hovering the reason it once failed.
+  const h = railHarness();
+  h.feature.setStreamState('error', 'socket closed');
+  assert.equal(h.elements.streamValue.title, 'socket closed');
+  h.feature.setStreamState('connected');
+  assert.equal(h.elements.streamValue.title, undefined);
+});
+
+test('refresh reports a throwing /health as Unreachable, not as unknown', async () => {
+  // The wiring half of mapBackend()'s contract: refresh() must catch /health
+  // SEPARATELY from the other probes, because its failure is itself the value
+  // the Backend cell reports. Folding it into the shared catch-to-null would
+  // erase the difference this whole cell exists to draw.
+  const h = railHarness({ api: { fetchHealth: async () => { throw new Error('ECONNREFUSED'); } } });
+  await h.feature.refresh();
+  assert.equal(h.elements.backendValue.textContent, 'Unreachable');
+});
+
+test('refresh reports a healthy backend as Active', async () => {
+  const h = railHarness({ api: { fetchHealth: async () => ({ status: 'active', active_job_count: 0 }) } });
+  await h.feature.refresh();
+  assert.equal(h.elements.backendValue.textContent, 'Active');
+  assert.equal(h.elements.backendDot.dataset.tone, 'success');
+});
+
+test('one dead probe does not blank the cells whose data arrived', async () => {
+  const h = railHarness({
+    api: {
+      fetchHealth: async () => ({ status: 'active' }),
+      fetchRuntimeStatus: async () => { throw new Error('down'); },
+      fetchMetrics: async () => ({ total: { last_ms: 900 } }),
+    },
+  });
+  await h.feature.refresh();
+  assert.equal(h.elements.backendValue.textContent, 'Active');
+  assert.equal(h.elements.micValue.textContent, UNKNOWN, 'the probe that died degrades its own cell');
+  assert.equal(h.elements.latencyValue.textContent, '900 ms');
 });

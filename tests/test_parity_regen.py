@@ -46,3 +46,41 @@ def test_committed_ledger_matches_its_generator(tmp_path, monkeypatch):
             f"  committed:    {committed_lines[first: first + 1]}\n"
             f"  regenerated:  {regenerated_lines[first: first + 1]}"
         )
+
+
+def test_the_generator_is_deterministic_across_hash_seeds(tmp_path):
+    """Two runs in separate interpreters must produce identical bytes.
+
+    Not a formality: `_legacy_aliases` returned a SET, and `resolve_id` stops
+    at the first alias that resolves -- so the anchor the ledger cited for a
+    row depended on the interpreter's hash seed. `#onboardingTitle` printed
+    `#sdOnboardingTitle` in one process and `#sdHeaderTitle` in the next, from
+    identical sources, which made the staleness test above a coin flip and the
+    ledger unauditable. Subprocesses with explicit PYTHONHASHSEED values are
+    the only way to catch it: within a single interpreter the order is stable
+    and everything looks fine.
+    """
+    import os
+    import subprocess
+    import sys
+
+    digests = set()
+    for seed in ("0", "2"):
+        out = tmp_path / f"ledger-{seed}.md"
+        env = {**os.environ, "PYTHONHASHSEED": seed}
+        script = (
+            "import sys;"
+            f"sys.path.insert(0, {str(ROOT)!r});"
+            "from tools import parity_ledger_build as b;"
+            f"b.LEDGER = __import__('pathlib').Path({str(out)!r});"
+            "raise SystemExit(b.main())"
+        )
+        assert subprocess.run([sys.executable, "-c", script], env=env,
+                              capture_output=True).returncode == 0
+        digests.add(out.read_bytes())
+
+    assert len(digests) == 1, (
+        "the ledger generator is not deterministic across interpreters: the same "
+        "sources produced different bytes under different PYTHONHASHSEED values. "
+        "Something iterates a set or dict whose order is not pinned."
+    )

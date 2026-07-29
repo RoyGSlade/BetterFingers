@@ -753,7 +753,43 @@
         <span class="sd-header__pill-dot" aria-hidden="true"></span>
         <span id="sdHeaderPillLabel">Signal Core</span>
       </div>
+      <!--
+        Wave 11B. The legacy shell had a Quit button; Signal Desk shipped
+        without one, leaving the window chrome as the only way out of an app
+        that deliberately runs with a background sidecar. One button on a
+        channel that already exists (app:quit, the same one the onboarding
+        decline path uses). features/backendBanner.js confirms first, because
+        quitting mid-dictation loses the recording.
+      -->
+      <button type="button" class="sd-header__quit" id="sdQuitButton" aria-label="Quit BetterFingers">
+        <span aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4"></path><polyline points="15 8 19 12 15 16"></polyline><line x1="19" y1="12" x2="9" y2="12"></line></svg>
+        </span>
+        <span class="sd-header__quit-label">Quit</span>
+      </button>
     </header>
+
+    <!--
+      Wave 11B. Backend health / version-disagreement banner — the surface that
+      explains behaviour the user would otherwise have no way to account for: a
+      sidecar that crashed, is restarting, is not answering, or was built for a
+      different app version. It is `hidden` until there is a real, established
+      problem to report; see features/backendBanner.js's computeBackendBanner(),
+      which returns null (render nothing) for every ambiguous case.
+
+      It sits below the header rather than inside a workspace because the
+      condition is app-wide: it must be readable from Talk, Library, Studio,
+      Utilities and Settings alike.
+    -->
+    <div class="sd-backend-banner" id="sdVersionMismatchBanner" role="status" aria-live="polite" hidden>
+      <span class="sd-backend-banner__icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+      </span>
+      <span class="sd-backend-banner__text">
+        <strong class="sd-backend-banner__title" id="sdBackendBannerTitle"></strong>
+        <span class="sd-backend-banner__message" id="sdBackendBannerMessage"></span>
+      </span>
+    </div>
 
     <!-- ---------- TALK workspace (populated, SPEC 4) ---------- -->
     <section class="sd-workspace" id="workspace-talk" data-workspace="talk">
@@ -1480,6 +1516,23 @@
                 <button type="button" class="sd-btn" id="resetVoiceBlendButton">Reset</button>
                 <span class="sd-voice-studio__mix" id="voiceEffectiveMix"></span>
               </div>
+
+              <!--
+                Wave 11B: the blend quick-preset chips, same story as the
+                modulation ones below. features/voiceStudio.js exports
+                VOICE_BLEND_QUICK_PRESETS and binds a `[data-blend-preset]`
+                click handler; this page had none of the buttons, so five
+                one-click starting points were unreachable and the handler was
+                dead code. Values must match the VOICE_BLEND_QUICK_PRESETS keys.
+              -->
+              <div class="sd-voice-studio__row sd-voice-preset-chips">
+                <span class="sd-voice-studio__label">Quick blends</span>
+                <button type="button" class="sd-voice-preset-chip" data-blend-preset="softer">Softer</button>
+                <button type="button" class="sd-voice-preset-chip" data-blend-preset="brighter">Brighter</button>
+                <button type="button" class="sd-voice-preset-chip" data-blend-preset="lower">Lower</button>
+                <button type="button" class="sd-voice-preset-chip" data-blend-preset="narrator">Narrator</button>
+                <button type="button" class="sd-voice-preset-chip" data-blend-preset="assistant">Assistant</button>
+              </div>
             </section>
 
             <section class="sd-voice-studio__group">
@@ -1504,11 +1557,44 @@
               </div>
               <div class="sd-voice-studio__row">
                 <label class="sd-voice-studio__label" for="voicePauseStyle">Pause style</label>
+                <!--
+                  Wave 11B defect fix. These read "Tight" / "Relaxed" with
+                  values `tight` / `relaxed`, neither of which is in
+                  features/voiceStudio.js's PAUSE_STYLES set
+                  (natural / compact / dramatic). Both collectVoiceStudioState()
+                  and buildPersistableVoiceStudioSettings() fall back to
+                  `natural` for an unknown value, so picking either one silently
+                  discarded the user's choice and saved the default instead --
+                  with the select still showing what they picked. The legacy
+                  page had the right three; this one was retyped from the label
+                  rather than the contract.
+                -->
                 <select class="sd-review-select" id="voicePauseStyle">
                   <option value="natural">Natural</option>
-                  <option value="tight">Tight</option>
-                  <option value="relaxed">Relaxed</option>
+                  <option value="compact">Compact</option>
+                  <option value="dramatic">Dramatic</option>
                 </select>
+              </div>
+
+              <!--
+                Wave 11B: the modulation quick-preset chips (inventory §7.5.x /
+                orphan §15). features/voiceStudio.js has ALWAYS carried
+                VOICE_MODULATION_QUICK_PRESETS and a live
+                `[data-mod-preset]` click handler, but signal-desk.html
+                contained no such buttons, so the handler bound to nothing and
+                six presets were unreachable on the shipping page. The
+                `accessibility` one (0.75x speed) is a real accessibility
+                affordance that existed in legacy and had silently gone missing.
+                Values must match the VOICE_MODULATION_QUICK_PRESETS keys.
+              -->
+              <div class="sd-voice-studio__row sd-voice-preset-chips">
+                <span class="sd-voice-studio__label">Quick presets</span>
+                <button type="button" class="sd-voice-preset-chip" data-mod-preset="clear">Clear</button>
+                <button type="button" class="sd-voice-preset-chip" data-mod-preset="quiet">Quiet</button>
+                <button type="button" class="sd-voice-preset-chip" data-mod-preset="presentation">Presentation</button>
+                <button type="button" class="sd-voice-preset-chip" data-mod-preset="character">Character</button>
+                <button type="button" class="sd-voice-preset-chip" data-mod-preset="fast">Fast</button>
+                <button type="button" class="sd-voice-preset-chip" data-mod-preset="accessibility">Accessibility</button>
               </div>
             </section>
 
@@ -1640,7 +1726,7 @@
               </div>
             </div>
 
-            <div class="sd-util-group">
+            <div class="sd-util-group" id="sdUtilVoiceCloningPanel">
               <div class="sd-util-group__header">
                 <span class="sd-util-group__title">Voice Cloning</span>
                 <span class="sd-badge" id="sdUtilVoiceCloningBadge">Not installed</span>
@@ -1666,7 +1752,7 @@
               <div class="sd-actions-row">
                 <button type="button" class="sd-btn" id="sdUtilAudioTestMicButton">Test Browser Microphone Access</button>
               </div>
-              <div class="sd-util-meter"><span class="sd-util-meter__fill" id="sdUtilAudioMeterFill"></span></div>
+              <div class="sd-util-meter" id="sdUtilAudioMeterBar"><span class="sd-util-meter__fill" id="sdUtilAudioMeterFill"></span></div>
               <span class="sd-util-message" id="sdUtilAudioMessage"></span>
             </div>
 
@@ -1751,7 +1837,7 @@
               </div>
               <span class="sd-util-message" id="sdUtilWakeImportStatus"></span>
 
-              <div class="sd-util-group" style="background: var(--sd-surface-inset);">
+              <div class="sd-util-group" id="sdUtilWakeTrainGroup" style="background: var(--sd-surface-inset);">
                 <div class="sd-util-group__header"><span class="sd-util-group__title">Build a Wake Phrase</span></div>
                 <div class="sd-util-row">
                   <input type="text" class="sd-util-input sd-util-input--wide" id="sdUtilWakeTrainPhrase" maxlength="60" placeholder="e.g. Hey Fingers" />
@@ -1780,7 +1866,7 @@
               <div class="sd-util-group" style="background: var(--sd-surface-inset);">
                 <div class="sd-util-group__header"><span class="sd-util-group__title">Live Test</span></div>
                 <button type="button" class="sd-btn" id="sdUtilWakeTestButton">Test Wake Detection (10s)</button>
-                <div class="sd-util-meter"><span class="sd-util-meter__fill" id="sdUtilWakeScoreFill"></span></div>
+                <div class="sd-util-meter" id="sdUtilWakeScoreBar"><span class="sd-util-meter__fill" id="sdUtilWakeScoreFill"></span></div>
                 <span class="sd-util-message" id="sdUtilWakeTestResult"></span>
               </div>
 
@@ -3385,6 +3471,39 @@
 
   <!-- ============================== 3d. Bottom status bar ============================== -->
   <footer class="sd-statusbar">
+    <!--
+      Wave 11B. The legacy dashboard reported backend reachability in a status
+      card (backendStatus/backendDetail) and stream health in a pill
+      (wsConnection) — written without the selector # so that this comment
+      cannot itself become the production anchor those inventory rows resolve
+      against; the mapping is declared and checked in tools/parity_anchors.py.
+      Signal Desk shipped neither, so "the backend is not
+      answering" and "the live stream dropped" had no production surface at all
+      — the second one silently, because the bootstrap subscribed with empty
+      handlers. Both are permanent cells rather than hidden-when-fine ones: an
+      absent cell means "nothing true to say", and these two always have
+      something true to say. statusBar.js's mapBackend()/mapStream().
+    -->
+    <div class="sd-statusbar__cell">
+      <span class="sd-statusbar__icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="2"></rect><rect x="3" y="13" width="18" height="7" rx="2"></rect><line x1="7" y1="7.5" x2="7.01" y2="7.5"></line><line x1="7" y1="16.5" x2="7.01" y2="16.5"></line></svg>
+      </span>
+      <span class="sd-statusbar__text">
+        <span class="sd-statusbar__label">Backend <span class="sd-statusbar__dot" id="sdStatusBackendDot" aria-hidden="true"></span></span>
+        <span class="sd-statusbar__value" id="sdStatusBackendValue">—</span>
+      </span>
+    </div>
+
+    <div class="sd-statusbar__cell">
+      <span class="sd-statusbar__icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5a9 9 0 0 1 14 0"></path><path d="M8 15.5a5 5 0 0 1 8 0"></path><circle cx="12" cy="19" r="1.2" fill="currentColor" stroke="none"></circle></svg>
+      </span>
+      <span class="sd-statusbar__text">
+        <span class="sd-statusbar__label">Stream <span class="sd-statusbar__dot" id="sdStatusStreamDot" aria-hidden="true"></span></span>
+        <span class="sd-statusbar__value" id="sdStatusStreamValue">—</span>
+      </span>
+    </div>
+
     <div class="sd-statusbar__cell">
       <span class="sd-statusbar__icon" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><line x1="12" y1="18" x2="12" y2="22"></line></svg>

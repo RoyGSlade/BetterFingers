@@ -15,6 +15,15 @@
 // testable without a DOM or a backend.
 
 export const STATUS_BAR_ELEMENT_IDS = {
+  // Wave 11B. The legacy dashboard carried a three-card backend status grid and
+  // a WebSocket connection pill; Signal Desk shipped neither, so two states a
+  // user needs -- "is the backend answering at all" and "is the live voice
+  // stream still attached" -- had no production surface. See mapBackend() and
+  // mapStream() for why each is a rail cell rather than a card.
+  backendValue: 'sdStatusBackendValue',
+  backendDot: 'sdStatusBackendDot',
+  streamValue: 'sdStatusStreamValue',
+  streamDot: 'sdStatusStreamDot',
   micValue: 'sdStatusMicValue',
   sttValue: 'sdStatusSttValue',
   sttDot: 'sdStatusSttDot',
@@ -41,6 +50,69 @@ const WARN = 'warning';
 const IDLE = 'muted';
 
 // --- Pure mappers -------------------------------------------------------------
+
+/**
+ * Backend reachability — the cell that replaces the legacy dashboard's Backend
+ * card (`backendStatus`/`backendDetail` — deliberately written WITHOUT the
+ * selector `#`: tools/parity_evidence.py treats a quoted or `#`-prefixed id
+ * appearing anywhere in reachable source as a production anchor, and a COMMENT
+ * naming a legacy id must never be the thing that makes an inventory row
+ * resolve. The real anchor is the element this function paints; the mapping is
+ * declared, and checked, in tools/parity_anchors.py).
+ *
+ * Reachability and payload are separate arguments on purpose. `health` alone
+ * cannot distinguish "the fetch failed" from "we have not fetched yet", and
+ * those must not read the same: a rail that shows `—` while the backend is
+ * down is silently wrong about the one thing that explains why nothing else
+ * works. So `reachable === false` reports Unreachable, `null` (never asked)
+ * reports unknown, and only a real payload is trusted for the rest.
+ *
+ * `detail` rides along for the element title so a degraded state can say what
+ * it is without widening the rail.
+ */
+export function mapBackend(health, reachable) {
+  if (reachable === false) {
+    return { text: 'Unreachable', tone: WARN, detail: 'The backend did not answer GET /health.' };
+  }
+  const status = typeof health?.status === 'string' ? health.status.trim() : '';
+  if (!status) return { text: UNKNOWN, tone: IDLE };
+  if (status !== 'active') return { text: status, tone: WARN };
+  const jobs = Number(health?.active_job_count);
+  return Number.isFinite(jobs) && jobs > 0
+    ? { text: 'Active', tone: OK, detail: `${jobs} job${jobs === 1 ? '' : 's'} in progress.` }
+    : { text: 'Active', tone: OK, detail: 'GET /health responded.' };
+}
+
+/**
+ * Live voice-status stream — the cell that replaces the legacy `wsConnection`
+ * pill (again no selector `#`, for the reason mapBackend() gives above).
+ *
+ * The socket itself lives in the Electron main process (it holds the token);
+ * the renderer only receives forwarded state. Before Wave 11B the production
+ * bootstrap subscribed with empty `onConnectionChange`/`onError` handlers, so a
+ * dropped stream was invisible: the Signal Core simply stopped moving and the
+ * user had no way to tell a quiet mic from a severed connection.
+ *
+ * `reconnecting` is deliberately a warning rather than a neutral state. It is
+ * recoverable, but while it lasts the meter and the capture controls are
+ * reporting stale truth, and that is worth showing.
+ */
+const STREAM_STATES = {
+  connecting: { text: 'Connecting', tone: IDLE },
+  connected: { text: 'Connected', tone: OK },
+  reconnecting: { text: 'Reconnecting', tone: WARN },
+  closed: { text: 'Closed', tone: WARN },
+  error: { text: 'Error', tone: WARN },
+};
+
+export function mapStream(state, detail) {
+  const key = typeof state === 'string' ? state.trim().toLowerCase() : '';
+  if (!key) return { text: UNKNOWN, tone: IDLE };
+  const known = STREAM_STATES[key];
+  const cell = known || { text: key, tone: WARN };
+  const note = typeof detail === 'string' ? detail.trim() : '';
+  return note ? { ...cell, detail: note } : { ...cell };
+}
 
 /**
  * Mic cell. Deliberately "Idle" rather than the mockup's "Live": the mic is not
@@ -190,9 +262,11 @@ export function mapAppProfile(context) {
 
 /** Maps a whole backend snapshot to the full set of cell values. */
 export function computeStatusBar({
-  health, runtime, profile, metrics, targetApp, contact, appContext,
+  health, healthReachable, stream, runtime, profile, metrics, targetApp, contact, appContext,
 } = {}) {
   return {
+    backend: mapBackend(health, healthReachable),
+    stream: mapStream(stream?.state, stream?.detail),
     mic: mapMic(runtime),
     stt: mapStt(health, runtime),
     llm: mapLlm(health, runtime),
@@ -218,6 +292,11 @@ function paint(el, dotEl, cell) {
   if (el) {
     el.textContent = cell.text;
     el.dataset.tone = cell.tone;
+    // The rail is too narrow for a reason string, but a cell that says
+    // "Unreachable" and cannot say why is a dead end. Hover/AT get the detail;
+    // a cell with none clears any stale title rather than keeping the last one.
+    if (cell.detail) el.title = cell.detail;
+    else el.removeAttribute?.('title');
   }
   if (dotEl) dotEl.dataset.tone = cell.tone;
 }
@@ -239,6 +318,11 @@ export function createStatusBarFeature({ elements = {}, api = null } = {}) {
   // applicationProfiles feature (it owns the /app-context poll), so without
   // holding it here the next health poll would silently clear the cell.
   let appContext = null;
+  // Wave 11B. Same hold-across-renders reason as appliedContact/appContext: the
+  // voice-status stream state is PUSHED in by the main-process bridge, never
+  // fetched by the poll below, so without holding it here every health tick
+  // would reset a live "Reconnecting" back to unknown.
+  let streamState = null;
 
   function paintContact(cell) {
     if (elements.contactCell) elements.contactCell.hidden = !cell;
@@ -264,8 +348,11 @@ export function createStatusBarFeature({ elements = {}, api = null } = {}) {
       ...source,
       contact: 'contact' in source ? source.contact : appliedContact,
       appContext: 'appContext' in source ? source.appContext : appContext,
+      stream: 'stream' in source ? source.stream : streamState,
     });
     latest = values;
+    paint(elements.backendValue, elements.backendDot, values.backend);
+    paint(elements.streamValue, elements.streamDot, values.stream);
     paint(elements.micValue, null, values.mic);
     paint(elements.sttValue, elements.sttDot, values.stt);
     paint(elements.llmValue, elements.llmDot, values.llm);
@@ -290,12 +377,41 @@ export function createStatusBarFeature({ elements = {}, api = null } = {}) {
     return appliedContact;
   }
 
+  /**
+   * The production bootstrap calls this from connectVoiceStatus()'s
+   * onConnectionChange/onError. Those two closures were empty before Wave 11B,
+   * which is why a severed stream was invisible: the Signal Core just stopped
+   * moving. Repaints at once rather than waiting for the next 3s poll — a
+   * connection the user is watching drop should be reported when it drops.
+   */
+  function setStreamState(state, detail) {
+    streamState = state ? { state, detail: detail || '' } : null;
+    const cell = mapStream(streamState?.state, streamState?.detail);
+    paint(elements.streamValue, elements.streamDot, cell);
+    if (latest) latest.stream = cell;
+    return streamState;
+  }
+
   // Each call is independently guarded: one dead endpoint must degrade its own
   // cell to `—` rather than blanking cells whose data arrived fine.
   async function refresh() {
     if (!api) return render(null);
-    const [health, runtime, metrics] = await Promise.all([
-      api.fetchHealth?.().catch(() => null) ?? null,
+    // /health is fetched apart from the others because its FAILURE is itself the
+    // value the Backend cell reports. Folding it into the same catch-to-null as
+    // the rest would erase the difference between "down" and "not asked yet",
+    // which is the whole point of the cell -- see mapBackend().
+    let health = null;
+    let healthReachable = null;
+    if (api.fetchHealth) {
+      try {
+        health = (await api.fetchHealth()) ?? null;
+        healthReachable = true;
+      } catch (_e) {
+        health = null;
+        healthReachable = false;
+      }
+    }
+    const [runtime, metrics] = await Promise.all([
       api.fetchRuntimeStatus?.().catch(() => null) ?? null,
       api.fetchMetrics?.().catch(() => null) ?? null,
     ]);
@@ -305,7 +421,7 @@ export function createStatusBarFeature({ elements = {}, api = null } = {}) {
     } catch (_e) {
       profile = null;
     }
-    return render({ health, runtime, profile, metrics });
+    return render({ health, healthReachable, runtime, profile, metrics });
   }
 
   /**
@@ -328,6 +444,8 @@ export function createStatusBarFeature({ elements = {}, api = null } = {}) {
     getContact: () => appliedContact,
     setAppContext,
     getAppContext: () => appContext,
+    setStreamState,
+    getStreamState: () => streamState,
     getState: () => latest,
   };
 }

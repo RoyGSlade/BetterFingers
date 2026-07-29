@@ -1,0 +1,738 @@
+#!/usr/bin/env python3
+"""Human-authored production anchors and cut rulings for the Wave 11 parity audit.
+
+Data only. ``tools/parity_evidence.py`` loads this table through
+``load_anchor_table()``, validates every entry against the production closure in
+``validate_anchor_table()``, and consumes it during ``collect()``;
+``tools/parity_ledger_build.py`` turns ``CUTS`` into ``intentional_cut`` rulings.
+Nothing here decides a status on its own.
+
+WHY THE TABLE EXISTS
+--------------------
+``parity_evidence.py``'s docstring always promised an ``ANCHORS`` escape hatch
+and, until Wave 11B, did not have one. Its absence is the single largest
+distortion in the Wave 11 result. The collector's rename rule strips exactly ONE
+``sd<workspace>`` token, so it follows a rename INSIDE a workspace
+(``#settingRecordingMode`` -> ``#sdSetRecordingMode``) but cannot follow a
+control that MOVED workspace on the way. Signal Desk moved whole inventory
+groups:
+
+    inventory §7.3 Hotkeys        Settings  -> Utilities / Speech Input
+    inventory §7.7 Audio Devices  Settings  -> Utilities / Speech Input
+    inventory §7.8 Wake Word      Settings  -> Utilities / Speech Input
+    inventory §7.13 Voice Macros  Settings  -> Utilities / Text Tools
+    inventory §8   Models tab     own tab   -> Utilities / Models
+    inventory §9   Diagnostics    own tab   -> Utilities / Diagnostics
+    inventory §6   Draft history  Dashboard -> Library
+
+Every row in a moved group fell through to "no production anchor" and was
+reported as a PRODUCT gap. It is not one. ``#settingHotkey`` is
+``#sdUtilHotkeyRecordingInput``: built, wired to the same profile field,
+shipping. The Wave 11 blockers list said a user "cannot rebind a hotkey or train
+a wake phrase from the product". They can. The audit could not see it, and a
+measurement defect reported as a missing feature is the same failure as a
+missing feature reported as shipped.
+
+WHAT AN ANCHOR IS, AND IS NOT
+-----------------------------
+An anchor is a CLAIM, made by a person, that one specific production element
+carries the capability an inventory row describes — verified by reading both.
+It is not a convenience mapping to make a number move. Four properties keep that
+honest, and three of them are enforced by ``validate_anchor_table()`` rather
+than by good intentions:
+
+* every anchor names a concrete production handle, which the ledger prints, so
+  a reviewer can open the page and check it;
+* an anchor that does not resolve in the production closure FAILS THE BUILD —
+  delete the element and this breaks, rather than the ledger quietly continuing
+  to report the row as anchored;
+* a handle that ALREADY resolves may not be declared here at all, so the table
+  can never redirect a row away from evidence the collector found by itself;
+* an anchor supplies only the LOCATION leg of the D-0015 chain. The row still
+  has to clear the coverage leg on its own. Anchoring alone cannot make a row
+  ``wired``; rows anchored here that no production-target QA scenario or unit
+  test names stay ``blocked (evidence)`` — correctly, and visibly.
+
+A note on comments, kept because the history matters. The collector originally
+accepted a quoted or ``#``-prefixed id appearing ANYWHERE in reachable source —
+including inside a comment — as evidence that the id lived in production.
+Writing "replaces the legacy ``#backendStatus`` card" in a shipped module was
+therefore enough to make that row resolve against nothing but the prose. Three
+Wave 11B comments did exactly that before review caught it. Two fixes landed:
+the comments now spell legacy ids without the ``#``, and
+``parity_evidence.strip_comments()`` now blanks comments before any matching, so
+the hole is closed at the source. Both are kept — the collector guarantees it,
+and the convention means a reader is never misled either.
+
+CUTS carry the same burden in the other direction: every entry names what
+replaced the capability, by handle, or says plainly that there was no capability
+to replace.
+
+Self-check::
+
+    python3 -c "import sys; sys.path.insert(0,'.'); \\
+        from tools import parity_anchors as p; sys.exit(p.main())"
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+# Handshake with parity_evidence.ANCHOR_SCHEMA_VERSION. A mismatch is an error
+# there, not a silent downgrade: a table the collector half-understands is worse
+# than no table.
+SCHEMA_VERSION = 1
+
+
+# --- HANDLE_ANCHORS -----------------------------------------------------------
+#
+# Keyed by the handle EXACTLY as the source inventory writes it (backtick
+# contents, so `#settingHotkey` keeps its `#`). Applied only after mechanical
+# resolution has failed.
+
+HANDLE_ANCHORS: dict[str, dict[str, str]] = {
+    # --- inventory §7.3 Hotkeys: moved to Utilities / Speech Input ----------
+    #
+    # This is the group the Wave 11 blockers doc named as a substantive product
+    # gap. All six fields, their clear buttons and the click-to-record chord
+    # widget ship there, bound to the same profile keys the inventory names —
+    # plus per-field collision detection the legacy page never had.
+    '#settingHotkey': {
+        'anchor': '#sdUtilHotkeyRecordingInput',
+        'why': 'Recording Hotkey field in Utilities / Speech Input; same profile key `hotkey`, click-to-record capture wired by features/utilitiesWorkspace.js wireHotkeyRecorder()',
+    },
+    '#settingForceStopKey': {
+        'anchor': '#sdUtilHotkeyForceStopInput',
+        'why': 'Emergency Stop key field in Utilities / Speech Input; same profile key `force_stop_key`',
+    },
+    '#settingManualSendHotkey': {
+        'anchor': '#sdUtilHotkeyManualSendInput',
+        'why': 'Primary Action key field in Utilities / Speech Input; same profile key `manual_send_hotkey`',
+    },
+    '#settingReviewTtsHotkey': {
+        'anchor': '#sdUtilHotkeyReviewTtsInput',
+        'why': 'Review TTS Hotkey field in Utilities / Speech Input; same profile key `review_tts_hotkey`',
+    },
+    '#settingChatOpenKey': {
+        'anchor': '#sdUtilHotkeyChatOpenInput',
+        'why': 'Open Chat Key field in Utilities / Speech Input; same profile key `chat_open_key`',
+    },
+    '#settingVoiceMuteKey': {
+        'anchor': '#sdUtilHotkeyVoiceMuteInput',
+        'why': 'Voice Mute Key field in Utilities / Speech Input; same profile key `voice_mute_key`',
+    },
+    '#waylandHotkeyWarning': {
+        'anchor': '#sdUtilHotkeyWaylandWarning',
+        'why': 'Conditional Wayland limitation banner, shown from fetchCapabilities().is_wayland',
+    },
+    'setupHotkeyRecording': {
+        'anchor': 'wireHotkeyRecorder',
+        'why': 'The click-to-record chord widget, renamed in features/utilitiesWorkspace.js: same keydown chord accumulation over all six fields, plus collision detection',
+    },
+
+    # --- inventory §7.7 Audio Devices: moved to Utilities / Speech Input ----
+    '#testMicButton': {
+        'anchor': '#sdUtilAudioTestMicButton',
+        'why': 'Browser microphone test toggle in Utilities / Speech Input; same getUserMedia + AnalyserNode level loop',
+    },
+    '#micMeterBar': {
+        'anchor': '#sdUtilAudioMeterBar',
+        'why': 'Live mic level bar container in Utilities / Speech Input',
+    },
+    '#micMeterFill': {
+        'anchor': '#sdUtilAudioMeterFill',
+        'why': 'Live mic level fill, driven by the AnalyserNode loop',
+    },
+    '#settingInputDevice': {
+        'anchor': '#sdUtilAudioDeviceSelect',
+        'why': 'Microphone picker in Utilities / Speech Input, built from fetchAudioDevices() -> GET /runtime/audio-devices and filtered to input-capable devices; persists `input_device_index`. NOTE: this anchor was NOT declarable before Wave 11B — the element existed but was a permanently disabled stub, so a user could not actually choose a device. It was wired in the same wave that declared this anchor',
+    },
+
+    # --- inventory §7.8 Voice Control / Wake Word: moved to Utilities -------
+    #
+    # The other group the blockers doc called a product gap. Enable/disable,
+    # classifier selection, .onnx import, phrase TRAINING with live progress and
+    # a reliability verdict, the three tuning numbers and the timed live test
+    # all ship, against the real routes in routes_wake.py.
+    '#settingWakeWordEnabled': {
+        'anchor': '#sdUtilWakeEnabledToggle',
+        # No literal `|` in any rationale: the ledger is a Markdown TABLE and
+        # parity_validator splits rows on the pipe. The generator escapes it
+        # now, but a rationale that does not need one should not rely on that.
+        'why': 'Wake enable/disable toggle -> enableWake()/disableWake() -> POST /wake/enable and POST /wake/disable',
+    },
+    'handleWakeToggle()': {
+        'anchor': 'enableWake',
+        'why': 'The wake toggle handler, features/utilitiesWorkspace.js wakeEnabledToggle change listener, calling enableWake()/disableWake() and restoring the checkbox when the call fails',
+    },
+    '#settingWakeWordModel': {
+        'anchor': '#sdUtilWakeModelSelect',
+        'why': 'Imported-classifier dropdown; same profile key `wake_word_model`',
+    },
+    '#importWakeModelButton': {
+        'anchor': '#sdUtilWakeImportButton',
+        'why': '"Import model file… (.onnx)" -> importWakeModel() -> POST /wake/models/import',
+    },
+    '#importWakeModelFile': {
+        'anchor': '#sdUtilWakeImportFile',
+        'why': 'Hidden .onnx file input behind the import button',
+    },
+    '#importWakeModelStatus': {
+        'anchor': '#sdUtilWakeImportStatus',
+        'why': 'Import status line',
+    },
+    '#wakeTrainingGroup': {
+        'anchor': '#sdUtilWakeTrainGroup',
+        'why': '"Build a Wake Phrase" group: phrase input, train button, live progress and reliability verdict -> POST /wake/train + polled GET /wake/train/status',
+    },
+    '#settingWakeWordSensitivity': {
+        'anchor': '#sdUtilWakeSensitivity',
+        'why': 'Detection threshold; same profile key `wake_word_sensitivity`',
+    },
+    '#settingWakeWordCooldown': {
+        'anchor': '#sdUtilWakeCooldown',
+        'why': 'Cooldown seconds; same profile key `wake_word_cooldown_s`',
+    },
+    '#settingWakeWordMaxRecording': {
+        'anchor': '#sdUtilWakeMaxRecording',
+        'why': 'Max recording seconds; same profile key `wake_word_max_recording_s`',
+    },
+    '#testWakeButton': {
+        'anchor': '#sdUtilWakeTestButton',
+        'why': '"Test Wake Detection" -> testWake() -> POST /wake/test, peak score and sample count reported in #sdUtilWakeTestResult',
+    },
+
+    # --- inventory §7.13 Voice Macros: moved to Utilities / Text Tools ------
+    '#settingMacrosEnabled': {
+        'anchor': '#sdUtilMacrosEnabledToggle',
+        'why': 'Macros enable toggle in Utilities / Text Tools; same profile key `macros_enabled`',
+    },
+
+    # --- inventory §7.0 sticky save bar: stayed in Settings, renamed --------
+    '#discardProfileChangesButton': {
+        'anchor': '#sdSetDiscardButton',
+        'why': '"Discard" -> re-fetches the active profile and drops local edits',
+    },
+    '#saveProfileButton': {
+        'anchor': '#sdSetSaveButton',
+        'why': '"Save Settings" -> saveProfile(collectSettings()); disabled while validationErrors is non-empty, the same save-blocked-on-error gate',
+    },
+
+    # --- inventory §7.5.1 Persona Wizard: rebuilt as a guided flow ----------
+    '.wizard-container': {
+        'anchor': '.sd-persona-flow',
+        'why': 'The four-step Persona Wizard, rebuilt as a Signal Desk guided flow (features/personaFlow.js, #sdPersonaFlowTitle/#sdPersonaFlowFooter)',
+    },
+
+    # --- inventory §8 Models tab: moved to Utilities / Models ---------------
+    '#refreshModelsButton': {
+        'anchor': '#sdUtilModelsRefreshButton',
+        'why': '"Refresh Models" -> fetchLlmModels() + fetchWhisperModels()',
+    },
+    '#modelRecommendation': {
+        'anchor': '#sdUtilModelsRecommendation',
+        'why': 'Hardware-tier recommendation box <- GET /models/recommend',
+    },
+    '#modelStatusSummary': {
+        'anchor': '#sdUtilModelsStatusSummary',
+        'why': 'LLM / Whisper / Runtime overview, computed client-side from both model payloads',
+    },
+    '#modelMessage': {
+        'anchor': '#sdUtilModelsMessage',
+        'why': 'Shared status line for every model action in the section',
+    },
+    '#llmModelBadge': {'anchor': '#sdUtilLlmBadge', 'why': 'LLM Installed/Missing/Selected badge'},
+    '#llmModelSelect': {'anchor': '#sdUtilLlmSelect', 'why': 'LLM model picker'},
+    '#llmModelDetails': {'anchor': '#sdUtilLlmDetails', 'why': 'LLM detail grid (selected/viewing/install state/approx size/runtime)'},
+    '#selectLlmModelButton': {'anchor': '#sdUtilLlmSelectButton', 'why': '"Use This LLM" -> selectLlmModel() -> POST /models/llm/select'},
+    '#downloadLlmModelButton': {'anchor': '#sdUtilLlmDownloadButton', 'why': '"Download" -> downloadLlmModel(); polled progress in #sdUtilLlmProgress/#sdUtilLlmProgressFill/#sdUtilLlmProgressPercent'},
+    '#deleteLlmModelButton': {'anchor': '#sdUtilLlmDeleteButton', 'why': '"Delete" behind a confirmation -> deleteLlmModel() -> typed IPC DELETE /models/llm/:id'},
+    '#unloadLlmButton': {'anchor': '#sdUtilLlmUnloadButton', 'why': '"Unload" -> unloadModel(\'llm\') -> POST /models/unload/:component'},
+    '#whisperModelBadge': {'anchor': '#sdUtilWhisperBadge', 'why': 'Whisper Installed/Missing/Selected badge'},
+    '#whisperModelSelect': {'anchor': '#sdUtilWhisperSelect', 'why': 'Whisper model picker'},
+    '#whisperModelDetails': {'anchor': '#sdUtilWhisperDetails', 'why': 'Whisper detail grid'},
+    '#selectWhisperModelButton': {'anchor': '#sdUtilWhisperSelectButton', 'why': '"Use This" -> selectWhisperModel() -> POST /models/whisper/select'},
+    '#downloadWhisperButton': {'anchor': '#sdUtilWhisperDownloadButton', 'why': '"Download" -> downloadWhisperModel() -> POST /models/whisper/download'},
+    '#deleteWhisperButton': {'anchor': '#sdUtilWhisperDeleteButton', 'why': '"Delete" behind a confirmation -> deleteWhisperModel() -> typed IPC DELETE /models/whisper/:size'},
+    '#unloadSttButton': {'anchor': '#sdUtilWhisperUnloadButton', 'why': '"Unload" -> unloadModel(\'stt\') -> POST /models/unload/:component'},
+    '#provisionVoiceCloningButton': {
+        'anchor': '#sdUtilVoiceCloningProvisionButton',
+        'why': '"Install voice cloning" -> provisionVoiceCloning() -> POST /tts/clone/provision, outcome reported in #sdUtilVoiceCloningStatus',
+    },
+
+    # --- inventory §9 Diagnostics: moved to Utilities / Diagnostics ---------
+    '#refreshDoctorButton': {
+        'anchor': '#sdUtilDoctorRefreshButton',
+        'why': '"Run Doctor Check" -> GET /doctor, rendered into #sdUtilDoctorCardsGrid with recovery actions in #sdUtilDoctorRecoveryList',
+    },
+    '#clearSidecarLogsButton': {
+        'anchor': '#sdUtilSidecarLogsClearButton',
+        'why': 'Clears the sidecar startup log tail (#sdUtilSidecarLogsTail)',
+    },
+
+    # --- inventory §6 dashboard status cards -> the persistent status rail --
+    #
+    # The legacy page reported these in three cards on one tab; Signal Desk
+    # reports them in the bottom rail, glanceable from every workspace. The
+    # Backend and Stream cells did NOT exist before Wave 11B -- these anchors
+    # would have been false until they were built (features/statusBar.js
+    # mapBackend()/mapStream()).
+    '#backendStatus': {
+        'anchor': '#sdStatusBackendValue',
+        'why': 'Backend reachability cell in the status rail <- GET /health; reports Unreachable on a failed fetch rather than an unknown dash, which is the distinction the legacy card also drew',
+    },
+    '#backendDetail': {
+        'anchor': '#sdStatusBackendValue',
+        'why': 'Same cell: the detail (active job count, or why /health did not answer) is carried as that element\'s title so the rail stays one line',
+    },
+    '#transcriberStatus': {
+        'anchor': '#sdStatusSttValue',
+        'why': 'STT readiness cell in the status rail; mapStt() prefers the /runtime/status probe over /health, same as the legacy card',
+    },
+    '#llmStatus': {
+        'anchor': '#sdStatusLlmValue',
+        'why': 'LLM readiness cell in the status rail; mapLlm() reports readiness rather than the invariant "Local"',
+    },
+    '#wsConnection': {
+        'anchor': '#sdStatusStreamValue',
+        'why': 'Voice-status stream cell in the status rail, carrying the same connecting/connected/reconnecting/error states; built in Wave 11B, before which connectVoiceStatus()\'s onConnectionChange/onError were empty closures and a dropped stream was invisible',
+    },
+    '#draftStatus': {
+        'anchor': '#sdRefinedBadge',
+        'why': 'Draft state badge on the refined card, painted by features/talkWorkspace.js',
+    },
+    '#recordingControlStatus': {
+        'anchor': '#sdCaptureMessage',
+        'why': 'Capture hint/error line under the record controls, painted by features/talkCapture.js; surfaces hotkey-hook failures the same way',
+    },
+
+    # --- inventory §6 draft actions: same handlers, Signal Desk ids ---------
+    '#saveDraftEditButton': {'anchor': '#sdSaveEditButton', 'why': '"Save Edit" -> editDraft() -> POST /drafts/:id/edit, in the Revise drawer'},
+    '#readFullDraftButton': {'anchor': '#sdReadFullButton', 'why': '"Read Full" read-aloud over the whole draft'},
+    '#copyDraftButton': {'anchor': '#sdCopyButton', 'why': '"Copy" -> window.betterFingers.writeClipboardText'},
+    '#acceptDraftButton': {'anchor': '#sdAcceptButton', 'why': '"Accept" -> acceptDraft() -> POST /drafts/:id/accept'},
+    '#declineDraftButton': {'anchor': '#sdDeclineButton', 'why': '"Decline" -> declineDraft() -> POST /drafts/:id/decline'},
+    '#retryDraftButton': {'anchor': '#sdRetryButton', 'why': '"Retry" -> retryDraft() -> POST /drafts/:id/retry'},
+    '#sendDraftButton': {'anchor': '#sdSendButton', 'why': '"Send" -> sendDraft() -> typed IPC POST /drafts/:id/send'},
+    '#sendResultPanel': {'anchor': '#sdSendResult', 'why': 'Send-result detail grid: requested/actual action, fallback + reason, clipboard and submission'},
+
+    # --- inventory §6 draft history: moved to the Library workspace ---------
+    '#clearDraftHistoryButton': {
+        'anchor': '#sdLibraryClearDraftsButton',
+        'why': '"Clear drafts" in Library, behind the same confirmation contract (#sdLibraryConfirm)',
+    },
+    '#historySearchInput': {
+        'anchor': '#sdLibrarySearchInput',
+        'why': 'Library full-text search; an empty query restores the unfiltered timeline, same behaviour as the legacy box',
+    },
+    '#draftHistoryList': {
+        'anchor': '#sdLibraryTimeline',
+        'why': 'Library timeline; selecting an entry loads it into the context panel and can reopen it in Talk',
+    },
+
+    # --- inventory §1 surfaces: the legacy tab shells ----------------------
+    #
+    # These rows describe a legacy TAB and everything inside it. The tab STRIP
+    # is already cut (the five-workspace rail); these anchors name where each
+    # tab's CONTENT went, which is a different question and a real one.
+    '.status-grid': {
+        'anchor': '.sd-statusbar',
+        'why': 'The three backend status cards are the persistent status rail\'s Backend / STT / LLM cells (#sdStatusBackendValue, #sdStatusSttValue, #sdStatusLlmValue) — glanceable from every workspace rather than only the dashboard tab',
+    },
+    '.stream-panel': {
+        'anchor': '.sd-statusbar',
+        'why': 'The voice-status stream is reported in the persistent status rail\'s Stream cell (#sdStatusStreamValue) rather than as a dashboard panel',
+    },
+    '#tabDashboard': {
+        'anchor': '#workspace-talk',
+        'why': 'The Dashboard tab\'s capture/refine/send core is the Talk workspace; its draft HISTORY became the Library workspace and its status cards became the status rail — see the .status-grid and #draftHistoryList anchors',
+    },
+    'settingEls': {
+        'anchor': 'SETTINGS_ELEMENT_IDS',
+        'why': 'The legacy main.js element map the row refers to; features/settingsWorkspace.js declares SETTINGS_ELEMENT_IDS and collects it through collectSettingsElements(). `draft_history_limit` IS present in it, which is the wiring gap this row asks about',
+    },
+    'InsufficientDiskSpaceError': {
+        'anchor': 'isDiskSpaceMessage',
+        'why': 'The renderer never names the backend exception class — it detects its MESSAGE SHAPE, which is exactly what the inventory row describes. features/firstRun.js exports isDiskSpaceMessage(), matched against model_manager.py\'s "Not enough disk space to download this file: need X GB free, only Y GB available" text, and shows #sdFirstRunDiskWarning rather than a generic download failure',
+    },
+    'maybeLearnFromEdit': {
+        'anchor': 'suggestFromEdit',
+        'why': 'Dictionary auto-learn from an edited draft, renamed in features/utilitiesWorkspace.js and called from the production bootstrap\'s draft-edit save path (bootstrap/signalDeskApp.js) — same raw-vs-edited diff feeding POST /dictionary/suggest',
+    },
+    '#tabSettings': {
+        'anchor': '#workspace-settings',
+        'why': 'The Settings workspace: search (#sdSetSearchInput), section sub-nav, seven section panels and the sticky Save/Discard bar (#sdSetSaveBar). The remaining legacy categories moved to Utilities and Studio — see the UI-07-002 cut for the full 14-category mapping',
+    },
+    '#tabModels': {
+        'anchor': '#sdUtilSectionModels',
+        'why': 'The Models section of Utilities: LLM manager, Whisper manager, wake-word backbone list (#sdUtilWakeBackboneList), runtime residency keeps and the Voice Cloning panel',
+    },
+    '#tabDiagnostics': {
+        'anchor': '#sdUtilSectionDiagnostics',
+        'why': 'The Diagnostics section of Utilities: Doctor grid, recovery list, metrics HUD, active jobs, sidecar logs and the runtime paths/errors/debug-log readouts',
+    },
+
+    # --- inventory §14 per-panel inline status lines -----------------------
+    #
+    # This row writes RENDERER VARIABLE names with a `#` in front of them
+    # (`#draftMessageEl` is a `const` in main.js, never an element id). Each one
+    # is anchored to the production element that variable stood for.
+    '#draftMessageEl': {
+        'anchor': '#sdDraftMessage',
+        'why': 'The draft status line on the refined card; the legacy `draftMessageEl` variable, painted through the same setMessage(el, text, tone) pattern',
+    },
+    '#profileMessageEl': {
+        'anchor': '#sdSetProfileMessage',
+        'why': 'The Settings profile status line; the legacy `profileMessageEl` variable',
+    },
+    '#modelMessageEl': {
+        'anchor': '#sdUtilModelsMessage',
+        'why': 'The shared model-action status line in Utilities / Models; the legacy `modelMessageEl` variable',
+    },
+    '#warmupMessageEl': {
+        'anchor': '#sdUtilWarmupMessage',
+        'why': 'The warm-up status line in Utilities / Advanced; the legacy `warmupMessageEl` variable',
+    },
+    '#firstRunMessageEl': {
+        'anchor': '#sdFirstRunMessage',
+        'why': 'The first-run setup status line; the legacy `firstRunMessageEl` variable, on the same features/firstRun.js contract',
+    },
+}
+
+
+# --- ROW_ANCHORS --------------------------------------------------------------
+#
+# For PROSE rows that name no handle at all. Owned by the evidence lane
+# (inventory §B-6); kept here so both kinds of human anchoring are validated by
+# one mechanism. Keyed by stable id; a row that already resolves on its own may
+# not appear here.
+
+ROW_ANCHORS: dict[str, dict] = {
+    # Authored by the evidence lane (B-6) and re-verified here before landing:
+    # every id below was independently confirmed to exist in the file claimed
+    # for it (overlay.html, review-overlay.html, glitch-ring.js,
+    # signal-desk.html), not taken on trust. Additive by agreement — append
+    # rather than restructure so both lanes can write here.
+
+    # --- shell / header ---
+    'UI-01-003': {
+        'anchors': ['#sdHeaderTitle', '#sdHeaderSubtitle', '#sdQuitButton'],
+        'why': 'The app shell header: workspace title, tagline and the Quit button. Quit is the piece this row named that did NOT exist until Wave 11B built it — before that the row could not have been anchored honestly',
+    },
+    'UI-04-001': {
+        'anchors': ['#sdHeaderBreadcrumb', '#sdHeaderTitle', '#sdHeaderSubtitle'],
+        'why': 'The static header copy: breadcrumb, title and lede, repainted per workspace by features/signalDeskShell.js',
+    },
+
+    # --- the "biggest single panel" and its parts ---
+    'UI-01-009': {
+        'anchors': ['#sdRefinedHero', '#sdReviseDrawer', '#sdSendButton'],
+        'why': 'The Review Draft panel, split across Talk\'s refined card, the Revise drawer and the action row rather than kept as one monolith',
+    },
+    'UI-06-015': {
+        'anchors': ['#sdCaptureStartButton', '#sdCaptureStopButton', '#sdCaptureMessage'],
+        'why': 'The recording controls: start, stop, and the hint/error line beneath them',
+    },
+    'UI-06-019': {
+        'anchors': ['#sdRefinedHero', '#sdRawTranscriptText'],
+        'why': 'The draft preview: the editable refined text and the raw transcript it came from',
+    },
+    'UI-06-024': {
+        'anchors': ['#sdReviseDrawer', '#sdRewriteClearerButton', '#sdRewriteShorterButton', '#sdRewriteToneButton'],
+        'why': 'The review/rewrite tools row, moved into the Revise drawer so it does not crowd the send path',
+    },
+    'UI-06-033': {
+        'anchors': ['#sdAcceptButton', '#sdSendButton', '#sdCopyButton', '#sdDeclineButton'],
+        'why': 'The draft action row: accept, send, copy and decline',
+    },
+    'UI-06-042': {
+        'anchors': ['#sdLibraryTimeline', '#sdLibraryItemsCount'],
+        'why': 'Draft history, promoted from a dashboard list to the Library workspace timeline with a live item count',
+    },
+    'UI-06-046': {
+        'anchors': ['#sdShortcutSheet', 'createShortcutsFeature'],
+        'why': 'The global keyboard shortcuts, owned by features/shortcuts.js and made discoverable by the shortcut sheet the legacy page had no equivalent of',
+    },
+    'UI-06-010': {
+        'anchors': ['#sdFirstRunPanel', '#sdFirstRunDismissButton'],
+        'why': 'The first-run panel and its dismissal; a banner inside Talk rather than a modal, so it cannot fight the onboarding gate',
+    },
+
+    # --- overlay windows (production surfaces in their own right) ---
+    'UI-01-017': {
+        'anchors': ['#statusRing', '#overlayWrap'],
+        'why': 'overlay.html, the floating always-on-top status indicator: the glitch ring and its wrapper',
+    },
+    'UI-01-018': {
+        'anchors': ['#rawToggleButton', '#draftSummary'],
+        'why': 'review-overlay.html, the floating draft-review window with its own raw/refined toggle and summary',
+    },
+    'UI-12-004': {
+        'anchors': ['#statusText', 'interpretOverlayStatus'],
+        'why': 'The overlay\'s status mapping: interpretOverlayStatus() turns each voice-status payload kind into a ring state and the label #statusText shows',
+    },
+    'UI-12-005': {
+        'anchors': ['setAmplitude'],
+        'why': 'Live amplitude pulsing, glitch-ring.js\'s setAmplitude() driven from the recording payload',
+    },
+    'UI-12-006': {
+        'anchors': ['#overlayWrap', 'applyAppearance'],
+        'why': 'Pushed appearance settings: applyAppearance() sizes and positions #overlayWrap on load and on every settings change',
+    },
+    'UI-12-007': {
+        'anchors': ['setIgnoreMouseEvents'],
+        'why': 'The click-through/drag affordance, toggled on mouseenter and mouseleave',
+    },
+    'UI-12-015': {
+        'anchors': ['#acceptChevronButton', '#rewritePreset'],
+        'why': 'The review overlay\'s footer actions: the accept split-button and the rewrite preset picker',
+    },
+    'UI-12-023': {
+        'anchors': ['#draftSummary', '#ttsBackendBadge'],
+        'why': 'The draft push: a full re-render of the summary plus the refreshed TTS backend badge',
+    },
+    'UI-12-024': {
+        'anchors': ['#statusBadge', '#commandBadge'],
+        'why': 'The status push: speaking/stopped state and the voice-command badge',
+    },
+    'UI-12-025': {
+        'anchors': ['#closeButton', 'createShortcutsFeature'],
+        'why': 'Escape dismisses (hides, never declines) — the same close path as the button',
+    },
+
+    # --- persona wizard steps ---
+    'UI-07-053': {
+        'anchors': ['#wizardRole', '#wizardCustomRole'],
+        'why': 'Wizard step 1, Goal & Role: the preset role picker and its free-text alternative',
+    },
+    'UI-07-059': {
+        'anchors': ['#wizardTone', '#wizardCustomTone'],
+        'why': 'Wizard step 2, Tone: the preset tone picker and its free-text alternative',
+    },
+    'UI-07-062': {
+        'anchors': ['#wizardRuleNoPreamble', '#wizardRuleSanitize', '#wizardRuleCommands', '#wizardRuleLength'],
+        'why': 'Wizard step 3, Rules: the four rule toggles that shape the generated prompt',
+    },
+    'UI-07-067': {
+        'anchors': ['#wizardPromptPreview', '#wizardRegeneratePromptButton'],
+        'why': 'Wizard step 4, Review & Save: the generated prompt shown before saving, with a regenerate action',
+    },
+    'UI-15-024': {
+        'anchors': ['#wizardDeleteButton'],
+        'why': 'The wizard\'s Delete Custom Persona, gated on the persona being neither builtin nor loaded',
+    },
+
+    # --- hotkeys / wake, the groups that moved to Utilities ---
+    'UI-07-035': {
+        'anchors': ['#sdUtilHotkeyRecordingClear', '#sdUtilHotkeyForceStopClear', '#sdUtilHotkeyManualSendClear'],
+        'why': 'The per-field clear buttons that replace the legacy `.clear-hotkey-btn` class, one per hotkey field',
+    },
+    'UI-15-002': {
+        'anchors': ['#sdUtilHotkeyRecordingInput', '#sdUtilHotkeyWaylandWarning', '#sdUtilHotkeyMessage'],
+        'why': 'The hotkey configuration group as a whole: capture fields, the conditional Wayland banner and the shared status line, all in Utilities / Speech Input',
+    },
+    'UI-07-109': {
+        'anchors': ['#sdUtilWakeSensitivity', '#sdUtilWakeCooldown', '#sdUtilWakeMaxRecording'],
+        'why': 'Wake detection tuning: the three numeric fields backing wake_word_sensitivity/cooldown_s/max_recording_s',
+    },
+    'UI-07-113': {
+        'anchors': ['#sdUtilWakeTestButton', '#sdUtilWakeTestResult', '#sdUtilWakeScoreBar'],
+        'why': 'The live wake test: the timed trigger, the peak-score readout and the score meter',
+    },
+    'UI-15-009': {
+        'anchors': ['#sdUtilWakeTrainGroup', '#sdUtilWakeTrainButton', '#sdUtilWakeTrainResult'],
+        'why': 'The whole Build a Wake Phrase group: phrase input, the synthesize-and-train flow, and the reliability verdict',
+    },
+    'UI-14-012': {
+        'anchors': ['#sdUtilWakeTrainProgress', '#sdUtilWakeTrainProgressFill', '#sdUtilWakeTrainProgressPercent'],
+        'why': 'Live wake-training progress, polled from GET /wake/train/status',
+    },
+
+    # --- voice studio ---
+    'UI-07-122': {
+        'anchors': ['#voicePresetSelect', '#voicePresetList', '#saveVoicePresetButton'],
+        'why': 'Voice presets: the picker, the saved-preset list and the save action',
+    },
+    'UI-07-127': {
+        'anchors': ['#sdVoiceBlendCards'],
+        'why': 'The blend surface, rebuilt as Signal Desk voice-blend cards',
+    },
+    'UI-07-139': {
+        'anchors': ['#sdUtilVoiceCloningPanel', '#sdUtilVoiceCloningProvisionButton'],
+        'why': 'Voice cloning provisioning, homed in Utilities / Models — the same panel the UI-07-142 cut names as the replacement for the dead legacy install button',
+    },
+    'UI-07-140': {
+        'anchors': ['#voiceCloneConsent'],
+        'why': 'The cloning consent gate, which must be ticked before the upload flow will run',
+    },
+
+    # --- models / diagnostics / settings ---
+    'UI-08-004': {
+        'anchors': ['#sdUtilLlmSelect', '#sdUtilLlmBadge', '#sdUtilLlmDownloadButton'],
+        'why': 'The LLM panel: picker, install-state badge and download action',
+    },
+    'UI-08-012': {
+        'anchors': ['#sdUtilWhisperSelect', '#sdUtilWhisperBadge', '#sdUtilWhisperDownloadButton'],
+        'why': 'The Whisper panel: picker, install-state badge and download action',
+    },
+    'UI-09-011': {
+        'anchors': ['#sdUtilRuntimeStatusList', '#sdUtilCapabilitiesList'],
+        'why': 'Runtime diagnostics: the runtime-status dump and the platform capabilities readout',
+    },
+    'UI-14-013': {
+        'anchors': ['#sdUtilLlmProgressFill', '#sdFirstRunLlmProgressFill', '#sdFirstRunWhisperProgressFill'],
+        'why': 'Model download progress bars in both places a download can start: Utilities / Models and the first-run panel',
+    },
+    'UI-15-016': {
+        'anchors': ['#sdUtilJobsList'],
+        'why': 'The active-jobs list in Diagnostics, kept as its own surface rather than folded into recordings or Doctor',
+    },
+    'UI-15-023': {
+        'anchors': ['#sdSetStitchPass'],
+        'why': 'The Long Recording Stitch Pass toggle, backing long_recording_stitch_pass_enabled in Settings / AI Cleanup',
+    },
+    'UI-15-006': {
+        'anchors': ['#sdSetRenameProfileButton', '#sdSetDuplicateProfileButton'],
+        'why': 'Rename and Duplicate profile, really bound here through collectSettingsElements() — this is the surface that makes the §0 Bug #1 undeclared-identifier fault unreproducible on the shipping page',
+    },
+    'UI-07-164': {
+        'anchors': ['#sdSetOverlayAppearanceGroup'],
+        'why': 'The floating-overlay appearance group, hidden wholesale when the Electron bridge does not expose the overlay-appearance methods',
+    },
+    'UI-15-025': {
+        'anchors': ['#sdFirstRunDismissButton'],
+        'why': 'The sticky per-device first-run dismissal, deliberately separate from the one-time onboarding gate',
+    },
+
+    # --- status / notification ---
+    'UI-14-008': {
+        'anchors': ['#statusRing', '#statusText'],
+        'why': 'The floating status overlay window, cross-referenced from §12.1',
+    },
+    'UI-14-009': {
+        'anchors': ['#statusBadge', '#ttsBackendBadge', '#commandBadge'],
+        'why': 'The review overlay\'s three badges: session status, TTS backend and voice command, cross-referenced from §12.2',
+    },
+}
+
+
+# --- CUTS ---------------------------------------------------------------------
+#
+# Keyed by stable id. Every entry names what replaced the capability, by handle,
+# or states plainly that there was no capability to replace. Turned into
+# `intentional_cut` by parity_ledger_build.py.
+
+CUTS: dict[str, str] = {
+    'UI-07-002': (
+        'Intentional cut: the 14-button `.settings-nav-button` sidebar is replaced by the '
+        'workspace split Signal Desk is built around. Its 14 categories now live behind three '
+        'navs, all of which ship: the 7-item Settings sub-nav (`#sdSetNavProfile`/`Recording`/'
+        '`Review`/`AiCleanup`/`Notifications`/`Appearance`/`Privacy`), the 5-item Utilities '
+        'sub-nav (`#sdUtilNavModels`/`Speech`/`Text`/`Diagnostics`/`Advanced`, which carries '
+        'legacy Hotkeys, Audio Devices, Voice Control, Send & Injection, Dictionary, Macros and '
+        'Advanced), and the Studio workspace (legacy TTS / Voice Studio plus the persona '
+        'builders). The capability — reach every settings group — ships; the 14 legacy buttons '
+        'deliberately do not.'
+    ),
+    'UI-07-116': (
+        'Intentional cut: `#ttsWarningBadge` was a STATIC prose paragraph rendered '
+        'unconditionally on every platform, telling every user about Linux libsndfile1 whether '
+        'or not they were on Linux or using Kokoro. It was never driven by a capability probe, '
+        'so it was as likely to mislead as to help. Replaced by two surfaces that compute the '
+        'answer: the Doctor grid\'s "TTS (Read-Aloud)" card (`#sdUtilDoctorCardsGrid` <- '
+        '`GET /doctor`, with a recovery action when it fails) and the platform capabilities '
+        'readout (`#sdUtilCapabilitiesList` <- `GET /capabilities`, reporting `supports_tts`). '
+        'A conditional truth replaces an unconditional guess.'
+    ),
+    'UI-07-121': (
+        'Intentional cut: `#voiceLivePreview` re-auditioned the voice automatically ~600ms after '
+        'any blend/modulation/base/speed tweak. Replaced by explicit, user-initiated preview — '
+        '`#sdVoicePreviewButton` on the blend card and `#testTtsButton` in the Voice Studio. The '
+        'capability (hear the mix you just built) ships; the automatic re-trigger deliberately '
+        'does not, because it started audio nobody asked for while the user was still moving a '
+        'slider.'
+    ),
+    'UI-07-130': (
+        'Intentional cut: `#voiceBlendBackendNote` is one half of the §0 Bug #2 pair — its '
+        'population call `refreshVoiceBlendCapabilityNote()` was never defined anywhere, so the '
+        'element had no contract and never rendered anything on any page. Replaced by the Voice '
+        'Cloning panel\'s real, populated status in Utilities / Models: `#sdUtilVoiceCloningBadge`, '
+        '`#sdUtilVoiceCloningStatus` and `#sdUtilVoiceCloningHint`. An element that never had a '
+        'data source is not a capability being removed — and this closes half of UI-00-002.'
+    ),
+    'UI-07-137': (
+        'Intentional cut: `#voiceStability` shipped `disabled` and labelled "experimental — '
+        'reserved, not yet applied". It was wired to nothing, applied to nothing, and had no '
+        'backend field. There is NO replacement, because there was no capability: a permanently '
+        'disabled control is a promise the product never kept, and carrying it into Signal Desk '
+        'would have repeated the promise.'
+    ),
+    'UI-07-141': (
+        'Intentional cut: `#voiceCloneStatusNote` is the other half of the §0 Bug #2 pair — its '
+        'population call `refreshCloneStatusNote()` was never defined. Replaced by '
+        '`#sdUtilVoiceCloningStatus` in Utilities / Models, which is genuinely populated from the '
+        'clone provisioning/status data alongside `#sdUtilVoiceCloningBadge`.'
+    ),
+    'UI-07-142': (
+        'Intentional cut: `#voiceCloneInstallButton` was hidden with no click handler anywhere in '
+        'the legacy page — the inventory row says so itself. Replaced by '
+        '`#sdUtilVoiceCloningProvisionButton` in Utilities / Models, which has a real handler: '
+        'provisionVoiceCloning() -> POST /tts/clone/provision, with the outcome reported in '
+        '`#sdUtilVoiceCloningStatus`.'
+    ),
+    'UI-15-011': (
+        'Intentional cut: this orphan-list row exists to warn that three voice-cloning entry '
+        'points are easy to conflate, and the only handle it names is '
+        '(c), `#voiceCloneInstallButton` — the hidden, unwired one, cut at UI-07-142. The other '
+        'two ship and are anchored: (a) Models-tab provisioning is '
+        '`#sdUtilVoiceCloningProvisionButton` -> provisionVoiceCloning() -> POST '
+        '/tts/clone/provision, and (b) the consent+upload flow is `#voiceCloneUploadButton` in '
+        'the Studio Voice Studio. Signal Desk resolves the confusion this row documents by '
+        'having two entry points instead of three; the row is cut because the thing it points '
+        'at is the one that went away.'
+    ),
+    'UI-06-062': (
+        'Intentional cut: `#voiceStatusDetail` dumped the raw JSON of the latest voice-status '
+        'message, and the inventory row itself calls it developer-facing. A payload readout is '
+        'not a product surface. Both things a user needs from it ship: the CONNECTION state is '
+        'the status rail\'s Stream cell (`#sdStatusStreamValue`, built in Wave 11B, with the '
+        'failure reason as its title) and the message CONTENT drives the Signal Core ring, meter '
+        'and capture controls. Raw payloads remain available to a developer through Utilities / '
+        'Diagnostics (`#sdUtilDebugLogTail`).'
+    ),
+}
+
+
+# --- self-check ---------------------------------------------------------------
+
+
+def main() -> int:  # pragma: no cover - CLI
+    """Run the collector's own validation over this table and report."""
+    sys.path.insert(0, str(ROOT))
+    from tools import parity_evidence as pe
+    from tools import parity_validator as pv
+
+    prod = pe.Closure.build(
+        'production', pe.PROD_ENTRY_HTML, pe.PROD_ENTRY_JS, pe.PROD_EXTRA_PAGES
+    )
+    prod_index = pe.build_id_index(prod)
+    source_ids = {row.stable_id for row in pv.parse_source()}
+    try:
+        pe.validate_anchor_table(
+            HANDLE_ANCHORS, ROW_ANCHORS, CUTS, prod, prod_index, source_ids
+        )
+    except pe.AnchorError as exc:
+        print(exc)
+        return 1
+    print(
+        f'{len(HANDLE_ANCHORS)} handle anchor(s), {len(ROW_ANCHORS)} row anchor(s) and '
+        f'{len(CUTS)} cut ruling(s) all hold against the production closure'
+    )
+    return 0
+
+
+if __name__ == '__main__':  # pragma: no cover - CLI
+    sys.exit(main())

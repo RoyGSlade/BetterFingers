@@ -117,6 +117,77 @@ _TAB_REPLACEMENT = (
 for _sid in ("UI-01-005", "UI-05-001", "UI-05-002", "UI-05-003", "UI-05-004", "UI-05-005"):
     _cut(_sid, _TAB_REPLACEMENT)
 
+# Wave 11B: the hand rulings that live in the shared anchor table
+# (`tools/parity_anchors.py`) rather than here, because they belong next to the
+# verified legacy-handle -> production-anchor mappings that justify them. A cut
+# there is exactly a cut here -- same vocabulary, same requirement to name a
+# replacement -- it is just recorded where the evidence for it is. The table is
+# validated against the production closure before any of this runs (see
+# parity_evidence.validate_anchor_table), so a cut whose named replacement has
+# gone missing fails the build instead of quietly persisting.
+for _sid, _rationale in pe.load_anchor_table()[2].items():
+    _cut(_sid, _rationale)
+
+# --- Wave 11B: the overlay windows are anchored, covered, and UNREACHABLE -----
+#
+# Wave 11 recorded the 18 unevidenced overlay rows as an AUDIT gap: the windows
+# ship, so the only thing missing was QA. `app/tests/qa/scenarios/overlay-prod.mjs`
+# now supplies that QA -- and writing it established that the premise was wrong.
+#
+# On the PRODUCTION page these surfaces cannot be reached at all:
+#
+#   * `overlay:update-status` is what makes the capture overlay show a pipeline
+#     state. Its only renderer-side caller anywhere in the repo is
+#     `app/src/renderer/main.js` -- the LEGACY page. The production closure
+#     (`signal-desk.html` + everything `bootstrap/signalDeskApp.js` imports)
+#     contains no call to `updateOverlayStatus`. Signal Desk consumes the same
+#     voice-status stream itself (`features/talkCapture.js`) for its in-page ring
+#     and never forwards it to the window.
+#   * `review:show` is the only thing that ever creates the review window. Same
+#     single legacy caller. On the shipping page that window is never created.
+#
+# D-0015 asks for a REACHABLE production location. Marking these `wired` because
+# a scenario can drive the IPC handler directly would report a surface as part of
+# the product when a user can never see it -- the exact failure mode the comment
+# hole caused, arrived at by a different route. They stay `blocked`, and the
+# reason is corrected from evidence to product.
+#
+# NOT blocked here, deliberately: the capture overlay's ring, label, appearance
+# and drag rows (UI-12-001/002/006/007/008, UI-01-017, UI-14-008). Settings >
+# Appearance is a real production caller -- `#sdSetOverlaySize` reaches the window
+# through `overlay:set-appearance`, which also shows it -- so those genuinely do
+# resolve on the shipping page and are left to the mechanical rules.
+_OVERLAY_UNREACHABLE = (
+    "(product) the code ships and `app/tests/qa/scenarios/overlay-prod.mjs` exercises it, but the "
+    "production composition root contains NO caller for the IPC that reaches it — "
+    "`overlay:update-status` and `review:show` are called only from the legacy "
+    "`app/src/renderer/main.js`, never from `signal-desk.html`'s closure — so on the shipping page "
+    "this surface cannot be reached by a user. Wave 11 recorded these as evidence gaps; that was "
+    "wrong. The fix is a production caller, not more QA."
+)
+def _block_unless_ruled(stable_id: str, reason: str) -> None:
+    """Block, unless a cut already rules on this row.
+
+    An `intentional_cut` is a decision that the capability is not coming back;
+    "unreachable, needs a caller" is a decision that it is. If both were declared
+    the ledger would report whichever ran last, so the cut wins and the conflict
+    stays visible in the table rather than being resolved by import order.
+    """
+    if stable_id not in OVERRIDES:
+        _block(stable_id, reason)
+
+
+# 12.1, the rows that need a pipeline STATUS push (the ring vocabulary, the
+# status IPC itself, and the live amplitude that rides on it).
+for _sid in ("UI-12-003", "UI-12-004", "UI-12-005"):
+    _block_unless_ruled(_sid, _OVERLAY_UNREACHABLE)
+# 12.2 in full, plus the two rows in other sections that describe the same
+# window: the review overlay is never created on the production page.
+for _n in range(9, 27):
+    _block_unless_ruled(f"UI-12-{_n:03d}", _OVERLAY_UNREACHABLE)
+for _sid in ("UI-01-018", "UI-14-009"):
+    _block_unless_ruled(_sid, _OVERLAY_UNREACHABLE)
+
 # NOT ledger rows, deliberately: two Wave 11 rulings the brief asked for have
 # no counterpart in the 438-item source inventory, because that inventory
 # predates the work they concern.
@@ -131,12 +202,34 @@ for _sid in ("UI-01-005", "UI-05-001", "UI-05-002", "UI-05-003", "UI-05-004", "U
 # decisions they are rather than smuggled in as parity rows.
 
 
+def cell_safe(text: str) -> str:
+    """`text` made safe to put in a Markdown table cell.
+
+    A pipe becomes `&#124;` rather than `\\|`. Markdown renders both as a bar,
+    but the ledger is parsed by splitting rows on `|` (parity_validator), and a
+    backslash-escaped pipe still splits — which is how a hand-written anchor
+    rationale containing `POST /wake/enable | POST /wake/disable` produced an
+    8-cell row and broke the validator outright. The entity carries no literal
+    pipe, so the row survives the round trip with its meaning intact.
+    """
+    return text.replace("|", "&#124;").replace("\n", " ")
+
+
 def build_evidence_cell(row: pe.RowEvidence, status: str, reason: str) -> str:
     parts: list[str] = []
     if row.anchors:
         shown = ", ".join(f"`{anchor}`" for anchor in row.anchors[:6])
         more = "" if len(row.anchors) <= 6 else f" (+{len(row.anchors) - 6} more)"
         parts.append(f"Production anchor(s): {shown}{more} in `app/src/renderer/signal-desk.html`")
+    if row.declared:
+        # Say out loud that a human put this anchor here and why. A declared
+        # anchor carries the same weight as a derived one ONLY because it was
+        # checked against the production closure; printing it unlabelled would
+        # hide which half of the ledger rests on a person's verified claim.
+        shown = ", ".join(f"`{item}`" for item in row.declared[:4])
+        parts.append(
+            f"Hand-declared anchor(s) (`tools/parity_anchors.py`): {shown} — {row.declared_why}"
+        )
     if row.qa_hits:
         parts.append(
             "Production-target QA: " + ", ".join(f"`{path}`" for path in row.qa_hits[:3])
@@ -151,8 +244,7 @@ def build_evidence_cell(row: pe.RowEvidence, status: str, reason: str) -> str:
         parts.append("Unresolved handle(s): " + ", ".join(f"`{tok}`" for tok in row.not_in_prod[:6]))
     if status == "blocked":
         parts.append(f"Blocked: {reason}")
-    body = ". ".join(parts)
-    return body.replace("|", "\\|").replace("\n", " ")
+    return cell_safe(". ".join(parts))
 
 
 def classify(row: pe.RowEvidence) -> tuple[str, str]:
@@ -210,11 +302,11 @@ def main() -> int:
     for src, ev, status, reason in rulings:
         totals[status] += 1
         workspace = WORKSPACE_BY_SECTION.get(src.section_number, "Cross-cutting / orphans")
-        cell = reason if status == "intentional_cut" else build_evidence_cell(ev, status, reason)
+        cell = cell_safe(reason) if status == "intentional_cut" else build_evidence_cell(ev, status, reason)
         item = src.text
         if len(item) > 150:
             item = item[:149].rstrip() + "…"
-        item = item.replace("|", "\\|")
+        item = cell_safe(item)
         lines.append(
             f"| {src.stable_id} | {workspace} | {src.source_ref} | {item} | {cell} | "
             f"`sha256:{src.binding}` | `{status}` |"

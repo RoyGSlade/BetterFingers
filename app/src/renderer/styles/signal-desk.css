@@ -836,6 +836,33 @@
   box-shadow: 0 0 6px rgba(239, 68, 68, .6);
 }
 
+/*
+  Wave 11B defect fix. The two rules above key off `.is-warn`/`.is-bad`, but
+  statusBar.js's paint() has always written `data-tone` (the tone vocabulary the
+  rest of Signal Desk uses) and never those classes — so every dot rendered
+  permanently green regardless of what the cell beside it said. A green dot next
+  to "Not loaded" is worse than no dot: it is a confident, wrong reassurance
+  about exactly the state the rail exists to report. These rules bind the dot to
+  the tone that is actually written.
+*/
+.sd-statusbar__dot[data-tone="muted"] {
+  background: var(--sd-text-muted);
+  box-shadow: none;
+}
+
+.sd-statusbar__dot[data-tone="warning"] {
+  background: var(--sd-amber);
+  box-shadow: 0 0 6px rgba(245, 158, 11, .6);
+}
+
+.sd-statusbar__dot[data-tone="danger"] {
+  background: var(--sd-red);
+  box-shadow: 0 0 6px rgba(239, 68, 68, .6);
+}
+
+.sd-statusbar__value[data-tone="warning"] { color: var(--sd-amber); }
+.sd-statusbar__value[data-tone="danger"] { color: var(--sd-red); }
+
 .sd-statusbar__mini-viz {
   width: 40px;
   height: 18px;
@@ -6459,4 +6486,116 @@
 .sd-workflow-run[data-workflow-run-status="partial"],
 .sd-workflow-run[data-workflow-run-status="failed"] {
   color: var(--sd-danger, #c0392b);
+}
+
+/* --- Wave 11B: header Quit + backend health / version banner --------------- */
+
+/*
+  Quit is deliberately quiet: ghost styling, no accent, no fill. It is a real
+  exit the app owes the user (the background sidecar means closing the window is
+  not obviously the same thing), but it is not an action anyone should be nudged
+  toward, so it does not compete with the Signal Core pill beside it.
+*/
+.sd-header__quit {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: transparent;
+  border: 1px solid var(--sd-border);
+  color: var(--sd-text-secondary);
+  font-size: var(--sd-font-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: color .15s ease, border-color .15s ease, background .15s ease;
+}
+
+.sd-header__quit svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+}
+
+.sd-header__quit:hover,
+.sd-header__quit:focus-visible {
+  color: var(--sd-red);
+  border-color: var(--sd-red);
+  background: rgba(239, 68, 68, .08);
+}
+
+.sd-backend-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sd-space-12);
+  padding: var(--sd-space-12) var(--sd-space-16);
+  border-radius: var(--sd-radius-10);
+  border: 1px solid var(--sd-amber);
+  background: rgba(245, 158, 11, .10);
+  color: var(--sd-text-primary);
+  font-size: var(--sd-font-sm);
+}
+
+.sd-backend-banner[hidden] {
+  display: none;
+}
+
+.sd-backend-banner[data-tone="danger"] {
+  border-color: var(--sd-red);
+  background: rgba(239, 68, 68, .10);
+}
+
+.sd-backend-banner__icon {
+  color: var(--sd-amber);
+  flex-shrink: 0;
+}
+
+.sd-backend-banner[data-tone="danger"] .sd-backend-banner__icon {
+  color: var(--sd-red);
+}
+
+.sd-backend-banner__icon svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+.sd-backend-banner__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sd-backend-banner__message {
+  color: var(--sd-text-secondary);
+}
+
+/* Voice Studio quick-preset chips (Wave 11B): the markup for handlers
+   features/voiceStudio.js already had. Chips rather than buttons because each
+   one REPLACES the current modulation/blend state -- they are shortcuts to a
+   starting point, not additive actions, and should not look like the Add
+   layer / Reset buttons above them. */
+.sd-voice-preset-chips {
+  flex-wrap: wrap;
+  gap: var(--sd-space-8);
+}
+
+.sd-voice-preset-chip {
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--sd-border);
+  background: transparent;
+  color: var(--sd-text-secondary);
+  font-size: var(--sd-font-sm);
+  cursor: pointer;
+  transition: color .15s ease, border-color .15s ease, background .15s ease;
+}
+
+.sd-voice-preset-chip:hover,
+.sd-voice-preset-chip:focus-visible {
+  color: var(--sd-text-primary);
+  border-color: var(--sd-cyan);
+  background: rgba(34, 211, 238, .08);
 }

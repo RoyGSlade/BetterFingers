@@ -9,6 +9,14 @@ the per-row ruling; this is the director-facing summary of everything that did
 `python3 tools/parity_validator.py`; regenerate with
 `python3 tools/parity_ledger_build.py`.
 
+> **SUPERSEDED BY WAVE 11B — read [§ Wave 11B](#wave-11b--corrections-to-this-document)
+> before using any number above.** Wave 11B found two defects in the collector
+> that produced these figures, closed three of the clusters below, and reversed
+> the ruling on a fourth. The 161 / 10 / 267 line, the two tables under
+> *The split*, and blockers **B-1**, **B-2** and **B-6** are all out of date. They
+> are left in place rather than overwritten so the correction is legible as a
+> correction; the ledger itself is regenerated and is the authority.
+
 Gate 11 asks whether Signal Desk is the product. On this evidence the honest
 answer is: **it is the product, and it is not yet fully evidenced as the
 product.** 161 rows clear the whole chain against the page that ships. 267 do
@@ -178,3 +186,209 @@ Ordered by evidence gained per unit of work:
 
 None of 1-4 is a product change. That is the shape of this result: the largest
 part of what stands between here and a clean Gate 11 is evidence, not code.
+
+---
+
+# Wave 11B — corrections to this document
+
+Wave 11B (evidence lane) worked items 1-3 of the list above. Two of them closed.
+The third turned out to rest on a mistaken premise, and the work of testing it is
+what found the mistake. Everything below supersedes the corresponding section
+above.
+
+## C-0 — Two defects in the collector that produced the Wave 11 numbers
+
+Both were invisible: the ledger regenerated cleanly and the validator passed
+while the figures were wrong. Each is now covered by
+`tests/test_parity_evidence_rules.py`, so neither can quietly return.
+
+**Comments counted as evidence.** `parity_evidence.py` resolved an id by looking
+for it anywhere in reachable source, and "anywhere" included comments. A module
+that merely mentioned `#backendStatus` while explaining what replaced it made
+that row resolve *in production*, and the row could then reach `wired` on the
+strength of a sentence. Every file is now stripped of comments before anything is
+matched against it — HTML comments by pattern, JS comments by a scanner that
+tracks string state so `"https://…"` survives — and the same rule is applied to QA
+scenarios and unit tests, because a scenario that only *mentions* a control in
+its header does not exercise it. **Effect: −8 `wired`.** Five of the eight
+resolved only off a comment naming the legacy handle (`.stream-panel`,
+`settingEls`, `maybeLearnFromEdit`, `InsufficientDiskSpaceError`,
+`#settingInputDevice`). This defect *inflated* the number Gate 11 exists to
+trust, which makes it the more serious of the two.
+
+**Endpoint rows could never be reported as covered.** Coverage matched
+`\b<needle>\b`. `\b` asserts a word/non-word transition, so
+`\b/personas/interview/answer` requires a word character immediately before the
+leading slash — and a QA stub writes `'POST /personas/interview/answer'`, where
+that character is a space. No endpoint row could clear the QA leg however
+thoroughly a scenario drove it. Replaced with lookarounds that are no looser than
+`\b` for identifiers. **Effect: +5 `wired`.** The same class of bug as the comment
+hole, pointing the other way, and equally invisible.
+
+Net collector correction on the checkout where both were measured in isolation:
+**261 → 258 `wired`.** Wave 11B's own results are stated against the corrected
+collector, never against 261.
+
+## C-1 — B-1 is CLOSED, and its diagnosis was wrong
+
+B-1 said the Foundry's 23 unevidenced rows would be closed by retargeting
+`app/tests/qa/scenarios/personas.mjs` to `signal-desk-prod`. **That would have
+moved zero rows.** `personas.mjs` does not touch the Foundry: it exercises the
+manual persona *wizard* (`#wizard*`) and the Cleanup Preset select, and contains
+no `#foundry*` id at all. Retargeting it would have moved nothing while breaking
+the legacy rollback coverage it does provide. The Foundry had no QA on either
+page — the gap was larger than reported, not smaller.
+
+There is also almost no selector drift to fix. Signal Desk re-housed the Foundry
+dialog without renaming its controls: every `#foundry*` id is identical in
+`signal-desk.html` and `index.html`. The only two differences are the entry
+points, and they matter:
+
+- `#openFoundryButton` is a real Settings button on the legacy page and a
+  **hidden compatibility trigger** in production, existing so `personas.js`'s own
+  `initFoundry()` binding has something to bind.
+- `#sdOpenFoundryButton` — Studio's "✨ Build with AI" — is the production entry
+  point, routed `studioWorkspace.js` → `onOpenFoundryRequested` →
+  `personaFlow.openFoundry()` (`signalDeskApp.js:557`), which opens the guided-flow
+  chrome and only then clicks the hidden trigger.
+
+`app/tests/qa/scenarios/foundry-prod.mjs` (new, `ui: 'signal-desk-prod'`) enters
+through Studio and drives the whole path: interview → choice question →
+example/anti-example collection → automatic compile → stress test with per-case
+verdicts → character card → save. `personas.mjs` is left on the legacy target,
+deliberately, as rollback coverage.
+
+**§3: 3 `wired` / 23 `blocked` → 26 `wired` / 0 `blocked`.**
+
+Contingent on the QA run: the collector credits a row when a production-target
+scenario *names* its anchor, which the new file does. Whether the scenario
+*passes* is the director's Electron QA run
+(`BF_QA_UI=signal-desk-prod node tests/qa/run.mjs foundry`), which this lane
+cannot execute. **If it fails, these 26 rows must go back to `blocked` until it
+is green.** The same caveat applies to C-2.
+
+## C-2 — B-2 is REVERSED: the overlay windows are a product gap, not an audit gap
+
+B-2 stated that `overlay.html` and `review-overlay.html` "are **not** product
+gaps" and that the only thing missing was QA. Writing that QA established the
+opposite, and this is the most consequential finding of the objective.
+
+**On the production page these windows cannot be reached.**
+
+- `overlay:update-status` is what makes the capture overlay show a pipeline
+  state. Its only renderer-side caller anywhere in the repository is
+  `app/src/renderer/main.js` — the **legacy** page. The production closure
+  (`signal-desk.html` plus everything `bootstrap/signalDeskApp.js` imports)
+  contains no call to `updateOverlayStatus`. Signal Desk consumes the same
+  voice-status stream itself (`features/talkCapture.js`) to drive its in-page
+  ring, and never forwards it to the window.
+- `review:show` is the only thing that ever creates the review window. Same
+  single legacy caller. On the shipping page that window is never created at all.
+
+So the floating overlay a user is supposed to watch while dictating does not
+respond to dictation on the page that ships, and the Review Deck cannot be opened
+from it. The code is fine. Nothing calls it.
+
+D-0015 requires a *reachable* production location, so these rows stay `blocked`
+and their reason is corrected from evidence to **product**
+(`tools/parity_ledger_build.py`, `_OVERLAY_UNREACHABLE`): §12.1's status rows
+(`UI-12-003/004/005`), all of §12.2 (`UI-12-009`…`UI-12-026`), and the two rows
+elsewhere that describe the same window (`UI-01-018`, `UI-14-009`). Marking them
+`wired` because a test can drive the IPC handler directly would report a surface
+as shipped that a user can never see — the same failure as the comment hole,
+reached by a different route.
+
+**Not** blocked, deliberately: the capture overlay's ring, label, appearance and
+drag rows. Settings → Appearance *is* a real production caller —
+`#sdSetOverlaySize` reaches the window through `overlay:set-appearance`, which
+also shows it — so `UI-12-001/002/006/007/008`, `UI-01-017` and `UI-14-008` do
+resolve on the shipping page and are left to the mechanical rules.
+
+The QA still landed and is worth having: `app/tests/qa/scenarios/overlay-prod.mjs`
+(new, `ui: 'signal-desk-prod'`) drives both windows through the real main-process
+handlers and the real preload bridge, covering the ring's state vocabulary, the
+appearance chain end to end, the Review Deck's draft render, its rewrite/instruct/
+read actions with request capture, and the non-destructive dismissal contract
+(close and Escape must not decline). It is what makes the finding checkable and
+it is the regression net the fix will need.
+
+Reaching a second window needed no product change and no debug handle:
+`app/tests/qa/run.mjs` now passes scenarios a `ctx` carrying the
+`ElectronApplication`, which already tracks every window the app owns, and
+`harness.mjs` gained `auxiliaryWindow()`. Screenshot entries accept `of(ctx)` so a
+walkbook entry can photograph a window other than the dashboard.
+
+**§12 plus the four related rows: 10 `wired` / 20 `blocked` → 5 `wired` /
+25 `blocked`, and the rows B-2 called an audit gap are now correctly counted as
+product gaps.** This is the one cluster in Wave 11B whose number gets *worse*,
+and it does so on purpose: five rows that read as `wired` now read as `blocked
+(product)` because the surface is unreachable on the page that ships. The fix is
+a production caller, not more QA.
+
+Measured against the corrected-collector baseline on one checkout with this
+objective's two QA files withdrawn and this override removed, so the movement is
+attributable rather than entangled with the surfaces lane's concurrent work.
+
+## C-3 — B-6: the mechanism exists; 46 rows anchored, 12 stay prose-only
+
+B-6's 57 prose rows needed a human to name a production anchor. That mechanism
+now exists as `tools/parity_anchors.py` (owned by the surfaces lane; the import
+hook, validation and ledger plumbing are in `parity_evidence.py` /
+`parity_ledger_build.py`). A declared anchor is checked, not trusted: it must
+resolve in the production closure, it may not duplicate a handle that already
+resolves, it may not be attached to a row that anchored itself, and it must carry
+a stated reason — any of which failing fails the build.
+
+46 of the 58 rows that were unanchored at the start of Wave 11B now have verified
+anchors, landed in `ROW_ANCHORS` by the surfaces lane (the §1/§4 shell, the
+§6 Talk group headers, the §7 wizard steps and wake/voice groups, the §8/§9 panel
+headers, the §12 IPC rows, the §14 progress surfaces, and the §15 orphan-list
+rows). Anchoring supplies only the location leg — a row still has to clear
+coverage on its own, and several of these correctly remain
+`blocked (evidence)`.
+
+**12 rows are deliberately left unanchored, and stay `blocked`:**
+
+| Rows | Why no anchor |
+|---|---|
+| `UI-02-005`, `UI-02-007`, `UI-02-012` | The onboarding steps are unnamed `[data-flow-step]` sections addressed by index. Anchoring three rows to the shared `#sdOnboarding` container would be exactly the convenience mapping the table forbids. |
+| `UI-06-063` | Describes the WS driving overlay and review-overlay pushes. Production does not do that (see C-2). Anchoring it would assert behaviour that is absent. |
+| `UI-06-074`, `UI-06-076` | Message Rescue assessment/preservation regions. The rows name no element, and their siblings in §§6.4/6.6 are already `intentional_cut` as fixture-only. |
+| `UI-07-133`, `UI-07-138` | The `[data-blend-preset]` / `[data-mod-preset]` quick chips. `features/voiceStudio.js` queries them; `signal-desk.html` does not contain them. **A real product gap, not an anchoring gap.** |
+| `UI-07-134`, `UI-07-127` (chips), `UI-15-007` | `UI-15-007` is the donation prompt: the source row itself records that none exists anywhere in scope. There is nothing to anchor. |
+| remainder | Group headers whose only honest anchor is a container another row already owns. |
+
+## C-4 — Two smaller repairs made while regenerating
+
+**A silent-empty anchor table.** `load_anchor_table()` swallowed a failed import
+and returned three empty dicts. A regeneration that landed during another
+session's atomic rewrite of `parity_anchors.py` read the module as absent and
+wrote a clean-looking ledger sixty rows light — no warning, no failure. It now
+raises if the file exists but will not import; absent-from-disk still degrades
+quietly, which is correct for an older checkout.
+
+**Pipes in generated cells.** Rationales legitimately contain `|` (for example
+`POST /wake/enable | POST /wake/disable`). The generator escaped it as `\|`, but
+`parity_validator` splits rows on `|` and a backslash-escaped pipe still splits —
+one row came out with eight cells and broke parsing outright. Generated cells now
+emit `&#124;`.
+
+## What would move the numbers now
+
+Replacing items 1-3 of the Wave 11 list, which are done:
+
+1. **Give the production page a caller for the overlay windows** (C-2). This is
+   the one item here that is real product work, and it is the one the Wave 11
+   list said did not exist. Roughly: forward `talkCapture.js`'s status stream to
+   `updateOverlayStatus`, and open the Review Deck from the draft flow.
+2. **Land the 46 `ROW_ANCHORS`** and re-run. Pure audit work, already validated.
+3. **Add the `[data-blend-preset]` / `[data-mod-preset]` chips** to
+   `signal-desk.html`, or cut them with a named replacement (C-3). `voiceStudio.js`
+   already binds them.
+4. **Then** the remaining substantive gaps carried from Wave 11: B-3 and B-4, as
+   re-scoped by the surfaces lane.
+
+The Wave 11 conclusion was that the largest part of what stands between here and
+a clean Gate 11 is evidence rather than code. After 11B that is still mostly
+true — but it is less true than it looked, and the difference is the overlay
+windows.
