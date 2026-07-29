@@ -756,3 +756,68 @@ arrived tested, cross-reviewed, and green, and the director reviewed it
 at integration — the discipline's purpose (serialized shared-file access
 with review) was served by a different mechanism, and this record keeps
 that deviation visible rather than silent.
+
+## D-0030 — Wave 11 accepted; Gate 11 is NOT accepted
+
+**Owner:** release-director
+
+**Evidence:** The Wave 11 lane handoff plus integration; director-run:
+backend `3017 passed / 0 failed`, renderer `1300/1300`, build green,
+parity validator reporting zero errors on a regenerated ledger, and the
+three QA boards under the flip — default target (which is now the
+production page, asserted with an empty environment), `BF_UI=legacy`, and
+the preview target.
+
+**Decision:** Accept the Wave 11 *work* — the default flip, the version
+centralization, the rollback proof, and the re-audit tooling — and
+explicitly **do not accept Gate 11**. The strict ledger stands at
+**161 wired / 10 intentional_cut / 267 blocked**, and the gate forbids any
+blocked row. Signal Desk is now the product; it is not yet fully evidenced
+as the product, and the honest number stays on the board.
+
+**What the flip means concretely:** `BF_UI` unset opens `signal-desk.html`;
+`legacy` opens `index.html` as the rollback path; `signal-desk` still opens
+the QA preview per D-0007; `signal-desk-prod` remains a compatibility
+synonym so every committed Wave 1–10 invocation keeps working; an
+unrecognised value falls through to the shipping product rather than a dead
+app. `tests/test_rollback_store_parity.py` proves no Python source can
+observe `BF_UI`, so the backend cannot store anything differently for
+either page — flipping forward and rolling back lose nothing.
+
+**Ratified lane rulings:** R-1, the legacy page's smaller privacy surface,
+is an intentional cut with its cost stated (a rolled-back user can still
+wipe and export — both registry-driven and identical on either page — but
+cannot browse the store list or the learning disclosure there). R-2, none
+of the D-0029 `unavailable` actions are cut: they need backend entry
+points, and cutting them would be deciding the product does not want
+controller-driven persona switching, which no lane had the standing to
+decide.
+
+**The honesty note is accepted as a limitation, not a defect:** `wired`
+here means anchored in the shipping page, handlers resolve, and something
+exercises it. The failure-state, accessibility, and privacy legs rest on
+the accepted Gate 1–10 evidence for the workspace each row sits in rather
+than on a per-row pass. The ledger header says so; Gate 11 acceptance will
+require closing that gap or recording it as an accepted release
+limitation.
+
+**Two QA fixture faults found at integration, both fixed, neither a
+product defect:** the app-context override stub was static, so the
+three-second status poll repainted the rail back to the un-held profile a
+moment after an override landed — the real service holds the override in
+memory, so the stub now does too (pins likewise, being durable). And the
+learned-example *list* was asserted visible when it is legitimately empty
+and therefore zero-height on an install that has taught nothing; the sweep
+now asserts the disclosure paragraph, which is what Gate 6 actually
+requires the screen to say.
+
+**Gate 11 remediation, ordered by cost:** the blocked rows split 91
+product gaps and 176 evidence gaps, so the campaign is mostly QA
+authoring, not feature work. First the evidence lane — retarget
+`personas.mjs` to the production page (23 rows, no product change), author
+overlay-window scenarios (18 rows), and resolve the 57 rows whose source
+text names no code handle at all. Then the product lane — chiefly the
+hotkey and wake-word capture controls, the legacy model-manager surface,
+and the dashboard status cards, each of which must either gain a
+production home or be cut against a named replacement row. Progress is
+measured by rerunning `tools/parity_validator.py`, not by narration.

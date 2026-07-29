@@ -68,8 +68,15 @@ publication.
 
 ## Application and UI limitations
 
-- **Legacy is the production default.** Signal Desk is reachable only through
-  `BF_UI=signal-desk`.
+> **Wave 11 update (2026-07-28).** The first three bullets below are the Gate 0
+> record and are now superseded: Waves 1-10 built the production composition
+> root and Wave 11 flipped the default. `BF_UI` unset now opens
+> `signal-desk.html`; `index.html` is the rollback path behind `BF_UI=legacy`;
+> `signal-desk-preview.html` is a QA target only. Current limitations are the
+> two Wave 11 bullets at the end of this section.
+
+- **Legacy is the production default.** *(Gate 0 record; superseded by the
+  Wave 11 flip.)* Signal Desk was reachable only through `BF_UI=signal-desk`.
 - **Signal Desk is a QA preview, not a production composition root.** It mixes
   live Talk/status/contact adapters with runtime fixtures for Library, Studio,
   Utilities, Settings, privacy, models, devices, diagnostics, jobs, and
@@ -87,6 +94,28 @@ publication.
   Known placement/behavior gaps include capture/emergency controls and send
   details in Talk; most item mutation/recovery semantics in Library; active
   persona, edit, metadata, and teach-from-edit gaps in Studio.
+
+- **267 of 438 parity rows are still not `wired` after the Wave 11 re-audit.**
+  Current totals are 161 `wired` / 10 `intentional_cut` / 267 `blocked`. Of the
+  blocked rows, **91 have no production anchor** (a real gap — chiefly the
+  hotkey and wake-word capture controls, part of the legacy model-manager
+  surface, and the legacy backend status cards) and **176 are anchored in
+  production but unevidenced** (no production-target QA names them, or the
+  source row is prose with no code handle). Details and the ordered
+  remediation list: [WAVE11_BLOCKERS.md](WAVE11_BLOCKERS.md).
+
+- **The Persona Foundry and both overlay windows have no production-target QA.**
+  All three ship in the production composition — the Foundry ids are in
+  `signal-desk.html`, and `overlay.html` / `review-overlay.html` are separate
+  always-on-top production windows — but `personas.mjs` runs against
+  `index.html` and no scenario drives either overlay. 41 parity rows are
+  blocked on this alone. It is a coverage gap, not a missing feature.
+
+- **The legacy rollback page has a smaller privacy surface than production.**
+  Ruled an intentional cut in Wave 11 (see WAVE11_BLOCKERS.md R-1): a user who
+  rolls back to `BF_UI=legacy` can still wipe and export — those are
+  registry-driven in the backend and identical on both pages — but cannot
+  browse the store list or the persona-learning disclosure from that page.
 
 ## Contacts, audience, and traits
 

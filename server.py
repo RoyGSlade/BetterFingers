@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from llm_engine import LLMEngine, get_engine, get_engine_if_initialized, resolve_dictation_preset
 from log_redaction import redact_exc, redact_user_text
 from store_migration import get_degraded_events
+import version
 from transcriber import Transcriber
 from streaming_transcriber import BatchCutter, StreamingTranscriptionSession
 from hotkey_manager import HotkeyManager
@@ -2474,8 +2475,8 @@ def get_audio_devices(refresh=False):
 @app.get("/runtime/version")
 async def runtime_version():
     return {
-        "backend_version": "0.1.0",
-        "expected_electron_api_version": "0.1.0",
+        "backend_version": version.BACKEND_VERSION,
+        "expected_electron_api_version": version.APP_VERSION,
         "schema_version": 1,
         "config_version": 1,
     }
@@ -4316,7 +4317,11 @@ def gather_support_report():
     generated_at = datetime.now(timezone.utc).isoformat()
 
     # --- version (source of truth: /runtime/version) ---
-    version = {"backend_version": "0.1.0", "profile_schema_version": 1, "config_version": 1}
+    version_block = {
+        "backend_version": version.BACKEND_VERSION,
+        "profile_schema_version": 1,
+        "config_version": 1,
+    }
 
     # --- platform ---
     platform_info = {
@@ -4403,7 +4408,7 @@ def gather_support_report():
 
     data = {
         "generated_at": generated_at,
-        "version": version,
+        "version": version_block,
         "platform": platform_info,
         "hardware": hardware,
         "hardware_tier": hardware_tier,

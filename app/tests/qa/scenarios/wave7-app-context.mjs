@@ -110,9 +110,19 @@ let overrideWrites = [];
 let pinWrites = [];
 
 function withAppContext(current = context(), extra = {}) {
-  return () => ({
+  return () => {
+    // STATEFUL, deliberately: the real service holds a temporary override in
+    // memory (D-0024), so GET /app-context/status reports the held profile
+    // until it is cleared. A static status stub is unfaithful in a way that
+    // does not merely under-test -- the status bar re-polls every 3s, so a
+    // static stub actively repaints the rail back to the unheld profile a
+    // moment after the override lands, and the scenario watches a race it
+    // can only lose. Same class as the Wave 2 send stub and the Wave 5
+    // contacts stub (D-0021, D-0023).
+    let live = current;
+    return {
     ...readyProfile(),
-    'GET /app-context/status': { ok: true, context: current },
+    'GET /app-context/status': () => ({ ok: true, context: live }),
     'GET /app-context/profiles': {
       ok: true,
       profiles: PROFILES,
@@ -133,6 +143,9 @@ function withAppContext(current = context(), extra = {}) {
     'POST /app-context/override': (_req, { body }) => {
       overrideWrites.push(body);
       const id = (body && body.profile_id) || '';
+      live = id
+        ? context({ ...DISCORD_CONTEXT, profile_id: id, source: 'override', override_active: true })
+        : current;
       return {
         ok: true,
         context: id
@@ -143,6 +156,11 @@ function withAppContext(current = context(), extra = {}) {
     'POST /app-context/pin': (_req, { body }) => {
       pinWrites.push(body);
       const id = (body && body.profile_id) || '';
+      // A pin is durable in the real store, so the next status poll still
+      // reports it -- same faithfulness rule as the override above.
+      live = id
+        ? context({ ...DISCORD_CONTEXT, profile_id: id, source: 'pinned', pinned: true })
+        : current;
       return {
         ok: true,
         app_key: 'discord',
@@ -153,7 +171,8 @@ function withAppContext(current = context(), extra = {}) {
       };
     },
     ...extra,
-  });
+    };
+  };
 }
 
 async function openAppProfiles(page) {

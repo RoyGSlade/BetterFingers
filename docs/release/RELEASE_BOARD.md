@@ -1,7 +1,7 @@
 # True BetterFingers Release Board
 
 - **Release:** `v0.2.0-alpha.1`
-- **Current wave:** Waves 2 (Talk) and 3 (Library domain), in parallel per D-0014
+- **Current wave:** Wave 11 parity remediation (flip landed); Waves 12–13 blocked on Gate 11
 - **Gate 0:** **ACCEPTED (2026-07-28, release-director)**
 - **Gate 1:** **ACCEPTED (2026-07-28, release-director, D-0019)**
 - **Gate 2:** **ACCEPTED (2026-07-28, release-director, D-0021)**
@@ -13,6 +13,7 @@
 - **Gate 9:** **ACCEPTED (2026-07-28, release-director, D-0027)**
 - **Gate 6:** **ACCEPTED (2026-07-28, release-director, D-0028)**
 - **Gate 10:** **ACCEPTED — software (2026-07-28, D-0029); hardware matrices unqualified pending operator pass**
+- **Gate 11:** **NOT ACCEPTED (D-0030)** — Wave 11 work accepted and the default is flipped, but the strict ledger stands at 161 `wired` / 10 `intentional_cut` / 267 `blocked`, and the gate forbids any blocked row. Remediation is 176 evidence rows + 91 product rows; see [WAVE11_BLOCKERS.md](WAVE11_BLOCKERS.md).
 - **Last updated:** 2026-07-28
 
 Statuses: `DONE`, `IN PROGRESS`, `BLOCKED`, `PENDING`, `CUT`.
@@ -75,8 +76,10 @@ Wave 1 follow-ups recorded: factory-reset executor exists nowhere (Wave 6 backlo
 
 | Evidence | Current value | Release use |
 |---|---|---|
-| Workspace placement maps | Talk `28/33`; Library `11/23`; Studio `26/31`; Utilities `57/59`; Settings `37/37`; total **159/183 placed/wired in those maps, 24 unwired** | Preview placement signal only; it does not satisfy the strict 438-item production-evidence rule. |
-| 438-item release ledger | [PARITY_INVENTORY.md](PARITY_INVENTORY.md): **0 `wired`, 4 `intentional_cut`, 434 `blocked`; total 438** | Completed Gate 0 classification. Zero wired is the honest strict baseline, not a product failure count to hide. |
+| Workspace placement maps | Talk `28/33`; Library `11/23`; Studio `26/31`; Utilities `57/59`; Settings `37/37`; total **159/183 placed/wired in those maps, 24 unwired** | Preview placement signal only; it does not satisfy the strict 438-item production-evidence rule. Wave 11 used these as discovery pointers, never as promotions. |
+| 438-item release ledger | [PARITY_INVENTORY.md](PARITY_INVENTORY.md): **161 `wired`, 10 `intentional_cut`, 267 `blocked`; total 438** (Wave 11 re-audit against `signal-desk.html`; Gate 0 baseline was 0/4/434) | Wave 11 strict re-audit. The 267 blocked split **91 `(product)`** — no production anchor — and **176 `(evidence)`** — anchored in production but the QA/prose leg is unmet. See [WAVE11_BLOCKERS.md](WAVE11_BLOCKERS.md); reproduce with `python3 tools/parity_validator.py`. |
+| Version source | `VERSION` = `0.2.0-alpha.1`, read by `version.py`; `app/package.json` is a checked copy | D-0008 single source. Four integration-owned diffs pending — see [WAVE11_INTEGRATION_DIFFS.md](WAVE11_INTEGRATION_DIFFS.md). |
+| Default UI route | `BF_UI` unset → `signal-desk.html`; `BF_UI=legacy` → `index.html` (rollback); `BF_UI=signal-desk` → preview (QA only) | Wave 11 flip. Pending the `windows.js` diff; QA harness, scenarios and rollback tests already assert the post-flip contract. |
 | Renderer unit baseline | `775/775` passed | Current renderer evidence from the authoritative source baseline. |
 | Renderer production build | Passed; `app/out` 30 files / `1,288,162` bytes | Current build evidence; it is not a distributable installer. |
 | Playwright | `18` passed; `3` model-dependent skipped | Current browser/Electron evidence; skipped cases remain unqualified. |
@@ -118,7 +121,7 @@ Wave 1 follow-ups recorded: factory-reset executor exists nowhere (Wave 6 backlo
 | 8 | Audio privacy and wake hardening | AudioInputBroker before isolation/handoff | `DONE` |
 | 9 | Restricted action engine | Approved action schema | `DONE` (run executor follows with Wave 10) |
 | 10 | Controller and Stream Deck | Shared action IDs from Waves 2/9 | `DONE` (software; hardware pass = operator checklist WAVE10_QA.md) |
-| 11 | Strict 438-item parity closure, version, default flip | Gates 1–10 | `IN PROGRESS` |
+| 11 | Strict 438-item parity closure, version, default flip | Gates 1–10 | `IN PROGRESS` — flip + version DONE; parity closure open (267 blocked) |
 | 12 | Windows/Linux package qualification | Gate 11 | `BLOCKED` |
 | 13 | Source Arcanum publication | Gates 0–12 | `BLOCKED` |
 | 14 | One-release legacy cleanup and later backend split | One completed Signal Desk release | `BLOCKED` |

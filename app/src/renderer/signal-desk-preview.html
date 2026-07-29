@@ -711,7 +711,12 @@
       <span class="sd-nav__version-avatar" aria-hidden="true"></span>
       <span class="sd-nav__version-text">
         <span class="sd-nav__version-name">BetterFingers</span>
-        <span class="sd-nav__version-num">v1.2.0</span>
+        <!-- Was a hardcoded marketing version that was never any build (D-0008). This
+             page is a QA-only mockup with no IPC bridge, so it cannot ask for
+             the real version -- it prints the same honest placeholder the
+             production page shows before app:get-version resolves, rather
+             than inventing a third release identity. -->
+        <span class="sd-nav__version-num">—</span>
       </span>
     </div>
   </nav>

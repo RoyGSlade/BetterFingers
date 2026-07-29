@@ -10,6 +10,10 @@ const backendBuildDir = path.join(appRoot, '.electron-backend-build');
 
 const dataSeparator = process.platform === 'win32' ? ';' : ':';
 const dataSources = [
+  // The one build version source (D-0008). version.py reads it at import, and
+  // raises if it is missing rather than reporting a guessed version into a
+  // support report — so the frozen sidecar must carry it or it will not start.
+  ['VERSION', '.'],
   ['config.yaml', '.'],
   ['context_rules.yaml', '.'],
   ['Tutorial_Script.txt', '.'],

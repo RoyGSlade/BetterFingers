@@ -163,8 +163,9 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
             response = client.get("/runtime/version")
         self.assertEqual(response.status_code, 200)
         data = response.json()
-        self.assertEqual(data["backend_version"], "0.1.0")
-        self.assertEqual(data["expected_electron_api_version"], "0.1.0")
+        import version as version_module
+        self.assertEqual(data["backend_version"], version_module.BACKEND_VERSION)
+        self.assertEqual(data["expected_electron_api_version"], version_module.APP_VERSION)
         self.assertEqual(data["schema_version"], 1)
 
     def test_doctor_endpoint(self):

@@ -1,6 +1,6 @@
 {
   "name": "betterfingers-electron",
-  "version": "0.1.0",
+  "version": "0.2.0-alpha.1",
   "description": "Electron shell for BetterFingers with a FastAPI Python backend.",
   "main": "out/main/main.js",
   "private": true,

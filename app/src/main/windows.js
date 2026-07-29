@@ -211,14 +211,29 @@ function resolveAppIcon() {
 // workspace UI (DESIGN.md §11) is landing incrementally and is not at feature
 // parity with index.html yet, so it must not be reachable by accident. The
 // default is unchanged for every shipping user.
-const SIGNAL_DESK_PAGE = 'signal-desk-preview.html';
-// The production composition root (D-0007). Also opt-in until the Wave 11
-// default flip; BF_UI=signal-desk keeps routing to the QA preview above.
+// The DESIGN/mockup preview page (D-0007). QA target only — never a
+// production route, and deliberately still behind BF_UI=signal-desk so the
+// preview QA scenarios keep a page to run against.
+const SIGNAL_DESK_PREVIEW_PAGE = 'signal-desk-preview.html';
+// The production composition root, and since Wave 11 the DEFAULT: this is
+// what a user with no BF_UI set gets.
 const SIGNAL_DESK_PROD_PAGE = 'signal-desk.html';
+// The pre-Signal-Desk dashboard. Kept reachable, but only on request: it is
+// the rollback path if the flip has to be backed out in the field, not a
+// second product. Both pages read the same backend stores, so flipping
+// forward and rolling back lose nothing — see
+// tests/test_rollback_store_parity.py.
+const LEGACY_PAGE = 'index.html';
 
 function dashboardPage() {
-  if (process.env.BF_UI === 'signal-desk-prod') return SIGNAL_DESK_PROD_PAGE;
-  return process.env.BF_UI === 'signal-desk' ? SIGNAL_DESK_PAGE : 'index.html';
+  if (process.env.BF_UI === 'legacy') return LEGACY_PAGE;
+  if (process.env.BF_UI === 'signal-desk') return SIGNAL_DESK_PREVIEW_PAGE;
+  // `signal-desk-prod` still resolves, so every Wave 1-10 command line and
+  // committed QA invocation keeps working; it is now a synonym for the
+  // default rather than the only way in. An unrecognised BF_UI also falls
+  // through here: a typo'd env var should give a user the shipping product,
+  // not a dead app.
+  return SIGNAL_DESK_PROD_PAGE;
 }
 
 function loadDashboard(window) {

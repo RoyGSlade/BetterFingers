@@ -45,21 +45,26 @@ const FIXED_VIEWPORT = { width: 1280, height: 800 };
 // other, so window discovery and the readiness sentinel cannot be hard-coded
 // to any one of them:
 //
-//   - `index`: the default, shipping `index.html` dashboard.
+//   - `signal-desk-prod`: the production Signal Desk composition root
+//     (signal-desk.html). Since the Wave 11 default flip this is what a user
+//     gets with BF_UI unset, so it is also the DEFAULT QA target: an
+//     unqualified `node tests/qa/run.mjs` now exercises the shipping product.
+//   - `legacy`: the pre-Signal-Desk `index.html` dashboard, reachable ONLY via
+//     BF_UI=legacy. This is the rollback path, not a second product: it is
+//     kept green so a flip can be reverted without a build, and Wave 11's
+//     rollback-safety evidence depends on it still running.
 //   - `signal-desk`: the Signal Desk DESIGN/mockup preview page
 //     (signal-desk-preview.html, behind BF_UI=signal-desk). Pinned here by
 //     binding decision D-0007 -- existing scenarios (signal-desk-shell/
 //     -sections/-talk) depend on this exact target continuing to point at
 //     the preview page, so it must never be repointed at the production
 //     composition root below.
-//   - `signal-desk-prod`: the production Signal Desk composition root
-//     (signal-desk.html, behind BF_UI=signal-desk-prod) that actually ships
-//     to users once mounted. Scenarios that only make sense against real
-//     production wiring (e.g. persona-learning's Studio "Teach from my
-//     edits" panel, which lives only in signal-desk.html's Studio workspace,
-//     never in the preview page) target this instead of `signal-desk` --
-//     that keeps them from clobbering the preview target's committed
-//     screenshots or asserting against markup the preview page never had.
+//     Scenarios that only make sense against real production wiring (e.g.
+//     persona-learning's Studio "Teach from my edits" panel, which lives only
+//     in signal-desk.html's Studio workspace, never in the preview page)
+//     target `signal-desk-prod` instead of `signal-desk` -- that keeps them
+//     from clobbering the preview target's committed screenshots or asserting
+//     against markup the preview page never had.
 //
 // This is a RUN-level choice, not a per-scenario one, and deliberately so:
 // launchApp's own close() comment documents that quitting Electron kills the
@@ -67,14 +72,16 @@ const FIXED_VIEWPORT = { width: 1280, height: 800 };
 // whole suite reuses a single launch. Switching target mid-run would require
 // relaunching with different env, so `BF_QA_UI` picks one target per run:
 //
-//   node tests/qa/run.mjs <area>                            # default UI
+//   node tests/qa/run.mjs <area>                            # production (default)
+//   BF_QA_UI=legacy node tests/qa/run.mjs <area>            # legacy rollback path
 //   BF_QA_UI=signal-desk node tests/qa/run.mjs <area>       # Signal Desk preview
-//   BF_QA_UI=signal-desk-prod node tests/qa/run.mjs <area>  # Signal Desk production root
 export const UI_TARGETS = {
-  index: {
-    name: 'index',
+  legacy: {
+    name: 'legacy',
     page: 'index.html',
-    env: {},
+    // Explicit, not empty: after the Wave 11 flip an unset BF_UI means the
+    // PRODUCTION page, so reaching index.html now requires asking for it.
+    env: { BF_UI: 'legacy' },
     // Present as soon as the shell renders; also the thing that reports
     // backend health, so it doubles as the readiness signal.
     attachedSelector: '#backendStatus',
@@ -103,24 +110,42 @@ export const UI_TARGETS = {
   'signal-desk-prod': {
     name: 'signal-desk-prod',
     page: 'signal-desk.html',
-    env: { BF_UI: 'signal-desk-prod' },
+    // Deliberately EMPTY, and that is the Wave 11 assertion: the production
+    // page is what the app boots with no BF_UI at all. Setting
+    // BF_UI=signal-desk-prod here would still work (windows.js keeps
+    // accepting it) but would test the opt-in route instead of the default
+    // one, which is exactly the thing the flip needs proven.
+    env: {},
     // Same shell + status-bar contract as 'signal-desk' above (both are the
     // Signal Desk redesign, just different pages) -- see that target's
     // comments for why each selector/pattern is what it is.
     attachedSelector: '.sd-shell',
     readyTextSelector: '#sdStatusSttValue',
     readyTextPattern: /loaded/i,
-    // Own subdir, distinct from BOTH 'index' and 'signal-desk': a
+    // Own subdir, distinct from BOTH 'legacy' and 'signal-desk': a
     // signal-desk-prod run must not clobber the preview target's committed
-    // screenshots (D-0007) or the default UI's.
+    // screenshots (D-0007) or the legacy UI's. Kept as 'signal-desk-prod'
+    // through the flip so the Wave 1-10 committed baselines stay valid.
     outSubdir: 'signal-desk-prod',
   },
 };
 
-const REQUESTED_UI = process.env.BF_QA_UI || 'index';
+/** The target a run gets when BF_QA_UI is unset: the shipping product. */
+export const DEFAULT_UI = 'signal-desk-prod';
+
+/** The target an untagged scenario belongs to. */
+export const DEFAULT_SCENARIO_UI = 'legacy';
+
+// `index` was this target's name before the flip. Kept as an alias rather
+// than deleted so an old command line keeps working instead of failing with
+// "Unknown BF_QA_UI" -- but it resolves to `legacy`, which is what
+// index.html now is.
+const TARGET_ALIASES = { index: 'legacy' };
+
+const REQUESTED_UI = TARGET_ALIASES[process.env.BF_QA_UI] || process.env.BF_QA_UI || DEFAULT_UI;
 if (!Object.hasOwn(UI_TARGETS, REQUESTED_UI)) {
   throw new Error(
-    `Unknown BF_QA_UI="${REQUESTED_UI}". Known targets: ${Object.keys(UI_TARGETS).join(', ')}`,
+    `Unknown BF_QA_UI="${process.env.BF_QA_UI}". Known targets: ${Object.keys(UI_TARGETS).join(', ')}`,
   );
 }
 

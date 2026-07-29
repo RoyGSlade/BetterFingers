@@ -82,6 +82,11 @@ import { wave9ActionScenarios } from './wave9-actions.mjs';
 // Wave 10 game setup wizard. Also `ui: 'signal-desk-prod'` -- the wizard ids
 // exist only in the production composition root, never in index.html.
 import { wave10InputScenarios } from './wave10-input.mjs';
+// Wave 11 (Gate 11): the default flip. One scenario per side -- production on
+// the DEFAULT target (BF_UI unset), legacy on the `legacy` rollback target --
+// so a single `node tests/qa/run.mjs` proves the app boots to Signal Desk and
+// `BF_QA_UI=legacy node tests/qa/run.mjs` proves the revert path still works.
+import { defaultFlipScenarios } from './default-flip.mjs';
 
 export const scenarios = [
   ...baselineScenarios,
@@ -108,6 +113,7 @@ export const scenarios = [
   ...wave7AppContextScenarios,
   ...wave9ActionScenarios,
   ...wave10InputScenarios,
+  ...defaultFlipScenarios,
   ...signalDeskProdSweepScenarios,
   // Ordered last among the prod-target scenarios as belt-and-braces, not as a
   // load-bearing requirement: the auto-dismiss sentinel these use is

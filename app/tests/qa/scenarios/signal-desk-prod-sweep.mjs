@@ -27,6 +27,38 @@ const NAV_IDS = ['talk', 'library', 'studio', 'utilities', 'settings'];
 const SET_SECTIONS = [
   'Profile', 'Recording', 'Review', 'AiCleanup', 'Notifications', 'Appearance', 'Privacy',
 ];
+// Wave 11: the console sweep previously stopped at the five workspaces and
+// the seven Settings sections, so Utilities' own five sub-sections -- which
+// is where Waves 9 and 10 put every surface they built -- were never opened
+// during the sweep at all. A section that is never opened cannot report a
+// console error, which made "zero console errors" quieter than it sounded.
+const UTIL_SECTIONS = ['Models', 'Speech', 'Text', 'Diagnostics', 'Advanced'];
+
+// The group containers each late wave added, and the section that owns each.
+// Asserted as present-and-visible after the sweep so the sweep cannot pass by
+// navigating past surfaces that silently failed to render. Ids re-grepped
+// against signal-desk.html, not copied from the feature modules.
+const LATE_WAVE_SURFACES = [
+  // Wave 6 (D-0028) privacy closure: the five groups the Gate 6 ruling
+  // recorded as having no dedicated QA scenario, folded into Wave 11.
+  { wave: 6, workspace: 'settings', section: '#sdSetSectionPrivacy', nav: '#sdSetNavPrivacy', id: '#sdSetPrivacyStoreList' },
+  // The learned-example DISCLOSURE, not the row list beside it: the list is
+  // legitimately empty (and therefore zero-height, i.e. not "visible") on a
+  // profile that has taught nothing, while the disclosure paragraph is what
+  // Gate 6 actually requires the screen to say -- that approved raw-to-final
+  // examples are stored locally. Asserting the empty container would fail on
+  // exactly the install that has nothing to hide.
+  { wave: 6, workspace: 'settings', section: '#sdSetSectionPrivacy', nav: '#sdSetNavPrivacy', id: '#sdSetPrivacyPersonaLearningWhat' },
+  { wave: 6, workspace: 'settings', section: '#sdSetSectionPrivacy', nav: '#sdSetNavPrivacy', id: '#sdSetPrivacyExportButton' },
+  { wave: 6, workspace: 'settings', section: '#sdSetSectionPrivacy', nav: '#sdSetNavPrivacy', id: '#sdSetPrivacyWipeMode' },
+  { wave: 6, workspace: 'settings', section: '#sdSetSectionPrivacy', nav: '#sdSetNavPrivacy', id: '#sdSetPrivacyFactoryResetButton' },
+  // Wave 7 (D-0024): application profiles, a GROUP inside AI Cleanup rather
+  // than an eighth Settings section -- see signal-desk.html's comment there.
+  { wave: 7, workspace: 'settings', section: '#sdSetSectionAiCleanup', nav: '#sdSetNavAiCleanup', id: '#sdSetAppProfileGroup' },
+  // Wave 9 (D-0027) and Wave 10 (D-0029) both live in Utilities > Advanced.
+  { wave: 9, workspace: 'utilities', section: '#sdUtilSectionAdvanced', nav: '#sdUtilNavAdvanced', id: '#sdUtilWorkflowGroup' },
+  { wave: 10, workspace: 'utilities', section: '#sdUtilSectionAdvanced', nav: '#sdUtilNavAdvanced', id: '#sdUtilGameSetupGroup' },
+];
 
 /**
  * Another worker's onboarding-prod scenarios deliberately raise the
@@ -199,6 +231,15 @@ export const signalDeskProdSweepScenarios = [
             await page.click(`#sdSetNav${setId}`);
           }
         }
+        if (id === 'utilities') {
+          // Wave 11: Utilities' five sub-sections carry every Wave 9/10
+          // surface. Before this loop the sweep opened Utilities and stopped,
+          // so Advanced (workflows, game setup) never rendered during the
+          // capture window.
+          for (const utilId of UTIL_SECTIONS) {
+            await page.click(`#sdUtilNav${utilId}`);
+          }
+        }
       }
     },
     async expects(page) {
@@ -219,5 +260,47 @@ export const signalDeskProdSweepScenarios = [
       }
     },
     screenshots: [{ name: 'no-console-errors-during-load-and-nav-sweep' }],
+  },
+  {
+    area: 'signal-desk-prod-sections',
+    ui: 'signal-desk-prod',
+    name: 'late-wave-surfaces-render-in-their-sections',
+    kind: 'standard',
+    description:
+      'Waves 6, 7, 9 and 10 each added surfaces to sections the original reachability sweep never opened: the ' +
+      'five new Privacy groups (store list, persona-learning disclosure, export, wipe mode, factory reset), ' +
+      'application profiles inside AI Cleanup, and the workflow builder plus game-setup wizard inside Utilities > ' +
+      'Advanced. Gate 6 explicitly deferred dedicated scenarios for the Privacy groups to Wave 11, so this is that ' +
+      'coverage. Each surface is navigated to and asserted VISIBLE rather than merely present: these all sit inside ' +
+      '[hidden] sections, so a toHaveCount(1) alone would pass even if the section that owns them never opened, ' +
+      'which is precisely the failure this is here to catch. Nothing is clicked -- several of these are ' +
+      'irreversible data-destruction controls (D-0028), and rendering is the property under test.',
+    backendState: coldBoot,
+    async navigate(page) {
+      await assertNoOnboardingGate(page);
+    },
+    async expects(page) {
+      for (const surface of LATE_WAVE_SURFACES) {
+        await page.click(`.sd-nav__button[data-nav="${surface.workspace}"]`);
+        await expect(
+          page.locator(`#workspace-${surface.workspace}`),
+          `#workspace-${surface.workspace} should open before reaching ${surface.id}`,
+        ).toBeVisible();
+        await page.click(surface.nav);
+        await expect(
+          page.locator(surface.section),
+          `${surface.section} should open when ${surface.nav} is clicked`,
+        ).toBeVisible();
+        await expect(
+          page.locator(surface.id),
+          `Wave ${surface.wave} surface ${surface.id} must exist exactly once in ${surface.section}`,
+        ).toHaveCount(1);
+        await expect(
+          page.locator(surface.id),
+          `Wave ${surface.wave} surface ${surface.id} must be VISIBLE once ${surface.section} is open`,
+        ).toBeVisible();
+      }
+    },
+    screenshots: [{ name: 'late-wave-surfaces-render-in-their-sections' }],
   },
 ];

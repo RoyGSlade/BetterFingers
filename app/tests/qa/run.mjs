@@ -8,7 +8,16 @@
 //   areaFilter (optional): only run scenarios whose `area` matches exactly.
 
 import path from 'node:path';
-import { startStubBackend, launchApp, resetBackendState, snap, writeReportFile, OUT_DIR, TARGET } from './harness.mjs';
+import {
+  startStubBackend,
+  launchApp,
+  resetBackendState,
+  snap,
+  writeReportFile,
+  OUT_DIR,
+  TARGET,
+  DEFAULT_SCENARIO_UI,
+} from './harness.mjs';
 import { scenarios } from './scenarios/index.mjs';
 
 // One Electron launch for the whole run (like electron-smoke.spec.js's single
@@ -115,11 +124,17 @@ function renderReport(results) {
 async function main() {
   const areaFilter = process.argv[2];
   // A scenario is written against one UI's element ids and is meaningless
-  // against the other (the two dashboards share no ids at all), so scenarios
-  // declare their target via `ui` and default to the shipping one. Without
-  // this filter, running either target drags in the other's scenarios and
-  // reports a wall of "element not found" that looks like a broken app.
-  const forTarget = scenarios.filter((s) => (s.ui || 'index') === TARGET.name);
+  // against the other (the dashboards share no ids at all), so scenarios
+  // declare their target via `ui`. Without this filter, running either target
+  // drags in the other's scenarios and reports a wall of "element not found"
+  // that looks like a broken app.
+  //
+  // Untagged scenarios default to `legacy`, NOT to whatever the default RUN
+  // target is. Those scenarios were all written against index.html's ids, and
+  // the Wave 11 flip changed which page a bare `node run.mjs` opens -- not
+  // which page they were written for. Tying the two together would have
+  // silently pointed ~37 legacy scenarios at the production page.
+  const forTarget = scenarios.filter((s) => (s.ui || DEFAULT_SCENARIO_UI) === TARGET.name);
   const selected = areaFilter ? forTarget.filter((s) => s.area === areaFilter) : forTarget;
   if (!selected.length) {
     const detail = areaFilter ? `area filter "${areaFilter}" on ` : '';
