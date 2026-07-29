@@ -13,7 +13,7 @@
 - **Gate 9:** **ACCEPTED (2026-07-28, release-director, D-0027)**
 - **Gate 6:** **ACCEPTED (2026-07-28, release-director, D-0028)**
 - **Gate 10:** **ACCEPTED — software (2026-07-28, D-0029); hardware matrices unqualified pending operator pass**
-- **Gate 11:** **NOT ACCEPTED (D-0030)** — Wave 11 work accepted and the default is flipped, but the strict ledger stands at 161 `wired` / 10 `intentional_cut` / 267 `blocked`, and the gate forbids any blocked row. Remediation is 176 evidence rows + 91 product rows; see [WAVE11_BLOCKERS.md](WAVE11_BLOCKERS.md).
+- **Gate 11:** **NOT ACCEPTED (D-0030, D-0031)** — default flipped and version centralized; ledger now **396 `wired` / 21 `intentional_cut` / 21 `blocked`** (Gate 0 baseline was 434 blocked). The gate forbids any blocked row: 19 evidence + 2 product remain, listed in [WAVE11_BLOCKERS.md](WAVE11_BLOCKERS.md).
 - **Last updated:** 2026-07-28
 
 Statuses: `DONE`, `IN PROGRESS`, `BLOCKED`, `PENDING`, `CUT`.
@@ -121,7 +121,7 @@ Wave 1 follow-ups recorded: factory-reset executor exists nowhere (Wave 6 backlo
 | 8 | Audio privacy and wake hardening | AudioInputBroker before isolation/handoff | `DONE` |
 | 9 | Restricted action engine | Approved action schema | `DONE` (run executor follows with Wave 10) |
 | 10 | Controller and Stream Deck | Shared action IDs from Waves 2/9 | `DONE` (software; hardware pass = operator checklist WAVE10_QA.md) |
-| 11 | Strict 438-item parity closure, version, default flip | Gates 1–10 | `IN PROGRESS` — flip + version DONE; parity closure open (267 blocked) |
+| 11 | Strict 438-item parity closure, version, default flip | Gates 1–10 | `IN PROGRESS` — flip + version DONE; parity closure open (21 blocked) |
 | 12 | Windows/Linux package qualification | Gate 11 | `BLOCKED` |
 | 13 | Source Arcanum publication | Gates 0–12 | `BLOCKED` |
 | 14 | One-release legacy cleanup and later backend split | One completed Signal Desk release | `BLOCKED` |

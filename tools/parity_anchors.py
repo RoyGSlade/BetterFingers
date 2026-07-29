@@ -400,6 +400,52 @@ HANDLE_ANCHORS: dict[str, dict[str, str]] = {
         'anchor': '#sdFirstRunMessage',
         'why': 'The first-run setup status line; the legacy `firstRunMessageEl` variable, on the same features/firstRun.js contract',
     },
+
+    # --- inventory §2 Onboarding: the wizard SHIPPED, under new handles ------
+    #
+    # Wave 11C, and this reverses a reading rather than adding to one. A prior
+    # lane looked at the production page, saw the consent screen, and concluded
+    # Signal Desk had replaced the 4-step wizard with a single-screen gate --
+    # which would have made these rows correct CUTS. It has not. `#sdOnboarding`
+    # in `signal-desk.html` carries four `[data-flow-step]` bodies (welcome,
+    # data-stays-here consent, how-it-works, speech models), four progress dots,
+    # a Back that hides on step 1 and a forward button that relabels per step;
+    # `features/onboardingFlow.js`'s `buildOnboardingSteps()` names all four with
+    # their titles and primary labels, and `features/guidedFlow.js` does the
+    # stepping, the dot states, the focus move and the swallowed Escape. That is
+    # the same wizard, re-expressed on the shared guided-flow shell.
+    #
+    # It is not a rename the collector could follow on its own: the legacy ids
+    # became attribute hooks (`[data-flow-back]`, `[data-flow-primary]`) or
+    # classes, and an attribute name is not a handle this collector can resolve.
+    # Where a control had no addressable handle at all, Wave 11C gave it the id
+    # its two siblings in the same footer already had (`#sdOnboardBack`,
+    # `#sdOnboardNext`) rather than anchoring the row to a function that merely
+    # binds it -- an element row deserves an element anchor.
+    '#onboardingOverlay': {
+        'anchor': '#sdOnboarding',
+        'why': 'The first-run gate itself: role="dialog" aria-modal, non-dismissible (features/guidedFlow.js `dismissible: false`), Escape swallowed and no close button in the markup — the same modal contract, on the shared guided-flow shell',
+    },
+    '#onboardingProgress': {
+        'anchor': '.sd-flow__dot',
+        'why': 'The progress dots, one per step, carrying `data-state` current/done/upcoming from features/guidedFlow.js `progressStates()`; the containing `[data-flow-progress]` row announces "Step N of 4" for anyone who cannot see them',
+    },
+    '#onboardingBody': {
+        'anchor': '.sd-flow__step',
+        'why': 'The per-step body. Four sections in markup rather than one container rebuilt with innerHTML per step — deliberately, since the legacy version had to escapeHtml() every backend string it interpolated into the recommendation box',
+    },
+    '#onboardingBackButton': {
+        'anchor': '#sdOnboardBack',
+        'why': 'The Back control in the onboarding footer, hidden on step 1 by features/guidedFlow.js (`back.hidden = isFirstStep(index)`), which is exactly the behaviour this row names',
+    },
+    '#onboardingNextButton': {
+        'anchor': '#sdOnboardNext',
+        'why': 'The forward control, relabelled per step by features/guidedFlow.js `primaryLabelFor()` from the labels features/onboardingFlow.js declares — "Get started" / "Accept & continue" / "Next" / "Finish", the exact four this row lists — and disabled until the step\'s `canAdvance` gate passes',
+    },
+    'finishOnboarding()': {
+        'anchor': 'markOnboardingComplete',
+        'why': 'Completion on the last step. `markOnboardingComplete` is the same localStorage write this row names, kept in features/onboardingFlow.js as the legacy path; production supplies the `consent` seam instead, so completion goes to the durable main-process record (features/onboardingConsent.js -> onboarding:accept) and the gate only closes once that write confirms. A stronger contract than the flag, not a missing one',
+    },
 }
 
 
@@ -702,6 +748,45 @@ CUTS: dict[str, str] = {
         'failure reason as its title) and the message CONTENT drives the Signal Core ring, meter '
         'and capture controls. Raw payloads remain available to a developer through Utilities / '
         'Diagnostics (`#sdUtilDebugLogTail`).'
+    ),
+
+    # --- inventory §0: the two Gate 0 known bugs, formally closed -----------
+    #
+    # Wave 11C. Both rows are DEFECT REPORTS against `index.html`, carried since
+    # Gate 0 and named as still-open by WAVE11_BLOCKERS B-7. Neither is a
+    # capability the product owes a user, and leaving a bug report `blocked`
+    # forever reports a gap that does not exist on the page that ships. They are
+    # cut, and each names the production surface that carries the capability the
+    # defect was about.
+    'UI-00-001': (
+        'Intentional cut: this row is a DEFECT REPORT against `index.html`, and it asks for one '
+        'thing — "verify this in a live DevTools console before the redesign". Closed on both '
+        'halves. (1) The capability ships on the production page under real, collected ids: '
+        '`#sdSetRenameProfileButton`, `#sdSetDuplicateProfileButton` and '
+        '`#sdSetExportProfileButton`, declared in features/settingsWorkspace.js\'s '
+        'SETTINGS_ELEMENT_IDS, captured by collectSettingsElements() and bound in '
+        'bindProfileButtons(), with unit coverage in app/tests/settingsWorkspace.test.mjs and '
+        'app/tests/settingsProfileOps.test.mjs. Every access there is via `els.*`, so the '
+        'bare-identifier pattern the row describes cannot exist on the shipping page. (2) On the '
+        'legacy page the predicted ReferenceError does not reproduce: `main.js` is loaded as a '
+        'module whose outer scope is the global scope, and an element with an `id` is exposed on '
+        'the window as a named property, so `renameProfileButton` resolves to the button rather '
+        'than throwing — which is why the legacy QA board boots at all, since a top-level throw '
+        'would abort bootstrap() and take the whole legacy dashboard with it. The row is cut '
+        'rather than wired because a bug report is not a shipped surface.'
+    ),
+    'UI-00-002': (
+        'Intentional cut: the row records that `refreshVoiceBlendCapabilityNote()` and '
+        '`refreshCloneStatusNote()` were removed from main.js (so the ReferenceError they caused '
+        'is gone), that their DOM targets `#voiceBlendBackendNote` and `#voiceCloneStatusNote` '
+        'survive in `index.html`, and that the intended behaviour "was not reimplemented because '
+        'its contract was unknown" — it asks to stay blocked until those surfaces have a defined '
+        'contract. They now do, on the page that ships, and both halves are already cut '
+        'individually with the same replacement named: UI-07-130 and UI-07-141 point at '
+        '`#sdUtilVoiceCloningBadge`, `#sdUtilVoiceCloningStatus` and `#sdUtilVoiceCloningHint` in '
+        'Utilities / Models, which are genuinely populated from clone provisioning/status data. '
+        'This §0 row is the umbrella over those two and is cut consistently with them: an element '
+        'that never had a data source is not a capability being removed.'
     ),
 }
 

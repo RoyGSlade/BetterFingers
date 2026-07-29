@@ -148,3 +148,38 @@ def test_a_path_segment_needle_does_not_match_a_longer_segment_neighbour():
     coverage = _coverage("'POST /personas/interview/answer': (req) => ({}),")
     qa, _unit = coverage.files_naming("answer")
     assert qa == []
+
+
+def test_a_regex_literal_does_not_smuggle_comments_past_the_stripper():
+    """C-5: regex literals must not open a phantom string state.
+
+    `.replace(/[&<>"']/g, ...)` carries a `"` and a `'` inside its character
+    class. A scanner that tracks strings but not regexes treats that quote as
+    opening a string which closes at the next matching quote further down the
+    file -- and every comment in between survives stripping, so a row can be
+    marked wired on the strength of a sentence. Five files in the production
+    closure carry that exact escape-HTML regex, the composition root among
+    them. The confirmed victim was a row claiming `#sendActionSelect` shipped
+    when the id existed only in a comment.
+    """
+    from tools.parity_evidence import strip_js_comments
+
+    source = (
+        'const esc = (v) => String(v).replace(/[&<>"\']/g, (c) => c);\n'
+        '// #smuggledIdInAComment must not survive\n'
+        'const after = 1;\n'
+    )
+    stripped = strip_js_comments(source)
+    assert "#smuggledIdInAComment" not in stripped
+    assert '[&<>' in stripped, "the regex literal itself must be preserved"
+    assert "const after = 1;" in stripped
+
+
+def test_division_is_not_mistaken_for_a_regex():
+    """The inverse error: treating `a / b` as a literal would swallow code."""
+    from tools.parity_evidence import strip_js_comments
+
+    stripped = strip_js_comments("const ratio = total / count; // note\nconst kept = 2;")
+    assert "total / count" in stripped
+    assert "note" not in stripped
+    assert "const kept = 2;" in stripped

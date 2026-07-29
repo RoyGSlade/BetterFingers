@@ -128,65 +128,55 @@ for _sid in ("UI-01-005", "UI-05-001", "UI-05-002", "UI-05-003", "UI-05-004", "U
 for _sid, _rationale in pe.load_anchor_table()[2].items():
     _cut(_sid, _rationale)
 
-# --- Wave 11B: the overlay windows are anchored, covered, and UNREACHABLE -----
+# --- The overlay windows: Wave 11B blocked them, Wave 11C built the caller ----
+#
+# HISTORY, because the override that used to live here is the reason 21 rows read
+# `blocked (product)` and deleting it silently would make the movement look like
+# an accounting change rather than a fix.
 #
 # Wave 11 recorded the 18 unevidenced overlay rows as an AUDIT gap: the windows
 # ship, so the only thing missing was QA. `app/tests/qa/scenarios/overlay-prod.mjs`
-# now supplies that QA -- and writing it established that the premise was wrong.
-#
-# On the PRODUCTION page these surfaces cannot be reached at all:
+# supplied that QA -- and writing it established that the premise was wrong. On
+# the production page the surfaces could not be reached at all:
 #
 #   * `overlay:update-status` is what makes the capture overlay show a pipeline
-#     state. Its only renderer-side caller anywhere in the repo is
-#     `app/src/renderer/main.js` -- the LEGACY page. The production closure
-#     (`signal-desk.html` + everything `bootstrap/signalDeskApp.js` imports)
-#     contains no call to `updateOverlayStatus`. Signal Desk consumes the same
-#     voice-status stream itself (`features/talkCapture.js`) for its in-page ring
-#     and never forwards it to the window.
+#     state. Its only renderer-side caller anywhere in the repo was
+#     `app/src/renderer/main.js` -- the LEGACY page.
 #   * `review:show` is the only thing that ever creates the review window. Same
-#     single legacy caller. On the shipping page that window is never created.
+#     single legacy caller. On the shipping page that window was never created.
 #
-# D-0015 asks for a REACHABLE production location. Marking these `wired` because
-# a scenario can drive the IPC handler directly would report a surface as part of
-# the product when a user can never see it -- the exact failure mode the comment
-# hole caused, arrived at by a different route. They stay `blocked`, and the
-# reason is corrected from evidence to product.
+# Wave 11B therefore forced those rows to `blocked (product)` with an override
+# here, and said the fix was a production caller rather than more QA.
 #
-# NOT blocked here, deliberately: the capture overlay's ring, label, appearance
-# and drag rows (UI-12-001/002/006/007/008, UI-01-017, UI-14-008). Settings >
-# Appearance is a real production caller -- `#sdSetOverlaySize` reaches the window
-# through `overlay:set-appearance`, which also shows it -- so those genuinely do
-# resolve on the shipping page and are left to the mechanical rules.
-_OVERLAY_UNREACHABLE = (
-    "(product) the code ships and `app/tests/qa/scenarios/overlay-prod.mjs` exercises it, but the "
-    "production composition root contains NO caller for the IPC that reaches it — "
-    "`overlay:update-status` and `review:show` are called only from the legacy "
-    "`app/src/renderer/main.js`, never from `signal-desk.html`'s closure — so on the shipping page "
-    "this surface cannot be reached by a user. Wave 11 recorded these as evidence gaps; that was "
-    "wrong. The fix is a production caller, not more QA."
-)
-def _block_unless_ruled(stable_id: str, reason: str) -> None:
-    """Block, unless a cut already rules on this row.
-
-    An `intentional_cut` is a decision that the capability is not coming back;
-    "unreachable, needs a caller" is a decision that it is. If both were declared
-    the ledger would report whichever ran last, so the cut wins and the conflict
-    stays visible in the table rather than being resolved by import order.
-    """
-    if stable_id not in OVERRIDES:
-        _block(stable_id, reason)
-
-
-# 12.1, the rows that need a pipeline STATUS push (the ring vocabulary, the
-# status IPC itself, and the live amplitude that rides on it).
-for _sid in ("UI-12-003", "UI-12-004", "UI-12-005"):
-    _block_unless_ruled(_sid, _OVERLAY_UNREACHABLE)
-# 12.2 in full, plus the two rows in other sections that describe the same
-# window: the review overlay is never created on the production page.
-for _n in range(9, 27):
-    _block_unless_ruled(f"UI-12-{_n:03d}", _OVERLAY_UNREACHABLE)
-for _sid in ("UI-01-018", "UI-14-009"):
-    _block_unless_ruled(_sid, _OVERLAY_UNREACHABLE)
+# WAVE 11C BUILT THAT CALLER, so the override is gone rather than relaxed. The
+# caller is `app/src/renderer/features/overlayBridge.js`, constructed by
+# `bootstrap/signalDeskApp.js` as a third consumer of the voice-status stream
+# `talkWorkspace` and `talkCapture` already read: every message is forwarded to
+# `overlay:update-status`, `preview_ready` opens the Review Deck through
+# `review:show` with the draft the message carried, and `draft_sent` /
+# `emergency_stop` put it away again. All show/hide policy stays in the main
+# process, so the two pages cannot drift.
+#
+# These rows are now left to the MECHANICAL rules below, which is the point: an
+# override that says "reachable now, trust me" would be exactly the asserted
+# evidence this ledger exists to avoid. A row still has to resolve its handles in
+# the production closure AND be named by a production-target QA scenario or unit
+# test before it can reach `wired`, and several of them still do not.
+#
+# What makes the reachability claim checkable rather than asserted:
+#
+#   * `app/tests/qa/scenarios/overlay-prod.mjs`'s
+#     `production-page-drives-both-overlay-windows` starts from a message on
+#     `backend:voice-status:message` -- the exact channel `main/backendProxy.js`
+#     sends on when the real WebSocket produces one -- and asserts that both
+#     windows show, render the draft, and are PUT AWAY again on `draft_sent`.
+#     Nothing in that path is a test-only call.
+#   * `app/tests/overlayBridge.test.mjs` covers the mapping and, deliberately at
+#     the same weight, every hide path: a surface that fails to release is worse
+#     than one that never appeared.
+#
+# If the director's Electron QA run of `overlay-windows` does not go green, this
+# reachability claim is not established and these rows must go back to `blocked`.
 
 # NOT ledger rows, deliberately: two Wave 11 rulings the brief asked for have
 # no counterpart in the 438-item source inventory, because that inventory

@@ -821,3 +821,68 @@ hotkey and wake-word capture controls, the legacy model-manager surface,
 and the dashboard status cards, each of which must either gain a
 production home or be cut against a named replacement row. Progress is
 measured by rerunning `tools/parity_validator.py`, not by narration.
+
+## D-0031 — Wave 11B/11C accepted; Gate 11 still NOT accepted at 21 blocked
+
+**Owner:** release-director
+
+**Evidence:** Director-run after both remediation rounds: backend
+`3034 passed / 0 failed`, renderer `1510/1510`, build green, ledger
+`396 wired / 21 intentional_cut / 21 blocked` regenerated and byte-identical
+under `PYTHONHASHSEED` 1, 7 and 12345, validator clean.
+
+**Decision:** Accept the remediation work — **139 blocked → 21** across two
+rounds, from a Gate 0 baseline of 434 — and hold Gate 11 open. The gate
+forbids any blocked row and 21 remain. Nineteen are evidence rows and two are
+product rows (`#toggleRecordingButton`, `#sendActionSelect`), so what is left
+is small, named, and mostly not feature work.
+
+**The real product regression this round caught:** since the Wave 11 flip made
+Signal Desk the default, *no user had a capture overlay or a Review Deck at
+all*. The elements shipped and the new overlay QA drove them directly, so the
+audit could not see it — the only caller of `overlay:update-status` /
+`review:show` in the repo was legacy `main.js`. `features/overlayBridge.js` is
+now the production caller, forwarding every voice-status message (including the
+quiet ones the put-away path depends on) with show/hide policy left in the main
+process so the two dashboards cannot drift. This would have shipped invisibly.
+
+**A third measurement defect, found at director verification (C-5):** the
+comment stripper tracked string state but not REGEX literals, so
+`.replace(/[&<>"']/g, …)` opened a phantom string at the quote inside its
+character class, and every comment until the next matching quote survived —
+reopening the comment hole by another route. Five production files carry that
+exact escape-HTML regex, the composition root among them; the confirmed victim
+claimed `#sendActionSelect` shipped when the id existed only in a comment.
+Regex literals are now tracked, division is distinguished from literals by
+expression position, and both directions have regression tests. That makes
+three separate ways this tool could lie, all found and closed:
+comments-as-evidence, `\b` blocking endpoint coverage, and hash-seed-dependent
+anchors.
+
+**Rulings on what remains:**
+
+- **The onboarding "correct cuts" premise was false and is overturned.**
+  Production ships the full four-step wizard on the shared guided-flow shell —
+  it was never a single-screen gate. Cutting those rows would have recorded a
+  feature as absent while it shipped. Evidenced instead.
+- **C-6 (`#draftConfidence`, UI-06-021 / UI-14-007): stays blocked, not cut,
+  pending a Wave 12 ruling.** The id resolves only through the "an id may live
+  in JS" fallback while `signal-desk.html` has no such element, so
+  `renderConfidenceBadge()` is a permanent no-op on the shipping page. The
+  capability is not missing — Talk's meta strip shows the score — but a dead
+  code path plus a live replacement deserves a deliberate decision, not a
+  convenience re-anchor at the end of a long session.
+- **The overlay isolation fix did NOT work and is recorded as such.**
+  `review-overlay-rewrite-instruct-and-read` fails 3/3 standalone while passing
+  inside the full board, so its area is still order-dependent. It is not
+  counted as evidence, and the reachability of the overlay windows rests
+  instead on `production-page-drives-both-overlay-windows`, which passed on
+  every run.
+- Two rows (`UI-12-008`, `UI-15-007`) assert *negative* properties — "no
+  backend calls", "no donation prompt exists anywhere" — which have no handle
+  by construction. They need a director ruling in Wave 12, not a ledger row.
+
+**Standing correction for future lanes:** `settingsWorkspace.js:49-57` asserts
+a `ReferenceError` that does not occur (an element `id` is exposed as a window
+property, so the bare identifier resolves). The comment is wrong and outlived
+the lane that found it.

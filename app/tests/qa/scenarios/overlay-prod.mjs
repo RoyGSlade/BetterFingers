@@ -11,41 +11,69 @@
 // basis and called their 18 unevidenced parity rows an AUDIT gap.
 //
 // Writing this suite turned up something the audit had not: on the production
-// page they are, in normal use, unreachable.
+// page they were, in normal use, unreachable.
 //
 //   * `overlay:update-status` is what makes the capture overlay appear and show
-//     a pipeline state. Its only renderer-side caller in the whole repo is
+//     a pipeline state. Its only renderer-side caller in the whole repo was
 //     `app/src/renderer/main.js` -- the LEGACY page. The production module
 //     closure (`signal-desk.html` + everything `bootstrap/signalDeskApp.js`
-//     imports) contains no call to `updateOverlayStatus` at all. Signal Desk
-//     consumes the same voice-status stream itself (features/talkCapture.js)
-//     and drives its own in-page ring, and never forwards to the overlay window.
+//     imports) contained no call to `updateOverlayStatus` at all. Signal Desk
+//     consumed the same voice-status stream itself (features/talkCapture.js)
+//     and drove its own in-page ring, and never forwarded to the overlay window.
 //   * `review:show` is the only way `review-overlay.html`'s window is ever
-//     created. Its only caller is likewise `main.js`. On the production page
-//     that window is never created at all.
+//     created. Its only caller was likewise `main.js`. On the production page
+//     that window was never created at all.
 //
-// So the honest split for these rows is not "anchored, needs QA". It is:
+// So the honest split for these rows was not "anchored, needs QA". It was:
 // the window code ships and works, and nothing on the shipping page reaches it.
-// That is a PRODUCT gap, and it is recorded as one in
-// docs/release/WAVE11_BLOCKERS.md B-2. These scenarios do not paper over it --
-// they are what makes it checkable, and they are the regression net the fix
-// will need.
+// That is a PRODUCT gap, recorded as one in docs/release/WAVE11_BLOCKERS.md B-2
+// / C-2. These scenarios did not paper over it -- they are what made it
+// checkable, and they are the regression net the fix needed.
 //
-// What that means for how these scenarios are written: they drive the overlays
-// through the REAL main-process handlers (`overlay:update-status`, `review:show`
-// in `app/src/main/ipc.js`) via the REAL preload bridge, invoked from the
-// production page. Every line of main-process routing, window management and
-// overlay-renderer logic under test is production code on the production path.
-// The one thing NOT proven is that the production page decides to make those
-// calls -- because it does not. The scenario named
-// `settings-appearance-reaches-the-overlay-window` is the exception and is
-// marked as such: `#sdSetOverlaySize` is a real production control with a real
-// production caller, so that one is a complete chain.
+// ---------------------------------------------------------------------------
+// WAVE 11C: THE CALLER NOW EXISTS.
+// ---------------------------------------------------------------------------
+// `app/src/renderer/features/overlayBridge.js` is that caller, constructed by
+// `bootstrap/signalDeskApp.js` as a third consumer of the same voice-status
+// stream talkWorkspace and talkCapture already read. The scenario named
+// `production-page-drives-both-overlay-windows` is the one that proves it, and
+// it is the only scenario here that starts from a real voice-status message
+// rather than from a direct IPC call: a message is delivered on
+// `backend:voice-status:message`, the exact channel `main/backendProxy.js` uses
+// when the real WebSocket produces one, and everything after that is production
+// code -- preload bridge, `api.connectVoiceStatus`, the composition root's
+// onMessage, overlayBridge, `overlay:update-status` / `review:show`, the main
+// process's window policy, and the two overlay renderers.
+//
+// The other scenarios keep driving the overlays through the REAL main-process
+// handlers (`overlay:update-status`, `review:show` in `app/src/main/ipc.js`) via
+// the REAL preload bridge, invoked from the production page. That is deliberate
+// and is not a downgrade: it is how you exercise the overlay renderers' own
+// state vocabulary exhaustively without staging a full dictation per assertion.
+// `settings-appearance-reaches-the-overlay-window` is a complete chain of a
+// different kind -- `#sdSetOverlaySize` is a real production control with a real
+// production caller.
 //
 // Reaching a second window needs no app change and no debug handle: run.mjs now
 // hands scenarios `ctx.app` (the ElectronApplication), which already tracks
 // every window the app owns, hidden ones included. See harness.mjs's
 // auxiliaryWindow().
+//
+// ---------------------------------------------------------------------------
+// SCENARIO ISOLATION -- read before adding a scenario here.
+// ---------------------------------------------------------------------------
+// run.mjs launches Electron ONCE for the whole run and, between scenarios,
+// resets the stub and reloads the DASHBOARD page only. The two overlay windows
+// are separate BrowserWindows and are NOT reloaded, so their renderer module
+// state -- `currentDraft`, `outputSettings`, whether `#instructionRow` is
+// disclosed, what `#instructionText` holds -- survives from one scenario into
+// the next. A scenario that merely waits for `#status` to read `Draft #7` can be
+// satisfied by the PREVIOUS scenario's render and then run against stale state,
+// which is how `review-overlay-rewrite-instruct-and-read` came to pass inside
+// the full board and fail when its area ran alone. Use `freshReviewOverlay()`
+// from `navigate()`: it destroys any existing Review Deck window first, so the
+// scenario gets a brand-new renderer whose state can only have come from its
+// own push.
 
 import { expect } from '@playwright/test';
 import { readyProfile } from './fixtures/cold-boot.mjs';
@@ -148,7 +176,67 @@ async function openReviewOverlay(page, app, draft = DRAFT) {
   await page.evaluate((d) => window.betterFingers.showReviewOverlay(d), draft);
   const review = await auxiliaryWindow(app, 'review-overlay.html');
   await expect(review.locator('#status')).toHaveText(`Draft #${draft.id}`);
+  // Not just the header: the header can already read `Draft #7` from a previous
+  // scenario's render, so the value that only THIS push can have produced is
+  // what the wait has to be anchored on. Without it a scenario can proceed with
+  // the window's `currentDraft` still unset or stale, and every action it then
+  // takes silently posts nothing.
+  await expect(review.locator('#finalText')).toHaveValue(draft.final_text);
   return review;
+}
+
+/**
+ * A Review Deck with NO inherited renderer state.
+ *
+ * Destroys any existing review window before pushing, so the scenario gets a
+ * freshly loaded `review-overlay.html`: `currentDraft` null until its own push
+ * lands, `#instructionRow` hidden, `#instructionText` empty, `#rawSection`
+ * expanded. Use this from `navigate()`; use `openReviewOverlay()` when a
+ * scenario deliberately wants the SAME window back (the dismissal scenario's
+ * re-show).
+ *
+ * Destroying is a supported lifecycle, not a test-only hack: `windows.js`
+ * already handles `reviewWindow.on('closed')` by clearing its handle, which is
+ * exactly the path `createReviewWindow()` is written to recover from.
+ */
+async function destroyReviewOverlay(app) {
+  await app.evaluate(({ BrowserWindow }) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      const file = (win.webContents.getURL().split('?')[0] || '').split('/').pop();
+      if (file === 'review-overlay.html') win.destroy();
+    }
+  });
+  // Polled, not assumed: destruction is asynchronous from Playwright's side and
+  // `auxiliaryWindow()` returns any window still in the list, which would hand
+  // back the one being torn down.
+  await expect.poll(async () => (await visibilityOf(app, 'review-overlay.html')) === null).toBe(true);
+}
+
+async function freshReviewOverlay(page, app, draft = DRAFT) {
+  await destroyReviewOverlay(app);
+  return openReviewOverlay(page, app, draft);
+}
+
+/**
+ * Deliver a voice-status message the way the real backend does.
+ *
+ * `backend:voice-status:message` is the exact channel `main/backendProxy.js`
+ * sends on when the voice-status WebSocket produces a message, so everything
+ * downstream of this call is production code: the preload bridge,
+ * `api.connectVoiceStatus`, the composition root's onMessage fan-out, and
+ * `features/overlayBridge.js`. The stub backend's WebSocket accepts the
+ * handshake but never pushes frames, which is why the message is injected at
+ * the main-process boundary rather than at the socket.
+ */
+async function pushVoiceStatus(app, message) {
+  await app.evaluate(({ BrowserWindow }, payload) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      const file = (win.webContents.getURL().split('?')[0] || '').split('/').pop();
+      if (file === 'signal-desk.html') {
+        win.webContents.send('backend:voice-status:message', payload);
+      }
+    }
+  }, message);
 }
 
 export const overlayProdScenarios = [
@@ -203,6 +291,32 @@ export const overlayProdScenarios = [
       // falling through to the unknown/idle default.
       await pushStatus(page, { status: 'recording', amplitude: 0.62 });
       await expect(label).toHaveAttribute('data-ring-state', 'recording');
+
+      // The drag affordance. overlay.html is click-through by default so it
+      // never steals a click meant for the app underneath, and it makes itself
+      // hit-testable again only while the cursor is over the ring, so it can
+      // still be dragged. Both halves are driven here through the real
+      // listeners on #overlayWrap and the real `overlay:set-ignore-mouse-events`
+      // channel, whose handler returns true only after it has called
+      // BrowserWindow.setIgnoreMouseEvents on a live overlay window.
+      //
+      // What this does NOT prove, stated so the row is not read as more than it
+      // is: whether the compositor actually passes clicks through. Electron
+      // exposes no getter for that, so there is nothing honest to assert.
+      const ignoreRoundTrip = await overlay.evaluate(async () => {
+        const bridge = window.betterFingersOverlay;
+        const wrap = document.getElementById('overlayWrap');
+        const results = [];
+        results.push(await bridge.setIgnoreMouseEvents(false));
+        results.push(await bridge.setIgnoreMouseEvents(true));
+        // The production listeners, run for real rather than simulated by
+        // calling the bridge in their place.
+        wrap.dispatchEvent(new MouseEvent('mouseenter'));
+        wrap.dispatchEvent(new MouseEvent('mouseleave'));
+        return results;
+      });
+      expect(ignoreRoundTrip, 'both click-through states are accepted by the live overlay window')
+        .toEqual([true, true]);
 
       // Idle + always-on off puts the overlay away again.
       await pushStatus(page, { status: 'idle' });
@@ -278,7 +392,7 @@ export const overlayProdScenarios = [
       + 'but never received its draft would show the "Waiting for draft" placeholder and fail here.',
     backendState: overlayBackendState(),
     async navigate(page, { app }) {
-      await openReviewOverlay(page, app);
+      await freshReviewOverlay(page, app);
     },
     async expects(page, { app }) {
       const review = await auxiliaryWindow(app, 'review-overlay.html');
@@ -320,7 +434,7 @@ export const overlayProdScenarios = [
       + 'speaking, and the second press posts POST /tts/stop rather than starting a second read.',
     backendState: overlayBackendState(),
     async navigate(page, { app }) {
-      await openReviewOverlay(page, app);
+      await freshReviewOverlay(page, app);
     },
     async expects(page, { app }) {
       const review = await auxiliaryWindow(app, 'review-overlay.html');
@@ -330,15 +444,15 @@ export const overlayProdScenarios = [
       await review.click('#changeButton');
       await expect(review.locator('#finalText')).toHaveValue(REWRITTEN.final_text);
       await expect(review.locator('#statusBadge')).toHaveText('Rewritten');
-      // KNOWN ORDER DEPENDENCE (director, Wave 11B): this scenario passes
-      // inside the full board and fails when its area is run alone -- the
-      // capture is empty, i.e. the rewrite never posted, which means the
-      // overlay is relying on state an earlier scenario left behind. The
-      // handler itself is correct (review-overlay.html's runInstructionButton
-      // refuses an empty instruction and posts action "custom" otherwise), so
-      // this is a scenario-isolation defect, not a product one. Until it is
-      // self-contained it is NOT counted as passing evidence and its ledger
-      // rows stay blocked.
+      // Wave 11C: this used to pass inside the full board and fail when its area
+      // ran alone, because the Review Deck window is not reloaded between
+      // scenarios and the open helper waited only on `#status` -- text a
+      // previous scenario had already produced. It could therefore start acting
+      // on a window whose `currentDraft` this scenario had not set, and
+      // `rewriteDraft()` returns early with no POST when `currentDraft?.id` is
+      // falsy, which is exactly the empty capture that was seen. `navigate()`
+      // now uses `freshReviewOverlay()`, so the window is destroyed and rebuilt
+      // per scenario and its state can only have come from this scenario's push.
       await expect.poll(() => rewriteCalls.length, {
         message: 'the chosen preset must post exactly one rewrite',
       }).toBe(1);
@@ -399,7 +513,7 @@ export const overlayProdScenarios = [
       + 'a draft again re-shows the same window with the draft intact.',
     backendState: overlayBackendState(),
     async navigate(page, { app }) {
-      await openReviewOverlay(page, app);
+      await freshReviewOverlay(page, app);
     },
     async expects(page, { app }) {
       const review = await auxiliaryWindow(app, 'review-overlay.html');
@@ -422,6 +536,84 @@ export const overlayProdScenarios = [
         .poll(async () => (await visibilityOf(app, 'review-overlay.html'))?.visible)
         .toBe(false);
       expect(declines, 'Escape is not a decline').toHaveLength(0);
+    },
+    screenshots: [],
+  },
+  {
+    area: 'overlay-windows',
+    ui: 'signal-desk-prod',
+    name: 'production-page-drives-both-overlay-windows',
+    kind: 'standard',
+    description:
+      'The scenario that closes Wave 11B\'s C-2 finding. Every other scenario here reaches the overlays by calling '
+      + 'the IPC directly, which proves the windows work but not that the shipping page ever asks for them -- and '
+      + 'until Wave 11C it did not, so a user on the default page got no floating overlay while dictating and no '
+      + 'Review Deck at all. This one starts where the real backend does: a message on '
+      + 'backend:voice-status:message, the exact channel main/backendProxy.js sends on. Everything after that is '
+      + 'production code -- preload, api.connectVoiceStatus, signalDeskApp.js\'s onMessage fan-out, and '
+      + 'features/overlayBridge.js. A dictation stream shows the capture overlay with the right ring state, '
+      + 'preview_ready CREATES the Review Deck (destroyed first, so its existence can only come from this stream) '
+      + 'carrying the draft the message described, and draft_sent puts BOTH windows away again. The put-away half '
+      + 'is asserted on the main process\'s own view of visibility, not on a class, because a surface that fails to '
+      + 'release is worse than one that never appeared.',
+    backendState: overlayBackendState(),
+    async navigate(page, { app }) {
+      // No Review Deck to begin with: if one exists after preview_ready, the
+      // production path is the only thing that can have created it.
+      await destroyReviewOverlay(app);
+      await pushVoiceStatus(app, { status: 'recording' });
+      await expect
+        .poll(async () => (await visibilityOf(app, 'overlay.html'))?.visible, { timeout: 15000 })
+        .toBe(true);
+    },
+    async expects(page, { app }) {
+      const overlay = await auxiliaryWindow(app, 'overlay.html');
+      const label = overlay.locator('#statusText');
+      await expect(label).toHaveAttribute('data-ring-state', 'recording');
+
+      // Mid-pipeline. The label text is produced by overlayBridge's mapping, not
+      // handed to it, so this also checks the production page speaks the same
+      // overlay vocabulary the legacy page did.
+      await pushVoiceStatus(app, { status: 'chunking_progress', chunk_index: 2, chunk_count: 5 });
+      await expect(label).toHaveText('Chunk 2 of 5');
+      await expect(label).toHaveAttribute('data-ring-state', 'transcribing');
+
+      // preview_ready: the Deck is created by the production path and renders
+      // the draft the status message carried.
+      await pushVoiceStatus(app, {
+        status: 'preview_ready',
+        draft_id: DRAFT.id,
+        raw_text: DRAFT.raw_text,
+        final_text: DRAFT.final_text,
+        confidence: DRAFT.confidence,
+        auto_send_ok: true,
+      });
+      const review = await auxiliaryWindow(app, 'review-overlay.html');
+      await expect(review.locator('#status')).toHaveText(`Draft #${DRAFT.id}`);
+      await expect(review.locator('#finalText')).toHaveValue(DRAFT.final_text);
+      await expect(review.locator('#rawText')).toHaveText(DRAFT.raw_text);
+      await expect
+        .poll(async () => (await visibilityOf(app, 'review-overlay.html'))?.visible, { timeout: 15000 })
+        .toBe(true);
+      await expect(label).toHaveText('Draft ready');
+
+      // THE PUT-AWAY PATH. draft_sent ends the interaction, so the Deck must
+      // come down and the capture overlay must settle away on its own transient
+      // timer rather than sitting on top of whatever the user does next.
+      await pushVoiceStatus(app, {
+        status: 'draft_sent',
+        send_result: { ok: true, fallback: false, message: 'Sent' },
+      });
+      await expect
+        .poll(async () => (await visibilityOf(app, 'review-overlay.html'))?.visible, { timeout: 15000 })
+        .toBe(false);
+      await expect
+        .poll(async () => (await visibilityOf(app, 'overlay.html'))?.visible, { timeout: 15000 })
+        .toBe(false);
+
+      // Putting the Deck away is a dismissal, never a decision: nothing here may
+      // have declined the draft on the user's behalf.
+      expect(declines, 'the put-away path is not a decline').toHaveLength(0);
     },
     screenshots: [],
   },

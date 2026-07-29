@@ -24,6 +24,7 @@ import { createBackendBannerFeature, collectBackendBannerElements } from '../fea
 import { createDraftsFeature } from '../features/drafts.js';
 import { createTalkWorkspaceFeature, collectTalkElements } from '../features/talkWorkspace.js';
 import { createTalkCaptureFeature, collectTalkCaptureElements } from '../features/talkCapture.js';
+import { createOverlayBridgeFeature } from '../features/overlayBridge.js';
 // Only the element collector -- talkDrafts.js has no import-time side effects,
 // and its map is the already-reviewed description of which Signal Desk ids
 // drafts.js should own (and which, like Send, it deliberately should not).
@@ -523,12 +524,41 @@ export function startSignalDeskApp(doc = document) {
   });
   talkTeaching.init();
 
+  // --- The two floating windows (Wave 11C) ---------------------------------
+  //
+  // Until now this page had NO caller for `overlay:update-status` or
+  // `review:show`. The windows ship and their QA drives them, but the only
+  // renderer that ever reached them was the legacy `main.js` -- so since the
+  // Wave 11 default flip, every user got no floating capture overlay while
+  // dictating and no Review Deck at all. That is the product gap Wave 11B
+  // recorded against 21 parity rows; this is its caller.
+  //
+  // It is a third consumer of the same voice-status stream, not a replacement
+  // for either existing one: the in-page ring (talkWorkspace) and the action row
+  // (talkCapture) are what the user sees when the dashboard is focused, and the
+  // overlay is what they see when it is not. All show/hide policy stays in the
+  // main process, so both pages put the windows away identically.
+  const overlayBridge = createOverlayBridgeFeature({
+    bridge: doc.defaultView?.betterFingers,
+    hooks: {
+      // The rewrite/edit statuses carry no draft, so a re-push has to fetch the
+      // current one. Reuses the drafts feature rather than fetching here.
+      getLatestDraft: () => drafts.refreshLatestDraft(),
+      // Deliberately not a toast: the overlay is a secondary view of state the
+      // page is already showing, so a failed forward is a console note, not an
+      // interruption.
+      onError: (error) => console.warn('[overlay-bridge] forward failed:', error),
+    },
+  });
+
   const voiceStatusConnection = api.connectVoiceStatus({
-    // Both consumers, not one instead of the other: talkWorkspace owns the
-    // ring/status/meter, talkCapture owns the action row's enablement.
+    // Three consumers, not one instead of the others: talkWorkspace owns the
+    // ring/status/meter, talkCapture owns the action row's enablement, and
+    // overlayBridge owns the two floating windows.
     onMessage: (payload) => {
       talkWorkspace.handleVoiceStatusMessage(payload);
       talkCapture.handleVoiceStatusMessage(payload);
+      overlayBridge.handleVoiceStatusMessage(payload);
     },
     // Wave 11B: these two were empty closures, which meant a dropped voice
     // stream was completely invisible -- the Signal Core simply stopped moving
@@ -899,6 +929,9 @@ export function startSignalDeskApp(doc = document) {
       voiceStatusConnection.close?.();
       talkWorkspace.destroy?.();
       talkCapture.destroy?.();
+      // Puts the Review Deck away. An always-on-top window whose owner has torn
+      // down is stranded on the user's screen with nothing left to close it.
+      overlayBridge.destroy?.();
     },
   };
 }

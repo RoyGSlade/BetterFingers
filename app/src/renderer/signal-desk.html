@@ -154,8 +154,13 @@
     <footer class="sd-flow__footer">
       <button type="button" class="sd-btn sd-flow__quit" id="sdOnboardDecline">Decline &amp; quit</button>
       <span class="sd-flow__spacer"></span>
-      <button type="button" class="sd-btn" data-flow-back hidden>Back</button>
-      <button type="button" class="sd-btn sd-btn--primary" data-flow-primary>Get started</button>
+      <!-- ids added in Wave 11C for the same reason #sdOnboardConsent and
+           #sdOnboardDecline have them: every other control in this dialog is
+           addressable and these two were not, so nothing could assert the Back
+           and Next controls by handle. guidedFlow.js still binds them by
+           [data-flow-back]/[data-flow-primary] -- the ids change no behaviour. -->
+      <button type="button" class="sd-btn" id="sdOnboardBack" data-flow-back hidden>Back</button>
+      <button type="button" class="sd-btn sd-btn--primary" id="sdOnboardNext" data-flow-primary>Get started</button>
     </footer>
   </div>
 </div>

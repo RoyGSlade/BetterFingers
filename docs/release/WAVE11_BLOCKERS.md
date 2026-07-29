@@ -392,3 +392,187 @@ The Wave 11 conclusion was that the largest part of what stands between here and
 a clean Gate 11 is evidence rather than code. After 11B that is still mostly
 true — but it is less true than it looked, and the difference is the overlay
 windows.
+
+---
+
+# Wave 11C — the evidence-gap rows (Objective A)
+
+Wave 11C opened with **280 `wired` / 19 `intentional_cut` / 139 `blocked`**, the
+139 split 31 product + 108 evidence. This section covers the 108 evidence rows:
+items that *are* anchored in the shipping page but that no production-target QA
+scenario and no renderer unit test named, so the D-0015 coverage leg was unmet.
+
+No product change was made for any of them. The work was writing tests that
+genuinely drive the shipping controls.
+
+## D-0: the unit suite could not reach the DOM, which is where these rows live
+
+Every one of these rows is an element. The renderer feature modules
+(`features/settingsWorkspace.js`, `features/utilitiesWorkspace.js`,
+`features/talkWorkspace.js`, …) are written against a browser document, this
+repo has no jsdom, and the unit suite is plain `node --test`. So the existing
+suites tested the *pure* halves — view models, reducers, validators — and the
+DOM wiring was left to manual preview-page checks. Which id becomes which
+control, which listener a button actually gets, and which backend route a click
+actually reaches had never been executed by a test.
+
+That is the gap the ledger was reporting, stated in its own terms.
+
+`app/tests/helpers/rendererDom.mjs` closes it without adding a dependency: a
+~300-line document that implements only what the feature modules touch —
+`getElementById`, `classList`, `dataset`, `hidden`, `append`/`replaceChildren`,
+attribute selectors, listeners, `style.setProperty`. It is deliberately not a
+DOM emulator. Two places where an over-simplification would have *hidden* a
+defect were found and fixed while writing it, and both are documented in the
+file: `textContent` concatenates own text with descendants (modelling them as
+alternatives hid the `×` a chip appends after its label), and `title` is
+reflected between property and attribute (keeping them apart would have reported
+a tooltip as cleared while it was still on screen).
+
+The backend is stubbed at exactly one place: `window.betterFingers.backendRequest`,
+the single preload bridge `api/backend.js` funnels every proxied route through.
+So the tests exercise the real URL building, the real error unwrapping and the
+real `(method, path, body)` triple, and can assert the exact route a control
+reaches for. Destructive and sensitive calls (`wipePrivacyData`, `cancelJob`,
+`uploadWakeModel`) go down dedicated typed IPC methods and are stubbed there,
+which is itself a check that the sensitive paths are not on the generic proxy.
+
+## What landed
+
+Ten new files, **147 tests, all green**, and the whole renderer suite is
+**1510/1510**.
+
+| File | Rows it evidences |
+|---|---|
+| `app/tests/settingsProfileOps.test.mjs` | UI-07-003, -004, -005, -009, -010, -015, -016, -018, UI-15-023 |
+| `app/tests/settingsAppearanceOverlay.test.mjs` | UI-07-151 … -156, -159, -160, -161, -163 |
+| `app/tests/settingsPrivacyPanel.test.mjs` | UI-07-171, -172, -173, -174, -176 |
+| `app/tests/utilitiesInputWake.test.mjs` | UI-07-026, -100, -103, -107, -108, UI-08-018, UI-14-012, UI-15-003, UI-15-010 |
+| `app/tests/utilitiesTextAdvanced.test.mjs` | UI-07-091, -092, -093, -095, -165, -166, -167, -168, -170, -177, -178, -179, -182, -186, -187, UI-09-011 |
+| `app/tests/utilitiesDiagnosticsPanels.test.mjs` | UI-01-016, UI-08-019, UI-08-021, UI-09-002, -010, -012, -013, -015, -016, UI-14-013, -014, UI-15-008, -016, -017, -018 |
+| `app/tests/talkDraftSurfaces.test.mjs` | UI-06-014, -018, -022, -029, -032, -037, -041, UI-14-005 |
+| `app/tests/shellHeaderCopy.test.mjs` | UI-01-019, UI-04-001, UI-06-073, -080, UI-14-001, UI-15-025 |
+| `app/tests/personaWizardSteps.test.mjs` | UI-07-052, -058, -072, -074 |
+| `app/tests/voiceCloningConsent.test.mjs` | UI-07-140, -143, -144, -147 |
+
+**87 of the 108 evidence rows.** Per cluster, evidence-blocked before → after:
+
+| Cluster | Before | After | What is left |
+|---|---:|---:|---|
+| Settings (§7) | 57 | 6 | UI-07-051, -126, -127, and the three missing preset chips |
+| Dashboard / Talk (§6) | 14 | 5 | 2 inert handles + 3 prose rows |
+| Utilities / Models + Diagnostics (§8/§9) | 11 | 1 | UI-09-006 only |
+| Cross-cutting / orphans (§15) | 11 | 3 | UI-15-007, -012, -014 |
+| Status / Shell / Onboarding (§14/§1/§4/§2) | 13 | 4 | 3 prose onboarding rows + UI-14-007 |
+| Overlay windows (§12) | 2 | 2 | owned by the overlays lane |
+
+Nothing in the table is asserted from a run of the generator by this lane — this
+lane's toolchain permissions do not include running `tools/parity_ledger_build.py`
+(see *Regeneration*, below). Every row above is claimed because a test that
+**passes** names its printed anchor, which is the collector's own rule; the
+authority is the regenerated ledger, not this table.
+
+One partial regeneration landed mid-objective from the overlays lane and is
+consistent with that claim: it moved the ledger to **381 `wired` / 21
+`intentional_cut` / 36 `blocked`** with the first six of these files present and
+the last four absent, and every row it left blocked is either on the list below
+or covered by the four files it had not yet seen. That figure also contains the
+overlays lane's own product work, so it is not attributable to this objective and
+is quoted only as corroboration.
+
+## C-5 — a comment can still count as evidence: the regex-literal hole
+
+**This is the most important finding of the objective, and it is C-0's comment
+hole reopened by a different route.**
+
+`strip_js_comments()` in `tools/parity_evidence.py` tracks string state so that
+`"https://…"` is not mistaken for a comment. It does not track **regex
+literals**. A `/` is treated as a comment opener only when followed by `/` or
+`*`, which keeps `/foo/` intact — but the characters *inside* a regex literal
+are still scanned as ordinary source, so a quote character inside a character
+class opens a string state that never closes:
+
+```js
+return String(value ?? '').replace(/[&<>"']/g, (c) => ESCAPES[c]);
+```
+
+The `"` opens a double-quoted string. It closes at the next `"` anywhere later
+in the file. Everything between — **including every comment** — is emitted
+verbatim instead of being blanked.
+
+Five files in the production closure contain that exact escape-HTML regex,
+including the production bootstrap itself:
+
+- `app/src/renderer/bootstrap/signalDeskApp.js:76`
+- `app/src/renderer/features/applicationProfiles.js:192`
+- `app/src/renderer/features/messageRescuePanel.js:39`
+- `app/src/renderer/features/workflowBuilder.js:264`
+- `app/src/renderer/talkDrafts.js:30`
+
+**A confirmed victim: `UI-06-038`.** The row names `#sendActionSelect`. That id
+occurs in exactly three places in the repository: `index.html` (legacy),
+`main.js` (legacy), and one **comment** at `app/src/renderer/talkDrafts.js:80` —
+which sits after the regex on line 30. The ledger reports the row as
+`Production anchor(s): #sendActionSelect in app/src/renderer/signal-desk.html`.
+It is not in `signal-desk.html`, and it is not in any executable line of the
+production closure. The row is a **product** gap (Signal Desk replaced the
+control with `#sdDeliveryType`), not an evidence gap, and it is currently
+mis-classified.
+
+This lane did **not** cover UI-06-038, deliberately: crediting it would have
+promoted a row whose production anchor does not exist.
+
+The fix belongs to whoever owns `tools/parity_evidence.py` — the scanner needs
+to recognise a regex literal (a `/` in expression position) and skip to its
+closing `/`. Until then the `wired` count carries an unknown amount of
+comment-derived evidence, and `tests/test_parity_evidence_rules.py` needs a case
+for it so it cannot return a third time.
+
+## C-6 — two rows whose named handle is inert on the shipping page
+
+Not evidence gaps, and not covered here. Both are cases where the collector's
+"an id may live only in JS" fallback resolved a handle that production never
+attaches to an element.
+
+**`UI-06-021` and `UI-14-007` — `#draftConfidence`.** `features/drafts.js` is in
+the production closure and calls `document.getElementById('draftConfidence')`,
+so the id resolves. But `signal-desk.html` contains no such element:
+`renderConfidenceBadge()` is a permanent no-op on the shipping page. The
+capability is not missing — Talk's meta strip shows the score in
+`#sdConfidenceValue` and `#sdConfidenceBarFill`, and
+`app/tests/talkDraftSurfaces.test.mjs` now evidences that replacement explicitly
+so it is a named substitution rather than an assumption. But the rows as written
+name a handle that does nothing, so they stay `blocked`. Either they get a
+`ROW_ANCHORS`-style human ruling pointing at the meta strip, or they are cut with
+that replacement named.
+
+**`UI-06-038` — `#sendActionSelect`.** See C-5. Replaced by `#sdDeliveryType`,
+which `talkDrafts.js` reads for exactly the contract the old select had.
+
+## What is still `blocked (evidence)` after this objective, and why
+
+Twenty-one rows. Grouped by what each actually needs — and only three of them
+would be closed by more tests of the kind this objective wrote.
+
+| Rows | Why still blocked |
+|---|---|
+| `UI-07-051` | The Persona Wizard container row, anchored on the CLASS `.sd-persona-flow` rather than on any of the wizard ids. `personaWizardSteps.test.mjs` now drives the wizard itself, but nothing names that class, and naming a CSS class in a unit test to satisfy the collector would be exactly the kind of token-matching this ledger exists to refuse. A production-target QA scenario that opens the flow is the honest close. |
+| `UI-07-126`, `UI-15-012` | `setDefaultVoicePreset` / `clearDefaultVoicePreset`. Both source rows already say it: the backend routes and the `backend.js` wrappers exist and **no UI triggers them**. Confirmed still true — the only occurrences in the renderer are the wrapper definitions and the export list. Covering them would evidence a route rather than a surface, which is the failure C-2 named. Blocked, and it is a product decision (build the control or cut it), not audit work. |
+| `UI-07-127` | The Blend group header, anchored on `#sdVoiceBlendCards` in `features/studioWorkspace.js`. Reachable by the same method as the rest; simply not reached before this objective closed. The smallest remaining item. |
+| `UI-07-133`, `-134`, `-138` | The `[data-blend-preset]` / `[data-mod-preset]` quick chips. **A real product gap, carried unchanged from 11B's C-3**: `voiceStudio.js` queries them and `signal-desk.html` does not contain them. No test can honestly evidence a control that is not on the page. |
+| `UI-09-006` | Anchored only on the symbol `retranscribeRecording` and on `POST /recordings/:id/retranscribe` (with the literal placeholder). `utilitiesDiagnosticsPanels.test.mjs` genuinely exercises the control — it clicks the real Re-transcribe button on a rendered recording row and asserts `POST /recordings/rec-77/retranscribe` — so if the regenerated ledger still shows this row blocked, the reason is the needle spelling, not missing coverage. |
+| `UI-06-063`, `-074`, `-076`, `UI-02-005`, `-007`, `-012`, `UI-12-008`, `UI-15-007` | **Prose-only, and deliberately left that way** — 11B's C-3 already ruled each of them and nothing in 11C changes the ruling. `UI-15-007` (donation prompt) records that none exists anywhere in scope; `UI-06-063` describes overlay pushes production does not perform; the three §2 rows are unnamed `[data-flow-step]` sections addressed by index, and anchoring them to the shared `#sdOnboarding` container is exactly the convenience mapping `ROW_ANCHORS` forbids. |
+| `UI-06-021`, `UI-14-007`, `UI-06-038` | Inert handles — see C-6. These are product/anchoring rulings, not evidence work. |
+| `UI-15-014` | `deleteWakeModel()` / `DELETE /wake/models/:id` are exported and have **no UI trigger** — the source row says so and asks for verification. Confirmed: no production caller. A test could drive the wrapper, but that would evidence a route rather than a surface, which is the failure mode C-2 named. Left blocked. |
+| `UI-12-003` | Overlay windows; the overlays lane owns it. |
+
+## Regeneration
+
+`python3 tools/parity_ledger_build.py` and `python3 tools/parity_validator.py`
+were **not** run by this lane: its `taskSafe` allowlist covers `node --test` and
+`pytest` but not arbitrary interpreter invocations, and the widening commit
+(`f091714`) landed after this session's tool permissions were fixed at spawn.
+The ledger must therefore be regenerated by the director (or by any lane that can
+run the generator) before the numbers above are treated as measured. Every claim
+in this section is stated so it can be checked against that regeneration rather
+than in place of it.

@@ -158,15 +158,58 @@ HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 SCRIPT_BLOCK_RE = re.compile(r"(<script\b[^>]*>)(.*?)(</script>)", re.DOTALL | re.IGNORECASE)
 
 
+_REGEX_PRECEDING_KEYWORDS = frozenset({
+    "return", "typeof", "instanceof", "in", "of", "new", "delete", "void",
+    "case", "do", "else", "yield", "await", "throw",
+})
+
+
+def _regex_allowed(emitted: list[str]) -> bool:
+    """Whether a `/` at this point opens a regex literal rather than divides.
+
+    Decided from what was emitted before it: nothing (start of file), an
+    operator or opening bracket, or a keyword that can precede a value. After
+    an identifier, number, `)` or `]` a slash is division.
+    """
+    k = len(emitted) - 1
+    while k >= 0 and emitted[k].strip() == "":
+        k -= 1
+    if k < 0:
+        return True
+    prev = emitted[k][-1:]
+    if prev in "(,=:[!&|?{};+-*%~^<>":
+        return True
+    if not (prev.isalnum() or prev in "_$)]"):
+        return True
+    word = ""
+    while k >= 0 and (emitted[k][-1:].isalnum() or emitted[k][-1:] in "_$"):
+        word = emitted[k][-1:] + word
+        k -= 1
+    return word in _REGEX_PRECEDING_KEYWORDS
+
+
 def strip_js_comments(text: str) -> str:
     """`text` with // and /* */ comments blanked, string literals preserved.
 
     A hand-written scanner rather than a regex because the two things that must
     not be confused -- `//` starting a comment and `//` inside `"https://..."` --
     are indistinguishable without tracking string state. Quotes, apostrophes in
-    template literals and escapes are all handled; a `/` is treated as a comment
-    opener only when the next character is `/` or `*`, which keeps regex literals
-    like `/foo/` intact.
+    template literals and escapes are all handled.
+
+    REGEX LITERALS ARE TRACKED TOO, and that is not a nicety. A literal like
+    `.replace(/[&<>"']/g, ...)` carries a `"` and a `'` inside its character
+    class. Without regex tracking those open a phantom string that closes at
+    the next matching quote somewhere further down the file, and every comment
+    in between survives stripping -- which put the comment hole straight back
+    (a row claimed `#sendActionSelect` shipped when the id existed only in a
+    comment). Five files in the production closure carry that exact
+    escape-HTML regex, the composition root among them, so this was not an
+    edge case.
+
+    A `/` opens a regex only in expression position: at the start of input,
+    after an operator or opening bracket, or after a keyword that can precede
+    a value. After an identifier, a number, or a closing bracket it is
+    division. Inside the literal, a `/` within `[...]` does not close it.
     """
     out: list[str] = []
     i = 0
@@ -189,6 +232,33 @@ def strip_js_comments(text: str) -> str:
             out.append(char)
             i += 1
             continue
+        if char == "/" and i + 1 < length and text[i + 1] not in "/*" and _regex_allowed(out):
+            # A regex literal: copy it verbatim so its contents cannot be
+            # mistaken for string or comment syntax.
+            j = i + 1
+            in_class = False
+            while j < length:
+                cur = text[j]
+                if cur == "\\":
+                    j += 2
+                    continue
+                if cur == "[":
+                    in_class = True
+                elif cur == "]":
+                    in_class = False
+                elif cur == "/" and not in_class:
+                    j += 1
+                    break
+                elif cur == "\n":
+                    # An unterminated literal is not a regex after all; bail out
+                    # and let the ordinary scanner have the character.
+                    j = i
+                    break
+                j += 1
+            if j > i:
+                out.append(text[i:j])
+                i = j
+                continue
         if char == "/" and i + 1 < length:
             nxt = text[i + 1]
             if nxt == "/":

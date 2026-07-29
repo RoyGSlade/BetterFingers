@@ -206,4 +206,89 @@ export const onboardingProdScenarios = [
     },
     screenshots: [{ name: 'escape-cannot-dismiss-the-consent-gate' }],
   },
+  {
+    area: 'onboarding-prod',
+    ui: 'signal-desk-prod',
+    name: 'the-first-run-gate-is-a-four-step-wizard',
+    kind: 'standard',
+    description:
+      'The source inventory describes onboarding as a 4-step wizard -- container, progress dots, title, a '
+      + 'per-step body, Back and a Next whose label changes per step -- and a reading of the production page '
+      + 'that stopped at the consent screen concluded that Signal Desk had replaced it with a single-screen '
+      + 'gate. It has not: #sdOnboarding ships all four steps, and this scenario walks every one of them. '
+      + 'Each step is checked on the three things that make it a wizard rather than a modal: the title '
+      + '(#sdOnboardingTitle) names the step, exactly one .sd-flow__step body is visible at a time, and the '
+      + '.sd-flow__dot progress row marks the current step as current and the ones behind it as done. '
+      + '#sdOnboardBack is hidden on step 1 and present afterwards, and #sdOnboardNext relabels itself '
+      + '"Get started" / "Accept & continue" / "Next" / "Finish". Finish is deliberately never clicked: it '
+      + 'writes the durable consent record, and this scenario is about the wizard\'s shape, not its exit.',
+    backendState: coldBoot,
+    async navigate(page) {
+      await enterFirstRunState(page);
+      await expect(page.locator('#sdOnboarding'), 'the gate must show itself -- nothing here opened it').toBeVisible();
+    },
+    async expects(page) {
+      const title = page.locator('#sdOnboardingTitle');
+      const back = page.locator('#sdOnboardBack');
+      const next = page.locator('#sdOnboardNext');
+      const dots = page.locator('#sdOnboarding .sd-flow__dot');
+      const steps = page.locator('#sdOnboarding .sd-flow__step');
+
+      // One dot per step, and one step body per dot. If these ever disagree the
+      // progress row is lying about how much is left.
+      await expect(dots).toHaveCount(4);
+      await expect(steps).toHaveCount(4);
+
+      // Exactly one body visible at a time -- the property that separates a
+      // wizard from four stacked sections with a scrollbar.
+      const visibleBodies = async () => {
+        let shown = 0;
+        for (let i = 0; i < 4; i += 1) {
+          if (await steps.nth(i).isVisible()) shown += 1;
+        }
+        return shown;
+      };
+
+      const walk = [
+        { title: 'Welcome to BetterFingers', label: 'Get started', backVisible: false },
+        { title: 'Your data stays on this device', label: 'Accept & continue', backVisible: true },
+        { title: 'How it works', label: 'Next', backVisible: true },
+        { title: 'Speech models', label: 'Finish', backVisible: true },
+      ];
+
+      for (let step = 0; step < walk.length; step += 1) {
+        const expected = walk[step];
+        await expect(title, `step ${step + 1} title`).toHaveText(expected.title);
+        await expect(next, `step ${step + 1} forward label`).toHaveText(expected.label);
+        if (expected.backVisible) {
+          await expect(back, `step ${step + 1}: Back is available`).toBeVisible();
+        } else {
+          await expect(back, 'Back is hidden on step 1').toBeHidden();
+        }
+        expect(await visibleBodies(), `step ${step + 1}: exactly one body visible`).toBe(1);
+
+        // The dots are the only thing on screen that says how far along this is,
+        // so their state vocabulary is asserted rather than their mere presence.
+        await expect(dots.nth(step), `dot ${step + 1} is current`).toHaveAttribute('data-state', 'current');
+        for (let done = 0; done < step; done += 1) {
+          await expect(dots.nth(done), `dot ${done + 1} is done`).toHaveAttribute('data-state', 'done');
+        }
+
+        if (step === 1) {
+          // Step 2 gates: consent has to be given before the wizard will move on.
+          await expect(next, 'the consent step holds the wizard').toBeDisabled();
+          await page.locator('#sdOnboardConsent').check();
+          await expect(next).toBeEnabled();
+        }
+        if (step < walk.length - 1) await next.click();
+      }
+
+      // Back really goes back, and un-marks the step it left.
+      await back.click();
+      await expect(title).toHaveText('How it works');
+      await expect(dots.nth(2)).toHaveAttribute('data-state', 'current');
+      await expect(dots.nth(3)).toHaveAttribute('data-state', 'upcoming');
+    },
+    screenshots: [{ name: 'the-first-run-gate-is-a-four-step-wizard' }],
+  },
 ];

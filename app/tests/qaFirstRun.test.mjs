@@ -107,9 +107,12 @@ test('qaDataRoot', async (t) => {
 // It proves the same thing: the scenario module imports cleanly (including
 // its `../harness.mjs` import) and exports the expected scenario count.
 
-test('onboarding-prod.mjs imports cleanly and exports 5 scenarios', async () => {
+// 6 since Wave 11C: `the-first-run-gate-is-a-four-step-wizard` was added when
+// the production page turned out to ship the whole 4-step wizard the source
+// inventory describes, not the single-screen gate a previous reading assumed.
+test('onboarding-prod.mjs imports cleanly and exports 6 scenarios', async () => {
   const mod = await import('./qa/scenarios/onboarding-prod.mjs');
-  assert.equal(mod.onboardingProdScenarios.length, 5);
+  assert.equal(mod.onboardingProdScenarios.length, 6);
   for (const scenario of mod.onboardingProdScenarios) {
     assert.equal(scenario.ui, 'signal-desk-prod');
     assert.equal(scenario.area, 'onboarding-prod');
