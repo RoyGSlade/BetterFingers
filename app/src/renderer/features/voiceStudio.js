@@ -190,6 +190,40 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
     return voiceOptionsCache.find((v) => v.id === id)?.name || id;
   }
 
+  /**
+   * Wave 12A, finding (3): one sentence naming what is actually available to
+   * blend. Exported-in-spirit as a pure string builder so the unit test can
+   * assert the wording without a DOM. Caps the list so a 40-voice install
+   * does not produce a paragraph; the count is always exact, so a truncated
+   * list still tells the truth about how many there are.
+   */
+  function availableVoicesSentence(limit = 6) {
+    if (voiceOptionsCache.length === 0) {
+      return 'No voices are loaded yet, so there is nothing to blend.';
+    }
+    const names = voiceOptionsCache.map((v) => v.name);
+    const shown = names.slice(0, limit);
+    const rest = names.length - shown.length;
+    const list = rest > 0 ? `${shown.join(', ')} and ${rest} more` : shown.join(', ');
+    return `No blend layers — auditioning the base voice alone. ${names.length} ${names.length === 1 ? 'voice is' : 'voices are'} available to blend: ${list}.`;
+  }
+
+  /**
+   * Wave 12A, finding (3): the active voice, named in text.
+   *
+   * The <select> knows which voice is selected, but a closed native select on
+   * a dark page reads as a slab of chrome, and the product owner reported not
+   * being able to see which voice was active at all. Naming it in page text
+   * beside the control answers the question without opening anything -- and is
+   * assertable by QA, which a rendered <select> value is not.
+   */
+  function renderActiveVoiceName(doc) {
+    const el = doc.getElementById('voiceActiveVoiceName');
+    if (!el) return;
+    const baseId = doc.getElementById('settingReviewTtsVoiceHint')?.value || '';
+    el.textContent = baseId ? voiceLabel(baseId) : 'None selected';
+  }
+
   function messageEl(doc) {
     return doc.getElementById('profileMessage');
   }
@@ -199,24 +233,38 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
   }
 
   // --- Blend rows -----------------------------------------------------
+  //
+  // WAVE 12A CLASS NAMES. Every class emitted here used to be a LEGACY one --
+  // `setting-row`, `settings-input`, `min-w-160`, `secondary-button`,
+  // `setting-desc`, `voice-blend-weight-label`. Those live in
+  // styles/base.css, and signal-desk.html links only styles/signal-desk.css.
+  // On the production page (the default page since the Wave 11 flip) that made
+  // this entire Blend surface render as raw unstyled HTML: the product owner
+  // reported it as "the remove button on blend voices looks like a generic
+  // html button" and "the dropdowns look like blank html". The names below are
+  // the Signal Desk primitives, all defined in styles/signal-desk.css.
   function renderVoiceBlendRows(doc) {
     const container = doc.getElementById('voiceBlendRows');
     if (!container) return;
     container.innerHTML = '';
     if (voiceBlendLayers.length === 0) {
       const empty = doc.createElement('p');
-      empty.className = 'setting-desc';
-      empty.textContent = 'No blend layers — auditioning the base voice alone.';
+      empty.className = 'sd-voice-studio__hint';
+      // Naming the candidates is the point, not the empty state itself: before
+      // this the surface said only "no layers", so the voices available to
+      // blend were discoverable ONLY by adding a layer and reading the
+      // dropdown. That is the UI half of the product owner's finding (3).
+      empty.textContent = availableVoicesSentence();
       container.appendChild(empty);
       renderEffectiveMix(doc);
       return;
     }
     voiceBlendLayers.forEach((layer, index) => {
       const row = doc.createElement('div');
-      row.className = 'setting-row voice-blend-row';
+      row.className = 'sd-voice-studio__blend-row';
 
       const select = doc.createElement('select');
-      select.className = 'settings-input min-w-160';
+      select.className = 'sd-select';
       select.setAttribute('aria-label', `Blend voice ${index + 1}`);
       for (const voice of voiceOptionsCache) {
         const option = doc.createElement('option');
@@ -237,11 +285,10 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
       weightInput.max = '1';
       weightInput.step = '0.05';
       weightInput.value = String(layer.weight);
-      weightInput.className = 'settings-input';
       weightInput.setAttribute('aria-label', `Blend voice ${index + 1} weight`);
 
       const weightLabel = doc.createElement('span');
-      weightLabel.className = 'status-label voice-blend-weight-label';
+      weightLabel.className = 'sd-voice-studio__blend-weight';
       weightLabel.textContent = layer.weight.toFixed(2);
       weightInput.addEventListener('input', () => {
         voiceBlendLayers[index].weight = parseFloat(weightInput.value);
@@ -252,7 +299,7 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
 
       const removeButton = doc.createElement('button');
       removeButton.type = 'button';
-      removeButton.className = 'secondary-button';
+      removeButton.className = 'sd-btn sd-btn--danger';
       removeButton.textContent = 'Remove';
       removeButton.setAttribute('aria-label', `Remove blend voice ${index + 1}`);
       removeButton.addEventListener('click', () => {
@@ -271,6 +318,9 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
   }
 
   function renderEffectiveMix(doc) {
+    // The active-voice readout tracks the same state, and every caller of
+    // renderEffectiveMix is a point where that state may have moved.
+    renderActiveVoiceName(doc);
     const el = doc.getElementById('voiceEffectiveMix');
     if (!el) return;
     const baseSelect = doc.getElementById('settingReviewTtsVoiceHint');
@@ -406,32 +456,35 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
     container.innerHTML = '';
     if (loadedVoicePresets.length === 0) {
       const empty = doc.createElement('p');
-      empty.className = 'setting-desc';
+      empty.className = 'sd-voice-studio__hint';
       empty.textContent = 'No saved presets yet.';
       container.appendChild(empty);
       return;
     }
     for (const preset of loadedVoicePresets) {
+      // Same Wave 12A class swap as renderVoiceBlendRows: `setting-row` /
+      // `setting-info` / `setting-control` / `setting-desc` / `status-label`
+      // are base.css names, and signal-desk.html does not load base.css.
       const row = doc.createElement('div');
-      row.className = 'setting-row voice-preset-row';
+      row.className = 'sd-voice-studio__blend-row';
 
       const info = doc.createElement('div');
-      info.className = 'setting-info';
+      info.className = 'sd-voice-studio__active';
       const label = doc.createElement('span');
-      label.className = 'status-label';
+      label.className = 'sd-voice-studio__active-name';
       label.textContent = preset.name;
       const desc = doc.createElement('span');
-      desc.className = 'setting-desc';
+      desc.className = 'sd-voice-studio__hint';
       const blendKeys = Object.keys(preset.blend || {});
       desc.textContent = `${preset.base || 'default voice'}${blendKeys.length ? ` + ${blendKeys.join(', ')}` : ''}`;
       info.appendChild(label);
       info.appendChild(desc);
 
       const controls = doc.createElement('div');
-      controls.className = 'setting-control';
+      controls.className = 'sd-actions-row';
       const applyButton = doc.createElement('button');
       applyButton.type = 'button';
-      applyButton.className = 'secondary-button';
+      applyButton.className = 'sd-btn';
       applyButton.textContent = 'Apply';
       applyButton.addEventListener('click', () => {
         const select = doc.getElementById('voicePresetSelect');
@@ -440,7 +493,7 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
       });
       const deleteButton = doc.createElement('button');
       deleteButton.type = 'button';
-      deleteButton.className = 'secondary-button';
+      deleteButton.className = 'sd-btn sd-btn--danger';
       deleteButton.textContent = 'Delete';
       deleteButton.addEventListener('click', async () => {
         try {
@@ -572,6 +625,16 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
       });
     });
     activeDoc.getElementById('voicePauseStyle')?.addEventListener('change', dirty);
+
+    // Wave 12A. The base-voice select had NO change listener at all: picking a
+    // different read-aloud voice neither marked the profile dirty nor moved
+    // the effective-mix line, so the blend readout could sit there describing
+    // a base the user had already changed away from. Found while wiring the
+    // active-voice readout, which needs this same event.
+    activeDoc.getElementById('settingReviewTtsVoiceHint')?.addEventListener('change', () => {
+      renderEffectiveMix(activeDoc);
+      dirty();
+    });
 
     activeDoc.getElementById('addVoiceLayerButton')?.addEventListener('click', () => {
       if (voiceBlendLayers.length >= MAX_BLEND_LAYERS) return;

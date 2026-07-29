@@ -106,6 +106,15 @@ import { overlayProdScenarios } from './overlay-prod.mjs';
 // Quit is asserted present and labelled, never clicked -- clicking it would quit
 // the Electron app the whole suite is running inside.
 import { shellStatusProdScenarios } from './shell-status-prod.mjs';
+// Wave 12A (sup-ui-polish): the native form-control contract -- that no
+// reachable select/button/file input on the production page is still a raw
+// browser widget, that option text clears WCAG AA against its own background
+// (the select popup is OS-drawn, so no screenshot can cover it), and that the
+// active voice is named on screen. `ui: 'signal-desk-prod'`. Read the file
+// header for why every assertion here is a computed style rather than an
+// image: these are visual findings whose failure mode is invisible to a
+// screenshot suite.
+import { uiControlsProdScenarios } from './ui-controls-prod.mjs';
 
 export const scenarios = [
   ...baselineScenarios,
@@ -137,6 +146,7 @@ export const scenarios = [
   ...overlayProdScenarios,
   ...signalDeskProdSweepScenarios,
   ...shellStatusProdScenarios,
+  ...uiControlsProdScenarios,
   // Ordered last among the prod-target scenarios as belt-and-braces, not as a
   // load-bearing requirement: the auto-dismiss sentinel these use is
   // single-shot (harness.mjs), so a first-run scenario cannot leave the shared

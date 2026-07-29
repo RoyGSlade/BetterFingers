@@ -79,6 +79,45 @@ function escapeHtml(value) {
 }
 
 /**
+ * Fetches the persona list without ever downgrading a good list to an empty one.
+ *
+ * The product owner's build rendered #sdSetCurrentPreset with ZERO options on a
+ * clean profile. That cannot be a data problem: llm_engine.load_personas_v2()
+ * falls back to _DEFAULT_PERSONAS whenever personas.yaml is missing, empty or
+ * corrupt, so a healthy backend always answers with at least the built-ins. An
+ * empty list therefore only ever means the REQUEST failed -- and the old code
+ * turned that into `loadedPersonas = {}` silently, presenting a fault as if the
+ * user simply had no personas.
+ *
+ * Three rules, all about not lying to the user:
+ *   * a failure KEEPS the previous list rather than blanking a working dropdown
+ *     (and the user's current selection with it);
+ *   * it is retried once, because the field failure is a slow first response
+ *     against api/backend.js's 2500 ms budget, not a permanently dead endpoint;
+ *   * an empty or non-object payload counts as a failure, not as an empty state.
+ *
+ * @param {() => Promise<object>} fetchPersonas
+ * @param {object} previous last known-good list, returned unchanged on failure
+ * @returns {Promise<{personas: object, failed: boolean}>}
+ */
+export async function loadPersonaList(fetchPersonas, previous = {}) {
+  const usable = (value) => Boolean(value)
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && Object.keys(value).length > 0;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const fetched = await fetchPersonas();
+      if (usable(fetched)) return { personas: fetched, failed: false };
+    } catch (_error) {
+      // fall through to the retry / to the caller's last-good list
+    }
+  }
+  return { personas: previous, failed: true };
+}
+
+/**
  * @param {Document} doc
  * @returns {{ destroy(): void }} teardown handle -- closes the voice-status
  *   socket, clears the status-bar poll, and tears down the Talk signal core.
@@ -717,11 +756,12 @@ export function startSignalDeskApp(doc = document) {
 
   let loadedPersonas = {};
 
+  // See loadPersonaList() above for the rule and the reasoning.
   async function refreshPersonasAndVoices() {
-    try {
-      loadedPersonas = await api.fetchPersonas();
-    } catch (_error) {
-      loadedPersonas = {};
+    const { personas, failed } = await loadPersonaList(() => api.fetchPersonas(), loadedPersonas);
+    loadedPersonas = personas;
+    if (failed && !Object.keys(loadedPersonas).length) {
+      showToast('Could not load the persona list; the preset dropdown may be empty.', 'warning');
     }
     settingsWorkspace.setPersonaOptions(Object.keys(loadedPersonas));
     // Library's persona filter maps to /library/search?persona=, which the

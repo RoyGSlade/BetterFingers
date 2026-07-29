@@ -345,6 +345,97 @@ test('createStudioWorkspaceFeature: selectPersona() switches selection; selectin
   assert.equal(feature.getSelectedName(), 'Direct');
 });
 
+// --- Wave 12A: the blend roster is named on screen (product-owner finding 3) --
+//
+// "The user cannot SEE [...] what voices exist to blend." The "+ Add Voice"
+// button picks the first unused voice out of voiceOptionsCache and adds it;
+// until this wave nothing on the page listed that roster, so it was
+// discoverable only by clicking until the button ran out of voices.
+//
+// `blendCards` is deliberately left off the stub element set below:
+// buildBlendCard() reaches for the global `document`, which does not exist
+// under node --test, and the roster line is rendered by the same pass without
+// needing it. Same DOM-free convention as the smoke tests above.
+
+function stubTextElement() {
+  return { textContent: '', disabled: false };
+}
+
+const THREE_VOICES = [
+  { id: 'af_bella', name: 'Bella' },
+  { id: 'af_nicole', name: 'Nicole' },
+  { id: 'am_michael', name: 'Michael' },
+];
+
+test('the blend strip names the voices still available to blend', () => {
+  const blendAvailable = stubTextElement();
+  const feature = createStudioWorkspaceFeature({ elements: { blendAvailable } });
+  feature.setPersonas(
+    { Natural: { prompt: 'p1' } },
+    { voices: THREE_VOICES, blend: { base: { voiceId: 'af_bella', label: 'Bella' }, layers: [] } },
+  );
+
+  assert.match(blendAvailable.textContent, /^Available to blend: /);
+  assert.match(blendAvailable.textContent, /Nicole/);
+  assert.match(blendAvailable.textContent, /Michael/);
+  assert.doesNotMatch(
+    blendAvailable.textContent,
+    /Bella/,
+    'the base voice is already in the mix, so offering it as "available to blend" would be a lie',
+  );
+});
+
+test('the blend strip says so plainly when every voice is already in the mix', () => {
+  const blendAvailable = stubTextElement();
+  const feature = createStudioWorkspaceFeature({ elements: { blendAvailable } });
+  feature.setPersonas(
+    { Natural: { prompt: 'p1' } },
+    {
+      // Two voices, both used -- exhausted roster, but still under the layer cap,
+      // so this is the "nothing left to offer" case and not the "blend is full"
+      // one. The two failure modes read identically to a user staring at a
+      // disabled button, which is why each gets its own sentence.
+      voices: THREE_VOICES.slice(0, 2),
+      blend: {
+        base: { voiceId: 'af_bella', label: 'Bella' },
+        layers: [{ voiceId: 'af_nicole', weight: 0.3 }],
+      },
+    },
+  );
+
+  assert.equal(blendAvailable.textContent, 'Every available voice is already in this blend.');
+});
+
+test('the blend strip distinguishes a full blend from an exhausted roster', () => {
+  const blendAvailable = stubTextElement();
+  const feature = createStudioWorkspaceFeature({ elements: { blendAvailable } });
+  feature.setPersonas(
+    { Natural: { prompt: 'p1' } },
+    {
+      // Four voices, only two of them used -- but the blend is at
+      // MAX_BLEND_LAYERS, so the reason "+ Add Voice" is disabled is the cap,
+      // not the roster. Saying "every voice is already in this blend" here
+      // would be false and would send the user looking for more voices.
+      voices: [...THREE_VOICES, { id: 'bf_emma', name: 'Emma' }],
+      blend: {
+        base: { voiceId: 'af_bella', label: 'Bella' },
+        layers: [{ voiceId: 'af_nicole', weight: 0.3 }, { voiceId: 'am_michael', weight: 0.3 }],
+      },
+    },
+  );
+
+  assert.match(blendAvailable.textContent, /^Blend is full at 2 layers/);
+  assert.doesNotMatch(blendAvailable.textContent, /Emma/, 'Emma is available; the cap is what blocks adding her');
+});
+
+test('the blend strip does not claim voices are available before any have loaded', () => {
+  const blendAvailable = stubTextElement();
+  const feature = createStudioWorkspaceFeature({ elements: { blendAvailable } });
+  feature.setPersonas({ Natural: { prompt: 'p1' } }, { voices: [] });
+
+  assert.match(blendAvailable.textContent, /nothing to blend/);
+});
+
 // --- persona entry points: injected hook beats the cross-document fallback ----
 //
 // Both handlers can either call an injected hook or reach across the document

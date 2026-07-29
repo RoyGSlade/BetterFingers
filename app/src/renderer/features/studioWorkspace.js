@@ -569,6 +569,8 @@ export const STUDIO_ELEMENT_IDS = {
 
   blendCards: 'sdVoiceBlendCards',
   addVoiceButton: 'sdAddVoiceButton',
+  // Wave 12A finding (3): names the voices "+ Add Voice" can actually reach.
+  blendAvailable: 'sdVoiceBlendAvailable',
   previewButton: 'sdVoicePreviewButton',
   previewText: 'sdVoicePreviewText',
 
@@ -1002,7 +1004,29 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
       cards.forEach((card, index) => container.insertBefore(buildBlendCard(card, index), anchor));
     }
     if (els.addVoiceButton) els.addVoiceButton.disabled = blendLayers.length >= MAX_BLEND_LAYERS;
+    if (els.blendAvailable) els.blendAvailable.textContent = describeBlendableVoices();
     if (els.previewText) els.previewText.textContent = livePreview.input || 'I should be there around six.';
+  }
+
+  /**
+   * Wave 12A, finding (3). The blend strip's cards name the voices already IN
+   * the mix; nothing named the ones still available, so "+ Add Voice" was a
+   * button that silently produced a voice the user had never seen offered.
+   * This is the sentence that fixes that. Pure (reads module state, returns a
+   * string) so app/tests/studioWorkspace.test.mjs can assert the wording.
+   */
+  function describeBlendableVoices() {
+    if (voiceOptionsCache.length === 0) return 'No voices are loaded yet, so there is nothing to blend.';
+    const used = new Set([blendBase.voiceId, ...blendLayers.map((l) => l.voiceId)]);
+    const free = voiceOptionsCache.filter((v) => !used.has(v.id)).map((v) => v.name);
+    if (blendLayers.length >= MAX_BLEND_LAYERS) {
+      return `Blend is full at ${MAX_BLEND_LAYERS} layers — remove one to add a different voice.`;
+    }
+    if (free.length === 0) return 'Every available voice is already in this blend.';
+    const shown = free.slice(0, 6);
+    const rest = free.length - shown.length;
+    const list = rest > 0 ? `${shown.join(', ')} and ${rest} more` : shown.join(', ');
+    return `Available to blend: ${list}.`;
   }
 
   function buildBlendCard(card, index) {
@@ -1311,6 +1335,9 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
       return;
     }
     blendLayers.push({ voiceId: nextVoice.id, weight: 0.3 });
+    // Wave 12A: say WHICH voice was just added. This used to be silent, and
+    // the new card is the only clue -- easy to miss in a row of them.
+    hks.showToast?.(`Added ${nextVoice.name} to the blend.`, 'info');
     renderVoiceBlendStrip();
   }
 

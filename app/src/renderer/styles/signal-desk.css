@@ -3608,10 +3608,16 @@
   padding: var(--sd-space-8) var(--sd-space-12);
   border-radius: var(--sd-radius-pill);
   border: 1px solid var(--sd-border);
-  background: var(--sd-surface-inset);
+  /* background-color, not the shorthand -- see .sd-review-select. */
+  background-color: var(--sd-surface-inset);
   color: var(--sd-text-primary);
   font-family: inherit;
   font-size: var(--sd-font-sm);
+}
+
+select.sd-util-select,
+select.sd-util-input {
+  padding-right: 40px;
 }
 
 .sd-util-input:focus,
@@ -4332,10 +4338,15 @@
   padding: var(--sd-space-8) var(--sd-space-12);
   border-radius: var(--sd-radius-pill);
   border: 1px solid var(--sd-border);
-  background: var(--sd-surface-inset);
+  /* background-color, not the shorthand -- see .sd-review-select. */
+  background-color: var(--sd-surface-inset);
   color: var(--sd-text-primary);
   font-family: inherit;
   font-size: var(--sd-font-sm);
+}
+
+select.sd-set-select {
+  padding-right: 40px;
 }
 
 .sd-set-input:focus,
@@ -4955,21 +4966,43 @@
   min-height: 54px;
 }
 
+/* Wave 12A. This class is worn by SELECTS *and* by four text/number inputs
+   (#settingReviewTtsSpeed, #voicePreviewText, #voicePresetNameInput,
+   #voiceCloneName), so it can only carry the shared box. It used to hard-code
+   a chevron background, which meant those four text inputs each rendered a
+   dropdown arrow they could not act on. The chevron now comes from the
+   element-level `select` rule at the end of this file, which reaches exactly
+   the elements that actually open a list. */
 .sd-review-select {
-  appearance: none;
-  padding: var(--sd-space-8) 22px var(--sd-space-8) var(--sd-space-12);
+  box-sizing: border-box;
+  padding: var(--sd-space-8) var(--sd-space-12);
   border-radius: var(--sd-radius-pill);
   border: 1px solid var(--sd-border);
-  background: var(--sd-surface-raised) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%2394A3B8' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 8px center;
-  color: var(--sd-text-secondary);
+  /* `background-color`, never the `background` shorthand: the shorthand resets
+     background-image, which would erase the chevron the element-level `select`
+     rule paints (class 0-1-0 beats element 0-0-1). Same reason in the four
+     other select families below. */
+  background-color: var(--sd-surface-raised);
+  color: var(--sd-text-primary);
   font-family: inherit;
   font-size: var(--sd-font-sm);
+}
+
+select.sd-review-select {
+  padding-right: 40px;
   cursor: pointer;
 }
 
-.sd-review-select option {
-  color: #000;
+.sd-review-select:focus,
+.sd-review-select:focus-visible {
+  outline: none;
+  border-color: var(--sd-cyan);
 }
+
+/* `.sd-review-select option { color: #000 }` lived here and was the direct
+   cause of finding (2) -- black option text in a popup the platform paints
+   dark. Option colors are now set once, on `select option`, in the NATIVE FORM
+   CONTROL CONTRACT block at the end of this file. */
 
 .sd-review-footer {
   flex-shrink: 0;
@@ -5220,14 +5253,23 @@
 }
 
 .sd-input {
+  box-sizing: border-box;
   width: 100%;
   padding: var(--sd-space-8) var(--sd-space-12);
-  background: var(--sd-surface-inset);
+  /* background-color, not the shorthand -- see .sd-review-select. */
+  background-color: var(--sd-surface-inset);
   border: 1px solid var(--sd-border);
   border-radius: var(--sd-radius-chip);
   color: var(--sd-text-primary);
   font-family: inherit;
   font-size: var(--sd-font-sm);
+}
+
+/* The five persona-wizard selects wear .sd-input. Keep the family's 8px chip
+   radius; take the padding that leaves room for the chevron. */
+select.sd-input {
+  padding-right: 40px;
+  border-radius: var(--sd-radius-chip);
 }
 
 .sd-input:focus-visible {
@@ -5894,13 +5936,22 @@
 }
 
 .sd-library-filters__control {
-  padding: 6px 8px;
+  padding: 6px 34px 6px 8px;
   border-radius: var(--sd-radius-8);
   border: 1px solid var(--sd-border);
-  background: var(--sd-surface);
+  /* background-color, not the shorthand -- see .sd-review-select. */
+  background-color: var(--sd-surface);
   color: var(--sd-text-primary);
   font-family: inherit;
   font-size: var(--sd-font-sm);
+}
+
+/* This family sits in a tight filter bar, so its chevron rides closer in than
+   the 12px default. Overriding position only -- the image, the backplate and
+   the popup colors all still come from the one `select` rule. */
+select.sd-library-filters__control {
+  background-position: right 9px center, right 0 center;
+  background-size: 10px 6px, 24px 100%;
 }
 
 .sd-library-filters__control:focus {
@@ -6598,4 +6649,349 @@
   color: var(--sd-text-primary);
   border-color: var(--sd-cyan);
   background: rgba(34, 211, 238, .08);
+}
+
+/* ==========================================================================
+   NATIVE FORM CONTROL CONTRACT (Wave 12A, Objective A)
+   ==========================================================================
+
+   WHY THIS BLOCK EXISTS. The product owner's hand-test of the flipped build
+   produced five findings that all reduce to one cause: signal-desk.html links
+   ONE stylesheet (this file, at its line 19) and nothing else, and this file
+   styled selects/file-inputs/buttons only through per-family CLASSES. Anything
+   the page or a feature module rendered without one of those classes fell back
+   to the browser's own Chromium/GTK widget on a #0A0E14 page. Measured before
+   this block landed:
+
+     * 36 <select> elements across six different class families
+       (.sd-input / .sd-util-select / .sd-set-select / .sd-review-select /
+       .sd-library-filters__control / .sd-select), of which exactly ONE
+       (.sd-review-select) set `appearance: none`. The other five left the
+       native GTK dropdown arrow -- oversized, hard-edged, no backplate.
+       Findings (1) and (10).
+     * `.sd-select` (signal-desk.html #sdSelectedContactPicker) was never
+       defined in this file at all: a literally unstyled control. Finding (10).
+     * `.sd-review-select option { color: #000 }` painted BLACK option text.
+       On Linux/GTK the native popup takes its background from the system
+       theme, so on a dark desktop that is black-on-dark. That rule is what
+       finding (2) -- "pause style brings up black text hard to see options",
+       i.e. #voicePauseStyle -- was describing. It is deleted below.
+     * 3 <input type="file"> with no styling whatsoever, and feature modules
+       emitting legacy class names (.secondary-button, .settings-input,
+       .setting-row, ...) that exist only in styles/base.css -- a stylesheet
+       this page does not load. Findings (4) and (10).
+
+   THE FIX IS AT THE ELEMENT LEVEL, NOT PER CONTROL. Every rule below is keyed
+   on the ELEMENT (`select`, `button`, `input[type=file]`), specificity 0-0-1,
+   so it is the floor for every such control that is reachable today or added
+   later, and every existing class rule (0-1-0) still wins where it
+   deliberately differs. Adding a sixth select class can no longer reintroduce
+   an unstyled dropdown.
+
+   NATIVE POPUP LEGIBILITY -- the decision, and why. A <select>'s option list
+   is drawn by the platform, not by the page, so page CSS does not reach it on
+   Linux/GTK the way it reaches the closed control. Two ways out:
+     (a) replace all 36 selects with custom listboxes, or
+     (b) tell the platform what palette to draw in.
+   (b) was chosen. (a) means hand-reimplementing keyboard interaction,
+   typeahead, scroll containment and the ARIA listbox pattern 36 times, days
+   before a release, and every reimplementation is a fresh accessibility
+   regression surface -- for a purely cosmetic win. (b) is two declarations:
+     * `color-scheme: dark` on :root and on `select` -- the standardised signal
+       that makes Chromium request the DARK native widget set, which is what
+       actually repaints the popup chrome; and
+     * explicit `background-color`/`color` on `option`/`optgroup`, which
+       Chromium honours inside the popup on Linux and Windows.
+   Both are set, because neither alone covers every platform: color-scheme
+   fixes the popup chrome, the option colors fix the text. The page has no
+   light theme today (#sdSetTheme's three options have no matching CSS anywhere
+   in this file -- documented, not fixed here), so pinning `dark` states what
+   already ships rather than adding a mode.
+   ========================================================================== */
+
+/* `color-scheme` makes Chromium draw native widgets (select popups,
+   scrollbars, checkbox and range chrome) from the DARK set instead of the
+   light default.
+
+   `font-family` is here because of what the Wave 12A QA scenario found on its
+   first run: the page font was declared on `.sd-shell` and NOWHERE else, so
+   every control that is not a descendant of the shell inherited the UA
+   default and rendered in TIMES NEW ROMAN. That is 34 buttons and 5 selects on
+   the shipping page -- the whole persona wizard, the Foundry, the contact
+   wizard, the onboarding flow, the confirm dialogs and the toast close button,
+   i.e. exactly the overlay surfaces that sit outside the shell grid. Serif
+   text in a sans-serif app is a large part of what reads as "blank html".
+   Declaring it on :root makes it the document floor; `.sd-shell`'s own
+   declaration is left in place as the (now redundant) local statement.
+
+   font-SIZE is deliberately NOT set here: 23 rules in this file use `rem`, and
+   moving the root size off 16px would silently rescale all of them. */
+:root {
+  color-scheme: dark;
+  font-family: var(--sd-font-family);
+}
+
+/* --- Selects -------------------------------------------------------------
+   One treatment: our own chevron plus a distinguishable backplate (a tinted
+   full-height slab with a 1px divider, clipped to the control's own radius),
+   replacing the native arrow the user called "big [...] out of place, wrong
+   size, no distinguishable backplate". */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  max-width: 100%;
+  font-family: inherit;
+  font-size: var(--sd-font-sm);
+  line-height: 1.4;
+  color: var(--sd-text-primary);
+  color-scheme: dark;
+  cursor: pointer;
+  padding: var(--sd-space-8) 40px var(--sd-space-8) var(--sd-space-12);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-pill);
+  background-color: var(--sd-surface-inset);
+  /* layer 1: the chevron. layer 2: the backplate -- a 1px divider column then
+     a lighter slab. Background painting honours border-radius, so the slab's
+     outer corners follow the pill instead of squaring it off. */
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23E8EEF4' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"),
+    linear-gradient(to right, var(--sd-border) 0 1px, rgba(255, 255, 255, .05) 1px);
+  background-repeat: no-repeat, no-repeat;
+  background-position: right 12px center, right 0 center;
+  background-size: 10px 6px, 28px 100%;
+  transition: border-color .15s ease;
+}
+
+select:hover:not(:disabled) {
+  border-color: var(--sd-border-hover);
+}
+
+select:focus,
+select:focus-visible {
+  outline: none;
+  border-color: var(--sd-cyan);
+}
+
+select:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+/* The popup half of the contract. --sd-text-primary (#E8EEF4) on
+   --sd-surface-raised (#131A23) is ~15.3:1, so the list is legible whatever
+   the desktop theme decides -- this is the rule that replaces `color: #000`.
+   Asserted by app/tests/qa/scenarios/ui-controls-prod.mjs, which computes the
+   real WCAG ratio rather than eyeballing a screenshot. */
+select option,
+select optgroup {
+  background-color: var(--sd-surface-raised);
+  color: var(--sd-text-primary);
+}
+
+/* Dimmer than an enabled option (--sd-text-primary), but still ~7:1 against
+   the popup background. The first pass used --sd-text-muted and the QA
+   scenario measured it at 3.20:1 -- below AA -- on #sdUtilAudioDeviceSelect
+   and #sdUtilGameSetupDelivery, whose disabled first option is the "choose
+   one" placeholder. A placeholder you cannot read is the same complaint the
+   user made about the rest of the list, so it is held to the same bar rather
+   than exempted for being disabled. */
+select option:disabled {
+  color: var(--sd-text-secondary);
+}
+
+/* --- File inputs ---------------------------------------------------------
+   One treatment: the "Choose File" widget is a real button in our own scale,
+   and the filename beside it is page text rather than platform text. */
+input[type="file"] {
+  box-sizing: border-box;
+  max-width: 100%;
+  font-family: inherit;
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+  cursor: pointer;
+}
+
+input[type="file"]::file-selector-button {
+  margin-right: var(--sd-space-12);
+  padding: var(--sd-space-8) var(--sd-space-16);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-pill);
+  background: var(--sd-surface-raised);
+  color: var(--sd-text-secondary);
+  font-family: inherit;
+  font-size: var(--sd-font-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color .15s ease, color .15s ease;
+}
+
+input[type="file"]::file-selector-button:hover {
+  border-color: var(--sd-border-hover);
+  color: var(--sd-text-primary);
+}
+
+input[type="file"]:disabled,
+input[type="file"]:disabled::file-selector-button {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+/* --- Button scale --------------------------------------------------------
+   Element-level FONT only. A native <button> falls back to the UA's 13.33px
+   Arial, which is both the wrong family and a different metric to everything
+   around it -- that mismatch, sitting next to native chrome, is the "buttons
+   oversized" in finding (10). Chrome (background/border/padding) is
+   deliberately NOT set here: several existing chips and icon buttons style
+   themselves off a transparent background, and an element-level background
+   would be invisible to them only by luck of specificity. Controls carrying no
+   class at all are covered by the :not() rule below instead. */
+button,
+input[type="button"],
+input[type="submit"] {
+  font-family: inherit;
+  font-size: var(--sd-font-sm);
+  line-height: 1.4;
+}
+
+/* A <button> with no class is a control nobody styled. Give it the .sd-btn
+   look rather than the UA's buttonface slab. */
+button:not([class]) {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+  padding: var(--sd-space-8) var(--sd-space-16);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-pill);
+  background: var(--sd-surface-raised);
+  color: var(--sd-text-secondary);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+button:not([class]):hover {
+  border-color: var(--sd-border-hover);
+  color: var(--sd-text-primary);
+}
+
+/* --- The `.sd-select` that was never defined ------------------------------
+   #sdSelectedContactPicker in signal-desk.html carries it. The element rule
+   above already covers it fully; this exists so the class resolves to
+   something intentional rather than silently to nothing, and so the name is
+   greppable from this file. */
+.sd-select {
+  min-width: 0;
+}
+
+/* --- Legacy-class bridge --------------------------------------------------
+   Feature modules ported from the legacy dashboard emit class names that live
+   only in styles/base.css, which signal-desk.html does not link.
+   features/voiceStudio.js has been corrected in this wave to emit the `sd-`
+   primitives directly; these are the remaining reachable emitters
+   (features/personas.js's Persona Foundry rows, features/personaLearning.js's
+   delete control) and are NOT files this objective owns. Bridged here so the
+   shipping page is correct, and REPORTED UPWARD so the owning supervisor can
+   port them properly -- a bridge is a stopgap, not the fix. The full list of
+   43 base.css-only class names still reachable on this page is in the
+   Wave 12A handoff. */
+.secondary-button,
+.persona-learning-delete-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+  padding: var(--sd-space-8) var(--sd-space-16);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-pill);
+  background: var(--sd-surface-raised);
+  color: var(--sd-text-secondary);
+  font-family: inherit;
+  font-size: var(--sd-font-sm);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.secondary-button:hover,
+.persona-learning-delete-button:hover {
+  border-color: var(--sd-border-hover);
+  color: var(--sd-text-primary);
+}
+
+.settings-input {
+  box-sizing: border-box;
+  padding: var(--sd-space-8) var(--sd-space-12);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-pill);
+  background-color: var(--sd-surface-inset);
+  color: var(--sd-text-primary);
+  font-family: inherit;
+  font-size: var(--sd-font-sm);
+}
+
+select.settings-input {
+  padding-right: 40px;
+}
+
+/* --- Voice Studio blend rows ---------------------------------------------
+   features/voiceStudio.js used to render these with .setting-row /
+   .settings-input / .secondary-button -- all base.css-only, so on this page
+   the entire Blend surface rendered as raw HTML. That is finding (4)
+   ("remove button on blend voices looks like a generic html button") and half
+   of finding (10). The module now emits the classes below instead. */
+.sd-voice-studio__blend-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-12);
+  padding: var(--sd-space-8) 0;
+}
+
+.sd-voice-studio__blend-row select {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+.sd-voice-studio__blend-row input[type="range"] {
+  flex: 1 1 120px;
+  min-width: 80px;
+  accent-color: var(--sd-cyan);
+}
+
+.sd-voice-studio__blend-weight {
+  flex: none;
+  min-width: 4ch;
+  font-size: var(--sd-font-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--sd-text-secondary);
+}
+
+.sd-voice-studio__blend-row .sd-btn {
+  flex: none;
+}
+
+/* --- Selected-voice visibility (finding 3, UI half) -----------------------
+   The active voice and the voices available to blend are named in TEXT, so
+   "which voice am I using" is answerable without opening a dropdown. */
+.sd-voice-studio__active {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sd-space-8);
+  flex-wrap: wrap;
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-secondary);
+}
+
+.sd-voice-studio__active-name {
+  color: var(--sd-text-primary);
+  font-weight: 600;
+}
+
+.sd-voice-studio__hint {
+  margin: 0;
+  font-size: var(--sd-font-xs);
+  line-height: 1.5;
+  color: var(--sd-text-muted);
+}
+
+.sd-voice-studio__hint b {
+  color: var(--sd-text-secondary);
+  font-weight: 500;
 }

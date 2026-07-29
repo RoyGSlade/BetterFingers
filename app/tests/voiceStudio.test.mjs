@@ -206,6 +206,8 @@ function makeFakeDoc(overrides = {}) {
     voiceBrightnessValue: makeStubElement(),
     voicePauseStyle: makeStubElement(),
     profileMessage: makeStubElement(),
+    // Wave 12A finding (3): the active-voice readout beside the base select.
+    voiceActiveVoiceName: makeStubElement(),
     ...overrides,
   };
   elements.settingReviewTtsVoiceHint.value = 'af_heart';
@@ -233,6 +235,78 @@ function makeApiStub(overrides = {}) {
     ...overrides,
   };
 }
+
+// --- Wave 12A: selected-voice visibility (product-owner finding 3) ----------
+//
+// "The user cannot SEE which voice is selected, nor what voices exist to
+// blend." The select always HELD the answer; nothing rendered it as text. The
+// three tests below pin the three ways that could regress: the readout not
+// being filled at all, the readout not following the control, and the empty
+// blend state going back to saying nothing useful.
+
+test('the active voice is named in text once voices load (finding 3: which voice is selected)', async () => {
+  const fakeDoc = makeFakeDoc();
+  const feature = createVoiceStudioFeature({ ui: {}, hooks: {}, api: makeApiStub() });
+  await feature.refreshVoices(fakeDoc);
+
+  assert.equal(
+    fakeDoc.elements.voiceActiveVoiceName.textContent,
+    'Heart',
+    'the readout must show the voice NAME, not its id and not a placeholder',
+  );
+});
+
+test('the active-voice readout follows the select, rather than being a label set once', async () => {
+  const fakeDoc = makeFakeDoc();
+  const feature = createVoiceStudioFeature({ ui: {}, hooks: {}, api: makeApiStub() });
+  await feature.refreshVoices(fakeDoc);
+  feature.init({ doc: fakeDoc });
+
+  fakeDoc.elements.settingReviewTtsVoiceHint.value = 'af_nicole';
+  fireInput(fakeDoc.elements.settingReviewTtsVoiceHint, 'change');
+
+  assert.equal(fakeDoc.elements.voiceActiveVoiceName.textContent, 'Nicole');
+});
+
+test('the base-voice select marks the profile dirty on change (there was no listener at all)', async () => {
+  const fakeDoc = makeFakeDoc();
+  let dirtyCalls = 0;
+  const feature = createVoiceStudioFeature({
+    ui: {},
+    hooks: { markProfileDirty: () => { dirtyCalls += 1; } },
+    api: makeApiStub(),
+  });
+  await feature.refreshVoices(fakeDoc);
+  feature.init({ doc: fakeDoc });
+
+  fakeDoc.elements.settingReviewTtsVoiceHint.value = 'af_nicole';
+  fireInput(fakeDoc.elements.settingReviewTtsVoiceHint, 'change');
+
+  assert.ok(
+    dirtyCalls > 0,
+    'changing the read-aloud voice is an unsaved edit; before Wave 12A this select had no change handler, ' +
+      'so the save bar never noticed',
+  );
+});
+
+test('the empty blend state names the voices available to blend (finding 3, second half)', async () => {
+  const appended = [];
+  const fakeDoc = makeFakeDoc();
+  fakeDoc.elements.voiceBlendRows.appendChild = (child) => { appended.push(child); return child; };
+  const feature = createVoiceStudioFeature({ ui: {}, hooks: {}, api: makeApiStub() });
+  await feature.refreshVoices(fakeDoc);
+
+  const empty = appended.at(-1);
+  assert.ok(empty, 'the empty state must render something into #voiceBlendRows');
+  assert.match(empty.textContent, /Heart/, 'names the voices, not just "no layers"');
+  assert.match(empty.textContent, /Nicole/);
+  assert.match(empty.textContent, /2 voices are available to blend/);
+  assert.equal(
+    empty.className,
+    'sd-voice-studio__hint',
+    'and does so with a class styles/signal-desk.css actually defines -- it used to be base.css-only `setting-desc`',
+  );
+});
 
 test('gatherVoiceStudioSettings: reads the live DOM value immediately (select -> active-use)', async () => {
   const fakeDoc = makeFakeDoc();

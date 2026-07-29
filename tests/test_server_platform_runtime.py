@@ -6,8 +6,26 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+import app_paths
 import platform_capabilities
 import server
+
+
+def fake_home(path):
+    """Re-point ``Path.home()`` for the data-root resolver.
+
+    The "without APPDATA" tests below delete APPDATA on purpose — that is the
+    condition under test. But with APPDATA gone, app_paths.resolve_base() falls
+    through to the legacy candidate ``Path.home()/BetterFingers``, which on a
+    developer machine is the REAL install: these tests were booting a full
+    TestClient against ~/BetterFingers and writing into it (debug.log, profiles/,
+    history.db). Setting XDG_DATA_HOME does not help, because the legacy
+    candidate is checked before the platform one.
+
+    Re-pointing home keeps the condition under test exactly as it was (APPDATA
+    really is unset) while making the legacy candidate a temp directory.
+    """
+    return patch.object(app_paths.Path, "home", staticmethod(lambda: Path(path)))
 
 
 class DummyTranscriber:
@@ -75,7 +93,7 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
             }
             with patch.dict(os.environ, env, clear=False), patch.object(
                 server, "Transcriber", DummyTranscriber
-            ), patch("sys.platform", "linux"):
+            ), patch("sys.platform", "linux"), fake_home(data_dir):
                 os.environ.pop("APPDATA", None)
                 with TestClient(server.app) as client:
                     response = client.get("/tts/voices")
@@ -94,7 +112,7 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
             }
             with patch.dict(os.environ, env, clear=False), patch.object(
                 server, "Transcriber", DummyTranscriber
-            ), patch("sys.platform", "linux"):
+            ), patch("sys.platform", "linux"), fake_home(data_dir):
                 os.environ.pop("APPDATA", None)
                 with TestClient(server.app) as client:
                     save_response = client.post(

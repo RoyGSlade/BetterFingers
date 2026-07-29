@@ -1111,7 +1111,13 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
   async function refreshPersonaOptions() {
     try {
       const personas = await fetchPersonas();
-      setPersonaOptions(Object.keys(personas || {}), fieldEls.current_preset?.value);
+      const names = Object.keys(personas || {});
+      // An empty result is a failed fetch, not a user with no personas: the
+      // backend always falls back to the built-in personas. Blanking the
+      // dropdown on it would destroy a working option list (and the user's
+      // current selection with it), so keep what we have -- same reasoning as
+      // the catch below, which already declines to blank on a thrown error.
+      if (names.length) setPersonaOptions(names, fieldEls.current_preset?.value);
     } catch (_e) {
       // Non-fatal -- current_preset simply keeps whatever options it had.
     }
@@ -1964,6 +1970,7 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
     refreshAll,
     setProfilesList,
     setPersonaOptions,
+    refreshPersonaOptions,
     renderSettings,
     renderDisclosedToggles,
     collectSettings,

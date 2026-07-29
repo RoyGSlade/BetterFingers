@@ -1465,6 +1465,14 @@
                 <span aria-hidden="true">&#65291;</span> Add Voice
               </button>
             </div>
+            <!--
+              Wave 12A, product-owner finding (3): "nor what voices exist to
+              blend". "+ Add Voice" picks the first unused voice out of
+              studioWorkspace.js's voiceOptionsCache and adds it silently, so
+              the roster was discoverable only by clicking until it ran out.
+              This line names it. Filled by renderVoiceBlendStrip().
+            -->
+            <p class="sd-voice-studio__hint" id="sdVoiceBlendAvailable" aria-live="polite"></p>
             <div class="sd-voice-preview-row">
               <button type="button" class="sd-voice-preview-btn" id="sdVoicePreviewButton" aria-label="Preview voice blend">
                 <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="6,4 20,12 6,20"></polygon></svg>
@@ -1498,6 +1506,21 @@
 
             <section class="sd-voice-studio__group">
               <span class="sd-panel-label">Read-aloud voice</span>
+              <!--
+                Wave 12A, product-owner finding (3): "the user cannot SEE which
+                voice is selected". The <select> below has always KNOWN, but a
+                closed select on a dark page reads as a slab of chrome, and the
+                selection is only legible once it is opened. This line names
+                the active voice in page text, next to the control that sets
+                it. features/voiceStudio.js's renderActiveVoiceName() fills it
+                on load, on refreshVoices(), on preset apply, and on the base
+                select's own change event (a listener that wave also had to
+                add -- there was none).
+              -->
+              <p class="sd-voice-studio__active">
+                <span>Active voice:</span>
+                <span class="sd-voice-studio__active-name" id="voiceActiveVoiceName" aria-live="polite">None selected</span>
+              </p>
               <div class="sd-voice-studio__row">
                 <label class="sd-voice-studio__label" for="settingReviewTtsVoiceHint">Voice</label>
                 <select class="sd-review-select" id="settingReviewTtsVoiceHint"></select>
@@ -3296,11 +3319,18 @@
                way to attach one afterwards, so a draft dictated before the
                person existed as a contact stayed unattributed forever. -->
           <div class="sd-context__row" style="display: flex; gap: 6px; margin-top: 6px;">
-            <label class="sr-only" for="sdSelectedContactPicker">Attach this message to a contact</label>
+            <!-- Wave 12A: was `sr-only`, a base.css name this page does not
+                 load, so the label meant to be screen-reader-only rendered
+                 visibly above the picker. `sd-visually-hidden` is the defined
+                 primitive and is what the rest of this file uses. -->
+            <label class="sd-visually-hidden" for="sdSelectedContactPicker">Attach this message to a contact</label>
             <select id="sdSelectedContactPicker" class="sd-select" style="flex: 1 1 auto;">
               <option value="">No one in particular</option>
             </select>
-            <button type="button" class="sd-button sd-button--ghost" id="sdSelectedContactApply">Attach</button>
+            <!-- Wave 12A: was `sd-button sd-button--ghost`. Neither class is
+                 defined in styles/signal-desk.css (nor anywhere else), so this
+                 shipped as a bare browser button. The primitive is `sd-btn`. -->
+            <button type="button" class="sd-btn" id="sdSelectedContactApply">Attach</button>
           </div>
           <p class="sd-context__hint" id="sdSelectedContactMessage" role="status" aria-live="polite"></p>
         </div>
