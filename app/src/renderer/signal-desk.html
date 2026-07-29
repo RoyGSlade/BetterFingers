@@ -2153,6 +2153,68 @@
               <ul class="sd-workflow-history" id="sdUtilWorkflowHistory"></ul>
             </div>
 
+            <div class="sd-util-group" id="sdUtilGameSetupGroup" data-wizard-step="detect" data-wizard-rehearsed="false" data-wizard-saved="false">
+              <div class="sd-util-group__header"><span class="sd-util-group__title">Game Setup</span></div>
+              <p class="sd-util-group__desc">
+                Set up a controller for one game: a button to dictate, a separate button for
+                commands, the key that opens the game's chat, and how the text reaches it.
+                Dictation and commands are deliberately two different buttons — one button that
+                meant both could issue a command you were only trying to say.
+              </p>
+              <p class="sd-util-banner sd-util-banner--warn" id="sdUtilGameSetupUnavailable" hidden></p>
+              <p class="sd-util-group__desc">Step: <span id="sdUtilGameSetupStep">detect</span></p>
+
+              <div class="sd-actions-row">
+                <button type="button" class="sd-btn" id="sdUtilGameSetupDetectButton">Find my controller</button>
+              </div>
+              <p class="sd-util-group__desc" id="sdUtilGameSetupDevices" data-device-count="0"></p>
+
+              <div class="sd-actions-row">
+                <button type="button" class="sd-btn" id="sdUtilGameSetupRecordDictation" disabled>Record the dictation button</button>
+                <button type="button" class="sd-btn" id="sdUtilGameSetupRecordCommand" disabled>Record the command button</button>
+              </div>
+              <p class="sd-util-group__desc">Dictation: <span id="sdUtilGameSetupDictationValue">not set</span></p>
+              <p class="sd-util-group__desc">Commands: <span id="sdUtilGameSetupCommandValue">not set</span></p>
+
+              <label class="sd-util-row">
+                <span class="sd-util-row__label-text">Key that opens the game's chat</span>
+                <input type="text" class="sd-util-input" id="sdUtilGameSetupChatKey" placeholder="Enter" />
+              </label>
+              <label class="sd-util-row">
+                <span class="sd-util-row__label-text">How the text reaches the game</span>
+                <select class="sd-util-input" id="sdUtilGameSetupDelivery" disabled>
+                  <option value="review_only">Review first (safest)</option>
+                  <option value="clipboard_only">Copy to clipboard</option>
+                  <option value="type">Type it into the game</option>
+                </select>
+              </label>
+
+              <p class="sd-util-banner sd-util-banner--warn" id="sdUtilGameSetupWarning" data-required="false" data-satisfied="true"></p>
+              <label class="sd-util-row">
+                <span class="sd-util-row__label-text">I understand the anti-cheat risk of input automation</span>
+                <input type="checkbox" class="sd-util-checkbox" id="sdUtilGameSetupAcknowledge" />
+              </label>
+
+              <p class="sd-util-group__desc">
+                The test below is a rehearsal: BetterFingers shows you that your button arrived and
+                nothing is sent. It cannot type into a game, and it cannot stop a recording you
+                never started.
+              </p>
+              <div class="sd-actions-row">
+                <button type="button" class="sd-btn" id="sdUtilGameSetupRehearseButton" disabled>Test my buttons (nothing is sent)</button>
+              </div>
+              <pre class="sd-util-group__desc" id="sdUtilGameSetupRehearsalLog" data-press-count="0"></pre>
+
+              <label class="sd-util-row">
+                <span class="sd-util-row__label-text">Profile name</span>
+                <input type="text" class="sd-util-input" id="sdUtilGameSetupProfileName" placeholder="rocket_league" />
+              </label>
+              <div class="sd-actions-row">
+                <button type="button" class="sd-btn sd-btn--primary" id="sdUtilGameSetupSaveButton" disabled>Save this game profile</button>
+              </div>
+              <span class="sd-util-message" id="sdUtilGameSetupMessage"></span>
+            </div>
+
             <div class="sd-util-grid-2">
               <div class="sd-util-group">
                 <div class="sd-util-group__header"><span class="sd-util-group__title">Capabilities Dump</span></div>
@@ -2794,6 +2856,34 @@
               <div class="sd-set-detail-list" id="sdSetPrivacyDataList"><span class="empty-state">Loading&hellip;</span></div>
             </div>
 
+            <!-- Wave 6 (Gate 6): every persistent store, generated from the
+                 backend data registry. The "Your data on this device" list
+                 above is a six-entry summary that predates the registry; this
+                 is the complete inventory, so the screen cannot omit a store
+                 the app actually writes. -->
+            <div class="sd-set-group" data-search-group>
+              <div class="sd-set-group__header"><span class="sd-set-group__title">Everything stored on this device</span></div>
+              <p class="sd-set-group__desc">One row per store BetterFingers keeps: where it lives, how big it is, and which &ldquo;clear&rdquo; removes it.</p>
+              <div class="sd-set-detail-list" id="sdSetPrivacyStoreList"><span class="empty-state">Loading&hellip;</span></div>
+              <p class="sd-set-group__desc" id="sdSetPrivacyUnmappedWarning" hidden></p>
+            </div>
+
+            <!-- Learned persona examples get an explicit disclosure rather than
+                 a table row: the row understates a store that holds sentences
+                 the user dictated AND the rewrites they approved. -->
+            <div class="sd-set-group" data-search-group>
+              <div class="sd-set-group__header"><span class="sd-set-group__title">Learned persona examples</span></div>
+              <p class="sd-set-group__desc" id="sdSetPrivacyPersonaLearningWhat">Loading&hellip;</p>
+              <p class="sd-set-group__desc" id="sdSetPrivacyPersonaLearningCounts"></p>
+              <div class="sd-set-detail-list" id="sdSetPrivacyPersonaLearningList"></div>
+              <div class="sd-actions-row">
+                <button type="button" class="sd-btn sd-action-btn--danger" id="sdSetPrivacyPersonaLearningClear">Delete all learned examples&hellip;</button>
+                <button type="button" class="sd-btn" id="sdSetPrivacyPersonaLearningVerify">Verify they&rsquo;re gone</button>
+                <button type="button" class="sd-btn" id="sdSetPrivacyExportButton">Export my data</button>
+              </div>
+              <span class="sd-set-message" id="sdSetPrivacyPersonaLearningMessage" role="status" aria-live="polite"></span>
+            </div>
+
             <div class="sd-set-group" data-search-group>
               <div class="sd-set-group__header"><span class="sd-set-group__title">Wake-word listener</span></div>
               <p class="sd-set-group__desc" id="sdSetPrivacyWakeListenerStatus">Loading&hellip;</p>
@@ -2801,7 +2891,17 @@
 
             <div class="sd-set-group" data-search-group>
               <div class="sd-set-group__header"><span class="sd-set-group__title">Wipe my data</span></div>
-              <p class="sd-set-group__desc">Permanently deletes your drafts, transcription history, and any recordings held in memory. Models and profiles are kept.</p>
+              <p class="sd-set-group__desc">Choose how much to remove. The list below is what is actually on disk right now, so what you agree to is what gets deleted.</p>
+              <div class="sd-set-row" data-search-row data-search-label="what to clear wipe mode">
+                <div class="sd-set-row__label"><span class="sd-set-row__label-text">What to clear</span></div>
+                <div class="sd-set-row__control">
+                  <select class="sd-set-select" id="sdSetPrivacyWipeMode">
+                    <option value="clear_conversations" selected>Conversations &mdash; recordings, drafts, history, contacts, learned examples</option>
+                    <option value="clear_personal_data">All personal data &mdash; the above plus personas, dictionary, macros and app profiles</option>
+                  </select>
+                </div>
+              </div>
+              <div class="sd-set-detail-list" id="sdSetPrivacyWipePreview"><span class="empty-state">Loading&hellip;</span></div>
               <div class="sd-set-row" data-search-row data-search-label="also delete cloned voices">
                 <div class="sd-set-row__label"><span class="sd-set-row__label-text">Also delete my cloned voices</span></div>
                 <div class="sd-set-row__control">
@@ -2812,6 +2912,33 @@
                 <button type="button" class="sd-btn sd-action-btn--danger" id="sdSetPrivacyWipeButton">Wipe my data&hellip;</button>
               </div>
               <span class="sd-set-message" id="sdSetPrivacyMessage" role="status" aria-live="polite"></span>
+            </div>
+
+            <!-- Factory reset (the Wave 1 backlog item). Kept separate from the
+                 wipe modes and gated on a typed phrase because it is
+                 unrecoverable and also removes settings, the overlay state and
+                 the onboarding consent record. -->
+            <div class="sd-set-group" data-search-group>
+              <div class="sd-set-group__header"><span class="sd-set-group__title">Factory reset</span></div>
+              <p class="sd-set-group__desc">Returns this install to a fresh state: everything above, plus your settings, overlay position, application profiles, workflows and the onboarding record. Downloaded models are kept unless you tick the box. This cannot be undone.</p>
+              <div class="sd-set-detail-list" id="sdSetPrivacyFactoryResetPreview"><span class="empty-state">Loading&hellip;</span></div>
+              <div class="sd-set-row" data-search-row data-search-label="also delete downloaded models">
+                <div class="sd-set-row__label"><span class="sd-set-row__label-text">Also delete downloaded models</span></div>
+                <div class="sd-set-row__control">
+                  <input type="checkbox" class="sd-set-checkbox" id="sdSetPrivacyFactoryResetModels" />
+                </div>
+              </div>
+              <div class="sd-set-row" data-search-row data-search-label="factory reset confirmation phrase">
+                <div class="sd-set-row__label"><span class="sd-set-row__label-text">Type DELETE EVERYTHING to enable</span></div>
+                <div class="sd-set-row__control">
+                  <input type="text" class="sd-set-input" id="sdSetPrivacyFactoryResetConfirm" autocomplete="off" spellcheck="false" placeholder="DELETE EVERYTHING" />
+                </div>
+              </div>
+              <div class="sd-actions-row">
+                <button type="button" class="sd-btn sd-action-btn--danger" id="sdSetPrivacyFactoryResetButton" disabled>Reset this install&hellip;</button>
+                <button type="button" class="sd-btn" id="sdSetPrivacyFactoryResetVerify">Check what&rsquo;s left</button>
+              </div>
+              <span class="sd-set-message" id="sdSetPrivacyFactoryResetMessage" role="status" aria-live="polite"></span>
             </div>
           </section>
 
@@ -3073,6 +3200,18 @@
             </span>
             <span class="sd-dropdown__chevron" aria-hidden="true">&#9662;</span>
           </button>
+          <!-- Retroactive contact (D-0023). The dropdown above only DISPLAYS
+               the contact a draft was captured against; until now there was no
+               way to attach one afterwards, so a draft dictated before the
+               person existed as a contact stayed unattributed forever. -->
+          <div class="sd-context__row" style="display: flex; gap: 6px; margin-top: 6px;">
+            <label class="sr-only" for="sdSelectedContactPicker">Attach this message to a contact</label>
+            <select id="sdSelectedContactPicker" class="sd-select" style="flex: 1 1 auto;">
+              <option value="">No one in particular</option>
+            </select>
+            <button type="button" class="sd-button sd-button--ghost" id="sdSelectedContactApply">Attach</button>
+          </div>
+          <p class="sd-context__hint" id="sdSelectedContactMessage" role="status" aria-live="polite"></p>
         </div>
 
         <div class="sd-context__section">

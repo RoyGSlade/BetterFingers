@@ -29,6 +29,13 @@ const ROUTE_ALLOWLIST = {
     // rescan already permitted below.
     '/runtime/audio-devices',
     '/capabilities', '/doctor', '/metrics', '/privacy',
+    // Wave 6 privacy closure. All read-only: what each wipe mode WOULD delete,
+    // whether a factory reset actually landed, whether the learned-example
+    // store is really empty, and the user's own data as one export bundle.
+    // None of these delete anything -- the two that do are typed operations
+    // below, not generic proxy routes.
+    '/privacy/modes', '/privacy/factory-reset/verify',
+    '/privacy/persona-learning/verify', '/privacy/export',
     '/diagnostics/logs', '/diagnostics/paths',
     '/recordings', '/jobs', '/dictionary', '/macros',
     '/history', '/history/search',
@@ -58,6 +65,13 @@ const ROUTE_ALLOWLIST = {
     // saved workflows, and the code-only run history. Nothing here launches
     // anything -- execution is the main process's job, not a route's.
     '/workflows', '/workflows/vocabulary', '/workflows/history',
+    // Wave 10 controller / Stream Deck. Read-only: the closed action
+    // vocabulary, the resolved binding layers, the mirrored deck state and the
+    // code-only recent-dispatch log. None of these carry a parameter VALUE --
+    // a persona name never appears in a binding readout.
+    '/input/vocabulary', '/input/bindings', '/input/recent',
+    '/input/capture/result',
+    '/stream-deck', '/stream-deck/qualification',
   ],
   POST: [
     '/runtime/audio-devices/refresh', '/runtime/warmup',
@@ -90,6 +104,11 @@ const ROUTE_ALLOWLIST = {
     '/contacts', '/contacts/:id', '/contacts/active',
     '/contacts/interview/start', '/contacts/interview/answer', '/contacts/compile',
     '/app-context/override', '/app-context/pin',
+    // Wave 10: writing a profile. Wave 7 shipped the store and the read routes
+    // and left the write to whichever wave first needed one; the game setup
+    // wizard is that wave, because the per-application binding layer lives on a
+    // profile. The store drops anything outside PROFILE_FIELDS and reports it.
+    '/app-context/profiles',
     '/library/drafts/:id/pin', '/library/drafts/:id/duplicate',
     '/library/drafts/:id/reopen', '/library/drafts/:id/resend',
     '/library/drafts/:id/restore', '/library/recordings/:id/restore',
@@ -100,6 +119,20 @@ const ROUTE_ALLOWLIST = {
     '/workflows/compile', '/workflows/save', '/workflows/approve',
     '/workflows/enable', '/workflows/delete',
     '/workflows/run', '/workflows/run/record',
+    // Wave 10. `/input/dispatch` is here because the SETUP UI needs it: the
+    // wizard's test step sends a press and shows what BetterFingers saw. That
+    // is safe because the dispatcher, not the route, decides what a press does
+    // -- and during a rehearsal the wizard holds a dispatcher with no handlers
+    // at all, so nothing it sends can fire (see input_dispatch.rehearsal_dispatcher).
+    // Note what is NOT reachable from the renderer: there is no route here that
+    // runs a workflow. That goes through the `workflows:execute` channel, so
+    // the main process re-fetches and re-validates before anything launches.
+    '/input/dispatch', '/input/bindings/set', '/input/bindings/clear',
+    '/input/settings',
+    '/input/capture/start', '/input/capture/cancel',
+    '/stream-deck/pair', '/stream-deck/unpair', '/stream-deck/enabled',
+    '/stream-deck/key', '/stream-deck/key/forget',
+    '/stream-deck/device', '/stream-deck/device/disconnected',
   ],
   DELETE: [
     '/settings/profiles/:name',
@@ -263,9 +296,43 @@ function sendDraft({ id, action, openChat, allowResend, timeoutMs } = {}) {
   }, timeoutMs);
 }
 
-function wipePrivacyData({ wipeVoices, confirm, timeoutMs } = {}) {
+const WIPE_MODES = new Set(['clear_conversations', 'clear_personal_data', 'factory_reset']);
+
+function wipePrivacyData({ wipeVoices, confirm, mode, timeoutMs } = {}) {
+  // An unrecognised mode is refused here rather than forwarded. The backend
+  // rejects it too, but a mode is the difference between deleting drafts and
+  // deleting someone's personas, so a typo must not travel.
+  const requested = typeof mode === 'string' && mode ? mode : 'clear_conversations';
+  if (!WIPE_MODES.has(requested)) {
+    return _fault(`wipePrivacyData: unknown wipe mode ${requested}`);
+  }
   return _requireConfirm({ confirm })
-    || _send('POST', '/privacy/wipe', { wipe_voices: Boolean(wipeVoices) }, timeoutMs);
+    || _send('POST', '/privacy/wipe', {
+      wipe_voices: Boolean(wipeVoices),
+      mode: requested,
+    }, timeoutMs);
+}
+
+function clearPersonaLearning({ confirm, timeoutMs } = {}) {
+  // Typed rather than an allowlisted DELETE: this erases every approved
+  // raw-to-final example -- the user's own sentences on both sides -- so it
+  // goes through the same confirmed-operation gate as the other destructive
+  // routes rather than the generic proxy.
+  return _requireConfirm({ confirm })
+    || _send('DELETE', '/privacy/persona-learning', undefined, timeoutMs);
+}
+
+function factoryReset({ confirm, deleteDownloadedModels, timeoutMs } = {}) {
+  // Deliberately NOT _requireConfirm's boolean gate: the backend demands an
+  // exact phrase and this forwards it verbatim, so a stray `true` in a caller
+  // cannot erase an install. A non-string is refused before it leaves here.
+  if (typeof confirm !== 'string' || !confirm) {
+    return _fault('factoryReset: confirmation phrase required');
+  }
+  return _send('POST', '/privacy/factory-reset', {
+    confirm,
+    delete_downloaded_models: Boolean(deleteDownloadedModels),
+  }, timeoutMs);
 }
 
 function deleteLlmModel({ modelId, confirm, timeoutMs } = {}) {
@@ -466,6 +533,8 @@ module.exports = {
   fetchHealth,
   sendDraft,
   wipePrivacyData,
+  factoryReset,
+  clearPersonaLearning,
   deleteLlmModel,
   deleteWhisperModel,
   deleteVoice,

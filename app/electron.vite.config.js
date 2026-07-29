@@ -25,6 +25,8 @@ module.exports = defineConfig({
           // output and main.js dies before a window is created.
           applicationRegistry: resolve(__dirname, 'src/main/applicationRegistry.js'),
           applicationLauncher: resolve(__dirname, 'src/main/applicationLauncher.js'),
+          // Wave 10 / D-0027: the run executor, the only caller of the launcher.
+          workflowExecutor: resolve(__dirname, 'src/main/workflowExecutor.js'),
         },
       },
     },

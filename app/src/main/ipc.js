@@ -106,8 +106,21 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthT
   });
 
   handleTrusted('backend:wipe-privacy', (_event, req) => {
-    const { wipeVoices, confirm, timeoutMs } = req || {};
-    return backendProxy.wipePrivacyData({ wipeVoices, confirm, timeoutMs });
+    const { wipeVoices, confirm, mode, timeoutMs } = req || {};
+    return backendProxy.wipePrivacyData({ wipeVoices, confirm, mode, timeoutMs });
+  });
+
+  // Wave 6: the factory-reset executor. Its own channel rather than a mode on
+  // the wipe above, because it takes a different gate (an exact phrase, not a
+  // boolean) and erases settings and the consent record too.
+  handleTrusted('backend:factory-reset', (_event, req) => {
+    const { confirm, deleteDownloadedModels, timeoutMs } = req || {};
+    return backendProxy.factoryReset({ confirm, deleteDownloadedModels, timeoutMs });
+  });
+
+  handleTrusted('backend:clear-persona-learning', (_event, req) => {
+    const { confirm, timeoutMs } = req || {};
+    return backendProxy.clearPersonaLearning({ confirm, timeoutMs });
   });
 
   handleTrusted('backend:delete-llm-model', (_event, req) => {
@@ -199,6 +212,44 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthT
   }));
   handleTrusted('applications:confirm', (_event, payload) => applicationRegistry().confirm(payload));
   handleTrusted('applications:remove', (_event, { id } = {}) => applicationRegistry().remove(id));
+
+  // Wave 10 / D-0027: the workflow run executor. This is the ONLY caller of
+  // applicationLauncher.js and the only way to reach it is the single channel
+  // below, which takes a workflow id and nothing else -- the main process
+  // re-fetches, re-validates through POST /workflows/run and executes only what
+  // the backend says is approved. A renderer that lies about the id can at most
+  // ask for a different workflow the user already approved.
+  //
+  // The controller and the Stream Deck arrive here too, by the same route: their
+  // `workflow.run` action reaches the renderer as a request and the renderer
+  // calls this channel. There is no second path, and there must not be one.
+  let _workflowExecutor = null;
+  function workflowExecutor() {
+    if (!_workflowExecutor) {
+      const { createApplicationLauncher } = require('./applicationLauncher');
+      const { createWorkflowExecutor } = require('./workflowExecutor');
+      _workflowExecutor = createWorkflowExecutor({
+        backendProxy,
+        launcher: createApplicationLauncher({}),
+        listApplications: () => applicationRegistry().list(),
+        notify: (message) => {
+          const { Notification } = require('electron');
+          if (Notification.isSupported()) {
+            new Notification({ title: 'BetterFingers', body: String(message || '') }).show();
+          }
+        },
+      });
+    }
+    return _workflowExecutor;
+  }
+
+  handleTrusted('workflows:execute', (_event, payload) => {
+    // Destructured to exactly one field on purpose: passing `payload` through
+    // would let a future edit start honouring extra keys without anybody
+    // noticing that the channel had stopped being id-only.
+    const { workflowId } = payload || {};
+    return workflowExecutor().execute(workflowId);
+  });
 
   onTrusted('update-hotkeys', (_event, config) => {
     const { registerHotkeys } = require('./hotkeys');

@@ -79,6 +79,9 @@ import { wave7AppContextScenarios } from './wave7-app-context.mjs';
 // property under test is that saving does not approve and approving changes
 // what a later call returns; a stateless stub cannot tell those apart.
 import { wave9ActionScenarios } from './wave9-actions.mjs';
+// Wave 10 game setup wizard. Also `ui: 'signal-desk-prod'` -- the wizard ids
+// exist only in the production composition root, never in index.html.
+import { wave10InputScenarios } from './wave10-input.mjs';
 
 export const scenarios = [
   ...baselineScenarios,
@@ -104,6 +107,7 @@ export const scenarios = [
   ...wave5StudioScenarios,
   ...wave7AppContextScenarios,
   ...wave9ActionScenarios,
+  ...wave10InputScenarios,
   ...signalDeskProdSweepScenarios,
   // Ordered last among the prod-target scenarios as belt-and-braces, not as a
   // load-bearing requirement: the auto-dismiss sentinel these use is

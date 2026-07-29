@@ -12,8 +12,12 @@ const api = {
   fetchHealth: (timeoutMs) => ipcRenderer.invoke('backend:fetch-health', { timeoutMs }),
   sendDraft: (id, { action, openChat, allowResend } = {}, timeoutMs) =>
     ipcRenderer.invoke('backend:send-draft', { id, action, openChat, allowResend, timeoutMs }),
-  wipePrivacyData: ({ wipeVoices, confirm } = {}, timeoutMs) =>
-    ipcRenderer.invoke('backend:wipe-privacy', { wipeVoices, confirm, timeoutMs }),
+  wipePrivacyData: ({ wipeVoices, confirm, mode } = {}, timeoutMs) =>
+    ipcRenderer.invoke('backend:wipe-privacy', { wipeVoices, confirm, mode, timeoutMs }),
+  factoryReset: ({ confirm, deleteDownloadedModels } = {}, timeoutMs) =>
+    ipcRenderer.invoke('backend:factory-reset', { confirm, deleteDownloadedModels, timeoutMs }),
+  clearPersonaLearning: ({ confirm } = {}, timeoutMs) =>
+    ipcRenderer.invoke('backend:clear-persona-learning', { confirm, timeoutMs }),
   deleteLlmModel: (modelId, { confirm } = {}, timeoutMs) =>
     ipcRenderer.invoke('backend:delete-llm-model', { modelId, confirm, timeoutMs }),
   deleteWhisperModel: (modelSize, { confirm } = {}, timeoutMs) =>
@@ -60,6 +64,14 @@ const api = {
     discover: () => ipcRenderer.invoke('applications:discover'),
     confirm: (entry) => ipcRenderer.invoke('applications:confirm', entry),
     remove: (id) => ipcRenderer.invoke('applications:remove', { id }),
+  },
+  // Wave 10 / D-0027. One channel, one argument: a workflow id. The main
+  // process re-fetches and re-validates through POST /workflows/run and runs
+  // only what the backend says is approved, so nothing the renderer can say
+  // here describes work to the launcher. There is deliberately no channel that
+  // takes steps, a plan, or a preview.
+  workflows: {
+    execute: (workflowId) => ipcRenderer.invoke('workflows:execute', { workflowId }),
   },
   getSidecarStatus: () => ipcRenderer.invoke('sidecar:get-status'),
   getSidecarLogs: () => ipcRenderer.invoke('sidecar:get-logs'),

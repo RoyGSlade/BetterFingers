@@ -51,6 +51,10 @@ import {
   createWorkflowBuilderFeature,
   collectWorkflowElements,
 } from '../features/workflowBuilder.js';
+import {
+  createGameSetupWizardFeature,
+  collectGameSetupElements,
+} from '../features/gameSetupWizard.js';
 import { createContactsFeature, collectContactElements } from '../features/contacts.js';
 import { createContactWizard, collectContactWizardElements } from '../features/contactWizard.js';
 import { createOnboardingFlow, collectOnboardingElements } from '../features/onboardingFlow.js';
@@ -644,6 +648,19 @@ export function startSignalDeskApp(doc = document) {
   });
   workflowBuilder.init();
   refreshConfirmedApplications().catch(() => {});
+
+  // Wave 10 game setup wizard. It shares the api adapter with everything else,
+  // which is the point: the buttons it records reach the same contracts the
+  // dashboard and the keyboard use. Its rehearsal step is answered by the
+  // backend's handler-less dispatcher, so nothing it sends can fire.
+  const gameSetupWizard = createGameSetupWizardFeature({
+    elements: collectGameSetupElements(doc),
+    api,
+    onMessage: (text, tone) => {
+      if (tone === 'danger') showToast(text, 'danger');
+    },
+  });
+  gameSetupWizard.init();
 
   // --- Persona wizard / Foundry + persona list refresh (shared) -----------
 

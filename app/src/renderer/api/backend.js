@@ -199,11 +199,58 @@ async function fetchPrivacy(timeoutMs = 2500) {
   return fetchJson(`${BACKEND_ORIGIN}/privacy`, timeoutMs);
 }
 
-async function wipeData(wipeVoices = false, timeoutMs = 10000, { confirmed = false } = {}) {
+async function wipeData(wipeVoices = false, timeoutMs = 10000,
+                        { confirmed = false, mode = 'clear_conversations' } = {}) {
+  // `mode` defaults to the lightest wipe, which is exactly what this call has
+  // always done. Widening the default would silently start deleting personas,
+  // dictionaries and macros for every existing caller.
   return typedRequest('wipePrivacyData', '/privacy/wipe', timeoutMs, {
     wipeVoices,
     confirm: confirmed === true,
+    mode,
   });
+}
+
+/** What each wipe mode would delete right now, with real sizes (read-only). */
+async function fetchPrivacyModes(timeoutMs = 2500) {
+  return fetchJson(`${BACKEND_ORIGIN}/privacy/modes`, timeoutMs);
+}
+
+/**
+ * Erase every declared store and prove it (Wave 6).
+ *
+ * `confirm` is the exact phrase, forwarded verbatim all the way to the
+ * backend. It is deliberately not a boolean anywhere in this chain: a factory
+ * reset removes settings, application profiles, workflows and the onboarding
+ * consent record, and a truthy value is far too easy to send by accident.
+ */
+async function factoryReset(confirm, { deleteDownloadedModels = false } = {}, timeoutMs = 120000) {
+  return typedRequest('factoryReset', '/privacy/factory-reset', timeoutMs, {
+    confirm,
+    deleteDownloadedModels,
+  });
+}
+
+/** Re-read the disk and report whether a reset landed. Never deletes. */
+async function verifyFactoryReset(timeoutMs = 15000) {
+  return fetchJson(`${BACKEND_ORIGIN}/privacy/factory-reset/verify`, timeoutMs);
+}
+
+/** Delete every learned persona example (typed: it erases the user's own words). */
+async function clearPersonaLearning(timeoutMs = 15000, { confirmed = false } = {}) {
+  return typedRequest('clearPersonaLearning', '/privacy/persona-learning', timeoutMs, {
+    confirm: confirmed === true,
+  });
+}
+
+/** Independent check that the learned-example store is empty. Never deletes. */
+async function verifyPersonaLearning(timeoutMs = 10000) {
+  return fetchJson(`${BACKEND_ORIGIN}/privacy/persona-learning/verify`, timeoutMs);
+}
+
+/** The user's own data, as one bundle, generated from the registry's export flags. */
+async function exportPrivacyData(timeoutMs = 60000) {
+  return fetchJson(`${BACKEND_ORIGIN}/privacy/export`, timeoutMs);
 }
 
 async function fetchRecordings(timeoutMs = 2500) {
@@ -534,6 +581,16 @@ async function fetchAppProfiles(timeoutMs = 2500) {
   return fetchJson(`${APP_CONTEXT_URL}/profiles`, timeoutMs);
 }
 
+/**
+ * Create or replace one application profile (Wave 10).
+ *
+ * The reply carries `dropped_fields`. Callers should show it: a silently
+ * dropped field is a setting the user made and the product forgot.
+ */
+async function saveAppProfile(profile, timeoutMs = 2500) {
+  return postJson(`${APP_CONTEXT_URL}/profiles`, { profile }, timeoutMs);
+}
+
 async function overrideAppProfile(profileId, timeoutMs = 2500) {
   return postJson(`${APP_CONTEXT_URL}/override`, { profile_id: profileId ?? null }, timeoutMs);
 }
@@ -568,8 +625,92 @@ async function approveWorkflow(workflowId, preview, timeoutMs = 2500) {
   return postJson(`${WORKFLOWS_URL}/approve`, { workflow_id: workflowId, preview }, timeoutMs);
 }
 
-async function runWorkflow(workflowId, context, timeoutMs = 4000) {
-  return postJson(`${WORKFLOWS_URL}/run`, { workflow_id: workflowId, context }, timeoutMs);
+/**
+ * Ask the MAIN PROCESS to run an approved workflow (Wave 10 / D-0027).
+ *
+ * Not a backend call. Wave 9 shipped this as `POST /workflows/run` from the
+ * renderer, which consulted the gate and then told the user "running the steps"
+ * while nothing ran — the executor did not exist yet. It exists now, in the main
+ * process, and it is the only thing that can reach the launcher.
+ *
+ * The channel takes an id and nothing else, on purpose: the main process
+ * re-fetches the workflow, asks the gate again, and executes only what the
+ * backend says is approved. That is why this adapter deliberately does NOT take
+ * a context or a step list — there is nothing useful the renderer could add, and
+ * anything it could add would be something the launcher had to trust.
+ */
+async function executeWorkflow(workflowId) {
+  const bridge = window.betterFingers
+    && window.betterFingers.workflows
+    && window.betterFingers.workflows.execute;
+  if (typeof bridge !== 'function') {
+    throw new Error('Backend bridge is unavailable.');
+  }
+  return bridge(workflowId);
+}
+
+// --- Controller and Stream Deck (Wave 10) ----------------------------------
+// One vocabulary for every non-voice device, one dispatch route, three binding
+// layers. Nothing here runs a workflow: `workflow.run` is an action ID that
+// reaches the executor through executeWorkflow above.
+const INPUT_URL = `${BACKEND_ORIGIN}/input`;
+const STREAM_DECK_URL = `${BACKEND_ORIGIN}/stream-deck`;
+
+async function fetchInputVocabulary(timeoutMs = 2500) {
+  return fetchJson(`${INPUT_URL}/vocabulary`, timeoutMs);
+}
+
+async function fetchInputBindings(deviceKey = '', profileId = '', timeoutMs = 2500) {
+  const query = `?device_key=${encodeURIComponent(deviceKey)}`
+    + `&profile_id=${encodeURIComponent(profileId)}`;
+  return fetchJson(`${INPUT_URL}/bindings${query}`, timeoutMs);
+}
+
+async function setInputBinding(actionId, binding, deviceKey = '', timeoutMs = 2500) {
+  return postJson(`${INPUT_URL}/bindings/set`,
+    { action_id: actionId, binding, device_key: deviceKey }, timeoutMs);
+}
+
+async function clearInputBinding(actionId, deviceKey = '', timeoutMs = 2500) {
+  return postJson(`${INPUT_URL}/bindings/clear`,
+    { action_id: actionId, device_key: deviceKey }, timeoutMs);
+}
+
+async function setInputSettings(settings, timeoutMs = 2500) {
+  return postJson(`${INPUT_URL}/settings`, settings || {}, timeoutMs);
+}
+
+async function dispatchInputAction(payload, timeoutMs = 2500) {
+  return postJson(`${INPUT_URL}/dispatch`, payload || {}, timeoutMs);
+}
+
+// The wizard's "press a button now". The engine listens; these are the handle.
+async function startInputCapture(timeoutMs = 2500) {
+  return postJson(`${INPUT_URL}/capture/start`, {}, timeoutMs);
+}
+
+async function readInputCapture(timeoutMs = 2500) {
+  return fetchJson(`${INPUT_URL}/capture/result`, timeoutMs);
+}
+
+async function cancelInputCapture(timeoutMs = 2500) {
+  return postJson(`${INPUT_URL}/capture/cancel`, {}, timeoutMs);
+}
+
+async function fetchRecentInputActions(limit = 20, timeoutMs = 2500) {
+  return fetchJson(`${INPUT_URL}/recent?limit=${limit}`, timeoutMs);
+}
+
+async function fetchStreamDeck(timeoutMs = 2500) {
+  return fetchJson(STREAM_DECK_URL, timeoutMs);
+}
+
+async function pairStreamDeck(token, timeoutMs = 2500) {
+  return postJson(`${STREAM_DECK_URL}/pair`, { token }, timeoutMs);
+}
+
+async function setStreamDeckEnabled(enabled, timeoutMs = 2500) {
+  return postJson(`${STREAM_DECK_URL}/enabled`, { enabled: Boolean(enabled) }, timeoutMs);
 }
 
 // Apply (or clear, with '') a contact on an existing draft. Metadata only:
@@ -997,6 +1138,12 @@ export {
   fetchMetrics,
   fetchPrivacy,
   wipeData,
+  fetchPrivacyModes,
+  factoryReset,
+  verifyFactoryReset,
+  clearPersonaLearning,
+  verifyPersonaLearning,
+  exportPrivacyData,
   fetchRecordings,
   retranscribeRecording,
   deleteRecording,
@@ -1113,6 +1260,7 @@ export {
   setDraftContact,
   fetchAppContextStatus,
   fetchAppProfiles,
+  saveAppProfile,
   overrideAppProfile,
   pinAppProfile,
   fetchWorkflows,
@@ -1120,7 +1268,20 @@ export {
   compileWorkflow,
   saveWorkflow,
   approveWorkflow,
-  runWorkflow,
+  executeWorkflow,
+  fetchInputVocabulary,
+  fetchInputBindings,
+  setInputBinding,
+  clearInputBinding,
+  setInputSettings,
+  dispatchInputAction,
+  startInputCapture,
+  readInputCapture,
+  cancelInputCapture,
+  fetchRecentInputActions,
+  fetchStreamDeck,
+  pairStreamDeck,
+  setStreamDeckEnabled,
   unloadModel,
   warmupRuntime,
   normalizeHealthPayload,

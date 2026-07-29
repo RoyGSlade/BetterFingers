@@ -40,6 +40,12 @@ import macros
 import voice_presets
 import voice_clone_qa
 import history_store
+# Wave 6: the privacy report, every wipe mode, and the factory reset are all
+# generated from one declared inventory, so the screen cannot describe a store
+# the wipe misses (or miss one the screen describes).
+import data_registry
+import data_categories
+import data_lifecycle
 import mcp_client
 from job_manager import JOBS, JobState
 from backend.runtime.dependencies import JobManagerCancellationBridge, PipelineDependencies
@@ -2261,6 +2267,10 @@ async def startup_event():
                 logging.info("Audio privacy crash recovery: %s", recovery)
         except Exception as exc:
             logging.warning(f"Audio privacy crash recovery skipped: {exc}")
+        try:
+            start_controller_loop()
+        except Exception as exc:
+            logging.warning(f"Controller loop not started: {exc}")
     # SQLite-first (history_store is canonical); load_draft_history() falls
     # back to draft_history.json only if the DB is empty/unrecoverable, and
     # imports+retires the JSON as a migration backup when it does (C8/P1).
@@ -2324,6 +2334,14 @@ def shutdown_event():
         privacy_lease.get_lease().release(reason="shutdown")
     except Exception as exc:
         logging.warning(f"Shutdown voice-privacy release failed: {exc}")
+    # Controller: release every held action through the ordinary dispatcher —
+    # that is how the Wave 8 lease and broker get released (D-0026). Do not
+    # add a second release path.
+    try:
+        _controller_thread_stop.set()
+        _CONTROLLER_ENGINE.release_all_devices(reason="shutdown")
+    except Exception as exc:
+        logging.warning(f"Controller release on shutdown failed: {exc}")
     # Join the background warmup thread so it can't outlive this app instance and
     # mutate global model state afterwards (also keeps tests deterministic).
     thread = _warmup_thread
@@ -3359,6 +3377,185 @@ def _message_rescue_privacy_snapshot():
     }
 
 
+def _persona_learning_disclosure():
+    """The plain-English account of the learned-examples store, plus the exact
+    controls that act on it.
+
+    Every claim here is computed, not asserted: the counts come from the store,
+    the path comes from the store, and `verified_empty` comes from the same
+    registry verification the wipe uses. Listing the endpoints in the payload
+    is deliberate — the disclosure and the affordances that honour it ship
+    together, so a screen cannot promise "you can delete one" without the
+    route that does it existing.
+
+    NEVER includes example text. The counts are the disclosure; the content
+    stays behind the per-persona API the user opens deliberately.
+    """
+    from backend.services.persona_learning import PersonaLearningStore
+    store = PersonaLearningStore()
+    personas = store.list_personas()
+    per_persona = {name: len(store.list_examples(name)) for name in personas}
+    category = data_categories.get_registry().get("persona_learning")
+    return {
+        "stored_locally": True,
+        "path": store.path,
+        "personas": len(personas),
+        "total_examples": sum(per_persona.values()),
+        "examples_per_persona": per_persona,
+        "bytes": category.size(),
+        "verified_empty": category.verify().ok,
+        "what_is_stored": (
+            "When you approve teaching a persona, BetterFingers saves that one "
+            "example locally: the raw text you dictated and the final text it "
+            "became. Both halves are your own words. Nothing is saved unless "
+            "you tick the consent box for that specific example, the consent is "
+            "not remembered between examples, and the examples never leave this "
+            "device — they are replayed to the local model as examples of how "
+            "you write."
+        ),
+        "controls": {
+            "inspect": "GET /personas/{name}/examples",
+            "delete_one": "DELETE /personas/{name}/examples/{example_id}",
+            "clear_persona": "DELETE /personas/{name}/examples",
+            # Deliberately in the privacy namespace, not /personas/examples:
+            # that path is shadowed by the existing DELETE /personas/{name}
+            # (both are two segments), so a clear-all registered there would
+            # silently delete a persona named "examples" instead.
+            "clear_all": "DELETE /privacy/persona-learning",
+            "export": "GET /privacy/export",
+            "verify_wipe": "GET /privacy/persona-learning/verify",
+        },
+        "cleared_by": sorted(category.wipe_modes),
+    }
+
+
+def _build_privacy_export():
+    """Everything the registry marks ``included_in_export``, as one JSON bundle.
+
+    ``included_in_export`` had been declared metadata that nothing read — the
+    same defect as WIPE_MODE_FACTORY_RESET being declared and never performed.
+    A flag no code consumes is a promise the product has not made.
+
+    Honesty rules, because an export that quietly drops stores is worse than
+    no export at all:
+
+    * Every export-flagged category appears in the bundle, including ones that
+      cannot be inlined. A store that is a SQLite database or a directory of
+      binary blobs gets an entry stating what it is, where it is, and how big
+      it is — recorded as ``exported: false`` with a reason, never omitted.
+    * ``skipped`` at the top level lists exactly those, so a caller can tell
+      "this store was empty" from "this store could not be represented here".
+    * Nothing is invented. A file that will not parse is reported as
+      unreadable rather than silently replaced with an empty object.
+    """
+    registry = data_categories.get_registry()
+    bundle, skipped = {}, []
+    for category in registry.all():
+        if not category.included_in_export:
+            continue
+        paths = category.paths()
+        entry = {
+            "label": category.label,
+            "sensitivity": category.sensitivity,
+            "may_contain_user_text": category.may_contain_user_text,
+            "paths": [str(p) for p in paths],
+            "bytes": category.size(),
+        }
+        if not paths:
+            entry.update({"exported": True, "present": False, "content": None})
+            bundle[category.id] = entry
+            continue
+        entry["present"] = True
+        files, unreadable = {}, []
+        for path in paths:
+            if path.is_dir():
+                unreadable.append(f"{path}: directory store, not inlined")
+                continue
+            if path.suffix in (".db", ".db-wal", ".db-shm", ".db-journal"):
+                unreadable.append(f"{path}: database, exported via its own history API")
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                unreadable.append(f"{path}: {exc}")
+                continue
+            if path.suffix == ".json":
+                try:
+                    files[str(path)] = json.loads(text)
+                except json.JSONDecodeError as exc:
+                    unreadable.append(f"{path}: invalid JSON ({exc})")
+            else:
+                files[str(path)] = text
+        entry["content"] = files
+        if unreadable:
+            entry["not_exported"] = unreadable
+            entry["exported"] = bool(files)
+            skipped.append({"id": category.id, "reasons": unreadable})
+        else:
+            entry["exported"] = True
+        bundle[category.id] = entry
+    return {
+        "ok": True,
+        "generated_by": "BetterFingers privacy export",
+        "categories": bundle,
+        "category_count": len(bundle),
+        "skipped": skipped,
+        "note": (
+            "This is every store flagged for export in the data registry. Stores "
+            "that cannot be represented as text (the transcription database, "
+            "recordings, cloned voices) are listed with their path and size "
+            "rather than omitted."
+        ),
+    }
+
+
+@app.get("/privacy/export")
+async def privacy_export():
+    """Export the user's own data — one bundle, generated from the registry."""
+    return await run_in_threadpool(_build_privacy_export)
+
+
+@app.delete("/privacy/persona-learning")
+async def privacy_clear_persona_learning():
+    """Delete every learned example for every persona, then verify.
+
+    Goes through the registry's category wipe (which goes through
+    PersonaLearningStore.clear_all()) rather than unlinking the file, so the
+    store's atomic-write and dedupe invariants hold and the result is checked
+    by re-reading rather than trusted. Keys are dropped, not blacklisted — a
+    later approved example recreates them.
+    """
+    category = data_categories.get_registry().get("persona_learning")
+
+    def _clear():
+        wipe = category.wipe()
+        verification = category.verify()
+        return {
+            "ok": verification.ok,
+            "wiped": wipe.ok,
+            "message": (wipe.message if verification.ok else
+                        "Examples remain after clearing; nothing is being claimed "
+                        "that did not happen."),
+            "remaining": verification.remaining,
+            "detail": verification.detail,
+        }
+
+    result = await run_in_threadpool(_clear)
+    return JSONResponse(status_code=200 if result["ok"] else 500, content=result)
+
+
+@app.get("/privacy/persona-learning/verify")
+async def privacy_persona_learning_verify():
+    """Prove the learned-examples store is empty by re-reading it.
+
+    "Clear all" returning ok is the store's claim about its own write; this is
+    the independent check the privacy screen shows next to it.
+    """
+    category = data_categories.get_registry().get("persona_learning")
+    result = category.verify()
+    return {"ok": result.ok, "remaining": result.remaining, "detail": result.detail}
+
+
 def get_privacy_report():
     """Everything that touches the network + where local data lives (C7)."""
     history_file = os.path.join(get_user_data_path(), "draft_history.json")
@@ -3413,10 +3610,39 @@ def get_privacy_report():
     import app_paths
     import routes_wake
 
+    # Wave 6 (Gate 6): the authoritative store table, generated from the data
+    # registry. `data_locations` above is the six-entry summary the current
+    # screen has always shown and is kept for compatibility; `stores` is the
+    # complete inventory — every persistent store the app owns, with its real
+    # path, real size, sensitivity, whether it can hold text the user wrote,
+    # and exactly which wipe modes remove it. It is generated rather than
+    # written out so that a store cannot be added without appearing here.
+    registry = data_categories.get_registry()
+    stores = data_lifecycle.report_rows(registry)
+
     return {
         "offline_by_default": True,
         "network_touchpoints": network_touchpoints,
         "data_locations": data_locations,
+        "stores": stores,
+        "store_count": len(stores),
+        # The anti-lie-by-omission check, surfaced rather than buried in a
+        # test: any file under the data root that no declared category claims.
+        # A non-empty list here means this report is incomplete, and the screen
+        # says so instead of rendering a tidy table over an unknown file.
+        "unmapped_files": data_lifecycle.unmapped_files(registry)[:50],
+        # What each mode deletes, so the confirmation the user reads and the
+        # sweep that runs come from one source.
+        "wipe_modes": {mode: data_lifecycle.preview_mode(registry, mode)
+                       for mode in sorted(data_registry.WIPE_MODES)},
+        # Learned persona examples get an explicit disclosure rather than a
+        # table row, because the row alone understates it: this store holds
+        # sentences the user actually dictated AND the rewritten version, kept
+        # so a persona can imitate their voice. A user who has ticked a
+        # "teach this persona" box deserves to be told plainly what that box
+        # persisted and how to undo it (counts and paths only — never content;
+        # the content is reachable only through the per-persona examples API).
+        "persona_learning": _persona_learning_disclosure(),
         # Live-truthful, not static copy: reflects the actual running service
         # state so this never claims a listener exists while wake word is
         # disabled (or vice versa).
@@ -3452,6 +3678,22 @@ async def privacy_report():
 
 class PrivacyWipeRequest(BaseModel):
     wipe_voices: bool = False
+    # Defaults to the lightest mode, which is exactly what the shipped button
+    # has always done. Widening the default would silently delete personas,
+    # dictionaries and macros for anyone whose client predates this field.
+    mode: str = data_registry.WIPE_MODE_CONVERSATIONS
+
+
+class FactoryResetRequest(BaseModel):
+    """A factory reset is unrecoverable, so the request has to carry proof the
+    user meant it. ``confirm`` must be the exact phrase — a boolean flag is
+    one stray ``true`` in a client away from erasing an install."""
+
+    confirm: str = ""
+    delete_downloaded_models: bool = False
+
+
+FACTORY_RESET_CONFIRMATION = "DELETE EVERYTHING"
 
 
 def _drain_recorder(timeout=10.0):
@@ -3563,7 +3805,7 @@ def _drain_tts_and_clone(timeout=TTS_DRAIN_TIMEOUT_SECONDS):
     return results["voice_cache_cleared"], results
 
 
-def _perform_privacy_wipe(wipe_voices: bool):
+def _perform_privacy_wipe(wipe_voices: bool, mode: str = data_registry.WIPE_MODE_CONVERSATIONS):
     """Quiesce fully, then delete, then verify — and only claim success when
     every postcondition holds. Reaching the final line is not proof of an
     empty landfill.
@@ -3573,7 +3815,15 @@ def _perform_privacy_wipe(wipe_voices: bool):
     refuse while it runs. Aborts (without deleting) if the pipeline, output,
     or TTS/voice-clone path cannot be quiesced, so we never delete out from
     under a running job, send, or speech synthesis.
+
+    ``mode`` is one of the three declared wipe modes. Deletion itself is
+    delegated to the data registry (Wave 6), so this function is now only the
+    quiescence protocol plus the in-memory queues — the *what* lives in
+    ``data_categories`` and the report and the wipe read the same list.
     """
+    if mode not in data_registry.WIPE_MODES:
+        return {"ok": False, "error": "unknown_wipe_mode",
+                "message": f"Unknown wipe mode {mode!r}."}
     if privacy_wipe_in_progress.is_set():
         return {"ok": False, "error": "wipe_already_running",
                 "message": "A privacy wipe is already in progress."}
@@ -3681,30 +3931,63 @@ def _perform_privacy_wipe(wipe_voices: bool):
         save_draft_history()
 
         # 5. Delete on-disk stores (final sweep — callbacks/workers are drained).
+        #
+        #    Wave 6: this step no longer names stores by hand. It executes the
+        #    requested wipe MODE against the data registry, so the set of
+        #    things deleted here is by construction the same set the privacy
+        #    screen lists for that mode. The previous hand-rolled sweep is how
+        #    the shipped button ended up deleting two stores (contacts and
+        #    learned persona examples) that its own confirmation text never
+        #    mentioned, and skipping stores the report implied it cleared.
+        #    Adding a store to the registry now wires it into the wipe; there
+        #    is no second place to remember.
         history_file = os.path.join(get_user_data_path(), "draft_history.json")
-        try:
-            if os.path.exists(history_file):
-                os.remove(history_file)
-            cleared["history_file_removed"] = not os.path.exists(history_file)
-        except OSError as exc:
-            logging.warning(f"Could not remove draft history file: {exc}")
-            cleared["history_file_removed"] = False
+        registry = data_categories.get_registry()
+        mode_result = data_lifecycle.execute_mode(registry, mode)
+        cleared["mode"] = mode
+        cleared["categories"] = mode_result["categories"]
 
-        db_result = history_store.wipe_database()
+        # The legacy per-store keys are derived from the registry results
+        # rather than recomputed: clients (and the renderer's wipe summary)
+        # read these names, and two sources for one fact is the defect this
+        # change removes.
+        def _entry(category_id: str) -> dict:
+            return mode_result["categories"].get(category_id) or {}
+
+        def _category_ok(category_id: str) -> bool:
+            """A category counts as cleared only when its verification — which
+            re-reads the disk — passed. The wipe call returning ok is what we
+            asked for, not what happened."""
+            return bool(_entry(category_id).get("verified"))
+
+        cleared["history_file_removed"] = _category_ok("drafts")
+        cleared["recordings_files_removed"] = len(_entry("raw_recordings").get("removed", []))
+        cleared["persona_examples_cleared"] = _category_ok("persona_learning")
+        cleared["contacts_cleared"] = _category_ok("contacts")
+        # history_store.wipe_database() ran inside the registry's history_db
+        # wipe. Both of its facts are read back from that one call rather than
+        # re-derived: "recreated" comes from the store (a schema it could not
+        # rebuild is a broken install even though the old file is gone), and
+        # "ok" requires the wipe AND the re-read to agree.
+        db_entry = _entry("history_db")
+        db_result = {
+            "ok": bool(db_entry.get("wiped") and db_entry.get("verified")),
+            "recreated": bool(db_entry.get("wipe_detail", {}).get("recreated")),
+        }
         cleared["history_db_wiped"] = db_result
 
-        cleared["recordings_files_removed"] = recordings.clear_recordings()
-
         if wipe_voices:
-            voices_dir = get_voices_path()
-            try:
-                if voices_dir.exists():
-                    # No ignore_errors: a suppressed failure must not report
-                    # success. Verified below regardless.
-                    shutil.rmtree(voices_dir)
-            except OSError as exc:
-                logging.warning(f"Could not remove voices dir: {exc}")
-            cleared["voices_removed"] = not voices_dir.exists()
+            # Cloned voices are a personal-tier category, so a conversations
+            # wipe does not include them; the checkbox is what adds them. Run
+            # through the same registry entry rather than a second rmtree, so
+            # the "voices are gone" claim comes from the same verification as
+            # every other store.
+            voices_category = registry.get("cloned_voices")
+            if voices_category.id not in mode_result["categories"]:
+                voices_result = voices_category.wipe()
+                if not voices_result.ok:
+                    logging.warning(f"Could not remove voices dir: {voices_result.message}")
+            cleared["voices_removed"] = voices_category.verify().ok
 
         # 5b. Clear Message Rescue's held context, stored generation results,
         #     and cancellation handles (F2.5/F2.7 in-memory state). Best-effort
@@ -3717,43 +4000,26 @@ def _perform_privacy_wipe(wipe_voices: bool):
         cleared["message_rescue_results_cleared"] = mr_clear_result["stored_results_cleared"]
         cleared["message_rescue_generations_cleared"] = mr_clear_result["active_generations_cleared"]
 
-        # 5c. Clear every learned persona example (F2.6 on-disk store),
-        #     persona-by-persona so a single write failure is reported rather
-        #     than silently skipped. Keys are dropped, not blacklisted -- a
-        #     later add_example (with fresh consent) recreates them.
-        from backend.services.persona_learning import PersonaLearningStore
-        persona_store = PersonaLearningStore()
-        persona_examples_ok = True
-        for persona_name in persona_store.list_personas():
-            persona_result = persona_store.clear_persona(persona_name)
-            if not persona_result.get("ok"):
-                persona_examples_ok = False
-                logging.warning(
-                    f"Privacy wipe: failed to clear persona examples for "
-                    f"{persona_name!r}: {persona_result.get('message')}"
-                )
-        cleared["persona_examples_cleared"] = persona_examples_ok and not persona_store.list_personas()
-
-        # 5d. Clear contacts (Stage 11). User-authored records of how to speak
-        #     to a person -- notes and tone guidance are free prose about
-        #     someone -- so they go with the rest of the personal data. A
-        #     contact list that survived "delete my data" would be a breach of
-        #     the product's central promise, which is why this lands in the
-        #     same change that creates the store rather than after it.
-        from backend.services.contacts import ContactStore
-        contact_store = ContactStore()
-        contacts_result = contact_store.clear_all()
-        if not contacts_result.get("ok"):
-            logging.warning(
-                f"Privacy wipe: failed to clear contacts: {contacts_result.get('message')}"
-            )
-        # Verified by re-reading, not by trusting the return value: the claim
-        # this dict makes is "they are gone", not "we asked".
-        cleared["contacts_cleared"] = contacts_result.get("ok", False) and contact_store.count() == 0
+        # 5c/5d. Learned persona examples (F2.6) and contacts (Stage 11) used
+        #        to be cleared by hand here. They are now conversation-tier
+        #        registry categories with store-API wipes, so step 5 above
+        #        already cleared and verified them -- through the same
+        #        PersonaLearningStore.clear_all()/ContactStore.clear_all()
+        #        calls, which keep each store's atomicity and id bookkeeping.
+        #        Their postconditions below read the registry's verification.
 
         # 6. Verify every target and report per-path postconditions.
+        #    Every declared category in the mode contributes its verification
+        #    here, so `ok` below cannot be True while a store the mode claims
+        #    to clear is still on disk. The named keys that follow are the
+        #    long-standing ones clients read; the per-category block is the
+        #    complete, generated truth.
         leftover_recordings = recordings.list_leftover_files()
         postconditions = {
+            f"category_{cid}_verified": entry["verified"]
+            for cid, entry in mode_result["categories"].items()
+        }
+        postconditions.update({
             "recorder_stopped": cleared["recorder_stopped"],
             "recording_callback_drained": cleared["recording_callback_drained"],
             "pending_queue_empty": _pending_recordings.empty(),
@@ -3776,7 +4042,7 @@ def _perform_privacy_wipe(wipe_voices: bool):
             # from this dict, so a contacts file that failed to clear makes the
             # whole wipe report failure instead of quietly succeeding.
             "contacts_cleared": cleared["contacts_cleared"],
-        }
+        })
         if wipe_voices:
             postconditions["voices_absent"] = not get_voices_path().exists()
     finally:
@@ -3833,8 +4099,97 @@ async def privacy_wipe(request: PrivacyWipeRequest = PrivacyWipeRequest()):
 
     Returns an honest HTTP status (see _wipe_status_code): a wipe that did not
     fully succeed never reports 200."""
-    result = await run_in_threadpool(_perform_privacy_wipe, request.wipe_voices)
+    result = await run_in_threadpool(_perform_privacy_wipe, request.wipe_voices, request.mode)
     return JSONResponse(status_code=_wipe_status_code(result), content=result)
+
+
+@app.get("/privacy/modes")
+async def privacy_wipe_modes():
+    """What each mode would delete, right now, with real sizes.
+
+    The confirmation dialog reads this instead of carrying its own copy of the
+    list. That is the whole point: the sentence the user agrees to and the
+    sweep that runs are generated from one inventory.
+    """
+    registry = data_categories.get_registry()
+    return {
+        "ok": True,
+        "modes": {mode: data_lifecycle.preview_mode(registry, mode)
+                  for mode in sorted(data_registry.WIPE_MODES)},
+        "factory_reset_confirmation": FACTORY_RESET_CONFIRMATION,
+    }
+
+
+def _perform_factory_reset(delete_downloaded_models: bool):
+    """Run the declared factory reset under the same quiescence protocol the
+    privacy wipe uses.
+
+    A factory reset deletes a strict superset of what a privacy wipe deletes,
+    so it needs at least the same guarantees: no recording in flight, no send
+    mid-injection, no TTS worker holding a file open. Rather than re-implement
+    that protocol, this runs the wipe in factory_reset mode (which quiesces,
+    aborts on any stall, and deletes via the registry) and then performs the
+    reset-only extras: the opt-in model deletion and the residual-file sweep
+    that decides whether this really is a fresh install.
+    """
+    wipe = _perform_privacy_wipe(wipe_voices=True,
+                                 mode=data_registry.WIPE_MODE_FACTORY_RESET)
+    if not wipe.get("ok") and wipe.get("error"):
+        # A pre-deletion abort (pipeline/output/TTS would not quiesce, or a
+        # wipe was already running). Nothing was deleted; say so plainly
+        # instead of reporting a half-finished reset.
+        return {"ok": False, "error": wipe["error"], "wipe": wipe,
+                "message": wipe.get("message", "Factory reset aborted; nothing was deleted.")}
+
+    registry = data_categories.get_registry()
+    reset = data_lifecycle.factory_reset(registry, include_models=delete_downloaded_models)
+    ok = bool(wipe.get("ok") and reset.get("ok"))
+    return {
+        "ok": ok,
+        "wipe": wipe,
+        "reset": reset,
+        "residual_files": reset["residual_files"],
+        "verified": reset["ok"],
+        "message": ("This install was reset to a fresh state." if ok else
+                    "The reset finished with data still on disk — see reset.failed "
+                    "and residual_files. Nothing is being claimed that did not happen."),
+    }
+
+
+@app.post("/privacy/factory-reset")
+async def privacy_factory_reset(request: FactoryResetRequest):
+    """Erase every declared store — Python-owned and Electron-owned — and then
+    prove it by re-reading the disk.
+
+    ``data_registry`` has declared WIPE_MODE_FACTORY_RESET since phase 2.1 and
+    nothing performed it; this is that executor. Requires the exact
+    confirmation phrase (see FactoryResetRequest) because it is unrecoverable:
+    it removes the onboarding consent record, the overlay state, application
+    profiles, workflows, personas, dictionaries, macros and settings, not only
+    conversation data.
+    """
+    if request.confirm != FACTORY_RESET_CONFIRMATION:
+        return JSONResponse(status_code=400, content={
+            "ok": False, "error": "confirmation_required",
+            "message": (f"A factory reset requires confirm={FACTORY_RESET_CONFIRMATION!r}. "
+                        "Nothing was deleted."),
+        })
+    result = await run_in_threadpool(_perform_factory_reset,
+                                     request.delete_downloaded_models)
+    status = 200 if result.get("ok") else _WIPE_ERROR_STATUS.get(result.get("error"), 500)
+    return JSONResponse(status_code=status, content=result)
+
+
+@app.get("/privacy/factory-reset/verify")
+async def privacy_factory_reset_verify():
+    """Re-read the disk and report whether a factory reset actually landed.
+
+    Deliberately a separate GET with no deletion path: the Settings surface
+    offers "check again" after a failed reset, and a user re-checking must not
+    be able to trigger a second erase.
+    """
+    registry = data_categories.get_registry()
+    return await run_in_threadpool(data_lifecycle.verify_factory_reset, registry)
 
 
 @app.get("/mcp/status")
@@ -5320,7 +5675,104 @@ app.include_router(routes_contacts.router)
 app.include_router(routes_library.router)
 app.include_router(routes_app_context.router)
 app.include_router(routes_actions.router)
+from backend.api.routes import input_devices as input_devices_routes  # noqa: E402
+app.include_router(input_devices_routes.router)
 _foundry_sessions = routes_foundry._foundry_sessions
+
+
+# --- Wave 10: the input dispatcher and controller engine (D-0027/D-0028) ----
+# Each handler is the SAME function the corresponding HTTP route calls — a
+# controller press and a dashboard click are one code path. cancel_capture and
+# inject_latest are deliberately unset: no dedicated cancel-without-processing
+# or single-delivery helper exists, and assembling one here would be the
+# second implementation Wave 10's design forbids; the dispatcher reports both
+# as `unavailable`. begin/end_command wait for a command-capture entry point.
+from backend.services.input_dispatch import InputActionDispatcher, InputActionHandlers  # noqa: E402
+from backend.services.controller_engine import ControllerEngine, PygameEventSource  # noqa: E402
+from backend.stores.controller_bindings import ControllerBindingStore  # noqa: E402
+
+
+def _latest_draft_record():
+    with draft_lock:
+        return dict(draft_queue[-1]) if draft_queue else None
+
+
+_INPUT_DISPATCHER = InputActionDispatcher(InputActionHandlers(
+    begin_dictation=start_recording_runtime,
+    end_dictation=stop_recording_runtime,
+    toggle_dictation=toggle_recording_runtime,
+    read_latest=lambda: speak_text_aloud((_latest_draft_record() or {}).get("final_text", "")),
+    copy_latest=lambda: copy_text_to_clipboard((_latest_draft_record() or {}).get("final_text", "")),
+    activate_application_profile=lambda pid: _app_context_get_service().set_override(pid),
+    emergency_stop=emergency_stop_runtime,
+    # Workflows are NOT run here: this asks the renderer to take the Wave 9
+    # approval path; the Electron main process does the running.
+    request_workflow=lambda wid: broadcast_status_threadsafe(
+        "workflow_requested", {"workflow_id": wid},
+    ),
+))
+input_devices_routes.set_dispatcher(_INPUT_DISPATCHER)
+
+
+def _app_context_get_service():
+    from backend.services.app_context import get_service
+    return get_service()
+
+
+_CONTROLLER_STORE = ControllerBindingStore()
+
+
+def _resolve_controller_bindings(device_key):
+    # The application-profile layer is read live, so switching profile mid-game
+    # takes effect on the next press with nobody rebuilding the engine.
+    from backend.stores.app_profiles import AppProfileStore
+    profile_id = _app_context_get_service().current().get("profile_id", "")
+    profile = AppProfileStore().get(profile_id) or {}
+    return _CONTROLLER_STORE.resolve(device_key, profile.get("bindings"))
+
+
+_CONTROLLER_ENGINE = ControllerEngine(
+    _INPUT_DISPATCHER.dispatch,
+    _resolve_controller_bindings,
+    debounce_ms=_CONTROLLER_STORE.read()["debounce_ms"],
+)
+input_devices_routes.set_capture_source(_CONTROLLER_ENGINE)
+
+
+def _pygame_or_none():
+    try:
+        import pygame
+        if getattr(pygame, "joystick", None) is None:
+            return None
+        return pygame
+    except Exception:
+        return None
+
+
+_controller_thread_stop = threading.Event()
+
+
+def _controller_poll_loop():
+    pygame_module = _pygame_or_none()
+    source = PygameEventSource(_CONTROLLER_ENGINE, pygame_module=pygame_module)
+    if not source.available:
+        return
+    source.refresh_devices()
+    while not _controller_thread_stop.is_set():
+        for event in pygame_module.event.get():
+            source.handle(event)
+        _CONTROLLER_ENGINE.tick()  # fires deferred presses
+        time.sleep(0.005)
+
+
+def start_controller_loop():
+    """Daemon poll thread; a no-op when pygame has no joystick support."""
+    if _is_test_env():
+        return None
+    thread = threading.Thread(target=_controller_poll_loop, daemon=True,
+                              name="controller-poll")
+    thread.start()
+    return thread
 
 
 if __name__ == "__main__":
