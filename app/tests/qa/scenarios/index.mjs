@@ -93,6 +93,10 @@ import { defaultFlipScenarios } from './default-flip.mjs';
 // pointing it at production would have moved none of §3 while dropping the
 // legacy rollback coverage it does provide. See foundry-prod.mjs's header.
 import { foundryProdScenarios } from './foundry-prod.mjs';
+// Wave 13 (B-4): the manual Persona Wizard (UI-07-051) on the production
+// composition root -- the missing production leg foundry-prod.mjs's header
+// above explicitly says it does not cover (it proves the Foundry path only).
+import { personaWizardProdScenarios } from './persona-wizard-prod.mjs';
 // Wave 11B (B-2): the two floating overlay WINDOWS (overlay.html,
 // review-overlay.html). The first scenarios in this suite to drive a window
 // other than the dashboard -- run.mjs hands them `ctx.app` for that. Read the
@@ -143,6 +147,7 @@ export const scenarios = [
   ...wave10InputScenarios,
   ...defaultFlipScenarios,
   ...foundryProdScenarios,
+  ...personaWizardProdScenarios,
   ...overlayProdScenarios,
   ...signalDeskProdSweepScenarios,
   ...shellStatusProdScenarios,

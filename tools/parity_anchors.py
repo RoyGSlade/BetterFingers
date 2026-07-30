@@ -816,6 +816,51 @@ ROW_ANCHORS: dict[str, dict] = {
         ),
     },
 
+    # --- Wave 13 (B-6): blend / modulation quick-preset chips ---------------
+    #
+    # Three prose rows citing legacy attribute selectors (`[data-blend-preset]`
+    # / `[data-mod-preset]`), which this collector cannot resolve as a handle
+    # (an attribute name is not an id/class/endpoint/symbol) -- so they read as
+    # "no code handle" even though the same attributes ship verbatim on the
+    # production page (signal-desk.html:1558-1562 / 1644-1649).
+    'UI-07-133': {
+        'anchors': ['VOICE_BLEND_QUICK_PRESETS'],
+        'why': (
+            'Quick-blend chips: features/voiceStudio.js exports VOICE_BLEND_QUICK_PRESETS and binds '
+            'a `[data-blend-preset]` click handler over it (signal-desk.html:1556-1563 ships all five '
+            'chips -- softer/brighter/lower/narrator/assistant -- with matching data-blend-preset '
+            'values). Covered by shell-status-prod.mjs\'s '
+            '`voice-studio-quick-presets-exist-and-match-their-handlers`, which clicks the "softer" '
+            'chip and asserts the real #voiceEnergy/#voiceWarmth sliders move to that preset\'s exact '
+            'values -- proof the handler is live, not just that the button exists.'
+        ),
+    },
+    'UI-07-134': {
+        'anchors': ['setModulationControls'],
+        'why': (
+            'The "Modulation:" group heading itself (its four sliders are already anchored '
+            'individually at UI-07-109): features/voiceStudio.js\'s setModulationControls() is the '
+            'one function that paints pitch/energy/warmth/brightness/pause-style as a group, called '
+            'both by profile load and by every modulation quick-preset click. Covered by the same '
+            'shell-status-prod.mjs scenario, which clicks a modulation chip and asserts multiple '
+            'sliders in the group move together to that preset\'s values.'
+        ),
+    },
+    'UI-07-138': {
+        'anchors': ['VOICE_MODULATION_QUICK_PRESETS'],
+        'why': (
+            'Quick-modulation chips: features/voiceStudio.js exports VOICE_MODULATION_QUICK_PRESETS '
+            'and binds a `[data-mod-preset]` click handler over it (signal-desk.html:1642-1650 ships '
+            'all six chips -- clear/quiet/presentation/character/fast/accessibility -- with matching '
+            'data-mod-preset values; "accessibility" is the 0.75x-speed affordance that had silently '
+            'gone missing from the shipping page). Covered by shell-status-prod.mjs\'s '
+            '`voice-studio-quick-presets-exist-and-match-their-handlers`, which clicks the "quiet" '
+            'chip and asserts energy/warmth/brightness/pause-style/speed all move to that preset\'s '
+            'exact values in one click -- a second, different set of values than the blend click '
+            'that ran immediately before it, which only a live binding could produce twice in a row.'
+        ),
+    },
+
     # --- Wave 12 (D-0034 / director Ruling B): legacy-id re-anchors -----------
     #
     # tools/anchor_audit.py found seven rows naming a DOM id that exists in no
