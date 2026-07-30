@@ -185,6 +185,7 @@ import {
   fetchWakeModels,
   downloadWakeModel,
   fetchWakeModelDownloadState,
+  deleteWakeModel,
   provisionVoiceCloning,
   fetchCapabilities,
   // Wave 11B: both of these were already exported by api/backend.js; the audio
@@ -1055,17 +1056,25 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
       title.textContent = backbone.name || backbone.id;
       const meta = document.createElement('span');
       meta.className = 'sd-util-list-row__meta';
-      meta.textContent = backbone.installed ? 'Installed' : 'Not installed';
+      meta.textContent = backbone.downloaded ? 'Installed' : 'Not installed';
       main.append(title, meta);
       const actions = document.createElement('div');
       actions.className = 'sd-util-list-row__actions';
-      if (!backbone.installed) {
+      if (!backbone.downloaded) {
         const dl = document.createElement('button');
         dl.type = 'button';
         dl.className = 'sd-btn';
         dl.textContent = 'Download';
         dl.addEventListener('click', () => handleDownloadWakeBackbone(backbone.id, dl));
         actions.append(dl);
+      }
+      if (backbone.origin === 'user-imported') {
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'sd-btn sd-action-btn--danger';
+        del.textContent = 'Delete';
+        del.addEventListener('click', () => handleDeleteWakeBackbone(backbone.id, backbone.name, del));
+        actions.append(del);
       }
       row.append(main, actions);
       els.wakeBackboneList.append(row);
@@ -1097,12 +1106,34 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
     }
   }
 
+  async function handleDeleteWakeBackbone(id, name, buttonEl) {
+    if (!confirmFn(`Delete wake model "${name || id}"? This cannot be undone.`)) return;
+    if (buttonEl) {
+      buttonEl.disabled = true;
+      buttonEl.textContent = 'Deleting…';
+    }
+    try {
+      await deleteWakeModel(id);
+      if (profileSettingsCache.wake_word_model === id) {
+        if (els.wakeModelSelect) els.wakeModelSelect.value = '';
+        await patchProfileSetting('wake_word_model', '', { messageEl: els.wakeMessage });
+      }
+      await refreshWakeBackbones();
+    } catch (error) {
+      setMessage(els.modelsMessage, `Delete failed: ${error.message}`, 'danger');
+      if (buttonEl) {
+        buttonEl.disabled = false;
+        buttonEl.textContent = 'Delete';
+      }
+    }
+  }
+
   async function refreshWakeBackbones() {
     const result = await attemptFetch(() => fetchWakeModels());
     if (result.ok) {
       const res = result.value;
-      if (els.wakeEngineBadge) els.wakeEngineBadge.textContent = Array.isArray(res?.backbones) && res.backbones.some((b) => b.installed) ? 'Ready' : 'Not installed';
-      renderWakeBackbones(res?.backbones || []);
+      if (els.wakeEngineBadge) els.wakeEngineBadge.textContent = Array.isArray(res?.models) && res.models.some((b) => b.downloaded) ? 'Ready' : 'Not installed';
+      renderWakeBackbones(res?.models || []);
     } else {
       // No render call on failure -- the badge and list keep showing whatever
       // was last successfully loaded rather than being blanked.
