@@ -26,6 +26,8 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
+import upload_safety
+
 router = APIRouter()
 
 _lock = threading.Lock()
@@ -385,9 +387,15 @@ async def wake_model_import(name: str = Form(...), file: UploadFile = File(...))
 
     suffix = os.path.splitext(file.filename or "")[1] or ".onnx"
     fd, tmp_path = tempfile.mkstemp(suffix=suffix)
+    os.close(fd)
     try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(await file.read())
+        try:
+            upload_safety.stream_to_file(file.file, tmp_path, wake_models.MAX_IMPORT_BYTES)
+            upload_safety.validate_signature(tmp_path, "onnx")
+        except upload_safety.UploadTooLarge as exc:
+            raise HTTPException(status_code=413, detail=f"Wake model file too large (max {exc.limit} bytes).")
+        except upload_safety.UploadRejected as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid wake model file: {exc}")
         entry = wake_models.import_wake_model(name, tmp_path)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
