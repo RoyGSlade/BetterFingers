@@ -33,6 +33,28 @@ it doesn't exist.
 | [QA-DOC-004](#qa-doc-004) QA board fails 6 scenarios without two env vars | Docs | YEL | **OPEN** — documented in OPERATOR_QA §0 |
 | [QA-BL-001](#qa-bl-001) Parity tool counts dead `glitch-ring.js` | Backlog | YEL | **DEFERRED** post-publish |
 
+> ## ⚠ OPERATOR REVIEW, 2026-07-30 — six NEW RED findings
+>
+> Donaven's hands-on pass landed after the table below and is filed in full at
+> [`OPERATOR_REVIEW.md`](OPERATOR_REVIEW.md). It supersedes the "all clear"
+> reading of this file.
+>
+> | ID | Finding | Sev |
+> |---|---|---|
+> | OR-01 | **Auto Submit presses Enter in the focused window, unwarned** | RED |
+> | OR-02 | UI reports "Listening" before the backend is ready | RED |
+> | OR-03 | LLM turns off despite "Always On" | RED |
+> | OR-04 | False "Hotkeys fetch failed" while hotkeys work | RED |
+> | OR-05 | Confidence score passes badly wrong transcriptions | RED |
+> | OR-06 | Audio does not default to System Default | RED |
+>
+> Plus 14 P1 broken-workflow items and a P2 restructure (Scribe, Custom Voice).
+>
+> **`v0.2.0-alpha.1` does not meet the §2 publishable bar.** OR-01 is the only
+> finding in this repository that can damage data *outside* the application —
+> it pastes and presses Enter into whatever window has focus, with no warning.
+> Treat it as the next thing anyone touches.
+
 **Four RED findings this wave. All four are fixed.** Two of them
 (QA-FR-002, QA-UTIL-001) were user-facing defects nobody had reported — they were
 found by auditing rather than by a bug report.
