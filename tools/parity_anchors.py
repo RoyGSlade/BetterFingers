@@ -1033,6 +1033,40 @@ CUTS: dict[str, str] = {
         'this row named, `#draftConfidence`, exists only in the legacy `index.html` rollback '
         'page and never in the production composition root.'
     ),
+
+    # --- Wave 13 (B-3a, D-0036): delivery is Paste only -----------------------
+    'UI-06-038': (
+        'Intentional cut: the legacy `#sendActionSelect` five-option dropdown (Profile default / '
+        'Copy only / Paste / Type / Open chat then send) is not rebuilt. Replaced by '
+        '`#sdDeliverySegmented` (`app/src/renderer/signal-desk.html`, painted by '
+        '`features/talkWorkspace.js`), which Wave 2 already shipped as the ONE delivery '
+        'selector — but per D-0036 (docs/release/DECISIONS.md) that control is itself reduced '
+        'to a single Paste option for v0.2.0-alpha.1: Type and Copy are removed as user choices '
+        'on the shipping page (not merely hidden — the buttons do not exist). "Profile default" '
+        'and "Open chat then send" are not offered at all this release. '
+        '`backend/domain/gaming_policy.resolve_send_action()`\'s deliberate paste -> copy_only '
+        'downgrade under an active gaming profile is untouched by this cut. Covered by '
+        '`app/tests/qa/scenarios/signal-desk-talk.mjs`\'s `talk-single-delivery-selector`, which '
+        'asserts exactly one delivery option (Paste) is offered, Type/Copy are gone outright, and '
+        'clicking Paste still functionally presses it and updates the send-button label.'
+    ),
+
+    # --- Wave 13 (B-3b, D-0037): recording toggle -----------------------------
+    'UI-06-016': (
+        'Intentional cut: `#toggleRecordingButton` (one button flipping label + `data-recording` '
+        'between Start/Stop, calling `POST /runtime/recording/toggle`) exists only in the legacy '
+        '`app/src/renderer/index.html` rollback page and its handler `app/src/renderer/main.js:155`. '
+        '`features/runtime.js` still paints it but guarded by `if (els.toggleRecordingButton)`, which '
+        'never runs on the shipping page since the element is absent there. Production replaced it in '
+        'Wave 2 with an explicit pair — `#sdCaptureStartButton` / `#sdCaptureStopButton` '
+        '(`app/src/renderer/signal-desk.html`), bound by `features/talkCapture.js`, which converges '
+        'the button path and the hotkey path on one reducer and falls back to the same '
+        '`api.toggleRecording()` -> `POST /runtime/recording/toggle` the legacy button called. The '
+        'capability and the endpoint are wired; only the legacy combined-toggle ELEMENT is gone, '
+        'deliberately — a control whose meaning depends on invisible state is the exact failure mode '
+        'the explicit Start/Stop pair (plus a never-disabled Emergency Stop) exists to prevent. See '
+        'docs/release/DECISIONS.md D-0037 for the full verification and ruling.'
+    ),
 }
 
 

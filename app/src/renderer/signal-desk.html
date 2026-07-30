@@ -3210,12 +3210,14 @@
         <span class="sd-context__section-label">Delivery <span class="sd-help" aria-hidden="true">?</span></span>
         <div class="sd-segmented" role="group" aria-label="Delivery method" id="sdDeliverySegmented">
           <!--
-            Wave 2: Send / Insert / Copy became Type / Paste / Copy. The old
-            labels named two things the backend has no notion of; these three map
-            exactly onto the only actions perform_output_action() accepts
-            (type / paste / copy_only), so what the user picks here is literally
-            what gets requested. This group is now the ONLY delivery selector on
-            the page -- see the removed <select> in the refined card.
+            D-0036 (docs/release/DECISIONS.md): delivery is Paste only for
+            v0.2.0-alpha.1. Wave 2 built this as a three-way Type/Paste/Copy
+            selector; keeping a selector that only ever resolves one way would
+            be exactly the overload PUBLISH_PLAN.md §5 forbids, so Type and
+            Copy are removed as user choices here (UI-06-038 is `intentional_cut`,
+            named replacement `#sdDeliverySegmented`). perform_output_action()
+            is untouched and still accepts type/paste/copy_only -- re-offering
+            them later is a markup change, not a rebuild.
           -->
           <!--
             No `is-active` in the markup: talkWorkspace.js paints the active
@@ -3223,17 +3225,9 @@
             settings arrive, so a static default here could only ever disagree
             with what Send is actually going to do.
           -->
-          <button type="button" class="sd-segmented__option" data-delivery-option="type" aria-pressed="false">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="4" x2="12" y2="20"></line><line x1="7" y1="4" x2="17" y2="4"></line><line x1="9" y1="20" x2="15" y2="20"></line></svg>
-            Type
-          </button>
           <button type="button" class="sd-segmented__option" data-delivery-option="paste" aria-pressed="false">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="4" width="10" height="16" rx="2"></rect><line x1="10" y1="2.5" x2="14" y2="2.5"></line></svg>
             Paste
-          </button>
-          <button type="button" class="sd-segmented__option" data-delivery-option="copy" aria-pressed="false">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="11" height="12" rx="2"></rect><path d="M5 15V4h10"></path></svg>
-            Copy
           </button>
         </div>
       </div>

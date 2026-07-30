@@ -198,32 +198,44 @@ export const signalDeskTalkScenarios = [
     kind: 'standard',
     description:
       'DIRECTOR RULING (Wave 2 Gate 2): Talk used to carry two competing delivery controls plus a decorative send ' +
-      'chevron with no popover anywhere in the repo. Exactly ONE survives -- #sdDeliverySegmented (Type/Paste/Copy) ' +
-      '-- so this asserts the old #sdDeliveryType dropdown and #sdSendChevronButton are gone outright (not merely ' +
-      'hidden), the segmented control is visible with all three options, and the primary button label ' +
-      '(#sdSendButtonLabel) always states what Send will actually do, changing when the selection changes.',
+      'chevron with no popover anywhere in the repo. Exactly ONE survives -- #sdDeliverySegmented -- so this ' +
+      'asserts the old #sdDeliveryType dropdown and #sdSendChevronButton are gone outright (not merely hidden). ' +
+      'D-0036 (docs/release/DECISIONS.md) further narrows that survivor to Paste only for v0.2.0-alpha.1 -- UI-06-038 ' +
+      'is `intentional_cut` -- so this also asserts Type and Copy are gone as user choices (not merely hidden) and ' +
+      'exactly one option, Paste, is offered. The primary button label (#sdSendButtonLabel) must still always state ' +
+      'what Send will actually do, and clicking the one remaining option must still visibly move the control -- an ' +
+      'existence check alone would pass a dead binding.',
     backendState: withDraft,
     async navigate(_page) {},
     async expects(page) {
       const segmented = page.locator('#sdDeliverySegmented');
       await expect(segmented, '#sdDeliverySegmented must be the one delivery selector').toBeVisible();
-      for (const option of ['Type', 'Paste', 'Copy']) {
-        await expect(segmented.locator('[data-delivery-option]', { hasText: option })).toBeVisible();
+      await expect(
+        segmented.locator('[data-delivery-option]'),
+        'D-0036: exactly one delivery option (Paste) may be offered',
+      ).toHaveCount(1);
+      await expect(segmented.locator('[data-delivery-option="paste"]', { hasText: 'Paste' })).toBeVisible();
+      for (const option of ['type', 'copy']) {
+        await expect(
+          segmented.locator(`[data-delivery-option="${option}"]`),
+          `D-0036: "${option}" must be gone as a user choice, not merely hidden`,
+        ).toHaveCount(0);
       }
 
       await expect(page.locator('#sdDeliveryType'), 'the old insert-method dropdown must be gone outright').toHaveCount(0);
       await expect(page.locator('#sdSendChevronButton'), 'the decorative split-button chevron must be gone outright').toHaveCount(0);
 
       // Cold-boot output settings: review_first + injection supported, so the
-      // resolved default (no explicit selection) is 'paste' -- see
+      // resolved default (no explicit selection) is already 'paste' -- see
       // talkWorkspace.js's resolveSendAction()/primaryActionLabel().
       await expect(page.locator('#sdSendButtonLabel')).toHaveText('Paste at Cursor');
 
-      await page.click('#sdDeliverySegmented [data-delivery-option="copy"]');
-      await expect(page.locator('#sdSendButtonLabel'), 'label must update when the selection changes').toHaveText('Copy to Clipboard');
-
-      await page.click('#sdDeliverySegmented [data-delivery-option="type"]');
-      await expect(page.locator('#sdSendButtonLabel')).toHaveText('Type at Cursor');
+      // FUNCTIONAL, not just present: clicking the one remaining option must
+      // still visibly press it and the label must still reflect it -- proving
+      // the binding survived the markup change rather than becoming dead code.
+      await page.click('#sdDeliverySegmented [data-delivery-option="paste"]');
+      await expect(page.locator('#sdDeliverySegmented [data-delivery-option="paste"]')).toHaveAttribute('aria-pressed', 'true');
+      await expect(page.locator('#sdSendButtonLabel')).toHaveText('Paste at Cursor');
     },
     screenshots: [{ name: 'talk-single-delivery-selector' }],
   },
