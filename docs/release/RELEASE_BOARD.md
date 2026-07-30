@@ -1,7 +1,7 @@
 # True BetterFingers Release Board
 
 - **Release:** `v0.2.0-alpha.1`
-- **Current wave:** Wave 13 publish plan execution (Gate 11 still NOT accepted). As of `545e582` (2026-07-29, director-verified): parity ledger **398 wired / 23 intentional_cut / 17 blocked / 438 total** — down from the Wave 12A snapshot of 396/21/21 (itself down from the Wave 11 21-blocked figure) as WS-B work lands. Wave 12A landed two objectives ahead of formal Gate 11 closure — native-control styling/QA (`9399e54`) and a P0 data-root resolver fix (`2507930`), followed by a startup-hardening fix for the llama-server port and the renderer initial-load race (`2575cc5`). Waves 12 (package qualification) and 13 remain blocked on Gate 11.
+- **Current wave:** Wave 13 publish plan execution — **Gate 11 ACCEPTED** (D-0044, 2026-07-30). As of `3d935c6` (director-verified): parity ledger **411 wired / 27 intentional_cut / 0 blocked / 438 total**, down from 398/23/17 at wave open and 396/21/21 at the Wave 12A snapshot. Also at this commit: QA board 99/99 (three consecutive, fresh build), node 1668/1668, python 3098/0. Wave 12 (package qualification, F-1/F-2) is now UNBLOCKED and is the next work; it has not been started. Operator QA (`OPERATOR_QA.md`) has not been performed.
 - **Gate 0:** **ACCEPTED (2026-07-28, release-director)**
 - **Gate 1:** **ACCEPTED (2026-07-28, release-director, D-0019)**
 - **Gate 2:** **ACCEPTED (2026-07-28, release-director, D-0021)**
@@ -13,7 +13,7 @@
 - **Gate 9:** **ACCEPTED (2026-07-28, release-director, D-0027)**
 - **Gate 6:** **ACCEPTED (2026-07-28, release-director, D-0028)**
 - **Gate 10:** **ACCEPTED — software (2026-07-28, D-0029); hardware matrices unqualified pending operator pass**
-- **Gate 11:** **NOT ACCEPTED (D-0030, D-0031)** — default flipped and version centralized. At Wave 12A, the ledger stood at **396 `wired` / 21 `intentional_cut` / 21 `blocked`** (Gate 0 baseline was 434 blocked; confirmed unmoved in [WAVE12A_UI_CONTROLS.md](archive/WAVE12A_UI_CONTROLS.md)'s verification table). **As of `545e582` (2026-07-29, director-verified, live via `python3 tools/parity_validator.py`): 398 `wired` / 23 `intentional_cut` / 17 `blocked` / 438 total.** This figure moves as WS-B tasks land — do not treat it as final; re-run the validator for the current count. The gate forbids any blocked row; see [WAVE11_BLOCKERS.md](archive/WAVE11_BLOCKERS.md) for the (now historical) blocker detail. Separately, the full production-QA board regressed from 97/97 to **96/97** on 2026-07-29 (`91d19b8`) — see "Why the board is 96/97, not 97/97" below.
+- **Gate 11:** **ACCEPTED (D-0044, 2026-07-30)** — the gate forbids any `blocked` row and the ledger now reads **411 `wired` / 27 `intentional_cut` / 0 `blocked` / 438 total**, director-verified live at `3d935c6` via `python3 tools/parity_validator.py`. Baseline at wave open was 398/23/17; seventeen blocked rows closed — eleven wired with evidence, six cut under D-0036, D-0037 and D-0043. Supporting runs at the same commit: production QA board **99/99 three consecutive times** on a fresh build (the board grew from 97 to 99 as this wave added the onboarding keyboard-trap and persona-wizard scenarios), node suite **1668/1668**, python suite **3098 passed / 0 failed** in a clean environment (see QA-DOC-005 — the QA env vars must NOT be set for pytest). Gate 11 is a parity gate: it does not assert operator sign-off (see OPERATOR_QA.md) or CI green (C-5 is unproven).
 - **Last updated:** 2026-07-29
 
 Statuses: `DONE`, `IN PROGRESS`, `BLOCKED`, `PENDING`, `CUT`.
@@ -152,7 +152,7 @@ Wave 1 follow-ups recorded: factory-reset executor exists nowhere (Wave 6 backlo
 | 9 | Restricted action engine | Approved action schema | `DONE` (run executor follows with Wave 10) |
 | 10 | Controller and Stream Deck | Shared action IDs from Waves 2/9 | `DONE` (software; hardware pass = operator checklist WAVE10_QA.md) |
 | 11 | Strict 438-item parity closure, version, default flip | Gates 1–10 | `IN PROGRESS` — flip + version DONE; parity closure open (17 blocked as of `545e582`, 2026-07-29 — re-run `python3 tools/parity_validator.py` for the current count) |
-| 12 | Windows/Linux package qualification | Gate 11 | `BLOCKED` |
+| 12 | Windows/Linux package qualification | Gate 11 | `UNBLOCKED — not started` |
 | 13 | Source Arcanum publication | Gates 0–12 | `BLOCKED` |
 | 14 | One-release legacy cleanup and later backend split | One completed Signal Desk release | `BLOCKED` |
 

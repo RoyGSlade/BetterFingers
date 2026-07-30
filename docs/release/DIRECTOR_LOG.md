@@ -31,25 +31,28 @@ Status vocabulary per PUBLISH_PLAN §3: `OPEN`, `IN PROGRESS`, `NEEDS REVIEW`,
 
 | Task | Lane | Status | Commit | Director verdict |
 |---|---|---|---|---|
-| A-1 Review Deck Read/Stop | w-overlay | OPEN | — | — |
-| B-1 Onboarding evidence rows | — | OPEN | — | — |
-| B-2 Talk evidence rows | — | OPEN | — | — |
-| B-3a Delivery = Paste | — | OPEN (ruled D-0036) | — | — |
-| B-3b Recording toggle | — | OPEN (ruled D-0037) | — | — |
-| B-4 Persona Wizard QA | — | OPEN | — | — |
-| B-5 Voice defaults + blend | — | OPEN | — | — |
-| B-6 Blend/modulation chips | — | OPEN | — | — |
-| B-7 Ring states | — | OPEN | — | — |
-| B-8 Wake model deletion | — | OPEN | — | — |
-| C-1 Wake upload safety | w-sec | OPEN | — | — |
-| C-2 Dev route gating | — | OPEN | — | — |
-| C-3 project_generator target_dir | w-sec | OPEN | — | — |
-| C-4 Wipe-gate unification | — | OPEN | — | — |
-| C-5a/b/c CI gates | — | OPEN | — | — |
-| D-1 First-run audit | — | OPEN | — | — |
-| D-2 Per-feature setup paths | — | OPEN | — | — |
-| E-1/E-2/E-3 Doc corrections | w-docs | **COMPLETE** | `f321bbe` | Accepted — all three re-verified independently |
-| F-1/F-2 Package qualification | — | BLOCKED (Gate 11) — past the stop line | — | — |
+| A-1 Review Deck Read/Stop | w-overlay | **COMPLETE** | — (no change needed) | Premise was stale; already fixed in `ed1bede` (D-0041) |
+| B-1 Onboarding rows | w-parity | **COMPLETE** | `5a4570d` | Delta exactly 3; trap test is real keystrokes |
+| B-2 Talk rows | w-parity | **COMPLETE** | `ded3300` | Bound to pre-existing coverage, confirmed behavioral |
+| B-3a Delivery = Paste | w-parity2 | **COMPLETE** | `2740396` | Gaming downgrade verified intact |
+| B-3b Recording toggle | w-parity2 | **COMPLETE** | `28f1557` | Cut per D-0037 |
+| B-4 Persona Wizard | w-parity | **COMPLETE** | `323ba30` | Walks all four steps + back/validation/save |
+| B-5 Voice defaults + blend | w-parity2 / w-lastrows | **COMPLETE** | `323ba30`, `7428bb6` | 1 wired, 2 cut per D-0043 |
+| B-6 Blend/modulation chips | w-parity / w-parity2 | **COMPLETE** | `323ba30`, `5b09e8e` | Chips proven functional, twice over |
+| B-7 Ring states | w-parity2 | **COMPLETE** | `5b09e8e` | Enumeration-driven; signalCore coverage added on ruling |
+| B-8 Wake model deletion | w-wakedel | **COMPLETE** | `098dfba` | Built per D-0043; fixed the list it depended on |
+| C-1 Wake upload safety | w-sec | **COMPLETE** | `080cd90` | Denylist per D-0040 |
+| C-2 Dev route gating | w-server | **COMPLETE** | `20a307b` | 11 routes; default verified outside pytest |
+| C-3 project_generator guard | w-foundry | **COMPLETE** | `f0f2b33` | Survived 12 director-chosen escape probes |
+| C-4 Wipe-gate unification | w-server | **COMPLETE** | `da21809` | 6/7 converted, 1 documented exception |
+| C-5a/b/c CI gates | w-ci | **COMMITTED, NOT COMPLETE** | `70e13fe` | **Needs an operator-authorised push to prove green** |
+| D-1 First-run audit | w-firstrun | **COMPLETE** | — (report) | Found the wave's only RED |
+| D-2 Per-feature audit | w-firstrun | **COMPLETE** | — (report) | 4/5 pass; Library partial-fail |
+| D-3 Talk download feedback | w-firstfix | **COMPLETE** | `630a4bc` | The RED. Director's objection withdrawn — worker was right |
+| D-4 Library empty state | w-firstfix | **COMPLETE** | `52c1905` | Exactly one action, real navigation |
+| E-1/E-2/E-3 Docs | w-docs | **COMPLETE** | `f321bbe` | E-1 rewritten — its premise was false |
+| Regression repair | director | **COMPLETE** | `3d935c6` | Two failures the filtered suites hid |
+| F-1/F-2 Package qualification | — | **NOT STARTED — past the operator's stop line** | — | — |
 
 ## Log
 
@@ -141,3 +144,133 @@ length". All clean: no surviving false GPU claim, every stale parity number
 dated or live-with-commit, zero `@app.on_event` sites, `isDeletionOutcome()`
 confirmed handling the `{ok, recreated}` dict, and **no gate's accept status
 altered** (the one way a docs task could do real damage). Accepted.
+
+### 2026-07-30 · The last three rows, and the bug hiding behind one of them
+
+B-5 and B-8 were investigate-or-escalate. `w-parity2` investigated and escalated
+rather than building UI — correct under §1 rule 1 — and I verified its finding
+independently: `setDefaultVoicePreset`, `clearDefaultVoicePreset` and
+`deleteWakeModel` are all exported from `api/backend.js` with **zero callers
+anywhere else in the renderer**, all three proxy-allowlisted. Real, backend-
+supported, UI-absent capabilities.
+
+**D-0043** resolved them in opposite directions, and the distinction is the
+point: a missing *convenience* versus a *one-way door*.
+
+- Voice-preset make-default → **cut**. Apply already reaches the identical end
+  state; a default concept means new UI, new persisted state and a new conflict
+  state for zero new capability.
+- Wake-model deletion → **built**. Utilities offers Import for a user-supplied
+  `.onnx` and had no removal path *anywhere* — and the privacy wipe does not
+  cover it (`server.py:3886-3888` wipes the pretrigger buffer, not model files).
+  A user who imported the wrong file could never remove it. Shipping an import
+  feature with no undo is not a defensible alpha.
+
+Building that then surfaced **QA-UTIL-001**, a defect bigger than the row: the
+wake backbone list **never rendered in production at all**. The renderer read
+`res.backbones` where the backend returns `{"models": …}`, and `backbone.installed`
+where entries carry `downloaded`. The engine badge could therefore never read
+"Ready" — the screen told every user their wake engine was not installed while
+it was working fine. It read plausibly because the LLM and Whisper payloads on
+the *same screen* genuinely do use `installed`. Ruled in scope: without it the
+authorised Delete button would have been unreachable dead code.
+
+### 2026-07-30 · Two regressions the filtered suites hid
+
+The full `node --test` suite came back **1666/1668**. Both failures were mine to
+own:
+
+1. `qaFirstRun.test.mjs` pinned onboarding-prod at 6 scenarios; B-1 legitimately
+   added a 7th. **I accepted B-1 on a filtered run.**
+2. The "no renderer page hardcodes a version number" guard failed on a *comment*
+   B-3a added to `signal-desk.html`. The guard greps the file and cannot tell
+   comment from markup.
+
+Fixed by updating the count (keeping the pin — it guards against losing a
+scenario) and rewording the comment (keeping the guard — the renderer genuinely
+must not invent a version). **The lesson is procedural and worth more than either
+fix: a green filtered run is not evidence of a green suite.** Every task in this
+wave was reviewed by re-running its *own* Review commands; that is necessary and
+was not sufficient.
+
+### 2026-07-30 · Final verification at `3d935c6`
+
+Run on a **fresh build**, because the QA harness executes `app/out/`, not source:
+
+- Production QA board: **99/99, three consecutive runs.** The board grew from 97
+  to 99 — this wave added the onboarding keyboard-trap scenario and the persona
+  wizard scenario — so §2's "97/97" bar is met and exceeded.
+- Node suite: **1668 / 1668**.
+- Parity ledger: **411 wired / 27 intentional_cut / 0 blocked / 438 total**,
+  validator OK. **Gate 11's parity bar is met.**
+
+### 2026-07-30 · Where this stops
+
+Per the operator's stop line, the wave ends with WS-A/B/C/D/E closed and F-1/F-2
+untouched. Two things are deliberately NOT claimed as done:
+
+1. **C-5's CI gates are committed but unproven.** Their Done-when requires a
+   green run on a push, and no push has been authorised. Worse, `ruff` and
+   `bandit` are not installed on this machine, so their baselines are **genuinely
+   unknown** — possibly clean, possibly hundreds of findings. Nobody should plan
+   triage on an assumption here.
+2. **Operator QA has not been performed.** [`OPERATOR_QA.md`](OPERATOR_QA.md) is
+   the script for it. §1.10 and §5.1/§5.2 exist specifically to confirm the two
+   RED fixes read correctly to a human — automated tests prove the mechanism, not
+   the impression.
+
+**Eight plan or QA statements proved false or stale during this wave** — a
+fabricated GPU claim, an ONNX magic-byte assumption, an already-fixed "broken"
+test, a stale QA report, a wrongly-named caller module, two miscounted call-site
+tallies, and a parity mapping pointing at dead code. Every single one was caught
+by a worker running the command instead of trusting the brief, and in one case a
+worker was right against my own explicit instruction. That is the habit worth
+carrying into the next wave.
+
+### 2026-07-30 · A 42-failure false alarm, and what it cost
+
+The first full Python run came back **42 failed / 3056 passed** and looked like a
+serious regression. It was not. I had exported `BETTERFINGERS_DATA_DIR` and
+`BF_QA_USER_DATA_DIR` for the QA board **in the same shell**, and they leaked
+into pytest.
+
+Diagnosed rather than assumed, in this order: the failing file passed 28/28 in
+isolation and 45/45 under `-k` (so: pollution, not a defect) → re-ran the branch
+with `env -u` on both variables → **3098 passed, 0 failed** → and to be certain
+the wave had not introduced latent pollution, built a throwaway worktree at
+pre-wave `main` and ran the same suite there: **3074 passed, 0 failed**. The
+branch adds 24 net new passing tests and breaks nothing.
+
+**The error was mine, in the verification command, not in the code.** Two things
+come out of it worth keeping:
+
+1. Filed as **QA-DOC-005**: the QA board *requires* those two variables and
+   pytest is *poisoned* by them. A trap whose failure mode impersonates a
+   regression deserves a sign, and it is now in `OPERATOR_QA.md` §0.
+2. The comparison against pre-wave `main` was the right instinct and cheap
+   (~4 min). When a suite goes red late, establishing whether it was ever green
+   beats staring at the failures.
+
+### 2026-07-30 · Gate 11 ACCEPTED (D-0044)
+
+`411 wired / 27 intentional_cut / 0 blocked / 438 total` at `3d935c6`. Seventeen
+blocked rows closed from a 398/23/17 baseline — eleven wired with evidence, six
+cut under D-0036, D-0037 and D-0043. `RELEASE_BOARD.md` updated; Wave 12 is
+unblocked and not started.
+
+The gate is deliberately narrow. It does not assert operator sign-off, and it
+does not assert CI green. Both are stated in the ruling so nobody reads a parity
+gate as a shipping decision.
+
+### 2026-07-30 · Wave closed — what is left is exactly what the operator asked to be left
+
+WS-A, WS-B, WS-C, WS-D and WS-E are closed and reviewed. What remains:
+
+1. **Operator QA** — [`OPERATOR_QA.md`](OPERATOR_QA.md), written for this. §1.10
+   and §5.1–5.2 exist specifically to confirm the two RED fixes read correctly to
+   a human.
+2. **C-5's CI gates** — committed, unproven, and needing an operator-authorised
+   push. `ruff` and `bandit` baselines are genuinely unknown.
+3. **F-1 / F-2** — the AppImage and .exe builds. Untouched, per the stop line.
+
+Nothing has been pushed. `main` is untouched. All work is on `publish/wave-13`.
