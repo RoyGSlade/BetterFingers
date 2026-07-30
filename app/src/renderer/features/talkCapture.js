@@ -42,7 +42,7 @@
 
 // --- Pure helpers (no DOM) --------------------------------------------------
 
-export const CAPTURE_STATES = ['idle', 'starting', 'recording', 'stopping', 'busy', 'error'];
+export const CAPTURE_STATES = ['idle', 'starting', 'recording', 'stopping', 'busy', 'downloading', 'error'];
 
 // The status vocabulary is checked against what server.py ACTUALLY broadcasts,
 // not against features/talkWorkspace.js's interpretVoiceStatus() list. Those two
@@ -109,6 +109,8 @@ function defaultMessageForState(state) {
       return 'Recording…';
     case 'busy':
       return 'Processing…';
+    case 'downloading':
+      return "Downloading the speech model (first use only, this can take a few minutes)…";
     case 'error':
       return 'Needs attention.';
     case 'starting':
@@ -142,6 +144,16 @@ const INITIAL_SNAPSHOT = snapshotFor('idle', defaultMessageForState('idle'));
  *   {type:'intent', intent:'start'|'stop'|'toggle'|'emergencyStop'}
  *   {type:'result', intent, ok, recording, message}
  *   {type:'error', message}
+ *   {type:'modelDownload', active, message}   QA-FR-002: client-side-only
+ *     enrichment, never something server.py broadcasts over the voice-status
+ *     socket. Driven by createTalkCaptureFeature() polling GET /models/whisper
+ *     while 'busy' (see pollModelDownload() below) -- it only ever narrows
+ *     the generic 'busy'/"Processing…" span into a distinct, explained
+ *     'downloading' state. A real voiceStatus event stays authoritative and
+ *     can override it at any time, same as every other state here.
+ *   {type:'guidance', text}   QA-FR-003: appends the backend's Doctor
+ *     recovery guidance to an already-shown error message; never changes
+ *     the state itself.
  */
 export function reduceCaptureState(current, event) {
   const prev = current && CAPTURE_STATES.includes(current.state) ? current : INITIAL_SNAPSHOT;
@@ -194,6 +206,21 @@ export function reduceCaptureState(current, event) {
     case 'error':
       return snapshotFor('error', event.message || 'Something went wrong.');
 
+    case 'modelDownload': {
+      if (!event.active) return prev;
+      // Only ever narrows 'busy' (or refreshes an existing 'downloading') --
+      // never fires from 'recording'/'idle'/'error'/etc., so a stale poll
+      // response arriving after the pipeline has already moved on can't
+      // drag the UI backward.
+      if (prev.state !== 'busy' && prev.state !== 'downloading') return prev;
+      return snapshotFor('downloading', event.message || defaultMessageForState('downloading'));
+    }
+
+    case 'guidance': {
+      if (prev.state !== 'error' || !event.text) return prev;
+      return snapshotFor('error', `${prev.message} ${event.text}`.trim());
+    }
+
     default:
       return prev;
   }
@@ -236,17 +263,102 @@ export function createTalkCaptureFeature({ elements, hooks } = {}) {
   let startInFlight = false;
   let stopInFlight = false;
   let emergencyInFlight = false;
+  let downloadPollTimer = null;
+  let guidanceInFlightFor = null;
 
   function isFn(value) {
     return typeof value === 'function';
   }
 
+  // --- QA-FR-002: poll the same tracked download state the Utilities
+  // Download button already exposes (GET /models/whisper's download_state,
+  // now also written by transcriber.ensure_loaded() for an on-demand load --
+  // see transcriber.py), so the generic 'busy' span can narrow into an
+  // explained, progress-bearing 'downloading' state instead of staying an
+  // indefinite "Processing…". Best-effort only: any failure just stops
+  // polling and leaves the ordinary 'busy' message in place.
+  function stopDownloadPolling() {
+    if (downloadPollTimer) {
+      clearInterval(downloadPollTimer);
+      downloadPollTimer = null;
+    }
+  }
+
+  function formatDownloadMessage(state) {
+    if (state?.message) return state.message;
+    const size = state?.model_size ? ` '${state.model_size}'` : '';
+    return `Downloading speech model${size} (first use only, this can take a few minutes)…`;
+  }
+
+  async function pollModelDownload() {
+    const api = hks.api;
+    if (!api || !isFn(api.fetchWhisperModels)) {
+      stopDownloadPolling();
+      return;
+    }
+    try {
+      const result = await api.fetchWhisperModels();
+      const state = result?.download_state;
+      const active = Boolean(state && (state.status === 'starting' || state.status === 'downloading'));
+      if (active) {
+        dispatch({ type: 'modelDownload', active: true, message: formatDownloadMessage(state) });
+      } else {
+        stopDownloadPolling();
+      }
+    } catch {
+      stopDownloadPolling();
+    }
+  }
+
+  function startDownloadPollingIfNeeded() {
+    const api = hks.api;
+    if (downloadPollTimer || !api || !isFn(api.fetchWhisperModels)) return;
+    downloadPollTimer = setInterval(() => { pollModelDownload(); }, 800);
+    // Node's test runner would otherwise keep the process alive on a stray
+    // interval; browsers/Electron have no unref() and ignore the call.
+    if (typeof downloadPollTimer.unref === 'function') downloadPollTimer.unref();
+    pollModelDownload();
+  }
+
+  // --- QA-FR-003: the backend already writes real Doctor recovery guidance
+  // (server.py's recovery_guidelines) but Talk never read it. On the FIRST
+  // tick of a genuinely new error (not a re-render caused by our own
+  // 'guidance' dispatch below), fetch the existing /doctor report Utilities
+  // already uses and -- only when it independently confirms STT isn't
+  // loaded -- append its "missing_model" guidance to the message already
+  // shown. Best-effort: a failed fetch leaves the original error untouched.
+  async function maybeFetchGuidance(originalMessage) {
+    const api = hks.api;
+    if (!api || !isFn(api.fetchDoctor)) return;
+    if (guidanceInFlightFor === originalMessage) return;
+    guidanceInFlightFor = originalMessage;
+    try {
+      const doctor = await api.fetchDoctor();
+      const text = doctor?.stt_info?.loaded === false ? doctor?.recovery?.missing_model : null;
+      if (text && snapshot.state === 'error' && snapshot.message === originalMessage) {
+        dispatch({ type: 'guidance', text });
+      }
+    } catch {
+      // Diagnostic enrichment only -- the error already shown must not depend on this.
+    }
+  }
+
   function applySnapshot(next) {
+    const enteringError = next.state === 'error' && snapshot.state !== 'error';
     snapshot = next;
     if (els.startButton) els.startButton.disabled = !snapshot.canStart;
     if (els.stopButton) els.stopButton.disabled = !snapshot.canStop;
     if (els.emergencyButton) els.emergencyButton.disabled = !snapshot.canEmergencyStop;
     if (els.statusMessage) els.statusMessage.textContent = snapshot.message;
+    if (snapshot.state === 'busy' || snapshot.state === 'downloading') {
+      startDownloadPollingIfNeeded();
+    } else {
+      stopDownloadPolling();
+    }
+    if (enteringError) {
+      guidanceInFlightFor = null;
+      maybeFetchGuidance(snapshot.message);
+    }
     hks.onStateChange?.(snapshot);
   }
 
@@ -378,6 +490,8 @@ export function createTalkCaptureFeature({ elements, hooks } = {}) {
     startInFlight = false;
     stopInFlight = false;
     emergencyInFlight = false;
+    stopDownloadPolling();
+    guidanceInFlightFor = null;
   }
 
   return {

@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from transcriber import Transcriber
+from transcriber import Transcriber, get_whisper_download_state
 
 
 class _DummySegment:
@@ -81,6 +81,66 @@ class TranscriberAdmissionTests(unittest.TestCase):
         ok = transcriber.ensure_loaded()
         self.assertTrue(ok)
         whisper_model.assert_called_once()
+
+
+class TranscriberOnDemandDownloadStateTests(unittest.TestCase):
+    """QA-FR-002: the on-demand load ensure_loaded() hits from Talk's
+    stop/transcribe path (server.py's ensure_transcriber_initialized ->
+    _stage_transcribe) must write into the SAME tracked download-state
+    dict the explicit Utilities Download button uses, so a poller (Talk's
+    'downloading' capture state) can observe real progress instead of the
+    load just blocking silently."""
+
+    @patch("transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
+    @patch("transcriber.Transcriber._is_model_cached", return_value=False)
+    @patch("transcriber.WhisperModel", return_value=_DummyWhisperModel())
+    def test_uncached_load_reports_downloading_then_complete(self, whisper_model, _is_cached, _load_profile):
+        del whisper_model
+        transcriber = Transcriber(profile_name="Default", preload=False)
+
+        ok = transcriber.ensure_loaded()
+
+        self.assertTrue(ok)
+        final_state = get_whisper_download_state("base.en")
+        self.assertEqual(final_state["status"], "complete")
+        self.assertEqual(final_state["percent"], 100.0)
+
+    @patch("transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
+    @patch("transcriber.Transcriber._is_model_cached", return_value=False)
+    @patch("transcriber.WhisperModel", return_value=_DummyWhisperModel())
+    def test_uncached_load_passes_through_starting_and_downloading(self, whisper_model, _is_cached, _load_profile):
+        del whisper_model
+        transcriber = Transcriber(profile_name="Default", preload=False)
+
+        with patch("transcriber._set_whisper_download_state") as setter:
+            transcriber.ensure_loaded()
+
+        statuses = [call.args[1]["status"] for call in setter.call_args_list]
+        self.assertEqual(statuses, ["starting", "downloading", "complete"])
+
+    @patch("transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
+    @patch("transcriber.Transcriber._is_model_cached", return_value=False)
+    def test_uncached_load_failure_reports_error_state(self, _is_cached, _load_profile):
+        transcriber = Transcriber(profile_name="Default", preload=False)
+        with patch("transcriber.WhisperModel", side_effect=RuntimeError("network unreachable")):
+            ok = transcriber.ensure_loaded()
+
+        self.assertFalse(ok)
+        final_state = get_whisper_download_state("base.en")
+        self.assertEqual(final_state["status"], "error")
+        self.assertIn("network unreachable", final_state["message"])
+
+    @patch("transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
+    @patch("transcriber.Transcriber._is_model_cached", return_value=True)
+    @patch("transcriber.WhisperModel", return_value=_DummyWhisperModel())
+    def test_cached_load_never_touches_download_state(self, whisper_model, _is_cached, _load_profile):
+        del whisper_model
+        transcriber = Transcriber(profile_name="Default", preload=False)
+        with patch("transcriber._set_whisper_download_state") as setter:
+            ok = transcriber.ensure_loaded()
+
+        self.assertTrue(ok)
+        setter.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -524,7 +524,31 @@ class Transcriber:
                     logging.error(self._last_error)
                     return False
 
+            # QA-FR-002: an uncached model means _load_model() below is about
+            # to fetch it over the network (local_files_only becomes False),
+            # exactly like download_whisper_model() does explicitly for the
+            # Utilities Download button. Write into the SAME tracked state
+            # (_set_whisper_download_state / get_whisper_download_state,
+            # already polled by GET /models/whisper) so any caller -- Talk's
+            # on-demand load included -- can observe real download progress
+            # instead of this call just blocking silently.
+            will_download = not self._is_model_cached(self.model_size)
+            if will_download:
+                _set_whisper_download_state(self.model_size, {
+                    "model_size": self.model_size,
+                    "status": "starting",
+                    "percent": 0.0,
+                    "message": f"Downloading Whisper '{self.model_size}' (first use)...",
+                })
+
             try:
+                if will_download:
+                    _set_whisper_download_state(self.model_size, {
+                        "model_size": self.model_size,
+                        "status": "downloading",
+                        "percent": 20.0,
+                        "message": f"Downloading Whisper '{self.model_size}'. This can take a few minutes.",
+                    })
                 self.model = self._load_model()
             except Exception as exc:
                 logging.error(f"Failed to load Whisper model: {exc}")
@@ -535,10 +559,24 @@ class Transcriber:
                 self.active_compute_type = None
                 self.device_fallback_reason = None
                 self._last_error = str(exc)
+                if will_download:
+                    _set_whisper_download_state(self.model_size, {
+                        "model_size": self.model_size,
+                        "status": "error",
+                        "percent": 0.0,
+                        "message": f"Whisper download failed: {exc}",
+                    })
                 return False
 
             if self.model is not None:
                 self._last_error = ""
+                if will_download:
+                    _set_whisper_download_state(self.model_size, {
+                        "model_size": self.model_size,
+                        "status": "complete",
+                        "percent": 100.0,
+                        "message": f"Whisper '{self.model_size}' download complete.",
+                    })
                 if self._load_reporter is not None:
                     try:
                         self._load_reporter(self.model_size, _estimate_whisper_runtime_mb(self.model_size))

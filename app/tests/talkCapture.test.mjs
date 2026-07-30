@@ -253,7 +253,47 @@ test('reduceCaptureState: hotkey path (voiceStatus only) and button path (intent
 });
 
 test('CAPTURE_STATES lists every state the reducer can produce', () => {
-  assert.deepEqual(CAPTURE_STATES, ['idle', 'starting', 'recording', 'stopping', 'busy', 'error']);
+  assert.deepEqual(CAPTURE_STATES, ['idle', 'starting', 'recording', 'stopping', 'busy', 'downloading', 'error']);
+});
+
+// --- modelDownload / guidance: QA-FR-002 / QA-FR-003 --------------------------
+
+test('reduceCaptureState: modelDownload active narrows busy into an explained downloading state', () => {
+  const busy = reduceCaptureState(undefined, { type: 'voiceStatus', status: 'transcribing', payload: {} });
+  assert.equal(busy.state, 'busy');
+  const next = reduceCaptureState(busy, { type: 'modelDownload', active: true, message: "Downloading Whisper 'base.en'. This can take a few minutes." });
+  assert.equal(next.state, 'downloading');
+  assert.equal(next.message, "Downloading Whisper 'base.en'. This can take a few minutes.");
+  assert.equal(next.canStart, false);
+  assert.equal(next.canStop, false);
+  assert.equal(next.canEmergencyStop, true);
+});
+
+test('reduceCaptureState: modelDownload never fires outside busy/downloading', () => {
+  for (const status of ['recording', 'idle']) {
+    const state = reduceCaptureState(undefined, { type: 'voiceStatus', status, payload: {} });
+    const next = reduceCaptureState(state, { type: 'modelDownload', active: true, message: 'Downloading…' });
+    assert.equal(next, state, `modelDownload must be a no-op from '${status}'`);
+  }
+});
+
+test('reduceCaptureState: a real voiceStatus overrides a prior downloading state', () => {
+  const busy = reduceCaptureState(undefined, { type: 'voiceStatus', status: 'transcribing', payload: {} });
+  const downloading = reduceCaptureState(busy, { type: 'modelDownload', active: true, message: 'Downloading…' });
+  assert.equal(downloading.state, 'downloading');
+  const next = reduceCaptureState(downloading, { type: 'voiceStatus', status: 'preview_ready', payload: {} });
+  assert.equal(next.state, 'idle');
+});
+
+test('reduceCaptureState: guidance appends to an existing error message and only fires from error', () => {
+  const idle = reduceCaptureState(undefined, {});
+  const noop = reduceCaptureState(idle, { type: 'guidance', text: 'Go to the Models screen.' });
+  assert.equal(noop, idle, 'guidance must be a no-op outside the error state');
+
+  const errored = reduceCaptureState(idle, { type: 'error', message: 'Whisper download failed: network unreachable' });
+  const next = reduceCaptureState(errored, { type: 'guidance', text: 'Go to the Models screen to download the recommended LLM or Whisper models.' });
+  assert.equal(next.state, 'error');
+  assert.equal(next.message, 'Whisper download failed: network unreachable Go to the Models screen to download the recommended LLM or Whisper models.');
 });
 
 // --- createTalkCaptureFeature: DOM-wiring + api guard behavior ----------------
@@ -406,4 +446,149 @@ test('createTalkCaptureFeature: onStateChange hook fires with the current snapsh
   feature.init();
   feature.handleVoiceStatusMessage({ status: 'recording' });
   assert.ok(seen.includes('recording'));
+});
+
+// --- QA-FR-002: on-demand model download surfaces as an explained state ------
+
+test('createTalkCaptureFeature: entering busy polls the tracked download state and narrows into downloading', async () => {
+  const els = makeElements();
+  let calls = 0;
+  const api = {
+    fetchWhisperModels: async () => {
+      calls += 1;
+      return {
+        download_state: {
+          status: 'downloading',
+          percent: 20,
+          model_size: 'base.en',
+          message: "Downloading Whisper 'base.en'. This can take a few minutes.",
+        },
+      };
+    },
+  };
+  const feature = createTalkCaptureFeature({ elements: els, hooks: { api } });
+  feature.init();
+
+  feature.handleVoiceStatusMessage({ status: 'transcribing' });
+  assert.equal(feature.getState().state, 'busy');
+
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.ok(calls >= 1, 'fetchWhisperModels should have been polled at least once while busy');
+  assert.equal(feature.getState().state, 'downloading');
+  assert.equal(els.statusMessage.textContent, "Downloading Whisper 'base.en'. This can take a few minutes.");
+
+  feature.destroy();
+});
+
+test('createTalkCaptureFeature: no fetchWhisperModels hook never polls; stays on the generic busy message', async () => {
+  const els = makeElements();
+  const feature = createTalkCaptureFeature({ elements: els, hooks: {} });
+  feature.init();
+
+  feature.handleVoiceStatusMessage({ status: 'transcribing' });
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.equal(feature.getState().state, 'busy');
+  assert.equal(els.statusMessage.textContent, 'Processing…');
+  feature.destroy();
+});
+
+test('createTalkCaptureFeature: a non-active download_state (cached / complete) leaves the ordinary busy message alone', async () => {
+  const els = makeElements();
+  const api = { fetchWhisperModels: async () => ({ download_state: { status: 'complete', percent: 100 } }) };
+  const feature = createTalkCaptureFeature({ elements: els, hooks: { api } });
+  feature.init();
+
+  feature.handleVoiceStatusMessage({ status: 'transcribing' });
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.equal(feature.getState().state, 'busy');
+  feature.destroy();
+});
+
+test('createTalkCaptureFeature: leaving busy (a real voiceStatus arrives) stops the download poll', async () => {
+  const els = makeElements();
+  let calls = 0;
+  const api = {
+    fetchWhisperModels: async () => {
+      calls += 1;
+      return { download_state: { status: 'downloading', percent: 20 } };
+    },
+  };
+  const feature = createTalkCaptureFeature({ elements: els, hooks: { api } });
+  feature.init();
+  feature.handleVoiceStatusMessage({ status: 'transcribing' });
+  await Promise.resolve();
+  await Promise.resolve();
+  const callsWhileDownloading = calls;
+  assert.ok(callsWhileDownloading >= 1);
+
+  feature.handleVoiceStatusMessage({ status: 'idle' });
+  assert.equal(feature.getState().state, 'idle');
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(calls, callsWhileDownloading, 'poll must stop once a real voiceStatus leaves busy/downloading');
+  feature.destroy();
+});
+
+// --- QA-FR-003: Doctor's recovery guidance now reaches an error in Talk ------
+
+test('createTalkCaptureFeature: an error confirmed STT-unloaded by Doctor gets the backend recovery guidance appended', async () => {
+  const els = makeElements();
+  const api = {
+    toggleRecording: async () => { throw new Error("Whisper download failed: network unreachable"); },
+    fetchDoctor: async () => ({
+      stt_info: { loaded: false },
+      recovery: { missing_model: 'Go to the Models screen to download the recommended LLM or Whisper models.' },
+    }),
+  };
+  const feature = createTalkCaptureFeature({ elements: els, hooks: { api } });
+  feature.init();
+
+  await feature.start();
+  assert.equal(feature.getState().state, 'error');
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.equal(
+    els.statusMessage.textContent,
+    'Whisper download failed: network unreachable Go to the Models screen to download the recommended LLM or Whisper models.',
+  );
+  feature.destroy();
+});
+
+test('createTalkCaptureFeature: Doctor guidance is skipped when STT is not confirmed unloaded', async () => {
+  const els = makeElements();
+  const api = {
+    toggleRecording: async () => { throw new Error('Mic unavailable.'); },
+    fetchDoctor: async () => ({ stt_info: { loaded: true }, recovery: { missing_model: 'Go to the Models screen.' } }),
+  };
+  const feature = createTalkCaptureFeature({ elements: els, hooks: { api } });
+  feature.init();
+
+  await feature.start();
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.equal(els.statusMessage.textContent, 'Mic unavailable.');
+  feature.destroy();
+});
+
+test('createTalkCaptureFeature: no fetchDoctor hook never throws and leaves the plain error message', async () => {
+  const els = makeElements();
+  const api = { toggleRecording: async () => { throw new Error('Backend unreachable.'); } };
+  const feature = createTalkCaptureFeature({ elements: els, hooks: { api } });
+  feature.init();
+
+  await feature.start();
+  await Promise.resolve();
+
+  assert.equal(els.statusMessage.textContent, 'Backend unreachable.');
+  feature.destroy();
 });
