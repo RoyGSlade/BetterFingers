@@ -1265,3 +1265,166 @@ B-3 can close.
 
 **Consequence for the ledger:** blocked count drops by one (17 → 16) once the
 cut is declared and the ledger regenerated. Gate 11 stays NOT ACCEPTED.
+
+## D-0037 — Recording toggle UI-06-016 is cut; production ships explicit Start/Stop
+
+**Owner:** release-director (director ruling, 2026-07-29)
+
+**Context:** `PUBLISH_PLAN.md` task B-3b required a wire-or-cut ruling before
+any worker could touch row UI-06-016. D-0036 explicitly declined to rule on it.
+The row describes the legacy dashboard's single `#toggleRecordingButton` — one
+button that flips label and `data-recording` between Start and Stop and calls
+`POST /runtime/recording/toggle`. Verified at HEAD `545e582`:
+
+- `#toggleRecordingButton` exists **only** in `app/src/renderer/index.html`
+  (the rollback path, §7 "legacy `index.html` extraction") and its handler
+  `app/src/renderer/main.js:155`.
+- `app/src/renderer/features/runtime.js:78-80` still paints that element, but
+  guarded by `if (els.toggleRecordingButton)` — on the shipping page the
+  element is absent and the branch never runs.
+- The shipping page deliberately replaced it in Wave 2 with an explicit pair,
+  `#sdCaptureStartButton` (`signal-desk.html:966`) and `#sdCaptureStopButton`
+  (`:970`), plus a never-disabled Emergency Stop, all bound by
+  `features/talkCapture.js` — which converges the button path and the hotkey
+  path on one reducer with voice-status messages authoritative, and falls back
+  to `api.toggleRecording()` → `POST /runtime/recording/toggle`
+  (`api/backend.js:564`). The in-file comment at `signal-desk.html:951-963`
+  records the replacement and its rationale.
+
+So the *capability* and the *endpoint* are wired; only the legacy element id is
+absent. That is precisely the "partially anchored" state the row is blocked on.
+
+**Decision:** **UI-06-016 → `intentional_cut`**, named replacement
+`#sdCaptureStartButton` / `#sdCaptureStopButton` (`features/talkCapture.js`).
+
+1. The single combined toggle is **not** rebuilt on the shipping page.
+   Rebuilding it would be new scope (§1 rule 1) and a usability regression: a
+   control whose meaning depends on invisible state is the failure mode the
+   explicit pair exists to prevent.
+2. `POST /runtime/recording/toggle` stays reachable and `api.toggleRecording()`
+   keeps its fallback role in `talkCapture.js`. This ruling narrows the *UI
+   surface*, not the backend.
+3. Emergency Stop stays never-disabled (`signal-desk.html:961-962`). A diff
+   that adds a disabled state to it is `REJECTED`.
+4. No change to `index.html`; it remains the rollback path.
+
+**Consequence for the ledger:** blocked drops by one. With D-0036's cut, the
+two product rows together take blocked 17 → 15. Gate 11 stays NOT ACCEPTED
+until the remaining evidence rows close.
+
+## D-0038 — Release identity for installer metadata
+
+**Owner:** operator ruling (Donaven Crenshaw, 2026-07-29), recorded by
+release-director
+
+**Context:** electron-builder warns `author is missed in package.json`. Benign
+for the AppImage but it feeds publisher identity for any future NSIS/dmg
+target. D-0008 froze release identity as "Source Arcanum" before any public
+artifact existed; the portfolio has since rebranded to Donaven Crenshaw. Board
+item #2 escalated the choice to the owner.
+
+**Decision:** Installers ship as **Donaven Crenshaw**,
+contact **dcworks@donavencrenshaw.com**. This **supersedes D-0008** for
+release-identity purposes only (D-0008's other provisions stand).
+
+- `app/package.json` gains `"author": "Donaven Crenshaw <dcworks@donavencrenshaw.com>"`.
+- `app/package.json` is integration-owned: the edit needs a director-granted
+  claim and lands with the WS-F packaging work, not as a drive-by.
+- Board item #2 is closed by this ruling.
+
+**Consequence:** no code behavior changes; the electron-builder warning clears
+when the field lands.
+
+## D-0039 — The dev machine has no discrete GPU; E-1's premise is withdrawn
+
+**Owner:** release-director (director ruling, 2026-07-29)
+
+**Context:** `PUBLISH_PLAN.md` task E-1 and `QA_NOTES.md` entry QA-DOC-001 both
+asserted that `KNOWN_LIMITATIONS.md`'s "this machine… no GPU" line was wrong,
+because "this machine has an RTX 4060 Ti 16 GB" and
+`hardware_report.get_hardware_tier()` returns `dgpu-12g+`/`cuda`. Neither
+citation carried pasted output. Worker `w-docs` refused to write the claim
+because it could not reproduce it, and escalated. The director then verified
+independently on host `Shitbox`:
+
+```
+command -v nvidia-smi                  → NOT FOUND
+lspci | grep -i nvidia                 → (no output; no NVIDIA device on the bus)
+glxinfo | grep "OpenGL renderer"       → Mesa Intel(R) Iris(R) Xe Graphics (TGL GT2)
+hardware_report.get_hardware_tier()    → {"tier": "igpu", "label": "Integrated GPU",
+                                          "gpu_kind": "integrated", "ram_mb": 15632,
+                                          "cores": 4}
+/proc/cpuinfo                          → 11th Gen Intel Core i7-1165G7 @ 2.80GHz
+```
+
+**Decision:** The original E-1 objective is **false and withdrawn**. Executing
+it would have written a fabricated hardware claim into the release docs — the
+exact failure mode `QA_NOTES.md` exists to prevent.
+
+1. **The dev machine is `igpu`**: integrated Intel Iris Xe, no discrete GPU, no
+   CUDA, ~15.6 GB RAM, 8 logical cores.
+2. **E-1 is rewritten** (see the rewritten task in `PUBLISH_PLAN.md`): the fix
+   is *precision*, not inversion. "No GPU" becomes "no discrete GPU and no CUDA
+   on the dev machine; integrated Intel Iris Xe, tier `igpu`".
+3. **CUDA and dGPU tiers stay documented as supported-but-unverified-here.**
+   The code paths exist; nothing on this host has ever exercised them. No doc
+   may claim they are verified.
+4. **QA-DOC-001 is corrected in place**, severity held at YEL, with the true
+   evidence attached and the false claim struck.
+5. This is consistent with the standing room note "Do NOT touch NVIDIA/CUDA
+   drivers — CPU fallback is the accepted state", which reads as written by
+   someone who also found no working CUDA here.
+
+**Process consequence (the reason this ruling is numbered rather than a silent
+fix):** a plan task and a QA entry both carried an unsourced hardware assertion
+far enough to become assigned work. **Evidence lines in `QA_NOTES.md` must
+paste real command output, not name a command.** The entry format's `Evidence:`
+field is amended accordingly. Credit to `w-docs` for refusing the task rather
+than completing it.
+
+**Consequence for the release:** none to code. If the RTX 4060 Ti belongs to a
+different host (the plan was drafted across machines), any GPU qualification
+claim for that host needs its own dated evidence before it may appear in a doc.
+
+## D-0040 — C-1's wake-import magic check is a denylist, not an ONNX allowlist
+
+**Owner:** release-director (director ruling, 2026-07-29)
+
+**Context:** `PUBLISH_PLAN.md` C-1 asks for a "magic-byte check" on wake-model
+import, matching the dictation/clone/OCR upload paths. Worker `w-sec` stopped
+before implementing and raised the conflict: ONNX is protobuf, which does **not
+mandate field ordering**. A leading `0x08` (field 1 = `ir_version`) is a strong
+convention, not a spec guarantee. An affirmative "must start with `0x08`" gate
+would therefore reject some genuinely valid models — and would immediately
+break `tests/test_server_wake_routes.py:214-224`, a passing test whose fixture
+uploads `b"tiny classifier bytes"`, a file `w-sec` was not permitted to touch.
+
+**Decision:** The magic check is a **denylist of known-wrong containers**, not
+an ONNX allowlist.
+
+1. **The size cap is the actual fix.** The RED vector is the unbounded
+   `await file.read()`. Import streams through `upload_safety.stream_to_file`
+   capped at `wake_models.MAX_IMPORT_BYTES` (20 MB), **imported from
+   `wake_models`, not re-declared** — one source of truth per limit.
+2. **Reject known-wrong leading bytes only:** PNG, JPEG, GIF, PDF, ZIP/PK,
+   ELF, MZ/PE, RIFF, gzip, and a leading `<` (HTML/XML). Everything else
+   proceeds to the existing downstream `wake_models` sha + loadability checks.
+3. **`0x08` is never a hard gate.** A soft signal at most.
+4. **Errors name what was detected**, not a generic 400.
+
+**Why this shape, explicitly:** the two failure modes are not symmetric. A
+false *reject* refuses a user's real wake model in a release whose entire bar
+is "clean, hardened, simple to set up" (§5). A false *accept* writes bounded
+garbage that the loadability check then refuses. The magic byte was never what
+made this path safe; the cap is.
+
+**Consequence:** `tests/test_server_wake_routes.py` stays green and untouched —
+no existing passing test is weakened to accommodate an implementation choice,
+and §1 rule 3 (no edits outside the claim list) holds. C-1's new tests must
+pin all three behaviors: oversize rejected *by streaming*, PNG-header payload
+rejected, and a plain non-container payload still **accepted** — that last one
+is the regression guard that stops a later worker from "tightening" this
+denylist into an allowlist and silently breaking real models.
+
+**Not a weakened implementation.** A reviewer reading only the diff may mistake
+the denylist for a shortcut. It is the ruled design; this entry is the record.

@@ -16,9 +16,16 @@ Append under the right section, newest last:
 - Where: <exact surface — element id, route, file:line if known>
 - Repro: <numbered steps from a known state; say which data dir / target>
 - Expected vs actual: <one line each>
-- Evidence: <QA report path, screenshot path, test name, or "manual">
+- Evidence: <PASTED command output, QA report path, screenshot path, or "manual">
 - Disposition: (director fills) → task <ID> in PUBLISH_PLAN | deferred §7 | not-a-bug
 ```
+
+> **Evidence means pasted output, not a named command.** Amended by **D-0039**:
+> QA-DOC-001 cited "`nvidia-smi` + `get_hardware_tier()` → `dgpu-12g+`/`cuda`"
+> with nothing pasted, and the claim turned out to be false — it reached the
+> plan as assigned work before anyone ran it. Naming a command you did not run,
+> or whose output you did not paste, is how a fabricated fact becomes a task.
+> If you cannot paste output, write `unverified —` and say what you'd run.
 
 - **Severity:** `RED` blocks publish. `YEL` fix if cheap before publish. `GRN`
   observation, no action promised.
@@ -122,10 +129,26 @@ _No entries yet — opens with Wave 12 (F-1/F-2)._
 
 ## Docs vs code (QA-DOC)
 
-### QA-DOC-001 · Docs claim "this machine has no GPU"; it has a 4060 Ti 16 GB · YEL · TRIAGED
+### QA-DOC-001 · Docs' "no GPU" line is imprecise (machine is `igpu`, not dGPU) · YEL · TRIAGED
+- Found by / date: publish planning / 2026-07-29; **corrected by director 2026-07-29**
 - Where: `KNOWN_LIMITATIONS.md` GPU section; `docs/archive/REMEDIATION_WHATS_LEFT.md` Phase 4
-- Evidence: `nvidia-smi` + `hardware_report.get_hardware_tier()` → `dgpu-12g+`/`cuda`
-- Disposition: → task **E-1**
+- ~~Original claim: "this machine has a 4060 Ti 16 GB; `get_hardware_tier()` →
+  `dgpu-12g+`/`cuda`".~~ **STRUCK — false.** It was written with no pasted
+  output and could not be reproduced. `w-docs` refused the task rather than
+  write it; the director then verified. See **D-0039**.
+- Expected vs actual: docs should name the real tier / docs say "no GPU", which
+  reads as "no graphics hardware at all" when the truth is "no *discrete* GPU
+  and no CUDA; an integrated one is present and usable"
+- Evidence (director-verified on host `Shitbox`, 2026-07-29, HEAD `545e582`):
+  ```
+  command -v nvidia-smi               → NOT FOUND
+  lspci | grep -i nvidia              → (no output)
+  glxinfo | grep "OpenGL renderer"    → Mesa Intel(R) Iris(R) Xe Graphics (TGL GT2)
+  get_hardware_tier()                 → {"tier":"igpu","gpu_kind":"integrated",
+                                         "ram_mb":15632,"cores":4}
+  /proc/cpuinfo                       → 11th Gen Intel Core i7-1165G7
+  ```
+- Disposition: → task **E-1** (rewritten per D-0039 — precision fix, not inversion)
 
 ### QA-DOC-002 · Parity totals differ across three docs vs live validator · YEL · TRIAGED
 - Where: `RELEASE_BOARD.md` (396/21/21 and 161/10/267), `KNOWN_LIMITATIONS.md`
