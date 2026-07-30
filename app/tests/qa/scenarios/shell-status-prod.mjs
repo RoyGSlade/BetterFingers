@@ -325,7 +325,11 @@ export const shellStatusProdScenarios = [
       'blend chip and one modulation chip and asserts the real bound sliders move to that preset\'s ' +
       'exact values -- energy/warmth changing on the blend click, then energy/warmth/pause-style/speed ' +
       'changing AGAIN to a second, different set of values on the modulation click, which only a live ' +
-      'binding (not a static default) could produce twice in a row.',
+      'binding (not a static default) could produce twice in a row. The modulation click\'s multi-field ' +
+      'move (energy+warmth+brightness+pause-style together) is exactly what voiceStudio.js\'s ' +
+      'setModulationControls() does -- the one function that paints that whole group, called both by ' +
+      'a preset click and by profile load -- so this is also the production-target evidence for its ' +
+      'own "Modulation:" group-heading row (UI-07-134), not just the quick-preset chips.',
     backendState: coldBoot,
     async navigate(page) {
       await assertNoOnboardingGate(page);
