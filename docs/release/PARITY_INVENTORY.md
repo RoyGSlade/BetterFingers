@@ -69,9 +69,9 @@ missing things it is not missing, which is the mirror image of a victory lap and
 
 | Status | Count |
 |---|---:|
-| `wired` | 409 |
+| `wired` | 410 |
 | `intentional_cut` | 25 |
-| `blocked` | 4 |
+| `blocked` | 3 |
 | **Total** | **438** |
 
 ### Totals by source section (section index)
@@ -85,7 +85,7 @@ missing things it is not missing, which is the mirror image of a victory lap and
 | §4 APP SHELL / HEADER | 3 | 0 | 0 | 3 |
 | §5 TAB NAVIGATION | 0 | 5 | 0 | 5 |
 | §6 DASHBOARD TAB | 73 | 7 | 0 | 80 |
-| §7 SETTINGS TAB (`#tabSettings`) | 179 | 7 | 2 | 188 |
+| §7 SETTINGS TAB (`#tabSettings`) | 180 | 7 | 1 | 188 |
 | §8 MODELS TAB (`#tabModels`) | 21 | 0 | 0 | 21 |
 | §9 DIAGNOSTICS & DOCTOR TAB (`#tabDiagnostics`) | 17 | 0 | 0 | 17 |
 | §12 THE TWO OVERLAYS | 26 | 0 | 0 | 26 |
@@ -105,7 +105,7 @@ no checkbox row.
 | Onboarding | 12 | 0 | 0 | 12 |
 | Overlay windows | 26 | 0 | 0 | 26 |
 | Release control | 0 | 2 | 0 | 2 |
-| Settings | 179 | 7 | 2 | 188 |
+| Settings | 180 | 7 | 1 | 188 |
 | Shell / header | 3 | 0 | 0 | 3 |
 | Shell / navigation | 0 | 5 | 0 | 5 |
 | Shell / surfaces | 17 | 2 | 0 | 19 |
@@ -391,7 +391,7 @@ no checkbox row.
 | UI-07-124 | Settings | §7 item 124 · L412 | `#voicePresetList` — list with per-preset Apply/Delete buttons → `deleteVoicePreset()` → `DELETE /voice-presets/:name` | Production anchor(s): `#voicePresetList`, `deleteVoicePreset()`, `DELETE /voice-presets/:name` in `app/src/renderer/signal-desk.html`. Unit coverage: `app/tests/voiceStudio.test.mjs`, `app/tests/voiceCloningConsent.test.mjs` | `sha256:63b4855c405284732097be8e40677e1596823872ec03e492d24e5cb69f0b2e2a` | `wired` |
 | UI-07-125 | Settings | §7 item 125 · L413 | `#voicePresetNameInput` + `#saveVoicePresetButton` — "Save As Preset" → `saveVoicePreset()` → `POST /voice-presets` | Production anchor(s): `#voicePresetNameInput`, `#saveVoicePresetButton`, `saveVoicePreset()`, `POST /voice-presets` in `app/src/renderer/signal-desk.html`. Production-target QA: `app/tests/qa/scenarios/ui-controls-prod.mjs`. Unit coverage: `app/tests/voiceStudio.test.mjs`, `app/tests/voiceCloningConsent.test.mjs` | `sha256:84cbcfc4c13309a8ec299254d012b3850c1f0628c5479f0ecdb220313bc63c3e` | `wired` |
 | UI-07-126 | Settings | §7 item 126 · L414 | (Backend-supported, no visible UI trigger found for) "make default"/"clear default" preset routes (`setDefaultVoicePreset`/`clearDefaultVoicePreset`)… | Production anchor(s): `setDefaultVoicePreset`, `clearDefaultVoicePreset` in `app/src/renderer/signal-desk.html`. Blocked: (evidence) fully anchored in production but no production-target QA scenario or renderer unit test names any of its anchors, so the D-0015 QA leg is unmet | `sha256:e576f133f050739d71325b951c7bd83e393173b7de19588105f94a08b05a6212` | `blocked` |
-| UI-07-127 | Settings | §7 item 127 · L415 | **Blend:** | Production anchor(s): `#sdVoiceBlendCards` in `app/src/renderer/signal-desk.html`. Hand-declared anchor(s) (`tools/parity_anchors.py`): `#sdVoiceBlendCards` — The blend surface, rebuilt as Signal Desk voice-blend cards. Blocked: (evidence) fully anchored in production but no production-target QA scenario or renderer unit test names any of its anchors, so the D-0015 QA leg is unmet | `sha256:c08c3b9a0b27eda7ac7b7bca56fb61023185e930f5d5f77ae8e31b57e0781a1a` | `blocked` |
+| UI-07-127 | Settings | §7 item 127 · L415 | **Blend:** | Production anchor(s): `#sdVoiceBlendCards` in `app/src/renderer/signal-desk.html`. Hand-declared anchor(s) (`tools/parity_anchors.py`): `#sdVoiceBlendCards` — The blend surface, rebuilt as Signal Desk voice-blend cards. Production-target QA: `app/tests/qa/scenarios/ui-controls-prod.mjs` | `sha256:c08c3b9a0b27eda7ac7b7bca56fb61023185e930f5d5f77ae8e31b57e0781a1a` | `wired` |
 | UI-07-128 | Settings | §7 item 128 · L416 | `#voiceBlendRows` — dynamic list of up to 2 extra voice layers (select + weight slider + Remove button per row) | Production anchor(s): `#voiceBlendRows` in `app/src/renderer/signal-desk.html`. Production-target QA: `app/tests/qa/scenarios/ui-controls-prod.mjs`. Unit coverage: `app/tests/voiceCloningConsent.test.mjs`, `app/tests/voiceStudio.test.mjs` | `sha256:644d63a33ca48345735fc2885a5747aa9a5df6dd341751141f15c8f84085c68e` | `wired` |
 | UI-07-129 | Settings | §7 item 129 · L417 | `#voiceEffectiveMix` — computed "effective mix" readout (post backend-normalization) | Production anchor(s): `#voiceEffectiveMix` in `app/src/renderer/signal-desk.html`. Unit coverage: `app/tests/voiceStudio.test.mjs` | `sha256:f94f1de3747e9166b32c99719f5635cc18eeb60edd2cf8d436045a46ed087998` | `wired` |
 | UI-07-130 | Settings | §7 item 130 · L418 | `#voiceBlendBackendNote` — "needs ONNX voice engine" warning (rendering call is currently broken — see Bug #2) | Intentional cut: `#voiceBlendBackendNote` is one half of the §0 Bug #2 pair — its population call `refreshVoiceBlendCapabilityNote()` was never defined anywhere, so the element had no contract and never rendered anything on any page. Replaced by the Voice Cloning panel's real, populated status in Utilities / Models: `#sdUtilVoiceCloningBadge`, `#sdUtilVoiceCloningStatus` and `#sdUtilVoiceCloningHint`. An element that never had a data source is not a capability being removed — and this closes half of UI-00-002. | `sha256:be186dad397435f4957aeb2ec41429ca7288890cce487f4860d4c889df6991cf` | `intentional_cut` |
