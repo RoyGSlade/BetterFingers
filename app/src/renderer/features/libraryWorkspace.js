@@ -1176,8 +1176,21 @@ export function createLibraryWorkspaceFeature({ elements, hooks, api } = {}) {
       reset.addEventListener('click', () => resetFilters());
       wrap.append(reset);
     } else {
+      // QA-LIB-001 / PUBLISH_PLAN §5.4: the only branch a first-time user
+      // ever sees was the one branch missing a primary action -- the error
+      // and filtered branches above both already had one. Exactly one
+      // action here (§5.4 "exactly one"): send them to where the copy
+      // already says messages come from, via the same real shell.goTo('talk')
+      // seam loadIntoTalk() uses -- no draft to hand over here, just the nav.
       message.textContent = 'Nothing in your Library yet. Messages you capture in Talk land here.';
       wrap.append(message);
+      const goToTalk = document_.createElement('button');
+      goToTalk.type = 'button';
+      goToTalk.className = 'sd-timeline__empty-action';
+      goToTalk.id = 'sdLibraryGoToTalkButton';
+      goToTalk.textContent = 'Go to Talk';
+      goToTalk.addEventListener('click', () => hks.shell?.goTo?.('talk'));
+      wrap.append(goToTalk);
     }
     container.append(wrap);
   }

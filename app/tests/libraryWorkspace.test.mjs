@@ -812,6 +812,66 @@ test('a failed load reports the failure — it never renders as an empty Library
   assert.equal(/nothing in your library/i.test(said), false, 'an unreachable backend was reported as an empty archive');
 });
 
+// --- QA-LIB-001: the true-empty state gets exactly one primary action -------
+// (the error and filtered-empty branches already had one -- Try again /
+// Clear filters -- this is the branch a first-time user actually hits).
+
+test('the genuine-empty Library state offers exactly one primary action: Go to Talk', async () => {
+  const doc = makeDocument(['sdLibraryTimeline']);
+  const restore = installDomGlobals({ document: doc, betterFingers: {} });
+  try {
+    const api = recordingApi({ librarySearch: () => Promise.resolve({ ok: true, results: [], total: 0 }) });
+    const elements = { ...stubElements(), timelineContainer: doc.getElementById('sdLibraryTimeline') };
+    const { feature } = makeFeature({ api, elements });
+    await feature.loadPage();
+
+    const container = elements.timelineContainer;
+    const actions = container.querySelectorAll('.sd-timeline__empty-action');
+    assert.equal(actions.length, 1, '§5.4 requires exactly one primary action on an empty state');
+    assert.equal(actions[0].id, 'sdLibraryGoToTalkButton');
+    assert.match(container.textContent, /Nothing in your Library yet\. Messages you capture in Talk land here\./);
+  } finally {
+    restore();
+  }
+});
+
+test('the Go to Talk action on the genuine-empty state really navigates to Talk', async () => {
+  const doc = makeDocument(['sdLibraryTimeline']);
+  const restore = installDomGlobals({ document: doc, betterFingers: {} });
+  try {
+    const api = recordingApi({ librarySearch: () => Promise.resolve({ ok: true, results: [], total: 0 }) });
+    const elements = { ...stubElements(), timelineContainer: doc.getElementById('sdLibraryTimeline') };
+    const goTo = [];
+    const { feature } = makeFeature({ api, elements, hooks: { shell: { goTo: (where) => goTo.push(where) } } });
+    await feature.loadPage();
+
+    const button = elements.timelineContainer.querySelector('#sdLibraryGoToTalkButton');
+    assert.ok(button, 'Go to Talk button not found in the rendered empty state');
+    button.click();
+
+    assert.deepEqual(goTo, ['talk']);
+  } finally {
+    restore();
+  }
+});
+
+test('the error and filtered-empty branches are unaffected: still exactly their own one action, not two', async () => {
+  const doc = makeDocument(['sdLibraryTimeline']);
+  const restore = installDomGlobals({ document: doc, betterFingers: {} });
+  try {
+    const api = recordingApi({ librarySearch: () => Promise.reject(new Error('socket hang up')) });
+    const elements = { ...stubElements(), timelineContainer: doc.getElementById('sdLibraryTimeline') };
+    const { feature } = makeFeature({ api, elements });
+    await feature.loadPage();
+
+    const actions = elements.timelineContainer.querySelectorAll('.sd-timeline__empty-action');
+    assert.equal(actions.length, 1);
+    assert.equal(actions[0].id, 'sdLibraryRetryButton');
+  } finally {
+    restore();
+  }
+});
+
 test('recordings failing does not blank the timeline, and does not claim "none retained"', async () => {
   const api = recordingApi({
     librarySearch: () => Promise.resolve({ ok: true, results: [draftRecord()], total: 1 }),
