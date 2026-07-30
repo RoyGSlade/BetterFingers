@@ -961,6 +961,26 @@ CUTS: dict[str, str] = {
         'having two entry points instead of three; the row is cut because the thing it points '
         'at is the one that went away.'
     ),
+    'UI-07-126': (
+        'Intentional cut: per director ruling D-0043, `setDefaultVoicePreset`/'
+        '`clearDefaultVoicePreset` are backend-supported, proxy-allowlisted, and exported from '
+        '`api/backend.js`, but have zero '
+        'callers anywhere in the renderer — no UI trigger exists or is being built. Replaced by '
+        'the voice-preset list\'s existing Apply action: `renderVoicePresetList()` in '
+        '`features/voiceStudio.js` renders one row per saved preset with an apply-on-click '
+        'button (-> `applyVoicePreset()`) and a Delete button (-> `deleteVoicePreset()`). Nothing '
+        'a user can do is lost — Apply reaches the identical end state a "default" would, in one '
+        'click, without the new persisted state and new conflict state a make-default concept '
+        'would require. This row and UI-15-012 describe the same capability and are cut together.'
+    ),
+    'UI-15-012': (
+        'Intentional cut: per director ruling D-0043, duplicate of UI-07-126 — same two dead exports '
+        '(`setDefaultVoicePreset`/`clearDefaultVoicePreset`), same ruling, same replacement: the '
+        'voice-preset list\'s existing Apply action (`renderVoicePresetList()` in '
+        '`features/voiceStudio.js`, apply-on-click, with `deleteVoicePreset()` for removal). See '
+        'UI-07-126 for the full rationale; both rows are cut together because they name one '
+        'capability, not two.'
+    ),
     'UI-06-062': (
         'Intentional cut: `#voiceStatusDetail` dumped the raw JSON of the latest voice-status '
         'message, and the inventory row itself calls it developer-facing. A payload readout is '

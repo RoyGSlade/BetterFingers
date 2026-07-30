@@ -70,8 +70,8 @@ missing things it is not missing, which is the mirror image of a victory lap and
 | Status | Count |
 |---|---:|
 | `wired` | 410 |
-| `intentional_cut` | 25 |
-| `blocked` | 3 |
+| `intentional_cut` | 27 |
+| `blocked` | 1 |
 | **Total** | **438** |
 
 ### Totals by source section (section index)
@@ -85,12 +85,12 @@ missing things it is not missing, which is the mirror image of a victory lap and
 | §4 APP SHELL / HEADER | 3 | 0 | 0 | 3 |
 | §5 TAB NAVIGATION | 0 | 5 | 0 | 5 |
 | §6 DASHBOARD TAB | 73 | 7 | 0 | 80 |
-| §7 SETTINGS TAB (`#tabSettings`) | 180 | 7 | 1 | 188 |
+| §7 SETTINGS TAB (`#tabSettings`) | 180 | 8 | 0 | 188 |
 | §8 MODELS TAB (`#tabModels`) | 21 | 0 | 0 | 21 |
 | §9 DIAGNOSTICS & DOCTOR TAB (`#tabDiagnostics`) | 17 | 0 | 0 | 17 |
 | §12 THE TWO OVERLAYS | 26 | 0 | 0 | 26 |
 | §14 STATUS / NOTIFICATION SURFACES | 13 | 1 | 0 | 14 |
-| §15 POTENTIAL ORPHANS (easy to forget in a redesign — verify each is intentionally kept or intentionally cut) | 22 | 1 | 2 | 25 |
+| §15 POTENTIAL ORPHANS (easy to forget in a redesign — verify each is intentionally kept or intentionally cut) | 22 | 2 | 1 | 25 |
 
 Source §§10, 11, and 13 have zero ledger rows because they contain reference tables rather
 than Markdown checkboxes. Section 16 is the source inventory's totals summary and likewise has
@@ -100,12 +100,12 @@ no checkbox row.
 
 | Workspace | Wired | Intentional cut | Blocked | Total |
 |---|---:|---:|---:|---:|
-| Cross-cutting / orphans | 22 | 1 | 2 | 25 |
+| Cross-cutting / orphans | 22 | 2 | 1 | 25 |
 | Dashboard / Talk | 73 | 7 | 0 | 80 |
 | Onboarding | 12 | 0 | 0 | 12 |
 | Overlay windows | 26 | 0 | 0 | 26 |
 | Release control | 0 | 2 | 0 | 2 |
-| Settings | 180 | 7 | 1 | 188 |
+| Settings | 180 | 8 | 0 | 188 |
 | Shell / header | 3 | 0 | 0 | 3 |
 | Shell / navigation | 0 | 5 | 0 | 5 |
 | Shell / surfaces | 17 | 2 | 0 | 19 |
@@ -390,7 +390,7 @@ no checkbox row.
 | UI-07-123 | Settings | §7 item 123 · L411 | `#voicePresetSelect` — load a saved preset → applies base/blend/modulation into controls (not yet saved to profile) | Production anchor(s): `#voicePresetSelect` in `app/src/renderer/signal-desk.html`. Unit coverage: `app/tests/voiceCloningConsent.test.mjs`, `app/tests/voiceStudio.test.mjs` | `sha256:e4324621173801fcf3f1b3164b62eda05981f9d1c4c9fbcda2080434c1f4461d` | `wired` |
 | UI-07-124 | Settings | §7 item 124 · L412 | `#voicePresetList` — list with per-preset Apply/Delete buttons → `deleteVoicePreset()` → `DELETE /voice-presets/:name` | Production anchor(s): `#voicePresetList`, `deleteVoicePreset()`, `DELETE /voice-presets/:name` in `app/src/renderer/signal-desk.html`. Unit coverage: `app/tests/voiceStudio.test.mjs`, `app/tests/voiceCloningConsent.test.mjs` | `sha256:63b4855c405284732097be8e40677e1596823872ec03e492d24e5cb69f0b2e2a` | `wired` |
 | UI-07-125 | Settings | §7 item 125 · L413 | `#voicePresetNameInput` + `#saveVoicePresetButton` — "Save As Preset" → `saveVoicePreset()` → `POST /voice-presets` | Production anchor(s): `#voicePresetNameInput`, `#saveVoicePresetButton`, `saveVoicePreset()`, `POST /voice-presets` in `app/src/renderer/signal-desk.html`. Production-target QA: `app/tests/qa/scenarios/ui-controls-prod.mjs`. Unit coverage: `app/tests/voiceStudio.test.mjs`, `app/tests/voiceCloningConsent.test.mjs` | `sha256:84cbcfc4c13309a8ec299254d012b3850c1f0628c5479f0ecdb220313bc63c3e` | `wired` |
-| UI-07-126 | Settings | §7 item 126 · L414 | (Backend-supported, no visible UI trigger found for) "make default"/"clear default" preset routes (`setDefaultVoicePreset`/`clearDefaultVoicePreset`)… | Production anchor(s): `setDefaultVoicePreset`, `clearDefaultVoicePreset` in `app/src/renderer/signal-desk.html`. Blocked: (evidence) fully anchored in production but no production-target QA scenario or renderer unit test names any of its anchors, so the D-0015 QA leg is unmet | `sha256:e576f133f050739d71325b951c7bd83e393173b7de19588105f94a08b05a6212` | `blocked` |
+| UI-07-126 | Settings | §7 item 126 · L414 | (Backend-supported, no visible UI trigger found for) "make default"/"clear default" preset routes (`setDefaultVoicePreset`/`clearDefaultVoicePreset`)… | Intentional cut: per director ruling D-0043, `setDefaultVoicePreset`/`clearDefaultVoicePreset` are backend-supported, proxy-allowlisted, and exported from `api/backend.js`, but have zero callers anywhere in the renderer — no UI trigger exists or is being built. Replaced by the voice-preset list's existing Apply action: `renderVoicePresetList()` in `features/voiceStudio.js` renders one row per saved preset with an apply-on-click button (-> `applyVoicePreset()`) and a Delete button (-> `deleteVoicePreset()`). Nothing a user can do is lost — Apply reaches the identical end state a "default" would, in one click, without the new persisted state and new conflict state a make-default concept would require. This row and UI-15-012 describe the same capability and are cut together. | `sha256:e576f133f050739d71325b951c7bd83e393173b7de19588105f94a08b05a6212` | `intentional_cut` |
 | UI-07-127 | Settings | §7 item 127 · L415 | **Blend:** | Production anchor(s): `#sdVoiceBlendCards` in `app/src/renderer/signal-desk.html`. Hand-declared anchor(s) (`tools/parity_anchors.py`): `#sdVoiceBlendCards` — The blend surface, rebuilt as Signal Desk voice-blend cards. Production-target QA: `app/tests/qa/scenarios/ui-controls-prod.mjs` | `sha256:c08c3b9a0b27eda7ac7b7bca56fb61023185e930f5d5f77ae8e31b57e0781a1a` | `wired` |
 | UI-07-128 | Settings | §7 item 128 · L416 | `#voiceBlendRows` — dynamic list of up to 2 extra voice layers (select + weight slider + Remove button per row) | Production anchor(s): `#voiceBlendRows` in `app/src/renderer/signal-desk.html`. Production-target QA: `app/tests/qa/scenarios/ui-controls-prod.mjs`. Unit coverage: `app/tests/voiceCloningConsent.test.mjs`, `app/tests/voiceStudio.test.mjs` | `sha256:644d63a33ca48345735fc2885a5747aa9a5df6dd341751141f15c8f84085c68e` | `wired` |
 | UI-07-129 | Settings | §7 item 129 · L417 | `#voiceEffectiveMix` — computed "effective mix" readout (post backend-normalization) | Production anchor(s): `#voiceEffectiveMix` in `app/src/renderer/signal-desk.html`. Unit coverage: `app/tests/voiceStudio.test.mjs` | `sha256:f94f1de3747e9166b32c99719f5635cc18eeb60edd2cf8d436045a46ed087998` | `wired` |
@@ -542,7 +542,7 @@ no checkbox row.
 | UI-15-009 | Cross-cutting / orphans | §15 item 009 · L839 | **Wake-word training** — the entire "Build a Wake Phrase" group (7.8): phrase input, synthesize-and-train flow, verdict copy (reliable/noisy/unusable… | Production anchor(s): `#sdUtilWakeTrainGroup`, `#sdUtilWakeTrainButton`, `#sdUtilWakeTrainResult` in `app/src/renderer/signal-desk.html`. Hand-declared anchor(s) (`tools/parity_anchors.py`): `#sdUtilWakeTrainGroup`, `#sdUtilWakeTrainButton`, `#sdUtilWakeTrainResult` — The whole Build a Wake Phrase group: phrase input, the synthesize-and-train flow, and the reliability verdict. Production-target QA: `app/tests/qa/scenarios/shell-status-prod.mjs`. Unit coverage: `app/tests/utilitiesInputWake.test.mjs` | `sha256:0dffde18efb46900e57589808f199cf2ba83a2d4d294103ebf53e3a0ddbafa75` | `wired` |
 | UI-15-010 | Cross-cutting / orphans | §15 item 010 · L842 | **Wake model import** (`.onnx` upload, licensing-responsibility disclaimer) — distinct from wake model *download* (backbones) and from wake *training… | Production anchor(s): `.onnx` in `app/src/renderer/signal-desk.html`. Unit coverage: `app/tests/utilitiesInputWake.test.mjs` | `sha256:03b05badc37b9a11bb41d3adaaf79d963afc91ac45c275476a96b79b1249475d` | `wired` |
 | UI-15-011 | Cross-cutting / orphans | §15 item 011 · L844 | **Voice cloning** — three distinct entry points that are easy to conflate: (a) Models tab "Install voice cloning" provisioning, (b) Settings → TTS/Re… | Intentional cut: this orphan-list row exists to warn that three voice-cloning entry points are easy to conflate, and the only handle it names is (c), `#voiceCloneInstallButton` — the hidden, unwired one, cut at UI-07-142. The other two ship and are anchored: (a) Models-tab provisioning is `#sdUtilVoiceCloningProvisionButton` -> provisionVoiceCloning() -> POST /tts/clone/provision, and (b) the consent+upload flow is `#voiceCloneUploadButton` in the Studio Voice Studio. Signal Desk resolves the confusion this row documents by having two entry points instead of three; the row is cut because the thing it points at is the one that went away. | `sha256:90a4ba78025e589862f30d2f3c932def0360342eaabc8c595375bbb633d572d5` | `intentional_cut` |
-| UI-15-012 | Cross-cutting / orphans | §15 item 012 · L847 | **Voice presets "make default" / "clear default"** — backend routes and `backend.js` wrappers exist (`setDefaultVoicePreset`, `clearDefaultVoicePrese… | Production anchor(s): `setDefaultVoicePreset`, `clearDefaultVoicePreset` in `app/src/renderer/signal-desk.html`. Blocked: (evidence) fully anchored in production but no production-target QA scenario or renderer unit test names any of its anchors, so the D-0015 QA leg is unmet | `sha256:61087540d6bbdda1d0a425fff479bbacba1ac7a3159eea929a92d26eb800e380` | `blocked` |
+| UI-15-012 | Cross-cutting / orphans | §15 item 012 · L847 | **Voice presets "make default" / "clear default"** — backend routes and `backend.js` wrappers exist (`setDefaultVoicePreset`, `clearDefaultVoicePrese… | Intentional cut: per director ruling D-0043, duplicate of UI-07-126 — same two dead exports (`setDefaultVoicePreset`/`clearDefaultVoicePreset`), same ruling, same replacement: the voice-preset list's existing Apply action (`renderVoicePresetList()` in `features/voiceStudio.js`, apply-on-click, with `deleteVoicePreset()` for removal). See UI-07-126 for the full rationale; both rows are cut together because they name one capability, not two. | `sha256:61087540d6bbdda1d0a425fff479bbacba1ac7a3159eea929a92d26eb800e380` | `intentional_cut` |
 | UI-15-013 | Cross-cutting / orphans | §15 item 013 · L850 | **Cloned-voice deletion** — `deleteVoice()`/`DELETE /tts/voices/:id` exists as a typed IPC method with no UI trigger found — verify. | Production anchor(s): `deleteVoice()`, `DELETE /tts/voices/:id` in `app/src/renderer/signal-desk.html`. Unit coverage: `app/tests/backendProxy.test.mjs` | `sha256:58ec8bbcdb9de8910c749510d9157efa52ec903dd40f03af9fdacb5bd682f2fa` | `wired` |
 | UI-15-014 | Cross-cutting / orphans | §15 item 014 · L852 | **Wake model deletion** — `deleteWakeModel()`/`DELETE /wake/models/:id` exported, no UI trigger found — verify. | Production anchor(s): `deleteWakeModel()`, `DELETE /wake/models/:id` in `app/src/renderer/signal-desk.html`. Blocked: (evidence) fully anchored in production but no production-target QA scenario or renderer unit test names any of its anchors, so the D-0015 QA leg is unmet | `sha256:5ef7686c9c4a5f0b2ea95fbc7a5d08ad1d2de73a2edf554e6db2f2cd4a7550cd` | `blocked` |
 | UI-15-015 | Cross-cutting / orphans | §15 item 015 · L854 | **History search vs. draft clear** — `searchHistory`/`fetchHistoryRecent`/`clearHistory` hit `/history*` routes (a separate full-text archive) distin… | Production anchor(s): `searchHistory`, `fetchHistoryRecent`, `clearHistory`, `/drafts`, `clearDrafts` in `app/src/renderer/signal-desk.html`. Production-target QA: `app/tests/qa/scenarios/overlay-prod.mjs`, `app/tests/qa/scenarios/signal-desk-talk.mjs`. Unit coverage: `app/tests/parityGates.test.mjs`, `app/tests/backendProxy.test.mjs`, `app/tests/drafts-feature.test.mjs` | `sha256:aea7397ca8dfa5f7e67cec72eac77636b775509fd3254a6ac691a5902ff76729` | `wired` |
