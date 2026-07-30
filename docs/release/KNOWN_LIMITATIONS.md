@@ -145,7 +145,7 @@ publication.
   surface, and the legacy backend status cards) and **176 are anchored in
   production but unevidenced** (no production-target QA names them, or the
   source row is prose with no code handle). Details and the ordered
-  remediation list: [WAVE11_BLOCKERS.md](WAVE11_BLOCKERS.md).
+  remediation list: [WAVE11_BLOCKERS.md](archive/WAVE11_BLOCKERS.md).
 
 - **The Persona Foundry and both overlay windows have no production-target QA.**
   All three ship in the production composition — the Foundry ids are in

@@ -6,7 +6,7 @@
 - **HEAD at writing:** `be2ebaa` (2026-07-29). Verified live: parity ledger
   **398 wired / 23 intentional_cut / 17 blocked**, QA board **96/97**, Python suite
   3074 passed, Node suite 1638 passed.
-- **This document supersedes** `REMEDIATION_WHATS_LEFT.md` for planning purposes.
+- **This document supersedes** `docs/archive/REMEDIATION_WHATS_LEFT.md` for planning purposes.
   `RELEASE_BOARD.md` remains the gate authority; this doc is the work queue that
   gets its remaining gates accepted.
 - **QA issues found by anyone go to** [`QA_NOTES.md`](QA_NOTES.md) — never into
@@ -309,11 +309,11 @@ tasks — not the workers.
 
 #### E-1 · Correct the GPU claims · `OPEN`
 - **Objective:** `KNOWN_LIMITATIONS.md` ("this machine… no GPU") and
-  `REMEDIATION_WHATS_LEFT.md` (Phase 4 "concretely confirmed" no-GPU) are
+  `docs/archive/REMEDIATION_WHATS_LEFT.md` (Phase 4 "concretely confirmed" no-GPU) are
   wrong — this machine has an RTX 4060 Ti 16 GB and
   `hardware_report.get_hardware_tier()` returns `dgpu-12g+`/`cuda`. Correct
   both; keep the CPU-only tier documented as a supported configuration.
-- **Files:** `docs/release/KNOWN_LIMITATIONS.md`, `REMEDIATION_WHATS_LEFT.md`.
+- **Files:** `docs/release/KNOWN_LIMITATIONS.md`, `docs/archive/REMEDIATION_WHATS_LEFT.md`.
 - **Review (Opus):** run the tier probe; grep both files for "no GPU".
 
 #### E-2 · Reconcile parity numbers everywhere they appear · `OPEN`
@@ -322,7 +322,7 @@ tasks — not the workers.
   `KNOWN_LIMITATIONS.md` says 0/4/434. Update every stale citation to either
   the live number or an explicitly dated historical baseline.
 - **Files:** `docs/release/RELEASE_BOARD.md`,
-  `docs/release/KNOWN_LIMITATIONS.md`, `docs/release/WAVE11_BLOCKERS.md`
+  `docs/release/KNOWN_LIMITATIONS.md`, `docs/release/archive/WAVE11_BLOCKERS.md`
   (banner note only).
 - **Review (Opus):** run the validator; grep all three files for `434`, `267`,
   `396` — every hit must be dated-historical or gone.
@@ -332,7 +332,7 @@ tasks — not the workers.
   `:2366`, zero `@app.on_event` remaining) and Finding #3-residual (fixed —
   `wipeSummary.mjs` handles the `{ok, recreated}` dict) as closed; point the
   doc's "How to resume" at this plan.
-- **Files:** `REMEDIATION_WHATS_LEFT.md`.
+- **Files:** `docs/archive/REMEDIATION_WHATS_LEFT.md`.
 - **Review (Opus):** grep `server.py` for `on_event`; read
   `isDeletionOutcome()`; confirm doc now matches.
 

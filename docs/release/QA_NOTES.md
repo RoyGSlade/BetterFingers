@@ -123,7 +123,7 @@ _No entries yet — opens with Wave 12 (F-1/F-2)._
 ## Docs vs code (QA-DOC)
 
 ### QA-DOC-001 · Docs claim "this machine has no GPU"; it has a 4060 Ti 16 GB · YEL · TRIAGED
-- Where: `KNOWN_LIMITATIONS.md` GPU section; `REMEDIATION_WHATS_LEFT.md` Phase 4
+- Where: `KNOWN_LIMITATIONS.md` GPU section; `docs/archive/REMEDIATION_WHATS_LEFT.md` Phase 4
 - Evidence: `nvidia-smi` + `hardware_report.get_hardware_tier()` → `dgpu-12g+`/`cuda`
 - Disposition: → task **E-1**
 
@@ -133,7 +133,7 @@ _No entries yet — opens with Wave 12 (F-1/F-2)._
 - Disposition: → task **E-2**
 
 ### QA-DOC-003 · Lifespan migration + Finding #3-residual reported open; both landed · GRN · TRIAGED
-- Where: `REMEDIATION_WHATS_LEFT.md`
+- Where: `docs/archive/REMEDIATION_WHATS_LEFT.md`
 - Evidence: `server.py:2353/:2366`; `wipeSummary.mjs` dict handling
 - Disposition: → task **E-3**
 

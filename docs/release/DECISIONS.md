@@ -393,7 +393,7 @@ with zero console/page errors.
 
 **Owner:** release-director
 
-**Evidence:** [WAVE3_LIBRARY_CONTRACT.md](WAVE3_LIBRARY_CONTRACT.md) (ratified
+**Evidence:** [WAVE3_LIBRARY_CONTRACT.md](archive/WAVE3_LIBRARY_CONTRACT.md) (ratified
 before implementation, amended A1/A2 under its own change rule); commits
 `ff39159`/`8408aad`/`9db4500`. Director-run in the qualified `.venv`: cheap
 suite `2114 passed / 0 failed` (+142 over the Wave 0 baseline), the
