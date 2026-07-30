@@ -393,7 +393,7 @@ with zero console/page errors.
 
 **Owner:** release-director
 
-**Evidence:** [WAVE3_LIBRARY_CONTRACT.md](WAVE3_LIBRARY_CONTRACT.md) (ratified
+**Evidence:** [WAVE3_LIBRARY_CONTRACT.md](archive/WAVE3_LIBRARY_CONTRACT.md) (ratified
 before implementation, amended A1/A2 under its own change rule); commits
 `ff39159`/`8408aad`/`9db4500`. Director-run in the qualified `.venv`: cheap
 suite `2114 passed / 0 failed` (+142 over the Wave 0 baseline), the
@@ -1220,3 +1220,48 @@ is worse than leaving an honest, documented gap.
 count and every affected row, and separates serious findings (currently **0**)
 from location-only ones. Nobody can be misled by the ledger's filenames while
 that tool exists and reports them.
+
+---
+
+## D-0036 — Delivery is Paste only for this release; UI-06-038 is cut
+
+**Owner:** release-director (operator ruling, 2026-07-29)
+
+**Context:** Gate 11's two remaining product rows needed a wire-or-cut ruling
+before the parity lane could run (see `PUBLISH_PLAN.md` task B-3). Row
+UI-06-038 is the legacy `#sendActionSelect` dropdown in `index.html` with five
+options (Profile default / Copy only / Paste / Type / Open chat then send).
+Production does not carry that dropdown: D-0015-era Wave 2 work already
+replaced it with the segmented `#sdDeliverySegmented` control
+(`signal-desk.html:3211`, painted by `features/talkWorkspace.js:492`), which
+offers Type / Paste / Copy — the three actions `perform_output_action()`
+actually accepts. A second dropdown, `#sdDeliveryType`, survives only in
+`signal-desk-preview.html` and does not ship.
+
+**Decision:** For `v0.2.0-alpha.1` the product delivers by **Paste only**.
+
+1. **UI-06-038 → `intentional_cut`**, named replacement `#sdDeliverySegmented`.
+   The five-option legacy dropdown is not rebuilt. "Profile default" and
+   "Open chat then send" are not shipped at all this release.
+2. **The segmented control is reduced to Paste** — Type and Copy are not
+   offered as user choices on the shipping page. Keeping a three-way selector
+   that only ever resolves one way would be exactly the overload
+   `PUBLISH_PLAN.md` §5 forbids.
+3. **Backend actions are untouched.** `perform_output_action()` keeps
+   accepting `type` / `paste` / `copy_only`; this ruling narrows what the UI
+   *requests*, not what the backend can do. Re-offering Type/Copy later is a
+   markup change, not a rebuild.
+4. **The gaming-policy downgrade stands and is not a violation of this
+   ruling.** `backend/domain/gaming_policy.resolve_send_action()` converts
+   `paste` to `copy_only` while a gaming profile is active, because synthetic
+   input reaches whatever has focus and in a game that is the movement keys.
+   Paste-only describes the user's choice, not an absolute guarantee about the
+   wire action; that safety downgrade is deliberate and must survive.
+
+**Still open — not ruled here.** UI-06-016 (`#toggleRecordingButton`, only
+partially anchored in production) is the other B-3 product row and remains
+undecided. It is unrelated to delivery method and needs its own ruling before
+B-3 can close.
+
+**Consequence for the ledger:** blocked count drops by one (17 → 16) once the
+cut is declared and the ledger regenerated. Gate 11 stays NOT ACCEPTED.

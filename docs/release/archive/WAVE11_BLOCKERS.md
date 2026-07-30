@@ -1,6 +1,6 @@
 # Wave 11 BLOCKERS — what is not `wired`, and why
 
-Companion to [PARITY_INVENTORY.md](PARITY_INVENTORY.md). The ledger carries
+Companion to [PARITY_INVENTORY.md](../PARITY_INVENTORY.md). The ledger carries
 the per-row ruling; this is the director-facing summary of everything that did
 **not** clear the strict D-0015 chain, stated without softening.
 
