@@ -449,5 +449,46 @@ class KeyboardReviewTTSGatingTests(unittest.TestCase):
         fake.speak.assert_not_called()
 
 
+class HotkeyManagerWipeGateTests(unittest.TestCase):
+    """start_hotkey_manager's is_busy_callback (C-4) must route through the
+    same _reject_if_wiping gate as every other write-path wipe check."""
+
+    def setUp(self):
+        server.hotkey_manager = None
+        server.hotkey_manager_started = False
+        server.hotkey_recorder = None
+        self.addCleanup(setattr, server, "hotkey_manager", None)
+        self.addCleanup(setattr, server, "hotkey_manager_started", False)
+        self.addCleanup(setattr, server, "hotkey_recorder", None)
+        self.addCleanup(server.privacy_wipe_in_progress.clear)
+
+    def test_hotkey_manager_reports_busy_during_a_privacy_wipe(self):
+        captured = {}
+
+        class _DummyRecorder:
+            def set_chunk_callback(self, callback):
+                pass
+
+        class _DummyHotkeyManager:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def update_config(self, *args, **kwargs):
+                pass
+
+            def start(self):
+                pass
+
+        with patch("recorder.AudioRecorder", _DummyRecorder), \
+             patch.object(server, "HotkeyManager", _DummyHotkeyManager), \
+             patch.object(server, "get_last_active_profile", return_value={}):
+            server.start_hotkey_manager()
+
+        is_busy = captured["is_busy_callback"]
+        self.assertFalse(is_busy())
+        server.privacy_wipe_in_progress.set()
+        self.assertTrue(is_busy())
+
+
 if __name__ == "__main__":
     unittest.main()

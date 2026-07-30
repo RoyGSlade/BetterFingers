@@ -807,7 +807,7 @@ def start_hotkey_manager():
         # Recording is never blocked by draft processing anymore — a finished
         # recording is held in _pending_recordings and processed in order. The
         # only true blocker is a privacy wipe, which must stay quiescent.
-        is_busy_callback=lambda: privacy_wipe_in_progress.is_set(),
+        is_busy_callback=lambda: bool(_reject_if_wiping("hotkey recording start")),
         on_watchdog_timeout_callback=_broadcast_watchdog_timeout,
     )
     try:
@@ -1636,8 +1636,7 @@ def process_recording_result(
     # A privacy wipe must operate on a quiescent system: never start (or
     # recover-save) a recording while one is running, or it would regrow data
     # the wipe is trying to erase.
-    if privacy_wipe_in_progress.is_set():
-        logging.info("Dropping recording: a privacy wipe is in progress.")
+    if _reject_if_wiping("recording drop"):
         broadcast_status_threadsafe(
             "dictation_busy",
             {"message": "A privacy wipe is in progress; this recording was discarded."},
@@ -1658,7 +1657,7 @@ def process_recording_result(
         logging.warning("Dictation pipeline busy; rejecting competing invocation.")
         # Re-check the wipe flag: it may have been set after the top guard.
         # A rejected recording must not seed the recovery bin during a wipe.
-        if not privacy_wipe_in_progress.is_set():
+        if not _reject_if_wiping("rejected-recording recovery save"):
             try:
                 recordings.save_recording(
                     recording_result,
@@ -1678,7 +1677,7 @@ def process_recording_result(
     # Re-check the wipe AFTER admission: a wipe may have begun while this
     # caller was blocked in begin() (or between try_begin and here). Running
     # the pipeline now would save/create data behind the wipe's back.
-    if privacy_wipe_in_progress.is_set():
+    if _reject_if_wiping("recording drop (post-admission)"):
         dictation_coordinator.finish()
         logging.info("Dropping recording: a privacy wipe began while awaiting the pipeline gate.")
         broadcast_status_threadsafe(
@@ -2156,7 +2155,7 @@ def _enqueue_recording(recording_result, stream_session=None):
         # persist to the recovery bin exactly like the old rejection path.
         if stream_session is not None:
             stream_session.abort()
-        if not privacy_wipe_in_progress.is_set():
+        if not _reject_if_wiping("overflow recording recovery save"):
             try:
                 recordings.save_recording(
                     recording_result,
@@ -2208,7 +2207,7 @@ def _recording_dispatcher_loop():
             continue
         recording_result, session, generation = item
         try:
-            if generation != _pending_drop_generation or privacy_wipe_in_progress.is_set():
+            if generation != _pending_drop_generation or _reject_if_wiping("held recording dispatch"):
                 # Invalidated by a privacy wipe after being queued/dequeued.
                 if session is not None:
                     session.abort()
