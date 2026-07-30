@@ -706,6 +706,60 @@ ROW_ANCHORS: dict[str, dict] = {
         'why': 'The review overlay\'s three badges: session status, TTS backend and voice command, cross-referenced from §12.2',
     },
 
+    # --- Wave 13 (B-1): onboarding wizard step content + keyboard trap -----
+    #
+    # These three rows cite no handle at all in the source inventory -- they
+    # are prose describing step content and a keyboard contract, not an
+    # element id. #sdOnboarding's four `.sd-flow__step` bodies have no
+    # per-step id of their own (guidedFlow.js addresses bare `data-flow-step`
+    # sections by POSITION, not by id -- see its render() comment), so the
+    # concrete handle a human can verify is the step DEFINITION
+    # (features/onboardingFlow.js buildOnboardingSteps()) plus the shared
+    # title element it paints into.
+    'UI-02-005': {
+        'anchors': ['#sdOnboardingTitle', 'buildOnboardingSteps'],
+        'why': (
+            'Step 1 "Welcome": buildOnboardingSteps() (features/onboardingFlow.js:64) declares the '
+            '`welcome` step with title \'Welcome to BetterFingers\' and primaryLabel \'Get started\', '
+            'and states no `canAdvance` gate -- the "no gating" this row names, since guidedFlow.js '
+            'treats an absent gate as always-advanceable. render() paints that title into '
+            '#sdOnboardingTitle (signal-desk.html:94) and shows the first `.sd-flow__step` body '
+            '(signal-desk.html:104-113), the static "what you\'ll do" copy this row calls out. '
+            'Covered behaviourally, not just for existence, by onboarding-prod.mjs\'s '
+            '`the-first-run-gate-is-a-four-step-wizard`, which walks this exact step and asserts its '
+            'title, its forward label, that exactly one body is visible, its copy, and that clicking '
+            'Next actually advances the wizard.'
+        ),
+    },
+    'UI-02-007': {
+        'anchors': ['#sdOnboardingTitle', 'buildOnboardingSteps'],
+        'why': (
+            'Step 3 "How it works": buildOnboardingSteps() (features/onboardingFlow.js:71) declares '
+            'the `how` step with title \'How it works\' and primaryLabel \'Next\', painted into '
+            '#sdOnboardingTitle and the third `.sd-flow__step` body (signal-desk.html:132-141) -- the '
+            'record -> review -> send explainer bullets this row names. Covered behaviourally by '
+            'onboarding-prod.mjs\'s `the-first-run-gate-is-a-four-step-wizard`, which advances to this '
+            'step via a real Next click and asserts its title, forward label, single-visible-body '
+            'invariant, and its record/review/send copy.'
+        ),
+    },
+    'UI-02-012': {
+        'anchors': ['trapTab', 'dismissible'],
+        'why': (
+            'Keyboard trap: guidedFlow.js\'s trapTab() (bound on every keydown while `#sdOnboarding` is '
+            'open) cycles Tab and Shift+Tab between the dialog\'s own focusable controls instead of '
+            'letting focus leave it, and onboardingFlow.js passes `dismissible: false` '
+            '(features/onboardingFlow.js:231) into createGuidedFlow(), which its onKeydown uses to '
+            'swallow Escape (`event.preventDefault()`, no close()) rather than dismiss the gate -- '
+            'exactly the "Tab cycles, Escape is swallowed" contract this row names. Covered by '
+            'onboarding-prod.mjs\'s new `keyboard-trap-cycles-focus-and-swallows-escape` scenario, which '
+            'Tabs forward through all four real focusable controls on the consent step and asserts the '
+            'last wraps back to the first, Shift+Tabs back and asserts the first wraps to the last, then '
+            'presses Escape and asserts the dialog stays open with focus undisturbed -- a real keyboard '
+            'round-trip, not a check that the dialog merely exists.'
+        ),
+    },
+
     # --- Wave 12 (D-0034 / director Ruling B): legacy-id re-anchors -----------
     #
     # tools/anchor_audit.py found seven rows naming a DOM id that exists in no
