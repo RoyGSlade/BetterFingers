@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Optional
 import typing
 import pyperclip
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
@@ -103,6 +103,23 @@ if __name__ != "__main__":
 app = FastAPI(title="BetterFingers Sidecar")
 _llm_download_jobs = {}
 _llm_download_jobs_lock = threading.Lock()
+
+
+def _dev_routes_enabled():
+    """BETTERFINGERS_DEV_ROUTES=1 gate (QA-SEC-002 / C-2, D-0042).
+
+    graph/intent/project (export+generate)/mcp/llm-process+llm-generate_plan
+    are prototype surfaces the Electron renderer's ROUTE_ALLOWLIST never
+    grants, but anything that can reach this port directly still could. Off
+    by default. Read at request time (not cached at import) so a test can
+    flip the env var and observe both outcomes without reloading the module.
+    """
+    return os.environ.get("BETTERFINGERS_DEV_ROUTES") == "1"
+
+
+def _require_dev_routes():
+    if not _dev_routes_enabled():
+        raise HTTPException(status_code=404, detail="Not Found")
 
 # CORS — only the app's own renderer surfaces, not the wildcard. The Electron
 # renderer loads from file:// (Chromium sends `Origin: null` for cross-origin
@@ -4217,17 +4234,17 @@ async def privacy_factory_reset_verify():
     return await run_in_threadpool(data_lifecycle.verify_factory_reset, registry)
 
 
-@app.get("/mcp/status")
+@app.get("/mcp/status", dependencies=[Depends(_require_dev_routes)])
 async def mcp_status():
     return mcp_client.status()
 
 
-@app.get("/mcp/servers")
+@app.get("/mcp/servers", dependencies=[Depends(_require_dev_routes)])
 async def mcp_servers():
     return {"ok": True, "servers": mcp_client.list_servers()}
 
 
-@app.get("/mcp/servers/{server_name}/tools")
+@app.get("/mcp/servers/{server_name}/tools", dependencies=[Depends(_require_dev_routes)])
 async def mcp_server_tools(server_name: str):
     try:
         return await run_in_threadpool(mcp_client.list_tools, server_name)
@@ -5122,7 +5139,7 @@ class LLMRequest(BaseModel):
     preset: str = "True Janitor"
     true_gen: bool = False
 
-@app.post("/llm/process")
+@app.post("/llm/process", dependencies=[Depends(_require_dev_routes)])
 async def process_llm(request: LLMRequest):
     try:
         # Read lease: a concurrent LLM unload/reload/select waits or 409s
@@ -5523,7 +5540,7 @@ class GraphRequest(BaseModel):
     nodes: list
     edges: list
 
-@app.post("/graph/save")
+@app.post("/graph/save", dependencies=[Depends(_require_dev_routes)])
 async def save_graph(data: GraphRequest):
     graph_path = get_graph_path()
     try:
@@ -5536,7 +5553,7 @@ async def save_graph(data: GraphRequest):
         logging.error(f"Graph Save Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/graph/load")
+@app.get("/graph/load", dependencies=[Depends(_require_dev_routes)])
 async def load_graph():
     graph_path = get_graph_path()
     if os.path.exists(graph_path):
@@ -5552,7 +5569,7 @@ async def load_graph():
 class PlanRequest(BaseModel):
     goal: str
 
-@app.post("/llm/generate_plan")
+@app.post("/llm/generate_plan", dependencies=[Depends(_require_dev_routes)])
 async def generate_plan(request: PlanRequest):
     engine = get_selected_llm_engine()
     prompt = f"Goal: {request.goal}"
@@ -5607,7 +5624,7 @@ class ExportRequest(BaseModel):
     content: str
     plan: dict
 
-@app.post("/project/export")
+@app.post("/project/export", dependencies=[Depends(_require_dev_routes)])
 async def export_project(request: ExportRequest):
     import zipfile
     import io
@@ -5652,11 +5669,11 @@ async def save_profile(data: dict):
     success = profile_manager.save_profile(data)
     return {"status": "success" if success else "error"}
 
-@app.get("/intent/state")
+@app.get("/intent/state", dependencies=[Depends(_require_dev_routes)])
 async def get_intent_state():
     return {"state": intent_engine.get_state()}
 
-@app.post("/intent/state")
+@app.post("/intent/state", dependencies=[Depends(_require_dev_routes)])
 async def set_intent_state(data: dict):
     # expect {"state": "planning"}
     new_state = data.get("state")
@@ -5668,7 +5685,7 @@ async def set_intent_state(data: dict):
         intent_engine.set_state(IntentState.IDLE)
     return {"state": intent_engine.get_state()}
 
-@app.post("/project/generate")
+@app.post("/project/generate", dependencies=[Depends(_require_dev_routes)])
 async def generate_project(data: dict):
     # expect {"plan": {...}, "path": "..."}
     plan = data.get("plan")
