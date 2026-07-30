@@ -760,6 +760,62 @@ ROW_ANCHORS: dict[str, dict] = {
         ),
     },
 
+    # --- Wave 13 (B-2): Talk voice-status fan-out + shared message-rescue -----
+    #
+    # Three prose rows citing no handle at all in the source inventory.
+    'UI-06-063': {
+        'anchors': ['connectVoiceStatus', 'handleVoiceStatusMessage'],
+        'why': (
+            'Event-driven refresh surfaces: api/backend.js\'s connectVoiceStatus() (bound in '
+            'bootstrap/signalDeskApp.js:593-601) fans one voice-status WS message out to THREE '
+            'independent handleVoiceStatusMessage() implementations -- features/talkWorkspace.js:557 '
+            '(Signal Core ring/label/meter), features/talkCapture.js:258 (capture action-row state, '
+            'including the long_recording_detected/chunking_*/chunking_stitching cases that produce '
+            'this row\'s "long-recording/chunking progress text"), and features/overlayBridge.js:241 '
+            '(the row\'s "overlay window status pushes" AND "review-overlay draft pushes" -- '
+            'REVIEW_SHOW/REVIEW_REFRESH/REVIEW_HIDE_STATUSES). Two of the six legacy effects this row '
+            'lists are RE-ARCHITECTED rather than reproduced verbatim, not silently dropped: '
+            '"draft-history refresh" moved off the WS push onto direct calls in features/drafts.js '
+            '(refreshDrafts() runs off the accept/decline/send/edit response itself, a stronger '
+            'guarantee than waiting for a follow-up event); the "watchdog-timeout toast" for '
+            '`watchdog_timeout_warning` (server.py:723 _broadcast_watchdog_timeout) reaches the same '
+            'fan-out and its real message text is shown on the capture status line '
+            '(#sdCaptureMessage, talkCapture.js\'s default-state message path) rather than a discrete '
+            'toast popup -- surfaced, just not in the exact legacy presentation. Flagged for the '
+            'director in room chat rather than silently claimed.'
+        ),
+    },
+    'UI-06-074': {
+        'anchors': ['formatAssessmentSummary', 'formatDeliverySignals', 'formatClarification'],
+        'why': (
+            'Assessment / delivery / clarification regions, "same shared renderer as 6.4/6.6": '
+            'features/messageRescue.js\'s formatAssessmentSummary()/formatDeliverySignals()/'
+            'formatClarification() (lines 159/196/178) are the literal shared renderer this row '
+            'names, called from formatMessageRescueViewModel() and reused VERBATIM (same canonical '
+            'ids, comment at signal-desk.html:1963/2022/2064) by all three Message Rescue surfaces: '
+            'the Talk-adjacent draft-bound live panel (features/messageRescueDraft.js, now hosted in '
+            'Utilities / Text Tools via initMessageRescueDraft() at utilitiesWorkspace.js:1822 -- a '
+            'workspace move, same pattern as the Hotkeys/Wake Word groups above), the static preview '
+            '(#messageRescueAssessment) and the Text Playground (#textPlaygroundAssessment). '
+            'app/tests/messageRescue.test.mjs already exercises all three functions on real, '
+            'malformed and empty input (percentage formatting, non-string filtering, missing-question '
+            'null-handling) -- behavioral coverage, not existence checks.'
+        ),
+    },
+    'UI-06-076': {
+        'anchors': ['formatPreservationChecks', 'formatWarnings'],
+        'why': (
+            'Preservation checks / warnings lists: features/messageRescue.js\'s '
+            'formatPreservationChecks()/formatWarnings() (lines 233/250), the same shared renderer as '
+            'UI-06-074, reused verbatim across the three Message Rescue surfaces '
+            '(#draftRescuePreservationList/#draftRescueWarningsList and their message-rescue/'
+            'textPlayground siblings). app/tests/messageRescue.test.mjs asserts real behavior: mixed '
+            'pass/fail entries, an entry with neither a `passed` nor `ok` field defaulting to FAILED '
+            'rather than silently passing, and non-array/malformed warnings collapsing to an empty '
+            'list rather than throwing.'
+        ),
+    },
+
     # --- Wave 12 (D-0034 / director Ruling B): legacy-id re-anchors -----------
     #
     # tools/anchor_audit.py found seven rows naming a DOM id that exists in no
