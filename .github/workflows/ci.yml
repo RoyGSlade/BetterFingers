@@ -261,3 +261,97 @@ jobs:
             app/test-results/**
             app/playwright-report/**
           if-no-files-found: ignore
+
+  ruff:
+    # Report-only lint gate (PUBLISH_PLAN C-5a). continue-on-error keeps this
+    # from failing the build until the baseline is clean or triaged in
+    # QA_NOTES.md; the finding count is still visible in this job's log and
+    # in the uploaded artifact.
+    name: ruff check (report-only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: ruff check
+        continue-on-error: true
+        run: ruff check . --output-format=full | tee ruff-report.txt
+
+      - name: Upload ruff report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: ruff-report
+          path: ruff-report.txt
+          if-no-files-found: ignore
+
+  bandit:
+    # Report-only security gate on the Python backend (PUBLISH_PLAN C-5b).
+    # Scoped to the actual server code (root *.py + backend/), not the test
+    # suite or vendored/tooling scripts. continue-on-error keeps this from
+    # failing the build until the baseline is clean or triaged in
+    # QA_NOTES.md; the finding count is still visible in this job's log and
+    # in the uploaded artifact.
+    name: bandit (report-only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install bandit
+        run: pip install bandit
+
+      - name: bandit scan
+        continue-on-error: true
+        run: bandit -c .bandit -r . -f txt -o bandit-report.txt
+      - name: Print bandit report
+        if: always()
+        run: cat bandit-report.txt
+
+      - name: Upload bandit report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: bandit-report
+          path: bandit-report.txt
+          if-no-files-found: ignore
+
+  npm-audit:
+    # Report-only dependency-vulnerability gate (PUBLISH_PLAN C-5c).
+    # --omit=dev matches what actually ships; needs only the committed
+    # lockfile, so no `npm ci`/`npm install` step. continue-on-error keeps
+    # this from failing the build until the baseline is clean or triaged in
+    # QA_NOTES.md; the finding count is still visible in this job's log and
+    # in the uploaded artifact.
+    name: npm audit (report-only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: npm audit
+        working-directory: app
+        continue-on-error: true
+        run: npm audit --omit=dev | tee npm-audit-report.txt
+
+      - name: Upload npm audit report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: npm-audit-report
+          path: app/npm-audit-report.txt
+          if-no-files-found: ignore
