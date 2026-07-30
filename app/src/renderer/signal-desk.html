@@ -3211,7 +3211,11 @@
         <div class="sd-segmented" role="group" aria-label="Delivery method" id="sdDeliverySegmented">
           <!--
             D-0036 (docs/release/DECISIONS.md): delivery is Paste only for
-            v0.2.0-alpha.1. Wave 2 built this as a three-way Type/Paste/Copy
+            this release. (No literal version string here on purpose — the
+            "no renderer page hardcodes a version number" guard in
+            app/tests/qaFirstRun.test.mjs greps this file and cannot tell a
+            comment from markup. The version has one source; see D-0036.)
+            Wave 2 built this as a three-way Type/Paste/Copy
             selector; keeping a selector that only ever resolves one way would
             be exactly the overload PUBLISH_PLAN.md §5 forbids, so Type and
             Copy are removed as user choices here (UI-06-038 is `intentional_cut`,
