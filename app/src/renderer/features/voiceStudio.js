@@ -114,6 +114,15 @@ export function computeEffectiveMix(baseLabel, layers) {
   return parts;
 }
 
+/** Human-readable duration used by the user-recorded sample preview. */
+export function formatVoiceSampleDuration(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value < 0) return 'duration unavailable';
+  if (value < 60) return `${value.toFixed(1)}s`;
+  const minutes = Math.floor(value / 60);
+  return `${minutes}:${String(Math.round(value % 60)).padStart(2, '0')}`;
+}
+
 /** The full "what to speak with" shape used by both preview paths (Audition,
  * drafts.js runDraftTts) and by profile persistence. */
 export function gatherVoiceStudioSettingsFromInputs({ base, speed, blendLayers, pitch, energy, warmth, brightness, pauseStyle }) {
@@ -174,12 +183,17 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
   const { setMessage, showToast } = ui || {};
   const { markProfileDirty, renderVoiceCloningPanel } = hooks || {};
   const {
-    fetchTtsVoices, fetchVoicePresets, saveVoicePreset, deleteVoicePreset, cloneVoice, speakTts,
+    fetchTtsVoices, fetchVoicePresets, saveVoicePreset, deleteVoicePreset,
+    setDefaultVoicePreset, cloneVoice, speakTts, stopTts,
   } = api || backendApi;
 
   let voiceOptionsCache = []; // [{id, name}]
   let voiceBlendLayers = []; // [{voiceId, weight}]
   let loadedVoicePresets = [];
+  let loadedVoicePresetDefault = null;
+  let playbackRun = 0;
+  let playbackState = 'idle';
+  let playbackText = '';
   let initialized = false;
 
   function availableVoiceIds() {
@@ -422,7 +436,7 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
     setModulationControls(doc, state);
   }
 
-  function applyVoicePreset(doc, preset) {
+  function applyVoicePreset(doc, preset, { markDirtyAfter = true } = {}) {
     if (!preset) return;
     applyVoiceStudioState(doc, {
       base: preset.base,
@@ -434,7 +448,7 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
       brightness: preset.brightness,
       pause_style: preset.pause_style,
     });
-    dirty();
+    if (markDirtyAfter) dirty();
   }
 
   // --- Presets ------------------------------------------------------------
@@ -460,8 +474,11 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
       return;
     }
     loadedVoicePresets = Array.isArray(data.presets) ? data.presets : [];
+    loadedVoicePresetDefault = data.default || loadedVoicePresets.find((preset) => preset.is_default)?.name || null;
     renderVoicePresetSelect(doc);
     renderVoicePresetList(doc);
+    const activePreset = loadedVoicePresets.find((preset) => preset.name === loadedVoicePresetDefault);
+    if (activePreset) applyVoicePreset(doc, activePreset, { markDirtyAfter: false });
   }
 
   function renderVoicePresetSelect(doc) {
@@ -497,6 +514,7 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
       // are base.css names, and signal-desk.html does not load base.css.
       const row = doc.createElement('div');
       row.className = 'sd-voice-studio__blend-row';
+      if (preset.name === loadedVoicePresetDefault) row.setAttribute('data-active', 'true');
 
       const info = doc.createElement('div');
       info.className = 'sd-voice-studio__active';
@@ -512,6 +530,13 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
 
       const controls = doc.createElement('div');
       controls.className = 'sd-actions-row';
+      if (preset.name === loadedVoicePresetDefault) {
+        const activeBadge = doc.createElement('span');
+        activeBadge.className = 'sd-badge';
+        activeBadge.textContent = 'Active';
+        activeBadge.setAttribute('aria-label', 'Globally active voice preset');
+        controls.appendChild(activeBadge);
+      }
       const applyButton = doc.createElement('button');
       applyButton.type = 'button';
       applyButton.className = 'sd-btn';
@@ -520,6 +545,67 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
         const select = doc.getElementById('voicePresetSelect');
         if (select) select.value = preset.name;
         applyVoicePreset(doc, preset);
+      });
+      const activeButton = doc.createElement('button');
+      activeButton.type = 'button';
+      activeButton.className = 'sd-btn';
+      activeButton.textContent = preset.name === loadedVoicePresetDefault ? 'Active' : 'Make active';
+      activeButton.disabled = preset.name === loadedVoicePresetDefault;
+      activeButton.addEventListener('click', async () => {
+        if (typeof setDefaultVoicePreset !== 'function') {
+          setMessage?.(messageEl(doc), 'This backend cannot set an active voice preset.', 'danger');
+          return;
+        }
+        try {
+          await setDefaultVoicePreset(preset.name);
+          loadedVoicePresetDefault = preset.name;
+          applyVoicePreset(doc, preset);
+          renderVoicePresetList(doc);
+          setMessage?.(messageEl(doc), `Voice preset "${preset.name}" is now active.`, 'success');
+        } catch (error) {
+          setMessage?.(messageEl(doc), `Failed to activate preset: ${error.message}`, 'danger');
+        }
+      });
+      const renameButton = doc.createElement('button');
+      renameButton.type = 'button';
+      renameButton.className = 'sd-btn';
+      renameButton.textContent = 'Rename';
+      renameButton.addEventListener('click', async () => {
+        const promptFn = doc.defaultView?.prompt || globalThis.prompt;
+        const nextName = typeof promptFn === 'function' ? promptFn('Rename voice preset', preset.name) : '';
+        const trimmedName = String(nextName || '').trim();
+        if (!trimmedName || trimmedName.toLowerCase() === preset.name.toLowerCase()) return;
+        try {
+          const { name: _oldName, created_at: _createdAt, updated_at: _updatedAt, ...fields } = preset;
+          await saveVoicePreset(trimmedName, fields);
+          if (preset.name === loadedVoicePresetDefault && typeof setDefaultVoicePreset === 'function') {
+            await setDefaultVoicePreset(trimmedName);
+          }
+          await deleteVoicePreset(preset.name);
+          await refreshVoicePresets(doc);
+          setMessage?.(messageEl(doc), `Renamed voice preset to "${trimmedName}".`, 'success');
+        } catch (error) {
+          setMessage?.(messageEl(doc), `Failed to rename preset: ${error.message}`, 'danger');
+        }
+      });
+      const duplicateButton = doc.createElement('button');
+      duplicateButton.type = 'button';
+      duplicateButton.className = 'sd-btn';
+      duplicateButton.textContent = 'Duplicate';
+      duplicateButton.addEventListener('click', async () => {
+        const names = new Set(loadedVoicePresets.map((item) => item.name.toLowerCase()));
+        const baseName = `${preset.name} (copy)`;
+        let nextName = baseName;
+        let suffix = 2;
+        while (names.has(nextName.toLowerCase())) nextName = `${baseName} ${suffix++}`;
+        try {
+          const { name: _oldName, created_at: _createdAt, updated_at: _updatedAt, ...fields } = preset;
+          await saveVoicePreset(nextName, fields);
+          await refreshVoicePresets(doc);
+          setMessage?.(messageEl(doc), `Duplicated voice preset as "${nextName}".`, 'success');
+        } catch (error) {
+          setMessage?.(messageEl(doc), `Failed to duplicate preset: ${error.message}`, 'danger');
+        }
       });
       const deleteButton = doc.createElement('button');
       deleteButton.type = 'button';
@@ -533,7 +619,10 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
           setMessage?.(messageEl(doc), `Failed to delete preset: ${error.message}`, 'danger');
         }
       });
+      controls.appendChild(activeButton);
       controls.appendChild(applyButton);
+      controls.appendChild(renameButton);
+      controls.appendChild(duplicateButton);
       controls.appendChild(deleteButton);
 
       row.appendChild(info);
@@ -604,6 +693,137 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
     await refreshVoicePresets(activeDoc).catch((error) => console.error('Failed to load voice presets:', error));
   }
 
+  // --- Read-aloud transport ----------------------------------------------
+  // The backend owns the audio device and exposes a stop route, so pause is a
+  // safe stop-with-intent-to-resume (the next Play starts the requested text
+  // again). Keeping the transport here means every action gathers the live
+  // voice/blend controls at the moment it starts, rather than replaying stale
+  // settings captured by the first audition.
+  function renderReadAloudState(doc, state, detail = '') {
+    playbackState = state;
+    const status = doc.getElementById('readAloudPlaybackState');
+    if (!status) return;
+    const labels = { idle: 'Ready', playing: 'Playing…', paused: 'Paused', stopped: 'Stopped' };
+    status.textContent = detail || labels[state] || 'Ready';
+    status.dataset.state = state;
+  }
+
+  async function stopCurrentTts() {
+    if (typeof stopTts !== 'function') return;
+    try {
+      await stopTts();
+    } catch (error) {
+      // A stop failure is surfaced by the transport caller; never turn it into
+      // a false "stopped" state.
+      throw error;
+    }
+  }
+
+  async function playReadAloud(doc, textOverride = '') {
+    const text = textOverride || doc.getElementById('voicePreviewText')?.value?.trim()
+      || 'This is a test of the BetterFingers text to speech voice synthesis.';
+    const settings = gatherVoiceStudioSettings(doc);
+    const run = ++playbackRun;
+    playbackText = text;
+    renderReadAloudState(doc, 'playing');
+    try {
+      const result = await speakTts(text, settings.base, settings.speed, settings.pitch, {
+        blend: settings.blend,
+        energy: settings.energy,
+        warmth: settings.warmth,
+        brightness: settings.brightness,
+        pause_style: settings.pause_style,
+      });
+      if (run !== playbackRun) return result;
+      if (result && result.ok === false) {
+        renderReadAloudState(doc, 'stopped', `Playback failed: ${result.message || result.error || 'Unknown error'}`);
+      } else {
+        renderReadAloudState(doc, 'idle', 'Ready — playback complete');
+      }
+      return result;
+    } catch (error) {
+      if (run === playbackRun) renderReadAloudState(doc, 'stopped', `Playback failed: ${error.message}`);
+      throw error;
+    }
+  }
+
+  function createTransportButton(doc, id, label) {
+    const button = doc.createElement('button');
+    button.id = id;
+    button.type = 'button';
+    button.className = 'sd-btn';
+    button.textContent = label;
+    return button;
+  }
+
+  function ensureReadAloudControls(doc) {
+    const existing = {
+      play: doc.getElementById('readAloudPlayButton'),
+      pause: doc.getElementById('readAloudPauseButton'),
+      stop: doc.getElementById('readAloudStopButton'),
+      restart: doc.getElementById('readAloudRestartButton'),
+      status: doc.getElementById('readAloudPlaybackState'),
+    };
+    const audition = doc.getElementById('testTtsButton');
+    const host = audition?.parentNode || audition;
+    const controls = [
+      ['play', 'readAloudPlayButton', 'Play'],
+      ['pause', 'readAloudPauseButton', 'Pause'],
+      ['stop', 'readAloudStopButton', 'Stop'],
+      ['restart', 'readAloudRestartButton', 'Restart'],
+    ];
+    for (const [key, id, label] of controls) {
+      if (!existing[key] && host?.appendChild) {
+        existing[key] = createTransportButton(doc, id, label);
+        host.appendChild(existing[key]);
+      }
+    }
+    if (!existing.status && host?.appendChild) {
+      existing.status = doc.createElement('span');
+      existing.status.id = 'readAloudPlaybackState';
+      existing.status.className = 'sd-voice-studio__result';
+      existing.status.setAttribute('role', 'status');
+      existing.status.setAttribute('aria-live', 'polite');
+      host.appendChild(existing.status);
+    }
+    return existing;
+  }
+
+  function initReadAloud(doc) {
+    const controls = ensureReadAloudControls(doc);
+    renderReadAloudState(doc, 'idle');
+    controls.play?.addEventListener('click', async () => {
+      try { await playReadAloud(doc); } catch (error) { setMessage?.(messageEl(doc), `Read aloud failed: ${error.message}`, 'danger'); }
+    });
+    controls.pause?.addEventListener('click', async () => {
+      ++playbackRun;
+      try {
+        await stopCurrentTts();
+        renderReadAloudState(doc, 'paused');
+      } catch (error) {
+        renderReadAloudState(doc, 'playing', `Pause failed: ${error.message}`);
+      }
+    });
+    controls.stop?.addEventListener('click', async () => {
+      ++playbackRun;
+      try {
+        await stopCurrentTts();
+        renderReadAloudState(doc, 'stopped');
+      } catch (error) {
+        renderReadAloudState(doc, 'playing', `Stop failed: ${error.message}`);
+      }
+    });
+    controls.restart?.addEventListener('click', async () => {
+      ++playbackRun;
+      try {
+        await stopCurrentTts();
+        await playReadAloud(doc, playbackText);
+      } catch (error) {
+        setMessage?.(messageEl(doc), `Read aloud restart failed: ${error.message}`, 'danger');
+      }
+    });
+  }
+
   // --- Voice cloning (sample upload) --------------------------------------
   function initVoiceCloning(doc) {
     const consentEl = doc.getElementById('voiceCloneConsent');
@@ -613,18 +833,153 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
     const resultEl = doc.getElementById('voiceCloneResult');
     if (!consentEl || !nameEl || !fileEl || !uploadButton || !resultEl) return;
 
-    consentEl.addEventListener('change', () => {
+    let recordedSample = null;
+    let sampleUrl = '';
+    let recorder = null;
+    let recorderStream = null;
+    let recorderChunks = [];
+    const host = uploadButton.parentNode || resultEl.parentNode || uploadButton;
+    const makeControl = (id, label) => {
+      const button = doc.getElementById(id) || doc.createElement('button');
+      button.id = id;
+      button.type = 'button';
+      button.className = 'sd-btn';
+      button.textContent = label;
+      if (!doc.getElementById(id)) host?.appendChild?.(button);
+      return button;
+    };
+    const recordButton = makeControl('voiceCloneRecordButton', 'Record sample');
+    const previewButton = makeControl('voiceClonePreviewButton', 'Preview recording');
+    const discardButton = makeControl('voiceCloneDiscardButton', 'Discard / re-record');
+    const sampleAudio = doc.getElementById('voiceCloneSampleAudio') || doc.createElement('audio');
+    sampleAudio.id = 'voiceCloneSampleAudio';
+    sampleAudio.controls = true;
+    sampleAudio.hidden = true;
+    if (!doc.getElementById('voiceCloneSampleAudio')) host?.appendChild?.(sampleAudio);
+    const sampleState = doc.getElementById('voiceClonePlaybackState') || doc.createElement('span');
+    sampleState.id = 'voiceClonePlaybackState';
+    sampleState.className = 'sd-voice-studio__result';
+    sampleState.setAttribute('role', 'status');
+    sampleState.setAttribute('aria-live', 'polite');
+    if (!doc.getElementById('voiceClonePlaybackState')) host?.appendChild?.(sampleState);
+
+    const updateSampleState = (message) => { sampleState.textContent = message; };
+    const stopStream = () => {
+      recorderStream?.getTracks?.().forEach((track) => track.stop());
+      recorderStream = null;
+      recorder = null;
+    };
+    const sampleName = (file) => file?.name || 'recorded sample';
+    const showSample = (file) => {
+      if (!file) return;
+      recordedSample = file?.__voiceStudioRecorded ? file : null;
+      if (sampleUrl && globalThis.URL?.revokeObjectURL) globalThis.URL.revokeObjectURL(sampleUrl);
+      try {
+        sampleUrl = globalThis.URL?.createObjectURL ? globalThis.URL.createObjectURL(file) : '';
+      } catch {
+        sampleUrl = '';
+      }
+      if (sampleUrl) sampleAudio.src = sampleUrl;
+      sampleAudio.hidden = false;
+      previewButton.disabled = false;
+      discardButton.disabled = false;
+      const duration = Number(file.duration);
+      updateSampleState(`Sample ready: ${sampleName(file)} · ${formatVoiceSampleDuration(duration)}`);
+    };
+    const currentSample = () => recordedSample || fileEl.files?.[0] || null;
+    const discardSample = () => {
+      sampleAudio.pause?.();
+      sampleAudio.removeAttribute?.('src');
+      sampleAudio.hidden = true;
+      if (sampleUrl && globalThis.URL?.revokeObjectURL) globalThis.URL.revokeObjectURL(sampleUrl);
+      sampleUrl = '';
+      recordedSample = null;
+      if ('value' in fileEl) fileEl.value = '';
+      previewButton.disabled = true;
+      discardButton.disabled = true;
+      updateSampleState('No recording selected. Record or choose a sample.');
+    };
+    fileEl.addEventListener('change', () => {
+      recordedSample = null;
+      showSample(fileEl.files?.[0]);
+    });
+    sampleAudio.addEventListener?.('loadedmetadata', () => {
+      const duration = Number(sampleAudio.duration);
+      if (Number.isFinite(duration)) updateSampleState(`Sample ready: ${sampleName(currentSample())} · ${formatVoiceSampleDuration(duration)}`);
+    });
+    sampleAudio.addEventListener?.('play', () => updateSampleState(`Playing recording: ${sampleName(currentSample())}`));
+    sampleAudio.addEventListener?.('pause', () => {
+      if (!sampleAudio.ended) updateSampleState(`Paused recording: ${sampleName(currentSample())}`);
+    });
+    sampleAudio.addEventListener?.('ended', () => updateSampleState(`Finished recording: ${sampleName(currentSample())}`));
+    previewButton.addEventListener('click', () => {
+      if (!currentSample()) {
+        updateSampleState('No recording selected. Record or choose a sample.');
+        return;
+      }
+      const playResult = sampleAudio.play?.();
+      playResult?.catch?.(() => updateSampleState('Could not play this recording.'));
+    });
+    discardButton.addEventListener('click', discardSample);
+    recordButton.addEventListener('click', async () => {
+      if (recorder) {
+        recorder.stop();
+        recordButton.disabled = true;
+        return;
+      }
+      const mediaDevices = globalThis.navigator?.mediaDevices || globalThis.window?.navigator?.mediaDevices;
+      const MediaRecorderCtor = globalThis.MediaRecorder;
+      if (!mediaDevices?.getUserMedia || typeof MediaRecorderCtor !== 'function') {
+        updateSampleState('Recording is unavailable in this environment; choose an audio file instead.');
+        return;
+      }
+      try {
+        recorderStream = await mediaDevices.getUserMedia({ audio: true });
+        recorderChunks = [];
+        recorder = new MediaRecorderCtor(recorderStream);
+        recorder.addEventListener?.('dataavailable', (event) => { if (event.data?.size) recorderChunks.push(event.data); });
+        recorder.addEventListener?.('stop', () => {
+          const blob = new Blob(recorderChunks, { type: recorder.mimeType || 'audio/webm' });
+          const file = typeof File === 'function'
+            ? new File([blob], 'recorded-voice-sample.webm', { type: blob.type })
+            : blob;
+          try { Object.defineProperty(file, 'name', { value: 'recorded-voice-sample.webm' }); } catch {}
+          try { Object.defineProperty(file, '__voiceStudioRecorded', { value: true }); } catch { file.__voiceStudioRecorded = true; }
+          recordedSample = file;
+          showSample(file);
+          recordButton.disabled = false;
+          recordButton.textContent = 'Re-record sample';
+          stopStream();
+        });
+        recorder.start();
+        recordButton.textContent = 'Stop recording';
+        updateSampleState('Recording… speak clearly, then stop when finished.');
+      } catch (error) {
+        stopStream();
+        updateSampleState(`Could not record sample: ${error.message}`);
+      }
+    });
+
+    const syncConsent = () => {
       const enabled = consentEl.checked;
       nameEl.disabled = !enabled;
       fileEl.disabled = !enabled;
       uploadButton.disabled = !enabled;
+      recordButton.disabled = !enabled;
+      previewButton.disabled = !enabled || !currentSample();
+      discardButton.disabled = !enabled || !currentSample();
       if (!enabled) {
         resultEl.textContent = '';
+        if (recorder) recorder.stop();
+        discardSample();
       }
-    });
+    };
+    consentEl.addEventListener('change', syncConsent);
+    updateSampleState('No recording selected. Record or choose a sample.');
+    syncConsent();
 
     uploadButton.addEventListener('click', async () => {
-      const file = fileEl.files?.[0];
+      const file = currentSample();
       const name = nameEl.value.trim();
       if (!consentEl.checked) {
         resultEl.textContent = 'Consent is required before uploading a sample.';
@@ -760,27 +1115,14 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
 
     const testTtsButton = activeDoc.getElementById('testTtsButton');
     testTtsButton?.addEventListener('click', async () => {
-      const previewText = activeDoc.getElementById('voicePreviewText')?.value?.trim();
-      const text = previewText || 'This is a test of the BetterFingers text to speech voice synthesis.';
-      const settings = gatherVoiceStudioSettings(activeDoc);
-
       testTtsButton.disabled = true;
       testTtsButton.textContent = 'Speaking...';
-
       try {
-        const res = await speakTts(text, settings.base, settings.speed, settings.pitch, {
-          blend: settings.blend,
-          energy: settings.energy,
-          warmth: settings.warmth,
-          brightness: settings.brightness,
-          pause_style: settings.pause_style,
-        });
-        // A cloned voice can fail honestly (sample missing / clone engine not
-        // installed) — surface that as an error, not a green "success".
+        const res = await playReadAloud(activeDoc);
         if (res && res.ok === false) {
           setMessage?.(messageEl(activeDoc), `TTS Audition failed: ${res.message || res.error || 'Unknown error'}`, 'danger');
         } else {
-          setMessage?.(messageEl(activeDoc), `TTS Audition: ${res.message}`, 'success');
+          setMessage?.(messageEl(activeDoc), `TTS Audition: ${res?.message || 'Playback complete.'}`, 'success');
         }
       } catch (error) {
         setMessage?.(messageEl(activeDoc), `TTS Audition failed: ${error.message}`, 'danger');
@@ -790,6 +1132,7 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
       }
     });
 
+    initReadAloud(activeDoc);
     initVoiceCloning(activeDoc);
   }
 

@@ -19,6 +19,7 @@ import {
   gatherVoiceStudioSettingsFromInputs,
   buildPersistableVoiceStudioSettings,
   extractVoiceStudioStateFromProfile,
+  formatVoiceSampleDuration,
   createVoiceStudioFeature,
 } from '../src/renderer/features/voiceStudio.js';
 
@@ -157,9 +158,10 @@ function makeStubElement() {
   return {
     value: '', textContent: '', innerHTML: '', className: '', hidden: false,
     disabled: false, checked: false, dataset: {}, _attrs: {}, _listeners: {},
+    children: [],
     classList: { add() {}, remove() {}, toggle() {} },
     setAttribute(k, v) { this._attrs[k] = v; },
-    appendChild(child) { return child; },
+    appendChild(child) { this.children.push(child); return child; },
     addEventListener(evt, fn) {
       // Voice Studio wires each control once per init(); if listener dedupe
       // ever regresses, this collects every handler instead of overwriting,
@@ -233,9 +235,111 @@ function makeApiStub(overrides = {}) {
     deleteVoicePreset: async () => ({}),
     cloneVoice: async () => ({}),
     speakTts: async () => ({ ok: true, message: 'spoke' }),
+    stopTts: async () => ({ ok: true }),
     ...overrides,
   };
 }
+
+test('formatVoiceSampleDuration: records a real duration and rejects unknown metadata honestly', () => {
+  assert.equal(formatVoiceSampleDuration(3.25), '3.3s');
+  assert.equal(formatVoiceSampleDuration(65), '1:05');
+  assert.equal(formatVoiceSampleDuration(NaN), 'duration unavailable');
+});
+
+test('read-aloud transport exposes Play/Pause/Stop/Restart and always sends current voice blend settings', async () => {
+  const fakeDoc = makeFakeDoc({
+    readAloudPlayButton: makeStubElement(),
+    readAloudPauseButton: makeStubElement(),
+    readAloudStopButton: makeStubElement(),
+    readAloudRestartButton: makeStubElement(),
+    readAloudPlaybackState: makeStubElement(),
+  });
+  const calls = [];
+  const stops = [];
+  const feature = createVoiceStudioFeature({
+    ui: { setMessage() {}, showToast() {} },
+    hooks: {},
+    api: makeApiStub({
+      speakTts: async (...args) => { calls.push(args); return { ok: true, message: 'played' }; },
+      stopTts: async () => { stops.push(1); return { ok: true }; },
+    }),
+  });
+  await feature.refreshVoices(fakeDoc);
+  feature.init({ doc: fakeDoc });
+  fireClick(fakeDoc.elements.addVoiceLayerButton);
+  fakeDoc.elements.voicePreviewText.value = 'Current sample text';
+  fakeDoc.elements.settingReviewTtsVoiceHint.value = 'af_nicole';
+  fireClick(fakeDoc.elements.readAloudPlayButton);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(calls[0][0], 'Current sample text');
+  assert.equal(calls[0][1], 'af_nicole');
+  assert.ok(calls[0][4].blend, 'Play sends the live blend, not a cached preset');
+  assert.equal(fakeDoc.elements.readAloudPlaybackState.textContent, 'Ready — playback complete');
+
+  fireClick(fakeDoc.elements.readAloudPauseButton);
+  fireClick(fakeDoc.elements.readAloudStopButton);
+  fireClick(fakeDoc.elements.readAloudRestartButton);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(stops.length >= 3, 'Pause, Stop, and Restart each reach the TTS stop route');
+  assert.equal(calls.length, 2, 'Restart starts the same read-aloud request again');
+});
+
+test('saved voice presets render the backend default as Active', async () => {
+  const fakeDoc = makeFakeDoc();
+  const rows = [];
+  fakeDoc.elements.voicePresetList.appendChild = (child) => { rows.push(child); return child; };
+  const feature = createVoiceStudioFeature({
+    ui: {},
+    hooks: {},
+    api: makeApiStub({
+      fetchVoicePresets: async () => ({
+        presets: [{ name: 'Warm', base: 'af_heart', blend: {} }, { name: 'Crisp', base: 'af_nicole', blend: {} }],
+        default: 'Crisp',
+      }),
+    }),
+  });
+  await feature.refreshVoices(fakeDoc);
+
+  const activeRow = rows.find((row) => row._attrs['data-active'] === 'true');
+  assert.ok(activeRow, 'the globally active preset is marked in the saved list');
+  const controls = activeRow.children.find((child) => child.className === 'sd-actions-row');
+  assert.deepEqual(
+    controls.children.filter((child) => child.className.includes('sd-btn')).map((child) => child.textContent),
+    ['Active', 'Apply', 'Rename', 'Duplicate', 'Delete'],
+    'saved presets expose active/apply/rename/duplicate/delete actions',
+  );
+});
+
+test('recorded voice samples use their own audio preview and expose discard/re-record controls', async () => {
+  const created = {};
+  const fakeDoc = makeFakeDoc({
+    voiceCloneConsent: makeStubElement(),
+    voiceCloneName: makeStubElement(),
+    voiceCloneFile: makeStubElement(),
+    voiceCloneUploadButton: makeStubElement(),
+    voiceCloneResult: makeStubElement(),
+  });
+  fakeDoc.elements.voiceCloneUploadButton.appendChild = (child) => { created[child.id] = child; return child; };
+  fakeDoc.elements.voiceCloneConsent.checked = true;
+  fakeDoc.elements.voiceCloneFile.files = [{ name: 'my-recording.wav', duration: 4.2 }];
+  const uploads = [];
+  const feature = createVoiceStudioFeature({
+    ui: {},
+    hooks: {},
+    api: makeApiStub({ cloneVoice: async (file) => { uploads.push(file); return { warnings: [] }; } }),
+  });
+  feature.init({ doc: fakeDoc });
+
+  fireInput(fakeDoc.elements.voiceCloneFile, 'change');
+  assert.equal(created.voiceClonePreviewButton.disabled, false, 'the preview action is enabled for the selected recording');
+  assert.equal(created.voiceCloneDiscardButton.disabled, false, 'discard/re-record is offered for the selected recording');
+  assert.match(created.voiceClonePlaybackState.textContent, /my-recording\.wav · 4\.2s/);
+  fakeDoc.elements.voiceCloneName.value = 'My recorded voice';
+  fireClick(fakeDoc.elements.voiceCloneUploadButton);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(uploads[0].name, 'my-recording.wav', 'upload uses the user sample, never synthesized preview text');
+});
 
 // --- Wave 12A: selected-voice visibility (product-owner finding 3) ----------
 //
