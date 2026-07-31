@@ -1,11 +1,11 @@
-// Text Playground: a silent, text-only place to paste/type a message, pick a
+// Scribe: a silent, text-only place to paste/type a message, pick a
 // persona, and run the local LLM through the Message Rescue endpoint (I3.2)
 // without any microphone, transcription, or TTS involved (board #31).
 //
 // Reuses F2.3's pure view-model (./messageRescue.js) and F2.8's escaped panel
 // renderer (./messageRescuePanel.js) wholesale for the assessment/delivery/
 // clarification/variants/preservation/warnings region -- this module only
-// adds the playground-specific controls (text/context input, persona/draft
+// adds the Scribe-specific controls (text/context input, persona/draft
 // pickers, run/cancel/clear, apply-to-draft, copy) around it. Independent of
 // main.js: loaded via its own <script type="module"> tag and self-initializes
 // on import, exactly like messageRescuePanel.js.
@@ -271,7 +271,7 @@ export function buildDraftOptionsHtml(drafts, selectedDraftId) {
 
 // --- composite pure model ----------------------------------------------------
 
-// Combines this module's playground-only fields with F2.3/F2.8's own
+// Combines this module's Scribe-only fields with F2.3/F2.8's own
 // escaped rescue-result model (reused, not reimplemented) into one DOM-ready
 // object. `rawSelectedText` is deliberately unescaped -- it is only ever
 // consumed by the DOM layer's apply-to-draft/copy handlers (JSON body /
@@ -618,7 +618,7 @@ function queryElements(doc) {
   };
 }
 
-// Sets up the playground if its markup is present; no-ops otherwise (safe to
+// Sets up Scribe if its markup is present; no-ops otherwise (safe to
 // call against a doc that doesn't have #textPlaygroundSection, e.g. an older
 // build or a test doc). Kicks off persona/draft list loads but never touches
 // audio, transcription, or TTS.
@@ -643,3 +643,11 @@ export function initTextPlayground({ doc } = {}) {
 if (shouldAutowire()) {
   initTextPlayground();
 }
+
+// Scribe is the user-facing name. Keep the old export names as compatibility
+// aliases because bootstrap and existing renderer tests still import the
+// canonical textPlayground module path during this IA-only migration.
+export const buildScribeModel = buildTextPlaygroundModel;
+export const renderScribe = renderTextPlayground;
+export const createScribeFeature = createTextPlaygroundFeature;
+export const initScribe = initTextPlayground;
