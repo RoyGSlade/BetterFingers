@@ -1087,6 +1087,24 @@ CUTS: dict[str, str] = {
         'the explicit Start/Stop pair (plus a never-disabled Emergency Stop) exists to prevent. See '
         'docs/release/DECISIONS.md D-0037 for the full verification and ruling.'
     ),
+    'UI-07-041': (
+        'Intentional cut: `#settingInstantTyping` — "Instant typing", the checkbox that typed '
+        'a draft character-by-character instead of pasting it — was REMOVED from the shipping '
+        'page on 2026-07-31 at the operator\'s explicit direction (docs/release/OPERATOR_REVIEW.md, '
+        'P2 "Remove" list). It was already disabled on Wayland, which is this host\'s likely '
+        'display server, so for many users it was a control that advertised a capability it '
+        'could not deliver. There is no replacement ELEMENT and deliberately so: pasting is the '
+        'single supported delivery path. The BACKEND capability is untouched — `instant_typing` '
+        'remains a real profile field defaulting to False (utils.py:798) and injector.py:286/545 '
+        'still honours it, so nothing was deleted from the engine and any profile that already '
+        'carries the flag keeps working. It also remains in SETTINGS_FIELD_KEYS with no element; '
+        'readFieldStates() skips absent elements (features/settingsWorkspace.js), so the field is '
+        'simply never sent from this page and the stored value stands. This row went `blocked` '
+        'rather than `intentional_cut` the moment the element left the page, because the item '
+        'was partially anchored — the profile key still resolves in production while the handle '
+        'does not. That is the ledger working correctly; the missing piece was the ruling, not '
+        'the removal. See docs/release/DECISIONS.md D-0045.'
+    ),
 }
 
 

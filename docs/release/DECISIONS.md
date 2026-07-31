@@ -1643,3 +1643,44 @@ static default could not fake it.
 
 `RELEASE_BOARD.md` is updated to ACCEPTED accordingly. Gates 12/13 (package
 qualification) remain open and are the next work.
+
+---
+
+## D-0045 — `UI-07-041` (`#settingInstantTyping`) is an `intentional_cut`, not `blocked`
+
+**2026-07-31, director, Wave 14.**
+
+Removing the Instant Typing checkbox from the shipping page flipped its parity
+row from `wired` to `blocked`, taking the ledger from `411/27/0` to
+`410/27/1`. The ledger was right to flag it: the item became *partially
+anchored* — the `instant_typing` profile key still resolves in production while
+the `#settingInstantTyping` handle no longer does — and a partially anchored
+item is not wholly present on the shipping page.
+
+What was missing was the ruling, not the removal.
+
+**Ruling: `intentional_cut`.** The control was removed at the operator's
+explicit direction (`OPERATOR_REVIEW.md`, P2 "Remove" list). It was already
+disabled on Wayland, so for a large share of users it advertised a capability it
+could not deliver — and a control that cannot do what it says is exactly the
+class of defect Wave 14 exists to remove.
+
+**The backend capability is untouched, and that is what makes this a cut rather
+than a deletion.** `instant_typing` remains a real profile field defaulting to
+`False` (`utils.py:798`); `injector.py:286` and `:545` still honour it. It also
+remains in `SETTINGS_FIELD_KEYS` with no element — `readFieldStates()` skips
+absent elements, so the field is simply never sent from this page and any
+profile already carrying the flag keeps working. Nothing was removed from the
+engine, and no default changed.
+
+Ledger after the ruling: **410 wired / 28 intentional_cut / 0 blocked / 438
+total**, validator OK. The delta against the Gate 11 baseline (`411/27/0`) is
+exactly the one row this ruling covers — no other row moved.
+
+**Found by running the full Python suite before merging to `main`, not by
+inspection.** `tests/test_parity_regen.py` failed because the committed ledger
+no longer matched its generator. Three other failures surfaced in the same run,
+all from OR-13's new host-tooling gate short-circuiting tests that fake the
+clipboard; those tests now state the precondition they had always implicitly
+assumed. Had the merge gone ahead on the node suite alone, all four would have
+landed on `main`.
