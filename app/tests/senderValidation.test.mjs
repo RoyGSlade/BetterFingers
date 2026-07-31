@@ -33,6 +33,15 @@ test('accepts the Signal Desk page so its IPC bridge is not silently revoked', (
   assert.equal(isTrustedFileUrl(`file://${dir}/signal-desk-preview.html`, dir), true);
 });
 
+// Regression guard: the OR-02 startup splash's IPC bridge (splash:get-state,
+// splash:retry) is gated by this exact same list (ipc.js's isTrustedSender).
+// Missing here means the RecoveryCard's Retry button looks clickable but
+// silently does nothing.
+test('accepts the splash page so its Retry button is not silently dead', () => {
+  const dir = '/opt/app/resources/app.asar/out/renderer';
+  assert.equal(isTrustedFileUrl(`file://${dir}/splash.html`, dir), true);
+});
+
 test('rejects a non-renderer page that still lives under the renderer dir', () => {
   const dir = '/opt/app/out/renderer';
   assert.equal(isTrustedFileUrl(`file://${dir}/evil.html`, dir), false);

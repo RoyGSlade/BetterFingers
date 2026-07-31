@@ -2,13 +2,22 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { randomUUID } = require('node:crypto');
 const { app } = require('electron');
-const { createMainWindow, getMainWindow, focusMainWindow, createOverlayWindow } = require('./windows');
+const {
+  createMainWindow,
+  getMainWindow,
+  focusMainWindow,
+  createSplashWindow,
+  getSplashWindow,
+  closeSplashWindow,
+  createOverlayWindow,
+} = require('./windows');
 const { createSidecar } = require('./sidecar');
 const { createTray } = require('./tray');
 const { registerIpc } = require('./ipc');
 const backendProxy = require('./backendProxy');
 const { unregisterAllHotkeys, triggerBackendAction } = require('./hotkeys');
 const { BACKEND_HOST, BACKEND_PORT, BACKEND_ORIGIN } = require('./config');
+const { derivePhase, deriveServices, describeHardware } = require('./bootPhases');
 
 // Adopt an inherited token when the backend is managed by something else (the
 // Linux launcher starts it before us, so sidecar.js finds it already listening
@@ -37,6 +46,144 @@ function ensureMainWindow() {
     win = createMainWindow();
   }
   return win;
+}
+
+// OR-02 boot-phase state. bootSidecarOutcome is the ONE thing that may set
+// phase 'failed' (see bootPhases.derivePhase) and it is set exclusively from
+// sidecar.start()'s own resolution/rejection below -- never from a timer in
+// this file or in the splash renderer.
+let bootStartedAt = null;
+let bootSidecarOutcome = 'pending'; // 'pending' | 'ready' | 'failed'
+let bootLastError = null;
+let bootLastDoctor = null;
+let bootTicker = null;
+let bootDoctorTimer = null;
+let bootFinished = false; // true once the main dashboard window has been revealed
+
+function currentBootSnapshot() {
+  const elapsedMs = bootStartedAt ? Date.now() - bootStartedAt : 0;
+  const phase = derivePhase({ elapsedMs, doctor: bootLastDoctor, sidecarOutcome: bootSidecarOutcome });
+  return {
+    phase,
+    elapsedMs,
+    services: deriveServices(bootLastDoctor),
+    hardware: describeHardware(bootLastDoctor),
+    error: phase === 'failed'
+      ? { message: bootLastError || 'The backend did not start.' }
+      : null,
+  };
+}
+
+function pushBootSnapshot() {
+  const win = getSplashWindow();
+  const snapshot = currentBootSnapshot();
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('splash:boot', snapshot);
+  }
+  if (snapshot.phase === 'ready') {
+    revealMainWindow();
+  }
+}
+
+async function pollDoctorForBoot() {
+  if (bootFinished) {
+    return;
+  }
+  try {
+    const result = await backendProxy.request({ method: 'GET', path: '/doctor', timeoutMs: 2500 });
+    if (result && result.ok) {
+      bootLastDoctor = result.body;
+      pushBootSnapshot();
+    }
+  } catch (error) {
+    // The backend isn't answering yet -- waitForHealthy is still the source
+    // of truth for booting vs. failed; this poll only enriches the display.
+  }
+}
+
+function stopBootTimers() {
+  if (bootTicker) {
+    clearInterval(bootTicker);
+    bootTicker = null;
+  }
+  if (bootDoctorTimer) {
+    clearInterval(bootDoctorTimer);
+    bootDoctorTimer = null;
+  }
+}
+
+function revealMainWindow() {
+  if (bootFinished) {
+    return;
+  }
+  bootFinished = true;
+  stopBootTimers();
+  const win = ensureMainWindow();
+  win.once('ready-to-show', () => {
+    closeSplashWindow();
+  });
+  if (!win.webContents.isLoading()) {
+    // The renderer already finished loading before this handler was attached.
+    closeSplashWindow();
+  }
+  focusMainWindow(win);
+}
+
+// Runs once at cold boot, and again from the splash's Retry action
+// (registerIpc's onSplashRetry below) -- both paths go through the same
+// sidecar.start() call, so 'failed' can only ever come from that promise
+// rejecting, per SPLASH_SPEC.md's one rule.
+function startBackendBoot() {
+  bootStartedAt = Date.now();
+  bootSidecarOutcome = 'pending';
+  bootLastError = null;
+  bootLastDoctor = null;
+  pushBootSnapshot();
+
+  stopBootTimers();
+  bootTicker = setInterval(pushBootSnapshot, 500);
+  bootDoctorTimer = setInterval(pollDoctorForBoot, 750);
+  pollDoctorForBoot();
+
+  sidecar.start().then(() => {
+    bootSidecarOutcome = 'ready';
+    pushBootSnapshot();
+  }).catch((error) => {
+    console.error('Failed to start BetterFingers backend:', error);
+    bootSidecarOutcome = 'failed';
+    bootLastError = error && error.message ? error.message : String(error);
+    pushBootSnapshot();
+  });
+}
+
+async function retryBackendBoot() {
+  if (bootFinished) {
+    // Retry only makes sense pre-reveal; post-reveal recovery already goes
+    // through the existing sidecar health-monitor + backendBanner path.
+    return;
+  }
+  try {
+    if (sidecar) {
+      await sidecar.stop();
+    }
+  } catch (error) {
+    console.error('Error stopping backend before splash retry:', error);
+  }
+  startBackendBoot();
+}
+
+// Focuses the splash while boot is still in flight (so a tray click never
+// summons a half-broken dashboard before the backend is real), otherwise the
+// dashboard itself.
+function focusAppropriateWindow() {
+  if (!bootFinished) {
+    const splash = getSplashWindow();
+    if (splash && !splash.isDestroyed()) {
+      focusMainWindow(splash);
+      return;
+    }
+  }
+  focusMainWindow(ensureMainWindow());
 }
 
 function getDefaultDevPythonCommand() {
@@ -122,21 +269,26 @@ function bootstrapApp() {
     getAuthToken: () => authToken,
     getBackendOrigin: () => BACKEND_ORIGIN,
     onQuit: requestQuit,
-    onShow: () => focusMainWindow(ensureMainWindow()),
+    onShow: () => focusAppropriateWindow(),
+    // OR-02: the splash's own boot-phase channel. getSplashBootState backs a
+    // pull (splash:get-state) for a page that finishes loading after boot
+    // already started and would otherwise miss the earlier pushed events.
+    onSplashRetry: retryBackendBoot,
+    getSplashBootState: () => currentBootSnapshot(),
   });
 
-  createMainWindow();
+  // The dashboard window is NOT created here -- only once boot succeeds (see
+  // revealMainWindow()). Only the splash is shown at cold boot.
+  createSplashWindow();
   createOverlayWindow();
   tray = createTray({
     getMainWindow: () => getMainWindow(),
-    onShow: () => focusMainWindow(ensureMainWindow()),
+    onShow: () => focusAppropriateWindow(),
     onQuit: requestQuit,
     onToggleRecording: () => triggerBackendAction('/runtime/recording/toggle'),
   });
 
-  sidecar.start().catch((error) => {
-    console.error('Failed to start BetterFingers backend:', error);
-  });
+  startBackendBoot();
 }
 
 async function requestQuit() {
@@ -166,7 +318,7 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(bootstrapApp);
 
   app.on('second-instance', () => {
-    focusMainWindow(ensureMainWindow());
+    focusAppropriateWindow();
   });
 
   app.on('window-all-closed', () => {

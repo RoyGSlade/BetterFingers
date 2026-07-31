@@ -81,7 +81,10 @@ function isAllowedOpenTarget(targetPath) {
   );
 }
 
-function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthToken, getBackendOrigin, onQuit, onShow } = {}) {
+function registerIpc({
+  getMainWindow, getSidecarStatus, getSidecarLogs, getAuthToken, getBackendOrigin, onQuit, onShow,
+  onSplashRetry, getSplashBootState,
+} = {}) {
   const backendProxy = require('./backendProxy');
 
   // Phase 3c: the token is never exposed to the renderer. All backend HTTP
@@ -160,6 +163,20 @@ function registerIpc({ getMainWindow, getSidecarStatus, getSidecarLogs, getAuthT
 
   handleTrusted('backend:voice-status:stop', () => {
     backendProxy.stopVoiceStatus();
+    return { ok: true };
+  });
+
+  // OR-02: the startup splash's own channel. splash:get-state backs a pull for
+  // a page that finishes loading after boot already started (and would
+  // otherwise miss the events pushed before it was listening); splash:retry is
+  // the RecoveryCard's only way to ask main to try starting the backend again
+  // -- the splash itself never re-derives 'failed' on its own, it only relays
+  // what main decided (see bootPhases.js and main.js's startBackendBoot()).
+  handleTrusted('splash:get-state', () => (getSplashBootState ? getSplashBootState() : null));
+  handleTrusted('splash:retry', async () => {
+    if (onSplashRetry) {
+      await onSplashRetry();
+    }
     return { ok: true };
   });
 

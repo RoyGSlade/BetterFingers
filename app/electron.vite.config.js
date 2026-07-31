@@ -18,6 +18,9 @@ module.exports = defineConfig({
           backendProxy: resolve(__dirname, 'src/main/backendProxy.js'),
           userDataRoot: resolve(__dirname, 'src/main/userDataRoot.js'),
           onboardingStore: resolve(__dirname, 'src/main/onboardingStore.js'),
+          // OR-02 startup splash phase derivation (main.js requires it for
+          // pushBootSnapshot()).
+          bootPhases: resolve(__dirname, 'src/main/bootPhases.js'),
           // Wave 9 restricted actions. Listed here for the Wave 1 lesson: a
           // main-process module that is required at runtime but missing from
           // these inputs is not a build error -- it is a silent no-window
@@ -63,6 +66,11 @@ module.exports = defineConfig({
           // main/senderValidation.js are updated to route/allowlist it — see
           // the W1-COMP-ROOT handoff for that exact diff).
           signalDesk: resolve(__dirname, 'src/renderer/signal-desk.html'),
+          // OR-02 startup splash (windows.js's createSplashWindow()). Missing
+          // from this list is the exact Wave 1 lesson viteMainInputs.test.mjs
+          // exists to prevent, just for the renderer side: the page would 404
+          // in a packaged build while working fine from source in dev.
+          splash: resolve(__dirname, 'src/renderer/splash.html'),
         },
       },
     },

@@ -22,6 +22,12 @@ const RENDERER_PAGES = new Set([
   // Production Signal Desk composition root, reachable via
   // BF_UI=signal-desk-prod until the Wave 11 default flip.
   'signal-desk.html',
+  // OR-02 startup splash (windows.js's createSplashWindow()). Missing from
+  // this set is not cosmetic: isTrustedSender (ipc.js) checks against exactly
+  // this list, so splash:get-state / splash:retry would silently come back
+  // { ok: false, error: 'untrusted_sender' } for the one window that needs
+  // them most -- the RecoveryCard's Retry button would look dead.
+  'splash.html',
 ]);
 
 // A file URL is Windows-flavoured when its pathname starts with a drive letter
