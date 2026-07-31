@@ -170,3 +170,59 @@ or that a toggle will press Enter in someone's terminal.
 
 The plan's §2 ordering was right to put operator QA before the packaging gates.
 The mistake would be reading a green board as permission to skip it.
+
+---
+
+## STATUS AFTER WAVE 14 · 2026-07-31 (director)
+
+Ten commits on `publish/wave-13`, nothing pushed, `main` untouched. Node suite
+**1727/1727**. Every claim below was director-verified against the code, not
+taken from a worker's word.
+
+### Fixed — but nobody has watched them run
+
+These are code-complete and unit-tested. Not one has been exercised in a live
+GUI, and several are in the most device-dependent paths in the app. **Rebuild
+first** (`npm run build` in `app/`) — the QA harness tests the BUILT renderer.
+
+| | Item | What to look for |
+|---|---|---|
+| OR-01 | Auto Submit | Toggle it on: you should get a confirmation naming the focus risk, and a red banner that stays while it is armed. Decline it — it must revert. |
+| OR-02 | Startup screen | Watch a cold boot. Service rows should appear only as `/doctor` reports them, and it must NOT declare failure early. |
+| OR-06 | Audio defaults | Fresh profile: picker reads "System default", not blank. Then record silence — expect the "I can't hear you" toast with a working link. |
+| OR-07 | Model download | Download Whisper Tiny and watch it. Progress, then verification, then "Installed and Ready". |
+| OR-09 | Voice cloning | With the model absent, the control should say so up front and offer install — not accept a recording and fail after. |
+| OR-12/14/15 | Voice Studio | Preview must play **your recording**, not TTS. Presets persist with Apply/Make active/Rename/Duplicate/Delete. Read Aloud has Play/Pause/Stop/Restart. |
+| OR-18 | Diagnostics | Rows should match what `/doctor` actually returns — no row for a subsystem it did not mention. |
+| OR-19 | Stress Test | The button is disabled and points at Diagnostics. It no longer sends anything. |
+
+### Fixed with a caveat — please re-test these specifically
+
+| | Item | The caveat |
+|---|---|---|
+| OR-03 | LLM Always On | Readiness now comes only from the `llm_ready` probe. Should be solid. |
+| OR-04 | False hotkeys error | **The literal string "Hotkeys fetch failed" does not exist anywhere in `app/src`.** The class of bug that produces false hotkey errors is fixed, but I cannot prove that exact message is gone. If you still see it, tell me the screen and I will find the real source. |
+| OR-10 | Persona test | Studio now frames the sample as rewrite material and shows persona/settings. But the **backend still receives it as a final `user` message** — the root cause is a backend contract change outside this wave. Expect improvement, not a cure. |
+| OR-11 | Active persona | Badge and "Make active" exist in Studio; persisting global activation needs a host callback that is not wired yet. |
+| OR-05 | STT confidence | One real scale bug fixed (a perfect segment was scored as the worst possible one). **The threshold is untouched and is your decision.** Also: your "passed at ~35%" case cannot be the default auto-send gate under current settings — that was a manually invoked send, a different path. |
+
+### Still open
+
+| | Item | Why it did not land |
+|---|---|---|
+| OR-08 | Runtime/model incompatibility | The runtime contract does not carry the data. It reports backend/runtime/blend capability, **not** supported TTS model or voice IDs. Building the filter anyway would mean inventing a mapping and presenting a guess as a guarantee — the exact defect class this wave exists to remove. Needs a backend capability first. |
+| OR-13 | Selected-text TTS hotkey | The hotkey reaches TTS fine; **selection capture from another application fails on this host** before any text arrives. That is an OS/display-server problem (Wayland restricts it), not a renderer bug. Needs a decision on approach, and possibly an honest "cannot read your selection here" message. |
+| OR-16 | Talk volume slider | A worker reported no such slider exists in production markup. **Unconfirmed — needs your eyes.** If you can still see it, tell me where. |
+| OR-19 | Real stress test | The injection behaviour is gone, but the actual latency/throughput probe (Light/Medium/Hard, STT/rewrite/TTS timings, CPU/RAM/VRAM) has not been built. It belongs in Pipeline Latency / Diagnostics. |
+| P2 | Scribe, nav restructure, Custom Voice modal | Not started. Backlog by your own ordering. |
+
+### Two decisions that are yours, not mine
+
+1. **OR-05's threshold.** The gate works and reads the right fields, but the
+   score is a heuristic, not a calibrated probability. Candidates and their
+   tradeoffs are in `.collab-reports/w-stt.md`. I deliberately had the worker
+   not pick a number — it trades a false reject against a wrong send, and that
+   is your tolerance to set.
+2. **OR-13's approach.** If selection capture cannot work under this display
+   server, the honest fix may be to say so in the UI rather than leave a hotkey
+   that silently does nothing.

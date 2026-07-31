@@ -274,3 +274,150 @@ WS-A, WS-B, WS-C, WS-D and WS-E are closed and reviewed. What remains:
 3. **F-1 / F-2** — the AppImage and .exe builds. Untouched, per the stop line.
 
 Nothing has been pushed. `main` is untouched. All work is on `publish/wave-13`.
+
+---
+
+## Wave 14 · The worker fleet moved to Luna (2026-07-30)
+
+### Why
+
+Operator directive: stop using Sonnet workers for objective task work and use
+`gpt-5.6-luna` via `codex exec` instead — $0.20/M input, $1.20/M output after an
+80% price cut. Then: *"use it to the max… if you need better reporting why not
+give luna a skill for it?"* That second half turned out to be the load-bearing
+part.
+
+### What broke first, and the fix
+
+Luna workers launched and did real work immediately. What they could not do was
+**report**. Every `collab_*` MCP call inside `codex exec` returns *"user
+cancelled MCP tool call"* — the approval step has nobody to answer it in a
+non-interactive run. The first Luna worker (`w-cleanup`) completed its whole
+task correctly, then lost the handoff: 34 cancelled MCP calls, no room entry, no
+claims, no release. Its work was only recoverable because the diff was sitting in
+the working tree.
+
+Three fixes were tried and rejected before the right one: `-a never` (not a valid
+flag for `codex exec`), `approval_policy="never"` (no effect), disabling hooks
+(no effect — and the hooks were never the cause; `PreToolUse` only matches
+`apply_patch`).
+
+**The fix was to stop using the channel that does not work.** Codex workers now
+report through the filesystem, and the director performs their room lifecycle for
+them:
+
+- **`~/.codex/skills/collab-worker/SKILL.md`** — the worker protocol. Report to
+  `.collab-reports/<agent>.md` (gitignored via `.git/info/exclude`), heartbeat to
+  `<agent>.status`, and a mandated report shape: Outcome / Files changed /
+  Evidence / **What I did NOT do** / Findings for the director.
+- **`collab_lib.spawn_agent`** now builds a different prompt for the codex path,
+  restating the essentials inline so a spawned run never depends on skill
+  auto-discovery to stay safe.
+- **The director claims files on the workers' behalf** before spawning, with the
+  reason naming which worker holds what. Disjoint file sets are assigned at spawn
+  time rather than trusted to self-claiming — which is arguably the stronger
+  guarantee, since it cannot be skipped.
+
+Result: **zero** MCP calls attempted across five Luna workers, down from 34
+wasted retries, and all five wrote a `STARTED` heartbeat within seconds.
+
+### The rule that got written in blood
+
+During diagnosis, Luna was asked what `collab_status` returned. The call failed.
+It answered `~/.claude/collab/` anyway — a plausible, correct-looking value it
+had invented. That answer would have sent the director to fix the wrong thing.
+
+So the skill's first substantive section is the evidence rule: **never report a
+result you did not observe.** Paste real output; write `NOT RUN` for anything you
+could not execute; "I don't know" is an acceptable answer and fabrication is not.
+Every worker prompt restates it as point 3.
+
+### Standing limitation — Luna workers are NOT brokered
+
+The director-review broker is a Claude `--settings` `PreToolUse` hook. Codex has
+no equivalent, so a Luna worker's shell commands **do not queue for director
+approval**. They are constrained by an OS sandbox (`workspace-write`) instead:
+confined to the project, but no human sees the individual commands.
+
+This is a weaker guarantee than the operator's standing ruling ("not free rein
+without your review first"), so it is recorded on every spawn entry, printed in
+the log header, and announced in the room as `NOT brokered — OS sandbox
+'workspace-write'`. **Working split:** Luna for bounded mechanical work; Sonnet
+where every command should be seen — anything touching `server.py`, injection, or
+security.
+
+### Fleet as of 21:58
+
+| Worker | Model | Item | Files held (by director) |
+|---|---|---|---|
+| `w-audio2` | sonnet | OR-06 audio defaults + no-input toast | 10 renderer/test files |
+| `w-voice` | luna | OR-12 / OR-14 / OR-15 voice studio | `voiceStudio.js` + test |
+| `w-persona` | luna | OR-10 persona test contract | `personas.js`, `personaFlow.js` + test |
+| `w-stress` | luna | OR-19 stress test / injection-text audit | `studioWorkspace.js` + test |
+| `w-stt` | luna | OR-05 STT confidence provenance | `transcriber.py` + test |
+| `w-hotkey` | luna | OR-13 selected-text TTS hotkey | `shortcuts.js` + test |
+
+Two briefs deliberately forbid a fix. `w-stt` is told **not** to pick a
+confidence threshold if the mechanism turns out to be sound — that is the
+operator's tolerance call between a false reject and a wrong send, and a worker
+inventing a number would bury the decision. `w-stress` is told to investigate and
+neutralise the injection-text behaviour but **not** to relocate the feature,
+because the relocation crosses file sets it does not hold.
+
+### Also landed
+
+`OR-02` committed at `f2728a2`. The permission gate (`gate.py`) gained a
+repo-scoped `cd` prefix rule — workers legitimately run `cd app && npm run build`
+— verified against eight escape cases including `cd ~`, `cd ../../` and
+`cd app && rm -rf out`, all still escalating.
+
+### 2026-07-30 · Can a non-brokered Luna worker be watched? Mostly yes, and the gap is documented
+
+Operator: *"seems like you might need to change the not being able to see them
+thing though if you are to direct them."* Correct. Directing without seeing is
+not directing. Three probes, then a decision.
+
+**Pre-execution blocking of shell: NOT POSSIBLE in this Codex build.** A
+`PreToolUse` hook with `matcher: "shell"` does not fire. With the matcher removed
+entirely it still does not fire. `PostToolUse` fires reliably for the same call,
+so hooks are working — Codex simply does not offer a pre-execution gate for
+shell. `apply_patch` is the only tool the existing `PreToolUse` entry gates. This
+is a limit of the tool, not something to engineer around, and the probe entry was
+removed from `.codex/hooks.json` afterwards.
+
+**Full visibility IS possible, and is now built.** `codex exec` writes every
+shell call to the spawn log verbatim, and every file edit as a unified diff.
+`scratchpad/watch_luna.py` merges both into one chronological feed per worker and
+flags two classes: forbidden verbs (git writes, network fetches, unfiltered
+pytest) and out-of-lane edits, checked against the same file sets the director
+claimed on each worker's behalf.
+
+First audit — the five-worker batch, retrospectively: **152 shell calls, zero
+forbidden; 486 edit records, zero out-of-lane.** The classifier needed one pass
+to be worth reading: the first version flagged every `sed -n` read of
+`OPERATOR_REVIEW.md` and every `rm -f` of a worker's own `/tmp` scratch file. A
+noisy alarm column is one nobody reads, so reads are no longer flagged at all —
+only writes can breach a lane — and `/tmp` is a worker's own business.
+
+**Honest limit:** this is observation, not approval. A command has already run by
+the time it appears. The standing split therefore stands — Luna for bounded
+mechanical work, Sonnet where every command must be seen *before* it runs.
+
+### 2026-07-30 · First full Luna batch — and two workers that correctly refused
+
+| Worker | Outcome | Note |
+|---|---|---|
+| `w-voice` | DONE | OR-14/15/12 all three fixed in `voiceStudio.js` |
+| `w-stress` | DONE | injection probe removed from the sample export |
+| `w-stt` | PARTIAL | fixed an `avg_logprob == 0.0` scale bug; **declined to set the threshold**, as briefed |
+| `w-hotkey` | PARTIAL | traced OR-13 to selection capture; changed nothing, reported the owner |
+| `w-persona` | BLOCKED | the live persona test lives in `studioWorkspace.js`, outside its lane |
+
+The two refusals are the result worth recording. `w-persona` confirmed OR-10's
+premise, found the real owner was a file another worker held, and **changed
+nothing** rather than reach for it. `w-stt` went further and contradicted the
+operator's own report with evidence: the "passed at ~35%" case cannot be the
+default auto-send gate under current settings, so a manually invoked send is a
+different path. Both are exactly what the skill's "when the task description is
+wrong" section asks for, and both would have been silent damage under a worker
+that just did as it was told.
