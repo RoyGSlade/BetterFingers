@@ -140,9 +140,49 @@ export function mapStt(health, runtime) {
  * readiness instead, which actually changes.
  */
 export function mapLlm(health, runtime) {
-  const ready = runtime?.llm_ready ?? runtime?.llm_initialized ?? health?.llm_engine;
-  if (ready === undefined || ready === null) return { text: UNKNOWN, tone: IDLE };
-  return ready ? { text: 'Ready', tone: OK } : { text: 'Not ready', tone: WARN };
+  const reason = [
+    runtime?.llm_error,
+    runtime?.llm_reason,
+    runtime?.llm_runtime_message,
+    runtime?.llm_last_error,
+  ].find((value) => typeof value === 'string' && value.trim())?.trim();
+
+  // `llm_ready` is the runtime truth. `llm_initialized` only means an engine
+  // object exists; it is not permission to claim that inference can run.
+  if (runtime && Object.prototype.hasOwnProperty.call(runtime, 'llm_ready')) {
+    if (runtime.llm_ready === true) return { text: 'Ready', tone: OK };
+    if (runtime.llm_ready === false) {
+      const fallbackReason = runtime.llm_initialized === true
+        ? 'LLM runtime is initialized but not ready.'
+        : 'LLM runtime is not initialized.';
+      return {
+        text: 'Not ready',
+        tone: WARN,
+        detail: reason || fallbackReason,
+      };
+    }
+  }
+
+  // A runtime payload with only `llm_initialized: true` is a loading state,
+  // not a ready state. Fall back to /health only when the runtime probe did not
+  // provide a readiness field at all.
+  if (runtime && runtime.llm_initialized === true) {
+    return {
+      text: 'Starting',
+      tone: WARN,
+      detail: reason || 'LLM runtime is initialized; waiting for readiness.',
+    };
+  }
+  if (runtime && runtime.llm_initialized === false) {
+    return {
+      text: 'Not ready',
+      tone: WARN,
+      detail: reason || 'LLM runtime is not initialized.',
+    };
+  }
+  if (health?.llm_engine === true) return { text: 'Ready', tone: OK };
+  if (health?.llm_engine === false) return { text: 'Not ready', tone: WARN };
+  return { text: UNKNOWN, tone: IDLE };
 }
 
 /** Active persona, from the profile's current_preset. */
