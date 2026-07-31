@@ -11,28 +11,107 @@ import {
   connectVoiceStatus,
 } from '../api/backend.js';
 
-function getTranscriberRuntimeState(runtime) {
-  if (runtime?.transcriber_loaded) {
+export function getTranscriberRuntimeState(runtime) {
+  if (runtime?.transcriber_loaded === true) {
     return { text: 'loaded', tone: 'success' };
   }
 
-  if (runtime?.transcriber_initialized) {
+  if (runtime?.transcriber_initialized === true) {
     return { text: 'initialized', tone: 'warning' };
+  }
+
+  if (!runtime || typeof runtime !== 'object') {
+    return { text: 'checking…', tone: 'warning', detail: 'Runtime status is not available yet.' };
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(runtime, 'transcriber_loaded')
+    && !Object.prototype.hasOwnProperty.call(runtime, 'transcriber_initialized')) {
+    return { text: 'checking…', tone: 'warning', detail: 'Waiting for transcriber status.' };
   }
 
   return { text: 'unloaded', tone: 'danger' };
 }
 
-function getLlmRuntimeState(runtime) {
-  if (runtime?.llm_ready) {
+const LLM_REASON_KEYS = [
+  'llm_error',
+  'llm_reason',
+  'llm_runtime_message',
+  'llm_last_error',
+];
+
+function firstRuntimeReason(runtime, keys) {
+  for (const key of keys) {
+    const value = runtime?.[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+export function getLlmRuntimeState(runtime) {
+  if (!runtime || typeof runtime !== 'object') {
+    return { text: 'checking…', tone: 'warning', detail: 'Runtime status is not available yet.' };
+  }
+
+  // `llm_ready` is the runtime probe. Never infer readiness from the saved
+  // residency setting, and never turn `llm_initialized` into "ready": an
+  // initialized engine can still be loading or can have failed to start.
+  if (runtime.llm_ready === true) {
     return { text: 'ready', tone: 'success' };
   }
 
-  if (runtime?.llm_initialized) {
-    return { text: 'initialized', tone: 'warning' };
+  const reason = firstRuntimeReason(runtime, LLM_REASON_KEYS);
+  if (runtime.llm_ready === false) {
+    const fallbackReason = runtime.llm_initialized === true
+      ? 'LLM runtime is initialized but not ready.'
+      : 'LLM runtime is not initialized.';
+    return {
+      text: runtime.llm_initialized === true ? 'not ready' : 'unloaded',
+      tone: runtime.llm_initialized === true ? 'warning' : 'danger',
+      detail: reason || fallbackReason,
+    };
+  }
+
+  if (runtime.llm_initialized === true) {
+    return {
+      text: 'initialized',
+      tone: 'warning',
+      detail: reason || 'LLM runtime is initialized; waiting for readiness.',
+    };
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(runtime, 'llm_ready')
+    && !Object.prototype.hasOwnProperty.call(runtime, 'llm_initialized')) {
+    return { text: 'checking…', tone: 'warning', detail: 'Waiting for LLM status.' };
   }
 
   return { text: 'unloaded', tone: 'danger' };
+}
+
+export function getHotkeyRuntimeState(runtime) {
+  if (!runtime || typeof runtime !== 'object') {
+    return { text: 'checking…', tone: 'warning', detail: 'Waiting for runtime status.' };
+  }
+
+  const errors = Array.isArray(runtime.hotkey_keyboard_hook_errors)
+    ? runtime.hotkey_keyboard_hook_errors.filter((error) => typeof error === 'string' && error.trim())
+    : [];
+  if (runtime.hotkey_manager_started === false) {
+    return { text: 'unavailable', tone: 'danger', detail: 'Global hotkey manager is not started.' };
+  }
+  if (runtime.hotkey_keyboard_hooks_ok === false || errors.length) {
+    return {
+      text: 'unavailable',
+      tone: 'danger',
+      detail: errors[0] || 'Global keyboard hooks failed to initialize.',
+    };
+  }
+  if (runtime.hotkey_manager_started === true && runtime.hotkey_keyboard_hooks_ok === true) {
+    return { text: 'ready', tone: 'success' };
+  }
+
+  // An empty-but-valid response is not a failure. It is simply not enough
+  // evidence to claim that global hotkeys are ready yet.
+  return { text: 'checking…', tone: 'warning', detail: 'Waiting for hotkey status.' };
 }
 
 // Banner states worth interrupting the user for, mapped to a short title.
@@ -66,6 +145,39 @@ export function createRuntimeFeature({ elements, ui, hooks }) {
   // personas/voices unloaded). We track whether that load succeeded so it can be
   // retried once the backend is actually reachable (see the sidecar-status hook).
   let initialDataLoaded = false;
+  let runtimeSnapshotLoaded = false;
+
+  function clearRuntimeDetail() {
+    if (els.llmStatusEl) {
+      els.llmStatusEl.removeAttribute?.('title');
+      els.llmStatusEl.removeAttribute?.('aria-label');
+    }
+  }
+
+  function paintRuntimeDetail(element, state) {
+    if (!element) return;
+    if (state.detail) {
+      element.title = state.detail;
+      element.setAttribute?.('aria-label', `${state.text}: ${state.detail}`);
+    } else {
+      element.removeAttribute?.('title');
+      element.removeAttribute?.('aria-label');
+    }
+  }
+
+  function markRuntimePending() {
+    // A delayed status probe is not proof that the backend or hotkeys are
+    // offline. Preserve a known-good snapshot while a later poll is pending;
+    // on first load, use an explicit checking state instead of a false error.
+    if (!runtimeSnapshotLoaded) {
+      setBadgeState(els.transcriberStatusEl, 'checking…', 'warning');
+      setBadgeState(els.llmStatusEl, 'checking…', 'warning');
+      clearRuntimeDetail();
+    }
+    if (els.recordingControlStatusEl && !runtimeSnapshotLoaded) {
+      els.recordingControlStatusEl.textContent = 'Checking global hotkeys…';
+    }
+  }
 
   function updateRuntimeTopCards(runtime) {
     const transcriber = getTranscriberRuntimeState(runtime);
@@ -73,6 +185,7 @@ export function createRuntimeFeature({ elements, ui, hooks }) {
 
     setBadgeState(els.transcriberStatusEl, transcriber.text, transcriber.tone);
     setBadgeState(els.llmStatusEl, llm.text, llm.tone);
+    paintRuntimeDetail(els.llmStatusEl, llm);
 
     const recording = Boolean(runtime?.recording_active);
     if (els.toggleRecordingButton) {
@@ -80,11 +193,13 @@ export function createRuntimeFeature({ elements, ui, hooks }) {
       els.toggleRecordingButton.dataset.recording = recording ? 'true' : 'false';
     }
     if (els.recordingControlStatusEl) {
-      const hookErrors = Array.isArray(runtime?.hotkey_keyboard_hook_errors) ? runtime.hotkey_keyboard_hook_errors : [];
+      const hotkeys = getHotkeyRuntimeState(runtime);
       if (recording) {
         els.recordingControlStatusEl.textContent = 'Recording now. Press Stop Recording when finished.';
-      } else if (hookErrors.length) {
-        els.recordingControlStatusEl.textContent = `Global hotkeys unavailable: ${hookErrors[0]}`;
+      } else if (hotkeys.text === 'unavailable') {
+        els.recordingControlStatusEl.textContent = `Global hotkeys unavailable: ${hotkeys.detail}`;
+      } else if (hotkeys.text === 'checking…') {
+        els.recordingControlStatusEl.textContent = 'Checking global hotkeys…';
       } else {
         els.recordingControlStatusEl.textContent = 'Ready. Hotkeys or the dashboard button can start recording.';
       }
@@ -117,12 +232,17 @@ export function createRuntimeFeature({ elements, ui, hooks }) {
 
   async function refreshRuntime() {
     const runtime = await fetchRuntimeStatus();
+    runtimeSnapshotLoaded = true;
     updateRuntimeTopCards(runtime);
     renderDetailList(els.runtimeStatusListEl, runtime, [
       'transcriber_initialized',
       'transcriber_loaded',
       'llm_initialized',
       'llm_ready',
+      'llm_error',
+      'llm_reason',
+      'llm_runtime_message',
+      'llm_last_error',
       'hotkey_manager_started',
       'hotkey_keyboard_hooks_ok',
       'recording_active',
@@ -205,9 +325,10 @@ export function createRuntimeFeature({ elements, ui, hooks }) {
       name: 'runtime',
       run: () => refreshRuntime(),
       onError: () => {
-        setBadgeState(els.transcriberStatusEl, 'offline', 'danger');
-        setBadgeState(els.llmStatusEl, 'offline', 'danger');
-        renderDetailList(els.runtimeStatusListEl, {});
+        markRuntimePending();
+        if (!runtimeSnapshotLoaded) {
+          renderDetailList(els.runtimeStatusListEl, {});
+        }
       },
     },
     {
@@ -298,8 +419,7 @@ export function createRuntimeFeature({ elements, ui, hooks }) {
       refreshHealth();
       refreshSidecarStatus().catch(() => {});
       refreshRuntime().catch(() => {
-        setBadgeState(els.transcriberStatusEl, 'offline', 'danger');
-        setBadgeState(els.llmStatusEl, 'offline', 'danger');
+        markRuntimePending();
       });
       // Fallback: if the startup race left any panel un-loaded and we never
       // caught the sidecar 'ready' push, retry exactly those panels each poll.

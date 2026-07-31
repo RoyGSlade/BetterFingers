@@ -1,0 +1,112 @@
+<!doctype html>
+<!--
+  OR-02 startup screen. A standalone BrowserWindow (windows.js's
+  createSplashWindow()) shown before the main dashboard window is ever
+  created -- see main.js's revealMainWindow(). Deliberately its own page
+  rather than a layer inside signal-desk.html: that page renders its shell
+  regardless of backend health, so gating only paint there would race
+  against this screen's entire reason for existing (SPLASH_SPEC.md §2).
+
+  Visual design ported from the operator's AI Studio applet prototype
+  (components/splash/HorizonPulseSvg.tsx, StatusDisplay.tsx, RecoveryCard.tsx)
+  -- geometry, colour and copy kept close to the original; React/Tailwind/
+  framer-motion/lucide discarded per SPLASH_SPEC.md §2 (this codebase is
+  Electron + vanilla HTML/CSS/JS, no such dependencies exist here). The
+  services list below the status line is NOT in the prototype -- it is
+  SPLASH_SPEC.md §4/§6's own addition, driven only by real /doctor signals.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Starting BetterFingers</title>
+<link rel="stylesheet" href="./styles/splash.css" />
+</head>
+<body>
+  <div class="splash__bg" aria-hidden="true"></div>
+
+  <main class="splash" id="splash" data-phase="booting">
+    <header class="splash__topbar">
+      <span>BetterFingers</span>
+      <span id="splashEnvTag">Local Desktop</span>
+    </header>
+
+    <div class="splash__hero">
+      <div class="splash__pulse" aria-hidden="true">
+        <svg viewBox="0 0 1200 160" preserveAspectRatio="none" class="horizon-pulse" id="horizonPulseSvg">
+          <defs>
+            <filter id="bf-horizon-glow" x="-20%" y="-100%" width="140%" height="300%" filterUnits="userSpaceOnUse">
+              <feGaussianBlur stdDeviation="8" result="blur1" />
+              <feGaussianBlur stdDeviation="20" result="blur2" />
+              <feMerge>
+                <feMergeNode in="blur2" />
+                <feMergeNode in="blur1" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+            <radialGradient id="bf-center-spot" cx="50%" cy="50%" r="50%">
+              <stop id="horizonSpotStop0" offset="0%" stop-color="rgba(125,211,252,0.30)" />
+              <stop id="horizonSpotStop1" offset="40%" stop-color="rgba(125,211,252,0.12)" />
+              <stop offset="100%" stop-color="rgba(0,0,0,0)" />
+            </radialGradient>
+          </defs>
+          <circle id="horizonGlowSpot" cx="600" cy="80" r="180" fill="url(#bf-center-spot)" />
+          <path id="horizonGlowPath" class="horizon-pulse__glow" d="M 0 80 L 1200 80" />
+          <path id="horizonMainPath" class="horizon-pulse__main" d="M 0 80 L 1200 80" />
+          <path id="horizonHighlightPath" class="horizon-pulse__highlight" d="M 0 80 L 1200 80" />
+        </svg>
+      </div>
+
+      <div class="splash__wordmark">
+        <h1>
+          <span class="splash__wordmark-better">Better</span><span class="splash__wordmark-fingers" id="wordmarkFingers">Fingers</span>
+        </h1>
+        <p class="splash__tagline">Voice &amp; Gesture Command System</p>
+      </div>
+
+      <div class="splash__status" id="splashStatus">
+        <div class="splash__status-line">
+          <span class="splash__status-text" id="splashStatusText">Starting BetterFingers</span>
+          <span class="splash__activity-dots" id="splashActivityDots" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </span>
+        </div>
+        <p class="splash__elapsed" id="splashElapsed" hidden></p>
+      </div>
+
+      <ul class="splash__services" id="splashServices" aria-live="polite"></ul>
+
+      <div class="splash__recovery" id="splashRecovery" hidden>
+        <div class="splash__recovery-head">
+          <div class="splash__recovery-icon" aria-hidden="true">!</div>
+          <div class="splash__recovery-copy">
+            <h3 id="splashErrorTitle">BetterFingers could not finish starting</h3>
+            <p id="splashErrorMessage"></p>
+          </div>
+        </div>
+        <div class="splash__recovery-actions">
+          <button type="button" class="splash__recovery-toggle" id="splashDetailsToggle" aria-expanded="false">
+            View details <span id="splashDetailsChevron">▾</span>
+          </button>
+          <button type="button" class="splash__recovery-retry" id="splashRetryButton">Retry Startup</button>
+        </div>
+        <div class="splash__recovery-details" id="splashErrorDetails" hidden>
+          <div class="splash__recovery-code">
+            <div class="splash__recovery-code-line" id="splashErrorCode"></div>
+            <div class="splash__recovery-code-line" id="splashErrorTimestamp"></div>
+            <div class="splash__recovery-code-line splash__recovery-code-details" id="splashErrorFullDetails"></div>
+          </div>
+          <div class="splash__recovery-diagnostics">
+            <div class="splash__recovery-diagnostics-label">Service Diagnostics</div>
+            <ul class="splash__recovery-diagnostics-list" id="splashRecoveryServices"></ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <footer class="splash__footer">Local Desktop System</footer>
+  </main>
+
+  <script type="module" src="./bootstrap/splashApp.js"></script>
+</body>
+</html>

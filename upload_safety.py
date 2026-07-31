@@ -15,6 +15,8 @@ import struct
 import wave
 
 # Per-kind caps (bytes). Generous for real use, ruinous for abuse.
+# (Wake classifier imports are capped by wake_models.MAX_IMPORT_BYTES, the
+# existing single source of truth for that limit -- not duplicated here.)
 MAX_AUDIO_BYTES = 50 * 1024 * 1024      # ~50 MB WAV
 MAX_IMAGE_BYTES = 25 * 1024 * 1024      # ~25 MB image
 MAX_AUDIO_SECONDS = 15 * 60             # 15 minutes
@@ -27,6 +29,28 @@ _STREAM_CHUNK = 1024 * 1024
 _SIGNATURES = {
     "audio": [b"RIFF"],                       # RIFF/WAVE (WAVE checked below)
     "image": [b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"BM", b"II*\x00", b"MM\x00*"],
+}
+
+# ONNX is a protobuf message with no format-mandated magic byte (unlike
+# RIFF/PNG), so it is validated as a DENYLIST rather than an allowlist
+# (D-0040): reject known non-model container formats by their real
+# signatures; anything else passes through to wake_models' own sha256 +
+# onnxruntime-loadability checks. An allowlist here would risk rejecting a
+# genuinely valid user model over an unenforced protobuf field-ordering
+# convention.
+_DENY_SIGNATURES = {
+    "onnx": [
+        (b"\x89PNG", "PNG image"),
+        (b"\xff\xd8\xff", "JPEG image"),
+        (b"GIF8", "GIF image"),
+        (b"%PDF", "PDF document"),
+        (b"PK\x03\x04", "ZIP/Office document"),
+        (b"\x7fELF", "ELF executable"),
+        (b"MZ", "Windows PE executable"),
+        (b"RIFF", "RIFF/WAV container"),
+        (b"\x1f\x8b", "gzip archive"),
+        (b"<", "HTML/XML content"),
+    ],
 }
 
 
@@ -77,13 +101,25 @@ def _matches_signature(head, kind):
 
 
 def validate_signature(path, kind):
-    """Raise UploadRejected unless the file's leading bytes match ``kind``."""
+    """Raise UploadRejected unless the file's leading bytes match ``kind``.
+
+    Most kinds are an allowlist (must match a known-good signature). Kinds in
+    ``_DENY_SIGNATURES`` are the opposite -- a denylist that only rejects
+    known-bad containers, for formats (like ONNX/protobuf) with no
+    format-mandated magic byte of their own.
+    """
     with open(path, "rb") as fh:
         head = fh.read(16)
     if kind == "audio":
         # RIFF container whose form type is WAVE.
         if not (head.startswith(b"RIFF") and head[8:12] == b"WAVE"):
             raise UploadRejected("not a WAVE audio file")
+        return
+    deny = _DENY_SIGNATURES.get(kind)
+    if deny is not None:
+        for sig, label in deny:
+            if head.startswith(sig):
+                raise UploadRejected(f"{label} detected")
         return
     if not _matches_signature(head, kind):
         raise UploadRejected(f"unrecognized {kind} signature")

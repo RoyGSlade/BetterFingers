@@ -12,7 +12,24 @@
 # repo-local server provides both the core claim/message lifecycle and the
 # hierarchy tools described in `.claude/skills/hierarchy/SKILL.md`.
 
+# 2026-07-30: REPOINTED AT THE MACHINE-WIDE ROOM.
+#
+# This previously ran the repo-local server against the repo-local room
+# (.claude/collab/). That room is real but SEPARATE: the active director board,
+# task queue and — critically — the file claims live in ~/.claude/collab/. A
+# Codex session on the repo-local room saw an empty board and, because its
+# PreToolUse claim check looked in the wrong room, would have been cleared to
+# edit files another session was actively holding.
+#
+# The two collab-mcp installs are also different code (server.py and
+# collab_lib.py differ by hash), so this points at the machine-wide SERVER as
+# well as the machine-wide room — otherwise Codex and Claude would be running
+# different schemas against one shared state directory.
+#
+# COLLAB_WS_DIR is honoured by collab_lib.py; see .codex/hooks.json, which
+# carries the same override so the hooks and the MCP agree on the room.
 [mcp_servers.collab]
 command = "python3"
-args = [".claude/collab-mcp/server.py"]
+args = ["/home/roygslade/.claude/collab-mcp/server.py"]
 cwd = "."
+env = { COLLAB_WS_DIR = "/home/roygslade/.claude/collab" }

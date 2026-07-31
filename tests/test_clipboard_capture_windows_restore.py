@@ -9,6 +9,16 @@ class _FixedUUID:
 
 
 class ClipboardCaptureWindowsRestoreTests(unittest.TestCase):
+    # OR-13 added a live host-tooling gate at the top of
+    # capture_selection_text_with_restore: on Linux it needs xclip/xsel (or
+    # wl-clipboard under Wayland) and returns an "unsupported" result before
+    # touching the clipboard at all. These tests fake the clipboard end to end
+    # and exercise the WINDOWS restore path, so they have to state the
+    # precondition they always implicitly assumed -- otherwise they short
+    # circuit on any Linux CI box that happens not to have xclip installed,
+    # which is exactly what happened when the gate landed.
+    @patch("clipboard_capture._selection_capture_support",
+           return_value={"supported": True, "tool": "native"})
     @patch("clipboard_capture._schedule_delayed_clipboard_restore")
     @patch("clipboard_capture._restore_clipboard_snapshot_windows", return_value=True)
     @patch("clipboard_capture._capture_clipboard_snapshot_windows")
@@ -27,6 +37,7 @@ class ClipboardCaptureWindowsRestoreTests(unittest.TestCase):
         capture_snapshot,
         restore_snapshot,
         delayed_restore,
+        _support,
     ):
         snapshot = [(13, b"payload")]
         capture_snapshot.return_value = snapshot
@@ -40,6 +51,8 @@ class ClipboardCaptureWindowsRestoreTests(unittest.TestCase):
         delayed_restore.assert_called_once()
         self.assertEqual(set_text.call_args_list[0].args[0], "__betterfingers_clipboard_probe_fixed__")
 
+    @patch("clipboard_capture._selection_capture_support",
+           return_value={"supported": True, "tool": "native"})
     @patch("clipboard_capture._schedule_delayed_clipboard_restore")
     @patch("clipboard_capture._restore_clipboard_snapshot_windows", return_value=False)
     @patch("clipboard_capture._capture_clipboard_snapshot_windows")
@@ -58,6 +71,7 @@ class ClipboardCaptureWindowsRestoreTests(unittest.TestCase):
         capture_snapshot,
         restore_snapshot,
         delayed_restore,
+        _support,
     ):
         sentinel = "__betterfingers_clipboard_probe_fixed__"
         capture_snapshot.return_value = [(13, b"payload")]

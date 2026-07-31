@@ -1,0 +1,8 @@
+exclude_dirs:
+  - /.venv
+  - /node_modules
+  - /app
+  - /tests
+  - /tools
+  - /docs
+  - /scripts

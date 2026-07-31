@@ -121,10 +121,14 @@ OOM risk).
   exist anywhere in the repo (checked by name across `.py` and `.js`).
   `model_runtime_coordinator.py` and `platform_capabilities.py` exist but
   cover clipboard/injection detection, not GPU/accelerator selection. Unlike
-  2026-07-17, this is no longer purely hypothetical: this machine has no GPU
-  (see `docs/release/KNOWN_LIMITATIONS.md`'s new GPU/CPU section), so any
-  future 4.1–4.4 work here can only ever be fixture-tested locally, exactly
-  as the original doc anticipated.
+  2026-07-17, this is no longer purely hypothetical: this dev machine has no
+  discrete GPU and no CUDA — it runs an integrated Intel Iris Xe, tier
+  `igpu` per `hardware_report.get_hardware_tier()`, verified 2026-07-29
+  (D-0039; see `docs/release/KNOWN_LIMITATIONS.md`'s GPU/CPU section) — so any
+  future 4.1–4.4 work here can only be fixture-tested locally, or tested
+  against the `cpu-only`/`igpu` tiers this host actually has; the
+  `dgpu-8g`/`dgpu-12g+` (CUDA) code paths exist but remain unverified against
+  real discrete-GPU hardware, exactly as the original doc anticipated.
 - **5.2** — `/graph/`, `/intent/`, `/project/`, `/mcp/`, and `/llm/process`
   are still mounted unconditionally in `server.py`, with no dev-flag guard.
   (They are absent from the Electron `ROUTE_ALLOWLIST`, so the renderer can't
@@ -145,21 +149,22 @@ OOM risk).
   2026-07-17 -- intent_engine.py mcp_client.py` returns **zero commits** on
   either file.
 
-## Newly-found residual bug (2.1d landed, but its own findings surfaced a fresh gap)
+## Newly-found residual bug (2.1d landed, but its own findings surfaced a fresh gap) — **CLOSED, verified 2026-07-29**
 
-**Finding #3-residual is still not actually closed**, despite 2.1d landing.
 `server.py:3994` sets `cleared["history_db_wiped"] = db_result`, where
-`db_result` is now a **dict** (`{"ok": ..., "recreated": ...}`,
+`db_result` is a **dict** (`{"ok": ..., "recreated": ...}`,
 `server.py:3988-3993`) rather than the plain boolean the original finding was
-written against. `app/src/renderer/lib/wipeSummary.mjs`'s
-`isDeletionOutcome(key, value)` (`:41-45`) only recognizes `number` and
-`boolean` values — a dict falls through its `return false` default — so the
-history DB still does not appear in the renderer's "already cleared" list,
-just via a different mechanism than the original finding described. No test
-in `app/tests/wipe-summary.test.mjs` covers the dict shape (it still tests
-the old boolean shape). This needs either `isDeletionOutcome()` to handle the
-dict, or the server to keep emitting a plain boolean in `cleared{}` and put
-the `recreated` detail somewhere else.
+written against. This originally meant `app/src/renderer/lib/wipeSummary.mjs`'s
+`isDeletionOutcome(key, value)` only recognized `number` and `boolean` values,
+so the history DB fell through to `false` and didn't appear in the renderer's
+"already cleared" list. **That gap is now closed:** `isDeletionOutcome()`
+(`app/src/renderer/lib/wipeSummary.mjs:41-58`) has an explicit object branch —
+`if (value && typeof value === 'object' && !Array.isArray(value)) return
+value.ok === true && /_(removed|wiped|cleared)$/.test(key);` — that recognizes
+the dict shape, and `describeDeletion()` (`:67-73`) surfaces a
+`(store not recreated — reopen the app to rebuild it)` note when
+`recreated === false`. Verified by reading the current file; re-run
+`node --test app/tests/wipe-summary.test.mjs` to confirm coverage.
 
 ## Partially landed
 
@@ -181,32 +186,19 @@ the `recreated` detail somewhere else.
   `backend/platform/audio_privacy/` all exist and are real, tested modules.
   `data_registry.py` and `data_categories.py` are still at the repo root,
   not relocated to `domain/privacy/` as the DoD specifies.
-  **`@app.on_event` → FastAPI lifespan is STILL OPEN at HEAD `3f86e30`.**
-  `git diff HEAD -- server.py` at the time of this reconciliation shows the
-  lifespan migration as an **uncommitted, in-progress working-tree change**
-  (session `worker-startup`'s concurrent task in this same collab room, per
-  the room roster) — it is not yet landed history. Do not read a clean
-  `git show HEAD:server.py` grep for `lifespan` as evidence either way
-  without checking for uncommitted diffs first, which is exactly the mistake
-  this reconciliation pass avoided by running `git status`/`git diff` before
-  citing this item.
+  **`@app.on_event` → FastAPI lifespan is CLOSED, verified 2026-07-29.**
+  `server.py:2353` defines `async def lifespan(app: FastAPI):` and
+  `server.py:2366` wires it in via `app.router.lifespan_context = lifespan`.
+  `grep -n "on_event\|lifespan" server.py` returns zero `@app.on_event` sites
+  — only the `lifespan` function and its wiring, plus unrelated
+  `cancellation_event`/`privacy_wipe_in_progress` names that happen to share
+  the substring. The migration that this document previously tracked as an
+  in-progress, uncommitted `worker-startup` diff has since landed as history.
 
-  **In-flight work, not yet reviewed or accepted — PENDING SUPERVISOR REVIEW.**
-  `worker-startup` has two uncommitted changes in this working tree as of this
-  reconciliation, touching this same phase and an adjacent Wave 10 item.
-  Neither is credited as landed above; both are named here only so the next
-  reconciliation doesn't have to rediscover them from scratch. `sup-backend`
-  will fill in the accepted status and exact test output once the diff is
-  reviewed and re-run independently.
-
-  | Item | Files (uncommitted at this reconciliation) | Status |
-  |---|---|---|
-  | `@app.on_event` → FastAPI lifespan (this phase, 8.2) | `server.py` | `PENDING SUPERVISOR REVIEW` |
-  | Controller poll-thread pygame crash fix (Wave 10, not this plan's phase numbering — noted here because it's the same session's concurrent work) | `backend/services/controller_engine.py`, `tests/test_controller_engine.py`, `tests/test_server_lifespan.py` (new, untracked) | `PENDING SUPERVISOR REVIEW` |
-
-  Do not read either row as done. `sup-backend` said explicitly: "I have not
-  reviewed or accepted worker-startup's diff yet and it may change or be
-  rejected."
+  The adjacent Wave 10 item named alongside it in the prior reconciliation
+  (controller poll-thread pygame crash fix) was a separate, unrelated change
+  from the same concurrent session and is not re-verified by this pass — see
+  `docs/release/RELEASE_BOARD.md` Wave 10 status for its current disposition.
 - **Phase 7 (renderer modularization)** — ambiguous by design, not simply
   open or done. The legacy `app/src/renderer/main.js` itself was never
   extracted (still ~4,277 lines) and does not meet the original `<300 line
@@ -266,7 +258,9 @@ document's phase numbering, so it is not re-listed here item by item. See:
 ### Phase 4 — Runtime & process boundaries · release-blocking · ⬜ (not started)
 - 4.1–4.4 all still open.
 - ⚠️ Hardware-dependent as originally noted, and now concretely confirmed: no
-  local GPU exists to test against (see `docs/release/KNOWN_LIMITATIONS.md`).
+  local discrete GPU / CUDA device exists to test against — this host has an
+  integrated Intel Iris Xe (`igpu` tier), verified 2026-07-29, D-0039 (see
+  `docs/release/KNOWN_LIMITATIONS.md`).
 - Relevant files: `model_runtime_coordinator.py`, `model_manager.py`,
   `platform_capabilities.py`, `hardware_report.py`, `app/src/main/*`.
 
@@ -280,9 +274,8 @@ document's phase numbering, so it is not re-listed here item by item. See:
 - `backend/api/routes/*`, `backend/services/*`, `backend/stores/*`,
   `backend/platform/audio_privacy/*` exist and are real. `server.py` is
   still 5,832 lines. `data_registry.py`/`data_categories.py` not relocated to
-  `domain/privacy/`. `@app.on_event` → lifespan is uncommitted, in-progress
-  work as of this reconciliation (not this plan's doing — a concurrent
-  session's task).
+  `domain/privacy/`. `@app.on_event` → lifespan (8.2) is **closed** — see
+  Phase 8 below.
 
 ### Phase 7 — Renderer modularization · 🚧 (ambiguous — see note above)
 - `main.js` itself unextracted; the shipping page (`signal-desk.html` +
@@ -290,10 +283,12 @@ document's phase numbering, so it is not re-listed here item by item. See:
   Wave 11 made the default. Scope question for the release director.
 
 ### Phase 8 — Quality/dependency/release gates · 🚧 (partial)
-- Closed: 8.3, 8.4. Partial: 8.1 (pytest/unit/CodeQL/build/lockfile-freshness
-  gates exist; Ruff, Bandit, `npm audit --omit=dev` do not). Open: 8.2
-  (uncommitted in-progress elsewhere as of this reconciliation), 8.5 (signing
-  still best-effort, ⛔ still needs credentials).
+- Closed: 8.2 (`@app.on_event` → FastAPI lifespan, verified 2026-07-29 —
+  `server.py:2353`/`:2366`, zero `@app.on_event` remaining), 8.3, 8.4.
+  Partial: 8.1 (pytest/unit/CodeQL/build/lockfile-freshness gates exist;
+  Ruff, Bandit, `npm audit --omit=dev` do not — tracked as WS-C5 in
+  `docs/release/PUBLISH_PLAN.md`). Open: 8.5 (signing still best-effort, ⛔
+  still needs credentials).
 
 ### Phase 9 — KISS boundary · ⬜ (not started, zero commits since 2026-07-17)
 - File today: `intent_engine.py`, `mcp_client.py` — both untouched since the
@@ -303,19 +298,30 @@ document's phase numbering, so it is not re-listed here item by item. See:
 
 ## ⚠️ Known blockers / deferrals
 
-- **Finding #3-residual** — NOT closed. 2.1d landed a registry-backed wipe,
-  but that same change reshaped `cleared.history_db_wiped` into a dict the
-  renderer's `isDeletionOutcome()` doesn't recognize. See "Newly-found
-  residual bug" above for the exact citation.
+- **Finding #3-residual** — **CLOSED (verified 2026-07-29).**
+  `app/src/renderer/lib/wipeSummary.mjs`'s `isDeletionOutcome()` (`:41-58`) now
+  explicitly handles the object-shaped `{ok, recreated}` outcome 2.1d
+  introduced: `if (value && typeof value === 'object' && !Array.isArray(value))
+  return value.ok === true && /_(removed|wiped|cleared)$/.test(key);` — the
+  history DB dict is recognized as a real deletion, not silently dropped. See
+  "Newly-found residual bug" above for the original citation; the fix has
+  since landed.
 - **Phase 4** hardware matrix — still blocked on real hardware; this machine
-  specifically has no GPU (confirmed, not hypothetical as of 2026-07-17).
+  specifically has no discrete GPU / CUDA device (integrated Intel Iris Xe,
+  `igpu` tier, confirmed 2026-07-29, D-0039 — not the RTX 4060 Ti a prior
+  release-docs pass briefly assigned it; see
+  `docs/release/KNOWN_LIMITATIONS.md`).
 - **Phase 8.5** signing — still requires credentials; still fail-open rather
   than fail-closed by design-in-progress.
 - **Phase 9** — entirely unstarted; not merely deferred, untouched.
 
 ## How to resume
-Re-run `/loop [interval] <the standard remediation prompt>`; each iteration
-reads `REMEDIATION_CHANGELOG.md` "Next up", does one chunk, commits, and posts
-a handoff to `bf-plan-reviewer`. Given this reconciliation, the smallest next
-chunks are: the `history_db_wiped` renderer fix (small, isolated), then the
-2.1b review comments (a/b/c), then 2.3's shared write-access gate.
+This document is superseded for planning purposes by
+[`docs/release/PUBLISH_PLAN.md`](../release/PUBLISH_PLAN.md), which is the
+current work queue and supersession note (see its header). `RELEASE_BOARD.md`
+remains the gate authority. Do not resume work directly from this document's
+old `/loop` chunk list — the `history_db_wiped` renderer fix and the 8.2
+lifespan migration it names are both closed (see above); remaining open items
+here (2.1b review comments, 2.3's shared write-access gate, Phase 3, Phase 9,
+8.5 signing) are explicitly deferred in `PUBLISH_PLAN.md` §7 or tracked as its
+own WS-C tasks — check there before picking up anything from this file.

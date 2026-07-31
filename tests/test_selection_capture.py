@@ -93,6 +93,13 @@ def test_default_capture_fn_restores_clipboard_via_existing_adapter(monkeypatch)
         box["value"] = "SELECTED TEXT"
 
     monkeypatch.setattr(cc.keyboard, "press_and_release", fake_press_and_release)
+    # OR-13's host-tooling gate runs inside clipboard_capture itself, before it
+    # touches the (here faked) clipboard. capture_selection's supported_fn
+    # override does not reach it, so this test has to say that a clipboard tool
+    # exists -- otherwise it short circuits to "unsupported" on any Linux box
+    # without xclip installed, which is what this machine actually is.
+    monkeypatch.setattr(cc, "_selection_capture_support",
+                        lambda: {"supported": True, "tool": "xclip"})
 
     result = capture_selection(supported_fn=_supported_true)
 

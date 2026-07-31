@@ -1,7 +1,7 @@
 // Signal Desk workspace router (Phase 1: foundation / static shell only).
 //
 // This is a pure, framework-free show/hide router for the 5 top-level
-// Signal Desk workspaces (Talk/Library/Studio/Utilities/Settings) described
+// Signal Desk workspaces (Talk/Scribe/Studio/Utilities/Settings) described
 // in docs/ui/SIGNAL_DESK_SPEC.md section 3. It has NO backend calls and no
 // feature logic -- this phase only wires the nav rail to workspace
 // visibility, the center header copy, and the right context-panel collapse
@@ -118,6 +118,12 @@ export function collectShellElements(root = document) {
     contextContents: root?.querySelectorAll
       ? Array.from(root.querySelectorAll('.sd-context__content[data-context-for]'))
       : [],
+    // Utilities owns the secondary links for retained material. Keep these
+    // separate from the primary rail so Library/History are reachable without
+    // making either one a competing top-level workspace.
+    utilityLinks: root?.querySelectorAll
+      ? Array.from(root.querySelectorAll('[data-shell-nav]'))
+      : [],
   };
 }
 
@@ -127,6 +133,7 @@ export function collectShellElements(root = document) {
  *   later phase, or a test stub today). Every access below is optional-chained.
  *   Shape:
  *   - navButtons: { talk, library, studio, utilities, settings } -- nav rail buttons
+ *   - utilityLinks: secondary links rendered inside Utilities
  *   - workspaces: { talk, library, studio, utilities, settings } -- center workspace containers
  *   - headerTitle, headerSubtitle, headerPillLabel, headerBreadcrumb -- center header elements
  *   - shellRoot -- the `.sd-shell` grid container (gets `.is-context-collapsed` toggled so the
@@ -156,6 +163,10 @@ export function createSignalDeskShellFeature({ elements } = {}) {
       // old tab bar avoided (main.js's activateTab) and the rail regressed.
       btn.setAttribute?.('tabindex', isActive ? '0' : '-1');
     });
+    for (const link of els.utilityLinks || []) {
+      const isActive = link?.getAttribute?.('data-shell-nav') === state.active;
+      link?.setAttribute?.('aria-current', isActive ? 'page' : 'false');
+    }
   }
 
   function applyWorkspaceVisibility() {
@@ -256,6 +267,11 @@ export function createSignalDeskShellFeature({ elements } = {}) {
         els.navButtons?.[nextId]?.focus?.();
       });
     });
+    for (const link of els.utilityLinks || []) {
+      const target = link?.getAttribute?.('data-shell-nav');
+      if (!target) continue;
+      link.addEventListener?.('click', () => goTo(target));
+    }
     els.contextCollapseButton?.addEventListener?.('click', () => toggleContextCollapsed());
     els.contextHideButton?.addEventListener?.('click', () => toggleContextCollapsed());
   }

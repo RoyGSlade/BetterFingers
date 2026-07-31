@@ -20,7 +20,7 @@ const TAU = Math.PI * 2;
 //  idle: dim cobalt · listening: teal · recording: coral/red · processing
 //  (transcribing/rewriting/chunking): amber+cobalt arcs · stitching: blue wave
 //  ready: green/teal check · error: red/orange fracture.
-const STATE_STYLES = {
+export const STATE_STYLES = {
   idle: {
     primary: '#4c6ef5', highlight: '#8fa2ff', glow: '#4c6ef5',
     amp: 0.05, pulseSpeed: 0.9, pulseDepth: 0.05, glitch: 0.04,
@@ -64,7 +64,7 @@ const STATE_STYLES = {
 };
 
 // Aliases so callers can pass the app's IPC/status vocabulary directly.
-const STATE_ALIASES = {
+export const STATE_ALIASES = {
   rewriting: 'transcribing',
   processing: 'transcribing',
   chunking: 'transcribing',
@@ -74,7 +74,7 @@ const STATE_ALIASES = {
   danger: 'error',
 };
 
-function resolveState(name) {
+export function resolveState(name) {
   if (STATE_STYLES[name]) return name;
   if (STATE_ALIASES[name]) return STATE_ALIASES[name];
   return 'idle';

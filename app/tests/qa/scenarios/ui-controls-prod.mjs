@@ -365,6 +365,26 @@ export const uiControlsProdScenarios = [
         available,
         'the blend strip must say something about what is available -- an empty line is the old behaviour',
       ).not.toHaveText('');
+
+      // UI-07-127: #sdVoiceBlendCards (studioWorkspace.js's persona-tied
+      // blend strip, distinct from voiceStudio.js's Settings-side
+      // #voiceBlendRows checked elsewhere) must render a REAL card for the
+      // current base voice, and clicking the strip's own "+ Add Voice"
+      // button (#sdAddVoiceButton, a sibling inside the same container) must
+      // grow it to a second card -- existence alone would still pass a
+      // strip that renders one static card and never updates.
+      const blendCards = page.locator('#sdVoiceBlendCards');
+      await expect(blendCards, '#sdVoiceBlendCards must exist exactly once').toHaveCount(1);
+      await expect(
+        blendCards.locator('.sd-voice-blend-card'),
+        'the blend strip must render exactly one card (the base voice) before any layer is added',
+      ).toHaveCount(1);
+
+      await page.click('#sdAddVoiceButton');
+      await expect(
+        blendCards.locator('.sd-voice-blend-card'),
+        'clicking "+ Add Voice" must grow the blend strip to a second real card, not silently no-op',
+      ).toHaveCount(2);
     },
     screenshots: [{ name: 'the-active-voice-is-named-on-screen' }],
   },

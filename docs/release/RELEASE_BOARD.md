@@ -1,7 +1,7 @@
 # True BetterFingers Release Board
 
 - **Release:** `v0.2.0-alpha.1`
-- **Current wave:** Wave 11 parity remediation (flip landed, 21 blocked rows remain — Gate 11 still NOT accepted); Wave 12A landed two objectives ahead of formal Gate 11 closure — native-control styling/QA (`9399e54`) and a P0 data-root resolver fix (`2507930`), followed by a startup-hardening fix for the llama-server port and the renderer initial-load race (`2575cc5`). Waves 12 (package qualification) and 13 remain blocked on Gate 11.
+- **Current wave:** Wave 13 publish plan execution — **Gate 11 ACCEPTED** (D-0044, 2026-07-30). As of `3d935c6` (director-verified): parity ledger **411 wired / 27 intentional_cut / 0 blocked / 438 total**, down from 398/23/17 at wave open and 396/21/21 at the Wave 12A snapshot. Also at this commit: QA board 99/99 (three consecutive, fresh build), node 1668/1668, python 3098/0. Wave 12 (package qualification, F-1/F-2) is now UNBLOCKED and is the next work; it has not been started. Operator QA (`OPERATOR_QA.md`) has not been performed.
 - **Gate 0:** **ACCEPTED (2026-07-28, release-director)**
 - **Gate 1:** **ACCEPTED (2026-07-28, release-director, D-0019)**
 - **Gate 2:** **ACCEPTED (2026-07-28, release-director, D-0021)**
@@ -13,7 +13,7 @@
 - **Gate 9:** **ACCEPTED (2026-07-28, release-director, D-0027)**
 - **Gate 6:** **ACCEPTED (2026-07-28, release-director, D-0028)**
 - **Gate 10:** **ACCEPTED — software (2026-07-28, D-0029); hardware matrices unqualified pending operator pass**
-- **Gate 11:** **NOT ACCEPTED (D-0030, D-0031)** — default flipped and version centralized; ledger unchanged by Wave 12A at **396 `wired` / 21 `intentional_cut` / 21 `blocked`** (Gate 0 baseline was 434 blocked; confirmed unmoved in [WAVE12A_UI_CONTROLS.md](archive/WAVE12A_UI_CONTROLS.md)'s verification table). The gate forbids any blocked row: 19 evidence + 2 product remain, listed in [WAVE11_BLOCKERS.md](archive/WAVE11_BLOCKERS.md). Separately, the full production-QA board regressed from 97/97 to **96/97** on 2026-07-29 (`91d19b8`) — see "Why the board is 96/97, not 97/97" below.
+- **Gate 11:** **ACCEPTED (D-0044, 2026-07-30)** — the gate forbids any `blocked` row and the ledger now reads **411 `wired` / 27 `intentional_cut` / 0 `blocked` / 438 total**, director-verified live at `3d935c6` via `python3 tools/parity_validator.py`. Baseline at wave open was 398/23/17; seventeen blocked rows closed — eleven wired with evidence, six cut under D-0036, D-0037 and D-0043. Supporting runs at the same commit: production QA board **99/99 three consecutive times** on a fresh build (the board grew from 97 to 99 as this wave added the onboarding keyboard-trap and persona-wizard scenarios), node suite **1668/1668**, python suite **3098 passed / 0 failed** in a clean environment (see QA-DOC-005 — the QA env vars must NOT be set for pytest). Gate 11 is a parity gate: it does not assert operator sign-off (see OPERATOR_QA.md) or CI green (C-5 is unproven).
 - **Last updated:** 2026-07-29
 
 Statuses: `DONE`, `IN PROGRESS`, `BLOCKED`, `PENDING`, `CUT`.
@@ -107,7 +107,7 @@ Wave 1 follow-ups recorded: factory-reset executor exists nowhere (Wave 6 backlo
 | Evidence | Current value | Release use |
 |---|---|---|
 | Workspace placement maps | Talk `28/33`; Library `11/23`; Studio `26/31`; Utilities `57/59`; Settings `37/37`; total **159/183 placed/wired in those maps, 24 unwired** | Preview placement signal only; it does not satisfy the strict 438-item production-evidence rule. Wave 11 used these as discovery pointers, never as promotions. |
-| 438-item release ledger | [PARITY_INVENTORY.md](PARITY_INVENTORY.md): **161 `wired`, 10 `intentional_cut`, 267 `blocked`; total 438** (Wave 11 re-audit against `signal-desk.html`; Gate 0 baseline was 0/4/434) | Wave 11 strict re-audit. The 267 blocked split **91 `(product)`** — no production anchor — and **176 `(evidence)`** — anchored in production but the QA/prose leg is unmet. See [WAVE11_BLOCKERS.md](archive/WAVE11_BLOCKERS.md); reproduce with `python3 tools/parity_validator.py`. |
+| 438-item release ledger | [PARITY_INVENTORY.md](PARITY_INVENTORY.md): **as of Wave 11 (161 `wired`, 10 `intentional_cut`, 267 `blocked`; Gate 0 baseline was 0/4/434) — historical, superseded.** **Current, as of `545e582` (2026-07-29, director-verified): 398 `wired` / 23 `intentional_cut` / 17 `blocked`; total 438.** | Wave 11's split of the 267 then-blocked rows into **91 `(product)`** (no production anchor) and **176 `(evidence)`** (anchored but unevidenced) is recorded in [WAVE11_BLOCKERS.md](archive/WAVE11_BLOCKERS.md) as historical detail. Reproduce the current figure with `python3 tools/parity_validator.py`; it moves as WS-B tasks land. |
 | Version source | `VERSION` = `0.2.0-alpha.1`, read by `version.py`; `app/package.json` is a checked copy | D-0008 single source. Four integration-owned diffs pending — see [WAVE11_INTEGRATION_DIFFS.md](archive/WAVE11_INTEGRATION_DIFFS.md). |
 | Default UI route | `BF_UI` unset → `signal-desk.html`; `BF_UI=legacy` → `index.html` (rollback); `BF_UI=signal-desk` → preview (QA only) | Wave 11 flip is **landed in code** — `app/src/main/windows.js:220` (`SIGNAL_DESK_PROD_PAGE = 'signal-desk.html'`), `:226` (`LEGACY_PAGE = 'index.html'`), `:229-236` (`dashboardPage()`: `BF_UI=legacy` → `LEGACY_PAGE`, `BF_UI=signal-desk` → preview, everything else including unset/typo'd → `SIGNAL_DESK_PROD_PAGE`). Rollback-contract test evidence, run by sup-backend 2026-07-29 at HEAD `3f86e30`: `cd app && node --test tests/qaTargets.test.mjs tests/senderValidation.test.mjs` → `tests 23 \| pass 23 \| fail 0 \| skipped 0`. `app/tests/qa/scenarios/default-flip.mjs` is the dedicated QA scenario. |
 | Renderer unit baseline | `1533/1533` passed | Superseded the `775/775` source baseline. Run by sup-backend 2026-07-29 at HEAD `3f86e30`: `npm --prefix app run test:unit` → `tests 1533 \| pass 1533 \| fail 0 \| cancelled 0 \| skipped 0 \| todo 0`. |
@@ -151,8 +151,8 @@ Wave 1 follow-ups recorded: factory-reset executor exists nowhere (Wave 6 backlo
 | 8 | Audio privacy and wake hardening | AudioInputBroker before isolation/handoff | `DONE` |
 | 9 | Restricted action engine | Approved action schema | `DONE` (run executor follows with Wave 10) |
 | 10 | Controller and Stream Deck | Shared action IDs from Waves 2/9 | `DONE` (software; hardware pass = operator checklist WAVE10_QA.md) |
-| 11 | Strict 438-item parity closure, version, default flip | Gates 1–10 | `IN PROGRESS` — flip + version DONE; parity closure open (21 blocked) |
-| 12 | Windows/Linux package qualification | Gate 11 | `BLOCKED` |
+| 11 | Strict 438-item parity closure, version, default flip | Gates 1–10 | `IN PROGRESS` — flip + version DONE; parity closure open (17 blocked as of `545e582`, 2026-07-29 — re-run `python3 tools/parity_validator.py` for the current count) |
+| 12 | Windows/Linux package qualification | Gate 11 | `UNBLOCKED — not started` |
 | 13 | Source Arcanum publication | Gates 0–12 | `BLOCKED` |
 | 14 | One-release legacy cleanup and later backend split | One completed Signal Desk release | `BLOCKED` |
 

@@ -49,6 +49,7 @@ const WAKE_IDS = {
   wakeEngineBadge: 'sdUtilWakeEngineBadge',
   wakeBackboneList: 'sdUtilWakeBackboneList',
   wakeMessage: 'sdUtilWakeMessage',
+  modelsMessage: 'sdUtilModelsMessage',
 };
 
 test('the Speech Input ids this file drives are the ids the Utilities module ships', () => {
@@ -62,7 +63,7 @@ const CAPABILITIES = {
   supports_input_injection: true, supports_audio_ducking: true,
 };
 
-function mount({ routes = {}, uploadWakeModel } = {}) {
+function mount({ routes = {}, uploadWakeModel, confirmFn } = {}) {
   const doc = makeDocument([...Object.values(INPUT_IDS), ...Object.values(WAKE_IDS)], {
     sdUtilAudioDeviceSelect: { tagName: 'select' },
     sdUtilWakeEnabledToggle: { tagName: 'input', type: 'checkbox' },
@@ -77,7 +78,7 @@ function mount({ routes = {}, uploadWakeModel } = {}) {
   const restore = installDomGlobals({ document: doc, betterFingers });
   const feature = createUtilitiesWorkspaceFeature({
     elements: collectUtilitiesElements(doc),
-    hooks: { showToast: (message, tone) => toasts.push({ message, tone }) },
+    hooks: { showToast: (message, tone) => toasts.push({ message, tone }), ...(confirmFn ? { confirmFn } : {}) },
   });
   return { doc, feature, bridge, toasts, restore, el: (id) => doc.getElementById(id) };
 }
@@ -301,14 +302,21 @@ test('training refuses to start with an empty phrase, and nothing reaches the ba
 });
 
 // --- UI-08-018: the wake engine badge and backbone list ----------------------
+//
+// The real /wake/models route (routes_wake.py:299-303, wake_models.py
+// list_wake_models()) returns {"models": [...]}, each entry carrying
+// "downloaded" (not "installed") and an "origin" of "bundled" or
+// "user-imported". These tests pin that exact shape -- a prior version of
+// this suite pinned the WRONG {"backbones": [...], installed} shape, which
+// is what let the renderer's read bug (UI-15-014) ship and survive.
 
-test('#sdUtilWakeBackboneList renders one row per backbone with its install state', async (t) => {
+test('#sdUtilWakeBackboneList renders one row per backbone from the real {models:[...]} payload, keyed on "downloaded"', async (t) => {
   const ctx = mount({
     routes: {
       'GET /wake/models': {
-        backbones: [
-          { id: 'embedding', name: 'Embedding backbone', installed: true },
-          { id: 'melspectrogram', name: 'Mel spectrogram', installed: false },
+        models: [
+          { id: 'embedding', name: 'Embedding backbone', origin: 'bundled', downloaded: true },
+          { id: 'melspectrogram', name: 'Mel spectrogram', origin: 'bundled', downloaded: false },
         ],
       },
     },
@@ -323,5 +331,159 @@ test('#sdUtilWakeBackboneList renders one row per backbone with its install stat
   assert.match(text, /Installed/);
   assert.match(text, /Mel spectrogram/);
   assert.match(text, /Not installed/);
-  assert.equal(ctx.el('sdUtilWakeEngineBadge').textContent, 'Ready', 'one installed backbone is enough for the engine to be ready');
+  assert.equal(ctx.el('sdUtilWakeEngineBadge').textContent, 'Ready', 'one downloaded backbone is enough for the engine to be ready');
+});
+
+test('#sdUtilWakeEngineBadge reads "Not installed" when nothing in the real payload is downloaded', async (t) => {
+  const ctx = mount({
+    routes: {
+      'GET /wake/models': { models: [{ id: 'melspectrogram', name: 'Mel spectrogram', origin: 'bundled', downloaded: false }] },
+    },
+  });
+  t.after(ctx.restore);
+  ctx.feature.init();
+
+  await ctx.feature.refreshWakeBackbones();
+  assert.equal(ctx.el('sdUtilWakeEngineBadge').textContent, 'Not installed');
+});
+
+test('#sdUtilWakeBackboneList shows the empty state (not a blank list) when there truly are no entries', async (t) => {
+  const ctx = mount({ routes: { 'GET /wake/models': { models: [] } } });
+  t.after(ctx.restore);
+  ctx.feature.init();
+
+  await ctx.feature.refreshWakeBackbones();
+  assert.match(ctx.el('sdUtilWakeBackboneList').textContent, /No wake-word backbones listed/);
+});
+
+// --- UI-15-014: deleting an imported wake model -------------------------------
+
+function rowFor(list, name) {
+  return list.children.find((row) => row.textContent.includes(name));
+}
+
+function buttonLabelled(row, label) {
+  return row.querySelectorAll('button').find((b) => b.textContent === label) || null;
+}
+
+test('Delete is offered only for origin==="user-imported" rows, never for "bundled" catalog entries', async (t) => {
+  const ctx = mount({
+    routes: {
+      'GET /wake/models': {
+        models: [
+          { id: 'melspectrogram', name: 'Melspectrogram feature extractor', origin: 'bundled', downloaded: true },
+          { id: 'user_123', name: 'My Custom Wake Word', origin: 'user-imported', downloaded: true },
+        ],
+      },
+    },
+  });
+  t.after(ctx.restore);
+  ctx.feature.init();
+  await ctx.feature.refreshWakeBackbones();
+
+  const list = ctx.el('sdUtilWakeBackboneList');
+  const bundledRow = rowFor(list, 'Melspectrogram feature extractor');
+  const importedRow = rowFor(list, 'My Custom Wake Word');
+  assert.ok(bundledRow && importedRow, 'both rows must render');
+  assert.equal(buttonLabelled(bundledRow, 'Delete'), null, 'a bundled/shipped model must never offer Delete');
+  assert.ok(buttonLabelled(importedRow, 'Delete'), 'a user-imported model must offer Delete');
+});
+
+test('deleting an imported model asks for confirmation, calls DELETE, and refreshes the list', async (t) => {
+  let listCallCount = 0;
+  const ctx = mount({
+    routes: {
+      'GET /wake/models': () => {
+        listCallCount += 1;
+        return { models: listCallCount === 1 ? [{ id: 'user_123', name: 'My Custom Wake Word', origin: 'user-imported', downloaded: true }] : [] };
+      },
+      'DELETE /wake/models/user_123': { ok: true },
+    },
+  });
+  t.after(ctx.restore);
+  ctx.feature.init();
+  await ctx.feature.refreshWakeBackbones();
+  assert.equal(listCallCount, 1);
+
+  const deleteButton = buttonLabelled(rowFor(ctx.el('sdUtilWakeBackboneList'), 'My Custom Wake Word'), 'Delete');
+  deleteButton.click();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.ok(ctx.bridge.find('DELETE', '/wake/models/user_123'), 'the delete must reach the real DELETE /wake/models/:id route');
+  assert.equal(listCallCount, 2, 'a successful delete must refresh the list from the backend');
+  assert.doesNotMatch(ctx.el('sdUtilWakeBackboneList').textContent, /My Custom Wake Word/, 'the deleted row must be gone after refresh');
+});
+
+test('declining the confirm leaves the model in place and never reaches the backend', async (t) => {
+  const asked = [];
+  const ctx = mount({
+    confirmFn: (message) => { asked.push(message); return false; },
+    routes: {
+      'GET /wake/models': { models: [{ id: 'user_123', name: 'My Custom Wake Word', origin: 'user-imported', downloaded: true }] },
+      'DELETE /wake/models/user_123': { ok: true },
+    },
+  });
+  t.after(ctx.restore);
+  ctx.feature.init();
+  await ctx.feature.refreshWakeBackbones();
+
+  const deleteButton = buttonLabelled(rowFor(ctx.el('sdUtilWakeBackboneList'), 'My Custom Wake Word'), 'Delete');
+  deleteButton.click();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(asked.length, 1, 'a confirm prompt must be shown before deleting');
+  assert.ok(!ctx.bridge.find('DELETE', '/wake/models/user_123'), 'declining the confirm must not call DELETE');
+  assert.match(ctx.el('sdUtilWakeBackboneList').textContent, /My Custom Wake Word/, 'the row must remain when the user declines');
+});
+
+test('a failed delete surfaces an error visibly and re-enables the Delete button, never a silent no-op', async (t) => {
+  const ctx = mount({
+    routes: {
+      'GET /wake/models': { models: [{ id: 'user_123', name: 'My Custom Wake Word', origin: 'user-imported', downloaded: true }] },
+      'DELETE /wake/models/user_123': { ok: false, status: 500, body: { detail: 'disk error' } },
+    },
+  });
+  t.after(ctx.restore);
+  ctx.feature.init();
+  await ctx.feature.refreshWakeBackbones();
+
+  const deleteButton = buttonLabelled(rowFor(ctx.el('sdUtilWakeBackboneList'), 'My Custom Wake Word'), 'Delete');
+  deleteButton.click();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(ctx.el('sdUtilModelsMessage').textContent, 'Delete failed: disk error');
+  assert.equal(deleteButton.disabled, false, 'the button must re-enable so the user can retry');
+  assert.match(ctx.el('sdUtilWakeBackboneList').textContent, /My Custom Wake Word/, 'a failed delete must not remove the row');
+});
+
+test('deleting the currently-active model clears the selection instead of leaving a dangling reference', async (t) => {
+  let savedSettings = null;
+  const ctx = mount({
+    routes: {
+      'GET /settings/profiles': { active: 'Default', profiles: ['Default'] },
+      'GET /settings/profiles/Default': { active: true, settings: { wake_word_model: 'user_123' } },
+      'POST /settings/profiles/Default': ({ body }) => {
+        savedSettings = body.settings;
+        return { ok: true, active: true, settings: body.settings };
+      },
+      'GET /wake/models': { models: [{ id: 'user_123', name: 'My Custom Wake Word', origin: 'user-imported', downloaded: true }] },
+      'DELETE /wake/models/user_123': { ok: true },
+    },
+  });
+  t.after(ctx.restore);
+  ctx.feature.init();
+  await ctx.feature.refreshWakeTuningFromProfile();
+  assert.equal(ctx.el('sdUtilWakeModelSelect').value, 'user_123', 'the select must start out showing the active model');
+
+  await ctx.feature.refreshWakeBackbones();
+  const deleteButton = buttonLabelled(rowFor(ctx.el('sdUtilWakeBackboneList'), 'My Custom Wake Word'), 'Delete');
+  deleteButton.click();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(ctx.el('sdUtilWakeModelSelect').value, '', 'the UI must not keep claiming the deleted model is still selected');
+  assert.equal(savedSettings?.wake_word_model, '', 'the persisted profile field must be cleared too, not just the on-screen select');
 });

@@ -521,6 +521,114 @@ test('createSettingsWorkspaceFeature: runValidation() sets/clears field errors a
   assert.deepEqual(feature.getValidationErrors(), {});
 });
 
+// --- Auto Submit safety: acknowledgement gate + warning banner (OR-01) ------
+// The operator's highest-severity finding: Auto Submit pastes/types then
+// presses Enter into whatever window has OS focus, with no review step.
+// These tests pin the SAFETY PROPERTIES, not the copy: the checkbox cannot
+// reach "checked" without going through an explicit confirmFn(), the warning
+// banner tracks the checked state, and turning it off and back on demands the
+// acknowledgement again rather than remembering an earlier "yes".
+
+function autoSubmitInputStub(initialChecked = false) {
+  const listeners = {};
+  return {
+    checked: initialChecked,
+    disabled: false,
+    addEventListener: (evt, fn) => { listeners[evt] = fn; },
+    fire: (evt) => listeners[evt]?.(),
+  };
+}
+
+function autoSubmitHarness(hooks = {}) {
+  const input = autoSubmitInputStub();
+  const warning = { hidden: true };
+  const feature = createSettingsWorkspaceFeature({
+    elements: { fields: { auto_submit: input }, fieldErrors: {}, autoSubmitWarning: warning },
+    hooks,
+  });
+  feature.init();
+  return { feature, input, warning };
+}
+
+test('auto submit warning starts hidden when the control is off', () => {
+  const { warning } = autoSubmitHarness();
+  assert.equal(warning.hidden, true);
+});
+
+test('checking auto submit asks for an explicit confirmation naming the real risk', () => {
+  const calls = [];
+  const { input } = autoSubmitHarness({ confirmFn: (msg) => { calls.push(msg); return true; } });
+  input.checked = true;
+  input.fire('change');
+  assert.equal(calls.length, 1, 'checking the box must go through confirmFn');
+  // Pin the safety property (the confirmation names the real mechanism), not the exact wording.
+  assert.match(calls[0], /Enter/);
+  assert.match(calls[0], /focus/i);
+});
+
+test('declining the confirmation reverts the checkbox and keeps the warning hidden', () => {
+  const { input, warning } = autoSubmitHarness({ confirmFn: () => false });
+  input.checked = true;
+  input.fire('change');
+  assert.equal(input.checked, false, 'declining must not leave auto submit enabled');
+  assert.equal(warning.hidden, true);
+});
+
+test('confirming the acknowledgement leaves auto submit checked and reveals the warning', () => {
+  const { input, warning } = autoSubmitHarness({ confirmFn: () => true });
+  input.checked = true;
+  input.fire('change');
+  assert.equal(input.checked, true);
+  assert.equal(warning.hidden, false);
+});
+
+test('turning auto submit off and back on demands the acknowledgement again', () => {
+  let calls = 0;
+  const { input, warning } = autoSubmitHarness({ confirmFn: () => { calls += 1; return true; } });
+
+  input.checked = true;
+  input.fire('change');
+  assert.equal(calls, 1);
+  assert.equal(input.checked, true);
+
+  input.checked = false;
+  input.fire('change');
+  assert.equal(warning.hidden, true, 'turning it off hides the warning immediately');
+
+  input.checked = true;
+  input.fire('change');
+  assert.equal(calls, 2, 're-enabling must re-run the acknowledgement, not remember the earlier "yes"');
+  assert.equal(input.checked, true);
+});
+
+test('declining the re-enable confirmation reverts it again, even though it was on before', () => {
+  let calls = 0;
+  const confirmFn = () => { calls += 1; return calls === 1; }; // yes the first time, no the second
+  const { input, warning } = autoSubmitHarness({ confirmFn });
+
+  input.checked = true;
+  input.fire('change');
+  assert.equal(input.checked, true);
+
+  input.checked = false;
+  input.fire('change');
+
+  input.checked = true;
+  input.fire('change');
+  assert.equal(calls, 2);
+  assert.equal(input.checked, false, 'a decline must win even on a re-enable of a previously-accepted toggle');
+  assert.equal(warning.hidden, true);
+});
+
+test('renderSettings() reflects a persisted auto_submit=true without re-prompting', () => {
+  const calls = [];
+  const { feature, input, warning } = autoSubmitHarness({ confirmFn: (msg) => { calls.push(msg); return true; } });
+  feature.renderSettings({ auto_submit: true });
+  assert.equal(input.checked, true, 'loading a profile that already has it on must restore the checked state');
+  assert.equal(warning.hidden, false, 'the warning must render whenever the control does, on load as well as on toggle');
+  assert.equal(calls.length, 0, 'restoring saved state is not "turning it on" -- it must not re-run the confirmation');
+});
+
 // --- completeness gate: every required inventory item has a placement -------
 
 // Exactly the inventory areas the work packet calls out by name for

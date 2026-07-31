@@ -185,6 +185,7 @@ import {
   fetchWakeModels,
   downloadWakeModel,
   fetchWakeModelDownloadState,
+  deleteWakeModel,
   provisionVoiceCloning,
   fetchCapabilities,
   // Wave 11B: both of these were already exported by api/backend.js; the audio
@@ -226,6 +227,13 @@ import {
   emergencyStop,
 } from '../api/backend.js';
 import { initMessageRescueDraft } from './messageRescueDraft.js';
+import {
+  LATENCY_PROBE_MODES,
+  PROBE_MODE_CONFIG,
+  formatProbeMetric,
+  normalizeResourceMetrics,
+  runLatencyProbe,
+} from '../lib/latencyProbe.mjs';
 
 // Side-effect imports: both self-initialize on import by querying their own
 // canonical DOM ids (`#messageRescuePanel`, `#textPlaygroundSection`) and
@@ -393,6 +401,112 @@ export function formatMb(mb) {
   return n >= 1024 ? `${(n / 1024).toFixed(1)} GB` : `${Math.round(n)} MB`;
 }
 
+export function formatBytes(bytes) {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n <= 0) return 'unknown';
+  return formatMb(n / (1024 * 1024));
+}
+
+// Hugging Face does not include a download-size estimate in the Whisper list
+// response. Keep these estimates visible as estimates, while preferring the
+// server's measured cache size once a model is installed. This gives an
+// operator useful planning information without presenting a guessed number as
+// a measurement.
+export const WHISPER_MODEL_METADATA = {
+  'tiny.en': {
+    downloadMb: 75,
+    installedMb: 150,
+    tradeoff: 'Fastest and lightest; lowest accuracy, especially in noisy audio.',
+    hardware: 'Any modern CPU; 2 GB RAM is comfortable.',
+  },
+  'base.en': {
+    downloadMb: 145,
+    installedMb: 290,
+    tradeoff: 'Good speed/accuracy balance for everyday dictation.',
+    hardware: 'Modern CPU; 4 GB RAM recommended.',
+  },
+  'small.en': {
+    downloadMb: 465,
+    installedMb: 950,
+    tradeoff: 'Higher accuracy than Base, with noticeably more latency and memory.',
+    hardware: 'Modern CPU or GPU; 8 GB RAM recommended.',
+  },
+  'medium.en': {
+    downloadMb: 1500,
+    installedMb: 3000,
+    tradeoff: 'High accuracy; slower and memory-heavy for long recordings.',
+    hardware: 'Dedicated GPU preferred; 12 GB RAM recommended.',
+  },
+  'large-v3': {
+    downloadMb: 3100,
+    installedMb: 6200,
+    tradeoff: 'Best general accuracy; slowest and most demanding option.',
+    hardware: 'Dedicated GPU strongly recommended; 16 GB RAM or more.',
+  },
+  'distil-medium.en': {
+    downloadMb: 1500,
+    installedMb: 3000,
+    tradeoff: 'Near-Medium quality with faster inference; some accuracy tradeoff.',
+    hardware: 'Modern CPU or GPU; 12 GB RAM recommended.',
+  },
+  'distil-large-v3': {
+    downloadMb: 1600,
+    installedMb: 3200,
+    tradeoff: 'Near-Large quality with faster inference; more memory than Medium.',
+    hardware: 'Dedicated GPU preferred; 16 GB RAM or more.',
+  },
+};
+
+function whisperMetadata(modelSize) {
+  return WHISPER_MODEL_METADATA[String(modelSize || '').trim()] || {
+    downloadMb: null,
+    installedMb: null,
+    tradeoff: 'Quality and speed depend on the selected model.',
+    hardware: 'Check your available RAM/VRAM before downloading.',
+  };
+}
+
+function modelVerification(model, verification) {
+  if (verification?.status === 'verified') return verification.message;
+  if (verification?.status === 'failed') return verification.message;
+  if (model?.verified === true) return 'Verified intact by the model manager.';
+  if (model?.installed && Number(model.size_bytes) > 0) {
+    return 'Installed cache is present; the backend reports no digest check.';
+  }
+  return 'Not verified — download is required.';
+}
+
+/**
+ * Full operator-facing metadata for an explicit Whisper download. The API
+ * currently supplies installed bytes and download state, while the static
+ * estimates explain the choice before a download starts.
+ */
+export function buildWhisperModelDetails(model, payload, downloadState, verification) {
+  const row = model || {};
+  const size = String(row.model_size || payload?.selected_model_size || 'unknown');
+  const meta = whisperMetadata(size);
+  const installedSize = Number(row.size_bytes) > 0 ? formatBytes(row.size_bytes) : formatMb(meta.installedMb);
+  const downloadSize = Number(row.download_size_mb) > 0 ? formatMb(row.download_size_mb) : formatMb(meta.downloadMb);
+  const state = downloadState?.status || (row.installed ? 'installed' : 'idle');
+  const stateLabel = (state === 'installed' || row.installed || (state === 'complete' && (row.installed || verification?.status === 'verified'))) ? 'Installed and Ready' : state === 'error' ? 'Download failed' : state === 'downloading' || state === 'starting' ? 'Downloading' : state === 'complete' ? 'Download complete — verifying…' : 'Not installed';
+  return {
+    name: size,
+    state: stateLabel,
+    rows: [
+      { label: 'Name', value: size },
+      { label: 'Type', value: 'Whisper speech-to-text model' },
+      { label: 'Download size', value: `${downloadSize} (estimated)` },
+      { label: 'Installed size', value: row.installed ? installedSize : `${installedSize} (estimated)` },
+      { label: 'Purpose', value: 'Transcribes recorded speech into text.' },
+      { label: 'Quality / speed', value: meta.tradeoff },
+      { label: 'Recommended hardware', value: meta.hardware },
+      { label: 'Install location', value: row.install_location || payload?.models_dir || 'Managed Whisper model cache' },
+      { label: 'Progress', value: downloadState?.message || `${clampPct(downloadState?.percent)}%` },
+      { label: 'Verification', value: modelVerification(row, verification) },
+    ],
+  };
+}
+
 export function clampPct(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return 0;
@@ -455,9 +569,13 @@ export function buildDoctorCardModel(id, data) {
     if (!d.initialized) triggers.push('missing_model');
   } else if (id === 'llm') {
     const runtimeIncompatible = d.llama_server_exists && d.runtime_compatible === false;
-    tone = d.ready ? 'ok' : runtimeIncompatible || d.initialized ? 'warn' : 'error';
-    status = d.ready ? 'Ready' : runtimeIncompatible ? 'Runtime outdated' : d.initialized ? 'Warming Up' : 'Offline';
-    lines.push(`Selected model: ${d.model_id ?? 'None'}`, `llama-server: ${d.llama_server_exists ? 'Found' : 'Missing'}`);
+    const runtimeStatus = d.runtime_status || (runtimeIncompatible ? 'runtime_outdated' : d.ready ? 'ready' : d.initialized ? 'not_loaded' : 'offline');
+    const ready = runtimeStatus === 'ready';
+    const failed = ['missing_llama_server', 'missing_model', 'runtime_link_failure', 'startup_failure'].includes(runtimeStatus);
+    tone = ready ? 'ok' : runtimeStatus === 'runtime_outdated' ? 'warn' : failed ? 'error' : d.initialized ? 'warn' : 'error';
+    status = ready ? 'Ready' : runtimeStatus === 'runtime_outdated' ? 'Runtime outdated' : runtimeStatus === 'missing_model' ? 'Model missing' : runtimeStatus === 'missing_llama_server' ? 'Runtime missing' : runtimeStatus === 'startup_failure' ? 'Startup failed' : d.initialized ? 'Warming Up' : 'Offline';
+    lines.push(`Selected model: ${d.model_id ?? 'None'}`, `Runtime: ${runtimeStatus}`, `llama-server: ${d.llama_server_exists ? 'Found' : 'Missing'}`);
+    if (d.runtime_message || d.last_error) lines.push(`Reason: ${d.runtime_message || d.last_error}`);
     if (runtimeIncompatible) triggers.push('outdated_runtime');
     if (!d.llama_server_exists) triggers.push('missing_llama_server');
     if (!d.initialized && d.llama_server_exists && !runtimeIncompatible && !d.model_exists) triggers.push('missing_model');
@@ -521,6 +639,21 @@ export function buildDoctorModel(doctorPayload) {
     }))
     .filter((r) => r.text);
   return { cards, recovery };
+}
+
+/**
+ * Rendering-safe Doctor view model. `/doctor` normally returns all eight
+ * subsystems, but a partial response or a future backend version must not turn
+ * an absent signal into an "Offline" card. Keep buildDoctorModel's historical
+ * complete shape for callers that use it as a schema, and use this helper for
+ * actual DOM output.
+ */
+export function buildSignalBackedDoctorModel(doctorPayload) {
+  const doctor = doctorPayload || {};
+  const model = buildDoctorModel(doctor);
+  const cards = model.cards.filter((card) => Object.prototype.hasOwnProperty.call(doctor, card.id));
+  const triggers = new Set(cards.flatMap((card) => card.triggers));
+  return { ...model, cards, recovery: model.recovery.filter((item) => triggers.has(item.trigger)) };
 }
 
 // --- Pure helpers: jobs / recordings ----------------------------------------
@@ -684,6 +817,10 @@ export const UTILITIES_ELEMENT_IDS = {
   doctorRecoveryPanel: 'sdUtilDoctorRecoveryPanel',
   doctorRecoveryList: 'sdUtilDoctorRecoveryList',
   metricsHud: 'sdUtilMetricsHud',
+  probeMode: 'sdUtilLatencyProbeMode',
+  probeRunButton: 'sdUtilLatencyProbeRunButton',
+  probeStatus: 'sdUtilLatencyProbeStatus',
+  probeResults: 'sdUtilLatencyProbeResults',
   recordingsList: 'sdUtilRecordingsList',
   recordingsClearButton: 'sdUtilRecordingsClearButton',
   recordingsMessage: 'sdUtilRecordingsMessage',
@@ -789,6 +926,12 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
   // show the loading/unavailable placeholder" from "a working picker exists,
   // so a transient failure must leave it alone."
   let audioDevicesLoaded = false;
+  // Explicit Utilities downloads are long-running POSTs. Keep their live
+  // state separate from the last completed model-list payload so the panel
+  // can repaint while the POST is still in flight.
+  let modelDownloadOverrides = { llm: null, whisper: null };
+  let modelDownloadPollTimer = null;
+  const modelVerifications = { llm: null, whisper: null };
   // Same "has this panel ever shown real data" tracking for the Diagnostics
   // surfaces below, each of which used to overwrite its own last-good render
   // with an error (or, worse, an indistinguishable-from-real-data empty
@@ -800,6 +943,9 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
   let diagnosticsPathsLoaded = false;
   let debugLogTailLoaded = false;
   let metricsLoaded = false;
+  let lastDoctorPayload = null;
+  let latencyProbeResult = null;
+  let latencyProbeRunning = false;
   let capabilitiesDumpLoaded = false;
   let runtimeStatusDumpLoaded = false;
   let outputSettingsSummaryLoaded = false;
@@ -943,14 +1089,22 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
       els.llmBadge.textContent = !visible ? 'Missing' : visible.id === llmPayload.selected_model_id ? 'Selected' : visible.installed ? 'Installed' : 'Missing';
       els.llmBadge.dataset.tone = visible?.installed ? 'success' : 'danger';
     }
+    const llmState = modelDownloadOverrides.llm || llmPayload.download_state;
     renderModelDetails(els.llmDetails, [
       { label: 'Selected', value: llmPayload.selected_model_id || 'none' },
       { label: 'Viewing', value: visible?.name || visible?.id || 'unknown' },
+      { label: 'Type', value: 'Local language model (LLM)' },
+      { label: 'Purpose', value: 'Cleans up and rewrites dictated text.' },
+      { label: 'Quality / speed', value: visible?.tradeoff || 'Larger models improve quality but use more memory and run slower.' },
+      { label: 'Recommended hardware', value: visible?.hardware || 'Use the recommendation above for this machine.' },
+      { label: 'Download size', value: formatMb(visible?.download_size_mb || visible?.size_mb) },
+      { label: 'Installed size', value: visible?.installed_size_mb ? formatMb(visible.installed_size_mb) : visible?.installed ? formatMb(visible?.size_mb) : 'Not installed' },
       { label: 'Install state', value: visible?.installed ? 'installed' : 'missing' },
-      { label: 'Approx size', value: formatMb(visible?.size_mb) },
+      { label: 'Verification', value: modelVerification(visible, modelVerifications.llm) },
+      { label: 'Install location', value: visible?.install_location || llmPayload.models_dir || 'Managed LLM model directory' },
       { label: 'Runtime', value: llmPayload.llama_server_exists ? 'found' : 'missing' },
     ]);
-    renderDownloadProgress(els.llmProgress, els.llmProgressLabel, els.llmProgressPercent, els.llmProgressFill, llmPayload.download_state);
+    renderDownloadProgress(els.llmProgress, els.llmProgressLabel, els.llmProgressPercent, els.llmProgressFill, llmState);
   }
 
   function renderWhisperPanel() {
@@ -975,14 +1129,14 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
       els.whisperBadge.textContent = !visible ? 'Missing' : visibleSize === whisperPayload.selected_model_size ? 'Selected' : visible.installed ? 'Installed' : 'Missing';
       els.whisperBadge.dataset.tone = visible?.installed ? 'success' : 'danger';
     }
-    const installed = models.filter((m) => m.installed).map((m) => m.model_size);
-    renderModelDetails(els.whisperDetails, [
-      { label: 'Selected', value: whisperPayload.selected_model_size || 'none' },
-      { label: 'Viewing', value: visibleSize || 'none' },
-      { label: 'Install state', value: visible?.installed ? 'installed' : 'missing' },
-      { label: 'Installed', value: installed.length ? installed.join(', ') : 'none' },
-    ]);
-    renderDownloadProgress(els.whisperProgress, els.whisperProgressLabel, els.whisperProgressPercent, els.whisperProgressFill, whisperPayload.download_state);
+    const whisperState = modelDownloadOverrides.whisper || whisperPayload.download_state;
+    const details = buildWhisperModelDetails(visible, whisperPayload, whisperState, modelVerifications.whisper);
+    renderModelDetails(els.whisperDetails, details.rows);
+    if (els.whisperBadge) {
+      els.whisperBadge.textContent = details.state;
+      els.whisperBadge.dataset.tone = details.state === 'Installed and Ready' ? 'success' : details.state === 'Download failed' ? 'danger' : 'info';
+    }
+    renderDownloadProgress(els.whisperProgress, els.whisperProgressLabel, els.whisperProgressPercent, els.whisperProgressFill, whisperState);
   }
 
   function renderModelStatusSummary() {
@@ -1024,6 +1178,70 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
     renderModelStatusSummary();
   }
 
+  function stopModelDownloadPolling() {
+    if (modelDownloadPollTimer) {
+      clearInterval(modelDownloadPollTimer);
+      modelDownloadPollTimer = null;
+    }
+  }
+
+  async function pollModelDownload(kind, fetchState) {
+    try {
+      const result = await fetchState();
+      const state = result?.download_state || result;
+      if (!state) return;
+      modelDownloadOverrides[kind] = state;
+      if (kind === 'whisper' && result?.models) whisperPayload = result;
+      if (kind === 'llm' && result?.models) llmPayload = result;
+      if (kind === 'whisper') renderWhisperPanel();
+      else renderLlmPanel();
+    } catch (_error) {
+      // A missed progress sample must not turn a real download into a false
+      // failure. The download request remains the source of truth.
+    }
+  }
+
+  async function runExplicitModelDownload({ kind, id, label, download, fetchState }) {
+    stopModelDownloadPolling();
+    modelVerifications[kind] = null;
+    modelDownloadOverrides[kind] = { status: 'starting', percent: 0, message: `Starting ${label} download…` };
+    if (kind === 'whisper') renderWhisperPanel();
+    else renderLlmPanel();
+    setMessage(els.modelsMessage, `Downloading ${label} '${id}'… progress will update here.`, 'info');
+    modelDownloadPollTimer = setInterval(() => { pollModelDownload(kind, fetchState); }, 500);
+    let result;
+    try {
+      result = await download();
+    } catch (error) {
+      modelDownloadOverrides[kind] = { status: 'error', percent: 0, message: error.message || `${label} download failed.` };
+      modelVerifications[kind] = { status: 'failed', message: `Verification failed: ${error.message || 'download failed'}` };
+      if (kind === 'whisper') renderWhisperPanel();
+      else renderLlmPanel();
+      setMessage(els.modelsMessage, `${label} download failed: ${error.message}`, 'danger');
+      stopModelDownloadPolling();
+      return;
+    }
+    stopModelDownloadPolling();
+    const ok = result?.ok !== false;
+    modelDownloadOverrides[kind] = ok
+      ? { status: 'complete', percent: 100, message: `${label} download complete — verifying…` }
+      : { status: 'error', percent: 0, message: result?.message || `${label} download failed.` };
+    await refreshModels();
+    const payload = kind === 'whisper' ? whisperPayload : llmPayload;
+    const installed = kind === 'whisper'
+      ? payload?.models?.find((m) => m.model_size === id)?.installed
+      : payload?.models?.find((m) => m.id === id)?.installed;
+    modelVerifications[kind] = ok && installed
+      ? { status: 'verified', message: 'Verified by the model inventory; Installed and Ready.' }
+      : { status: 'failed', message: ok ? 'Download returned complete, but the model inventory did not confirm installation.' : (result?.message || `${label} download failed.`) };
+    modelDownloadOverrides[kind] = ok && installed
+      ? null
+      : { status: 'error', percent: 0, message: modelVerifications[kind].message };
+    if (kind === 'whisper') renderWhisperPanel();
+    else renderLlmPanel();
+    setMessage(els.modelsMessage, modelVerifications[kind].message, ok && installed ? 'success' : 'danger');
+  }
+
   async function refreshModelRecommendation() {
     if (!els.modelsRecommendation) return;
     try {
@@ -1055,17 +1273,25 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
       title.textContent = backbone.name || backbone.id;
       const meta = document.createElement('span');
       meta.className = 'sd-util-list-row__meta';
-      meta.textContent = backbone.installed ? 'Installed' : 'Not installed';
+      meta.textContent = backbone.downloaded ? 'Installed' : 'Not installed';
       main.append(title, meta);
       const actions = document.createElement('div');
       actions.className = 'sd-util-list-row__actions';
-      if (!backbone.installed) {
+      if (!backbone.downloaded) {
         const dl = document.createElement('button');
         dl.type = 'button';
         dl.className = 'sd-btn';
         dl.textContent = 'Download';
         dl.addEventListener('click', () => handleDownloadWakeBackbone(backbone.id, dl));
         actions.append(dl);
+      }
+      if (backbone.origin === 'user-imported') {
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'sd-btn sd-action-btn--danger';
+        del.textContent = 'Delete';
+        del.addEventListener('click', () => handleDeleteWakeBackbone(backbone.id, backbone.name, del));
+        actions.append(del);
       }
       row.append(main, actions);
       els.wakeBackboneList.append(row);
@@ -1097,12 +1323,34 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
     }
   }
 
+  async function handleDeleteWakeBackbone(id, name, buttonEl) {
+    if (!confirmFn(`Delete wake model "${name || id}"? This cannot be undone.`)) return;
+    if (buttonEl) {
+      buttonEl.disabled = true;
+      buttonEl.textContent = 'Deleting…';
+    }
+    try {
+      await deleteWakeModel(id);
+      if (profileSettingsCache.wake_word_model === id) {
+        if (els.wakeModelSelect) els.wakeModelSelect.value = '';
+        await patchProfileSetting('wake_word_model', '', { messageEl: els.wakeMessage });
+      }
+      await refreshWakeBackbones();
+    } catch (error) {
+      setMessage(els.modelsMessage, `Delete failed: ${error.message}`, 'danger');
+      if (buttonEl) {
+        buttonEl.disabled = false;
+        buttonEl.textContent = 'Delete';
+      }
+    }
+  }
+
   async function refreshWakeBackbones() {
     const result = await attemptFetch(() => fetchWakeModels());
     if (result.ok) {
       const res = result.value;
-      if (els.wakeEngineBadge) els.wakeEngineBadge.textContent = Array.isArray(res?.backbones) && res.backbones.some((b) => b.installed) ? 'Ready' : 'Not installed';
-      renderWakeBackbones(res?.backbones || []);
+      if (els.wakeEngineBadge) els.wakeEngineBadge.textContent = Array.isArray(res?.models) && res.models.some((b) => b.downloaded) ? 'Ready' : 'Not installed';
+      renderWakeBackbones(res?.models || []);
     } else {
       // No render call on failure -- the badge and list keep showing whatever
       // was last successfully loaded rather than being blanked.
@@ -1125,8 +1373,14 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
       refreshModelRecommendation();
       refreshWakeBackbones();
     });
-    els.llmSelect?.addEventListener?.('change', () => renderLlmPanel());
-    els.whisperSelect?.addEventListener?.('change', () => renderWhisperPanel());
+    els.llmSelect?.addEventListener?.('change', () => {
+      modelVerifications.llm = null;
+      renderLlmPanel();
+    });
+    els.whisperSelect?.addEventListener?.('change', () => {
+      modelVerifications.whisper = null;
+      renderWhisperPanel();
+    });
 
     els.llmSelectButton?.addEventListener?.('click', async () => {
       const id = els.llmSelect?.value;
@@ -1142,12 +1396,13 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
     els.llmDownloadButton?.addEventListener?.('click', async () => {
       const id = els.llmSelect?.value;
       if (!id) return;
-      try {
-        await downloadLlmModel(id);
-        await refreshModels();
-      } catch (error) {
-        setMessage(els.modelsMessage, `Download failed: ${error.message}`, 'danger');
-      }
+      await runExplicitModelDownload({
+        kind: 'llm',
+        id,
+        label: 'LLM',
+        download: () => downloadLlmModel(id),
+        fetchState: () => fetchLlmDownloadState(id),
+      });
     });
     els.llmDeleteButton?.addEventListener?.('click', async () => {
       const id = els.llmSelect?.value;
@@ -1155,6 +1410,8 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
       if (!confirmFn(`Delete LLM model "${id}"? This cannot be undone.`)) return;
       try {
         await deleteLlmModel(id, undefined, { confirmed: true });
+        modelVerifications.llm = null;
+        modelDownloadOverrides.llm = null;
         await refreshModels();
       } catch (error) {
         setMessage(els.modelsMessage, `Delete failed: ${error.message}`, 'danger');
@@ -1183,12 +1440,15 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
     els.whisperDownloadButton?.addEventListener?.('click', async () => {
       const size = els.whisperSelect?.value;
       if (!size) return;
-      try {
-        await downloadWhisperModel(size);
-        await refreshModels();
-      } catch (error) {
-        setMessage(els.modelsMessage, `Download failed: ${error.message}`, 'danger');
-      }
+      await runExplicitModelDownload({
+        kind: 'whisper',
+        id: size,
+        label: 'Whisper',
+        download: () => downloadWhisperModel(size),
+        // There is no per-model Whisper state endpoint. The list route's
+        // download_state is the real progress signal used by Talk as well.
+        fetchState: fetchWhisperModels,
+      });
     });
     els.whisperDeleteButton?.addEventListener?.('click', async () => {
       const size = els.whisperSelect?.value;
@@ -1196,6 +1456,8 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
       if (!confirmFn(`Delete Whisper model "${size}"? This cannot be undone.`)) return;
       try {
         await deleteWhisperModel(size, undefined, { confirmed: true });
+        modelVerifications.whisper = null;
+        modelDownloadOverrides.whisper = null;
         await refreshModels();
       } catch (error) {
         setMessage(els.modelsMessage, `Delete failed: ${error.message}`, 'danger');
@@ -1312,7 +1574,16 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
     // that shows the right list with the wrong device selected.
     const settings = await refreshProfileSettings();
     const stored = settings?.input_device_index;
-    if (stored !== undefined && stored !== null && stored !== '') {
+    // OR-06: a fresh, never-touched profile still carries the backend's raw
+    // `-1` sentinel (utils.py's _profile_defaults()), not the `null` this
+    // page's own "System default" option uses. Assigning "-1" to a <select>
+    // with no matching option value deselects everything (native <select>
+    // value semantics: no match -> selectedIndex -1), so the control would
+    // render visibly blank instead of showing "System default" on first
+    // launch. Only a real, non-negative device index names an actual option;
+    // undefined/null/''/negative all leave the select on its default first
+    // option ("System default").
+    if (typeof stored === 'number' && stored >= 0) {
       els.audioDeviceSelect.value = String(stored);
     }
     return payload;
@@ -1838,8 +2109,21 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
 
   function renderDoctorCards(doctorPayload) {
     if (!els.doctorCardsGrid) return;
-    const model = buildDoctorModel(doctorPayload);
+    lastDoctorPayload = doctorPayload || null;
+    // A real `/doctor` response carries the health envelope. Only that
+    // response is allowed to drive the signal-gated renderer; keeping the
+    // legacy schema fallback here preserves preview fixtures that predate the
+    // envelope without letting a production partial response invent rows.
+    const model = doctorPayload && Object.prototype.hasOwnProperty.call(doctorPayload, 'health')
+      ? buildSignalBackedDoctorModel(doctorPayload)
+      : buildDoctorModel(doctorPayload);
     els.doctorCardsGrid.replaceChildren();
+    if (!model.cards.length) {
+      const empty = document.createElement('span');
+      empty.className = 'sd-util-list__empty';
+      empty.textContent = 'Doctor returned no subsystem status.';
+      els.doctorCardsGrid.append(empty);
+    }
     model.cards.forEach((card) => {
       const el = document.createElement('div');
       el.className = 'sd-util-doctor-card';
@@ -1910,6 +2194,46 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
   function renderMetricsHud(metrics) {
     if (!els.metricsHud) return;
     els.metricsHud.replaceChildren();
+    const probePanel = document.createElement('div');
+    probePanel.className = 'sd-util-latency-probe';
+    const probeHeader = document.createElement('div');
+    probeHeader.className = 'sd-util-group__header';
+    const probeTitle = document.createElement('span');
+    probeTitle.className = 'sd-util-group__title';
+    probeTitle.textContent = 'Latency / Throughput Probe';
+    const probeControls = document.createElement('div');
+    probeControls.className = 'sd-actions-row';
+    const probeMode = document.createElement('select');
+    probeMode.className = 'sd-util-select';
+    probeMode.id = 'sdUtilLatencyProbeMode';
+    LATENCY_PROBE_MODES.forEach((mode) => {
+      const option = document.createElement('option');
+      option.value = mode;
+      option.textContent = `${mode[0].toUpperCase()}${mode.slice(1)} (${PROBE_MODE_CONFIG[mode].runs} runs)`;
+      probeMode.append(option);
+    });
+    const probeRunButton = document.createElement('button');
+    probeRunButton.type = 'button';
+    probeRunButton.className = 'sd-btn';
+    probeRunButton.id = 'sdUtilLatencyProbeRunButton';
+    probeRunButton.textContent = 'Run probe';
+    probeControls.append(probeMode, probeRunButton);
+    probeHeader.append(probeTitle, probeControls);
+    const probeStatus = document.createElement('span');
+    probeStatus.className = 'sd-util-message';
+    probeStatus.id = 'sdUtilLatencyProbeStatus';
+    probeStatus.textContent = 'No probe run yet. Stage runners must report real pipeline work.';
+    const probeResults = document.createElement('div');
+    probeResults.id = 'sdUtilLatencyProbeResults';
+    probePanel.append(probeHeader, probeStatus, probeResults);
+    els.metricsHud.append(probePanel);
+    els.probeMode = probeMode;
+    els.probeRunButton = probeRunButton;
+    els.probeStatus = probeStatus;
+    els.probeResults = probeResults;
+    if (latencyProbeResult) renderLatencyProbeResult(latencyProbeResult);
+    bindLatencyProbe();
+
     const stages = metrics?.stages || metrics || {};
     const table = document.createElement('table');
     table.className = 'sd-util-metrics-table';
@@ -1930,6 +2254,93 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
       table.append(row);
     });
     els.metricsHud.append(table);
+  }
+
+  function renderLatencyProbeResult(result) {
+    if (!els.probeStatus || !els.probeResults || !result) return;
+    const bound = result.bound || {};
+    els.probeStatus.textContent = `${result.mode} completed ${result.completedRuns}/${result.requestedRuns} runs in ${formatProbeMetric(result.elapsedMs)}. Bound: max ${bound.maxRuns} runs / ${formatProbeMetric(bound.maxDurationMs)} total / ${formatProbeMetric(bound.stageTimeoutMs)} per stage${bound.truncated ? ' (stopped at bound)' : ''}.`;
+    els.probeResults.replaceChildren();
+    const table = document.createElement('table');
+    table.className = 'sd-util-metrics-table';
+    const heading = document.createElement('tr');
+    ['Stage', 'Average', 'OK', 'Failed', 'Timed out', 'Unavailable'].forEach((label) => {
+      const cell = document.createElement('th');
+      cell.textContent = label;
+      heading.append(cell);
+    });
+    table.append(heading);
+    Object.entries(result.stages || {}).forEach(([name, stat]) => {
+      const row = document.createElement('tr');
+      [name, formatProbeMetric(stat.avgMs), stat.ok, stat.failed, stat.timedOut, stat.unavailable].forEach((value) => {
+        const cell = document.createElement('td');
+        cell.textContent = String(value);
+        row.append(cell);
+      });
+      table.append(row);
+    });
+    const issues = result.runs.flatMap((run) => Object.values(run.stages || {})
+      .filter((stage) => stage.status === 'failed' || stage.status === 'timed_out')
+      .map((stage) => `Run ${run.runIndex + 1}: ${stage.name} ${stage.status.replace('_', ' ')} after ${formatProbeMetric(stage.durationMs)} — ${stage.error || 'no detail'}`));
+    if (issues.length) {
+      const issueList = document.createElement('ul');
+      issueList.className = 'sd-util-list';
+      issues.forEach((issue) => {
+        const row = document.createElement('li');
+        row.textContent = issue;
+        issueList.append(row);
+      });
+      els.probeResults.append(issueList);
+    }
+    const resources = result.runs?.at(-1)?.resources || normalizeResourceMetrics(null);
+    const resourceLine = document.createElement('p');
+    resourceLine.className = 'sd-util-message';
+    resourceLine.textContent = `CPU: ${formatProbeMetric(resources.cpu?.usagePercent, '%')} · RAM: ${formatProbeMetric(resources.ram?.usedPercent, '%')} used · GPU: ${resources.gpu?.name || 'not available'} · VRAM: ${formatProbeMetric(resources.vram?.usedMb, ' MB')} / ${formatProbeMetric(resources.vram?.totalMb, ' MB')}`;
+    els.probeResults.append(table, resourceLine);
+  }
+
+  function bindLatencyProbe() {
+    if (!els.probeRunButton || els.probeRunButton.dataset.bound === 'true') return;
+    els.probeRunButton.dataset.bound = 'true';
+    els.probeRunButton.addEventListener('click', async () => {
+      if (latencyProbeRunning) return;
+      latencyProbeRunning = true;
+      const mode = LATENCY_PROBE_MODES.includes(els.probeMode?.value) ? els.probeMode.value : 'light';
+      const config = PROBE_MODE_CONFIG[mode];
+      els.probeRunButton.disabled = true;
+      if (els.probeStatus) els.probeStatus.textContent = `Running ${mode}: up to ${config.maxRuns} sequential runs, ${formatProbeMetric(config.maxDurationMs)} total bound…`;
+      try {
+        const configuredStages = hks.latencyProbeStages || {};
+        const stages = Object.fromEntries(['stt', 'rewrite', 'tts'].map((name) => [
+          name,
+          typeof configuredStages[name] === 'function'
+            ? configuredStages[name]
+            : typeof hks.runLatencyStage === 'function'
+              ? (context) => hks.runLatencyStage(name, context)
+              : null,
+        ]));
+        const result = await runLatencyProbe({
+          mode,
+          stages,
+          metricsProvider: async () => {
+            if (lastDoctorPayload?.hardware) return lastDoctorPayload;
+            return fetchDoctor(false);
+          },
+        });
+        latencyProbeResult = result;
+        renderLatencyProbeResult(result);
+        if (result.runs.some((run) => Object.values(run.stages).some((stage) => stage.status !== 'ok'))) {
+          hks.showToast?.('Probe completed with unavailable, failed, or timed-out stages.', 'warning');
+        } else {
+          hks.showToast?.('Latency probe completed.', 'success');
+        }
+      } catch (error) {
+        if (els.probeStatus) els.probeStatus.textContent = `Probe failed before a run completed: ${error.message}`;
+      } finally {
+        latencyProbeRunning = false;
+        if (els.probeRunButton) els.probeRunButton.disabled = false;
+      }
+    });
   }
 
   async function refreshMetrics() {
@@ -2185,6 +2596,9 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
   }
 
   function bindDiagnosticsSection() {
+    // Metrics HUD is rendered after the first backend refresh; bind is also
+    // called here for preview/test documents that already provide the panel.
+    bindLatencyProbe();
     els.doctorRefreshButton?.addEventListener?.('click', () => refreshDoctor());
     els.recordingsClearButton?.addEventListener?.('click', async () => {
       if (!confirmFn('Clear all saved recordings? This cannot be undone.')) return;

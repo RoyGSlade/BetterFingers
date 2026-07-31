@@ -462,6 +462,10 @@
           // did not withhold this draft (low/missing confidence, long, or gated).
           if (outputSettings?.send_mode === 'auto_send' && currentDraft?.auto_send_ok !== false) {
             const action = defaultSendAction();
+            // OR-01: last visible moment before send_draft_by_id pastes/types and
+            // presses Enter into whichever window has OS focus -- named here, not
+            // just implied by "Accepting...", since this is the point of no return.
+            setOverlayState('accepted', 'Sending -- about to press Enter in the focused window...');
             const sentDraft = await sendDraftTyped(currentDraft.id, action, 120000);
             renderDraft(sentDraft);
 

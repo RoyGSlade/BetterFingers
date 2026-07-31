@@ -706,6 +706,161 @@ ROW_ANCHORS: dict[str, dict] = {
         'why': 'The review overlay\'s three badges: session status, TTS backend and voice command, cross-referenced from §12.2',
     },
 
+    # --- Wave 13 (B-1): onboarding wizard step content + keyboard trap -----
+    #
+    # These three rows cite no handle at all in the source inventory -- they
+    # are prose describing step content and a keyboard contract, not an
+    # element id. #sdOnboarding's four `.sd-flow__step` bodies have no
+    # per-step id of their own (guidedFlow.js addresses bare `data-flow-step`
+    # sections by POSITION, not by id -- see its render() comment), so the
+    # concrete handle a human can verify is the step DEFINITION
+    # (features/onboardingFlow.js buildOnboardingSteps()) plus the shared
+    # title element it paints into.
+    'UI-02-005': {
+        'anchors': ['#sdOnboardingTitle', 'buildOnboardingSteps'],
+        'why': (
+            'Step 1 "Welcome": buildOnboardingSteps() (features/onboardingFlow.js:64) declares the '
+            '`welcome` step with title \'Welcome to BetterFingers\' and primaryLabel \'Get started\', '
+            'and states no `canAdvance` gate -- the "no gating" this row names, since guidedFlow.js '
+            'treats an absent gate as always-advanceable. render() paints that title into '
+            '#sdOnboardingTitle (signal-desk.html:94) and shows the first `.sd-flow__step` body '
+            '(signal-desk.html:104-113), the static "what you\'ll do" copy this row calls out. '
+            'Covered behaviourally, not just for existence, by onboarding-prod.mjs\'s '
+            '`the-first-run-gate-is-a-four-step-wizard`, which walks this exact step and asserts its '
+            'title, its forward label, that exactly one body is visible, its copy, and that clicking '
+            'Next actually advances the wizard.'
+        ),
+    },
+    'UI-02-007': {
+        'anchors': ['#sdOnboardingTitle', 'buildOnboardingSteps'],
+        'why': (
+            'Step 3 "How it works": buildOnboardingSteps() (features/onboardingFlow.js:71) declares '
+            'the `how` step with title \'How it works\' and primaryLabel \'Next\', painted into '
+            '#sdOnboardingTitle and the third `.sd-flow__step` body (signal-desk.html:132-141) -- the '
+            'record -> review -> send explainer bullets this row names. Covered behaviourally by '
+            'onboarding-prod.mjs\'s `the-first-run-gate-is-a-four-step-wizard`, which advances to this '
+            'step via a real Next click and asserts its title, forward label, single-visible-body '
+            'invariant, and its record/review/send copy.'
+        ),
+    },
+    'UI-02-012': {
+        'anchors': ['trapTab', 'dismissible'],
+        'why': (
+            'Keyboard trap: guidedFlow.js\'s trapTab() (bound on every keydown while `#sdOnboarding` is '
+            'open) cycles Tab and Shift+Tab between the dialog\'s own focusable controls instead of '
+            'letting focus leave it, and onboardingFlow.js passes `dismissible: false` '
+            '(features/onboardingFlow.js:231) into createGuidedFlow(), which its onKeydown uses to '
+            'swallow Escape (`event.preventDefault()`, no close()) rather than dismiss the gate -- '
+            'exactly the "Tab cycles, Escape is swallowed" contract this row names. Covered by '
+            'onboarding-prod.mjs\'s new `keyboard-trap-cycles-focus-and-swallows-escape` scenario, which '
+            'Tabs forward through all four real focusable controls on the consent step and asserts the '
+            'last wraps back to the first, Shift+Tabs back and asserts the first wraps to the last, then '
+            'presses Escape and asserts the dialog stays open with focus undisturbed -- a real keyboard '
+            'round-trip, not a check that the dialog merely exists.'
+        ),
+    },
+
+    # --- Wave 13 (B-2): Talk voice-status fan-out + shared message-rescue -----
+    #
+    # Three prose rows citing no handle at all in the source inventory.
+    'UI-06-063': {
+        'anchors': ['connectVoiceStatus', 'handleVoiceStatusMessage'],
+        'why': (
+            'Event-driven refresh surfaces: api/backend.js\'s connectVoiceStatus() (bound in '
+            'bootstrap/signalDeskApp.js:593-601) fans one voice-status WS message out to THREE '
+            'independent handleVoiceStatusMessage() implementations -- features/talkWorkspace.js:557 '
+            '(Signal Core ring/label/meter), features/talkCapture.js:258 (capture action-row state, '
+            'including the long_recording_detected/chunking_*/chunking_stitching cases that produce '
+            'this row\'s "long-recording/chunking progress text"), and features/overlayBridge.js:241 '
+            '(the row\'s "overlay window status pushes" AND "review-overlay draft pushes" -- '
+            'REVIEW_SHOW/REVIEW_REFRESH/REVIEW_HIDE_STATUSES). Two of the six legacy effects this row '
+            'lists are RE-ARCHITECTED rather than reproduced verbatim, not silently dropped: '
+            '"draft-history refresh" moved off the WS push onto direct calls in features/drafts.js '
+            '(refreshDrafts() runs off the accept/decline/send/edit response itself, a stronger '
+            'guarantee than waiting for a follow-up event); the "watchdog-timeout toast" for '
+            '`watchdog_timeout_warning` (server.py:723 _broadcast_watchdog_timeout) reaches the same '
+            'fan-out and its real message text is shown on the capture status line '
+            '(#sdCaptureMessage, talkCapture.js\'s default-state message path) rather than a discrete '
+            'toast popup -- surfaced, just not in the exact legacy presentation. Flagged for the '
+            'director in room chat rather than silently claimed.'
+        ),
+    },
+    'UI-06-074': {
+        'anchors': ['formatAssessmentSummary', 'formatDeliverySignals', 'formatClarification'],
+        'why': (
+            'Assessment / delivery / clarification regions, "same shared renderer as 6.4/6.6": '
+            'features/messageRescue.js\'s formatAssessmentSummary()/formatDeliverySignals()/'
+            'formatClarification() (lines 159/196/178) are the literal shared renderer this row '
+            'names, called from formatMessageRescueViewModel() and reused VERBATIM (same canonical '
+            'ids, comment at signal-desk.html:1963/2022/2064) by all three Message Rescue surfaces: '
+            'the Talk-adjacent draft-bound live panel (features/messageRescueDraft.js, now hosted in '
+            'Utilities / Text Tools via initMessageRescueDraft() at utilitiesWorkspace.js:1822 -- a '
+            'workspace move, same pattern as the Hotkeys/Wake Word groups above), the static preview '
+            '(#messageRescueAssessment) and the Text Playground (#textPlaygroundAssessment). '
+            'app/tests/messageRescue.test.mjs already exercises all three functions on real, '
+            'malformed and empty input (percentage formatting, non-string filtering, missing-question '
+            'null-handling) -- behavioral coverage, not existence checks.'
+        ),
+    },
+    'UI-06-076': {
+        'anchors': ['formatPreservationChecks', 'formatWarnings'],
+        'why': (
+            'Preservation checks / warnings lists: features/messageRescue.js\'s '
+            'formatPreservationChecks()/formatWarnings() (lines 233/250), the same shared renderer as '
+            'UI-06-074, reused verbatim across the three Message Rescue surfaces '
+            '(#draftRescuePreservationList/#draftRescueWarningsList and their message-rescue/'
+            'textPlayground siblings). app/tests/messageRescue.test.mjs asserts real behavior: mixed '
+            'pass/fail entries, an entry with neither a `passed` nor `ok` field defaulting to FAILED '
+            'rather than silently passing, and non-array/malformed warnings collapsing to an empty '
+            'list rather than throwing.'
+        ),
+    },
+
+    # --- Wave 13 (B-6): blend / modulation quick-preset chips ---------------
+    #
+    # Three prose rows citing legacy attribute selectors (`[data-blend-preset]`
+    # / `[data-mod-preset]`), which this collector cannot resolve as a handle
+    # (an attribute name is not an id/class/endpoint/symbol) -- so they read as
+    # "no code handle" even though the same attributes ship verbatim on the
+    # production page (signal-desk.html:1558-1562 / 1644-1649).
+    'UI-07-133': {
+        'anchors': ['VOICE_BLEND_QUICK_PRESETS'],
+        'why': (
+            'Quick-blend chips: features/voiceStudio.js exports VOICE_BLEND_QUICK_PRESETS and binds '
+            'a `[data-blend-preset]` click handler over it (signal-desk.html:1556-1563 ships all five '
+            'chips -- softer/brighter/lower/narrator/assistant -- with matching data-blend-preset '
+            'values). Covered by shell-status-prod.mjs\'s '
+            '`voice-studio-quick-presets-exist-and-match-their-handlers`, which clicks the "softer" '
+            'chip and asserts the real #voiceEnergy/#voiceWarmth sliders move to that preset\'s exact '
+            'values -- proof the handler is live, not just that the button exists.'
+        ),
+    },
+    'UI-07-134': {
+        'anchors': ['setModulationControls'],
+        'why': (
+            'The "Modulation:" group heading itself (its four sliders are already anchored '
+            'individually at UI-07-109): features/voiceStudio.js\'s setModulationControls() is the '
+            'one function that paints pitch/energy/warmth/brightness/pause-style as a group, called '
+            'both by profile load and by every modulation quick-preset click. Covered by the same '
+            'shell-status-prod.mjs scenario, which clicks a modulation chip and asserts multiple '
+            'sliders in the group move together to that preset\'s values.'
+        ),
+    },
+    'UI-07-138': {
+        'anchors': ['VOICE_MODULATION_QUICK_PRESETS'],
+        'why': (
+            'Quick-modulation chips: features/voiceStudio.js exports VOICE_MODULATION_QUICK_PRESETS '
+            'and binds a `[data-mod-preset]` click handler over it (signal-desk.html:1642-1650 ships '
+            'all six chips -- clear/quiet/presentation/character/fast/accessibility -- with matching '
+            'data-mod-preset values; "accessibility" is the 0.75x-speed affordance that had silently '
+            'gone missing from the shipping page). Covered by shell-status-prod.mjs\'s '
+            '`voice-studio-quick-presets-exist-and-match-their-handlers`, which clicks the "quiet" '
+            'chip and asserts energy/warmth/brightness/pause-style/speed all move to that preset\'s '
+            'exact values in one click -- a second, different set of values than the blend click '
+            'that ran immediately before it, which only a live binding could produce twice in a row.'
+        ),
+    },
+
     # --- Wave 12 (D-0034 / director Ruling B): legacy-id re-anchors -----------
     #
     # tools/anchor_audit.py found seven rows naming a DOM id that exists in no
@@ -806,6 +961,26 @@ CUTS: dict[str, str] = {
         'having two entry points instead of three; the row is cut because the thing it points '
         'at is the one that went away.'
     ),
+    'UI-07-126': (
+        'Intentional cut: per director ruling D-0043, `setDefaultVoicePreset`/'
+        '`clearDefaultVoicePreset` are backend-supported, proxy-allowlisted, and exported from '
+        '`api/backend.js`, but have zero '
+        'callers anywhere in the renderer — no UI trigger exists or is being built. Replaced by '
+        'the voice-preset list\'s existing Apply action: `renderVoicePresetList()` in '
+        '`features/voiceStudio.js` renders one row per saved preset with an apply-on-click '
+        'button (-> `applyVoicePreset()`) and a Delete button (-> `deleteVoicePreset()`). Nothing '
+        'a user can do is lost — Apply reaches the identical end state a "default" would, in one '
+        'click, without the new persisted state and new conflict state a make-default concept '
+        'would require. This row and UI-15-012 describe the same capability and are cut together.'
+    ),
+    'UI-15-012': (
+        'Intentional cut: per director ruling D-0043, duplicate of UI-07-126 — same two dead exports '
+        '(`setDefaultVoicePreset`/`clearDefaultVoicePreset`), same ruling, same replacement: the '
+        'voice-preset list\'s existing Apply action (`renderVoicePresetList()` in '
+        '`features/voiceStudio.js`, apply-on-click, with `deleteVoicePreset()` for removal). See '
+        'UI-07-126 for the full rationale; both rows are cut together because they name one '
+        'capability, not two.'
+    ),
     'UI-06-062': (
         'Intentional cut: `#voiceStatusDetail` dumped the raw JSON of the latest voice-status '
         'message, and the inventory row itself calls it developer-facing. A payload readout is '
@@ -877,6 +1052,58 @@ CUTS: dict[str, str] = {
         '`#sdConfidenceBarFill`, evidenced by app/tests/talkDraftSurfaces.test.mjs). The id '
         'this row named, `#draftConfidence`, exists only in the legacy `index.html` rollback '
         'page and never in the production composition root.'
+    ),
+
+    # --- Wave 13 (B-3a, D-0036): delivery is Paste only -----------------------
+    'UI-06-038': (
+        'Intentional cut: the legacy `#sendActionSelect` five-option dropdown (Profile default / '
+        'Copy only / Paste / Type / Open chat then send) is not rebuilt. Replaced by '
+        '`#sdDeliverySegmented` (`app/src/renderer/signal-desk.html`, painted by '
+        '`features/talkWorkspace.js`), which Wave 2 already shipped as the ONE delivery '
+        'selector — but per D-0036 (docs/release/DECISIONS.md) that control is itself reduced '
+        'to a single Paste option for v0.2.0-alpha.1: Type and Copy are removed as user choices '
+        'on the shipping page (not merely hidden — the buttons do not exist). "Profile default" '
+        'and "Open chat then send" are not offered at all this release. '
+        '`backend/domain/gaming_policy.resolve_send_action()`\'s deliberate paste -> copy_only '
+        'downgrade under an active gaming profile is untouched by this cut. Covered by '
+        '`app/tests/qa/scenarios/signal-desk-talk.mjs`\'s `talk-single-delivery-selector`, which '
+        'asserts exactly one delivery option (Paste) is offered, Type/Copy are gone outright, and '
+        'clicking Paste still functionally presses it and updates the send-button label.'
+    ),
+
+    # --- Wave 13 (B-3b, D-0037): recording toggle -----------------------------
+    'UI-06-016': (
+        'Intentional cut: `#toggleRecordingButton` (one button flipping label + `data-recording` '
+        'between Start/Stop, calling `POST /runtime/recording/toggle`) exists only in the legacy '
+        '`app/src/renderer/index.html` rollback page and its handler `app/src/renderer/main.js:155`. '
+        '`features/runtime.js` still paints it but guarded by `if (els.toggleRecordingButton)`, which '
+        'never runs on the shipping page since the element is absent there. Production replaced it in '
+        'Wave 2 with an explicit pair — `#sdCaptureStartButton` / `#sdCaptureStopButton` '
+        '(`app/src/renderer/signal-desk.html`), bound by `features/talkCapture.js`, which converges '
+        'the button path and the hotkey path on one reducer and falls back to the same '
+        '`api.toggleRecording()` -> `POST /runtime/recording/toggle` the legacy button called. The '
+        'capability and the endpoint are wired; only the legacy combined-toggle ELEMENT is gone, '
+        'deliberately — a control whose meaning depends on invisible state is the exact failure mode '
+        'the explicit Start/Stop pair (plus a never-disabled Emergency Stop) exists to prevent. See '
+        'docs/release/DECISIONS.md D-0037 for the full verification and ruling.'
+    ),
+    'UI-07-041': (
+        'Intentional cut: `#settingInstantTyping` — "Instant typing", the checkbox that typed '
+        'a draft character-by-character instead of pasting it — was REMOVED from the shipping '
+        'page on 2026-07-31 at the operator\'s explicit direction (docs/release/OPERATOR_REVIEW.md, '
+        'P2 "Remove" list). It was already disabled on Wayland, which is this host\'s likely '
+        'display server, so for many users it was a control that advertised a capability it '
+        'could not deliver. There is no replacement ELEMENT and deliberately so: pasting is the '
+        'single supported delivery path. The BACKEND capability is untouched — `instant_typing` '
+        'remains a real profile field defaulting to False (utils.py:798) and injector.py:286/545 '
+        'still honours it, so nothing was deleted from the engine and any profile that already '
+        'carries the flag keeps working. It also remains in SETTINGS_FIELD_KEYS with no element; '
+        'readFieldStates() skips absent elements (features/settingsWorkspace.js), so the field is '
+        'simply never sent from this page and the stored value stands. This row went `blocked` '
+        'rather than `intentional_cut` the moment the element left the page, because the item '
+        'was partially anchored — the profile key still resolves in production while the handle '
+        'does not. That is the ledger working correctly; the missing piece was the ruling, not '
+        'the removal. See docs/release/DECISIONS.md D-0045.'
     ),
 }
 

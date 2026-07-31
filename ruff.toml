@@ -1,0 +1,9 @@
+target-version = "py312"
+
+extend-exclude = [
+  ".venv",
+  "node_modules",
+  "app/node_modules",
+  "app/dist",
+  "app/build",
+]

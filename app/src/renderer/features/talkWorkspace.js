@@ -66,6 +66,16 @@
 // removed outright, not stubbed -- see TALK_PLACEMENT_MAP's
 // 'delivery.sendVariants' entry.
 //
+// D-0036 (docs/release/DECISIONS.md): for v0.2.0-alpha.1, #sdDeliverySegmented
+// itself is further reduced to a single Paste button -- Type and Copy are no
+// longer offered as user choices on the shipping page (UI-06-038 is
+// `intentional_cut`). The mapping/resolution functions below (DELIVERY_OPTIONS,
+// deliveryOptionToSendAction, resolveSendAction, primaryActionLabel,
+// activeDeliverySegment) deliberately still speak the full type/paste/copy
+// vocabulary -- they read whatever `[data-delivery-option]` buttons actually
+// exist in the DOM, so re-offering Type/Copy later is a markup change, not a
+// rebuild of this module.
+//
 // To mount for real (a later phase): pass `elements` from collectTalkElements()
 // (or an equivalent object) plus `hooks.drafts` = the live drafts feature
 // instance, call `init()`, and forward main.js's voice-status messages into
@@ -213,12 +223,14 @@ export function deriveRefinedViewModel(draft) {
   };
 }
 
-// --- Delivery selector (Type/Paste/Copy) -------------------------------------
+// --- Delivery selector (Paste only on the shipping page, D-0036) ------------
 //
 // The backend's perform_output_action (server.py ~line 999) accepts exactly
 // 'copy_only' | 'paste' | 'type' | 'open_chat_then_send' -- anything else is
-// silently coerced to 'copy_only'. DELIVERY_OPTIONS are the only values the
-// context panel's segmented control can carry.
+// silently coerced to 'copy_only'. DELIVERY_OPTIONS is the full vocabulary the
+// context panel's segmented control CAN carry; D-0036 narrows which of these
+// the shipping markup actually offers a button for (paste only) without
+// touching this mapping -- see the header comment above.
 
 export const DELIVERY_OPTIONS = ['type', 'paste', 'copy'];
 
@@ -453,7 +465,7 @@ export const TALK_PLACEMENT_MAP = {
 
   'delivery.sendInsert': { section: 'delivery', control: 'Send / Insert primary action', wired: true },
   'delivery.sendVariants': { section: 'delivery', control: 'Send split-button variant popover', wired: false, intentional_cut: true, note: 'DIRECTOR RULING (Wave 2 Gate 2): no popover component exists anywhere in the repo; #sdSendChevronButton and hooks.onSendVariantsRequested are removed outright rather than left as a decorative stub. Exactly one delivery selector survives -- see delivery.segmented.' },
-  'delivery.segmented': { section: 'delivery', control: 'Delivery selector (Type/Paste/Copy) driving getSelectedSendAction()', wired: true },
+  'delivery.segmented': { section: 'delivery', control: 'Delivery selector (Paste only, D-0036) driving getSelectedSendAction()', wired: true },
   'delivery.accept': { section: 'delivery', control: 'Accept draft', wired: true },
   'delivery.decline': { section: 'delivery', control: 'Decline draft', wired: true },
   'delivery.retry': { section: 'delivery', control: 'Retry (blocked/error drafts)', wired: true },

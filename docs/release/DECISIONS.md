@@ -1265,3 +1265,422 @@ B-3 can close.
 
 **Consequence for the ledger:** blocked count drops by one (17 → 16) once the
 cut is declared and the ledger regenerated. Gate 11 stays NOT ACCEPTED.
+
+## D-0037 — Recording toggle UI-06-016 is cut; production ships explicit Start/Stop
+
+**Owner:** release-director (director ruling, 2026-07-29)
+
+**Context:** `PUBLISH_PLAN.md` task B-3b required a wire-or-cut ruling before
+any worker could touch row UI-06-016. D-0036 explicitly declined to rule on it.
+The row describes the legacy dashboard's single `#toggleRecordingButton` — one
+button that flips label and `data-recording` between Start and Stop and calls
+`POST /runtime/recording/toggle`. Verified at HEAD `545e582`:
+
+- `#toggleRecordingButton` exists **only** in `app/src/renderer/index.html`
+  (the rollback path, §7 "legacy `index.html` extraction") and its handler
+  `app/src/renderer/main.js:155`.
+- `app/src/renderer/features/runtime.js:78-80` still paints that element, but
+  guarded by `if (els.toggleRecordingButton)` — on the shipping page the
+  element is absent and the branch never runs.
+- The shipping page deliberately replaced it in Wave 2 with an explicit pair,
+  `#sdCaptureStartButton` (`signal-desk.html:966`) and `#sdCaptureStopButton`
+  (`:970`), plus a never-disabled Emergency Stop, all bound by
+  `features/talkCapture.js` — which converges the button path and the hotkey
+  path on one reducer with voice-status messages authoritative, and falls back
+  to `api.toggleRecording()` → `POST /runtime/recording/toggle`
+  (`api/backend.js:564`). The in-file comment at `signal-desk.html:951-963`
+  records the replacement and its rationale.
+
+So the *capability* and the *endpoint* are wired; only the legacy element id is
+absent. That is precisely the "partially anchored" state the row is blocked on.
+
+**Decision:** **UI-06-016 → `intentional_cut`**, named replacement
+`#sdCaptureStartButton` / `#sdCaptureStopButton` (`features/talkCapture.js`).
+
+1. The single combined toggle is **not** rebuilt on the shipping page.
+   Rebuilding it would be new scope (§1 rule 1) and a usability regression: a
+   control whose meaning depends on invisible state is the failure mode the
+   explicit pair exists to prevent.
+2. `POST /runtime/recording/toggle` stays reachable and `api.toggleRecording()`
+   keeps its fallback role in `talkCapture.js`. This ruling narrows the *UI
+   surface*, not the backend.
+3. Emergency Stop stays never-disabled (`signal-desk.html:961-962`). A diff
+   that adds a disabled state to it is `REJECTED`.
+4. No change to `index.html`; it remains the rollback path.
+
+**Consequence for the ledger:** blocked drops by one. With D-0036's cut, the
+two product rows together take blocked 17 → 15. Gate 11 stays NOT ACCEPTED
+until the remaining evidence rows close.
+
+## D-0038 — Release identity for installer metadata
+
+**Owner:** operator ruling (Donaven Crenshaw, 2026-07-29), recorded by
+release-director
+
+**Context:** electron-builder warns `author is missed in package.json`. Benign
+for the AppImage but it feeds publisher identity for any future NSIS/dmg
+target. D-0008 froze release identity as "Source Arcanum" before any public
+artifact existed; the portfolio has since rebranded to Donaven Crenshaw. Board
+item #2 escalated the choice to the owner.
+
+**Decision:** Installers ship as **Donaven Crenshaw**,
+contact **dcworks@donavencrenshaw.com**. This **supersedes D-0008** for
+release-identity purposes only (D-0008's other provisions stand).
+
+- `app/package.json` gains `"author": "Donaven Crenshaw <dcworks@donavencrenshaw.com>"`.
+- `app/package.json` is integration-owned: the edit needs a director-granted
+  claim and lands with the WS-F packaging work, not as a drive-by.
+- Board item #2 is closed by this ruling.
+
+**Consequence:** no code behavior changes; the electron-builder warning clears
+when the field lands.
+
+## D-0039 — The dev machine has no discrete GPU; E-1's premise is withdrawn
+
+**Owner:** release-director (director ruling, 2026-07-29)
+
+**Context:** `PUBLISH_PLAN.md` task E-1 and `QA_NOTES.md` entry QA-DOC-001 both
+asserted that `KNOWN_LIMITATIONS.md`'s "this machine… no GPU" line was wrong,
+because "this machine has an RTX 4060 Ti 16 GB" and
+`hardware_report.get_hardware_tier()` returns `dgpu-12g+`/`cuda`. Neither
+citation carried pasted output. Worker `w-docs` refused to write the claim
+because it could not reproduce it, and escalated. The director then verified
+independently on host `Shitbox`:
+
+```
+command -v nvidia-smi                  → NOT FOUND
+lspci | grep -i nvidia                 → (no output; no NVIDIA device on the bus)
+glxinfo | grep "OpenGL renderer"       → Mesa Intel(R) Iris(R) Xe Graphics (TGL GT2)
+hardware_report.get_hardware_tier()    → {"tier": "igpu", "label": "Integrated GPU",
+                                          "gpu_kind": "integrated", "ram_mb": 15632,
+                                          "cores": 4}
+/proc/cpuinfo                          → 11th Gen Intel Core i7-1165G7 @ 2.80GHz
+```
+
+**Decision:** The original E-1 objective is **false and withdrawn**. Executing
+it would have written a fabricated hardware claim into the release docs — the
+exact failure mode `QA_NOTES.md` exists to prevent.
+
+1. **The dev machine is `igpu`**: integrated Intel Iris Xe, no discrete GPU, no
+   CUDA, ~15.6 GB RAM, 8 logical cores.
+2. **E-1 is rewritten** (see the rewritten task in `PUBLISH_PLAN.md`): the fix
+   is *precision*, not inversion. "No GPU" becomes "no discrete GPU and no CUDA
+   on the dev machine; integrated Intel Iris Xe, tier `igpu`".
+3. **CUDA and dGPU tiers stay documented as supported-but-unverified-here.**
+   The code paths exist; nothing on this host has ever exercised them. No doc
+   may claim they are verified.
+4. **QA-DOC-001 is corrected in place**, severity held at YEL, with the true
+   evidence attached and the false claim struck.
+5. This is consistent with the standing room note "Do NOT touch NVIDIA/CUDA
+   drivers — CPU fallback is the accepted state", which reads as written by
+   someone who also found no working CUDA here.
+
+**Process consequence (the reason this ruling is numbered rather than a silent
+fix):** a plan task and a QA entry both carried an unsourced hardware assertion
+far enough to become assigned work. **Evidence lines in `QA_NOTES.md` must
+paste real command output, not name a command.** The entry format's `Evidence:`
+field is amended accordingly. Credit to `w-docs` for refusing the task rather
+than completing it.
+
+**Consequence for the release:** none to code. If the RTX 4060 Ti belongs to a
+different host (the plan was drafted across machines), any GPU qualification
+claim for that host needs its own dated evidence before it may appear in a doc.
+
+## D-0040 — C-1's wake-import magic check is a denylist, not an ONNX allowlist
+
+**Owner:** release-director (director ruling, 2026-07-29)
+
+**Context:** `PUBLISH_PLAN.md` C-1 asks for a "magic-byte check" on wake-model
+import, matching the dictation/clone/OCR upload paths. Worker `w-sec` stopped
+before implementing and raised the conflict: ONNX is protobuf, which does **not
+mandate field ordering**. A leading `0x08` (field 1 = `ir_version`) is a strong
+convention, not a spec guarantee. An affirmative "must start with `0x08`" gate
+would therefore reject some genuinely valid models — and would immediately
+break `tests/test_server_wake_routes.py:214-224`, a passing test whose fixture
+uploads `b"tiny classifier bytes"`, a file `w-sec` was not permitted to touch.
+
+**Decision:** The magic check is a **denylist of known-wrong containers**, not
+an ONNX allowlist.
+
+1. **The size cap is the actual fix.** The RED vector is the unbounded
+   `await file.read()`. Import streams through `upload_safety.stream_to_file`
+   capped at `wake_models.MAX_IMPORT_BYTES` (20 MB), **imported from
+   `wake_models`, not re-declared** — one source of truth per limit.
+2. **Reject known-wrong leading bytes only:** PNG, JPEG, GIF, PDF, ZIP/PK,
+   ELF, MZ/PE, RIFF, gzip, and a leading `<` (HTML/XML). Everything else
+   proceeds to the existing downstream `wake_models` sha + loadability checks.
+3. **`0x08` is never a hard gate.** A soft signal at most.
+4. **Errors name what was detected**, not a generic 400.
+
+**Why this shape, explicitly:** the two failure modes are not symmetric. A
+false *reject* refuses a user's real wake model in a release whose entire bar
+is "clean, hardened, simple to set up" (§5). A false *accept* writes bounded
+garbage that the loadability check then refuses. The magic byte was never what
+made this path safe; the cap is.
+
+**Consequence:** `tests/test_server_wake_routes.py` stays green and untouched —
+no existing passing test is weakened to accommodate an implementation choice,
+and §1 rule 3 (no edits outside the claim list) holds. C-1's new tests must
+pin all three behaviors: oversize rejected *by streaming*, PNG-header payload
+rejected, and a plain non-container payload still **accepted** — that last one
+is the regression guard that stops a later worker from "tightening" this
+denylist into an allowlist and silently breaking real models.
+
+**Not a weakened implementation.** A reviewer reading only the diff may mistake
+the denylist for a shortcut. It is the ruled design; this entry is the record.
+
+## D-0041 — A-1 was already fixed; the 96/97 board figure is stale
+
+**Owner:** release-director (director ruling, 2026-07-29)
+
+**Context:** `PUBLISH_PLAN.md` task A-1 was the wave's designated hardest job:
+the Review Deck Read/Stop toggle "drops `POST /tts/stop`", the scenario
+`review-overlay-rewrite-instruct-and-read` fails, and the board sits at 96/97.
+The plan states the director had ruled it "genuinely broken… needs a real fix,
+not a rerun." Worker `w-overlay` was given a dedicated slot for it.
+
+`w-overlay` made **no code change** and reported the scenario already green,
+tracing both halves of the fix to commit `ed1bede` (2026-07-29 05:47) — which
+predates the `be2ebaa` baseline the plan cites as verified-red. The plan's
+evidence (`app/tests/qa/out/…/qa-report.md`, 96/97) came from `91d19b8`, which
+predates `ed1bede`. The QA report was simply never regenerated after the fix.
+
+**Director verification (not taken on the worker's word):**
+
+- `git show --stat ed1bede` touches both files: `review-overlay.html` (+10),
+  `overlay-prod.mjs` (+38, −1).
+- `review-overlay.html:633` now calls `setOverlayState('pending', 'Playback
+  stopped.')` immediately after the stop POST. The in-file comment names the
+  real defect: without it the button stayed "Stop" and the next press posted a
+  **second** `/tts/stop` instead of starting a new read — the control was a dead
+  end after one use.
+- `overlay-prod.mjs:512-518` no longer checks the capture array flat after a
+  `click()` that resolves on dispatch; it awaits the UI transition and then
+  `expect.poll`s the count.
+- **Three consecutive full-board runs, run by the director:** 97/97, 97/97,
+  97/97, with `review-overlay-rewrite-instruct-and-read` ✅ PASS in all three.
+
+**Decision:** A-1 is **COMPLETE with no code change**. `QA-OVL-001` moves to
+`VERIFIED` — fixed by `ed1bede`, confirmed by three green boards.
+
+**This clears two items on the §2 publishable bar simultaneously:** the 97/97
+board *and* the "three consecutive full-board green runs" requirement.
+
+**Process consequence — the third false premise this wave** (after D-0039's
+hardware claim and D-0040's magic-byte assumption). All three shared one shape:
+a plan statement asserted as verified, carrying evidence that was real but
+**stale or never pasted**. A QA report path is not evidence of *current* state
+unless it was regenerated at the commit being described. `QA_NOTES.md` evidence
+lines must therefore carry **the commit they were captured at**, not just a path
+— amended alongside the D-0039 pasted-output rule.
+
+**Not a free pass.** A worker reporting "already fixed, no diff" is the easiest
+possible handoff to fake and the director must always re-run rather than accept
+it. Here the claim survived independent verification at every point.
+
+## D-0042 — C-2 gates at request time and includes `/llm/generate_plan`
+
+**Owner:** release-director (director ruling, 2026-07-29)
+
+**Context:** `PUBLISH_PLAN.md` C-2 gates five unguarded dev-route prefixes behind
+`BETTERFINGERS_DEV_ROUTES`. The director's spawn brief expressed a preference:
+"prefer not mounting at all when the flag is off (a 404 that looks like the
+route never existed) over mounting-then-rejecting." Worker `w-server` verified
+the prefixes resolve to 10 route decorators, confirmed none appear in Electron's
+`ROUTE_ALLOWLIST` (so QA-SEC-002's premise holds), and then stopped to report a
+collision the brief had not anticipated.
+
+**Two decisions.**
+
+**1. Gate at REQUEST time, not import time — reversing the director's own
+stated preference.** `include_router()` is evaluated at import. `server.py` is
+imported once and is very large, so proving the default-OFF path would require
+`importlib.reload` of the whole module — fragile, slow, and in direct conflict
+with the `conftest.py` `setdefault` below. A request-time check lets the new
+test `monkeypatch.delenv` and prove both directions in-process.
+
+Security is equivalent: the handler never executes either way and the caller
+receives 404. Import-time mounting buys only omission from the OpenAPI schema —
+real but minor. **A guard that cannot be tested in both directions is a guard
+nobody knows works.** Testability wins; the brief was wrong.
+
+**2. `/llm/generate_plan` (`server.py:5555`) is IN scope** — 11 routes, not 10.
+It has the identical unguarded shape and is likewise absent from the allowlist.
+The task prose named `/llm/process` rather than the `/llm/` prefix. Closing ten
+holes and knowingly shipping the eleventh because of that wording would follow
+the letter of the task while failing its objective. **The scope freeze exists to
+stop unrelated work, not to preserve a hole the worker is already standing in
+front of.**
+
+**Narrow claim granted:** `tests/conftest.py`, one line —
+`os.environ.setdefault("BETTERFINGERS_DEV_ROUTES", "1")`, matching the existing
+`BETTERFINGERS_LAZY_STARTUP` / `ALLOW_TINY_MODELS` precedent. This keeps
+`test_mcp_client.py` and `test_server_platform_runtime.py` green **without
+editing either**, which is why this beat the alternative of patching two test
+files to accommodate a new guard.
+
+**Required test coverage — three assertions, because the conftest line makes the
+naive version vacuous:** flag absent (`delenv`) → 404; flag `"1"` → reachable;
+and the gate helper returns `False` when the variable is unset, asserted
+directly, so the **shipped default** is pinned independently of `conftest`. A
+future conftest edit must not be able to flip production silently.
+
+**Credit:** the worker asked rather than guessing, twice in one task. Both times
+the answer changed the design.
+
+## D-0043 — Voice-preset default is CUT; wake-model deletion is WIRED
+
+**Owner:** release-director (director ruling, 2026-07-29)
+
+**Context:** B-5 and B-8 were investigate-or-escalate tasks. Worker `w-parity2`
+investigated and escalated rather than building UI, which is correct under §1
+rule 1. Three rows remained blocked. Director-verified independently — all three
+functions are defined and exported in `app/src/renderer/api/backend.js` and have
+**zero callers anywhere else in the renderer**:
+
+```
+setDefaultVoicePreset   -> 0 callers outside api/backend.js
+clearDefaultVoicePreset -> 0 callers outside api/backend.js
+deleteWakeModel         -> 0 callers outside api/backend.js
+```
+
+All three are real, backend-supported, proxy-allowlisted capabilities
+(`app/src/main/backendProxy.js:142` and `:144`) with no user-facing trigger.
+
+The default under §1 rule 2 is **cut beats build**. These two rows resolve
+differently, and the reason is the difference between a missing convenience and
+a one-way door.
+
+### 1. UI-07-126 + UI-15-012 (voice-preset make-default / clear-default) → `intentional_cut`
+
+**Named replacement:** the voice-preset list's existing **Apply** action
+(`features/voiceStudio.js` `renderVoicePresetList`, apply-on-click, with
+`deleteVoicePreset` for removal).
+
+Nothing the user can do is lost. "Default preset" is a convenience that saves one
+click per session; Apply reaches the identical end state, and Delete already
+exists. Adding a default-preset concept now means new UI, new persisted state,
+and a new empty/conflict state to design — new scope at the finish line for zero
+new capability. The two source rows describe one capability; both are cut
+together.
+
+### 2. UI-15-014 (wake-model deletion) → **WIRE** *(a deliberate build, recorded as this plan requires)*
+
+**This one is not a missing convenience — the product already opened a door it
+will not let the user close.** Utilities' Wake Word UI offers **Import** for a
+user-supplied `.onnx` (`utilitiesWorkspace.js:1571`), and there is no removal
+affordance anywhere in the app. Director-verified that no other route exists
+either: the privacy wipe clears the wake **pretrigger buffer**
+(`server.py:3886-3888`, `wipe_wake_pretrigger()`), **not imported model files**.
+
+So a user who imports the wrong file — or any file — cannot remove it. Not from
+the list, not from settings, not from a full privacy wipe. That is a data trap in
+a release whose stated bar is "clean, hardened, and simple to set up", and it is
+the kind of thing §5.5 ("no error state dead-ends") exists to prevent.
+
+Building is justified here precisely because the alternative is shipping an
+import feature with no undo. The work is minimal and additive: the backbone list
+already renders rows, `deleteWakeModel` is already exported and already
+proxy-allowlisted. Scope is one Delete action per imported-model row, with a
+confirm step, plus QA coverage.
+
+**Constraint:** only **imported** models are deletable. Built-in/downloaded
+backbone models must not offer Delete — removing a shipped model is a different
+operation with different consequences and is not in scope.
+
+**Consequence for the ledger:** blocked 3 → 0. **Gate 11 becomes closable.**
+
+## D-0044 — Gate 11 is ACCEPTED
+
+**Owner:** release-director (director ruling, 2026-07-30)
+
+**Gate 11 forbids any `blocked` row.** At `3d935c6` the ledger reads:
+
+```
+$ python3 tools/parity_validator.py
+source rows : 438
+ledger rows : 438
+totals      : 411 wired / 27 intentional_cut / 0 blocked / 438 total
+OK — ledger is internally consistent and bound to the source inventory.
+```
+
+From a wave-opening baseline of `398 / 23 / 17`. **Seventeen blocked rows closed:
+eleven wired with real evidence, six cut under recorded rulings** (D-0036,
+D-0037, D-0043). No row was hand-edited in `PARITY_INVENTORY.md`; every change
+went through `parity_anchors.py` and a regenerated ledger.
+
+**Supporting verification at the same commit, all director-run:**
+
+| | |
+|---|---|
+| Production QA board | **99/99, three consecutive runs**, on a fresh build |
+| Node suite | **1668 / 1668** |
+| Python suite | **3098 passed, 0 failed** (clean env — see QA-DOC-005) |
+
+The board is 99, not 97, because this wave added two scenarios (the onboarding
+keyboard trap and the persona wizard). §2's "97/97 and three consecutive green
+runs" is met and exceeded.
+
+**Evidence standard applied.** Every row was reviewed against the task's own
+criteria by re-running them independently, not by reading the handoff. Rows
+requiring behavior were rejected if they offered existence checks; the ring-state
+test was required to enumerate from the shipped contract rather than a copied
+list; the chip test had to move sliders twice to two distinct value sets so a
+static default could not fake it.
+
+**What this gate does NOT assert**, stated so nobody over-reads it:
+
+1. **That `glitch-ring.js` is live code.** UI-12-003 counts through a stale
+   `PROD_EXTRA_PAGES` mapping (QA-BL-001). Mitigated — B-7 added enumeration
+   coverage for `signalCore.js`, the ring production actually loads — but the
+   bookkeeping is repaired post-publish, behind a churn proof.
+2. **That the product is operator-approved.** Gate 11 is a parity gate. The
+   human pass in `OPERATOR_QA.md` has not been performed, and two RED fixes
+   (QA-FR-002, QA-UTIL-001) still need a person to confirm they *read* correctly
+   — automated tests prove the mechanism, not the impression.
+3. **That CI is green.** C-5's gates are committed but unproven, and `ruff` and
+   `bandit` have never been run at all.
+
+`RELEASE_BOARD.md` is updated to ACCEPTED accordingly. Gates 12/13 (package
+qualification) remain open and are the next work.
+
+---
+
+## D-0045 — `UI-07-041` (`#settingInstantTyping`) is an `intentional_cut`, not `blocked`
+
+**2026-07-31, director, Wave 14.**
+
+Removing the Instant Typing checkbox from the shipping page flipped its parity
+row from `wired` to `blocked`, taking the ledger from `411/27/0` to
+`410/27/1`. The ledger was right to flag it: the item became *partially
+anchored* — the `instant_typing` profile key still resolves in production while
+the `#settingInstantTyping` handle no longer does — and a partially anchored
+item is not wholly present on the shipping page.
+
+What was missing was the ruling, not the removal.
+
+**Ruling: `intentional_cut`.** The control was removed at the operator's
+explicit direction (`OPERATOR_REVIEW.md`, P2 "Remove" list). It was already
+disabled on Wayland, so for a large share of users it advertised a capability it
+could not deliver — and a control that cannot do what it says is exactly the
+class of defect Wave 14 exists to remove.
+
+**The backend capability is untouched, and that is what makes this a cut rather
+than a deletion.** `instant_typing` remains a real profile field defaulting to
+`False` (`utils.py:798`); `injector.py:286` and `:545` still honour it. It also
+remains in `SETTINGS_FIELD_KEYS` with no element — `readFieldStates()` skips
+absent elements, so the field is simply never sent from this page and any
+profile already carrying the flag keeps working. Nothing was removed from the
+engine, and no default changed.
+
+Ledger after the ruling: **410 wired / 28 intentional_cut / 0 blocked / 438
+total**, validator OK. The delta against the Gate 11 baseline (`411/27/0`) is
+exactly the one row this ruling covers — no other row moved.
+
+**Found by running the full Python suite before merging to `main`, not by
+inspection.** `tests/test_parity_regen.py` failed because the committed ledger
+no longer matched its generator. Three other failures surfaced in the same run,
+all from OR-13's new host-tooling gate short-circuiting tests that fake the
+clipboard; those tests now state the precondition they had always implicitly
+assumed. Had the merge gone ahead on the node suite alone, all four would have
+landed on `main`.

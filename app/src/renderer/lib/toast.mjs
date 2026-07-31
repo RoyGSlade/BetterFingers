@@ -56,15 +56,20 @@ export const MAX_VISIBLE_TOASTS = 4;
  * @param {'info'|'success'|'warning'|'error'} [tone]
  * @param {number} [durationMs] auto-dismiss delay; <=0 means stay until closed
  * @param {Document} [doc] injectable for tests
+ * @param {{onClick?: Function, actionLabel?: string}} [options] optional
+ *   click-through action, rendered as a second button alongside dismiss.
+ *   Activating it both runs `onClick` and dismisses the toast -- an
+ *   informational-only toast (no onClick) renders exactly as before.
  * @returns {HTMLElement|undefined} the toast element, if one was created
  */
-export function showToast(message, tone = 'info', durationMs = 5000, doc = globalThis.document) {
+export function showToast(message, tone = 'info', durationMs = 5000, doc = globalThis.document, options = {}) {
   const container = doc?.getElementById?.(TOAST_CONTAINER_ID);
   if (!container || !message) {
     return;
   }
 
   const text_ = String(message);
+  const { onClick, actionLabel } = options || {};
 
   // Coalesce: an identical message already on screen gets its timer restarted
   // and a count, instead of a second copy of itself. Matched on message AND
@@ -109,7 +114,23 @@ export function showToast(message, tone = 'info', durationMs = 5000, doc = globa
   };
 
   close.addEventListener('click', dismiss);
-  toast.append(text, close);
+
+  // The click-through: a second button, not a click handler on the whole
+  // toast -- keyboard/screen-reader reachable, and it can never be confused
+  // with dismissing the message it sits next to.
+  let action = null;
+  if (typeof onClick === 'function') {
+    action = doc.createElement('button');
+    action.className = 'toast-action';
+    action.type = 'button';
+    action.textContent = actionLabel || 'Fix this';
+    action.addEventListener('click', () => {
+      onClick();
+      dismiss();
+    });
+  }
+
+  toast.append(text, ...(action ? [action] : []), close);
   toast.dataset.toastMessage = text_;
   toast.dataset.toastCount = '1';
   container.append(toast);

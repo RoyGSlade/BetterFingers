@@ -1,12 +1,12 @@
 {
-  "description": "Collab-workspace lifecycle hooks for Codex CLI. Uses the repo's client-neutral hooks.py dispatcher (invoked with --client=codex so output uses Codex's flat systemMessage schema). 2026-07-28: dropped the COLLAB_WS_DIR=$HOME/.claude/collab overrides — that machine-wide room doesn't exist on this machine, so the hooks pointed nowhere. Codex now uses the repo's default director room (.claude/collab/), the same room .codex/config.toml's MCP entry uses, so a Codex/GPT director sees the same traffic as everyone else. Note: Codex has no blockable Stop hook, so the wake watcher (hooks.py stop) is Claude-only — a Codex director should loop collab_wait instead of relying on being woken.",
+  "description": "Collab-workspace lifecycle hooks for Codex CLI (--client=codex so output uses Codex's flat systemMessage schema). 2026-07-30: REPOINTED at the machine-wide room (~/.claude/collab) and the machine-wide hooks.py. The 2026-07-28 note that the machine-wide room 'doesn't exist on this machine' is STALE \u2014 it exists and holds the live director board, task queue and file claims. This was not cosmetic: PreToolUse checks claims, and a Codex session reading the wrong room would be cleared to edit files another session actively holds. The two collab-mcp installs are different code, so both the MCP entry and these hooks now use the machine-wide copy. UNCHANGED: Codex has no blockable Stop hook, so the wake watcher stays Claude-only \u2014 a Codex director must loop collab_wait rather than rely on being woken.",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/.claude/collab-mcp/hooks.py\" session_start --client=codex",
+            "command": "COLLAB_WS_DIR=\"/home/roygslade/.claude/collab\" python3 \"/home/roygslade/.claude/collab-mcp/hooks.py\" session_start --client=codex",
             "statusMessage": "Checking collab workspace status",
             "timeout": 15
           }
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/.claude/collab-mcp/hooks.py\" user_prompt --client=codex",
+            "command": "COLLAB_WS_DIR=\"/home/roygslade/.claude/collab\" python3 \"/home/roygslade/.claude/collab-mcp/hooks.py\" user_prompt --client=codex",
             "timeout": 15
           }
         ]
@@ -30,8 +30,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/.claude/collab-mcp/hooks.py\" pre_tool --client=codex",
-            "statusMessage": "Checking collab file claims (warning only — see AGENTS.md)",
+            "command": "COLLAB_WS_DIR=\"/home/roygslade/.claude/collab\" python3 \"/home/roygslade/.claude/collab-mcp/hooks.py\" pre_tool --client=codex",
+            "statusMessage": "Checking collab file claims (warning only \u2014 see AGENTS.md)",
             "timeout": 15
           }
         ]
@@ -42,7 +42,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/.claude/collab-mcp/hooks.py\" post_tool --client=codex",
+            "command": "COLLAB_WS_DIR=\"/home/roygslade/.claude/collab\" python3 \"/home/roygslade/.claude/collab-mcp/hooks.py\" post_tool --client=codex",
             "timeout": 15
           }
         ]

@@ -307,14 +307,27 @@ tasks — not the workers.
 
 ### WS-E — Make the docs stop lying (small, mechanical)
 
-#### E-1 · Correct the GPU claims · `OPEN`
-- **Objective:** `KNOWN_LIMITATIONS.md` ("this machine… no GPU") and
-  `docs/archive/REMEDIATION_WHATS_LEFT.md` (Phase 4 "concretely confirmed" no-GPU) are
-  wrong — this machine has an RTX 4060 Ti 16 GB and
-  `hardware_report.get_hardware_tier()` returns `dgpu-12g+`/`cuda`. Correct
-  both; keep the CPU-only tier documented as a supported configuration.
+#### E-1 · Correct the GPU claims · `OPEN` *(REWRITTEN — see D-0039)*
+> **This task's original premise was false and has been withdrawn.** It claimed
+> the dev machine has an RTX 4060 Ti 16 GB returning `dgpu-12g+`/`cuda`.
+> Director-verified 2026-07-29 on host `Shitbox`: no NVIDIA device on the PCI
+> bus, no `nvidia-smi`, renderer `Mesa Intel(R) Iris(R) Xe Graphics (TGL GT2)`,
+> `get_hardware_tier()` → `igpu`. Writing the original objective into the docs
+> would have made them **less** accurate. See **D-0039**.
+
+- **Objective:** The docs' "no GPU" phrasing is imprecise, not inverted. Replace
+  it with the tier the probe actually reports: **no discrete GPU and no CUDA on
+  the dev machine; an integrated Intel Iris Xe, `hardware_report` tier `igpu`**
+  (~15.6 GB RAM, 8 logical cores). Keep CPU-only documented as a supported
+  configuration, and keep the CUDA/dGPU tiers documented as supported-but-
+  unverified-here — the code paths exist and are untested on this host.
+- **Do not** claim any discrete-GPU or CUDA verification for this machine. Any
+  diff asserting an RTX 4060 Ti, `dgpu-12g+`, or `cuda` for the dev host is
+  `REJECTED`.
 - **Files:** `docs/release/KNOWN_LIMITATIONS.md`, `docs/archive/REMEDIATION_WHATS_LEFT.md`.
-- **Review (Opus):** run the tier probe; grep both files for "no GPU".
+- **Review (Opus):** run the tier probe and compare to the doc text verbatim;
+  grep both files for `4060`, `dgpu-12g`, `cuda` — every hit must be about a
+  *supported configuration class*, never about this machine's verified state.
 
 #### E-2 · Reconcile parity numbers everywhere they appear · `OPEN`
 - **Objective:** The live validator says 398/23/17 but `RELEASE_BOARD.md`'s

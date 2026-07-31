@@ -19,6 +19,49 @@ _MAX_TTS_CHARS = 6000
 IS_WINDOWS = platform_capabilities.IS_WINDOWS
 
 
+def _selection_capture_support() -> dict:
+    """Return the selection-capture backend available *right now*.
+
+    Linux clipboard support is provided by an external command, so this must
+    stay a live check rather than reusing platform capability values computed
+    during module import.  That lets an operator install the missing package
+    while BetterFingers is running and retry the hotkey successfully.
+    """
+    if IS_WINDOWS or platform_capabilities.is_macos:
+        return {"supported": True, "tool": "native"}
+
+    if platform_capabilities.is_wayland:
+        if shutil.which("wl-paste") and shutil.which("wl-copy"):
+            return {"supported": True, "tool": "wl-clipboard"}
+        return {"supported": False, "missing_tool": "wl-clipboard"}
+
+    if platform_capabilities.is_x11 or platform_capabilities.is_linux:
+        if shutil.which("xclip"):
+            return {"supported": True, "tool": "xclip"}
+        if shutil.which("xsel"):
+            return {"supported": True, "tool": "xsel"}
+        return {"supported": False, "missing_tool": "xclip or xsel"}
+
+    return {"supported": False, "missing_tool": "a supported clipboard tool"}
+
+
+def _unsupported_capture_result(support: dict) -> dict:
+    missing_tool = str(support.get("missing_tool") or "a supported clipboard tool")
+    if missing_tool == "xclip or xsel":
+        message = "Can't read selected text — xclip or xsel is not installed. Install xclip to enable this."
+    elif missing_tool == "wl-clipboard":
+        message = "Can't read selected text — wl-clipboard is not installed. Install wl-clipboard to enable this."
+    else:
+        message = f"Can't read selected text — {missing_tool} is not available on this system."
+    return {
+        "ok": False,
+        "text": "",
+        "capture_status": "unsupported",
+        "missing_tool": missing_tool,
+        "message": message,
+    }
+
+
 def _wayland_clipboard_get_text() -> str:
     """Best-effort Wayland clipboard read via wl-clipboard's `wl-paste`.
 
@@ -42,7 +85,52 @@ def _wayland_clipboard_get_text() -> str:
         return ""
 
 
+def _linux_clipboard_get_text(tool: str) -> str:
+    commands = {
+        "xclip": ["xclip", "-selection", "clipboard", "-o"],
+        "xsel": ["xsel", "--clipboard", "--output"],
+        "wl-clipboard": ["wl-paste", "--no-newline"],
+    }
+    command = commands.get(tool)
+    if not command:
+        return ""
+    try:
+        result = subprocess.run(command, check=False, capture_output=True, timeout=5)
+        if result.returncode != 0:
+            return ""
+        return result.stdout.decode("utf-8", "replace")
+    except Exception as exc:
+        logging.debug(f"{tool} read failed: {exc}")
+        return ""
+
+
+def _linux_clipboard_set_text(tool: str, value: str) -> bool:
+    commands = {
+        "xclip": ["xclip", "-selection", "clipboard"],
+        "xsel": ["xsel", "--clipboard", "--input"],
+        "wl-clipboard": ["wl-copy"],
+    }
+    command = commands.get(tool)
+    if not command:
+        return False
+    try:
+        result = subprocess.run(
+            command,
+            input=(value or "").encode("utf-8"),
+            check=False,
+            capture_output=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except Exception as exc:
+        logging.debug(f"{tool} write failed: {exc}")
+        return False
+
+
 def _clipboard_get_text() -> str:
+    support = _selection_capture_support()
+    if support.get("supported") and support.get("tool") in {"xclip", "xsel", "wl-clipboard"}:
+        return _linux_clipboard_get_text(support["tool"])
     try:
         value = pyperclip.paste()
         text = str(value or "")
@@ -58,6 +146,9 @@ def _clipboard_get_text() -> str:
 
 
 def _clipboard_set_text(value: str) -> bool:
+    support = _selection_capture_support()
+    if support.get("supported") and support.get("tool") in {"xclip", "xsel", "wl-clipboard"}:
+        return _linux_clipboard_set_text(support["tool"], value)
     try:
         pyperclip.copy(value or "")
         return True
@@ -254,6 +345,10 @@ def capture_selection_text_with_restore(timeout_ms=350, poll_ms=25) -> dict:
     poll_ms = max(5, int(poll_ms))
     attempts = max(1, timeout_ms // poll_ms)
 
+    support = _selection_capture_support()
+    if not support.get("supported"):
+        return _unsupported_capture_result(support)
+
     original_text = _clipboard_get_text()
     original_snapshot = _capture_clipboard_snapshot_windows()
     sentinel = f"__betterfingers_clipboard_probe_{uuid.uuid4().hex}__"
@@ -278,6 +373,7 @@ def capture_selection_text_with_restore(timeout_ms=350, poll_ms=25) -> dict:
                 "ok": True,
                 "text": _sanitize_tts_text(captured_text),
                 "used_fallback": False,
+                "capture_status": "captured",
                 "message": "Captured selected text.",
             }
 
@@ -286,6 +382,7 @@ def capture_selection_text_with_restore(timeout_ms=350, poll_ms=25) -> dict:
                 "ok": True,
                 "text": _sanitize_tts_text(original_text),
                 "used_fallback": True,
+                "capture_status": "captured",
                 "message": "Using existing clipboard text fallback.",
             }
 
@@ -293,7 +390,8 @@ def capture_selection_text_with_restore(timeout_ms=350, poll_ms=25) -> dict:
             "ok": False,
             "text": "",
             "used_fallback": False,
-            "message": "No readable selected/copied text found.",
+            "capture_status": "empty",
+            "message": "Can't read selected text — no selected text was captured. Select text and try again.",
         }
     finally:
         restored = False

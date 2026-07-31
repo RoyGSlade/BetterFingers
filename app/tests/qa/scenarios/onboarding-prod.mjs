@@ -209,6 +209,67 @@ export const onboardingProdScenarios = [
   {
     area: 'onboarding-prod',
     ui: 'signal-desk-prod',
+    name: 'keyboard-trap-cycles-focus-and-swallows-escape',
+    kind: 'standard',
+    description:
+      'UI-02-012: the required keyboard-trap gate -- Tab cycles within the overlay, Escape is swallowed. ' +
+      'This does not merely check that the dialog has role="dialog" or that some trap function exists; it ' +
+      'drives real Tab/Shift+Tab keystrokes across every focusable control on the consent step (checkbox, ' +
+      'Decline, Back, Next) and asserts the browser\'s own focus lands back inside #sdOnboarding at both ' +
+      'ends -- the actual, observable behaviour a keyboard-only user depends on, exercised through ' +
+      'guidedFlow.js\'s trapTab() rather than asserted by calling it directly. Escape is then pressed and ' +
+      'checked to not close the dialog, which is the row\'s actual "swallowed" claim.',
+    backendState: coldBoot,
+    async navigate(page) {
+      await enterFirstRunState(page);
+      await expect(page.locator('#sdOnboarding'), 'the gate must show itself -- nothing here opened it').toBeVisible();
+      await page.locator('#sdOnboarding [data-flow-primary]').click();
+      await expect(page.locator('#sdOnboarding [data-flow-title]')).toHaveText('Your data stays on this device');
+    },
+    async expects(page) {
+      const consent = page.locator('#sdOnboardConsent');
+      const decline = page.locator('#sdOnboardDecline');
+      const back = page.locator('#sdOnboardBack');
+      const next = page.locator('#sdOnboardNext');
+
+      // The forward control is disabled until consent is given, which takes it
+      // out of the tab order entirely -- check it first so all four real
+      // controls (not three) are in play for the trap walk below.
+      await consent.check();
+      await expect(next, 'checking consent enables the forward control before the trap walk').toBeEnabled();
+
+      // Real DOM tab order on the consent step: checkbox -> Decline -> Back -> Next.
+      await consent.focus();
+      await expect(consent).toBeFocused();
+      await page.keyboard.press('Tab');
+      await expect(decline, 'Tab from the checkbox moves to Decline').toBeFocused();
+      await page.keyboard.press('Tab');
+      await expect(back, 'Tab from Decline moves to Back').toBeFocused();
+      await page.keyboard.press('Tab');
+      await expect(next, 'Tab from Back moves to Next').toBeFocused();
+
+      // The trap: Tab from the LAST focusable control returns focus to the
+      // FIRST one, inside the dialog, rather than escaping to whatever the
+      // browser would tab to next in the underlying document.
+      await page.keyboard.press('Tab');
+      await expect(consent, 'Tab from the last focusable control wraps back to the first, staying inside the dialog').toBeFocused();
+
+      // And the reverse direction: Shift+Tab from the first wraps to the last.
+      await page.keyboard.press('Shift+Tab');
+      await expect(next, 'Shift+Tab from the first focusable control wraps to the last, staying inside the dialog').toBeFocused();
+
+      // Escape is swallowed: it does not dismiss the gate. (A separate,
+      // unrelated global shortcut also reacts to Escape by blurring whatever
+      // has focus -- reported in room chat, not this row's contract, and not
+      // asserted here since it is outside this task's claimed files.)
+      await page.keyboard.press('Escape');
+      await expect(page.locator('#sdOnboarding'), 'Escape must not dismiss the consent gate').toBeVisible();
+    },
+    screenshots: [{ name: 'keyboard-trap-cycles-focus-and-swallows-escape' }],
+  },
+  {
+    area: 'onboarding-prod',
+    ui: 'signal-desk-prod',
     name: 'the-first-run-gate-is-a-four-step-wizard',
     kind: 'standard',
     description:
@@ -250,9 +311,24 @@ export const onboardingProdScenarios = [
       };
 
       const walk = [
-        { title: 'Welcome to BetterFingers', label: 'Get started', backVisible: false },
+        {
+          title: 'Welcome to BetterFingers',
+          label: 'Get started',
+          backVisible: false,
+          // UI-02-005: "static copy, Get started button, no gating" -- the
+          // record/review/send preview and the absence of a disabled forward
+          // button (proved below by clicking through it) is what "no gating"
+          // means for this step.
+          bodyContains: ["What you'll do", 'record', 'review', 'send flow'],
+        },
         { title: 'Your data stays on this device', label: 'Accept & continue', backVisible: true },
-        { title: 'How it works', label: 'Next', backVisible: true },
+        {
+          title: 'How it works',
+          label: 'Next',
+          backVisible: true,
+          // UI-02-007: "record -> review -> send explainer".
+          bodyContains: ['Record', 'press your record hotkey', 'Review', 'a draft appears', 'Send', 'accept to type or paste'],
+        },
         { title: 'Speech models', label: 'Finish', backVisible: true },
       ];
 
@@ -266,6 +342,17 @@ export const onboardingProdScenarios = [
           await expect(back, 'Back is hidden on step 1').toBeHidden();
         }
         expect(await visibleBodies(), `step ${step + 1}: exactly one body visible`).toBe(1);
+        if (expected.bodyContains) {
+          // `:visible` filters `.sd-flow__step` itself here -- chaining
+          // `steps.locator(':visible')` instead would search each step's
+          // DESCENDANTS for visible nodes and match every paragraph/list-item
+          // inside the one visible step, not the step itself.
+          const visibleStep = page.locator('#sdOnboarding .sd-flow__step:visible');
+          const bodyText = await visibleStep.innerText();
+          for (const fragment of expected.bodyContains) {
+            expect(bodyText, `step ${step + 1} body renders its real copy ("${fragment}")`).toContain(fragment);
+          }
+        }
 
         // The dots are the only thing on screen that says how far along this is,
         // so their state vocabulary is asserted rather than their mere presence.

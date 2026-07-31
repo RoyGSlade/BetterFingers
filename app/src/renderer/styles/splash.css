@@ -1,0 +1,470 @@
+/* OR-02 startup screen. Colour intent ported from the operator's prototype
+   (HorizonPulseSvg.tsx's Tailwind sky/red/emerald/amber palette translated to
+   real values); layout otherwise matches this app's own dark theme
+   (styles/base.css's --bg/--text/--border), since this page ships beside it. */
+
+:root {
+  color-scheme: dark;
+  --splash-bg: #06070a;
+  --splash-text: #f1f5f9; /* slate-100 */
+  --splash-muted: #94a3b8; /* slate-400 */
+  --splash-border: rgba(148, 163, 184, 0.16); /* slate-400/16 */
+  --splash-idle: #7dd3fc; /* sky-300 */
+  --splash-ready: #38bdf8; /* sky-400 */
+  --splash-danger: #f87171; /* red-400 */
+  --splash-online: #34d399; /* emerald-400 */
+  --splash-pending: #fbbf24; /* amber-400 */
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--splash-bg);
+  color: var(--splash-text);
+  user-select: none;
+}
+
+.splash__bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at center, rgba(15, 23, 42, 0.6) 0%, rgba(6, 7, 10, 1) 85%);
+}
+
+.splash {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 12px;
+}
+
+.splash__topbar {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--splash-muted);
+  opacity: 0.6;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.splash__hero {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  gap: 4px;
+}
+
+/* --- Horizon pulse (ported from HorizonPulseSvg.tsx) --------------------- */
+
+.splash__pulse {
+  position: relative;
+  width: 100%;
+  height: 80px;
+  margin-bottom: -28px;
+}
+
+.horizon-pulse {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.horizon-pulse__glow {
+  fill: none;
+  stroke: var(--splash-idle);
+  stroke-width: 4;
+  stroke-opacity: 0.35;
+  filter: url(#bf-horizon-glow);
+}
+
+.horizon-pulse__main {
+  fill: none;
+  stroke: var(--splash-idle);
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-opacity: 0.9;
+}
+
+.horizon-pulse__highlight {
+  fill: none;
+  stroke: #ffffff;
+  stroke-width: 1;
+  stroke-linecap: round;
+  stroke-opacity: 0;
+}
+
+.splash[data-phase='ready'] .horizon-pulse__glow,
+.splash[data-phase='ready'] .horizon-pulse__main {
+  stroke: var(--splash-ready);
+}
+
+.splash[data-phase='failed'] .horizon-pulse__glow,
+.splash[data-phase='failed'] .horizon-pulse__main {
+  stroke: var(--splash-danger);
+}
+
+/* --- Wordmark ------------------------------------------------------------- */
+
+.splash__wordmark {
+  position: relative;
+  z-index: 1;
+  text-align: center;
+  padding: 20px 4px 8px;
+}
+
+.splash__wordmark h1 {
+  margin: 0;
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1;
+}
+
+.splash__wordmark-better {
+  color: var(--splash-text);
+  font-weight: 500;
+}
+
+.splash__wordmark-fingers {
+  color: var(--splash-ready);
+  font-weight: 700;
+  margin-left: 2px;
+  text-shadow: 0 0 20px rgba(56, 189, 248, 0.35), 0 0 40px rgba(56, 189, 248, 0.14);
+}
+
+.splash__tagline {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--splash-muted);
+  letter-spacing: 0.04em;
+  opacity: 0.8;
+}
+
+/* --- Status display (ported from StatusDisplay.tsx) ----------------------- */
+
+.splash__status {
+  min-height: 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.splash__status-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.splash__status-text {
+  color: var(--splash-muted);
+  transition: color 0.3s ease;
+}
+
+.splash[data-phase='ready'] .splash__status-text {
+  color: var(--splash-ready);
+  font-weight: 600;
+}
+
+.splash[data-phase='failed'] .splash__status-text {
+  color: var(--splash-danger);
+}
+
+.splash__activity-dots {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.splash__activity-dots span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: rgba(56, 189, 248, 0.8);
+  animation: splash-dot-pulse 1.2s ease-in-out infinite;
+}
+
+.splash__activity-dots span:nth-child(2) { animation-delay: 0.15s; }
+.splash__activity-dots span:nth-child(3) { animation-delay: 0.3s; }
+
+.splash[data-phase='ready'] .splash__activity-dots,
+.splash[data-phase='failed'] .splash__activity-dots {
+  display: none;
+}
+
+.splash__elapsed {
+  margin: 0;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.04em;
+  color: var(--splash-pending);
+  opacity: 0.85;
+}
+
+/* --- Services list (SPLASH_SPEC.md §4/§6 -- real /doctor signals only) ---- */
+
+.splash__services {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.splash__service {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--splash-border);
+  background: rgba(15, 23, 42, 0.5);
+  font-size: 11px;
+  color: var(--splash-muted);
+}
+
+.splash__service-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--splash-pending);
+  flex: none;
+}
+
+.splash__service[data-status='online'] .splash__service-dot { background: var(--splash-online); }
+.splash__service[data-status='failed'] .splash__service-dot { background: var(--splash-danger); }
+.splash__service[data-status='pending'] .splash__service-dot,
+.splash__service[data-status='starting'] .splash__service-dot { background: var(--splash-pending); }
+
+.splash__service[data-status='failed'] { color: #fca5a5; border-color: rgba(248, 113, 113, 0.3); }
+.splash__service[data-status='online'] { color: #cbd5e1; }
+
+/* --- Recovery card (ported from RecoveryCard.tsx) -------------------------- */
+
+.splash__recovery {
+  width: 100%;
+  max-width: 420px;
+  margin-top: 18px;
+  padding: 18px;
+  border-radius: 14px;
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  background: rgba(2, 6, 23, 0.8);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(12px);
+}
+
+.splash__recovery-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.splash__recovery-icon {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+  background: rgba(248, 113, 113, 0.1);
+  color: var(--splash-danger);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+}
+
+.splash__recovery-copy h3 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.splash__recovery-copy p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--splash-muted);
+}
+
+.splash__recovery-actions {
+  margin-top: 16px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(30, 41, 59, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.splash__recovery-toggle {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--splash-muted);
+  font-size: 11px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.splash__recovery-toggle:hover {
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.7);
+}
+
+.splash__recovery-retry {
+  appearance: none;
+  border: none;
+  cursor: pointer;
+  background: var(--splash-ready);
+  color: #020617;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: 10px;
+  box-shadow: 0 8px 20px rgba(56, 189, 248, 0.2);
+}
+
+.splash__recovery-retry:hover {
+  background: #7dd3fc;
+}
+
+.splash__recovery-details {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(30, 41, 59, 0.9);
+}
+
+.splash__recovery-code {
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(30, 41, 59, 1);
+  border-radius: 10px;
+  padding: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: #cbd5e1;
+}
+
+.splash__recovery-code-line {
+  padding: 1px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+#splashErrorCode {
+  color: var(--splash-danger);
+  font-weight: 600;
+}
+
+.splash__recovery-code-details {
+  color: var(--splash-muted);
+  padding-top: 6px;
+  margin-top: 4px;
+  border-top: 1px solid rgba(30, 41, 59, 0.8);
+}
+
+.splash__recovery-diagnostics {
+  margin-top: 12px;
+}
+
+.splash__recovery-diagnostics-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--splash-muted);
+  margin-bottom: 6px;
+}
+
+.splash__recovery-diagnostics-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.splash__recovery-diagnostics-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.5);
+  color: #cbd5e1;
+}
+
+.splash__recovery-diagnostics-list .splash__recovery-diagnostics-status {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 6px;
+}
+
+.splash__recovery-diagnostics-list [data-status='online'] .splash__recovery-diagnostics-status {
+  background: rgba(52, 211, 153, 0.1);
+  color: var(--splash-online);
+}
+
+.splash__recovery-diagnostics-list [data-status='failed'] .splash__recovery-diagnostics-status {
+  background: rgba(248, 113, 113, 0.1);
+  color: var(--splash-danger);
+}
+
+.splash__recovery-diagnostics-list [data-status='pending'] .splash__recovery-diagnostics-status,
+.splash__recovery-diagnostics-list [data-status='starting'] .splash__recovery-diagnostics-status {
+  background: rgba(251, 191, 36, 0.1);
+  color: var(--splash-pending);
+}
+
+.splash__footer {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: #475569;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding-top: 4px;
+}
+
+/* --- prefers-reduced-motion: no dot pulsing, no wordmark scale/glow thump,
+   no requestAnimationFrame-driven horizon wave (splashApp.js checks the same
+   media query and renders a flat static line + a fixed glow instead). --- */
+@media (prefers-reduced-motion: reduce) {
+  .splash__activity-dots span {
+    animation: none;
+    opacity: 0.8;
+  }
+}
+
+@keyframes splash-dot-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.15); }
+}

@@ -19,6 +19,14 @@ import pytest
 
 os.environ.setdefault("BETTERFINGERS_LAZY_STARTUP", "1")
 
+# C-2/QA-SEC-002: graph/intent/project/mcp/llm dev routes are gated off by
+# default in server.py. Pytest is a dev context, same reasoning as the two
+# setdefaults above -- tests that exercise them directly (test_mcp_client.py,
+# test_server_platform_runtime.py) need the flag on without patching every
+# call site. Tests that specifically cover the gate's off-by-default behavior
+# (tests/test_dev_route_gating.py) delenv it locally.
+os.environ.setdefault("BETTERFINGERS_DEV_ROUTES", "1")
+
 # --- Smoke suite definition (release-packaging gate) -------------------------
 # `build-installer.yml` runs `pytest -m smoke` as a fast, hardware-free
 # critical-path gate before packaging. Rather than scatter @pytest.mark.smoke

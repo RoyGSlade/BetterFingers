@@ -1644,6 +1644,20 @@ body.theme-light.high-contrast {
 
 .toast-message { flex: 1; }
 
+.toast-action {
+  flex: none;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.78rem;
+  line-height: 1;
+  padding: 4px 10px;
+  white-space: nowrap;
+}
+.toast-action:hover { background: var(--bg-elevated); }
+
 .toast-close {
   flex: none;
   background: none;

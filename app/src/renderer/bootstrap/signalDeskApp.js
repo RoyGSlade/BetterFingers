@@ -526,7 +526,18 @@ export function startSignalDeskApp(doc = document) {
 
   const talkCapture = createTalkCaptureFeature({
     elements: collectTalkCaptureElements(doc),
-    hooks: { api, showToast },
+    hooks: {
+      api,
+      showToast,
+      // OR-06: the no-input-signal toast's click-through. Same pattern as
+      // Talk's onOpenConfidenceSettings above -- link to the threshold/setting
+      // owner rather than duplicating its UI here.
+      onOpenSoundSettings: () => {
+        shell.goTo('utilities');
+        utilitiesWorkspace.goToSection('speech');
+        syncUtilitiesContext('speech');
+      },
+    },
   });
   talkCapture.init();
 

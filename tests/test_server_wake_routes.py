@@ -244,7 +244,7 @@ class WakeRoutesTests(unittest.TestCase):
                 data={"name": "Too Big"},
                 files={"file": ("classifier.onnx", payload, "application/octet-stream")},
             )
-        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.status_code, 413)
 
     def test_delete_unknown_imported_model_404(self):
         with self._client() as client:

@@ -698,7 +698,7 @@
               <circle cx="4" cy="18" r="1.4"></circle>
             </svg>
           </span>
-          <span class="sd-nav__button-label">Library</span>
+          <span class="sd-nav__button-label">Scribe</span>
         </button>
 
         <button type="button" class="sd-nav__button" data-nav="studio" aria-current="false">
@@ -783,7 +783,7 @@
       which returns null (render nothing) for every ambiguous case.
 
       It sits below the header rather than inside a workspace because the
-      condition is app-wide: it must be readable from Talk, Library, Studio,
+      condition is app-wide: it must be readable from Talk, Scribe, Studio,
       Utilities and Settings alike.
     -->
     <div class="sd-backend-banner" id="sdVersionMismatchBanner" role="status" aria-live="polite" hidden>
@@ -1362,7 +1362,7 @@
 
             <p class="sd-studio-detail-card__description" id="sdPersonaDescription"></p>
 
-            <div class="sd-rewrites-panel">
+            <div class="sd-rewrites-panel" hidden>
               <span class="sd-panel-label">Example Rewrites <span class="sd-help" aria-hidden="true">?</span></span>
               <table class="sd-rewrites-table">
                 <thead>
@@ -1385,7 +1385,7 @@
                 <p class="sd-example-column__body" id="sdTestOutputText">Run Test Persona to see a live preview here.</p>
                 <span class="sd-example-column__meta" id="sdTestOutputMeta"></span>
               </div>
-              <div class="sd-example-column">
+              <div class="sd-example-column" hidden>
                 <span class="sd-example-column__label">Why This Works</span>
                 <ul class="sd-example-column__why-list" id="sdWhyThisWorksList">
                 </ul>
@@ -1418,7 +1418,7 @@
             <p class="sd-studio-message" id="sdStudioMessage"></p>
 
             <!-- "Teach from my edits" -- features/personaLearning.js reused verbatim; see studioWorkspace.js's file-header ID-COLLISION NOTE for why these use sdTeach* ids rather than personaLearning.js's own canonical personaLearning* ids. -->
-            <div class="sd-teach-panel" id="sdTeachSection">
+            <div class="sd-teach-panel" id="sdTeachSection" hidden>
               <div class="sd-teach-panel__header">
                 <span class="sd-panel-label">Teach From My Edits <span class="sd-help" aria-hidden="true">?</span></span>
                 <span class="sd-teach-panel__persona" id="sdTeachPersonaLabel"></span>
@@ -1700,9 +1700,13 @@
         <nav class="sd-util-nav" aria-label="Utilities sections" role="tablist">
           <button type="button" class="sd-util-nav__item is-active" id="sdUtilNavModels" data-util-nav="models" aria-current="page">Models</button>
           <button type="button" class="sd-util-nav__item" id="sdUtilNavSpeech" data-util-nav="speech" aria-current="false">Speech Input</button>
-          <button type="button" class="sd-util-nav__item" id="sdUtilNavText" data-util-nav="text" aria-current="false">Text Tools</button>
-          <button type="button" class="sd-util-nav__item" id="sdUtilNavDiagnostics" data-util-nav="diagnostics" aria-current="false">Diagnostics</button>
+          <button type="button" class="sd-util-nav__item" id="sdUtilNavText" data-util-nav="text" aria-current="false">Scribe Tools</button>
+          <button type="button" class="sd-util-nav__item" id="sdUtilNavDiagnostics" data-util-nav="diagnostics" aria-current="false">Runtime Diagnostics</button>
           <button type="button" class="sd-util-nav__item" id="sdUtilNavAdvanced" data-util-nav="advanced" aria-current="false">Advanced</button>
+          <span class="sd-util-nav__group-label" role="presentation">Saved material</span>
+          <button type="button" class="sd-util-nav__item" data-shell-nav="library" aria-current="false">Library</button>
+          <button type="button" class="sd-util-nav__item" data-shell-nav="library" aria-current="false">History</button>
+          <button type="button" class="sd-util-nav__item" data-util-nav="advanced" aria-current="false">Game Mode</button>
         </nav>
 
         <div class="sd-util-content">
@@ -2061,9 +2065,9 @@
               </div>
             </div>
 
-            <!-- Message Rescue surface 3/3: Text & Persona Playground (features/textPlayground.js, reused verbatim -- canonical ids, free-standing, real backend) -->
+            <!-- Message Rescue surface 3/3: Scribe (features/textPlayground.js, reused verbatim -- canonical ids, free-standing, real backend) -->
             <div class="sd-util-group" id="textPlaygroundSection">
-              <div class="sd-util-group__header"><span class="sd-util-group__title">Text &amp; Persona Playground</span></div>
+              <div class="sd-util-group__header"><span class="sd-util-group__title">Scribe</span></div>
               <p class="sd-util-group__desc">Text-only — no mic, transcription, or TTS anywhere in this flow.</p>
               <textarea class="sd-util-input sd-util-input--wide" id="textPlaygroundText" rows="3" placeholder="Type or paste a message…"></textarea>
               <input type="text" class="sd-util-input sd-util-input--wide" id="textPlaygroundContext" placeholder="Optional context (one-time use)…" />
@@ -2246,7 +2250,7 @@
                  the same resolution Wave 7 documented for the Settings nav.
                  Promoting it is a utilitiesWorkspace.js change, written out in
                  docs/release/WAVE9_INTEGRATION_DIFFS.md as an optional diff. -->
-            <div class="sd-util-group" id="sdUtilWorkflowGroup" data-workflow-approved="false" data-workflow-saved="false">
+            <div class="sd-util-group" id="sdUtilWorkflowGroup" data-workflow-approved="false" data-workflow-saved="false" hidden>
               <div class="sd-util-group__header"><span class="sd-util-group__title">Launch Workflows</span></div>
               <p class="sd-util-group__desc">
                 A workflow is a fixed list of approved actions — open an application, a folder or a link,
@@ -2292,7 +2296,7 @@
             </div>
 
             <div class="sd-util-group" id="sdUtilGameSetupGroup" data-wizard-step="detect" data-wizard-rehearsed="false" data-wizard-saved="false">
-              <div class="sd-util-group__header"><span class="sd-util-group__title">Game Setup</span></div>
+              <div class="sd-util-group__header"><span class="sd-util-group__title">Game Mode</span></div>
               <p class="sd-util-group__desc">
                 Set up a controller for one game: a button to dictate, a separate button for
                 commands, the key that opens the game's chat, and how the text reaches it.
@@ -2581,22 +2585,13 @@
               <div class="sd-set-row" data-search-row data-search-label="auto submit">
                 <div class="sd-set-row__label">
                   <span class="sd-set-row__label-text">Auto submit</span>
-                  <span class="sd-set-row__label-hint">Press Enter/submit automatically after pasting.</span>
+                  <span class="sd-set-row__label-hint">Presses Enter for you the instant a draft is ready — into whatever window has focus, not necessarily BetterFingers. If that's your Slack, your terminal, or an email draft, this sends it. Turning this on requires a separate confirmation.</span>
                 </div>
                 <div class="sd-set-row__control">
                   <input type="checkbox" class="sd-set-checkbox" id="sdSetAutoSubmit" />
                 </div>
               </div>
-
-              <div class="sd-set-row" data-search-row data-search-label="instant typing">
-                <div class="sd-set-row__label">
-                  <span class="sd-set-row__label-text">Instant typing</span>
-                  <span class="sd-set-row__label-hint">Type character-by-character instead of a single paste. Disabled on Wayland.</span>
-                </div>
-                <div class="sd-set-row__control">
-                  <input type="checkbox" class="sd-set-checkbox" id="sdSetInstantTyping" />
-                </div>
-              </div>
+              <div class="sd-util-banner sd-util-banner--danger" id="sdSetAutoSubmitWarning" hidden>Auto submit is on: BetterFingers will press Enter in whatever app and text field currently has focus, with no review step. Make sure that's always where you want your dictation to land.</div>
 
               <div class="sd-set-row" data-search-row data-search-label="restore clipboard after paste">
                 <div class="sd-set-row__label">
@@ -2611,7 +2606,7 @@
               <div class="sd-set-row" data-search-row data-search-label="draft history limit">
                 <div class="sd-set-row__label">
                   <span class="sd-set-row__label-text">Draft history limit</span>
-                  <span class="sd-set-row__label-hint">How many past drafts Library keeps around.</span>
+                  <span class="sd-set-row__label-hint">How many prior drafts to retain.</span>
                 </div>
                 <div class="sd-set-row__control">
                   <input type="number" class="sd-set-input sd-set-input--number" id="sdSetDraftHistoryLimit" min="10" max="500" />
@@ -2691,7 +2686,7 @@
                 DISCLOSED_TOGGLES -- do not hard-code the text here, or the
                 disclosure and the behaviour can drift apart.
               -->
-              <div class="sd-set-row sd-set-row--disclosed" data-search-row data-search-label="speech delivery signals">
+              <div class="sd-set-row sd-set-row--disclosed" data-search-row data-search-label="speech delivery signals" hidden>
                 <div class="sd-set-row__label">
                   <span class="sd-set-row__label-text">Use speech delivery signals</span>
                   <dl class="sd-disclosure">
@@ -2714,7 +2709,7 @@
                 `use_audience_context` is absent from SETTINGS_FIELD_KEYS, so
                 no save path can carry it even if this attribute is removed.
               -->
-              <div class="sd-set-row sd-set-row--disclosed" data-search-row data-search-label="audience context contact">
+              <div class="sd-set-row sd-set-row--disclosed" data-search-row data-search-label="audience context contact" hidden>
                 <div class="sd-set-row__label">
                   <span class="sd-set-row__label-text">Use selected contact/audience context</span>
                   <dl class="sd-disclosure">
@@ -3210,12 +3205,18 @@
         <span class="sd-context__section-label">Delivery <span class="sd-help" aria-hidden="true">?</span></span>
         <div class="sd-segmented" role="group" aria-label="Delivery method" id="sdDeliverySegmented">
           <!--
-            Wave 2: Send / Insert / Copy became Type / Paste / Copy. The old
-            labels named two things the backend has no notion of; these three map
-            exactly onto the only actions perform_output_action() accepts
-            (type / paste / copy_only), so what the user picks here is literally
-            what gets requested. This group is now the ONLY delivery selector on
-            the page -- see the removed <select> in the refined card.
+            D-0036 (docs/release/DECISIONS.md): delivery is Paste only for
+            this release. (No literal version string here on purpose — the
+            "no renderer page hardcodes a version number" guard in
+            app/tests/qaFirstRun.test.mjs greps this file and cannot tell a
+            comment from markup. The version has one source; see D-0036.)
+            Wave 2 built this as a three-way Type/Paste/Copy
+            selector; keeping a selector that only ever resolves one way would
+            be exactly the overload PUBLISH_PLAN.md §5 forbids, so Type and
+            Copy are removed as user choices here (UI-06-038 is `intentional_cut`,
+            named replacement `#sdDeliverySegmented`). perform_output_action()
+            is untouched and still accepts type/paste/copy_only -- re-offering
+            them later is a markup change, not a rebuild.
           -->
           <!--
             No `is-active` in the markup: talkWorkspace.js paints the active
@@ -3223,17 +3224,9 @@
             settings arrive, so a static default here could only ever disagree
             with what Send is actually going to do.
           -->
-          <button type="button" class="sd-segmented__option" data-delivery-option="type" aria-pressed="false">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="4" x2="12" y2="20"></line><line x1="7" y1="4" x2="17" y2="4"></line><line x1="9" y1="20" x2="15" y2="20"></line></svg>
-            Type
-          </button>
           <button type="button" class="sd-segmented__option" data-delivery-option="paste" aria-pressed="false">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="4" width="10" height="16" rx="2"></rect><line x1="10" y1="2.5" x2="14" y2="2.5"></line></svg>
             Paste
-          </button>
-          <button type="button" class="sd-segmented__option" data-delivery-option="copy" aria-pressed="false">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="11" height="12" rx="2"></rect><path d="M5 15V4h10"></path></svg>
-            Copy
           </button>
         </div>
       </div>
@@ -3531,15 +3524,15 @@
           <div class="sd-filter-chips">
             <button type="button" class="sd-filter-chip" data-util-nav="models">Models</button>
             <button type="button" class="sd-filter-chip" data-util-nav="speech">Speech Input</button>
-            <button type="button" class="sd-filter-chip" data-util-nav="text">Text Tools</button>
-            <button type="button" class="sd-filter-chip" data-util-nav="diagnostics">Diagnostics</button>
+            <button type="button" class="sd-filter-chip" data-util-nav="text">Scribe Tools</button>
+            <button type="button" class="sd-filter-chip" data-util-nav="diagnostics">Runtime Diagnostics</button>
             <button type="button" class="sd-filter-chip" data-util-nav="advanced">Advanced</button>
           </div>
         </div>
 
         <div class="sd-context__section">
           <span class="sd-context__section-label">About Utilities <span class="sd-help" aria-hidden="true">?</span></span>
-          <p class="sd-context__description">Everything that isn't Talk, Library, Studio, or Settings lives here — models, speech input, text tools, diagnostics, and advanced/developer controls. See docs/ui/CURRENT_UI_INVENTORY.md.</p>
+          <p class="sd-context__description">Everything that isn't Talk, Scribe, Studio, or Settings lives here — models, speech input, saved material, diagnostics, and advanced/developer controls. See docs/ui/CURRENT_UI_INVENTORY.md.</p>
         </div>
       </div><!-- /data-context-for="utilities" -->
     </div>

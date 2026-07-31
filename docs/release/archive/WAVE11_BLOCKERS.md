@@ -1,5 +1,13 @@
 # Wave 11 BLOCKERS — what is not `wired`, and why
 
+> **Archived wave doc — numbers below are historical, not current.** Every
+> count in this document (161/10/267, and the later Wave 11B corrections) is
+> a snapshot from when it was written. The live validator, re-run and
+> director-verified at commit `545e582` (2026-07-29), reports **398 wired /
+> 23 intentional_cut / 17 blocked / 438 total**. Reproduce with
+> `python3 tools/parity_validator.py`. `RELEASE_BOARD.md` carries the current
+> figure; this document's body is left unedited below as a historical record.
+
 Companion to [PARITY_INVENTORY.md](../PARITY_INVENTORY.md). The ledger carries
 the per-row ruling; this is the director-facing summary of everything that did
 **not** clear the strict D-0015 chain, stated without softening.

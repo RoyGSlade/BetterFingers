@@ -289,6 +289,70 @@ function getMainWindow() {
   return mainWindow;
 }
 
+let splashWindow = null;
+
+function loadSplash(window) {
+  if (process.env.ELECTRON_RENDERER_URL) {
+    return window.loadURL(`${process.env.ELECTRON_RENDERER_URL}/splash.html`);
+  }
+  return window.loadFile(path.join(__dirname, '../renderer/splash.html'));
+}
+
+// OR-02: shown immediately at boot, before the backend is known to be up.
+// The main dashboard window is deliberately NOT created until boot succeeds
+// (see main.js's revealMainWindow()) -- creating it early and gating only its
+// .show() would race against signal-desk.html's own script tags, which render
+// their shell regardless of backend health, defeating the whole point of a
+// splash that only shows what's real.
+function createSplashWindow() {
+  if (splashWindow && !splashWindow.isDestroyed()) {
+    return splashWindow;
+  }
+
+  splashWindow = new BrowserWindow({
+    width: 480,
+    height: 420,
+    resizable: false,
+    show: false,
+    backgroundColor: '#07111f',
+    title: 'BetterFingers',
+    icon: resolveAppIcon(),
+    autoHideMenuBar: true,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      preload: resolvePreloadPath(),
+    },
+  });
+
+  hardenWindowNavigation(splashWindow);
+
+  splashWindow.once('ready-to-show', () => {
+    splashWindow?.show();
+  });
+
+  splashWindow.on('closed', () => {
+    splashWindow = null;
+  });
+
+  loadSplash(splashWindow).catch((error) => {
+    console.error('Failed to load BetterFingers splash screen:', error);
+  });
+
+  return splashWindow;
+}
+
+function getSplashWindow() {
+  return splashWindow;
+}
+
+function closeSplashWindow() {
+  if (splashWindow && !splashWindow.isDestroyed()) {
+    splashWindow.close();
+  }
+}
+
 function focusMainWindow(window = mainWindow) {
   if (!window || window.isDestroyed()) {
     return;
@@ -455,6 +519,9 @@ module.exports = {
   createMainWindow,
   getMainWindow,
   focusMainWindow,
+  createSplashWindow,
+  getSplashWindow,
+  closeSplashWindow,
   createOverlayWindow,
   getOverlayWindow,
   getOverlayAppearance,

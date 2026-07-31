@@ -30,6 +30,11 @@
 //   hooks.onStateChange(stateSnapshot)     Called after every render with the
 //                         reducer's current {state, message, canStart,
 //                         canStop, canEmergencyStop} snapshot.
+//   hooks.onOpenSoundSettings()            Click-through target for the
+//                         no-input-signal toast (OR-06) -- navigates to
+//                         Utilities / Speech Input. Optional-chained same as
+//                         everything else; a missing hook just means the
+//                         toast's action button is a no-op click.
 //
 // NOTE (integration-owned files, not touched here): as of this writing
 // backendProxy.js's POST allowlist and backend.js only cover
@@ -42,7 +47,7 @@
 
 // --- Pure helpers (no DOM) --------------------------------------------------
 
-export const CAPTURE_STATES = ['idle', 'starting', 'recording', 'stopping', 'busy', 'error'];
+export const CAPTURE_STATES = ['idle', 'starting', 'recording', 'stopping', 'busy', 'downloading', 'error'];
 
 // The status vocabulary is checked against what server.py ACTUALLY broadcasts,
 // not against features/talkWorkspace.js's interpretVoiceStatus() list. Those two
@@ -103,12 +108,34 @@ function statusToState(status) {
   }
 }
 
+// OR-06: "no input signal" detection lives entirely on the backend already --
+// audio_gate.py's should_block_for_no_audio() runs at record-stop time (not
+// boot time) over the WHOLE clip the user just recorded, using the same
+// no_audio_min_rms/no_audio_min_peak thresholds the trailing-silence auto-stop
+// already trusts. A near-silent clip broadcasts 'draft_blocked' with a
+// gate_reasons entry that starts with "near_silent(" (see should_block_for_no_audio).
+// Checking the FULL clip (not just its first N ms) is what keeps this from
+// crying wolf: a user who pauses before speaking still has real signal
+// somewhere in the recording, so only a clip with NO signal anywhere in it
+// trips this -- an honestly-quiet-so-far mic never does.
+//
+// 'clip_too_short' and 'empty_transcript' are deliberately NOT treated as "no
+// signal": a short-but-loud tap (e.g. a cough) or a clip Whisper simply
+// couldn't transcribe are different problems from an inaudible mic, and
+// telling the user "I can't hear you" for either would be misleading.
+export function hasNoInputSignal(payload) {
+  const reasons = Array.isArray(payload?.gate_reasons) ? payload.gate_reasons : [];
+  return reasons.some((reason) => typeof reason === 'string' && reason.startsWith('near_silent'));
+}
+
 function defaultMessageForState(state) {
   switch (state) {
     case 'recording':
       return 'Recording…';
     case 'busy':
       return 'Processing…';
+    case 'downloading':
+      return "Downloading the speech model (first use only, this can take a few minutes)…";
     case 'error':
       return 'Needs attention.';
     case 'starting':
@@ -142,6 +169,16 @@ const INITIAL_SNAPSHOT = snapshotFor('idle', defaultMessageForState('idle'));
  *   {type:'intent', intent:'start'|'stop'|'toggle'|'emergencyStop'}
  *   {type:'result', intent, ok, recording, message}
  *   {type:'error', message}
+ *   {type:'modelDownload', active, message}   QA-FR-002: client-side-only
+ *     enrichment, never something server.py broadcasts over the voice-status
+ *     socket. Driven by createTalkCaptureFeature() polling GET /models/whisper
+ *     while 'busy' (see pollModelDownload() below) -- it only ever narrows
+ *     the generic 'busy'/"Processing…" span into a distinct, explained
+ *     'downloading' state. A real voiceStatus event stays authoritative and
+ *     can override it at any time, same as every other state here.
+ *   {type:'guidance', text}   QA-FR-003: appends the backend's Doctor
+ *     recovery guidance to an already-shown error message; never changes
+ *     the state itself.
  */
 export function reduceCaptureState(current, event) {
   const prev = current && CAPTURE_STATES.includes(current.state) ? current : INITIAL_SNAPSHOT;
@@ -194,6 +231,21 @@ export function reduceCaptureState(current, event) {
     case 'error':
       return snapshotFor('error', event.message || 'Something went wrong.');
 
+    case 'modelDownload': {
+      if (!event.active) return prev;
+      // Only ever narrows 'busy' (or refreshes an existing 'downloading') --
+      // never fires from 'recording'/'idle'/'error'/etc., so a stale poll
+      // response arriving after the pipeline has already moved on can't
+      // drag the UI backward.
+      if (prev.state !== 'busy' && prev.state !== 'downloading') return prev;
+      return snapshotFor('downloading', event.message || defaultMessageForState('downloading'));
+    }
+
+    case 'guidance': {
+      if (prev.state !== 'error' || !event.text) return prev;
+      return snapshotFor('error', `${prev.message} ${event.text}`.trim());
+    }
+
     default:
       return prev;
   }
@@ -236,17 +288,102 @@ export function createTalkCaptureFeature({ elements, hooks } = {}) {
   let startInFlight = false;
   let stopInFlight = false;
   let emergencyInFlight = false;
+  let downloadPollTimer = null;
+  let guidanceInFlightFor = null;
 
   function isFn(value) {
     return typeof value === 'function';
   }
 
+  // --- QA-FR-002: poll the same tracked download state the Utilities
+  // Download button already exposes (GET /models/whisper's download_state,
+  // now also written by transcriber.ensure_loaded() for an on-demand load --
+  // see transcriber.py), so the generic 'busy' span can narrow into an
+  // explained, progress-bearing 'downloading' state instead of staying an
+  // indefinite "Processing…". Best-effort only: any failure just stops
+  // polling and leaves the ordinary 'busy' message in place.
+  function stopDownloadPolling() {
+    if (downloadPollTimer) {
+      clearInterval(downloadPollTimer);
+      downloadPollTimer = null;
+    }
+  }
+
+  function formatDownloadMessage(state) {
+    if (state?.message) return state.message;
+    const size = state?.model_size ? ` '${state.model_size}'` : '';
+    return `Downloading speech model${size} (first use only, this can take a few minutes)…`;
+  }
+
+  async function pollModelDownload() {
+    const api = hks.api;
+    if (!api || !isFn(api.fetchWhisperModels)) {
+      stopDownloadPolling();
+      return;
+    }
+    try {
+      const result = await api.fetchWhisperModels();
+      const state = result?.download_state;
+      const active = Boolean(state && (state.status === 'starting' || state.status === 'downloading'));
+      if (active) {
+        dispatch({ type: 'modelDownload', active: true, message: formatDownloadMessage(state) });
+      } else {
+        stopDownloadPolling();
+      }
+    } catch {
+      stopDownloadPolling();
+    }
+  }
+
+  function startDownloadPollingIfNeeded() {
+    const api = hks.api;
+    if (downloadPollTimer || !api || !isFn(api.fetchWhisperModels)) return;
+    downloadPollTimer = setInterval(() => { pollModelDownload(); }, 800);
+    // Node's test runner would otherwise keep the process alive on a stray
+    // interval; browsers/Electron have no unref() and ignore the call.
+    if (typeof downloadPollTimer.unref === 'function') downloadPollTimer.unref();
+    pollModelDownload();
+  }
+
+  // --- QA-FR-003: the backend already writes real Doctor recovery guidance
+  // (server.py's recovery_guidelines) but Talk never read it. On the FIRST
+  // tick of a genuinely new error (not a re-render caused by our own
+  // 'guidance' dispatch below), fetch the existing /doctor report Utilities
+  // already uses and -- only when it independently confirms STT isn't
+  // loaded -- append its "missing_model" guidance to the message already
+  // shown. Best-effort: a failed fetch leaves the original error untouched.
+  async function maybeFetchGuidance(originalMessage) {
+    const api = hks.api;
+    if (!api || !isFn(api.fetchDoctor)) return;
+    if (guidanceInFlightFor === originalMessage) return;
+    guidanceInFlightFor = originalMessage;
+    try {
+      const doctor = await api.fetchDoctor();
+      const text = doctor?.stt_info?.loaded === false ? doctor?.recovery?.missing_model : null;
+      if (text && snapshot.state === 'error' && snapshot.message === originalMessage) {
+        dispatch({ type: 'guidance', text });
+      }
+    } catch {
+      // Diagnostic enrichment only -- the error already shown must not depend on this.
+    }
+  }
+
   function applySnapshot(next) {
+    const enteringError = next.state === 'error' && snapshot.state !== 'error';
     snapshot = next;
     if (els.startButton) els.startButton.disabled = !snapshot.canStart;
     if (els.stopButton) els.stopButton.disabled = !snapshot.canStop;
     if (els.emergencyButton) els.emergencyButton.disabled = !snapshot.canEmergencyStop;
     if (els.statusMessage) els.statusMessage.textContent = snapshot.message;
+    if (snapshot.state === 'busy' || snapshot.state === 'downloading') {
+      startDownloadPollingIfNeeded();
+    } else {
+      stopDownloadPolling();
+    }
+    if (enteringError) {
+      guidanceInFlightFor = null;
+      maybeFetchGuidance(snapshot.message);
+    }
     hks.onStateChange?.(snapshot);
   }
 
@@ -258,6 +395,18 @@ export function createTalkCaptureFeature({ elements, hooks } = {}) {
   function handleVoiceStatusMessage(message) {
     const status = typeof message === 'string' ? message : message?.status || message?.type;
     const payload = typeof message === 'string' ? {} : message || {};
+    // OR-06: fires once per blocked recording attempt -- the backend only
+    // broadcasts a single 'draft_blocked' per pipeline run, and toast.mjs's
+    // own message+tone coalescing is the backstop against any repeat.
+    if (status === 'draft_blocked' && hasNoInputSignal(payload)) {
+      hks.showToast?.(
+        "I can't hear you. Check your microphone in Sound settings.",
+        'warning',
+        undefined,
+        undefined,
+        { onClick: () => hks.onOpenSoundSettings?.(), actionLabel: 'Open Sound Settings' },
+      );
+    }
     dispatch({ type: 'voiceStatus', status, payload });
   }
 
@@ -378,6 +527,8 @@ export function createTalkCaptureFeature({ elements, hooks } = {}) {
     startInFlight = false;
     stopInFlight = false;
     emergencyInFlight = false;
+    stopDownloadPolling();
+    guidanceInFlightFor = null;
   }
 
   return {

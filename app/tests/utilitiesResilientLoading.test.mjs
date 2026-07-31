@@ -146,6 +146,85 @@ test('a jobs refresh that fails after a previous success keeps the list (and its
   assert.match(ctx.el('sdUtilDiagnosticsMessage').textContent, /jobs endpoint down/);
 });
 
+// --- OR-06 Part 1: audio input defaults to System Default until the user ----
+// --- DELIBERATELY picks a device -- enumerating/loading the list must never
+// --- itself write a binding (see utilitiesWorkspace.js's setAudioDevices()
+// --- header comment: "System default" is a real, distinct choice, not a
+// --- synonym for whatever device happens to be first/default right now).
+
+test('loading the device list (enumerate only, no user action) never persists an input_device_index binding', async (t) => {
+  const saves = [];
+  const ctx = mount({
+    routes: {
+      'GET /runtime/audio-devices': { devices: [{ index: 1, name: 'Yeti', max_input_channels: 2 }], default_input_device: 1 },
+      'GET /settings/profiles': { active: 'Default', profiles: ['Default'] },
+      // A fresh profile: input_device_index is the backend's -1 ("system
+      // default"), never touched by the user yet.
+      'GET /settings/profiles/Default': { settings: { input_device_index: -1 } },
+      'POST /settings/profiles/Default': ({ body }) => { saves.push(body.settings); return { profile: 'Default', settings: body.settings }; },
+    },
+  });
+  t.after(ctx.restore);
+  ctx.feature.init();
+
+  // Simulates opening Utilities/Speech Input and the list arriving --
+  // exactly the non-deliberate path the spec calls out as easiest to get
+  // wrong.
+  await ctx.feature.refreshAll();
+  await ctx.feature.refreshAll(); // a second background repopulate, same as a /health re-poll
+
+  assert.equal(saves.length, 0, 'enumerating devices and displaying the current selection must not itself call POST /settings/profiles');
+  assert.equal(ctx.el('sdUtilAudioDeviceSelect').value, '', 'the select must display "System default", not silently pin to the first real device');
+});
+
+test('deliberately picking a device from the dropdown DOES persist input_device_index', async (t) => {
+  const saves = [];
+  const ctx = mount({
+    routes: {
+      'GET /runtime/audio-devices': { devices: [{ index: 1, name: 'Yeti', max_input_channels: 2 }], default_input_device: 1 },
+      'GET /settings/profiles': { active: 'Default', profiles: ['Default'] },
+      'GET /settings/profiles/Default': { settings: { input_device_index: -1 } },
+      'POST /settings/profiles/Default': ({ body }) => { saves.push(body.settings); return { profile: 'Default', settings: body.settings }; },
+    },
+  });
+  t.after(ctx.restore);
+  ctx.feature.init();
+  await ctx.feature.refreshAll();
+
+  const select = ctx.el('sdUtilAudioDeviceSelect');
+  select.value = '1';
+  select.emit('change');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(saves.length, 1, 'a deliberate change event must persist the selection');
+  assert.equal(saves[0].input_device_index, 1, 'the chosen device index must be a number, matching the option value');
+});
+
+test('deliberately picking "System default" back from a specific device persists null, not the string ""', async (t) => {
+  const saves = [];
+  const ctx = mount({
+    routes: {
+      'GET /runtime/audio-devices': { devices: [{ index: 1, name: 'Yeti', max_input_channels: 2 }], default_input_device: 1 },
+      'GET /settings/profiles': { active: 'Default', profiles: ['Default'] },
+      // This time the profile already has a deliberately-chosen device.
+      'GET /settings/profiles/Default': { settings: { input_device_index: 1 } },
+      'POST /settings/profiles/Default': ({ body }) => { saves.push(body.settings); return { profile: 'Default', settings: body.settings }; },
+    },
+  });
+  t.after(ctx.restore);
+  ctx.feature.init();
+  await ctx.feature.refreshAll();
+  assert.equal(ctx.el('sdUtilAudioDeviceSelect').value, '1', 'the stored device must be pre-selected on load');
+
+  const select = ctx.el('sdUtilAudioDeviceSelect');
+  select.value = '';
+  select.emit('change');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(saves.length, 1);
+  assert.equal(saves[0].input_device_index, null, 'reverting to System default must store null, never the empty string');
+});
+
 test('a failed audio-device refresh after a previous success keeps the picker populated', async (t) => {
   let succeed = true;
   const ctx = mount({

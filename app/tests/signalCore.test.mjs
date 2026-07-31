@@ -22,6 +22,7 @@ import {
   DEFAULT_OPTIONS,
   createSignalCore,
 } from '../src/renderer/signalCore.js';
+import { STATE_STYLES } from '../src/renderer/glitch-ring.js';
 
 const TAU = Math.PI * 2;
 
@@ -75,6 +76,54 @@ test('stateToColorTokens: every state table entry has a token pair and finite ba
     assert.equal(typeof tokens.secondaryToken, 'string');
     assert.ok(Number.isFinite(tokens.baseAmplitude));
     assert.ok(tokens.baseAmplitude >= 0 && tokens.baseAmplitude <= 1);
+  }
+});
+
+test('SIGNAL_CORE_STATE_TOKENS declares exactly the SIGNAL_CORE_STATES set -- no orphan or missing token entries', () => {
+  assert.deepEqual(Object.keys(SIGNAL_CORE_STATE_TOKENS).sort(), [...SIGNAL_CORE_STATES].sort());
+});
+
+test('every canonical Signal Core state has a pairwise-distinct token signature', () => {
+  // Enumerated from SIGNAL_CORE_STATES/SIGNAL_CORE_STATE_TOKENS themselves, not
+  // a copied list -- this is the same enumeration-driven distinctness check
+  // glitchRingStates.test.mjs runs for STATE_STYLES, applied to the ring
+  // production actually loads (overlay.html imports createSignalCore, not
+  // createGlitchRing -- see signalCore.js's header comment).
+  const seen = new Map();
+  for (const state of SIGNAL_CORE_STATES) {
+    const signature = JSON.stringify(SIGNAL_CORE_STATE_TOKENS[state]);
+    assert.ok(
+      !seen.has(signature),
+      `states '${seen.get(signature)}' and '${state}' declare byte-for-byte identical tokens`,
+    );
+    seen.set(signature, state);
+  }
+});
+
+test('SIGNAL_CORE_STATE_ALIASES entries are not themselves canonical states -- an alias collapses onto an existing style rather than getting its own', () => {
+  const canonical = new Set(SIGNAL_CORE_STATES);
+  for (const alias of Object.keys(SIGNAL_CORE_STATE_ALIASES)) {
+    assert.ok(!canonical.has(alias), `'${alias}' is declared as an alias but is also a canonical SIGNAL_CORE_STATES entry`);
+  }
+});
+
+test('every glitch-ring.js state Signal Core does not style distinctly is at least aliased, never silently dropped', () => {
+  // Signal Core (SIGNAL_CORE_STATES.length === 6) is deliberately smaller than
+  // glitch-ring.js's STATE_STYLES (8): 'stitching' and 'warning' collapse onto
+  // 'transcribing'/'error' as aliases here instead of getting distinct rings
+  // (see SIGNAL_CORE_STATE_ALIASES and signalCore.js's header comment). That is
+  // an intentional product difference between the two ring implementations,
+  // not a gap -- so this asserts the weaker, TRUE claim: every state
+  // glitch-ring distinguishes is at minimum reachable in Signal Core (as its
+  // own state or as an alias), so passing it to resolveSignalCoreState() can
+  // never silently fall back to idle.
+  const coreStates = new Set(SIGNAL_CORE_STATES);
+  const coreReachable = new Set([...SIGNAL_CORE_STATES, ...Object.keys(SIGNAL_CORE_STATE_ALIASES)]);
+  for (const name of Object.keys(STATE_STYLES)) {
+    assert.ok(
+      coreReachable.has(name),
+      `glitch-ring state '${name}' has no Signal Core state or alias -- resolveSignalCoreState('${name}') would silently fall back to idle`,
+    );
   }
 });
 

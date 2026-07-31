@@ -320,7 +320,16 @@ export const shellStatusProdScenarios = [
       'a screenshot cannot show. It also pins the pause-style options to the three values ' +
       'voiceStudio.js\'s PAUSE_STYLES actually accepts: the page shipped "tight" and "relaxed", ' +
       'neither of which is in that set, so choosing either silently saved "natural" instead ' +
-      'while the select went on showing the user what they had picked.',
+      'while the select went on showing the user what they had picked. Existence and key-matching ' +
+      'alone would still pass a chip with a dead click listener, so this also actually CLICKS one ' +
+      'blend chip and one modulation chip and asserts the real bound sliders move to that preset\'s ' +
+      'exact values -- energy/warmth changing on the blend click, then energy/warmth/pause-style/speed ' +
+      'changing AGAIN to a second, different set of values on the modulation click, which only a live ' +
+      'binding (not a static default) could produce twice in a row. The modulation click\'s multi-field ' +
+      'move (energy+warmth+brightness+pause-style together) is exactly what voiceStudio.js\'s ' +
+      'setModulationControls() does -- the one function that paints that whole group, called both by ' +
+      'a preset click and by profile load -- so this is also the production-target evidence for its ' +
+      'own "Modulation:" group-heading row (UI-07-134), not just the quick-preset chips.',
     backendState: coldBoot,
     async navigate(page) {
       await assertNoOnboardingGate(page);
@@ -360,6 +369,25 @@ export const shellStatusProdScenarios = [
         pauseValues.slice().sort(),
         'pause-style options must be exactly voiceStudio.js\'s PAUSE_STYLES set',
       ).toEqual(['compact', 'dramatic', 'natural']);
+
+      // FUNCTIONAL, not just present: clicking a blend chip must move the
+      // real modulation sliders to that preset's exact values.
+      // VOICE_BLEND_QUICK_PRESETS.softer = { energy: 0.35, warmth: 0.3 }.
+      await page.click('[data-blend-preset="softer"]');
+      await expect(page.locator('#voiceEnergy'), 'the softer blend preset must set energy to 0.35').toHaveValue('0.35');
+      await expect(page.locator('#voiceWarmth'), 'the softer blend preset must set warmth to 0.3').toHaveValue('0.3');
+
+      // A second, different click must move the SAME sliders again -- proving
+      // this is a live binding reacting to each click, not the page's static
+      // default values coincidentally matching the first assertion.
+      // VOICE_MODULATION_QUICK_PRESETS.quiet = { speed: 0.9, energy: 0.3,
+      // warmth: 0.2, brightness: 0, pause_style: 'compact' }.
+      await page.click('[data-mod-preset="quiet"]');
+      await expect(page.locator('#voiceEnergy'), 'the quiet modulation preset must move energy to 0.3').toHaveValue('0.3');
+      await expect(page.locator('#voiceWarmth'), 'the quiet modulation preset must move warmth to 0.2').toHaveValue('0.2');
+      await expect(page.locator('#voiceBrightness'), 'the quiet modulation preset must set brightness to 0').toHaveValue('0');
+      await expect(page.locator('#voicePauseStyle'), 'the quiet modulation preset must select the compact pause style').toHaveValue('compact');
+      await expect(page.locator('#settingReviewTtsSpeed'), 'the quiet modulation preset must set speed to 0.9').toHaveValue('0.9');
     },
     screenshots: [{ name: 'voice-studio-quick-presets-exist-and-match-their-handlers' }],
   },

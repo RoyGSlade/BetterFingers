@@ -17,7 +17,10 @@ publication.
   `release/true-betterfingers` branch, and the authenticated cross-client
   hierarchy smoke passed on the restarted repaired configuration on
   2026-07-28 (D-0017). Gates 1–12 remain open work: the strict parity ledger
-  still records 434 `blocked` items and no distributable package exists.
+  recorded 434 `blocked` items at the Gate 0 baseline (2026-07-28) and no
+  distributable package exists. The blocked count has since dropped
+  substantially — see the "Current parity totals" note below for the live
+  figure.
 - **The integrated Gate 0 workset was broader than infrastructure.** The
   [exact workset](TRUE_BETTERFINGERS_RELEASE_PLAN.md#21-integrated-wave-0-workset)
   includes `AGENTS.md`; `.claude`/`.codex` infrastructure and skills;
@@ -48,13 +51,16 @@ publication.
   the valid historical failure blocks qualification. Its `2/3`, `3/3`, and
   `3/3` observations are non-qualifying, not current evidence. W0-P1 evidence
   collection is done, but traits qualification is not a pass.
-- **The strict 438-item baseline has zero production-qualified wired rows.**
-  The completed [release ledger](PARITY_INVENTORY.md) records 0 `wired`,
-  4 `intentional_cut`, and 434 `blocked`. Zero wired is the honest result of
-  the strict production data/action/failure/accessibility/QA/privacy evidence
-  rule, not a product failure count to hide. The five preview placement maps
-  are a separate subset and report `159/183` placed/wired in those maps with
-  `24` unwired; they do not replace the strict ledger.
+- **The strict 438-item baseline had zero production-qualified wired rows at
+  Gate 0 (2026-07-28).** The [release ledger](PARITY_INVENTORY.md) recorded
+  0 `wired`, 4 `intentional_cut`, and 434 `blocked` at that snapshot. Zero
+  wired was the honest result of the strict production
+  data/action/failure/accessibility/QA/privacy evidence rule, not a product
+  failure count to hide. The five preview placement maps are a separate
+  subset and reported `159/183` placed/wired in those maps with `24`
+  unwired at the same snapshot; they do not replace the strict ledger. **This
+  is a historical Gate 0 baseline, not the current ledger** — see "Current
+  parity totals" below.
 - **No distributable package exists in this checkout.** The completed
   [package baseline](PACKAGE_BASELINE.md) records a
   `2026-07-28T08:11:19Z` snapshot: tracked checkout
@@ -131,21 +137,33 @@ publication.
   and receives disposable in-memory storage.
 - **Versions disagree.** Electron package `0.1.0`, preview `v1.2.0`, and planned
   release `0.2.0-alpha.1` are not centralized.
-- **Strict parity closure remains.** The release ledger has 434 blocked rows
-  and four intentional cuts. The separate preview maps report Talk `28/33`,
-  Library `11/23`, Studio `26/31`, Utilities `57/59`, and Settings `37/37`.
-  Known placement/behavior gaps include capture/emergency controls and send
-  details in Talk; most item mutation/recovery semantics in Library; active
-  persona, edit, metadata, and teach-from-edit gaps in Studio.
+- **Strict parity closure remains open, though the count has moved a lot since
+  Gate 0.** At the Gate 0 baseline (2026-07-28) the release ledger had 434
+  blocked rows and four intentional cuts. That is no longer the current
+  state — see "Current parity totals" immediately below. The separate preview
+  maps (Talk `28/33`, Library `11/23`, Studio `26/31`, Utilities `57/59`,
+  Settings `37/37`, all as of the same Gate 0-era snapshot) are a discovery
+  aid, not the strict ledger, and are not re-measured here. Known
+  placement/behavior gaps include capture/emergency controls and send details
+  in Talk; most item mutation/recovery semantics in Library; active persona,
+  edit, metadata, and teach-from-edit gaps in Studio.
 
-- **267 of 438 parity rows are still not `wired` after the Wave 11 re-audit.**
-  Current totals are 161 `wired` / 10 `intentional_cut` / 267 `blocked`. Of the
-  blocked rows, **91 have no production anchor** (a real gap — chiefly the
-  hotkey and wake-word capture controls, part of the legacy model-manager
-  surface, and the legacy backend status cards) and **176 are anchored in
-  production but unevidenced** (no production-target QA names them, or the
-  source row is prose with no code handle). Details and the ordered
-  remediation list: [WAVE11_BLOCKERS.md](archive/WAVE11_BLOCKERS.md).
+### Current parity totals
+
+**As of `545e582` (2026-07-29, director-verified):** the live validator
+(`python3 tools/parity_validator.py`) reports **398 `wired` / 23
+`intentional_cut` / 17 `blocked` / 438 total**. This has moved twice since
+Gate 0 — Gate 0 baseline was 0/4/434, the Wave 11 re-audit put it at 161/10/267
+(details in [WAVE11_BLOCKERS.md](archive/WAVE11_BLOCKERS.md), itself now
+historical) — and it continues to move as `docs/release/PUBLISH_PLAN.md`'s
+WS-B tasks close the remaining blocked rows. **Do not cite a parity number
+without a date and commit; re-run the validator for the current figure.** Of
+the historical 267-blocked Wave 11 breakdown, **91 had no production anchor**
+(chiefly hotkey/wake-word capture controls, the legacy model-manager surface,
+and the legacy backend status cards) and **176 were anchored in production
+but unevidenced** (no production-target QA named them, or the source row was
+prose with no code handle) — that split is not re-measured against the
+current 17 blocked rows.
 
 - **The Persona Foundry and both overlay windows have no production-target QA.**
   All three ship in the production composition — the Foundry ids are in
@@ -213,7 +231,7 @@ evidence.
 | Stream Deck | `unavailable` | `unavailable` | Official thin adapter is not implemented. |
 | Wake word | `experimental` | `experimental` | Detector/training foundations exist; shared audio broker, first-word protection, license manifest, and field qualification do not. |
 
-### GPU acceleration (Linux) — CPU-only is an accepted state, not a defect
+### GPU acceleration (Linux) — CPU-only/iGPU is an accepted state, not a defect
 
 **This is not a bug to fix; it is a supported configuration with honest
 performance expectations.** `hardware_report.py` models acceleration as a
@@ -225,11 +243,22 @@ Stick to small models (4B Q4, Whisper base/small); expect a few seconds per
 utterance."` (`hardware_report.py:421-423`). `llm_engine.py` sizes its HTTP
 read timeout off the same assumption: the comment at `llm_engine.py:73-76`
 calls the CPU-only case the "deliberately pessimistic... floor tier" the
-system is tuned around, not a fallback bolted on afterward. This machine (per
-[[user-hardware]] memory: 4B model, no GPU) runs in exactly this tier. No code
-path treats "no GPU" as a verdict downgrade — `assess_model_fit()` appends an
+system is tuned around, not a fallback bolted on afterward. No code path
+treats a low tier as a verdict downgrade — `assess_model_fit()` appends an
 informational reason string, it does not fail the assessment
 (`hardware_report.py:329-333`).
+
+**This dev machine, verified 2026-07-29 (D-0039):** no discrete GPU, no
+NVIDIA device, no CUDA. It has an integrated Intel Iris Xe (11th Gen Core
+i7-1165G7), ~15.6 GB RAM, 8 logical cores. `hardware_report.get_hardware_tier()`
+returns `{"tier": "igpu", "gpu_kind": "integrated", "ram_mb": 15632, "cores": 4}`
+— the `igpu` tier, not `cpu-only` and not a discrete tier. `nvidia-smi` is not
+installed, `lspci`/`lsmod` show no NVIDIA hardware, and `glxinfo` reports
+`Mesa Intel(R) Iris(R) Xe Graphics (TGL GT2)` as the renderer. CPU-only remains
+a fully supported configuration for hosts with no GPU at all (see above); the
+`dgpu-8g`/`dgpu-12g+` (CUDA) tiers are supported code paths that exist and are
+exercised by tests, but are **unverified on real discrete-GPU hardware** —
+nothing in this environment has run them against an actual device.
 
 ### Linux-specific limitations — Wayland vs. X11
 
