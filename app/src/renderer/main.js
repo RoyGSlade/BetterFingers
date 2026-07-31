@@ -2798,6 +2798,9 @@ function updateVoiceStatus(message) {
 
   if (['draft_sent', 'draft_send_error', 'selection_captured', 'selection_capture_failed', 'emergency_stop'].includes(message.status)) {
     setMessage(draftMessageEl, message.message || message.send_result?.message || statusText, message.status.endsWith('error') || message.status.endsWith('failed') ? 'danger' : 'success');
+    if (message.status === 'selection_capture_failed') {
+      showToast(message.message || 'Can\'t read selected text.', 'danger');
+    }
     if (message.send_result) {
       renderSendResult(message.send_result);
     }

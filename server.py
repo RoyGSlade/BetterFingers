@@ -1352,10 +1352,10 @@ def speak_text_aloud(text: str):
 def handle_review_tts_shortcut():
     if hotkey_manager is not None and bool(getattr(hotkey_manager, "is_recording", False)):
         logging.info("Ignored review TTS hotkey while recording is active.")
-        return
+        return {"ok": False, "reason": "recording", "message": "Review TTS is unavailable while recording."}
     if is_processing_draft:
         logging.info("Ignored review TTS hotkey while draft processing is active.")
-        return
+        return {"ok": False, "reason": "processing", "message": "Review TTS is unavailable while processing a draft."}
 
     active_draft = None
     with draft_lock:
@@ -1368,19 +1368,37 @@ def handle_review_tts_shortcut():
         text = active_draft.get("final_text", "").strip()
         if text:
             speak_text_aloud(text)
-            return
+            return {"ok": True, "text": text, "message": "Review text read aloud."}
 
     try:
         from clipboard_capture import capture_selection_text_with_restore
         result = capture_selection_text_with_restore(timeout_ms=350, poll_ms=25)
     except Exception as exc:
         logging.exception("Review TTS shortcut selection capture failed")
-        result = {"ok": False, "text": "", "message": f"Selection capture failed: {exc}"}
+        result = {
+            "ok": False,
+            "text": "",
+            "capture_status": "exception",
+            "reason": "exception",
+            "error": str(exc),
+            "message": "Can't read selected text — selection capture failed unexpectedly. Try selecting text again.",
+        }
 
     if result.get("ok"):
         text = str(result.get("text", "")).strip()
         if text:
             speak_text_aloud(text)
+            return result
+
+    result = dict(result or {})
+    result["ok"] = False
+    result["text"] = ""
+    if not result.get("capture_status"):
+        result["capture_status"] = "empty"
+    if not result.get("message"):
+        result["message"] = "Can't read selected text — no selected text was captured. Select text and try again."
+    broadcast_status_threadsafe("selection_capture_failed", result)
+    return result
 
 
 def handle_primary_action():
@@ -5061,8 +5079,7 @@ async def runtime_recording_stop():
 
 @app.post("/runtime/tts/toggle")
 async def runtime_tts_toggle():
-    handle_review_tts_shortcut()
-    return {"ok": True, "message": "Review TTS shortcut triggered."}
+    return handle_review_tts_shortcut()
 
 
 @app.post("/runtime/warmup")
