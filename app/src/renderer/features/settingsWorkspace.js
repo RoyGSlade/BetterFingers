@@ -712,6 +712,9 @@ export const SETTINGS_ELEMENT_IDS = {
   // --- Recording-only informational note ---
   pttAvailabilityNote: 'sdSetPttAvailabilityNote',
 
+  // --- Review & Drafts (§7.4): Auto Submit's armed-state warning banner ---
+  autoSubmitWarning: 'sdSetAutoSubmitWarning',
+
   // --- Privacy (§7.14) ---
   privacyNetworkList: 'sdSetPrivacyNetworkList',
   privacyDataList: 'sdSetPrivacyDataList',
@@ -972,6 +975,38 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
         el.value = state.value ?? '';
       }
     }
+    updateAutoSubmitWarning();
+  }
+
+  /** Shows the "Auto submit is on" banner exactly when the checkbox is currently checked -- on load, on profile switch, and on every toggle. */
+  function updateAutoSubmitWarning() {
+    if (els.autoSubmitWarning) els.autoSubmitWarning.hidden = !fieldEls.auto_submit?.checked;
+  }
+
+  /**
+   * Auto Submit presses Enter into whatever window has OS focus, with no
+   * review step (OPERATOR_REVIEW.md OR-01) -- the only Settings toggle that
+   * can send text somewhere outside the app. Enabling it (off -> on, via
+   * mouse, keyboard, or a stray click) must clear an explicit confirmation
+   * naming that risk before the checkbox is allowed to stay checked; declining
+   * reverts it. Same confirmFn idiom as the model-delete buttons above.
+   */
+  function bindAutoSubmitGate() {
+    const el = fieldEls.auto_submit;
+    if (!el) return;
+    el.addEventListener('change', () => {
+      if (el.checked) {
+        const ok = confirmFn(
+          'Turn on Auto Submit?\n\n'
+          + 'BetterFingers will press Enter the instant a draft is ready -- in whatever '
+          + 'application and text field currently has focus, not necessarily BetterFingers. '
+          + "If that's your Slack, your terminal, or an email you're composing, this sends "
+          + 'it, with no review step.',
+        );
+        if (!ok) el.checked = false;
+      }
+      updateAutoSubmitWarning();
+    });
   }
 
   /**
@@ -1985,6 +2020,7 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
     bindOverlayAppearanceControls();
     bindPrivacyControls();
     bindDisclosedToggles();
+    bindAutoSubmitGate();
     bindSearch();
   }
 

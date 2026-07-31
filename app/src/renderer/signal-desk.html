@@ -1362,7 +1362,7 @@
 
             <p class="sd-studio-detail-card__description" id="sdPersonaDescription"></p>
 
-            <div class="sd-rewrites-panel">
+            <div class="sd-rewrites-panel" hidden>
               <span class="sd-panel-label">Example Rewrites <span class="sd-help" aria-hidden="true">?</span></span>
               <table class="sd-rewrites-table">
                 <thead>
@@ -1385,7 +1385,7 @@
                 <p class="sd-example-column__body" id="sdTestOutputText">Run Test Persona to see a live preview here.</p>
                 <span class="sd-example-column__meta" id="sdTestOutputMeta"></span>
               </div>
-              <div class="sd-example-column">
+              <div class="sd-example-column" hidden>
                 <span class="sd-example-column__label">Why This Works</span>
                 <ul class="sd-example-column__why-list" id="sdWhyThisWorksList">
                 </ul>
@@ -1418,7 +1418,7 @@
             <p class="sd-studio-message" id="sdStudioMessage"></p>
 
             <!-- "Teach from my edits" -- features/personaLearning.js reused verbatim; see studioWorkspace.js's file-header ID-COLLISION NOTE for why these use sdTeach* ids rather than personaLearning.js's own canonical personaLearning* ids. -->
-            <div class="sd-teach-panel" id="sdTeachSection">
+            <div class="sd-teach-panel" id="sdTeachSection" hidden>
               <div class="sd-teach-panel__header">
                 <span class="sd-panel-label">Teach From My Edits <span class="sd-help" aria-hidden="true">?</span></span>
                 <span class="sd-teach-panel__persona" id="sdTeachPersonaLabel"></span>
@@ -2246,7 +2246,7 @@
                  the same resolution Wave 7 documented for the Settings nav.
                  Promoting it is a utilitiesWorkspace.js change, written out in
                  docs/release/WAVE9_INTEGRATION_DIFFS.md as an optional diff. -->
-            <div class="sd-util-group" id="sdUtilWorkflowGroup" data-workflow-approved="false" data-workflow-saved="false">
+            <div class="sd-util-group" id="sdUtilWorkflowGroup" data-workflow-approved="false" data-workflow-saved="false" hidden>
               <div class="sd-util-group__header"><span class="sd-util-group__title">Launch Workflows</span></div>
               <p class="sd-util-group__desc">
                 A workflow is a fixed list of approved actions — open an application, a folder or a link,
@@ -2581,22 +2581,13 @@
               <div class="sd-set-row" data-search-row data-search-label="auto submit">
                 <div class="sd-set-row__label">
                   <span class="sd-set-row__label-text">Auto submit</span>
-                  <span class="sd-set-row__label-hint">Press Enter/submit automatically after pasting.</span>
+                  <span class="sd-set-row__label-hint">Presses Enter for you the instant a draft is ready — into whatever window has focus, not necessarily BetterFingers. If that's your Slack, your terminal, or an email draft, this sends it. Turning this on requires a separate confirmation.</span>
                 </div>
                 <div class="sd-set-row__control">
                   <input type="checkbox" class="sd-set-checkbox" id="sdSetAutoSubmit" />
                 </div>
               </div>
-
-              <div class="sd-set-row" data-search-row data-search-label="instant typing">
-                <div class="sd-set-row__label">
-                  <span class="sd-set-row__label-text">Instant typing</span>
-                  <span class="sd-set-row__label-hint">Type character-by-character instead of a single paste. Disabled on Wayland.</span>
-                </div>
-                <div class="sd-set-row__control">
-                  <input type="checkbox" class="sd-set-checkbox" id="sdSetInstantTyping" />
-                </div>
-              </div>
+              <div class="sd-util-banner sd-util-banner--danger" id="sdSetAutoSubmitWarning" hidden>Auto submit is on: BetterFingers will press Enter in whatever app and text field currently has focus, with no review step. Make sure that's always where you want your dictation to land.</div>
 
               <div class="sd-set-row" data-search-row data-search-label="restore clipboard after paste">
                 <div class="sd-set-row__label">
@@ -2691,7 +2682,7 @@
                 DISCLOSED_TOGGLES -- do not hard-code the text here, or the
                 disclosure and the behaviour can drift apart.
               -->
-              <div class="sd-set-row sd-set-row--disclosed" data-search-row data-search-label="speech delivery signals">
+              <div class="sd-set-row sd-set-row--disclosed" data-search-row data-search-label="speech delivery signals" hidden>
                 <div class="sd-set-row__label">
                   <span class="sd-set-row__label-text">Use speech delivery signals</span>
                   <dl class="sd-disclosure">
@@ -2714,7 +2705,7 @@
                 `use_audience_context` is absent from SETTINGS_FIELD_KEYS, so
                 no save path can carry it even if this attribute is removed.
               -->
-              <div class="sd-set-row sd-set-row--disclosed" data-search-row data-search-label="audience context contact">
+              <div class="sd-set-row sd-set-row--disclosed" data-search-row data-search-label="audience context contact" hidden>
                 <div class="sd-set-row__label">
                   <span class="sd-set-row__label-text">Use selected contact/audience context</span>
                   <dl class="sd-disclosure">
