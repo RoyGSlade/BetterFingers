@@ -394,6 +394,112 @@ export function formatMb(mb) {
   return n >= 1024 ? `${(n / 1024).toFixed(1)} GB` : `${Math.round(n)} MB`;
 }
 
+export function formatBytes(bytes) {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n <= 0) return 'unknown';
+  return formatMb(n / (1024 * 1024));
+}
+
+// Hugging Face does not include a download-size estimate in the Whisper list
+// response. Keep these estimates visible as estimates, while preferring the
+// server's measured cache size once a model is installed. This gives an
+// operator useful planning information without presenting a guessed number as
+// a measurement.
+export const WHISPER_MODEL_METADATA = {
+  'tiny.en': {
+    downloadMb: 75,
+    installedMb: 150,
+    tradeoff: 'Fastest and lightest; lowest accuracy, especially in noisy audio.',
+    hardware: 'Any modern CPU; 2 GB RAM is comfortable.',
+  },
+  'base.en': {
+    downloadMb: 145,
+    installedMb: 290,
+    tradeoff: 'Good speed/accuracy balance for everyday dictation.',
+    hardware: 'Modern CPU; 4 GB RAM recommended.',
+  },
+  'small.en': {
+    downloadMb: 465,
+    installedMb: 950,
+    tradeoff: 'Higher accuracy than Base, with noticeably more latency and memory.',
+    hardware: 'Modern CPU or GPU; 8 GB RAM recommended.',
+  },
+  'medium.en': {
+    downloadMb: 1500,
+    installedMb: 3000,
+    tradeoff: 'High accuracy; slower and memory-heavy for long recordings.',
+    hardware: 'Dedicated GPU preferred; 12 GB RAM recommended.',
+  },
+  'large-v3': {
+    downloadMb: 3100,
+    installedMb: 6200,
+    tradeoff: 'Best general accuracy; slowest and most demanding option.',
+    hardware: 'Dedicated GPU strongly recommended; 16 GB RAM or more.',
+  },
+  'distil-medium.en': {
+    downloadMb: 1500,
+    installedMb: 3000,
+    tradeoff: 'Near-Medium quality with faster inference; some accuracy tradeoff.',
+    hardware: 'Modern CPU or GPU; 12 GB RAM recommended.',
+  },
+  'distil-large-v3': {
+    downloadMb: 1600,
+    installedMb: 3200,
+    tradeoff: 'Near-Large quality with faster inference; more memory than Medium.',
+    hardware: 'Dedicated GPU preferred; 16 GB RAM or more.',
+  },
+};
+
+function whisperMetadata(modelSize) {
+  return WHISPER_MODEL_METADATA[String(modelSize || '').trim()] || {
+    downloadMb: null,
+    installedMb: null,
+    tradeoff: 'Quality and speed depend on the selected model.',
+    hardware: 'Check your available RAM/VRAM before downloading.',
+  };
+}
+
+function modelVerification(model, verification) {
+  if (verification?.status === 'verified') return verification.message;
+  if (verification?.status === 'failed') return verification.message;
+  if (model?.verified === true) return 'Verified intact by the model manager.';
+  if (model?.installed && Number(model.size_bytes) > 0) {
+    return 'Installed cache is present; the backend reports no digest check.';
+  }
+  return 'Not verified — download is required.';
+}
+
+/**
+ * Full operator-facing metadata for an explicit Whisper download. The API
+ * currently supplies installed bytes and download state, while the static
+ * estimates explain the choice before a download starts.
+ */
+export function buildWhisperModelDetails(model, payload, downloadState, verification) {
+  const row = model || {};
+  const size = String(row.model_size || payload?.selected_model_size || 'unknown');
+  const meta = whisperMetadata(size);
+  const installedSize = Number(row.size_bytes) > 0 ? formatBytes(row.size_bytes) : formatMb(meta.installedMb);
+  const downloadSize = Number(row.download_size_mb) > 0 ? formatMb(row.download_size_mb) : formatMb(meta.downloadMb);
+  const state = downloadState?.status || (row.installed ? 'installed' : 'idle');
+  const stateLabel = (state === 'installed' || row.installed || (state === 'complete' && (row.installed || verification?.status === 'verified'))) ? 'Installed and Ready' : state === 'error' ? 'Download failed' : state === 'downloading' || state === 'starting' ? 'Downloading' : state === 'complete' ? 'Download complete — verifying…' : 'Not installed';
+  return {
+    name: size,
+    state: stateLabel,
+    rows: [
+      { label: 'Name', value: size },
+      { label: 'Type', value: 'Whisper speech-to-text model' },
+      { label: 'Download size', value: `${downloadSize} (estimated)` },
+      { label: 'Installed size', value: row.installed ? installedSize : `${installedSize} (estimated)` },
+      { label: 'Purpose', value: 'Transcribes recorded speech into text.' },
+      { label: 'Quality / speed', value: meta.tradeoff },
+      { label: 'Recommended hardware', value: meta.hardware },
+      { label: 'Install location', value: row.install_location || payload?.models_dir || 'Managed Whisper model cache' },
+      { label: 'Progress', value: downloadState?.message || `${clampPct(downloadState?.percent)}%` },
+      { label: 'Verification', value: modelVerification(row, verification) },
+    ],
+  };
+}
+
 export function clampPct(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return 0;
@@ -456,9 +562,13 @@ export function buildDoctorCardModel(id, data) {
     if (!d.initialized) triggers.push('missing_model');
   } else if (id === 'llm') {
     const runtimeIncompatible = d.llama_server_exists && d.runtime_compatible === false;
-    tone = d.ready ? 'ok' : runtimeIncompatible || d.initialized ? 'warn' : 'error';
-    status = d.ready ? 'Ready' : runtimeIncompatible ? 'Runtime outdated' : d.initialized ? 'Warming Up' : 'Offline';
-    lines.push(`Selected model: ${d.model_id ?? 'None'}`, `llama-server: ${d.llama_server_exists ? 'Found' : 'Missing'}`);
+    const runtimeStatus = d.runtime_status || (runtimeIncompatible ? 'runtime_outdated' : d.ready ? 'ready' : d.initialized ? 'not_loaded' : 'offline');
+    const ready = runtimeStatus === 'ready';
+    const failed = ['missing_llama_server', 'missing_model', 'runtime_link_failure', 'startup_failure'].includes(runtimeStatus);
+    tone = ready ? 'ok' : runtimeStatus === 'runtime_outdated' ? 'warn' : failed ? 'error' : d.initialized ? 'warn' : 'error';
+    status = ready ? 'Ready' : runtimeStatus === 'runtime_outdated' ? 'Runtime outdated' : runtimeStatus === 'missing_model' ? 'Model missing' : runtimeStatus === 'missing_llama_server' ? 'Runtime missing' : runtimeStatus === 'startup_failure' ? 'Startup failed' : d.initialized ? 'Warming Up' : 'Offline';
+    lines.push(`Selected model: ${d.model_id ?? 'None'}`, `Runtime: ${runtimeStatus}`, `llama-server: ${d.llama_server_exists ? 'Found' : 'Missing'}`);
+    if (d.runtime_message || d.last_error) lines.push(`Reason: ${d.runtime_message || d.last_error}`);
     if (runtimeIncompatible) triggers.push('outdated_runtime');
     if (!d.llama_server_exists) triggers.push('missing_llama_server');
     if (!d.initialized && d.llama_server_exists && !runtimeIncompatible && !d.model_exists) triggers.push('missing_model');
@@ -522,6 +632,21 @@ export function buildDoctorModel(doctorPayload) {
     }))
     .filter((r) => r.text);
   return { cards, recovery };
+}
+
+/**
+ * Rendering-safe Doctor view model. `/doctor` normally returns all eight
+ * subsystems, but a partial response or a future backend version must not turn
+ * an absent signal into an "Offline" card. Keep buildDoctorModel's historical
+ * complete shape for callers that use it as a schema, and use this helper for
+ * actual DOM output.
+ */
+export function buildSignalBackedDoctorModel(doctorPayload) {
+  const doctor = doctorPayload || {};
+  const model = buildDoctorModel(doctor);
+  const cards = model.cards.filter((card) => Object.prototype.hasOwnProperty.call(doctor, card.id));
+  const triggers = new Set(cards.flatMap((card) => card.triggers));
+  return { ...model, cards, recovery: model.recovery.filter((item) => triggers.has(item.trigger)) };
 }
 
 // --- Pure helpers: jobs / recordings ----------------------------------------
@@ -790,6 +915,12 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
   // show the loading/unavailable placeholder" from "a working picker exists,
   // so a transient failure must leave it alone."
   let audioDevicesLoaded = false;
+  // Explicit Utilities downloads are long-running POSTs. Keep their live
+  // state separate from the last completed model-list payload so the panel
+  // can repaint while the POST is still in flight.
+  let modelDownloadOverrides = { llm: null, whisper: null };
+  let modelDownloadPollTimer = null;
+  const modelVerifications = { llm: null, whisper: null };
   // Same "has this panel ever shown real data" tracking for the Diagnostics
   // surfaces below, each of which used to overwrite its own last-good render
   // with an error (or, worse, an indistinguishable-from-real-data empty
@@ -944,14 +1075,22 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
       els.llmBadge.textContent = !visible ? 'Missing' : visible.id === llmPayload.selected_model_id ? 'Selected' : visible.installed ? 'Installed' : 'Missing';
       els.llmBadge.dataset.tone = visible?.installed ? 'success' : 'danger';
     }
+    const llmState = modelDownloadOverrides.llm || llmPayload.download_state;
     renderModelDetails(els.llmDetails, [
       { label: 'Selected', value: llmPayload.selected_model_id || 'none' },
       { label: 'Viewing', value: visible?.name || visible?.id || 'unknown' },
+      { label: 'Type', value: 'Local language model (LLM)' },
+      { label: 'Purpose', value: 'Cleans up and rewrites dictated text.' },
+      { label: 'Quality / speed', value: visible?.tradeoff || 'Larger models improve quality but use more memory and run slower.' },
+      { label: 'Recommended hardware', value: visible?.hardware || 'Use the recommendation above for this machine.' },
+      { label: 'Download size', value: formatMb(visible?.download_size_mb || visible?.size_mb) },
+      { label: 'Installed size', value: visible?.installed_size_mb ? formatMb(visible.installed_size_mb) : visible?.installed ? formatMb(visible?.size_mb) : 'Not installed' },
       { label: 'Install state', value: visible?.installed ? 'installed' : 'missing' },
-      { label: 'Approx size', value: formatMb(visible?.size_mb) },
+      { label: 'Verification', value: modelVerification(visible, modelVerifications.llm) },
+      { label: 'Install location', value: visible?.install_location || llmPayload.models_dir || 'Managed LLM model directory' },
       { label: 'Runtime', value: llmPayload.llama_server_exists ? 'found' : 'missing' },
     ]);
-    renderDownloadProgress(els.llmProgress, els.llmProgressLabel, els.llmProgressPercent, els.llmProgressFill, llmPayload.download_state);
+    renderDownloadProgress(els.llmProgress, els.llmProgressLabel, els.llmProgressPercent, els.llmProgressFill, llmState);
   }
 
   function renderWhisperPanel() {
@@ -976,14 +1115,14 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
       els.whisperBadge.textContent = !visible ? 'Missing' : visibleSize === whisperPayload.selected_model_size ? 'Selected' : visible.installed ? 'Installed' : 'Missing';
       els.whisperBadge.dataset.tone = visible?.installed ? 'success' : 'danger';
     }
-    const installed = models.filter((m) => m.installed).map((m) => m.model_size);
-    renderModelDetails(els.whisperDetails, [
-      { label: 'Selected', value: whisperPayload.selected_model_size || 'none' },
-      { label: 'Viewing', value: visibleSize || 'none' },
-      { label: 'Install state', value: visible?.installed ? 'installed' : 'missing' },
-      { label: 'Installed', value: installed.length ? installed.join(', ') : 'none' },
-    ]);
-    renderDownloadProgress(els.whisperProgress, els.whisperProgressLabel, els.whisperProgressPercent, els.whisperProgressFill, whisperPayload.download_state);
+    const whisperState = modelDownloadOverrides.whisper || whisperPayload.download_state;
+    const details = buildWhisperModelDetails(visible, whisperPayload, whisperState, modelVerifications.whisper);
+    renderModelDetails(els.whisperDetails, details.rows);
+    if (els.whisperBadge) {
+      els.whisperBadge.textContent = details.state;
+      els.whisperBadge.dataset.tone = details.state === 'Installed and Ready' ? 'success' : details.state === 'Download failed' ? 'danger' : 'info';
+    }
+    renderDownloadProgress(els.whisperProgress, els.whisperProgressLabel, els.whisperProgressPercent, els.whisperProgressFill, whisperState);
   }
 
   function renderModelStatusSummary() {
@@ -1023,6 +1162,70 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
     renderLlmPanel();
     renderWhisperPanel();
     renderModelStatusSummary();
+  }
+
+  function stopModelDownloadPolling() {
+    if (modelDownloadPollTimer) {
+      clearInterval(modelDownloadPollTimer);
+      modelDownloadPollTimer = null;
+    }
+  }
+
+  async function pollModelDownload(kind, fetchState) {
+    try {
+      const result = await fetchState();
+      const state = result?.download_state || result;
+      if (!state) return;
+      modelDownloadOverrides[kind] = state;
+      if (kind === 'whisper' && result?.models) whisperPayload = result;
+      if (kind === 'llm' && result?.models) llmPayload = result;
+      if (kind === 'whisper') renderWhisperPanel();
+      else renderLlmPanel();
+    } catch (_error) {
+      // A missed progress sample must not turn a real download into a false
+      // failure. The download request remains the source of truth.
+    }
+  }
+
+  async function runExplicitModelDownload({ kind, id, label, download, fetchState }) {
+    stopModelDownloadPolling();
+    modelVerifications[kind] = null;
+    modelDownloadOverrides[kind] = { status: 'starting', percent: 0, message: `Starting ${label} download…` };
+    if (kind === 'whisper') renderWhisperPanel();
+    else renderLlmPanel();
+    setMessage(els.modelsMessage, `Downloading ${label} '${id}'… progress will update here.`, 'info');
+    modelDownloadPollTimer = setInterval(() => { pollModelDownload(kind, fetchState); }, 500);
+    let result;
+    try {
+      result = await download();
+    } catch (error) {
+      modelDownloadOverrides[kind] = { status: 'error', percent: 0, message: error.message || `${label} download failed.` };
+      modelVerifications[kind] = { status: 'failed', message: `Verification failed: ${error.message || 'download failed'}` };
+      if (kind === 'whisper') renderWhisperPanel();
+      else renderLlmPanel();
+      setMessage(els.modelsMessage, `${label} download failed: ${error.message}`, 'danger');
+      stopModelDownloadPolling();
+      return;
+    }
+    stopModelDownloadPolling();
+    const ok = result?.ok !== false;
+    modelDownloadOverrides[kind] = ok
+      ? { status: 'complete', percent: 100, message: `${label} download complete — verifying…` }
+      : { status: 'error', percent: 0, message: result?.message || `${label} download failed.` };
+    await refreshModels();
+    const payload = kind === 'whisper' ? whisperPayload : llmPayload;
+    const installed = kind === 'whisper'
+      ? payload?.models?.find((m) => m.model_size === id)?.installed
+      : payload?.models?.find((m) => m.id === id)?.installed;
+    modelVerifications[kind] = ok && installed
+      ? { status: 'verified', message: 'Verified by the model inventory; Installed and Ready.' }
+      : { status: 'failed', message: ok ? 'Download returned complete, but the model inventory did not confirm installation.' : (result?.message || `${label} download failed.`) };
+    modelDownloadOverrides[kind] = ok && installed
+      ? null
+      : { status: 'error', percent: 0, message: modelVerifications[kind].message };
+    if (kind === 'whisper') renderWhisperPanel();
+    else renderLlmPanel();
+    setMessage(els.modelsMessage, modelVerifications[kind].message, ok && installed ? 'success' : 'danger');
   }
 
   async function refreshModelRecommendation() {
@@ -1156,8 +1359,14 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
       refreshModelRecommendation();
       refreshWakeBackbones();
     });
-    els.llmSelect?.addEventListener?.('change', () => renderLlmPanel());
-    els.whisperSelect?.addEventListener?.('change', () => renderWhisperPanel());
+    els.llmSelect?.addEventListener?.('change', () => {
+      modelVerifications.llm = null;
+      renderLlmPanel();
+    });
+    els.whisperSelect?.addEventListener?.('change', () => {
+      modelVerifications.whisper = null;
+      renderWhisperPanel();
+    });
 
     els.llmSelectButton?.addEventListener?.('click', async () => {
       const id = els.llmSelect?.value;
@@ -1173,12 +1382,13 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
     els.llmDownloadButton?.addEventListener?.('click', async () => {
       const id = els.llmSelect?.value;
       if (!id) return;
-      try {
-        await downloadLlmModel(id);
-        await refreshModels();
-      } catch (error) {
-        setMessage(els.modelsMessage, `Download failed: ${error.message}`, 'danger');
-      }
+      await runExplicitModelDownload({
+        kind: 'llm',
+        id,
+        label: 'LLM',
+        download: () => downloadLlmModel(id),
+        fetchState: () => fetchLlmDownloadState(id),
+      });
     });
     els.llmDeleteButton?.addEventListener?.('click', async () => {
       const id = els.llmSelect?.value;
@@ -1186,6 +1396,8 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
       if (!confirmFn(`Delete LLM model "${id}"? This cannot be undone.`)) return;
       try {
         await deleteLlmModel(id, undefined, { confirmed: true });
+        modelVerifications.llm = null;
+        modelDownloadOverrides.llm = null;
         await refreshModels();
       } catch (error) {
         setMessage(els.modelsMessage, `Delete failed: ${error.message}`, 'danger');
@@ -1214,12 +1426,15 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
     els.whisperDownloadButton?.addEventListener?.('click', async () => {
       const size = els.whisperSelect?.value;
       if (!size) return;
-      try {
-        await downloadWhisperModel(size);
-        await refreshModels();
-      } catch (error) {
-        setMessage(els.modelsMessage, `Download failed: ${error.message}`, 'danger');
-      }
+      await runExplicitModelDownload({
+        kind: 'whisper',
+        id: size,
+        label: 'Whisper',
+        download: () => downloadWhisperModel(size),
+        // There is no per-model Whisper state endpoint. The list route's
+        // download_state is the real progress signal used by Talk as well.
+        fetchState: fetchWhisperModels,
+      });
     });
     els.whisperDeleteButton?.addEventListener?.('click', async () => {
       const size = els.whisperSelect?.value;
@@ -1227,6 +1442,8 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
       if (!confirmFn(`Delete Whisper model "${size}"? This cannot be undone.`)) return;
       try {
         await deleteWhisperModel(size, undefined, { confirmed: true });
+        modelVerifications.whisper = null;
+        modelDownloadOverrides.whisper = null;
         await refreshModels();
       } catch (error) {
         setMessage(els.modelsMessage, `Delete failed: ${error.message}`, 'danger');
@@ -1878,8 +2095,20 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
 
   function renderDoctorCards(doctorPayload) {
     if (!els.doctorCardsGrid) return;
-    const model = buildDoctorModel(doctorPayload);
+    // A real `/doctor` response carries the health envelope. Only that
+    // response is allowed to drive the signal-gated renderer; keeping the
+    // legacy schema fallback here preserves preview fixtures that predate the
+    // envelope without letting a production partial response invent rows.
+    const model = doctorPayload && Object.prototype.hasOwnProperty.call(doctorPayload, 'health')
+      ? buildSignalBackedDoctorModel(doctorPayload)
+      : buildDoctorModel(doctorPayload);
     els.doctorCardsGrid.replaceChildren();
+    if (!model.cards.length) {
+      const empty = document.createElement('span');
+      empty.className = 'sd-util-list__empty';
+      empty.textContent = 'Doctor returned no subsystem status.';
+      els.doctorCardsGrid.append(empty);
+    }
     model.cards.forEach((card) => {
       const el = document.createElement('div');
       el.className = 'sd-util-doctor-card';
