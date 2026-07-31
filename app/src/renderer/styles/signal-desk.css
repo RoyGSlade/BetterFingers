@@ -5167,6 +5167,21 @@ select.sd-review-select {
 
 .toast-message { flex: 1; }
 
+.toast-action {
+  flex: none;
+  background: none;
+  border: 1px solid var(--sd-border);
+  border-radius: 999px;
+  color: var(--sd-text-primary);
+  cursor: pointer;
+  font-size: .78rem;
+  line-height: 1;
+  padding: 4px 10px;
+  white-space: nowrap;
+}
+
+.toast-action:hover { background: rgba(255, 255, 255, .08); }
+
 .toast-close {
   flex: none;
   background: none;

@@ -13,7 +13,9 @@ import {
   TALK_CAPTURE_ELEMENT_IDS,
   collectTalkCaptureElements,
   createTalkCaptureFeature,
+  hasNoInputSignal,
 } from '../src/renderer/features/talkCapture.js';
+import { showToast, TOAST_CONTAINER_ID } from '../src/renderer/lib/toast.mjs';
 
 function makeButton() {
   const listeners = {};
@@ -591,4 +593,148 @@ test('createTalkCaptureFeature: no fetchDoctor hook never throws and leaves the 
 
   assert.equal(els.statusMessage.textContent, 'Backend unreachable.');
   feature.destroy();
+});
+
+// --- OR-06: no-input-signal toast --------------------------------------------
+//
+// audio_gate.py's should_block_for_no_audio() (backend, already shipped)
+// broadcasts 'draft_blocked' with gate_reasons over the SAME voice-status
+// socket every other status arrives on -- detection happens at record-stop
+// time, over the whole clip, using the existing no_audio_min_rms/peak
+// thresholds. hasNoInputSignal() is the pure predicate that decides whether a
+// given draft_blocked payload means "the mic heard nothing", and
+// handleVoiceStatusMessage() is the only call site that acts on it.
+
+test('hasNoInputSignal: true when a gate_reasons entry starts with near_silent(', () => {
+  assert.equal(hasNoInputSignal({ gate_reasons: ['near_silent(peak=0.00100,rms=0.00050)'] }), true);
+});
+
+test('hasNoInputSignal: true when near_silent is combined with other reasons', () => {
+  assert.equal(hasNoInputSignal({ gate_reasons: ['clip_too_short(0.100s<0.300s)', 'near_silent(peak=0.001,rms=0.0005)'] }), true);
+});
+
+test('hasNoInputSignal: false for reasons that do not include near_silent -- real audio, different problem', () => {
+  assert.equal(hasNoInputSignal({ gate_reasons: ['empty_transcript'] }), false);
+  assert.equal(hasNoInputSignal({ gate_reasons: ['clip_too_short(0.100s<0.300s)'] }), false);
+});
+
+test('hasNoInputSignal: false for missing/empty/malformed gate_reasons, never throws', () => {
+  assert.equal(hasNoInputSignal({}), false);
+  assert.equal(hasNoInputSignal({ gate_reasons: [] }), false);
+  assert.equal(hasNoInputSignal({ gate_reasons: null }), false);
+  assert.equal(hasNoInputSignal(undefined), false);
+  assert.equal(hasNoInputSignal({ gate_reasons: [42, null, 'near_silent(x)'] }), true);
+});
+
+test('createTalkCaptureFeature: draft_blocked with near_silent shows the no-input toast with a working click-through', () => {
+  const els = makeElements();
+  const toasts = [];
+  let opened = 0;
+  const feature = createTalkCaptureFeature({
+    elements: els,
+    hooks: {
+      showToast: (msg, tone, duration, doc, options) => toasts.push({ msg, tone, options }),
+      onOpenSoundSettings: () => { opened += 1; },
+    },
+  });
+  feature.init();
+
+  feature.handleVoiceStatusMessage({
+    status: 'draft_blocked',
+    gate_reasons: ['near_silent(peak=0.00100,rms=0.00050)'],
+    error: 'No usable audio was recorded.',
+  });
+
+  assert.equal(toasts.length, 1);
+  assert.match(toasts[0].msg, /can't hear you/i);
+  assert.equal(toasts[0].tone, 'warning');
+  assert.equal(typeof toasts[0].options.onClick, 'function');
+
+  toasts[0].options.onClick();
+  assert.equal(opened, 1, 'the toast action must call hooks.onOpenSoundSettings');
+});
+
+test('createTalkCaptureFeature: draft_blocked WITHOUT near_silent (real audio, e.g. empty transcript) does not fire the no-input toast', () => {
+  const els = makeElements();
+  const toasts = [];
+  const feature = createTalkCaptureFeature({
+    elements: els,
+    hooks: { showToast: (msg, tone) => toasts.push({ msg, tone }) },
+  });
+  feature.init();
+
+  feature.handleVoiceStatusMessage({ status: 'draft_blocked', gate_reasons: ['empty_transcript'] });
+
+  assert.equal(toasts.length, 0, 'a blocked draft with real audio must not claim the mic heard nothing');
+});
+
+test('createTalkCaptureFeature: an ordinary recording (real input, never blocked) never fires the no-input toast', () => {
+  const els = makeElements();
+  const toasts = [];
+  const feature = createTalkCaptureFeature({
+    elements: els,
+    hooks: { showToast: (msg, tone) => toasts.push({ msg, tone }) },
+  });
+  feature.init();
+
+  for (const status of ['recording_started', 'recording', 'transcribing', 'preview_ready', 'draft_sent']) {
+    feature.handleVoiceStatusMessage({ status });
+  }
+
+  assert.equal(toasts.length, 0);
+});
+
+test('createTalkCaptureFeature: missing onOpenSoundSettings hook leaves the toast action a safe no-op', () => {
+  const els = makeElements();
+  const toasts = [];
+  const feature = createTalkCaptureFeature({
+    elements: els,
+    hooks: { showToast: (msg, tone, duration, doc, options) => toasts.push(options) },
+  });
+  feature.init();
+
+  feature.handleVoiceStatusMessage({ status: 'draft_blocked', gate_reasons: ['near_silent(x)'] });
+  assert.doesNotThrow(() => toasts[0].onClick());
+});
+
+/** Minimal DOM double for toast.mjs's element-building path, mirroring toast.test.mjs. */
+function makeToastDoc() {
+  const makeEl = () => {
+    const el = {
+      className: '', textContent: '', dataset: {}, children: [], attrs: {},
+      classList: { added: [], add(c) { this.added.push(c); } },
+      listeners: {},
+      setAttribute(k, v) { this.attrs[k] = v; },
+      addEventListener(evt, fn) { (this.listeners[evt] ||= []).push(fn); },
+      append(...kids) { for (const kid of kids) { kid.parent = this; this.children.push(kid); } },
+      remove() {
+        this.removed = true;
+        const siblings = this.parent?.children;
+        if (siblings) { const at = siblings.indexOf(this); if (at !== -1) siblings.splice(at, 1); }
+      },
+      querySelector(selector) {
+        const wanted = selector.replace(/^\./, '');
+        return this.children.find((kid) => kid.className === wanted) || null;
+      },
+    };
+    return el;
+  };
+  const container = makeEl();
+  return { container, createElement: () => makeEl(), getElementById: (id) => (id === TOAST_CONTAINER_ID ? container : null) };
+}
+
+test('createTalkCaptureFeature + real showToast: two near_silent draft_blocked events (e.g. a duplicated socket message) still show only ONE toast', () => {
+  const els = makeElements();
+  const doc = makeToastDoc();
+  const feature = createTalkCaptureFeature({
+    elements: els,
+    hooks: { showToast: (msg, tone, duration, _doc, options) => showToast(msg, tone, duration, doc, options) },
+  });
+  feature.init();
+
+  const payload = { status: 'draft_blocked', gate_reasons: ['near_silent(peak=0.001,rms=0.0005)'] };
+  feature.handleVoiceStatusMessage(payload);
+  feature.handleVoiceStatusMessage(payload);
+
+  assert.equal(doc.container.children.length, 1, 'the toast idiom must coalesce a repeat into the SAME toast, not stack a second one');
 });

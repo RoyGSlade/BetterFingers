@@ -30,6 +30,11 @@
 //   hooks.onStateChange(stateSnapshot)     Called after every render with the
 //                         reducer's current {state, message, canStart,
 //                         canStop, canEmergencyStop} snapshot.
+//   hooks.onOpenSoundSettings()            Click-through target for the
+//                         no-input-signal toast (OR-06) -- navigates to
+//                         Utilities / Speech Input. Optional-chained same as
+//                         everything else; a missing hook just means the
+//                         toast's action button is a no-op click.
 //
 // NOTE (integration-owned files, not touched here): as of this writing
 // backendProxy.js's POST allowlist and backend.js only cover
@@ -101,6 +106,26 @@ function statusToState(status) {
     default:
       return 'idle';
   }
+}
+
+// OR-06: "no input signal" detection lives entirely on the backend already --
+// audio_gate.py's should_block_for_no_audio() runs at record-stop time (not
+// boot time) over the WHOLE clip the user just recorded, using the same
+// no_audio_min_rms/no_audio_min_peak thresholds the trailing-silence auto-stop
+// already trusts. A near-silent clip broadcasts 'draft_blocked' with a
+// gate_reasons entry that starts with "near_silent(" (see should_block_for_no_audio).
+// Checking the FULL clip (not just its first N ms) is what keeps this from
+// crying wolf: a user who pauses before speaking still has real signal
+// somewhere in the recording, so only a clip with NO signal anywhere in it
+// trips this -- an honestly-quiet-so-far mic never does.
+//
+// 'clip_too_short' and 'empty_transcript' are deliberately NOT treated as "no
+// signal": a short-but-loud tap (e.g. a cough) or a clip Whisper simply
+// couldn't transcribe are different problems from an inaudible mic, and
+// telling the user "I can't hear you" for either would be misleading.
+export function hasNoInputSignal(payload) {
+  const reasons = Array.isArray(payload?.gate_reasons) ? payload.gate_reasons : [];
+  return reasons.some((reason) => typeof reason === 'string' && reason.startsWith('near_silent'));
 }
 
 function defaultMessageForState(state) {
@@ -370,6 +395,18 @@ export function createTalkCaptureFeature({ elements, hooks } = {}) {
   function handleVoiceStatusMessage(message) {
     const status = typeof message === 'string' ? message : message?.status || message?.type;
     const payload = typeof message === 'string' ? {} : message || {};
+    // OR-06: fires once per blocked recording attempt -- the backend only
+    // broadcasts a single 'draft_blocked' per pipeline run, and toast.mjs's
+    // own message+tone coalescing is the backstop against any repeat.
+    if (status === 'draft_blocked' && hasNoInputSignal(payload)) {
+      hks.showToast?.(
+        "I can't hear you. Check your microphone in Sound settings.",
+        'warning',
+        undefined,
+        undefined,
+        { onClick: () => hks.onOpenSoundSettings?.(), actionLabel: 'Open Sound Settings' },
+      );
+    }
     dispatch({ type: 'voiceStatus', status, payload });
   }
 

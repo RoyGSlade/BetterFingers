@@ -171,3 +171,55 @@ test('a coalesced repeat restarts the auto-dismiss countdown', async () => {
   await new Promise((resolve) => setTimeout(resolve, 25));
   assert.ok(!toast.classList.added.includes('leaving'), 'must not have dismissed on the original timer');
 });
+
+// --- click-through action (OR-06: the no-input-signal toast) ----------------
+
+test('with no options argument, a toast renders exactly message + dismiss, unchanged from before', () => {
+  const doc = makeDoc();
+  const toast = showToast('Saved.', 'success', 0, doc);
+  assert.equal(toast.children.length, 2);
+  assert.equal(toast.children[1].className, 'toast-close');
+});
+
+test('an onClick option renders a third, clickable action button between the message and dismiss', () => {
+  const doc = makeDoc();
+  const toast = showToast("I can't hear you.", 'warning', 0, doc, {
+    onClick: () => {},
+    actionLabel: 'Open Sound Settings',
+  });
+  assert.equal(toast.children.length, 3);
+  const [message, action, close] = toast.children;
+  assert.equal(message.textContent, "I can't hear you.");
+  assert.equal(action.className, 'toast-action');
+  assert.equal(action.textContent, 'Open Sound Settings');
+  assert.equal(close.className, 'toast-close');
+});
+
+test('an onClick option with no actionLabel falls back to a generic label', () => {
+  const doc = makeDoc();
+  const toast = showToast('Needs attention.', 'warning', 0, doc, { onClick: () => {} });
+  assert.equal(toast.children[1].textContent, 'Fix this');
+});
+
+test('activating the action button runs onClick AND dismisses the toast', () => {
+  const doc = makeDoc();
+  let clicked = 0;
+  const toast = showToast("I can't hear you.", 'warning', 0, doc, {
+    onClick: () => { clicked += 1; },
+    actionLabel: 'Open Sound Settings',
+  });
+  const action = toast.children[1];
+  action.listeners.click[0]();
+  assert.equal(clicked, 1, 'onClick must have run');
+  assert.ok(toast.classList.added.includes('leaving'), 'the toast must also dismiss itself');
+});
+
+test('clicking dismiss (not the action button) does not run onClick', () => {
+  const doc = makeDoc();
+  let clicked = 0;
+  const toast = showToast("I can't hear you.", 'warning', 0, doc, { onClick: () => { clicked += 1; } });
+  const close = toast.children[2];
+  close.listeners.click[0]();
+  assert.equal(clicked, 0, 'dismissing the toast must not trigger the click-through action');
+  assert.ok(toast.classList.added.includes('leaving'));
+});

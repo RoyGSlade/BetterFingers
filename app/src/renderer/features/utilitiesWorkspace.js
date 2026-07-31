@@ -1343,7 +1343,16 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
     // that shows the right list with the wrong device selected.
     const settings = await refreshProfileSettings();
     const stored = settings?.input_device_index;
-    if (stored !== undefined && stored !== null && stored !== '') {
+    // OR-06: a fresh, never-touched profile still carries the backend's raw
+    // `-1` sentinel (utils.py's _profile_defaults()), not the `null` this
+    // page's own "System default" option uses. Assigning "-1" to a <select>
+    // with no matching option value deselects everything (native <select>
+    // value semantics: no match -> selectedIndex -1), so the control would
+    // render visibly blank instead of showing "System default" on first
+    // launch. Only a real, non-negative device index names an actual option;
+    // undefined/null/''/negative all leave the select on its default first
+    // option ("System default").
+    if (typeof stored === 'number' && stored >= 0) {
       els.audioDeviceSelect.value = String(stored);
     }
     return payload;
