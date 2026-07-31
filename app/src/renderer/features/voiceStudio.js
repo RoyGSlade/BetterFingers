@@ -24,6 +24,7 @@
 // (fetchTtsVoices/etc.) are similarly injectable via an `api` override so
 // refreshVoices()/preset actions are testable without a real backend.
 import * as backendApi from '../api/backend.js';
+import { assessTtsCompatibility } from '../lib/modelCompat.mjs';
 
 export const MAX_BLEND_LAYERS = 2; // base + 2 extra = 3-way blend cap
 
@@ -213,6 +214,7 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
   const {
     fetchTtsVoices, fetchVoicePresets, saveVoicePreset, deleteVoicePreset,
     setDefaultVoicePreset, cloneVoice, speakTts, stopTts, provisionVoiceCloning,
+    fetchTtsStatus,
   } = api || backendApi;
 
   let voiceOptionsCache = []; // [{id, name}]
@@ -224,6 +226,7 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
   let playbackText = '';
   let initialized = false;
   let voiceCloningAvailability = normalizeVoiceCloningAvailability(null);
+  let ttsRuntimeStatus = null;
 
   function availableVoiceIds() {
     return voiceOptionsCache.map((v) => v.id);
@@ -231,6 +234,50 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
 
   function voiceLabel(id) {
     return voiceOptionsCache.find((v) => v.id === id)?.name || id;
+  }
+
+  function currentTtsCompatibility(voiceId = '', capability) {
+    const status = ttsRuntimeStatus || {};
+    const capabilities = status.capabilities || {};
+    return assessTtsCompatibility({
+      runtime: capabilities.runtime || status.raw_backend || status.backend,
+      model: capabilities.model || capabilities.model_id || status.model || status.model_id
+        || capabilities.quantization || status.kokoro_quantization,
+      voiceId,
+      capability,
+    });
+  }
+
+  /**
+   * Runtime/model compatibility is deliberately advisory. The backend does
+   * not report a supported model or voice list, so an absent mapping must
+   * remain selectable and carry a caution rather than being filtered away.
+   */
+  function renderTtsCompatibility(doc) {
+    const select = doc.getElementById('settingReviewTtsVoiceHint');
+    if (!select) return;
+    let note = doc.getElementById('voiceModelCompatibilityNote');
+    if (!note) {
+      note = doc.createElement('p');
+      note.id = 'voiceModelCompatibilityNote';
+      note.className = 'sd-voice-studio__hint';
+      select.parentNode?.appendChild?.(note);
+    }
+    const result = currentTtsCompatibility(select.value, voiceBlendLayers.length ? 'blend' : undefined);
+    note.hidden = !result.caution;
+    note.textContent = result.caution
+      ? `Compatibility guidance: ${result.caution}`
+      : 'Compatibility confirmed by the local guidance table.';
+    note.dataset.compatibility = result.knownBad ? 'known-bad' : result.known ? 'known' : 'unknown';
+  }
+
+  function annotateVoiceOption(option, voiceId) {
+    const result = currentTtsCompatibility(voiceId);
+    if (result.caution) {
+      option.title = result.caution;
+      option.setAttribute('data-compatibility', result.knownBad ? 'known-bad' : 'unknown');
+    }
+    return option;
   }
 
   /**
@@ -311,6 +358,7 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
       empty.textContent = availableVoicesSentence();
       container.appendChild(empty);
       renderEffectiveMix(doc);
+      renderTtsCompatibility(doc);
       return;
     }
     voiceBlendLayers.forEach((layer, index) => {
@@ -324,6 +372,7 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
         const option = doc.createElement('option');
         option.value = voice.id;
         option.textContent = voice.name;
+        annotateVoiceOption(option, voice.id);
         select.appendChild(option);
       }
       select.value = layer.voiceId;
@@ -369,6 +418,7 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
       container.appendChild(row);
     });
     renderEffectiveMix(doc);
+    renderTtsCompatibility(doc);
   }
 
   function renderEffectiveMix(doc) {
@@ -687,6 +737,17 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
       showToast?.(`Could not refresh voices: ${lastError.message}`, 'danger');
       return false;
     }
+    // This endpoint reports backend/runtime/blend capability, but does not
+    // report a TTS model or voice list. Failure therefore leaves compatibility
+    // unknown/open and must never prevent the voice picker from rendering.
+    ttsRuntimeStatus = null;
+    if (typeof fetchTtsStatus === 'function') {
+      try {
+        ttsRuntimeStatus = await fetchTtsStatus();
+      } catch {
+        ttsRuntimeStatus = null;
+      }
+    }
     voiceCloningAvailability = normalizeVoiceCloningAvailability(voicesData.cloning);
     renderVoiceCloningPanel?.(voicesData.cloning);
     renderVoiceCloneAvailability(activeDoc, voiceCloningAvailability);
@@ -702,6 +763,7 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
         const option = activeDoc.createElement('option');
         option.value = voice.id;
         option.textContent = voice.name;
+        annotateVoiceOption(option, voice.id);
         voiceSelect.appendChild(option);
       }
       if (currentSelected) {
@@ -713,6 +775,7 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
         }
       }
     }
+    renderTtsCompatibility(activeDoc);
     // Existing blend rows may reference a voice that's now gone (deleted clone).
     const { layers, dropped } = filterAvailableBlendLayers(voiceBlendLayers, availableVoiceIds());
     if (dropped.length) {
@@ -1150,6 +1213,7 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
     // active-voice readout, which needs this same event.
     activeDoc.getElementById('settingReviewTtsVoiceHint')?.addEventListener('change', () => {
       renderEffectiveMix(activeDoc);
+      renderTtsCompatibility(activeDoc);
       dirty();
     });
 
