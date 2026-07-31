@@ -614,7 +614,10 @@ class Transcriber:
         worst_no_speech = 0.0
         for seg in seg_list:
             dur = max(0.001, float(getattr(seg, "end", 0.0)) - float(getattr(seg, "start", 0.0)))
-            logprob = float(getattr(seg, "avg_logprob", -1.0) or -1.0)
+            # Zero is a valid log-probability (probability 1.0), so only a
+            # missing value should use the conservative fallback.
+            raw_logprob = getattr(seg, "avg_logprob", None)
+            logprob = -1.0 if raw_logprob is None else float(raw_logprob)
             weighted_logprob += logprob * dur
             total_dur += dur
             worst_no_speech = max(worst_no_speech, float(getattr(seg, "no_speech_prob", 0.0) or 0.0))
