@@ -227,6 +227,13 @@ import {
   emergencyStop,
 } from '../api/backend.js';
 import { initMessageRescueDraft } from './messageRescueDraft.js';
+import {
+  LATENCY_PROBE_MODES,
+  PROBE_MODE_CONFIG,
+  formatProbeMetric,
+  normalizeResourceMetrics,
+  runLatencyProbe,
+} from '../lib/latencyProbe.mjs';
 
 // Side-effect imports: both self-initialize on import by querying their own
 // canonical DOM ids (`#messageRescuePanel`, `#textPlaygroundSection`) and
@@ -810,6 +817,10 @@ export const UTILITIES_ELEMENT_IDS = {
   doctorRecoveryPanel: 'sdUtilDoctorRecoveryPanel',
   doctorRecoveryList: 'sdUtilDoctorRecoveryList',
   metricsHud: 'sdUtilMetricsHud',
+  probeMode: 'sdUtilLatencyProbeMode',
+  probeRunButton: 'sdUtilLatencyProbeRunButton',
+  probeStatus: 'sdUtilLatencyProbeStatus',
+  probeResults: 'sdUtilLatencyProbeResults',
   recordingsList: 'sdUtilRecordingsList',
   recordingsClearButton: 'sdUtilRecordingsClearButton',
   recordingsMessage: 'sdUtilRecordingsMessage',
@@ -932,6 +943,9 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
   let diagnosticsPathsLoaded = false;
   let debugLogTailLoaded = false;
   let metricsLoaded = false;
+  let lastDoctorPayload = null;
+  let latencyProbeResult = null;
+  let latencyProbeRunning = false;
   let capabilitiesDumpLoaded = false;
   let runtimeStatusDumpLoaded = false;
   let outputSettingsSummaryLoaded = false;
@@ -2095,6 +2109,7 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
 
   function renderDoctorCards(doctorPayload) {
     if (!els.doctorCardsGrid) return;
+    lastDoctorPayload = doctorPayload || null;
     // A real `/doctor` response carries the health envelope. Only that
     // response is allowed to drive the signal-gated renderer; keeping the
     // legacy schema fallback here preserves preview fixtures that predate the
@@ -2179,6 +2194,46 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
   function renderMetricsHud(metrics) {
     if (!els.metricsHud) return;
     els.metricsHud.replaceChildren();
+    const probePanel = document.createElement('div');
+    probePanel.className = 'sd-util-latency-probe';
+    const probeHeader = document.createElement('div');
+    probeHeader.className = 'sd-util-group__header';
+    const probeTitle = document.createElement('span');
+    probeTitle.className = 'sd-util-group__title';
+    probeTitle.textContent = 'Latency / Throughput Probe';
+    const probeControls = document.createElement('div');
+    probeControls.className = 'sd-actions-row';
+    const probeMode = document.createElement('select');
+    probeMode.className = 'sd-util-select';
+    probeMode.id = 'sdUtilLatencyProbeMode';
+    LATENCY_PROBE_MODES.forEach((mode) => {
+      const option = document.createElement('option');
+      option.value = mode;
+      option.textContent = `${mode[0].toUpperCase()}${mode.slice(1)} (${PROBE_MODE_CONFIG[mode].runs} runs)`;
+      probeMode.append(option);
+    });
+    const probeRunButton = document.createElement('button');
+    probeRunButton.type = 'button';
+    probeRunButton.className = 'sd-btn';
+    probeRunButton.id = 'sdUtilLatencyProbeRunButton';
+    probeRunButton.textContent = 'Run probe';
+    probeControls.append(probeMode, probeRunButton);
+    probeHeader.append(probeTitle, probeControls);
+    const probeStatus = document.createElement('span');
+    probeStatus.className = 'sd-util-message';
+    probeStatus.id = 'sdUtilLatencyProbeStatus';
+    probeStatus.textContent = 'No probe run yet. Stage runners must report real pipeline work.';
+    const probeResults = document.createElement('div');
+    probeResults.id = 'sdUtilLatencyProbeResults';
+    probePanel.append(probeHeader, probeStatus, probeResults);
+    els.metricsHud.append(probePanel);
+    els.probeMode = probeMode;
+    els.probeRunButton = probeRunButton;
+    els.probeStatus = probeStatus;
+    els.probeResults = probeResults;
+    if (latencyProbeResult) renderLatencyProbeResult(latencyProbeResult);
+    bindLatencyProbe();
+
     const stages = metrics?.stages || metrics || {};
     const table = document.createElement('table');
     table.className = 'sd-util-metrics-table';
@@ -2199,6 +2254,93 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
       table.append(row);
     });
     els.metricsHud.append(table);
+  }
+
+  function renderLatencyProbeResult(result) {
+    if (!els.probeStatus || !els.probeResults || !result) return;
+    const bound = result.bound || {};
+    els.probeStatus.textContent = `${result.mode} completed ${result.completedRuns}/${result.requestedRuns} runs in ${formatProbeMetric(result.elapsedMs)}. Bound: max ${bound.maxRuns} runs / ${formatProbeMetric(bound.maxDurationMs)} total / ${formatProbeMetric(bound.stageTimeoutMs)} per stage${bound.truncated ? ' (stopped at bound)' : ''}.`;
+    els.probeResults.replaceChildren();
+    const table = document.createElement('table');
+    table.className = 'sd-util-metrics-table';
+    const heading = document.createElement('tr');
+    ['Stage', 'Average', 'OK', 'Failed', 'Timed out', 'Unavailable'].forEach((label) => {
+      const cell = document.createElement('th');
+      cell.textContent = label;
+      heading.append(cell);
+    });
+    table.append(heading);
+    Object.entries(result.stages || {}).forEach(([name, stat]) => {
+      const row = document.createElement('tr');
+      [name, formatProbeMetric(stat.avgMs), stat.ok, stat.failed, stat.timedOut, stat.unavailable].forEach((value) => {
+        const cell = document.createElement('td');
+        cell.textContent = String(value);
+        row.append(cell);
+      });
+      table.append(row);
+    });
+    const issues = result.runs.flatMap((run) => Object.values(run.stages || {})
+      .filter((stage) => stage.status === 'failed' || stage.status === 'timed_out')
+      .map((stage) => `Run ${run.runIndex + 1}: ${stage.name} ${stage.status.replace('_', ' ')} after ${formatProbeMetric(stage.durationMs)} — ${stage.error || 'no detail'}`));
+    if (issues.length) {
+      const issueList = document.createElement('ul');
+      issueList.className = 'sd-util-list';
+      issues.forEach((issue) => {
+        const row = document.createElement('li');
+        row.textContent = issue;
+        issueList.append(row);
+      });
+      els.probeResults.append(issueList);
+    }
+    const resources = result.runs?.at(-1)?.resources || normalizeResourceMetrics(null);
+    const resourceLine = document.createElement('p');
+    resourceLine.className = 'sd-util-message';
+    resourceLine.textContent = `CPU: ${formatProbeMetric(resources.cpu?.usagePercent, '%')} · RAM: ${formatProbeMetric(resources.ram?.usedPercent, '%')} used · GPU: ${resources.gpu?.name || 'not available'} · VRAM: ${formatProbeMetric(resources.vram?.usedMb, ' MB')} / ${formatProbeMetric(resources.vram?.totalMb, ' MB')}`;
+    els.probeResults.append(table, resourceLine);
+  }
+
+  function bindLatencyProbe() {
+    if (!els.probeRunButton || els.probeRunButton.dataset.bound === 'true') return;
+    els.probeRunButton.dataset.bound = 'true';
+    els.probeRunButton.addEventListener('click', async () => {
+      if (latencyProbeRunning) return;
+      latencyProbeRunning = true;
+      const mode = LATENCY_PROBE_MODES.includes(els.probeMode?.value) ? els.probeMode.value : 'light';
+      const config = PROBE_MODE_CONFIG[mode];
+      els.probeRunButton.disabled = true;
+      if (els.probeStatus) els.probeStatus.textContent = `Running ${mode}: up to ${config.maxRuns} sequential runs, ${formatProbeMetric(config.maxDurationMs)} total bound…`;
+      try {
+        const configuredStages = hks.latencyProbeStages || {};
+        const stages = Object.fromEntries(['stt', 'rewrite', 'tts'].map((name) => [
+          name,
+          typeof configuredStages[name] === 'function'
+            ? configuredStages[name]
+            : typeof hks.runLatencyStage === 'function'
+              ? (context) => hks.runLatencyStage(name, context)
+              : null,
+        ]));
+        const result = await runLatencyProbe({
+          mode,
+          stages,
+          metricsProvider: async () => {
+            if (lastDoctorPayload?.hardware) return lastDoctorPayload;
+            return fetchDoctor(false);
+          },
+        });
+        latencyProbeResult = result;
+        renderLatencyProbeResult(result);
+        if (result.runs.some((run) => Object.values(run.stages).some((stage) => stage.status !== 'ok'))) {
+          hks.showToast?.('Probe completed with unavailable, failed, or timed-out stages.', 'warning');
+        } else {
+          hks.showToast?.('Latency probe completed.', 'success');
+        }
+      } catch (error) {
+        if (els.probeStatus) els.probeStatus.textContent = `Probe failed before a run completed: ${error.message}`;
+      } finally {
+        latencyProbeRunning = false;
+        if (els.probeRunButton) els.probeRunButton.disabled = false;
+      }
+    });
   }
 
   async function refreshMetrics() {
@@ -2454,6 +2596,9 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
   }
 
   function bindDiagnosticsSection() {
+    // Metrics HUD is rendered after the first backend refresh; bind is also
+    // called here for preview/test documents that already provide the panel.
+    bindLatencyProbe();
     els.doctorRefreshButton?.addEventListener?.('click', () => refreshDoctor());
     els.recordingsClearButton?.addEventListener?.('click', async () => {
       if (!confirmFn('Clear all saved recordings? This cannot be undone.')) return;
