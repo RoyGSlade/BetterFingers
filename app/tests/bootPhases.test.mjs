@@ -7,6 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync, readdirSync } from 'node:fs';
 
 import { derivePhase, deriveServices, describeHardware, SLOW_THRESHOLD_MS } from '../src/main/bootPhases.js';
 
@@ -88,4 +89,50 @@ test('describeHardware never claims a dedicated GPU when the tier says integrate
 
 test('describeHardware degrades honestly when doctor has not reported hardware yet', () => {
   assert.equal(describeHardware(null), 'Checking your hardware…');
+});
+
+// --- BF_SKIP_BOOT_GATE ------------------------------------------------------
+//
+// Gating the dashboard window on a healthy backend (OR-02) made the QA harness
+// unrunnable: harness.mjs waits for a window whose URL is signal-desk.html and
+// deliberately drives renderer scenarios with no backend, so that window never
+// arrived and all ~100 checks died on a 20s timeout. BF_SKIP_BOOT_GATE is the
+// documented escape hatch. These tests exist so it cannot quietly become a
+// product behaviour: a shipping path that sets it, or a loosened comparison
+// that lets any truthy value through, fails here.
+
+test('the boot gate bypass requires the exact string "1", not merely a truthy value', () => {
+  const mainSrc = readFileSync(new URL('../src/main/main.js', import.meta.url), 'utf8');
+  assert.match(
+    mainSrc,
+    /process\.env\.BF_SKIP_BOOT_GATE\s*===\s*'1'/,
+    'main.js must compare BF_SKIP_BOOT_GATE strictly to \'1\' -- a loose check would let '
+    + 'a stray "0", "false" or "" disable the gate on a real user\'s machine',
+  );
+});
+
+test('nothing under app/src ever sets BF_SKIP_BOOT_GATE', () => {
+  const srcDir = new URL('../src/', import.meta.url);
+  const offenders = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const child = new URL(entry.name + (entry.isDirectory() ? '/' : ''), dir);
+      if (entry.isDirectory()) {
+        walk(child);
+        continue;
+      }
+      if (!/\.(js|mjs|cjs|html)$/.test(entry.name)) continue;
+      const text = readFileSync(child, 'utf8');
+      // Reading the flag is the point; ASSIGNING it is what must never ship.
+      if (/BF_SKIP_BOOT_GATE\s*[:=]\s*['"]/.test(text)) {
+        offenders.push(entry.name);
+      }
+    }
+  };
+  walk(srcDir);
+  assert.deepEqual(
+    offenders, [],
+    'BF_SKIP_BOOT_GATE is a test/diagnostic hatch. Only app/tests/qa/harness.mjs may set it; '
+    + `these shipping files do: ${offenders.join(', ')}`,
+  );
 });

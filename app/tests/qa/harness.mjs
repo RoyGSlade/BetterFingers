@@ -326,6 +326,15 @@ export async function launchApp({ backendPort, target = TARGET }) {
   launchEnv.TZ = 'UTC';
   launchEnv.LANG = 'en_US.UTF-8';
 
+  // OR-02 gated the dashboard window on a healthy backend: main.js only
+  // creates signal-desk.html once boot reaches 'ready'. This harness waits for
+  // a window matching target.page and deliberately runs renderer scenarios
+  // without a live backend, so that window never arrived and every scenario
+  // died on the 20s waitForEvent timeout. This flag is main.js's documented
+  // escape hatch -- it shows the dashboard immediately while boot still runs
+  // underneath. It is set HERE and nowhere in any shipping path.
+  launchEnv.BF_SKIP_BOOT_GATE = '1';
+
   // BF_QA_USER_DATA_DIR: run against a throwaway Electron profile instead of
   // the developer's real one. Two reasons, both real:
   //

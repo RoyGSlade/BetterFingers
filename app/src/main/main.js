@@ -112,6 +112,14 @@ function stopBootTimers() {
   }
 }
 
+/**
+ * Test/diagnostic escape hatch for the boot gate. Strict '1' only, so a stray
+ * empty or truthy-looking value cannot disable the gate by accident.
+ */
+function shouldSkipBootGate() {
+  return process.env.BF_SKIP_BOOT_GATE === '1';
+}
+
 function revealMainWindow() {
   if (bootFinished) {
     return;
@@ -279,7 +287,23 @@ function bootstrapApp() {
 
   // The dashboard window is NOT created here -- only once boot succeeds (see
   // revealMainWindow()). Only the splash is shown at cold boot.
-  createSplashWindow();
+  //
+  // BF_SKIP_BOOT_GATE is the one documented way past that, and it exists
+  // because gating the window on a healthy backend made the QA harness
+  // unrunnable: harness.mjs waits for a window whose URL is signal-desk.html,
+  // and it deliberately exercises renderer surfaces WITHOUT a backend, so that
+  // window would never arrive and every scenario failed on a 20s timeout.
+  //
+  // This is a test/diagnostic escape hatch, not a product option. It is off
+  // unless explicitly set to '1' (pinned by app/tests/bootPhases.test.mjs), it
+  // is never set by any shipping path, and boot still runs normally underneath
+  // -- the only thing it changes is that the dashboard is shown immediately
+  // instead of waiting for readiness. Shipped behaviour is untouched.
+  if (shouldSkipBootGate()) {
+    revealMainWindow();
+  } else {
+    createSplashWindow();
+  }
   createOverlayWindow();
   tray = createTray({
     getMainWindow: () => getMainWindow(),
