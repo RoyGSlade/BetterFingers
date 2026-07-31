@@ -123,6 +123,34 @@ export function formatVoiceSampleDuration(seconds) {
   return `${minutes}:${String(Math.round(value % 60)).padStart(2, '0')}`;
 }
 
+/**
+ * The clone upload is only safe once the backend has explicitly reported that
+ * the clone runtime/model is available.  Do not treat a legacy `installed`
+ * flag, a missing payload, or a provisioning response as proof: those values
+ * do not describe whether synthesis can run right now.
+ */
+export function normalizeVoiceCloningAvailability(cloning) {
+  if (cloning && typeof cloning.available === 'boolean') {
+    return {
+      known: true,
+      available: cloning.available,
+      message: cloning.available
+        ? 'Voice cloning model is installed and ready.'
+        : 'Voice cloning requires its model. Install voice cloning before uploading a sample.',
+    };
+  }
+  return {
+    known: false,
+    available: false,
+    message: 'Checking whether the voice-cloning model is available…',
+  };
+}
+
+export function canUploadVoiceClone(cloning) {
+  const status = normalizeVoiceCloningAvailability(cloning);
+  return status.known && status.available;
+}
+
 /** The full "what to speak with" shape used by both preview paths (Audition,
  * drafts.js runDraftTts) and by profile persistence. */
 export function gatherVoiceStudioSettingsFromInputs({ base, speed, blendLayers, pitch, energy, warmth, brightness, pauseStyle }) {
@@ -184,7 +212,7 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
   const { markProfileDirty, renderVoiceCloningPanel } = hooks || {};
   const {
     fetchTtsVoices, fetchVoicePresets, saveVoicePreset, deleteVoicePreset,
-    setDefaultVoicePreset, cloneVoice, speakTts, stopTts,
+    setDefaultVoicePreset, cloneVoice, speakTts, stopTts, provisionVoiceCloning,
   } = api || backendApi;
 
   let voiceOptionsCache = []; // [{id, name}]
@@ -195,6 +223,7 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
   let playbackState = 'idle';
   let playbackText = '';
   let initialized = false;
+  let voiceCloningAvailability = normalizeVoiceCloningAvailability(null);
 
   function availableVoiceIds() {
     return voiceOptionsCache.map((v) => v.id);
@@ -656,9 +685,11 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
     }
     if (lastError) {
       showToast?.(`Could not refresh voices: ${lastError.message}`, 'danger');
-      return;
+      return false;
     }
+    voiceCloningAvailability = normalizeVoiceCloningAvailability(voicesData.cloning);
     renderVoiceCloningPanel?.(voicesData.cloning);
+    renderVoiceCloneAvailability(activeDoc, voiceCloningAvailability);
     voiceOptionsCache = [
       ...(Array.isArray(voicesData.defaults) ? voicesData.defaults : []),
       ...(Array.isArray(voicesData.cloned) ? voicesData.cloned.map((v) => ({ id: v.id, name: `${v.name} (Cloned)` })) : []),
@@ -691,6 +722,7 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
     }
     renderVoiceBlendRows(activeDoc);
     await refreshVoicePresets(activeDoc).catch((error) => console.error('Failed to load voice presets:', error));
+    return true;
   }
 
   // --- Read-aloud transport ----------------------------------------------
@@ -825,6 +857,35 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
   }
 
   // --- Voice cloning (sample upload) --------------------------------------
+  function renderVoiceCloneAvailability(doc, status = voiceCloningAvailability) {
+    const statusEl = doc.getElementById('voiceCloneStatusNote');
+    const installButton = doc.getElementById('voiceCloneInstallButton');
+    if (statusEl) {
+      statusEl.textContent = status.message;
+      statusEl.hidden = false;
+    }
+    if (installButton) {
+      installButton.hidden = status.available;
+      installButton.disabled = status.available || typeof provisionVoiceCloning !== 'function';
+      installButton.textContent = status.known && !status.available ? 'Install voice cloning model' : 'Check voice cloning model';
+    }
+    const consentEl = doc.getElementById('voiceCloneConsent');
+    const nameEl = doc.getElementById('voiceCloneName');
+    const fileEl = doc.getElementById('voiceCloneFile');
+    const uploadButton = doc.getElementById('voiceCloneUploadButton');
+    const recordButton = doc.getElementById('voiceCloneRecordButton');
+    const previewButton = doc.getElementById('voiceClonePreviewButton');
+    const discardButton = doc.getElementById('voiceCloneDiscardButton');
+    const enabled = Boolean(consentEl?.checked);
+    const modelUnavailable = status.known && !status.available;
+    if (nameEl) nameEl.disabled = !enabled || modelUnavailable;
+    if (fileEl) fileEl.disabled = !enabled || modelUnavailable;
+    if (uploadButton) uploadButton.disabled = !enabled || modelUnavailable;
+    if (recordButton) recordButton.disabled = !enabled || modelUnavailable;
+    if (previewButton) previewButton.disabled = !enabled || modelUnavailable || !previewButton.dataset.hasSample;
+    if (discardButton) discardButton.disabled = !enabled || modelUnavailable || !discardButton.dataset.hasSample;
+  }
+
   function initVoiceCloning(doc) {
     const consentEl = doc.getElementById('voiceCloneConsent');
     const nameEl = doc.getElementById('voiceCloneName');
@@ -839,6 +900,15 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
     let recorderStream = null;
     let recorderChunks = [];
     const host = uploadButton.parentNode || resultEl.parentNode || uploadButton;
+    const statusEl = doc.getElementById('voiceCloneStatusNote') || doc.createElement('p');
+    statusEl.id = 'voiceCloneStatusNote';
+    statusEl.className = 'sd-voice-studio__result';
+    if (!doc.getElementById('voiceCloneStatusNote')) host?.appendChild?.(statusEl);
+    const installButton = doc.getElementById('voiceCloneInstallButton') || doc.createElement('button');
+    installButton.id = 'voiceCloneInstallButton';
+    installButton.type = 'button';
+    installButton.className = 'sd-btn';
+    if (!doc.getElementById('voiceCloneInstallButton')) host?.appendChild?.(installButton);
     const makeControl = (id, label) => {
       const button = doc.getElementById(id) || doc.createElement('button');
       button.id = id;
@@ -883,6 +953,8 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
       sampleAudio.hidden = false;
       previewButton.disabled = false;
       discardButton.disabled = false;
+      previewButton.dataset.hasSample = 'true';
+      discardButton.dataset.hasSample = 'true';
       const duration = Number(file.duration);
       updateSampleState(`Sample ready: ${sampleName(file)} · ${formatVoiceSampleDuration(duration)}`);
     };
@@ -897,6 +969,8 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
       if ('value' in fileEl) fileEl.value = '';
       previewButton.disabled = true;
       discardButton.disabled = true;
+      delete previewButton.dataset.hasSample;
+      delete discardButton.dataset.hasSample;
       updateSampleState('No recording selected. Record or choose a sample.');
     };
     fileEl.addEventListener('change', () => {
@@ -964,10 +1038,13 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
       const enabled = consentEl.checked;
       nameEl.disabled = !enabled;
       fileEl.disabled = !enabled;
-      uploadButton.disabled = !enabled;
-      recordButton.disabled = !enabled;
-      previewButton.disabled = !enabled || !currentSample();
-      discardButton.disabled = !enabled || !currentSample();
+      const modelUnavailable = voiceCloningAvailability.known && !voiceCloningAvailability.available;
+      nameEl.disabled = !enabled || modelUnavailable;
+      fileEl.disabled = !enabled || modelUnavailable;
+      uploadButton.disabled = !enabled || modelUnavailable;
+      recordButton.disabled = !enabled || modelUnavailable;
+      previewButton.disabled = !enabled || modelUnavailable || !currentSample();
+      discardButton.disabled = !enabled || modelUnavailable || !currentSample();
       if (!enabled) {
         resultEl.textContent = '';
         if (recorder) recorder.stop();
@@ -975,6 +1052,23 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
       }
     };
     consentEl.addEventListener('change', syncConsent);
+    installButton.addEventListener('click', async () => {
+      if (typeof provisionVoiceCloning !== 'function') {
+        updateSampleState('Install voice cloning from the Models page before uploading a sample.');
+        return;
+      }
+      installButton.disabled = true;
+      installButton.textContent = 'Installing voice cloning model…';
+      try {
+        await provisionVoiceCloning();
+        await refreshVoices(doc);
+      } catch (error) {
+        updateSampleState(`Could not install voice cloning model: ${error.message}`);
+        installButton.disabled = false;
+        installButton.textContent = 'Install voice cloning model';
+      }
+    });
+    renderVoiceCloneAvailability(doc);
     updateSampleState('No recording selected. Record or choose a sample.');
     syncConsent();
 
@@ -991,6 +1085,22 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
       }
       if (!name) {
         resultEl.textContent = 'A voice name is required.';
+        return;
+      }
+
+      // On a cold page load the voices request may still be in flight. Verify
+      // the backend's explicit availability report before accepting any sample
+      // so an upload cannot fail after the user has recorded it.
+      if (!voiceCloningAvailability.known) {
+        resultEl.textContent = 'Checking whether the voice-cloning model is available…';
+        const refreshed = await refreshVoices(doc);
+        if (!refreshed) {
+          resultEl.textContent = 'Could not verify the voice-cloning model. Install it from the Models page, then try again.';
+          return;
+        }
+      }
+      if (voiceCloningAvailability.known && !voiceCloningAvailability.available) {
+        resultEl.textContent = voiceCloningAvailability.message;
         return;
       }
 
