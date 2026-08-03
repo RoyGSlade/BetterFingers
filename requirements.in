@@ -34,7 +34,7 @@ huggingface_hub>=1.23.0,<2    # Model cache management (Whisper)
 pyyaml>=6,<7                  # Profile / config files
 
 # ---- Sidecar API ----
-mcp>=1.0,<2                   # MCP client SDK (C12 — persona tool integration)
+mcp>=2.0.0,<3                   # MCP client SDK (C12 — persona tool integration)
 fastapi>=0.139.2,<1             # REST + WebSocket server
 uvicorn>=0.51.0,<1           # ASGI server
 websockets>=16.1.1                # WebSocket protocol support
