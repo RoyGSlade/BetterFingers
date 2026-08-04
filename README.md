@@ -4,7 +4,7 @@
 local LLM, review the result, and place clean text into any application — all running
 100% on your own machine. No cloud, no account, no subscription, no telemetry.
 
-> A [Source Arcanum](#about) project · MIT licensed · Windows + Linux
+> A [Donaven Crenshaw](#about) project · MIT licensed · Windows + Linux
 > ⚠️ **Status: pre-release (alpha in progress).** The core dictation loop works; see
 > [Project status](#project-status) for what is and isn't ready.
 
@@ -166,8 +166,8 @@ vulnerabilities privately. Roadmap and design rationale: [DESIGN.md](DESIGN.md).
 
 ## About
 
-BetterFingers is the first release from **Source Arcanum** — private, local-first tools
-that respect you. By Donaven Crenshaw.
+BetterFingers is a project by **Donaven Crenshaw** — private, local-first software that
+respects you.
 
 ## License
 

@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "items": [
+    {
+      "id": "project-source-contract-adopted",
+      "date": "2026-08-03",
+      "title": "Project source contract adopted",
+      "summary": "BetterFingers adopted the v1 project source contract so its current project facts, page content, update feed, and empty screenshot boundary live in this repository for DonavenCrenshaw.com to review.",
+      "type": "progress",
+      "state": "published"
+    }
+  ]
+}
