@@ -1,15 +1,18 @@
 # v1.1.0-alpha.1 prerelease rehearsal
 
-Audit timestamp: 2026-08-04 11:27:37 UTC (working tree at `69f85fde417b31bc5781b0274342e2c12986c58d`).
+Audit refreshed: 2026-08-04. The validated release-candidate baseline is
+`acdad4e1d6aa4ad610ec7e8b5906980d00f2d92a`; draft PR
+[#94](https://github.com/RoyGSlade/BetterFingers/pull/94) tracks subsequent
+workflow and evidence-only changes before qualification.
 
 ## Rehearsal result
 
-**FAIL / DO NOT CREATE A DRAFT YET.** This is a non-publishing rehearsal only;
-no tag, release, upload, or remote mutation was performed. The current checkout
-has the intended version string, but it is not tagged, the current parity
-ledger is now reconciled at `410 / 28 / 0 / 438`, the only local package is an
-older `0.2.0-alpha.1` AppImage, Windows qualification is absent, and the
-expected Pages URL is HTTP 404.
+**HOLD / DO NOT TAG OR PUBLISH.** The release branch and draft source PR now
+exist, but no tag or GitHub Release has been created. The validated candidate
+has the intended version and parity `410 / 28 / 0 / 438`; GitHub platform
+checks and exact Windows/Linux artifact qualification remain mandatory. The
+untracked X11 directory and local AppImage describe `0.2.0-alpha.1` and remain
+explicitly outside this PR and release evidence.
 
 ## Exact release inputs from the current workflow
 
@@ -18,12 +21,12 @@ expected Pages URL is HTTP 404.
 | Repository | `RoyGSlade/BetterFingers` |
 | Intended tag | `v1.1.0-alpha.1` (`VERSION` is `1.1.0-alpha.1`; `version.py` derives `RELEASE_TAG` by prefixing `v`) |
 | Trigger | `.github/workflows/build-installer.yml` runs on `push.tags: ["v*"]` or manual dispatch |
-| Current commit | `69f85fde417b31bc5781b0274342e2c12986c58d` (`Harden desktop capture and release qualification`) |
+| Validated candidate commit | `acdad4e1d6aa4ad610ec7e8b5906980d00f2d92a` (`Prepare v1.1.0-alpha.1 release candidate`) |
 | Remote tag | **ABSENT**: `git ls-remote --tags origin refs/tags/v1.1.0-alpha.1` returned no line |
-| Release title | Workflow does not set `name`; pinned `softprops/action-gh-release` metadata says the default is the tag name. Treat `v1.1.0-alpha.1` as the exact generated title unless a manual title is supplied. |
-| Release body | Workflow does not set `body`, `body_path`, or `generate_release_notes`; no release notes body is supplied by the workflow. |
-| Draft/prerelease flags | Workflow does not set either flag. The action metadata says both default to `false`; a tag push would therefore not be an explicit draft prerelease. |
-| Publish condition | `publish-release` runs only when `startsWith(github.ref, 'refs/tags/')` and needs `windows-installer`, `linux-appimage`, and `sbom`. |
+| Release title | Explicit: `BetterFingers ${{ github.ref_name }}`; for the intended tag this is `BetterFingers v1.1.0-alpha.1`. |
+| Release body | Explicit workflow body names the draft public-alpha status, retained artifacts, unsigned/SmartScreen boundary, and qualification requirements. Generated notes are disabled. |
+| Draft/prerelease flags | Explicit `draft: true`, `prerelease: true`, and `make_latest: false`. |
+| Publish condition | `publish-release` runs only for a tag after Windows, Linux, and SBOM jobs, and is bound to the protected `release` environment. Manual branch dispatch cannot publish. |
 | Windows assets | Exactly one `*.exe`, matching `*.exe.sha256`, and `*.exe.signature.txt`; the workflow selects the first `.exe` and then verifies exact-one globs before upload. Filename is **PLACEHOLDER until the Windows job runs**. |
 | Linux assets | Exactly one `*.AppImage` and matching `*.AppImage.sha256`; filename is **PLACEHOLDER until the Linux job runs**. |
 | SBOM | Exactly one `*.cdx.json` CycloneDX file from the `betterfingers-sbom.cdx.json` artifact; final asset filename is **PLACEHOLDER until the job runs**. |
@@ -42,7 +45,7 @@ release-assets/windows/*.exe.signature.txt
 release-assets/linux/*.AppImage
 release-assets/linux/*.AppImage.sha256
 release-assets/sbom/*.cdx.json
-'}
+'; draft: true; prerelease: true; make_latest: false; explicit name/body: true}
 verify_script_has_exact_one_checks= True True
 ```
 
@@ -57,7 +60,7 @@ commit.
 |---|---|---|
 | The source identity is `1.1.0-alpha.1` / `v1.1.0-alpha.1`. | **PASS, source only** | `VERSION`, `app/package.json`, and `app/package-lock.json` agree; Python version test passed and the two JS version/resource tests passed. This does not prove a package was built from this commit. |
 | The current parity ledger is complete. | **PASS, current validator only** | `python3 tools/parity_validator.py` returned `410 wired / 28 intentional_cut / 0 blocked / 438 total` and exit 0. `RELEASE_BOARD.md` now records this as the current working-tree count while retaining `411 / 27 / 0` only as the historical Gate 11 baseline at `3d935c6`. |
-| X11 selected-text rewrite is qualified for this release. | **NOT PROVEN** | `docs/release/evidence/x11-appimage-2026-08-04/` says 8/8 PASS, but records AppImage `0.2.0-alpha.1`, commit `ef1ed0ded80aede0ab97838acc138283f8378376`, and the old AppImage hash. It is not evidence for current commit `69f85fd` or version `1.1.0-alpha.1`. |
+| X11 selected-text rewrite is qualified for this release. | **NOT PROVEN** | The excluded untracked evidence says 8/8 PASS, but records AppImage `0.2.0-alpha.1`, commit `ef1ed0ded80aede0ab97838acc138283f8378376`, and the old AppImage hash. It is not evidence for candidate `acdad4e` or version `1.1.0-alpha.1`. |
 | A Linux AppImage is available for this release. | **FAIL** | Local ignored output is `app/release/BetterFingers-0.2.0-alpha.1.AppImage`, 571,977,617 bytes, SHA-256 `efbdba4c0925b110c18c8d6cdd4fd56f24390169241dab116b2c36d494f67590`; its filename and evidence identity are the prior version. |
 | A Windows NSIS installer is available. | **FAIL / NOT OBSERVED** | No Windows `.exe` exists in the local checkout; no Windows CI run or install/upgrade/uninstall evidence was queried or observed. |
 | Packages are clean-machine qualified, signed, and provenance-backed. | **FAIL** | Current release docs explicitly keep package qualification, signing, provenance/SBOM, clean install, and OS qualification open. The local AppImage is explicitly non-acceptance evidence. |
@@ -114,44 +117,20 @@ page.
 | Local Markdown links in required release docs | **PASS** — read-only scan found `missing_local_links=[]` for README and all four required release docs. |
 | Workflow YAML/static release assertions | **PASS** — PyYAML parsed the workflow and the exact-one asset/glob assertions returned `True`. |
 | Whitespace check | **PASS** — `git diff --check` returned exit 0. |
-| Full Python/Node suites | **NOT RUN** — heavyweight/shared resources and unrelated worker ownership; prior reports are scoped historical evidence only. |
-| Production Electron QA | **NOT RUN** — no fresh display-backed run was required for this document. |
+| Full Python/Node suites | **PASS at `acdad4e`** — Python `3177 passed / 4 skipped / 26 subtests`; renderer `1772/1772`. |
+| Production Electron QA | **PASS at `acdad4e`** — fresh build and isolated data roots, `100/100`. |
 | Windows build/install/upgrade/uninstall | **NOT RUN** — no Windows host or CI run was available to this worker. |
 
-## Exact safe later inputs (template only; not executed)
+## Tag publication safety contract
 
-The existing tag workflow is not sufficient for an explicit draft prerelease:
-it omits `name`, `body`, `draft`, `prerelease`, and `generate_release_notes`.
-After the blockers above are closed and a director-approved commit is available,
-use a manual draft API/CLI path with the placeholders below. Do not substitute
-the current local AppImage or the old X11 evidence.
-
-```bash
-# TEMPLATE — NOT RUN. Replace every <PLACEHOLDER> after final CI/package review.
-gh release create v1.1.0-alpha.1 \
-  --repo RoyGSlade/BetterFingers \
-  --target <APPROVED_CURRENT_COMMIT_SHA> \
-  --title 'BetterFingers v1.1.0-alpha.1' \
-  --notes-file <FINAL_RELEASE_NOTES_FILE> \
-  --draft \
-  --prerelease \
-  <WINDOWS_EXE> <WINDOWS_EXE.sha256> <WINDOWS_EXE.signature.txt> \
-  <LINUX_APPIMAGE> <LINUX_APPIMAGE.sha256> <BETTERFINGERS_SBOM.cdx.json>
-```
-
-Equivalent GitHub API request body (the `POST` itself is **NOT RUN**):
-
-```json
-{
-  "tag_name": "v1.1.0-alpha.1",
-  "target_commitish": "<APPROVED_CURRENT_COMMIT_SHA>",
-  "name": "BetterFingers v1.1.0-alpha.1",
-  "body": "<FINAL_RELEASE_NOTES_BODY_FROM_VERIFIED_CLAIMS>",
-  "draft": true,
-  "prerelease": true,
-  "generate_release_notes": false
-}
-```
+The tag path is now fail-closed into a draft prerelease. A `v*` tag must finish
+the Windows installer, Linux AppImage, and SBOM jobs, verify exact-one asset
+sets, and wait for approval in the `release` environment before the publication
+job may create `draft: true`, `prerelease: true`, `make_latest: false`. The
+workflow supplies an explicit title and body and disables generated notes.
+Manual dispatch on a branch retains all build artifacts but cannot enter the
+publication job. No manual `gh release create` fallback is approved for this
+candidate.
 
 Before any later upload, require exactly these six asset classes from the
 successful tagged workflow: one Windows `.exe` plus its `.sha256` and
@@ -176,6 +155,6 @@ accepted matrix.
 5. Publish or deliberately omit the Pages/showcase, demo, privacy, and
    Devpost links. Do not advertise the current Pages 404 or a nonexistent
    release URL.
-6. If an explicit draft prerelease is required, use the manual template above
-   or update the workflow with explicit metadata after director approval; do
-   not rely on the current tag-push defaults to express draft/prerelease state.
+6. Merge and tag only the exact accepted commit after final CI and platform
+   qualification; inspect the workflow-created draft and tag provenance before
+   any human changes its draft state.

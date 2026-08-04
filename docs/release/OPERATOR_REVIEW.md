@@ -1,11 +1,25 @@
-# OPERATOR REVIEW — 2026-07-30
+# OPERATOR REVIEW — CURRENT RELEASE STATUS
+
+The 2026-07-30 hands-on review below is retained as historical discovery
+evidence, not the current headline for `v1.1.0-alpha.1`. Its deterministic RED
+items were addressed and the release-director re-test at `acdad4e` passed
+3177 Python tests (4 skipped), renderer `1772/1772`, and production Electron
+QA `100/100`; see [the final automated re-test](#update--2026-08-04-release-director-final-automated-re-test).
+
+The release is still on hold for exact GitHub-built Windows/Linux artifacts,
+clean install/uninstall/reinstall, real model installation and cache
+rediscovery, Windows and Linux X11 dictation/recovery/injection matrices, the
+100-dictation primary-platform run, signing disclosure, and final public-link
+verification. Automated closure does not replace those operator gates.
+
+## Historical hands-on review — 2026-07-30
 
 Donaven's hands-on pass. Consolidated from his notes, triaged by the release
 director, and treated as **the authoritative statement of what this product is
 actually like to use.** Where it contradicts `PUBLISH_PLAN.md`, this document
 wins — the plan was written from the code, this was written from the app.
 
-**Headline: the §2 publishable bar is NOT met.** The plan assumed operator QA
+**Historical headline: the §2 publishable bar was not met.** The plan assumed operator QA
 would surface polish. It surfaced core reliability defects, one safety defect,
 and two subsystems that need redesign rather than repair. That is not a failure
 of the QA process — it is the QA process doing precisely its job, at the only
