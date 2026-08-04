@@ -117,7 +117,7 @@
             "alt": "BetterFingers Persona Studio editor with saved personas visible behind the editing dialog",
             "title": "Edit and save",
             "caption": "Persona details and the saved roster share one workspace.",
-            "fit": "cover"
+            "fit": "contain"
           },
           {
             "type": "image",
@@ -125,7 +125,7 @@
             "alt": "BetterFingers Persona Studio stress test with editable outputs and Approve and Reject controls",
             "title": "Test and approve",
             "caption": "Hard inputs can be reviewed, edited, approved, or rejected before the persona is kept.",
-            "fit": "cover"
+            "fit": "contain"
           }
         ]
       },
@@ -156,7 +156,7 @@
             "alt": "BetterFingers model manager with local runtime, model details, hardware guidance, and install-state controls",
             "title": "Model manager",
             "caption": "Model purpose, hardware guidance, and install state remain visible.",
-            "fit": "cover"
+            "fit": "contain"
           },
           {
             "type": "image",
@@ -164,7 +164,7 @@
             "alt": "BetterFingers privacy settings with local storage inventory, learned-example deletion, and data-wipe controls",
             "title": "Privacy and data",
             "caption": "Local storage and destructive cleanup controls are presented together.",
-            "fit": "cover"
+            "fit": "contain"
           }
         ]
       }
