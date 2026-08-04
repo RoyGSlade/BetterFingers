@@ -52,6 +52,124 @@
     }
   ],
   "screenshots": [],
+  "showcase": {
+    "title": "BetterFingers product tour",
+    "summary": "Follow the current private-alpha workflow from speech capture and review through personas, recoverable history, and local controls.",
+    "variant": "gallery",
+    "loop": true,
+    "slides": [
+      {
+        "id": "complete-workflow",
+        "title": "Speak. Review. Deliver.",
+        "summary": "The desktop loop keeps capture, refinement, and the final delivery choice visible before text leaves BetterFingers.",
+        "layout": "single",
+        "media": [
+          {
+            "type": "image",
+            "path": "website/assets/showcase/complete-workflow.png",
+            "alt": "BetterFingers Talk interface with a floating review overlay and labels for Speak, Review, and Deliver",
+            "caption": "A composite of the current Talk workspace and review overlay.",
+            "fit": "contain"
+          }
+        ]
+      },
+      {
+        "id": "speak-review-send",
+        "title": "Speak → Review → Send",
+        "summary": "Three focused crops keep the live capture state, review decisions, and delivery result readable.",
+        "layout": "triptych",
+        "media": [
+          {
+            "type": "image",
+            "path": "website/assets/showcase/speak-waveform.png",
+            "alt": "BetterFingers listening waveform with live capture status",
+            "title": "Speak",
+            "caption": "A live waveform keeps recording state visible.",
+            "fit": "contain"
+          },
+          {
+            "type": "image",
+            "path": "website/assets/showcase/review-controls.png",
+            "alt": "BetterFingers review controls with refined text, raw transcript, persona, and delivery action",
+            "title": "Review",
+            "caption": "Raw and refined text stay together for approval.",
+            "fit": "contain"
+          },
+          {
+            "type": "image",
+            "path": "website/assets/showcase/send-result.png",
+            "alt": "BetterFingers send result with requested delivery, actual fallback, clipboard state, and submission status",
+            "title": "Deliver",
+            "caption": "The result reports the requested delivery, actual fallback, clipboard state, and submission status.",
+            "fit": "contain"
+          }
+        ]
+      },
+      {
+        "id": "persona-studio",
+        "title": "Persona Studio",
+        "summary": "Build a reusable voice, keep saved personas in view, and test the result before treating it as ready.",
+        "layout": "split",
+        "media": [
+          {
+            "type": "image",
+            "path": "website/assets/showcase/persona-editor.png",
+            "alt": "BetterFingers Persona Studio editor with saved personas visible behind the editing dialog",
+            "title": "Edit and save",
+            "caption": "Persona details and the saved roster share one workspace.",
+            "fit": "cover"
+          },
+          {
+            "type": "image",
+            "path": "website/assets/showcase/persona-testing.png",
+            "alt": "BetterFingers Persona Studio stress test with editable outputs and Approve and Reject controls",
+            "title": "Test and approve",
+            "caption": "Hard inputs can be reviewed, edited, approved, or rejected before the persona is kept.",
+            "fit": "cover"
+          }
+        ]
+      },
+      {
+        "id": "recoverable-history",
+        "title": "Recoverable history",
+        "summary": "Search and filter local history, then inspect the raw transcript, refined text, status, persona, contact, and audio metadata in one record.",
+        "layout": "single",
+        "media": [
+          {
+            "type": "image",
+            "path": "website/assets/showcase/recoverable-history.png",
+            "alt": "BetterFingers Library with search filters, dated history, raw and refined text, status, persona, contact, and audio metadata",
+            "caption": "The full-width Library keeps recovery context readable.",
+            "fit": "contain"
+          }
+        ]
+      },
+      {
+        "id": "local-control",
+        "title": "Local control",
+        "summary": "Inspect the local model runtime and hardware fit, then review or wipe the application data BetterFingers stores on the machine.",
+        "layout": "split",
+        "media": [
+          {
+            "type": "image",
+            "path": "website/assets/showcase/model-manager.png",
+            "alt": "BetterFingers model manager with local runtime, model details, hardware guidance, and install-state controls",
+            "title": "Model manager",
+            "caption": "Model purpose, hardware guidance, and install state remain visible.",
+            "fit": "cover"
+          },
+          {
+            "type": "image",
+            "path": "website/assets/showcase/privacy-controls.png",
+            "alt": "BetterFingers privacy settings with local storage inventory, learned-example deletion, and data-wipe controls",
+            "title": "Privacy and data",
+            "caption": "Local storage and destructive cleanup controls are presented together.",
+            "fit": "cover"
+          }
+        ]
+      }
+    ]
+  },
   "roadmap": [
     {
       "id": "public-release-qualification",
@@ -72,5 +190,5 @@
       "state": "planned"
     }
   ],
-  "updatedAt": "2026-08-03T21:58:14-07:00"
+  "updatedAt": "2026-08-03T23:16:56-07:00"
 }
