@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "id": "betterfingers",
+  "name": "BetterFingers",
+  "summary": "A private desktop speech editor that transcribes speech, refines it with local models, and lets users review and place text into other applications.",
+  "status": "private-alpha",
+  "featured": true,
+  "links": [
+    {
+      "label": "BetterFingers repository",
+      "url": "https://github.com/RoyGSlade/BetterFingers",
+      "type": "repository"
+    }
+  ],
+  "features": [
+    {
+      "id": "local-speech-capture",
+      "title": "Local speech capture and transcription",
+      "summary": "Captures speech from a desktop trigger and transcribes it with a local Whisper-based runtime.",
+      "state": "available"
+    },
+    {
+      "id": "local-persona-refinement",
+      "title": "Local persona refinement",
+      "summary": "Refines transcribed text with local LLM personas, formatting commands, a personal dictionary, and text macros.",
+      "state": "available"
+    },
+    {
+      "id": "review-and-placement",
+      "title": "Review and text placement",
+      "summary": "Provides an editable review step before placing text into the focused application and restores the clipboard afterward.",
+      "state": "available"
+    },
+    {
+      "id": "recovery-and-privacy",
+      "title": "Recovery and privacy controls",
+      "summary": "Retains raw recordings for recovery and provides local privacy reporting and data-wipe controls.",
+      "state": "available"
+    },
+    {
+      "id": "hardware-aware-model-selection",
+      "title": "Hardware-aware model selection",
+      "summary": "Reports hardware capabilities and recommends local model tiers that fit the machine's available resources.",
+      "state": "available"
+    },
+    {
+      "id": "hands-free-wake-word",
+      "title": "Hands-free wake word",
+      "summary": "A hands-free wake-word path remains planned release work and is not represented as shipped here.",
+      "state": "planned"
+    }
+  ],
+  "screenshots": [],
+  "roadmap": [
+    {
+      "id": "public-release-qualification",
+      "title": "Public release qualification",
+      "summary": "Complete release signing and reproducibility work, core-loop reliability evidence, and an injection compatibility matrix before a tagged public release.",
+      "state": "in-progress"
+    },
+    {
+      "id": "unified-data-lifecycle",
+      "title": "Unified data lifecycle",
+      "summary": "Unify retention and deletion handling across the local data stores as tracked in the repository roadmap.",
+      "state": "planned"
+    },
+    {
+      "id": "macos-support",
+      "title": "macOS support",
+      "summary": "Add and qualify a macOS build; macOS is not supported by the current project evidence.",
+      "state": "planned"
+    }
+  ],
+  "updatedAt": "2026-08-03T00:00:00-07:00"
+}

@@ -1,0 +1,45 @@
+name: Validate website content
+
+on:
+  pull_request:
+    paths:
+      - "website/**"
+      - ".github/workflows/website-content.yml"
+  push:
+    paths:
+      - "website/**"
+      - ".github/workflows/website-content.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate project source
+    uses: RoyGSlade/DonavenCrenshaw/.github/workflows/validate-project-source.yml@main
+
+  notify-site:
+    name: Notify DonavenCrenshaw.com
+    needs: validate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch project content update
+        env:
+          SITE_TOKEN: ${{ secrets.DONAVEN_SITE_TOKEN }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_REF: ${{ github.ref }}
+        run: |
+          if [ -z "$SITE_TOKEN" ]; then
+            echo "::warning::DONAVEN_SITE_TOKEN is not configured; skipping project-content-updated dispatch."
+            exit 0
+          fi
+
+          payload="$(node -e 'process.stdout.write(JSON.stringify({event_type: "project-content-updated", client_payload: {projectId: "betterfingers", sourceRepository: process.env.SOURCE_REPOSITORY, ref: process.env.SOURCE_REF, schemaVersion: 1}}))')"
+          curl --fail-with-body --request POST \
+            --url "https://api.github.com/repos/RoyGSlade/DonavenCrenshaw/dispatches" \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${SITE_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --data "$payload"
