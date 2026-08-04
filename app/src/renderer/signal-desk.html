@@ -686,7 +686,7 @@
           <span class="sd-nav__button-label">Talk</span>
         </button>
 
-        <button type="button" class="sd-nav__button" data-nav="library" aria-current="false">
+        <button type="button" class="sd-nav__button" data-nav="scribe" aria-current="false">
           <span class="sd-nav__button-icon" aria-hidden="true">
             <!-- list -->
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
@@ -1205,6 +1205,89 @@
 
   </section>
 
+    <!-- ---------- SCRIBE workspace ---------- -->
+    <section class="sd-workspace" id="workspace-scribe" data-workspace="scribe" hidden>
+      <div class="sd-util-content sd-scribe-content">
+        <p class="sd-util-section__intro">Type or paste a rough message. Your selected persona and local LLM clean it up. Results stay review-only until you explicitly choose Copy or Apply.</p>
+
+        <!-- Message Rescue surface: Scribe (features/textPlayground.js). This
+             is the one canonical surface; Utilities keeps its dictionary,
+             macros, and separate rescue tools without duplicating these IDs. -->
+        <div class="sd-util-group" id="textPlaygroundSection">
+          <div class="sd-util-group__header"><span class="sd-util-group__title">Scribe</span></div>
+          <p class="sd-util-group__desc">Text-only — no mic, transcription, or TTS anywhere in this flow. Raw text and every safe variant stay available for comparison.</p>
+          <textarea class="sd-util-input sd-util-input--wide" id="textPlaygroundText" rows="3" placeholder="Type or paste a rough message…"></textarea>
+          <input type="text" class="sd-util-input sd-util-input--wide" id="textPlaygroundContext" placeholder="Optional context (one-time use)…" />
+          <div class="sd-util-row">
+            <select class="sd-util-select" id="textPlaygroundPersonaSelect"></select>
+            <button type="button" class="sd-btn sd-btn--primary" id="textPlaygroundRunButton">Clean up message</button>
+            <button type="button" class="sd-btn" id="textPlaygroundCancelButton">Cancel</button>
+            <button type="button" class="sd-btn" id="textPlaygroundClearButton">Clear</button>
+          </div>
+          <span class="sd-util-message" id="textPlaygroundStatus"></span>
+          <span class="sd-util-message" id="textPlaygroundError" data-tone="danger" hidden></span>
+          <span class="sd-util-message" id="textPlaygroundRanInfo"></span>
+          <span class="sd-util-message" id="textPlaygroundFallback" data-tone="warning" hidden></span>
+
+          <div class="sd-message-rescue-block" id="textPlaygroundAssessment" hidden>
+            <span class="sd-panel-label">Assessment</span>
+            <p class="draft-text" id="textPlaygroundAssessmentIntent"></p>
+            <p class="draft-text" id="textPlaygroundAssessmentAmbiguity"></p>
+          </div>
+          <div class="sd-message-rescue-block">
+            <span class="sd-panel-label">Delivery</span>
+            <div id="textPlaygroundDeliveryLabels"></div>
+            <span class="sd-util-message" id="textPlaygroundDeliveryConfidence"></span>
+            <ul id="textPlaygroundDeliveryEvidence"></ul>
+          </div>
+          <div class="sd-message-rescue-block" id="textPlaygroundClarification" hidden>
+            <span class="sd-panel-label">Clarification</span>
+            <p class="draft-text" id="textPlaygroundClarificationQuestion"></p>
+            <ul id="textPlaygroundClarificationDetails"></ul>
+          </div>
+
+          <div class="sd-message-rescue-columns">
+            <div class="sd-message-rescue-column">
+              <span class="sd-message-rescue-column__label">Raw</span>
+              <p class="draft-text" id="textPlaygroundColumnRawText"></p>
+              <button type="button" class="sd-btn" id="textPlaygroundColumnRawButton">Use this</button>
+            </div>
+            <div class="sd-message-rescue-column">
+              <span class="sd-message-rescue-column__label">Faithful</span>
+              <p class="draft-text" id="textPlaygroundColumnFaithfulText"></p>
+              <button type="button" class="sd-btn" id="textPlaygroundColumnFaithfulButton">Use this</button>
+            </div>
+            <div class="sd-message-rescue-column">
+              <span class="sd-message-rescue-column__label">Clearer</span>
+              <p class="draft-text" id="textPlaygroundColumnClearerText"></p>
+              <button type="button" class="sd-btn" id="textPlaygroundColumnClearerButton">Use this</button>
+            </div>
+            <div class="sd-message-rescue-column">
+              <span class="sd-message-rescue-column__label">Alternate</span>
+              <p class="draft-text" id="textPlaygroundColumnAlternateText"></p>
+              <button type="button" class="sd-btn" id="textPlaygroundColumnAlternateButton">Use this</button>
+            </div>
+          </div>
+
+          <div class="sd-message-rescue-block">
+            <span class="sd-panel-label">Preservation checks</span>
+            <ul id="textPlaygroundPreservationList"></ul>
+          </div>
+          <div class="sd-message-rescue-block" id="textPlaygroundWarnings" hidden>
+            <span class="sd-panel-label">Warnings</span>
+            <ul id="textPlaygroundWarningsList"></ul>
+          </div>
+
+          <div class="sd-util-row">
+            <select class="sd-util-select" id="textPlaygroundDraftSelect"><option value="">Choose a draft…</option></select>
+            <button type="button" class="sd-btn" id="textPlaygroundApplyButton">Apply to draft</button>
+            <button type="button" class="sd-btn" id="textPlaygroundCopyButton">Copy</button>
+          </div>
+          <span class="sd-util-message" id="textPlaygroundApplyMessage"></span>
+        </div>
+      </div>
+    </section>
+
     <!-- ---------- LIBRARY workspace ---------- -->
     <section class="sd-workspace" id="workspace-library" data-workspace="library" hidden>
 
@@ -1700,7 +1783,7 @@
         <nav class="sd-util-nav" aria-label="Utilities sections" role="tablist">
           <button type="button" class="sd-util-nav__item is-active" id="sdUtilNavModels" data-util-nav="models" aria-current="page">Models</button>
           <button type="button" class="sd-util-nav__item" id="sdUtilNavSpeech" data-util-nav="speech" aria-current="false">Speech Input</button>
-          <button type="button" class="sd-util-nav__item" id="sdUtilNavText" data-util-nav="text" aria-current="false">Scribe Tools</button>
+          <button type="button" class="sd-util-nav__item" id="sdUtilNavText" data-util-nav="text" aria-current="false">Text Tools</button>
           <button type="button" class="sd-util-nav__item" id="sdUtilNavDiagnostics" data-util-nav="diagnostics" aria-current="false">Runtime Diagnostics</button>
           <button type="button" class="sd-util-nav__item" id="sdUtilNavAdvanced" data-util-nav="advanced" aria-current="false">Advanced</button>
           <span class="sd-util-nav__group-label" role="presentation">Saved material</span>
@@ -1857,6 +1940,16 @@
               <span class="sd-util-field-error" id="sdUtilHotkeyReviewTtsError"></span>
 
               <div class="sd-util-row">
+                <div class="sd-util-row__label"><span class="sd-util-row__label-text">Rewrite Selection Hotkey</span></div>
+                <div class="sd-util-row__control sd-util-hotkey-row">
+                  <input type="text" readonly class="sd-util-hotkey-input" id="sdUtilHotkeySelectionRewriteInput" value="Ctrl+Alt+R" aria-label="Click to record a new hotkey" />
+                  <button type="button" class="sd-util-hotkey-clear" id="sdUtilHotkeySelectionRewriteClear" aria-label="Clear Rewrite Selection Hotkey">&times;</button>
+                </div>
+              </div>
+              <span class="sd-util-field-error" id="sdUtilHotkeySelectionRewriteError"></span>
+              <p class="sd-util-group__desc">Select text in another app, then press this hotkey to create a persona-cleaned draft for review. It never auto-replaces or sends text.</p>
+
+              <div class="sd-util-row">
                 <div class="sd-util-row__label"><span class="sd-util-row__label-text">Open Chat Key</span></div>
                 <div class="sd-util-row__control sd-util-hotkey-row">
                   <input type="text" readonly class="sd-util-hotkey-input" id="sdUtilHotkeyChatOpenInput" value="Ctrl+G" aria-label="Click to record a new hotkey" />
@@ -1930,9 +2023,9 @@
             </div>
           </section>
 
-          <!-- ============================== TEXT TOOLS (dictionary + macros + 3 Message Rescue surfaces: §7.12/§7.13/§6.4/§6.6/§6.7) ============================== -->
+          <!-- ============================== TEXT TOOLS (dictionary + macros + 2 Message Rescue surfaces: §7.12/§7.13/§6.4/§6.6) ============================== -->
           <section class="sd-util-section" id="sdUtilSectionText" hidden>
-            <p class="sd-util-section__intro">Dictionary, macros, and the three distinct Message Rescue surfaces (kept separate, never merged).</p>
+            <p class="sd-util-section__intro">Dictionary, macros, and two distinct Message Rescue surfaces (kept separate, never merged).</p>
 
             <div class="sd-util-grid-2">
               <div class="sd-util-group">
@@ -2065,79 +2158,6 @@
               </div>
             </div>
 
-            <!-- Message Rescue surface 3/3: Scribe (features/textPlayground.js, reused verbatim -- canonical ids, free-standing, real backend) -->
-            <div class="sd-util-group" id="textPlaygroundSection">
-              <div class="sd-util-group__header"><span class="sd-util-group__title">Scribe</span></div>
-              <p class="sd-util-group__desc">Text-only — no mic, transcription, or TTS anywhere in this flow.</p>
-              <textarea class="sd-util-input sd-util-input--wide" id="textPlaygroundText" rows="3" placeholder="Type or paste a message…"></textarea>
-              <input type="text" class="sd-util-input sd-util-input--wide" id="textPlaygroundContext" placeholder="Optional context (one-time use)…" />
-              <div class="sd-util-row">
-                <select class="sd-util-select" id="textPlaygroundPersonaSelect"></select>
-                <button type="button" class="sd-btn sd-btn--primary" id="textPlaygroundRunButton">Run</button>
-                <button type="button" class="sd-btn" id="textPlaygroundCancelButton">Cancel</button>
-                <button type="button" class="sd-btn" id="textPlaygroundClearButton">Clear</button>
-              </div>
-              <span class="sd-util-message" id="textPlaygroundStatus"></span>
-              <span class="sd-util-message" id="textPlaygroundError" data-tone="danger" hidden></span>
-              <span class="sd-util-message" id="textPlaygroundRanInfo"></span>
-              <span class="sd-util-message" id="textPlaygroundFallback" data-tone="warning" hidden></span>
-
-              <div class="sd-message-rescue-block" id="textPlaygroundAssessment" hidden>
-                <span class="sd-panel-label">Assessment</span>
-                <p class="draft-text" id="textPlaygroundAssessmentIntent"></p>
-                <p class="draft-text" id="textPlaygroundAssessmentAmbiguity"></p>
-              </div>
-              <div class="sd-message-rescue-block">
-                <span class="sd-panel-label">Delivery</span>
-                <div id="textPlaygroundDeliveryLabels"></div>
-                <span class="sd-util-message" id="textPlaygroundDeliveryConfidence"></span>
-                <ul id="textPlaygroundDeliveryEvidence"></ul>
-              </div>
-              <div class="sd-message-rescue-block" id="textPlaygroundClarification" hidden>
-                <span class="sd-panel-label">Clarification</span>
-                <p class="draft-text" id="textPlaygroundClarificationQuestion"></p>
-                <ul id="textPlaygroundClarificationDetails"></ul>
-              </div>
-
-              <div class="sd-message-rescue-columns">
-                <div class="sd-message-rescue-column">
-                  <span class="sd-message-rescue-column__label">Raw</span>
-                  <p class="draft-text" id="textPlaygroundColumnRawText"></p>
-                  <button type="button" class="sd-btn" id="textPlaygroundColumnRawButton">Use this</button>
-                </div>
-                <div class="sd-message-rescue-column">
-                  <span class="sd-message-rescue-column__label">Faithful</span>
-                  <p class="draft-text" id="textPlaygroundColumnFaithfulText"></p>
-                  <button type="button" class="sd-btn" id="textPlaygroundColumnFaithfulButton">Use this</button>
-                </div>
-                <div class="sd-message-rescue-column">
-                  <span class="sd-message-rescue-column__label">Clearer</span>
-                  <p class="draft-text" id="textPlaygroundColumnClearerText"></p>
-                  <button type="button" class="sd-btn" id="textPlaygroundColumnClearerButton">Use this</button>
-                </div>
-                <div class="sd-message-rescue-column">
-                  <span class="sd-message-rescue-column__label">Alternate</span>
-                  <p class="draft-text" id="textPlaygroundColumnAlternateText"></p>
-                  <button type="button" class="sd-btn" id="textPlaygroundColumnAlternateButton">Use this</button>
-                </div>
-              </div>
-
-              <div class="sd-message-rescue-block">
-                <span class="sd-panel-label">Preservation checks</span>
-                <ul id="textPlaygroundPreservationList"></ul>
-              </div>
-              <div class="sd-message-rescue-block" id="textPlaygroundWarnings" hidden>
-                <span class="sd-panel-label">Warnings</span>
-                <ul id="textPlaygroundWarningsList"></ul>
-              </div>
-
-              <div class="sd-util-row">
-                <select class="sd-util-select" id="textPlaygroundDraftSelect"><option value="">Choose a draft…</option></select>
-                <button type="button" class="sd-btn" id="textPlaygroundApplyButton">Apply to draft</button>
-                <button type="button" class="sd-btn" id="textPlaygroundCopyButton">Copy</button>
-              </div>
-              <span class="sd-util-message" id="textPlaygroundApplyMessage"></span>
-            </div>
           </section>
 
           <!-- ============================== DIAGNOSTICS (inventory §9) ============================== -->

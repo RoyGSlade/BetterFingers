@@ -258,7 +258,7 @@ test('SETTINGS_FIELD_KEYS: includes draft_history_limit (the wiring-fix field) e
 });
 
 test('SETTINGS_FIELD_KEYS: does NOT include fields owned by Utilities/Studio (no duplication)', () => {
-  const forbidden = ['hotkey', 'force_stop_key', 'manual_send_hotkey', 'review_tts_hotkey', 'chat_open_key', 'voice_mute_key', 'input_device_index', 'audio_ducking', 'wake_word_model', 'wake_word_sensitivity', 'wake_word_cooldown_s', 'wake_word_max_recording_s', 'macros_enabled', 'model_keep_llm_loaded', 'model_keep_stt_loaded', 'model_keep_tts_loaded', 'review_tts_voice_hint', 'review_tts_speed'];
+  const forbidden = ['hotkey', 'force_stop_key', 'manual_send_hotkey', 'review_tts_hotkey', 'selection_rewrite_hotkey', 'chat_open_key', 'voice_mute_key', 'input_device_index', 'audio_ducking', 'wake_word_model', 'wake_word_sensitivity', 'wake_word_cooldown_s', 'wake_word_max_recording_s', 'macros_enabled', 'model_keep_llm_loaded', 'model_keep_stt_loaded', 'model_keep_tts_loaded', 'review_tts_voice_hint', 'review_tts_speed'];
   for (const key of forbidden) {
     assert.equal(SETTINGS_FIELD_KEYS.includes(key), false, `${key} should not be Settings-owned`);
   }

@@ -24,12 +24,11 @@ concurrency:
 jobs:
   python-tests:
     # Cross-platform Python test matrix (review finding: P1 CI matrix).
-    # Linux runs 3.12 + 3.13; Windows and macOS run 3.13 to match the version
-    # the packaged builds ship (build-installer.yml uses Python 3.13). The
-    # packaged-app smoke on real Windows/macOS runners (with signing) is a
-    # separate manual follow-up — see build-installer.yml — this job only
-    # exercises the Python unit suite so regressions are caught on all three
-    # OSes on every PR.
+    # Linux runs the shipped 3.12 runtime and Windows runs the shipped 3.13
+    # runtime. BetterFingers supports Windows + Linux; macOS is intentionally
+    # outside the required product matrix. The packaged-app smoke on a real
+    # Windows runner (with signing) is a separate manual follow-up — see
+    # build-installer.yml — this job exercises the Python unit suite.
     name: python-tests (${{ matrix.os }} / py${{ matrix.python-version }})
     strategy:
       fail-fast: false
@@ -37,12 +36,12 @@ jobs:
         include:
           - os: ubuntu-latest
             python-version: "3.12"
-          - os: ubuntu-latest
-            python-version: "3.13"
+            runtime_lock: requirements-linux-cpu.lock
+            dev_lock: requirements-dev.lock
           - os: windows-latest
             python-version: "3.13" # matches packaged build (build-installer.yml)
-          - os: macos-latest
-            python-version: "3.13"
+            runtime_lock: requirements-win.lock
+            dev_lock: requirements-dev-win.lock
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -61,12 +60,15 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libportaudio2
 
       - name: Install dependencies
-        # Hardware-aware install: CPU-only torch on the GPU-less runners here,
-        # so CI stops fetching the ~3.9 GB CUDA stack on every run.
+        # Hashed per-platform locks are the CI/release contract. Linux uses the
+        # CPU lock because the shipped Linux runtime is CPU/Vulkan, while the
+        # Windows lock matches the packaged Python 3.13 backend.
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
-          python tools/setup_venv.py --no-venv
-          pip install pytest
+          python -m pip install --require-hashes -r ${{ matrix.runtime_lock }}
+          python -m pip install --require-hashes -r ${{ matrix.dev_lock }}
 
       - name: Run Python test suite
         run: python -m pytest -q tests
@@ -146,10 +148,12 @@ jobs:
           cache: pip
 
       - name: Install Python dependencies
-        # Hardware-aware install (CPU-only torch on GPU-less runners).
+        # The Linux smoke uses the same hashed runtime + dev locks as the
+        # shipped AppImage; no source requirements are resolved in CI.
         run: |
           python -m pip install --upgrade pip
-          python tools/setup_venv.py --no-venv
+          python -m pip install --require-hashes -r requirements-linux-cpu.lock
+          python -m pip install --require-hashes -r requirements-dev.lock
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
@@ -198,18 +202,14 @@ jobs:
           if-no-files-found: ignore
 
   electron-smoke-crossplatform:
-    # Best-effort model-free Electron smoke on Windows + macOS. GitHub-hosted
-    # Windows/macOS runners have a real display (no Xvfb needed), but the
-    # Electron sandbox and Playwright launch are noticeably flakier there than
-    # on the Linux runner, so this job is NON-BLOCKING (continue-on-error).
-    # It is a signal, not a gate. A real packaged-app smoke on Windows/macOS
-    # (needing signing + notarization on dedicated runners) is a separate
-    # manual follow-up for the repo owner and is intentionally not attempted here.
+    # Best-effort model-free Electron smoke on Windows. The hosted Windows
+    # runner has a real display (no Xvfb needed), but packaged-app smoke with
+    # signing is a separate manual follow-up; this job is informational.
     continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -220,10 +220,14 @@ jobs:
           cache: pip
 
       - name: Install Python dependencies
-        # Hardware-aware install (CPU-only torch on GPU-less runners).
+        # The Windows smoke uses the same hashed runtime + dev locks as the
+        # packaged installer; no source requirements are resolved in CI.
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
-          python tools/setup_venv.py --no-venv
+          python -m pip install --require-hashes -r requirements-win.lock
+          python -m pip install --require-hashes -r requirements-dev-win.lock
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:

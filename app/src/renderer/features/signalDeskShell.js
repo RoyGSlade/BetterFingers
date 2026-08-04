@@ -14,7 +14,10 @@
 // were handed to it -- every access is optional-chained so a missing
 // element (or a stub in tests) never throws.
 
-export const WORKSPACES = ['talk', 'library', 'studio', 'utilities', 'settings'];
+// Five buttons live in the primary rail. Library remains a routable workspace,
+// but it is intentionally secondary and is opened from Utilities.
+export const WORKSPACES = ['talk', 'scribe', 'studio', 'utilities', 'settings'];
+export const ROUTABLE_WORKSPACES = [...WORKSPACES, 'library'];
 
 // Per-workspace header copy (SPEC 3b, 4-6). Utilities/Settings copy is a
 // reasonable placeholder -- SPEC 8 notes the director will spec those two
@@ -26,6 +29,12 @@ const WORKSPACE_META = {
     subtitle: 'Capture, refine, and send in one motion.',
     pill: 'Signal Core',
     breadcrumb: 'Capture → Refine → Send',
+  },
+  scribe: {
+    title: 'SCRIBE',
+    subtitle: 'Write, refine, and review in your selected voice.',
+    pill: 'Persona Cleanup',
+    breadcrumb: null,
   },
   library: {
     title: 'LIBRARY',
@@ -57,7 +66,7 @@ const WORKSPACE_META = {
 
 /** True if `id` is one of the 5 known Signal Desk workspaces. */
 export function isValidWorkspace(id) {
-  return WORKSPACES.includes(id);
+  return ROUTABLE_WORKSPACES.includes(id);
 }
 
 /** Header copy for a workspace id, or null if the id is unknown. */
@@ -102,6 +111,8 @@ export function collectShellElements(root = document) {
   const workspaces = {};
   for (const id of WORKSPACES) {
     navButtons[id] = root?.querySelector?.(`[data-nav="${id}"]`) ?? null;
+  }
+  for (const id of ROUTABLE_WORKSPACES) {
     workspaces[id] = root?.getElementById?.(`workspace-${id}`) ?? null;
   }
   return {
@@ -132,9 +143,9 @@ export function collectShellElements(root = document) {
  * @param {object} deps.elements DOM element references looked up by the caller (main.js in a
  *   later phase, or a test stub today). Every access below is optional-chained.
  *   Shape:
- *   - navButtons: { talk, library, studio, utilities, settings } -- nav rail buttons
+   *   - navButtons: { talk, scribe, studio, utilities, settings } -- nav rail buttons
  *   - utilityLinks: secondary links rendered inside Utilities
- *   - workspaces: { talk, library, studio, utilities, settings } -- center workspace containers
+   *   - workspaces: the five primary workspaces plus secondary Library
  *   - headerTitle, headerSubtitle, headerPillLabel, headerBreadcrumb -- center header elements
  *   - shellRoot -- the `.sd-shell` grid container (gets `.is-context-collapsed` toggled so the
  *     context column narrows; see signal-desk.css)
@@ -170,7 +181,7 @@ export function createSignalDeskShellFeature({ elements } = {}) {
   }
 
   function applyWorkspaceVisibility() {
-    WORKSPACES.forEach((id) => {
+    ROUTABLE_WORKSPACES.forEach((id) => {
       const container = els.workspaces?.[id];
       if (!container) return;
       container.hidden = id !== state.active;

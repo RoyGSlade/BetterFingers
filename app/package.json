@@ -2,6 +2,8 @@
   "name": "betterfingers-electron",
   "version": "0.2.0-alpha.1",
   "description": "Electron shell for BetterFingers with a FastAPI Python backend.",
+  "author": "Donaven Crenshaw",
+  "desktopName": "BetterFingers",
   "main": "out/main/main.js",
   "private": true,
   "scripts": {
@@ -50,11 +52,13 @@
       },
       {
         "from": "../assets",
-        "to": "assets"
-      },
-      {
-        "from": "../images",
-        "to": "images"
+        "to": "assets",
+        "filter": [
+          "indicator_idle.png",
+          "indicator_listening.png",
+          "indicator_processing.png",
+          "indicator_recording.png"
+        ]
       }
     ],
     "win": {
@@ -66,7 +70,9 @@
       "target": [
         "AppImage"
       ],
-      "category": "Utility"
+      "category": "Utility",
+      "executableArgs": [],
+      "syncDesktopName": true
     },
     "mac": {
       "target": [

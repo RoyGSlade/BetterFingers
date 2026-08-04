@@ -298,6 +298,8 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
             platform_capabilities, "is_wayland", True
         ), patch.object(platform_capabilities, "is_x11", False), patch(
             "platform_capabilities.shutil.which", side_effect=lambda name: "/usr/bin/wtype" if name == "wtype" else None
+        ), patch.dict(
+            os.environ, {"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ""}, clear=False
         ):
             with TestClient(server.app) as client:
                 response = client.get("/doctor")

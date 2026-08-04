@@ -13,6 +13,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  WORKSPACES,
+  ROUTABLE_WORKSPACES,
   collectShellElements,
   createSignalDeskShellFeature,
   getWorkspaceMeta,
@@ -24,18 +26,16 @@ import { makeDocument, makeLocalStorage, makeBackendBridge, installDomGlobals } 
 
 // --- UI-04-001: the header's breadcrumb / title / lede -----------------------
 
-const WORKSPACE_IDS = ['talk', 'library', 'studio', 'utilities', 'settings'];
-
 function mountShell() {
   const doc = makeDocument([
     'sdHeaderTitle', 'sdHeaderSubtitle', 'sdHeaderPillLabel', 'sdHeaderBreadcrumb',
     'sdShell', 'sdContextPanel', 'sdContextCollapseBtn', 'sdContextHideBtn',
-    ...WORKSPACE_IDS.map((id) => `workspace-${id}`),
+    ...ROUTABLE_WORKSPACES.map((id) => `workspace-${id}`),
   ]);
   // The nav rail is addressed by [data-nav], not by id -- build it the way the
   // page does so collectShellElements() finds it the way it does in production.
   const rail = doc.createElement('div');
-  for (const id of WORKSPACE_IDS) {
+  for (const id of WORKSPACES) {
     const button = doc.createElement('button');
     button.setAttribute('data-nav', id);
     rail.appendChild(button);
@@ -52,7 +52,7 @@ test('#sdHeaderTitle and #sdHeaderSubtitle are repainted from the workspace bein
   t.after(ctx.restore);
   ctx.shell.init();
 
-  for (const id of WORKSPACE_IDS) {
+  for (const id of ROUTABLE_WORKSPACES) {
     ctx.shell.goTo(id);
     const meta = getWorkspaceMeta(id);
     assert.equal(ctx.el('sdHeaderTitle').textContent, meta.title, `${id} did not repaint the header title`);
@@ -75,12 +75,12 @@ test('the nav rail announces the active workspace with aria-current', async (t) 
   const ctx = mountShell();
   t.after(ctx.restore);
   ctx.shell.init();
-  ctx.shell.goTo('library');
+  ctx.shell.goTo('scribe');
 
   const els = collectShellElements(ctx.doc);
-  assert.equal(els.navButtons.library.getAttribute('aria-current'), 'page');
+  assert.equal(els.navButtons.scribe.getAttribute('aria-current'), 'page');
   assert.notEqual(els.navButtons.settings.getAttribute('aria-current'), 'page');
-  assert.equal(els.workspaces.library.hidden, false);
+  assert.equal(els.workspaces.scribe.hidden, false);
   assert.equal(els.workspaces.settings.hidden, true);
 });
 

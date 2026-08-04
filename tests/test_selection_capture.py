@@ -59,10 +59,14 @@ def test_unsupported_platform_short_circuits_before_capture():
     assert calls == []  # never attempted capture once platform is unsupported
 
 
-def test_default_supported_fn_reflects_platform_capabilities(monkeypatch):
-    import platform_capabilities
+def test_default_supported_fn_requires_clipboard_and_copy_trigger(monkeypatch):
+    import clipboard_capture as cc
 
-    monkeypatch.setattr(platform_capabilities, "_detect_clipboard_backend", lambda: "")
+    monkeypatch.setattr(cc, "_selection_capture_support", lambda: {
+        "supported": False,
+        "clipboard_backend": {"name": "xclip", "available": True, "required": []},
+        "copy_trigger_backend": {"name": "unsupported", "available": False, "required": ["xdotool"]},
+    })
     result = capture_selection(capture_fn=lambda: {"ok": True, "text": "x", "used_fallback": False})
     assert result.outcome == "unsupported"
 
@@ -98,8 +102,12 @@ def test_default_capture_fn_restores_clipboard_via_existing_adapter(monkeypatch)
     # override does not reach it, so this test has to say that a clipboard tool
     # exists -- otherwise it short circuits to "unsupported" on any Linux box
     # without xclip installed, which is what this machine actually is.
-    monkeypatch.setattr(cc, "_selection_capture_support",
-                        lambda: {"supported": True, "tool": "xclip"})
+    monkeypatch.setattr(cc, "_selection_capture_support", lambda: {
+        "supported": True,
+        "tool": "xclip",
+        "clipboard_backend": {"name": "xclip", "available": True, "required": []},
+        "copy_trigger_backend": {"name": "native-keyboard", "available": True, "required": []},
+    })
 
     result = capture_selection(supported_fn=_supported_true)
 

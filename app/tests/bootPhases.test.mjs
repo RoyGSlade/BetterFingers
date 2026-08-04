@@ -111,6 +111,56 @@ test('the boot gate bypass requires the exact string "1", not merely a truthy va
   );
 });
 
+test('boot doctor polling fences stale retries and releases only its own request guard', async () => {
+  const mainSrc = readFileSync(new URL('../src/main/main.js', import.meta.url), 'utf8');
+  const functionStart = mainSrc.indexOf('function createBootDoctorPoller');
+  assert.notEqual(functionStart, -1, 'main.js must expose the extracted doctor poller contract');
+  const bodyStart = mainSrc.indexOf('{', mainSrc.indexOf(')', functionStart));
+  let depth = 0;
+  let functionEnd = -1;
+  for (let index = bodyStart; index < mainSrc.length; index += 1) {
+    if (mainSrc[index] === '{') depth += 1;
+    if (mainSrc[index] === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        functionEnd = index + 1;
+        break;
+      }
+    }
+  }
+  assert.notEqual(functionEnd, -1, 'doctor poller helper must have a complete function body');
+  const createPoller = new Function(`return (${mainSrc.slice(functionStart, functionEnd)})`)();
+
+  let generation = 1;
+  const resolvers = [];
+  const published = [];
+  const poller = createPoller({
+    requestDoctor: () => new Promise((resolve) => resolvers.push(resolve)),
+    isCurrent: (requestGeneration) => requestGeneration === generation,
+    publish: (doctor) => published.push(doctor),
+  });
+
+  const stalePoll = poller.poll(1);
+  assert.equal(poller.isInFlight(), true);
+  generation = 2;
+  assert.equal(await poller.poll(2), false, 'a retry cannot overlap the old doctor request');
+  resolvers.shift()({ ok: true, body: { lifecycle: 1 } });
+  assert.equal(await stalePoll, false, 'the old response is ignored after retry');
+  assert.deepEqual(published, []);
+  assert.equal(poller.isInFlight(), false, 'the old finally releases its own active request');
+
+  const currentPoll = poller.poll(2);
+  assert.equal(poller.isInFlight(), true);
+  resolvers.shift()({ ok: true, body: { lifecycle: 2 } });
+  assert.equal(await currentPoll, true);
+  assert.deepEqual(published, [{ lifecycle: 2 }]);
+
+  assert.match(mainSrc, /const generation = \+\+bootGeneration/);
+  assert.match(mainSrc, /bootGeneration \+= 1/);
+  assert.match(mainSrc, /generation !== bootGeneration/);
+  assert.match(mainSrc, /clearInterval\(bootDoctorTimer\)/);
+});
+
 test('nothing under app/src ever sets BF_SKIP_BOOT_GATE', () => {
   const srcDir = new URL('../src/', import.meta.url);
   const offenders = [];

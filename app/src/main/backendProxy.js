@@ -74,6 +74,10 @@ const ROUTE_ALLOWLIST = {
     '/stream-deck', '/stream-deck/qualification',
   ],
   POST: [
+    // `/runtime/rewrite-selection` is intentionally absent. It is a
+    // main-process global-hotkey action that captures another application's
+    // selection; renderer code must not be able to trigger that side effect
+    // through the generic proxy.
     '/runtime/audio-devices/refresh', '/runtime/warmup',
     '/runtime/primary-action', '/runtime/emergency-stop',
     '/runtime/recording/toggle',

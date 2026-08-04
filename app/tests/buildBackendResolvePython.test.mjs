@@ -31,9 +31,16 @@ function withEnv(key, value, fn) {
   }
 }
 
-test('BETTERFINGERS_PYTHON override always wins', () => {
-  withEnv('BETTERFINGERS_PYTHON', '/some/explicit/python', () => {
-    assert.equal(resolvePython(), '/some/explicit/python');
+test('absolute BETTERFINGERS_PYTHON override remains unchanged', () => {
+  withEnv('BETTERFINGERS_PYTHON', process.execPath, () => {
+    assert.equal(resolvePython(), process.execPath);
+  });
+});
+
+test('relative BETTERFINGERS_PYTHON overrides resolve from the invocation cwd', () => {
+  const relativeOverride = path.relative(process.cwd(), process.execPath);
+  withEnv('BETTERFINGERS_PYTHON', relativeOverride, () => {
+    assert.equal(resolvePython(), path.resolve(process.cwd(), relativeOverride));
   });
 });
 

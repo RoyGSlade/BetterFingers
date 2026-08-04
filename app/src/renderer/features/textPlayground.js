@@ -26,6 +26,7 @@ import {
   fetchPersonas,
   fetchDrafts,
   fetchLlmModels,
+  fetchProfiles,
   editDraft,
   captureManualMessageRescueContext,
   clearMessageRescueContext,
@@ -368,6 +369,7 @@ const defaultApi = {
   fetchPersonas,
   fetchDrafts,
   fetchLlmModels,
+  fetchProfiles,
   applyToDraft: (draftId, finalText) => editDraft(draftId, finalText),
   captureManualContext: (text) => captureManualMessageRescueContext(text),
   clearContext: () => clearMessageRescueContext(),
@@ -384,6 +386,7 @@ export function createTextPlaygroundFeature({ elements, api = defaultApi }) {
   let personas = {};
   let drafts = [];
   let modelId = null;
+  let personaExplicitlySelected = false;
 
   const rerender = () => {
     renderTextPlayground(elements, buildTextPlaygroundModel(state, { personas, drafts }));
@@ -396,6 +399,25 @@ export function createTextPlaygroundFeature({ elements, api = defaultApi }) {
       personas = {};
     }
     rerender();
+    await applyActiveProfilePersona();
+  }
+
+  async function applyActiveProfilePersona() {
+    if (personaExplicitlySelected || typeof api.fetchProfiles !== 'function') return;
+    try {
+      const profilePayload = await api.fetchProfiles();
+      const preset = String(profilePayload?.settings?.current_preset ?? '').trim();
+      const hasPreset = Array.isArray(personas)
+        ? personas.some((name) => name === preset)
+        : Object.prototype.hasOwnProperty.call(personas || {}, preset);
+      if (!personaExplicitlySelected && hasPreset) {
+        state = setPersona(state, preset);
+        rerender();
+      }
+    } catch (_e) {
+      // Profile defaults are advisory; a profile request failure must not
+      // make the persona picker unavailable or replace an explicit choice.
+    }
   }
 
   async function refreshDrafts() {
@@ -475,6 +497,7 @@ export function createTextPlaygroundFeature({ elements, api = defaultApi }) {
       // Best-effort privacy cleanup; local state is cleared regardless.
     }
     state = clearAll();
+    personaExplicitlySelected = false;
     rerender();
   }
 
@@ -522,6 +545,7 @@ export function createTextPlaygroundFeature({ elements, api = defaultApi }) {
     }
     if (elements.personaSelect && typeof elements.personaSelect.addEventListener === 'function') {
       elements.personaSelect.addEventListener('change', () => {
+        personaExplicitlySelected = true;
         state = setPersona(state, elements.personaSelect.value);
         rerender();
       });

@@ -23,7 +23,9 @@ import { expect } from '@playwright/test';
 import { coldBoot } from './fixtures/cold-boot.mjs';
 import { waitForText } from '../harness.mjs';
 
-const NAV_IDS = ['talk', 'library', 'studio', 'utilities', 'settings'];
+// The primary rail has five workspaces. Library remains a secondary, routable
+// workspace reached from Utilities' data-shell-nav link, not a sixth rail item.
+const NAV_IDS = ['talk', 'scribe', 'studio', 'utilities', 'settings'];
 const SET_SECTIONS = [
   'Profile', 'Recording', 'Review', 'AiCleanup', 'Notifications', 'Appearance', 'Privacy',
 ];
@@ -121,7 +123,7 @@ export const signalDeskProdSweepScenarios = [
     kind: 'standard',
     description:
       'The production Signal Desk shell (signal-desk.html) has five top-level workspaces on its left rail -- ' +
-      'Talk, Library, Studio, Utilities and Settings -- and this is the production-page proof that every one of ' +
+      'Talk, Scribe, Studio, Utilities and Settings -- and this is the production-page proof that every one of ' +
       'them actually opens. Clicking each nav button must reveal that workspace, hide the other four, and mark ' +
       'the clicked button aria-current="page" so assistive tech reports the same active section a sighted user ' +
       'sees. A workspace that silently fails to open makes every control inside it unreachable while looking, at ' +
@@ -201,7 +203,7 @@ export const signalDeskProdSweepScenarios = [
       'this scenario\'s own reload (not relying on the reload resetBackendState() already did before navigate() ' +
       'ran, which happened before these collectors existed and so would have silently missed every boot-time ' +
       'error), so this run actually covers a full boot: attach, reload, wait for the shell and the "loaded" ready ' +
-      'text, then sweep Talk, Library, Studio, Utilities, Settings, and every one of Settings\' seven sections. ' +
+      'text, then sweep Talk, Scribe, Studio, Utilities, Settings, and every one of Settings\' seven sections. ' +
       'Zero exclusions: no known-noisy source was found while writing this (the WS-reconnect noise harness.mjs\'s ' +
       'stub already guards against by accepting the upgrade), so anything captured here is reported, not filtered.',
     backendState: coldBoot,
@@ -241,6 +243,20 @@ export const signalDeskProdSweepScenarios = [
           }
         }
       }
+
+      // Library is intentionally not a primary nav route. Verify the
+      // secondary Utilities link still reaches its real workspace, then leave
+      // the shell in a primary workspace for the scenario screenshot.
+      await page.click('.sd-nav__button[data-nav="utilities"]');
+      const libraryLink = page.locator('.sd-util-nav__item[data-shell-nav="library"]').first();
+      await expect(libraryLink, 'Utilities must expose a secondary Library data-shell-nav link').toHaveText('Library');
+      await libraryLink.click();
+      await expect(page.locator('#workspace-library'), 'Library must remain reachable from Utilities').toBeVisible();
+      for (const id of NAV_IDS) {
+        await expect(page.locator(`#workspace-${id}`), `#workspace-${id} must be hidden while Library is secondary-active`).toBeHidden();
+      }
+      await page.click('.sd-nav__button[data-nav="utilities"]');
+      await expectOnlyWorkspaceVisible(page, 'utilities');
     },
     async expects(page) {
       try {

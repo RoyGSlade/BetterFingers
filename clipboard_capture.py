@@ -1,4 +1,6 @@
 import logging
+import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -11,12 +13,22 @@ import keyboard
 import pyperclip
 
 import platform_capabilities
+from log_redaction import redact_exc
 
 
 _URL_ONLY_RE = re.compile(r"^(https?://|www\.)\S+$", re.IGNORECASE)
 _MAX_TTS_CHARS = 6000
 
 IS_WINDOWS = platform_capabilities.IS_WINDOWS
+_COPY_TRIGGER_TIMEOUT_SECONDS = 2
+
+
+def _backend(name: str, available: bool, required: list[str]) -> dict:
+    return {
+        "name": name,
+        "available": bool(available),
+        "required": list(required),
+    }
 
 
 def _selection_capture_support() -> dict:
@@ -27,30 +39,99 @@ def _selection_capture_support() -> dict:
     during module import.  That lets an operator install the missing package
     while BetterFingers is running and retry the hotkey successfully.
     """
-    if IS_WINDOWS or platform_capabilities.is_macos:
-        return {"supported": True, "tool": "native"}
+    if IS_WINDOWS:
+        clipboard = _backend("native", True, [])
+        trigger = _backend("native-keyboard", True, [])
+    elif platform_capabilities.is_macos:
+        # README explicitly says macOS is not supported.  Do not silently use
+        # keyboard.press_and_release here: the keyboard package may require
+        # elevated privileges and this is not a qualified product path.
+        clipboard = _backend("native", True, [])
+        trigger = _backend("unsupported", False, ["macOS selection capture support"])
+    elif platform_capabilities.is_wayland:
+        display_missing = not bool(os.environ.get("WAYLAND_DISPLAY"))
+        wl_paste = shutil.which("wl-paste")
+        wl_copy = shutil.which("wl-copy")
+        clipboard_available = bool(wl_paste and wl_copy and not display_missing)
+        clipboard_requirements = []
+        if display_missing:
+            clipboard_requirements.append("WAYLAND_DISPLAY")
+        if not wl_copy:
+            clipboard_requirements.append("wl-copy")
+        if not wl_paste:
+            clipboard_requirements.append("wl-paste")
+        clipboard = _backend(
+            "wl-clipboard",
+            clipboard_available,
+            clipboard_requirements,
+        )
+        trigger_paths = {name: shutil.which(name) for name in ("wtype", "ydotool")}
+        trigger_tool = next((name for name in ("wtype", "ydotool") if trigger_paths[name]), None)
+        trigger = _backend(
+            trigger_tool or "unsupported",
+            bool(trigger_tool),
+            [] if trigger_tool else ["wtype or ydotool"],
+        )
+    elif platform_capabilities.is_x11 or platform_capabilities.is_linux:
+        display_missing = not bool(os.environ.get("DISPLAY"))
+        clipboard_paths = {name: shutil.which(name) for name in ("xclip", "xsel")}
+        clipboard_tool = next((name for name in ("xclip", "xsel") if clipboard_paths[name]), None)
+        clipboard_requirements = ["DISPLAY"] if display_missing else []
+        if not clipboard_tool:
+            clipboard_requirements.append("xclip or xsel")
+        clipboard = _backend(
+            clipboard_tool or "unsupported",
+            bool(clipboard_tool and not display_missing),
+            clipboard_requirements,
+        )
+        xdotool_path = shutil.which("xdotool")
+        trigger = _backend("xdotool" if xdotool_path else "unsupported", bool(xdotool_path), [] if xdotool_path else ["xdotool"])
+    else:
+        clipboard = _backend("unsupported", False, ["a supported clipboard tool"])
+        trigger = _backend("unsupported", False, ["a supported copy trigger"])
 
-    if platform_capabilities.is_wayland:
-        if shutil.which("wl-paste") and shutil.which("wl-copy"):
-            return {"supported": True, "tool": "wl-clipboard"}
-        return {"supported": False, "missing_tool": "wl-clipboard"}
-
-    if platform_capabilities.is_x11 or platform_capabilities.is_linux:
-        if shutil.which("xclip"):
-            return {"supported": True, "tool": "xclip"}
-        if shutil.which("xsel"):
-            return {"supported": True, "tool": "xsel"}
-        return {"supported": False, "missing_tool": "xclip or xsel"}
-
-    return {"supported": False, "missing_tool": "a supported clipboard tool"}
+    missing = clipboard["required"] + trigger["required"]
+    missing_tool = (
+        clipboard["required"][0]
+        if clipboard["required"]
+        else trigger["required"][0]
+        if trigger["required"]
+        else ""
+    )
+    return {
+        "supported": clipboard["available"] and trigger["available"],
+        "tool": clipboard["name"],
+        "missing_tool": missing_tool,
+        "missing_tools": " or ".join(missing) if missing else "",
+        "clipboard_backend": clipboard,
+        "copy_trigger_backend": trigger,
+    }
 
 
 def _unsupported_capture_result(support: dict) -> dict:
     missing_tool = str(support.get("missing_tool") or "a supported clipboard tool")
-    if missing_tool == "xclip or xsel":
-        message = "Can't read selected text — xclip or xsel is not installed. Install xclip to enable this."
-    elif missing_tool == "wl-clipboard":
-        message = "Can't read selected text — wl-clipboard is not installed. Install wl-clipboard to enable this."
+    clipboard = support.get("clipboard_backend") or {}
+    trigger = support.get("copy_trigger_backend") or {}
+    if not clipboard.get("available"):
+        if missing_tool == "DISPLAY":
+            message = "Can't read selected text — DISPLAY is not set for the active X11 session. Start BetterFingers inside an X11 desktop session and retry."
+        elif missing_tool == "WAYLAND_DISPLAY":
+            message = "Can't read selected text — WAYLAND_DISPLAY is not set for the active Wayland session. Start BetterFingers inside a Wayland desktop session and retry."
+        elif missing_tool == "xclip or xsel":
+            message = "Can't read selected text — xclip or xsel is not installed. Install xclip to enable this."
+        elif missing_tool in {"wl-copy", "wl-paste"}:
+            message = "Can't read selected text — wl-clipboard is not installed. Install wl-clipboard to enable this."
+        else:
+            message = f"Can't read selected text — {missing_tool} is not available on this system."
+    elif not trigger.get("available"):
+        if missing_tool == "xdotool":
+            message = "Can't read selected text — xdotool is required to trigger Ctrl+C on X11. Install xdotool and retry."
+        elif missing_tool == "wtype or ydotool":
+            message = "Can't read selected text — Wayland needs wtype or ydotool to trigger Ctrl+C. Install one and retry."
+        elif platform_capabilities.is_macos:
+            message = "Can't read selected text — macOS selection capture is not supported yet."
+        else:
+            message = f"Can't read selected text — {missing_tool} is not available on this system."
     else:
         message = f"Can't read selected text — {missing_tool} is not available on this system."
     return {
@@ -58,8 +139,44 @@ def _unsupported_capture_result(support: dict) -> dict:
         "text": "",
         "capture_status": "unsupported",
         "missing_tool": missing_tool,
+        "missing_tools": support.get("missing_tools", missing_tool),
+        "clipboard_backend": clipboard,
+        "copy_trigger_backend": trigger,
         "message": message,
     }
+
+
+def _trigger_selection_copy(trigger_backend: dict) -> dict:
+    """Trigger Ctrl+C without invoking the privileged keyboard path on Linux."""
+    tool = trigger_backend.get("name")
+    if tool == "native-keyboard":
+        try:
+            keyboard.press_and_release("ctrl+c")
+            return {"ok": True, "tool": tool}
+        except Exception as exc:
+            return {"ok": False, "tool": tool, "error": str(exc)}
+
+    commands = {
+        "xdotool": ["xdotool", "key", "--clearmodifiers", "ctrl+c"],
+        "wtype": ["wtype", "-M", "ctrl", "-k", "c", "-m", "ctrl"],
+        "ydotool": ["ydotool", "key", "29:1", "46:1", "46:0", "29:0"],
+    }
+    command = commands.get(tool)
+    if not command:
+        return {"ok": False, "tool": tool or "unsupported", "error": "no supported copy trigger"}
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            timeout=_COPY_TRIGGER_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        logging.debug("%s copy trigger failed: %s", tool, exc)
+        return {"ok": False, "tool": tool, "error": str(exc)}
+    if result.returncode != 0:
+        return {"ok": False, "tool": tool, "error": f"exit status {result.returncode}"}
+    return {"ok": True, "tool": tool}
 
 
 def _wayland_clipboard_get_text() -> str:
@@ -118,7 +235,8 @@ def _linux_clipboard_set_text(tool: str, value: str) -> bool:
             command,
             input=(value or "").encode("utf-8"),
             check=False,
-            capture_output=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             timeout=5,
         )
         return result.returncode == 0
@@ -316,23 +434,26 @@ def _snapshot_signature(snapshot):
     signature = []
     for fmt, payload in snapshot:
         data = bytes(payload or b"")
-        signature.append((int(fmt), len(data), data[:32]))
+        digest = hashlib.sha256(data).hexdigest()
+        signature.append((int(fmt), len(data), digest))
     return tuple(signature)
 
 
-def _schedule_delayed_clipboard_restore(snapshot, delay_ms=150):
+def _schedule_delayed_clipboard_restore(snapshot, expected_owned_snapshot=None, delay_ms=150):
     if not IS_WINDOWS:
         return
-    if not snapshot:
+    if not snapshot or not expected_owned_snapshot:
         return
 
-    target_signature = _snapshot_signature(snapshot)
+    expected_signature = _snapshot_signature(expected_owned_snapshot)
+    if not expected_signature:
+        return
 
     def _worker():
         try:
             time.sleep(max(0.05, float(delay_ms) / 1000.0))
             current = _capture_clipboard_snapshot_windows()
-            if _snapshot_signature(current) != target_signature:
+            if _snapshot_signature(current) == expected_signature:
                 _restore_clipboard_snapshot_windows(snapshot)
         except Exception as exc:
             logging.debug("Delayed clipboard restore skipped: %s", exc)
@@ -353,18 +474,48 @@ def capture_selection_text_with_restore(timeout_ms=350, poll_ms=25) -> dict:
     original_snapshot = _capture_clipboard_snapshot_windows()
     sentinel = f"__betterfingers_clipboard_probe_{uuid.uuid4().hex}__"
     captured_text = ""
+    owned_snapshot = None
 
     try:
-        _clipboard_set_text(sentinel)
-        try:
-            keyboard.press_and_release("ctrl+c")
-        except Exception as exc:
-            logging.debug(f"Ctrl+C trigger failed during selection capture: {exc}")
+        if not _clipboard_set_text(sentinel):
+            return {
+                "ok": False,
+                "text": "",
+                "used_fallback": False,
+                "capture_status": "clipboard_write_failed",
+                "message": "Can't read selected text — clipboard probe could not be written. Try again.",
+            }
+
+        trigger = _trigger_selection_copy(support.get("copy_trigger_backend") or {})
+        if not trigger.get("ok"):
+            # A failed trigger leaves the original clipboard as the only
+            # readable value. Never label that stale value as this selection.
+            return {
+                "ok": False,
+                "text": "",
+                "used_fallback": False,
+                "capture_status": "trigger_failed",
+                "message": (
+                    "Can't read selected text — the copy trigger failed. "
+                    "Select text and try again."
+                ),
+                "trigger": trigger,
+            }
 
         for _ in range(attempts):
             current = _clipboard_get_text()
             if current and current != sentinel:
                 captured_text = current
+                try:
+                    # Capture ownership at the first observation of the
+                    # selected text. A later snapshot could belong to a new
+                    # user copy and must not authorize delayed restoration.
+                    owned_snapshot = _capture_clipboard_snapshot_windows()
+                except Exception as exc:
+                    logging.debug(
+                        "Could not prove clipboard ownership at detection: %s",
+                        redact_exc(exc),
+                    )
                 break
             time.sleep(poll_ms / 1000.0)
 
@@ -375,15 +526,6 @@ def capture_selection_text_with_restore(timeout_ms=350, poll_ms=25) -> dict:
                 "used_fallback": False,
                 "capture_status": "captured",
                 "message": "Captured selected text.",
-            }
-
-        if is_readable_tts_text(original_text):
-            return {
-                "ok": True,
-                "text": _sanitize_tts_text(original_text),
-                "used_fallback": True,
-                "capture_status": "captured",
-                "message": "Using existing clipboard text fallback.",
             }
 
         return {
@@ -397,7 +539,11 @@ def capture_selection_text_with_restore(timeout_ms=350, poll_ms=25) -> dict:
         restored = False
         if original_snapshot is not None:
             restored = _restore_clipboard_snapshot_windows(original_snapshot)
-            if restored:
-                _schedule_delayed_clipboard_restore(original_snapshot, delay_ms=max(120, poll_ms * 4))
+            if restored and owned_snapshot:
+                _schedule_delayed_clipboard_restore(
+                    original_snapshot,
+                    expected_owned_snapshot=owned_snapshot,
+                    delay_ms=max(120, poll_ms * 4),
+                )
         if not restored and not _clipboard_set_text(original_text):
             logging.debug("Failed to restore original clipboard text after selection capture.")

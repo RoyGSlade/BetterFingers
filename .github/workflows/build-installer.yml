@@ -13,7 +13,7 @@ jobs:
   windows-installer:
     runs-on: windows-latest
     permissions:
-      contents: write
+      contents: read
       id-token: write # actions/attest-build-provenance (OIDC)
       attestations: write # actions/attest-build-provenance
     steps:
@@ -26,11 +26,14 @@ jobs:
           python-version: "3.13"
 
       - name: Install Python dependencies
-        shell: powershell
+        # GitHub-hosted Windows runners provide Git Bash. Explicit fail-fast
+        # keeps a resolver failure from being masked by a later pip command.
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
-          pip install --require-hashes -r requirements-win.lock
-          pip install --require-hashes -r requirements-dev-win.lock
+          python -m pip install --require-hashes -r requirements-win.lock
+          python -m pip install --require-hashes -r requirements-dev-win.lock
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
@@ -43,17 +46,24 @@ jobs:
         working-directory: app
         run: npm ci
 
+      - name: Run app unit tests
+        working-directory: app
+        run: npm run test:unit
+
       - name: Run test suite
         shell: powershell
         run: |
+          $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force -Path build | Out-Null
           python -m pytest -q tests -W default 2>&1 | Tee-Object -FilePath build/pytest.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/check_project_deprecations.py build/pytest.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run smoke suite
         shell: powershell
         run: |
+          $ErrorActionPreference = "Stop"
           python -m pytest -q tests -m smoke -W default 2>&1 | Tee-Object -FilePath build/pytest-smoke.log
           if ($LASTEXITCODE -eq 5) {
             Write-Error "Smoke suite collected zero tests -- the smoke marker wiring is broken (see SMOKE_FILES in tests/conftest.py)."
@@ -75,15 +85,19 @@ jobs:
         shell: powershell
         env:
           CERT_B64: ${{ secrets.WIN_CERTIFICATE_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.WIN_CERTIFICATE_PASSWORD }}
         run: |
           if ([string]::IsNullOrEmpty($env:CERT_B64)) {
             Write-Host "WIN_CERTIFICATE_BASE64 not set; building an unsigned installer."
-            "configured=false" >> $env:GITHUB_OUTPUT
+            "configured=false" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
           } else {
+            if ([string]::IsNullOrEmpty($env:CERT_PASSWORD)) {
+              throw "WIN_CERTIFICATE_BASE64 is set but WIN_CERTIFICATE_PASSWORD is missing; refusing an unverifiable signing configuration."
+            }
             $certPath = Join-Path $env:RUNNER_TEMP "betterfingers-signing.pfx"
             [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($env:CERT_B64))
-            "CSC_LINK=$certPath" >> $env:GITHUB_ENV
-            "configured=true" >> $env:GITHUB_OUTPUT
+            "CSC_LINK=$certPath" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_ENV
+            "configured=true" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
           }
 
       # Runs electron-vite build + the PyInstaller backend bundle + electron-builder's
@@ -129,49 +143,115 @@ jobs:
             throw "No .exe installer found in app\release"
           }
           Write-Host "Found installer: $($installer.FullName)"
-          "path=$($installer.FullName)" >> $env:GITHUB_OUTPUT
+          "path=$($installer.FullName)" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
 
-      - name: Download previous release installer (upgrade smoke)
+      - name: Verify installer signature status
+        shell: powershell
+        run: |
+          $installer = "${{ steps.installer.outputs.path }}"
+          $signature = Get-AuthenticodeSignature -FilePath $installer
+          Write-Host "Authenticode status: $($signature.Status)"
+          if ("${{ steps.signing.outputs.configured }}" -eq "true") {
+            if ($signature.Status -ne "Valid") {
+              throw "Signing was configured, but Authenticode verification returned $($signature.Status)."
+            }
+            "signed; authenticode_status=$($signature.Status)" | Out-File -Encoding ascii "$installer.signature.txt"
+          } else {
+            if ($signature.Status -eq "Valid") {
+              throw "Signing was not configured, but the installer reports a valid Authenticode signature; refusing an ambiguous release record."
+            }
+            Write-Host "UNSIGNED ALPHA: no Windows signing certificate was configured."
+            "unsigned alpha; authenticode_status=$($signature.Status)" | Out-File -Encoding ascii "$installer.signature.txt"
+          }
+
+      - name: Download previous release installer (replacement continuity coverage)
         id: previous
         shell: powershell
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Best-effort: on the very first release there is nothing to upgrade
-          # from, so a miss here only skips the upgrade leg, not the job.
-          $prevTag = gh release list --limit 1 --exclude-drafts --exclude-pre-releases 2>$null |
-            ForEach-Object { ($_ -split "\t")[2] } | Select-Object -First 1
+          $ErrorActionPreference = "Stop"
+          # Optional replacement/continuity coverage: on the very first
+          # release there is no prior installer, so an empty release history
+          # skips this leg without weakening the build job.
+          $releaseJson = gh release list --limit 1 --exclude-drafts --exclude-pre-releases --json tagName 2>$null
+          $listExitCode = $LASTEXITCODE
+          if ($listExitCode -ne 0) {
+            throw "gh release list failed with exit code $listExitCode; refusing to misreport the release as having no prior installer."
+          }
+          $releases = @()
+          if ($releaseJson) {
+            $releases = @($releaseJson | ConvertFrom-Json)
+          }
+          $prevTag = $releases | Select-Object -ExpandProperty tagName -First 1
           if (-not $prevTag) {
-            Write-Host "No previous release found; skipping upgrade smoke leg."
-            "path=" >> $env:GITHUB_OUTPUT
+            Write-Host "No previous release found; skipping replacement/continuity coverage."
+            "path=" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
             exit 0
           }
           Write-Host "Previous release: $prevTag"
-          New-Item -ItemType Directory -Force -Path prev-release | Out-Null
-          gh release download $prevTag --pattern "*.exe" --dir prev-release --clobber
-          $prevExe = Get-ChildItem "prev-release" -Filter "*.exe" | Select-Object -First 1
-          if ($prevExe) {
-            "path=$($prevExe.FullName)" >> $env:GITHUB_OUTPUT
-          } else {
-            Write-Host "Previous release had no .exe asset; skipping upgrade smoke leg."
-            "path=" >> $env:GITHUB_OUTPUT
+          $assetJson = gh release view $prevTag --json assets 2>$null
+          $assetExitCode = $LASTEXITCODE
+          if ($assetExitCode -ne 0) {
+            throw "gh release view failed with exit code $assetExitCode; refusing to misreport the previous release as having no installer asset."
           }
+          $assets = @($assetJson | ConvertFrom-Json).assets
+          $prevAssetName = $assets |
+            Where-Object { $_.name -like "*.exe" } |
+            Sort-Object name |
+            Select-Object -ExpandProperty name -First 1
+          if (-not $prevAssetName) {
+            Write-Host "Previous release had no .exe asset; skipping replacement/continuity coverage."
+            "path=" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
+            exit 0
+          }
+          Write-Host "Selected previous installer asset: $prevAssetName"
+          New-Item -ItemType Directory -Force -Path prev-release | Out-Null
+          gh release download $prevTag --pattern $prevAssetName --dir prev-release --clobber
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $prevExe = Join-Path "prev-release" $prevAssetName
+          if (-not (Test-Path -LiteralPath $prevExe -PathType Leaf)) {
+            throw "Selected previous installer asset was not downloaded: $prevExe"
+          }
+          "path=$((Resolve-Path -LiteralPath $prevExe).Path)" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
 
-      - name: Smoke check installer install/upgrade/uninstall
+      - name: Smoke check installer install/replacement/uninstall
         shell: powershell
         run: |
+          $ErrorActionPreference = "Stop"
           $args = @("-InstallerPath", "${{ steps.installer.outputs.path }}")
           if ("${{ steps.previous.outputs.path }}" -ne "") {
             $args += @("-PreviousInstallerPath", "${{ steps.previous.outputs.path }}")
           }
           powershell -ExecutionPolicy Bypass -File tools/smoke_installer.ps1 @args
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Generate checksum
         shell: powershell
         run: |
+          $ErrorActionPreference = "Stop"
           $installer = "${{ steps.installer.outputs.path }}"
-          $hash = (Get-FileHash -Path $installer -Algorithm SHA256).Hash.ToLower()
-          "$hash  $(Split-Path -Leaf $installer)" | Out-File -Encoding ascii "$installer.sha256"
+          $checksumPath = "$installer.sha256"
+          $expectedHash = (Get-FileHash -Path $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$expectedHash  $(Split-Path -Leaf $installer)" | Out-File -Encoding ascii $checksumPath
+
+          # Parse the just-written sidecar and compare it to a fresh hash. This
+          # catches malformed, mismatched, or accidentally stale release data
+          # before the checksum is uploaded or published.
+          $checksumLine = (Get-Content -Path $checksumPath -Raw).Trim()
+          if ($checksumLine -notmatch '^([0-9a-fA-F]{64})\s+\*?(.+)$') {
+            throw "Checksum sidecar is malformed: $checksumPath"
+          }
+          $sidecarHash = $Matches[1].ToLowerInvariant()
+          $sidecarName = $Matches[2].Trim()
+          if ($sidecarName -ne (Split-Path -Leaf $installer)) {
+            throw "Checksum sidecar names '$sidecarName' instead of the installer filename."
+          }
+          $actualHash = (Get-FileHash -Path $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($sidecarHash -ne $actualHash) {
+            throw "Checksum mismatch: sidecar=$sidecarHash actual=$actualHash"
+          }
+          Write-Host "Verified SHA256 sidecar for $(Split-Path -Leaf $installer): $actualHash"
 
       - name: Attest build provenance
         if: startsWith(github.ref, 'refs/tags/')
@@ -186,20 +266,13 @@ jobs:
           path: |
             ${{ steps.installer.outputs.path }}
             ${{ steps.installer.outputs.path }}.sha256
+            ${{ steps.installer.outputs.path }}.signature.txt
           if-no-files-found: error
-
-      - name: Publish GitHub Release Asset
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228  # v3.0.2
-        with:
-          files: |
-            ${{ steps.installer.outputs.path }}
-            ${{ steps.installer.outputs.path }}.sha256
 
   linux-appimage:
     runs-on: ubuntu-24.04 # needs the AppArmor userns sysctl for Electron's sandbox
     permissions:
-      contents: write
+      contents: read
       id-token: write # actions/attest-build-provenance (OIDC)
       attestations: write # actions/attest-build-provenance
     steps:
@@ -244,6 +317,10 @@ jobs:
         working-directory: app
         run: npm ci
 
+      - name: Run app unit tests
+        working-directory: app
+        run: npm run test:unit
+
       - name: Install Linux native build deps
         # libportaudio2: sounddevice's runtime lib — without it
         # test_audio_gate/test_auto_stop_silence/test_recorder_device fail at
@@ -284,6 +361,8 @@ jobs:
       - name: Launch AppImage smoke check
         # AppImages run under FUSE by default; --appimage-extract-and-run avoids
         # needing FUSE on the runner. Xvfb supplies a display for Electron.
+        env:
+          BETTERFINGERS_AUTH_TOKEN: appimage-smoke-token
         run: |
           set -euo pipefail
           sudo apt-get update && sudo apt-get install -y xvfb
@@ -291,17 +370,34 @@ jobs:
           xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" \
             "${{ steps.appimage.outputs.path }}" --appimage-extract-and-run --no-sandbox &
           pid=$!
-          sleep 8
-          if ! kill -0 "$pid" 2>/dev/null; then
-            echo "::error::AppImage exited within 8s of launch"
-            exit 1
-          fi
-          kill "$pid"
-          wait "$pid" 2>/dev/null || true
-          echo "AppImage launched and stayed up; smoke check passed."
+          trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
+          # Match the packaged sidecar's 90s health budget, with a small
+          # allowance for Electron process startup on a hosted runner.
+          for attempt in $(seq 1 120); do
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "::error::AppImage exited before its bundled backend became healthy"
+              exit 1
+            fi
+            if curl --silent --show-error --fail --max-time 2 \
+              -H "Authorization: Bearer $BETTERFINGERS_AUTH_TOKEN" \
+              http://127.0.0.1:8000/health; then
+              echo
+              echo "AppImage launched and its bundled backend answered /health; smoke check passed."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::AppImage stayed alive but bundled backend did not answer /health within 120s"
+          exit 1
 
-      - name: Generate checksum
-        run: sha256sum "${{ steps.appimage.outputs.path }}" | sed 's#app/release/##' > "${{ steps.appimage.outputs.path }}.sha256"
+      - name: Generate and verify checksum
+        run: |
+          set -euo pipefail
+          appimage="${{ steps.appimage.outputs.path }}"
+          checksum="${appimage}.sha256"
+          (cd "$(dirname "$appimage")" && \
+            sha256sum "$(basename "$appimage")" > "$(basename "$checksum")" && \
+            sha256sum --check "$(basename "$checksum")")
 
       - name: Attest build provenance
         if: startsWith(github.ref, 'refs/tags/')
@@ -318,23 +414,16 @@ jobs:
             ${{ steps.appimage.outputs.path }}.sha256
           if-no-files-found: error
 
-      - name: Publish GitHub Release Asset
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228  # v3.0.2
-        with:
-          files: |
-            ${{ steps.appimage.outputs.path }}
-            ${{ steps.appimage.outputs.path }}.sha256
-
   sbom:
     # Software Bill of Materials (CycloneDX) for release/tag builds. Syft scans
     # the checked-out source, capturing both the Python (requirements*) and npm
     # (app/package-lock.json) dependency trees. Runs on Linux for speed; the
     # SBOM is source/dependency based, not OS-specific. Uploaded as a build
-    # artifact and, on tag pushes, attached to the GitHub Release.
+    # artifact; on tag pushes, the publication job attaches it to the GitHub
+    # Release with the platform artifacts.
     runs-on: ubuntu-latest
     permissions:
-      contents: write # attach SBOM asset to the release on tag builds
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -347,8 +436,68 @@ jobs:
           output-file: betterfingers-sbom.cdx.json
           artifact-name: betterfingers-sbom.cdx.json
 
-      - name: Attach SBOM to release
-        if: startsWith(github.ref, 'refs/tags/')
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs:
+      - windows-installer
+      - linux-appimage
+      - sbom
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows installer artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: BetterFingers-Installer
+          path: release-assets/windows
+
+      - name: Download Linux AppImage artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: BetterFingers-AppImage
+          path: release-assets/linux
+
+      - name: Download SBOM artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: betterfingers-sbom.cdx.json
+          path: release-assets/sbom
+
+      - name: Verify downloaded release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          windows_installers=(release-assets/windows/*.exe)
+          windows_checksums=(release-assets/windows/*.exe.sha256)
+          windows_signatures=(release-assets/windows/*.exe.signature.txt)
+          linux_images=(release-assets/linux/*.AppImage)
+          linux_checksums=(release-assets/linux/*.AppImage.sha256)
+          sboms=(release-assets/sbom/*.cdx.json)
+          if [ "${#windows_installers[@]}" -ne 1 ] || [ "${#windows_checksums[@]}" -ne 1 ] || [ "${#windows_signatures[@]}" -ne 1 ]; then
+            echo "Expected exactly one Windows installer, checksum, and signature sidecar."
+            find release-assets/windows -type f -print
+            exit 1
+          fi
+          if [ "${#linux_images[@]}" -ne 1 ] || [ "${#linux_checksums[@]}" -ne 1 ]; then
+            echo "Expected exactly one Linux AppImage and checksum sidecar."
+            find release-assets/linux -type f -print
+            exit 1
+          fi
+          if [ "${#sboms[@]}" -ne 1 ]; then
+            echo "Expected exactly one CycloneDX SBOM."
+            find release-assets/sbom -type f -print
+            exit 1
+          fi
+
+      - name: Publish GitHub Release assets
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228  # v3.0.2
         with:
-          files: betterfingers-sbom.cdx.json
+          files: |
+            release-assets/windows/*.exe
+            release-assets/windows/*.exe.sha256
+            release-assets/windows/*.exe.signature.txt
+            release-assets/linux/*.AppImage
+            release-assets/linux/*.AppImage.sha256
+            release-assets/sbom/*.cdx.json

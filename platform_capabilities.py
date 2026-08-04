@@ -11,12 +11,27 @@ IS_WINDOWS = sys.platform == "win32"
 
 
 platform = platform_module.system().lower() or "unknown"
-session_type = (os.getenv("XDG_SESSION_TYPE") or "").strip().lower()
+_xdg_session_type = (os.getenv("XDG_SESSION_TYPE") or "").strip().lower()
+_wayland_display = bool(os.getenv("WAYLAND_DISPLAY"))
+_x11_display = bool(os.getenv("DISPLAY"))
+# A live Wayland display is authoritative when both display variables are
+# present. Otherwise accept only recognized XDG session types, and use a live
+# X11 display as the final fallback when the session variable is absent or
+# unrecognized.
+session_type = (
+    "wayland"
+    if _wayland_display
+    else _xdg_session_type
+    if _xdg_session_type in {"wayland", "x11"}
+    else "x11"
+    if _x11_display
+    else ""
+)
 is_windows = platform == "windows"
 is_linux = platform == "linux"
 is_macos = platform == "darwin"
-is_wayland = session_type == "wayland" or bool(os.getenv("WAYLAND_DISPLAY"))
-is_x11 = session_type == "x11" or bool(os.getenv("DISPLAY"))
+is_wayland = session_type == "wayland"
+is_x11 = session_type == "x11" and _x11_display
 
 
 def _detect_clipboard_backend():
@@ -32,13 +47,12 @@ def _detect_clipboard_backend():
     if is_windows or is_macos:
         return "native"
     if is_linux:
-        if is_wayland and shutil.which("wl-copy"):
+        if is_wayland and bool(os.getenv("WAYLAND_DISPLAY")) and shutil.which("wl-copy"):
             return "wl-copy"
-        for tool in ("xclip", "xsel"):
-            if shutil.which(tool):
-                return tool
-        if shutil.which("wl-copy"):  # also works under some XWayland setups
-            return "wl-copy"
+        if bool(os.getenv("DISPLAY")):
+            for tool in ("xclip", "xsel"):
+                if shutil.which(tool):
+                    return tool
     return ""
 
 
@@ -67,14 +81,18 @@ def detect_injection_method(clipboard_available=None):
 
     if is_linux:
         if is_wayland:
+            if not bool(os.getenv("WAYLAND_DISPLAY")):
+                return "none"
             if shutil.which("wtype"):
                 return "wtype"
             if shutil.which("ydotool"):
                 return "ydotool"
             # Some Wayland compositors still expose an XWayland DISPLAY; xdotool
             # only works for XWayland clients, so prefer wtype/ydotool above.
-            if is_x11 and shutil.which("xdotool"):
+            if bool(os.getenv("DISPLAY")) and shutil.which("xdotool"):
                 return "xdotool"
+        elif not bool(os.getenv("DISPLAY")):
+            return "none"
         else:
             if shutil.which("xdotool"):
                 return "xdotool"
@@ -88,7 +106,7 @@ clipboard_backend = _detect_clipboard_backend()
 # Real capability: on Linux this is False without xclip/xsel/wl-clipboard.
 supports_basic_clipboard = bool(clipboard_backend)
 supports_rich_clipboard_restore = is_windows
-supports_global_hotkeys = is_windows or is_macos or (is_linux and is_x11)
+supports_global_hotkeys = is_windows or is_macos or (is_linux and _x11_display and is_x11)
 # Linux audio ducking is best-effort via PipeWire/PulseAudio's `pactl`.
 supports_audio_ducking = is_windows or (is_linux and bool(shutil.which("pactl")))
 supports_stt = True
@@ -165,7 +183,7 @@ def get_injection_status():
         "clipboard_backend": live_clipboard_backend,
         "supports_typing": live_method not in ("paste", "none"),
         "supports_input_injection": live_method != "none",
-        "session_type": session_type or "unknown",
+        "session_type": ("wayland" if os.getenv("WAYLAND_DISPLAY") else session_type) or "unknown",
         "is_wayland": is_wayland,
         "is_x11": is_x11,
         "hint": injection_hint(live_method),

@@ -458,6 +458,7 @@ test('renderTextPlayground: comparison columns are written via textContent (no H
 function makeFakeApi(overrides = {}) {
   return {
     fetchPersonas: async () => ({ friendly: {}, formal: {} }),
+    fetchProfiles: async () => ({ settings: { current_preset: 'friendly' } }),
     fetchDrafts: async () => ({ drafts: [{ id: 1, final_text: 'existing draft' }] }),
     fetchLlmModels: async () => ({ selected_model_id: 'gemma-4-e2b-q4' }),
     applyToDraft: async () => ({ ok: true }),
@@ -723,6 +724,46 @@ test('createTextPlaygroundFeature.refreshPersonas/refreshDrafts: populate the pi
 
   await feature.refreshDrafts();
   assert.match(elements.draftSelect.innerHTML, /existing draft/);
+});
+
+test('createTextPlaygroundFeature.refreshPersonas defaults to an existing active current_preset', async () => {
+  const elements = makeStubElementsWithListeners();
+  const feature = createTextPlaygroundFeature({
+    elements,
+    api: makeFakeApi({ fetchProfiles: async () => ({ settings: { current_preset: 'formal' } }) }),
+  });
+  feature.wire();
+
+  await feature.refreshPersonas();
+  assert.equal(feature.getState().persona, 'formal');
+  assert.match(elements.personaSelect.innerHTML, /value="formal" selected/);
+});
+
+test('createTextPlaygroundFeature ignores an active current_preset that is not in the persona list', async () => {
+  const elements = makeStubElementsWithListeners();
+  const feature = createTextPlaygroundFeature({
+    elements,
+    api: makeFakeApi({ fetchProfiles: async () => ({ settings: { current_preset: 'missing' } }) }),
+  });
+  feature.wire();
+
+  await feature.refreshPersonas();
+  assert.equal(feature.getState().persona, '');
+});
+
+test('createTextPlaygroundFeature preserves an explicit persona choice over current_preset refreshes', async () => {
+  const elements = makeStubElementsWithListeners();
+  const feature = createTextPlaygroundFeature({ elements, api: makeFakeApi() });
+  feature.wire();
+
+  await feature.refreshPersonas();
+  assert.equal(feature.getState().persona, 'friendly');
+  elements.personaSelect.value = 'formal';
+  elements.personaSelect._listeners.change();
+
+  await feature.refreshPersonas();
+  assert.equal(feature.getState().persona, 'formal');
+  assert.match(elements.personaSelect.innerHTML, /value="formal" selected/);
 });
 
 // --- initTextPlayground (fake doc) ------------------------------------------------

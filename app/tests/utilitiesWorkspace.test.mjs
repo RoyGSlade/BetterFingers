@@ -19,6 +19,7 @@ import {
   UTILITIES_SECTIONS,
   UTILITIES_SECTION_META,
   isValidUtilitiesSection,
+  isValidInventoryPlacementSection,
   computeNextUtilitiesSection,
   INVENTORY_PLACEMENT_MAP,
   HOTKEY_FIELD_KEYS,
@@ -120,8 +121,8 @@ test('detectHotkeyCollisions: three-way collision lists both other fields', () =
   assert.equal(collisions.hotkey, 'Same as Emergency Stop key, Primary Action key');
 });
 
-test('HOTKEY_FIELD_KEYS: exactly the 6 hotkey fields from inventory §7.3, each with a label', () => {
-  assert.deepEqual(HOTKEY_FIELD_KEYS, ['hotkey', 'force_stop_key', 'manual_send_hotkey', 'review_tts_hotkey', 'chat_open_key', 'voice_mute_key']);
+test('HOTKEY_FIELD_KEYS: exactly the 7 hotkey fields from inventory §7.3, each with a label', () => {
+  assert.deepEqual(HOTKEY_FIELD_KEYS, ['hotkey', 'force_stop_key', 'manual_send_hotkey', 'review_tts_hotkey', 'selection_rewrite_hotkey', 'chat_open_key', 'voice_mute_key']);
   for (const key of HOTKEY_FIELD_KEYS) assert.ok(HOTKEY_FIELD_LABELS[key], `${key} missing a label`);
 });
 
@@ -270,6 +271,15 @@ test('collectUtilitiesElements: missing ids resolve to null (never throws) again
   assert.equal(els.modelsRefreshButton, null);
   assert.equal(els.hotkeyFields.hotkey.input, null);
   assert.equal(els.hotkeyFields.voice_mute_key.clear, null);
+  assert.equal(els.hotkeyFields.selection_rewrite_hotkey.input, null);
+});
+
+test('UTILITIES_ELEMENT_IDS: selection rewrite uses the Scribe worker contract ids', () => {
+  assert.deepEqual(UTILITIES_ELEMENT_IDS.hotkeyFields.selection_rewrite_hotkey, {
+    input: 'sdUtilHotkeySelectionRewriteInput',
+    clear: 'sdUtilHotkeySelectionRewriteClear',
+    error: 'sdUtilHotkeySelectionRewriteError',
+  });
 });
 
 test('collectUtilitiesElements: resolves every flat id plus the nested hotkeyFields map', () => {
@@ -348,7 +358,7 @@ test('renderDoctorCards: builds one card per subsystem into a stub grid containe
 
 // Exactly the inventory areas the work packet calls out by name as needing a
 // confirmed home: Models, Diagnostics, Dictionary, Macros, wake-word
-// training, audio device, all 6 hotkeys, controller note, support report,
+// training, audio device, all 7 hotkeys, controller note, support report,
 // warmup, residency, and the 3 Message Rescue surfaces. Each requirement
 // below is satisfied if AT LEAST ONE key with that prefix/id exists in
 // INVENTORY_PLACEMENT_MAP with a valid section.
@@ -426,9 +436,9 @@ test('COMPLETENESS: every required inventory key has an entry in INVENTORY_PLACE
   assert.deepEqual(missing, [], `missing placement map entries: ${missing.join(', ')}`);
 });
 
-test('COMPLETENESS: every placement map entry names a valid Utilities section', () => {
+test('COMPLETENESS: every placement map entry names a valid current product section', () => {
   for (const [key, entry] of Object.entries(INVENTORY_PLACEMENT_MAP)) {
-    assert.ok(isValidUtilitiesSection(entry.section), `${key} has an invalid section "${entry.section}"`);
+    assert.ok(isValidInventoryPlacementSection(entry.section), `${key} has an invalid section "${entry.section}"`);
   }
 });
 
@@ -451,10 +461,13 @@ test('COMPLETENESS: the 3 Message Rescue surfaces are each their own distinct en
   const keys = ['textTools.messageRescue.draftBound', 'textTools.messageRescue.staticPreview', 'textTools.messageRescue.playground'];
   const controls = keys.map((k) => INVENTORY_PLACEMENT_MAP[k].control);
   assert.equal(new Set(controls).size, 3, 'all 3 Message Rescue surfaces must have distinct control descriptions');
+  assert.equal(INVENTORY_PLACEMENT_MAP['textTools.messageRescue.draftBound'].section, 'text');
+  assert.equal(INVENTORY_PLACEMENT_MAP['textTools.messageRescue.staticPreview'].section, 'text');
+  assert.equal(INVENTORY_PLACEMENT_MAP['textTools.messageRescue.playground'].section, 'scribe');
 });
 
-test('COMPLETENESS: all 6 hotkey fields resolve to distinct, correctly-labeled entries', () => {
-  const keys = ['speech.hotkeys.recording', 'speech.hotkeys.forceStop', 'speech.hotkeys.manualSend', 'speech.hotkeys.reviewTts', 'speech.hotkeys.chatOpen', 'speech.hotkeys.voiceMute'];
+test('COMPLETENESS: all 7 hotkey fields resolve to distinct, correctly-labeled entries', () => {
+  const keys = ['speech.hotkeys.recording', 'speech.hotkeys.forceStop', 'speech.hotkeys.manualSend', 'speech.hotkeys.reviewTts', 'speech.hotkeys.selectionRewrite', 'speech.hotkeys.chatOpen', 'speech.hotkeys.voiceMute'];
   assert.equal(keys.length, HOTKEY_FIELD_KEYS.length);
   for (const key of keys) assert.equal(INVENTORY_PLACEMENT_MAP[key].section, 'speech');
 });

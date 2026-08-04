@@ -20,7 +20,9 @@
 // getSidecarLogs, getSidecarStatus, getHotkeyCapabilities -- same bridge
 // surface talkWorkspace.js / libraryWorkspace.js / runtime.js already read
 // from), and features/messageRescueDraft.js + messageRescuePanel.js +
-// textPlayground.js verbatim for the three distinct Message Rescue surfaces.
+// textPlayground.js verbatim for the three distinct Message Rescue surfaces
+// across the product. The real playground now lives in the primary Scribe
+// workspace; the other two remain in Utilities / Text Tools.
 //
 // index.html/main.js are NOT touched this phase (additive only) -- see the
 // phase plan in the work packet.
@@ -29,7 +31,7 @@
 // EXHAUSTIVE INVENTORY -> UTILITIES SECTION PLACEMENT MAP
 // (director's "no-orphan gate": every §8/§9/§7.3/§7.6/§7.7/§7.8/§7.12/§7.13/
 // §7.16 item from docs/ui/CURRENT_UI_INVENTORY.md, plus the 3 Message Rescue
-// surfaces, must appear below with the Utilities section it lives in.)
+// surfaces, must appear below with its current product placement.)
 //
 // Utilities has 5 internal sections (an internal sub-nav within the shared
 // Signal Desk shell's center column -- see UTILITIES_SECTIONS below):
@@ -66,9 +68,10 @@
 //   speech.hotkeys.forceStop       Emergency Stop key field + clear                -> profile field `force_stop_key`        [wired]
 //   speech.hotkeys.manualSend      Primary Action key field + clear                -> profile field `manual_send_hotkey`    [wired]
 //   speech.hotkeys.reviewTts       Review TTS Hotkey field + clear                 -> profile field `review_tts_hotkey`     [wired]
+//   speech.hotkeys.selectionRewrite Selection Rewrite Hotkey field + clear         -> profile field `selection_rewrite_hotkey` [wired]
 //   speech.hotkeys.chatOpen        Open Chat Key field + clear                     -> profile field `chat_open_key`         [wired]
 //   speech.hotkeys.voiceMute       Voice Mute Key field + clear                    -> profile field `voice_mute_key`        [wired]
-//   speech.hotkeys.customWidget    click-to-record chord capture (all 6 fields)    -> wireHotkeyRecorder() (keydown chord accumulation, pure describeKeyEvent()) [wired]
+//   speech.hotkeys.customWidget    click-to-record chord capture (all 7 fields)    -> wireHotkeyRecorder() (keydown chord accumulation, pure describeKeyEvent()) [wired]
 //   speech.hotkeys.collisionDetection inline per-field collision errors           -> detectHotkeyCollisions() (pure helper) [wired]
 //   speech.wake.enableToggle       Wake word enable/disable toggle                 -> enableWake()/disableWake()            [wired]
 //   speech.wake.modelSelect        Imported-classifier dropdown                    -> profile field `wake_word_model`       [wired]
@@ -77,14 +80,14 @@
 //   speech.wake.tuning             sensitivity / cooldown / max-recording numbers  -> profile fields `wake_word_sensitivity`/`wake_word_cooldown_s`/`wake_word_max_recording_s` [wired]
 //   speech.wake.liveTest           "Test Wake Detection (10s)" + score meter       -> testWake()                            [wired]
 //
-// --- TEXT TOOLS section (inventory §7.12/§7.13 + §6.4/§6.6/§6.7) ----------
+// --- TEXT TOOLS section (inventory §7.12/§7.13 + §6.4/§6.6) -----------------
 //   textTools.dictionary.crud      add/list/remove dictionary terms                -> fetchDictionary(), addDictionaryTerm(), deleteDictionaryTerm() [wired]
 //   textTools.dictionary.suggest   auto-surfaced suggestion chips                  -> suggestDictionaryTerms() (mount point wired; caller is a draft-edit diff Utilities does not own -- see SPEC GAP) [stub: TODO(phase-integration)]
 //   textTools.macros.crud          add/list/remove macros                          -> fetchMacros(), addMacro(), deleteMacro() [wired]
 //   textTools.macros.enabledToggle "Macros enabled" checkbox                       -> profile field `macros_enabled`        [wired]
 //   textTools.messageRescue.draftBound   #draftRescuePanel (live, latest-draft-bound) -> features/messageRescueDraft.js's initMessageRescueDraft() -- REUSED VERBATIM [wired, flag-gated pref_message_rescue_enabled]
 //   textTools.messageRescue.staticPreview #messageRescuePanel (synthetic example, zero backend calls) -> features/messageRescuePanel.js's self-init -- REUSED VERBATIM [wired, flag-gated]
-//   textTools.messageRescue.playground   #textPlaygroundSection (free-standing, real backend) -> features/textPlayground.js's self-init -- REUSED VERBATIM [wired]
+//   textTools.messageRescue.playground   #textPlaygroundSection (primary Scribe workspace, real backend) -> features/textPlayground.js's self-init -- REUSED VERBATIM [wired]
 //
 // --- DIAGNOSTICS section (inventory §9) ------------------------------------
 //   diagnostics.doctor             8 subsystem cards + recovery panel             -> fetchDoctor()                         [wired]
@@ -239,9 +242,9 @@ import {
 // canonical DOM ids (`#messageRescuePanel`, `#textPlaygroundSection`) and
 // no-op if that markup isn't present -- exactly the same contract they have
 // today loaded via their own `<script type="module">` tags in index.html.
-// Importing them here means any page that mounts utilitiesWorkspace.js gets
-// all three Message Rescue surfaces for free without needing separate script
-// tags of its own (see signal-desk-preview.html for the markup they bind to).
+// Importing them here keeps the shared page bootstrap additive: Utilities owns
+// two Message Rescue surfaces, while the same page's primary Scribe workspace
+// owns the real playground. Neither needs a separate script tag.
 import './messageRescuePanel.js';
 import './textPlayground.js';
 
@@ -252,13 +255,19 @@ export const UTILITIES_SECTIONS = ['models', 'speech', 'text', 'diagnostics', 'a
 export const UTILITIES_SECTION_META = {
   models: { label: 'Models', description: 'LLM, Whisper, wake-word backbones, runtime memory, and voice cloning.' },
   speech: { label: 'Speech Input', description: 'Audio device, hotkeys, and wake word.' },
-  text: { label: 'Text Tools', description: 'Dictionary, macros, and the three Message Rescue surfaces.' },
+  text: { label: 'Text Tools', description: 'Dictionary, macros, and two Message Rescue surfaces.' },
   diagnostics: { label: 'Diagnostics', description: 'Doctor checkup, latency, recovery, jobs, and logs.' },
   advanced: { label: 'Advanced', description: 'Warmup, residency, send & injection, and raw dumps.' },
 };
 
 export function isValidUtilitiesSection(id) {
   return UTILITIES_SECTIONS.includes(id);
+}
+
+export const INVENTORY_PLACEMENT_SECTIONS = [...UTILITIES_SECTIONS, 'scribe'];
+
+export function isValidInventoryPlacementSection(id) {
+  return INVENTORY_PLACEMENT_SECTIONS.includes(id);
 }
 
 /** Pure reducer, same shape as signalDeskShell.js's computeNextState -- an unknown id is a no-op. */
@@ -296,6 +305,7 @@ export const INVENTORY_PLACEMENT_MAP = {
   'speech.hotkeys.forceStop': { section: 'speech', control: 'Emergency Stop key field', wired: true },
   'speech.hotkeys.manualSend': { section: 'speech', control: 'Primary Action key field', wired: true },
   'speech.hotkeys.reviewTts': { section: 'speech', control: 'Review TTS Hotkey field', wired: true },
+  'speech.hotkeys.selectionRewrite': { section: 'speech', control: 'Selection Rewrite Hotkey field', wired: true },
   'speech.hotkeys.chatOpen': { section: 'speech', control: 'Open Chat Key field', wired: true },
   'speech.hotkeys.voiceMute': { section: 'speech', control: 'Voice Mute Key field', wired: true },
   'speech.hotkeys.customWidget': { section: 'speech', control: 'Click-to-record chord widget', wired: true },
@@ -313,7 +323,7 @@ export const INVENTORY_PLACEMENT_MAP = {
   'textTools.macros.enabledToggle': { section: 'text', control: 'Macros enabled toggle', wired: true },
   'textTools.messageRescue.draftBound': { section: 'text', control: 'Message Rescue: draft-bound live panel', wired: true },
   'textTools.messageRescue.staticPreview': { section: 'text', control: 'Message Rescue: static/example preview', wired: true },
-  'textTools.messageRescue.playground': { section: 'text', control: 'Text & Persona Playground', wired: true },
+  'textTools.messageRescue.playground': { section: 'scribe', control: 'Scribe: persona cleanup playground', wired: true },
 
   'diagnostics.doctor': { section: 'diagnostics', control: 'Doctor checkup (8 cards + recovery)', wired: true },
   'diagnostics.latencyHud': { section: 'diagnostics', control: 'Pipeline latency HUD', wired: true },
@@ -340,13 +350,14 @@ export const INVENTORY_PLACEMENT_MAP = {
 
 // --- Pure helpers: hotkeys ---------------------------------------------------
 
-export const HOTKEY_FIELD_KEYS = ['hotkey', 'force_stop_key', 'manual_send_hotkey', 'review_tts_hotkey', 'chat_open_key', 'voice_mute_key'];
+export const HOTKEY_FIELD_KEYS = ['hotkey', 'force_stop_key', 'manual_send_hotkey', 'review_tts_hotkey', 'selection_rewrite_hotkey', 'chat_open_key', 'voice_mute_key'];
 
 export const HOTKEY_FIELD_LABELS = {
   hotkey: 'Recording Hotkey',
   force_stop_key: 'Emergency Stop key',
   manual_send_hotkey: 'Primary Action key',
   review_tts_hotkey: 'Review TTS Hotkey',
+  selection_rewrite_hotkey: 'Selection Rewrite Hotkey',
   chat_open_key: 'Open Chat Key',
   voice_mute_key: 'Voice Mute Key',
 };
@@ -771,6 +782,7 @@ export const UTILITIES_ELEMENT_IDS = {
     force_stop_key: hotkeyFieldIds('ForceStop'),
     manual_send_hotkey: hotkeyFieldIds('ManualSend'),
     review_tts_hotkey: hotkeyFieldIds('ReviewTts'),
+    selection_rewrite_hotkey: hotkeyFieldIds('SelectionRewrite'),
     chat_open_key: hotkeyFieldIds('ChatOpen'),
     voice_mute_key: hotkeyFieldIds('VoiceMute'),
   },

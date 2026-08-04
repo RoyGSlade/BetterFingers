@@ -59,6 +59,43 @@ let bootLastDoctor = null;
 let bootTicker = null;
 let bootDoctorTimer = null;
 let bootFinished = false; // true once the main dashboard window has been revealed
+let bootGeneration = 0;
+
+// Keep the doctor request guard tied to the request that owns it. A retry
+// changes the generation, so an old response cannot publish into the new
+// splash lifecycle; its finally still releases only its own active request.
+function createBootDoctorPoller({ requestDoctor, isCurrent, publish }) {
+  let activeRequest = null;
+
+  async function poll(generation) {
+    if (!isCurrent(generation) || activeRequest) {
+      return false;
+    }
+
+    const requestToken = { generation };
+    activeRequest = requestToken;
+    try {
+      const result = await requestDoctor();
+      if (result && result.ok && isCurrent(generation)) {
+        publish(result.body);
+        return true;
+      }
+    } catch (error) {
+      // The backend is not answering yet; the sidecar health gate remains the
+      // source of truth for boot success or failure.
+    } finally {
+      if (activeRequest === requestToken) {
+        activeRequest = null;
+      }
+    }
+    return false;
+  }
+
+  return {
+    poll,
+    isInFlight: () => activeRequest !== null,
+  };
+}
 
 function currentBootSnapshot() {
   const elapsedMs = bootStartedAt ? Date.now() - bootStartedAt : 0;
@@ -85,20 +122,17 @@ function pushBootSnapshot() {
   }
 }
 
-async function pollDoctorForBoot() {
-  if (bootFinished) {
-    return;
-  }
-  try {
-    const result = await backendProxy.request({ method: 'GET', path: '/doctor', timeoutMs: 2500 });
-    if (result && result.ok) {
-      bootLastDoctor = result.body;
-      pushBootSnapshot();
-    }
-  } catch (error) {
-    // The backend isn't answering yet -- waitForHealthy is still the source
-    // of truth for booting vs. failed; this poll only enriches the display.
-  }
+const bootDoctorPoller = createBootDoctorPoller({
+  requestDoctor: () => backendProxy.request({ method: 'GET', path: '/doctor', timeoutMs: 2500 }),
+  isCurrent: (generation) => !isQuitting && !bootFinished && generation === bootGeneration,
+  publish: (doctor) => {
+    bootLastDoctor = doctor;
+    pushBootSnapshot();
+  },
+});
+
+function pollDoctorForBoot(generation = bootGeneration) {
+  return bootDoctorPoller.poll(generation);
 }
 
 function stopBootTimers() {
@@ -142,6 +176,7 @@ function revealMainWindow() {
 // sidecar.start() call, so 'failed' can only ever come from that promise
 // rejecting, per SPLASH_SPEC.md's one rule.
 function startBackendBoot() {
+  const generation = ++bootGeneration;
   bootStartedAt = Date.now();
   bootSidecarOutcome = 'pending';
   bootLastError = null;
@@ -150,13 +185,19 @@ function startBackendBoot() {
 
   stopBootTimers();
   bootTicker = setInterval(pushBootSnapshot, 500);
-  bootDoctorTimer = setInterval(pollDoctorForBoot, 750);
-  pollDoctorForBoot();
+  bootDoctorTimer = setInterval(() => pollDoctorForBoot(generation), 750);
+  pollDoctorForBoot(generation);
 
   sidecar.start().then(() => {
+    if (generation !== bootGeneration || bootFinished) {
+      return;
+    }
     bootSidecarOutcome = 'ready';
     pushBootSnapshot();
   }).catch((error) => {
+    if (generation !== bootGeneration || bootFinished) {
+      return;
+    }
     console.error('Failed to start BetterFingers backend:', error);
     bootSidecarOutcome = 'failed';
     bootLastError = error && error.message ? error.message : String(error);
@@ -170,6 +211,10 @@ async function retryBackendBoot() {
     // through the existing sidecar health-monitor + backendBanner path.
     return;
   }
+  stopBootTimers();
+  // Invalidate the old sidecar and doctor callbacks while stop() is awaiting;
+  // startBackendBoot() advances once more for the new lifecycle.
+  bootGeneration += 1;
   try {
     if (sidecar) {
       await sidecar.stop();
@@ -321,6 +366,8 @@ async function requestQuit() {
   }
 
   isQuitting = true;
+  stopBootTimers();
+  bootGeneration += 1;
 
   try {
     if (sidecar) {
@@ -335,6 +382,16 @@ async function requestQuit() {
 }
 
 app.setAppUserModelId('com.betterfingers.desktop');
+
+// Electron's globalShortcut needs Chromium's portal implementation on
+// Wayland. Preserve any feature flags supplied by the launcher while adding
+// the required portal feature before the app becomes ready.
+const existingChromiumFeatures = app.commandLine.getSwitchValue('enable-features');
+const chromiumFeatures = new Set(
+  existingChromiumFeatures.split(',').map((feature) => feature.trim()).filter(Boolean),
+);
+chromiumFeatures.add('GlobalShortcutsPortal');
+app.commandLine.appendSwitch('enable-features', [...chromiumFeatures].join(','));
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();

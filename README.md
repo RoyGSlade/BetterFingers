@@ -1,11 +1,13 @@
 # BetterFingers
 
 **A private desktop speech editor.** Speak messy thoughts, watch them get refined by a
-local LLM, review the result, and place clean text into any application — all running
-100% on your own machine. No cloud, no account, no subscription, no telemetry.
+local LLM, review the result, and place clean text into a focused target when the
+configured platform/backend supports it — all running 100% on your own machine. No
+cloud, no account, no subscription, no telemetry.
 
 > A [Donaven Crenshaw](#about) project · MIT licensed · Windows + Linux
-> ⚠️ **Status: pre-release (alpha in progress).** The core dictation loop works; see
+> ⚠️ **Status: pre-release (alpha in progress).** The core dictation loop is under
+> qualification; see
 > [Project status](#project-status) for what is and isn't ready.
 
 <!-- TODO(M0): 15-second demo GIF here — voice → clean text landing in a real app. -->
@@ -21,7 +23,8 @@ Hold a hotkey (or a game-controller button), talk, and BetterFingers:
    cleaning up grammar, tone, and formatting instead of dumping raw dictation.
 3. **Shows you the draft** in a review overlay you can edit, re-run, or have read back
    aloud (Kokoro TTS) before anything lands.
-4. **Injects** the final text into whatever app has focus, and restores your clipboard.
+4. **Injects** final text into the focused target when the configured injection path
+   supports it, and restores your clipboard.
 5. **Never loses audio** — every utterance's raw recording is kept so a failed run is
    recoverable, not gone.
 
@@ -35,10 +38,10 @@ The whole product is built around one loop:
   and wipes your data on demand.
 - **Smart, not literal.** LLM personas (Formal, Polished, Unhinged, and your own) rewrite
   what you say. Build new ones with a guided interview (**Persona Foundry**).
-- **Works everywhere you type.** Any app, via global hotkey or game controller — even
-  mid-game, with audio ducking.
-- **Respects your hardware.** Automatic hardware-tier detection recommends models that
-  actually fit your machine, from CPU-only laptops to high-end GPUs.
+- **Cross-app when supported.** Hotkeys, selection capture, and injection depend on the
+  desktop/platform path; Wayland is best-effort with honest capability reporting.
+- **Respects your hardware.** The recommender reports model tiers from detected hardware;
+  hardware compatibility remains subject to operator qualification.
 - **Free forever.** MIT-licensed and donation-supported. No paywall waiting to appear.
 
 ## Feature highlights
@@ -49,21 +52,21 @@ The whole product is built around one loop:
 | Refinement | Local LLM personas (schema v2), personal dictionary, spoken formatting commands, text macros |
 | Review | Editable review overlay, TTS read-back, per-utterance confidence surfaced honestly |
 | Recovery | Raw-audio retention + re-transcribe, recoverable error drafts |
-| Placement | Cross-app text injection (typing/paste backends), clipboard restore |
+| Placement | Text injection through supported typing/paste backends; clipboard restore; qualification varies by desktop/platform path |
 | Recall | Full-text searchable history (SQLite FTS5) |
 | Trust | Privacy dashboard, one-button data wipe, hardware-aware model recommender |
 
 ## Project status
 
-BetterFingers is a real application with a coherent local-first architecture, packaging,
-extensive tests (600+ Python unit tests, Playwright end-to-end coverage), and a deep
-feature set. It is **not yet a tagged public release.** The remaining work to 1.0 — release
-signing/reproducibility, a core-loop reliability benchmark, an injection-compatibility
-matrix, hands-free wake word, and a unified data-lifecycle model — is tracked in
-[DESIGN.md](DESIGN.md), the single source of truth for the roadmap.
+BetterFingers is a real local-first application with automated tests and a deep feature
+set. It is **not yet a tagged public release.** Remaining gates include operator QA,
+release reproducibility/package qualification, a signing decision, core-loop reliability
+evidence, injection compatibility, audio/hardware qualification, and platform-specific
+selection evidence. The active execution source is [ACCOMPLISH.md](ACCOMPLISH.md).
 
-**Platforms:** Windows and Linux (X11 fully; Wayland degrades global hotkeys/injection to
-best-effort with honest capability reporting). **macOS is not supported yet.**
+**Platforms:** Windows and Linux are intended targets. The source `Ctrl+Alt+R`
+selection-rewrite workflow is qualified on X11 only; selected-text TTS, general
+hotkeys/injection, Wayland, and Windows remain unqualified. **macOS is not supported yet.**
 
 ## Hardware tiers
 
@@ -87,8 +90,9 @@ recordings. See [DESIGN.md §9](DESIGN.md) for the full data-lifecycle model (a 
 
 ## Install
 
-> Packaged installers (Windows NSIS, Linux AppImage) are produced by CI on release tags
-> but a **signed public release has not shipped yet**. For now, run from source.
+> CI can build Windows NSIS and Linux AppImage artifacts on release tags, but no public
+> release package is currently qualified or shipped. A local AppImage build is not
+> clean-machine/install/signing evidence; for now, run from source.
 
 ## Run from source (Linux)
 
@@ -131,7 +135,8 @@ Overrides: `BETTERFINGERS_LLAMA_SERVER=/path/to/llama-server`,
 - **End-to-end:** `cd app && npx playwright test` (needs a local LLM + `llama-server` on
   disk for the review-overlay spec; close any running instance first).
 - **JS syntax check:** `node --check app/src/renderer/main.js`.
-- Architecture and the full roadmap live in **[DESIGN.md](DESIGN.md)**.
+- Execution status and release gates live in **[ACCOMPLISH.md](ACCOMPLISH.md)**;
+  [DESIGN.md](DESIGN.md) is long-horizon product design.
 
 ## Architecture
 
@@ -155,7 +160,14 @@ recordings, history, privacy). The boundary is an inspectable, version-gated RES
 
 - No macOS build.
 - No signed installer / auto-update channel yet.
-- Wayland global hotkeys and text injection are best-effort (OS limitation, not a bug).
+- On X11, selection/copy and typing paths require `DISPLAY`, `xclip` (or `xsel`), and
+  `xdotool` where those paths are used. Wayland best-effort paths use `WAYLAND_DISPLAY`,
+  `wl-copy`/`wl-paste` from `wl-clipboard`, and `wtype` or `ydotool` where the
+  compositor permits them; tool presence alone is not qualification.
+- Wayland global hotkeys and text injection are best-effort (OS limitation, not a bug),
+  and Wayland is not qualified on the current host.
+- Selected-text TTS (OR-13), general injection/PTT, Windows, package installation,
+  audio, hardware, and reliability remain unqualified.
 - A local LLM has a real resource footprint on weak hardware — use the tier recommender.
 - Voice cloning ships a consent + QA gate but **no synthesis engine is bundled yet**.
 

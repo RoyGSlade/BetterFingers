@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from hotkey_manager import HotkeyManager
+from utils import validate_profile_settings
 
 
 class _DummyRecorder:
@@ -28,12 +29,13 @@ class _DummyRecorder:
 
 class HotkeyManagerTTSTests(unittest.TestCase):
     @staticmethod
-    def _config(review_key="ctrl+shift+space", manual_key=""):
+    def _config(review_key="ctrl+shift+space", manual_key="", selection_rewrite_key="ctrl+alt+r"):
         return {
             "hotkey": "f8",
             "force_stop_key": "",
             "manual_send_hotkey": manual_key,
             "review_tts_hotkey": review_key,
+            "selection_rewrite_hotkey": selection_rewrite_key,
             "recording_mode": "toggle",
             "controller_enabled": False,
             "controller_binding": {
@@ -118,6 +120,56 @@ class HotkeyManagerTTSTests(unittest.TestCase):
             manager.update_config("Default")
             stop_mock.assert_called_once()
             start_mock.assert_called_once()
+
+    @patch("hotkey_manager.load_profile")
+    def test_defaults_and_dispatches_selection_rewrite_hotkey(self, load_profile):
+        config = self._config()
+        config.pop("selection_rewrite_hotkey")
+        load_profile.return_value = config
+        rewrite_hits = {"count": 0}
+        manager = HotkeyManager(
+            recorder=_DummyRecorder(),
+            on_recording_complete_callback=lambda _result: None,
+            on_recording_start_callback=lambda: None,
+            on_selection_rewrite_callback=lambda: rewrite_hits.__setitem__("count", rewrite_hits["count"] + 1),
+        )
+
+        self.assertEqual(manager.selection_rewrite_hotkey, "ctrl+alt+r")
+        manager._selection_rewrite_trigger()
+        self.assertEqual(rewrite_hits["count"], 1)
+
+    @patch("hotkey_manager.load_profile")
+    def test_explicit_empty_selection_rewrite_hotkey_stays_disabled(self, load_profile):
+        load_profile.return_value = self._config(selection_rewrite_key="")
+        manager = HotkeyManager(
+            recorder=_DummyRecorder(),
+            on_recording_complete_callback=lambda _result: None,
+            on_recording_start_callback=lambda: None,
+        )
+
+        self.assertEqual(manager.selection_rewrite_hotkey, "")
+
+    @patch("hotkey_manager.load_profile")
+    def test_update_config_restarts_for_selection_rewrite_hotkey_change(self, load_profile):
+        load_profile.side_effect = [
+            self._config(selection_rewrite_key="ctrl+alt+r"),
+            self._config(selection_rewrite_key="ctrl+shift+y"),
+        ]
+        manager = HotkeyManager(
+            recorder=_DummyRecorder(),
+            on_recording_complete_callback=lambda _result: None,
+            on_recording_start_callback=lambda: None,
+        )
+        manager._running = True
+        with patch.object(manager, "stop") as stop_mock, patch.object(manager, "start") as start_mock:
+            manager.update_config("Default")
+            stop_mock.assert_called_once()
+            start_mock.assert_called_once()
+
+    def test_profile_validation_rejects_selection_rewrite_collision(self):
+        config = self._config(selection_rewrite_key="ctrl+alt+r", manual_key="ctrl+alt+r")
+        with self.assertRaisesRegex(ValueError, "Selection Rewrite Hotkey"):
+            validate_profile_settings(config)
 
 
 class HotkeyManagerWatchdogTests(unittest.TestCase):

@@ -29,6 +29,7 @@ const DEFAULT_PROFILE_SETTINGS = {
   hotkey: 'f8',
   force_stop_key: '',
   manual_send_hotkey: 'f9',
+  selection_rewrite_hotkey: 'ctrl+alt+r',
   recording_mode: 'toggle',
   send_mode: 'review_first',
   confidence_force_review_enabled: true,

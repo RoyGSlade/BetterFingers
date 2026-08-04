@@ -1,4 +1,5 @@
 import importlib
+import os
 import unittest
 from unittest.mock import patch
 
@@ -26,6 +27,10 @@ class DetectInjectionMethodTests(unittest.TestCase):
             platform_capabilities, "supports_basic_clipboard", True
         ), patch(
             "platform_capabilities.shutil.which", _which_map(tools)
+        ), patch.dict(
+            os.environ,
+            {"DISPLAY": ":99" if x11 else "", "WAYLAND_DISPLAY": "wayland-0" if wayland else ""},
+            clear=False,
         ):
             return platform_capabilities.detect_injection_method()
 
@@ -56,6 +61,26 @@ class DetectInjectionMethodTests(unittest.TestCase):
     def test_wayland_without_typing_tools_falls_back_to_paste(self):
         self.assertEqual(self._detect(wayland=True, x11=False, tools=[]), "paste")
 
+    def test_wayland_without_live_display_is_unsupported(self):
+        with patch.object(platform_capabilities, "is_windows", False), patch.object(
+            platform_capabilities, "is_linux", True
+        ), patch.object(platform_capabilities, "is_wayland", True), patch.object(
+            platform_capabilities, "is_x11", False
+        ), patch.object(platform_capabilities, "supports_basic_clipboard", True), patch(
+            "platform_capabilities.shutil.which", _which_map(["wtype"])
+        ), patch.dict(os.environ, {"WAYLAND_DISPLAY": "", "DISPLAY": ""}, clear=False):
+            self.assertEqual(platform_capabilities.detect_injection_method(), "none")
+
+    def test_x11_without_live_display_is_unsupported(self):
+        with patch.object(platform_capabilities, "is_windows", False), patch.object(
+            platform_capabilities, "is_linux", True
+        ), patch.object(platform_capabilities, "is_wayland", False), patch.object(
+            platform_capabilities, "is_x11", True
+        ), patch.object(platform_capabilities, "supports_basic_clipboard", True), patch(
+            "platform_capabilities.shutil.which", _which_map(["xdotool"])
+        ), patch.dict(os.environ, {"WAYLAND_DISPLAY": "", "DISPLAY": ""}, clear=False):
+            self.assertEqual(platform_capabilities.detect_injection_method(), "none")
+
     def test_no_clipboard_reports_none(self):
         with patch.object(platform_capabilities, "is_windows", False), patch.object(
             platform_capabilities, "is_linux", False
@@ -76,7 +101,11 @@ class ClipboardBackendDetectionTests(unittest.TestCase):
             platform_capabilities, "is_macos", macos
         ), patch.object(platform_capabilities, "is_linux", linux), patch.object(
             platform_capabilities, "is_wayland", wayland
-        ), patch("platform_capabilities.shutil.which", _which_map(tools)):
+        ), patch("platform_capabilities.shutil.which", _which_map(tools)), patch.dict(
+            os.environ,
+            {"DISPLAY": "" if wayland else ":99", "WAYLAND_DISPLAY": "wayland-0" if wayland else ""},
+            clear=False,
+        ):
             return platform_capabilities._detect_clipboard_backend()
 
     def test_windows_native(self):
@@ -117,6 +146,71 @@ class InjectionHintTests(unittest.TestCase):
 
 
 class CapabilitiesFieldTests(unittest.TestCase):
+    def test_wayland_display_takes_precedence_over_stale_x11_environment(self):
+        original_env = dict(os.environ)
+        try:
+            os.environ["WAYLAND_DISPLAY"] = "wayland-0"
+            os.environ["DISPLAY"] = ":99"
+            os.environ["XDG_SESSION_TYPE"] = "x11"
+            importlib.reload(platform_capabilities)
+
+            self.assertEqual(platform_capabilities.session_type, "wayland")
+            self.assertTrue(platform_capabilities.is_wayland)
+            self.assertFalse(platform_capabilities.is_x11)
+            self.assertFalse(platform_capabilities.supports_global_hotkeys)
+        finally:
+            os.environ.clear()
+            os.environ.update(original_env)
+            importlib.reload(platform_capabilities)
+
+    def test_display_only_session_is_effective_x11(self):
+        original_env = dict(os.environ)
+        try:
+            os.environ.pop("WAYLAND_DISPLAY", None)
+            os.environ.pop("XDG_SESSION_TYPE", None)
+            os.environ["DISPLAY"] = ":99"
+            importlib.reload(platform_capabilities)
+
+            self.assertEqual(platform_capabilities.session_type, "x11")
+            self.assertFalse(platform_capabilities.is_wayland)
+            self.assertTrue(platform_capabilities.is_x11)
+            self.assertTrue(platform_capabilities.supports_global_hotkeys)
+        finally:
+            os.environ.clear()
+            os.environ.update(original_env)
+            importlib.reload(platform_capabilities)
+
+    def test_stale_x11_session_without_display_is_not_x11_capable(self):
+        original_env = dict(os.environ)
+        try:
+            os.environ.pop("WAYLAND_DISPLAY", None)
+            os.environ.pop("DISPLAY", None)
+            os.environ["XDG_SESSION_TYPE"] = "x11"
+            importlib.reload(platform_capabilities)
+
+            self.assertEqual(platform_capabilities.session_type, "x11")
+            self.assertFalse(platform_capabilities.is_x11)
+            self.assertFalse(platform_capabilities.supports_global_hotkeys)
+        finally:
+            os.environ.clear()
+            os.environ.update(original_env)
+            importlib.reload(platform_capabilities)
+
+    def test_wayland_xclip_fallback_requires_xwayland_display(self):
+        with patch.object(platform_capabilities, "is_linux", True), patch.object(
+            platform_capabilities, "is_wayland", True
+        ), patch("platform_capabilities.shutil.which", _which_map(["xclip"])), patch.dict(
+            os.environ, {"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ""}, clear=False
+        ):
+            self.assertEqual(platform_capabilities._detect_clipboard_backend(), "")
+
+        with patch.object(platform_capabilities, "is_linux", True), patch.object(
+            platform_capabilities, "is_wayland", True
+        ), patch("platform_capabilities.shutil.which", _which_map(["xclip"])), patch.dict(
+            os.environ, {"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":99"}, clear=False
+        ):
+            self.assertEqual(platform_capabilities._detect_clipboard_backend(), "xclip")
+
     def test_capabilities_expose_injection_fields(self):
         caps = platform_capabilities.get_capabilities()
         self.assertIn("injection_method", caps)
@@ -184,7 +278,11 @@ class InjectionStatusTests(unittest.TestCase):
             platform_capabilities, "is_wayland", wayland
         ), patch.object(platform_capabilities, "is_x11", x11), patch.object(
             platform_capabilities, "session_type", session
-        ), patch("platform_capabilities.shutil.which", _which_map(tools)):
+        ), patch("platform_capabilities.shutil.which", _which_map(tools)), patch.dict(
+            os.environ,
+            {"DISPLAY": ":99" if x11 else "", "WAYLAND_DISPLAY": "wayland-0" if wayland else ""},
+            clear=False,
+        ):
             return platform_capabilities.get_injection_status()
 
     def test_wayland_missing_everything_is_honestly_none(self):

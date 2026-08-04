@@ -84,7 +84,7 @@ export function overlayPayloadFor(message) {
   } else if (status === 'draft_blocked') {
     payload.message = message.error || 'No usable audio';
   } else if (status === 'draft_error') {
-    payload.message = message.error || 'Draft failed';
+    payload.message = message.message || message.error || 'Draft failed';
   } else if (status === 'long_recording_detected') {
     payload.message = 'Long recording…';
   } else if (status === 'chunking_started') {

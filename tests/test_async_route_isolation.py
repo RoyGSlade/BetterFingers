@@ -9,6 +9,7 @@ supervisor can tell busy from dead.
 
 import threading
 import time
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -88,6 +89,100 @@ class HealthJobVisibilityTests(unittest.TestCase):
         self.assertIn("active_job_count", payload)
         self.assertIn("active_jobs", payload)
         self.assertIn("last_progress_at", payload)
+
+
+class DoctorIsolationTests(unittest.TestCase):
+    def test_health_responds_while_doctor_runtime_probe_blocks(self):
+        entered = threading.Event()
+        release = threading.Event()
+        doctor_done = threading.Event()
+        responses = {}
+
+        def blocking_runtime_probe(_server_path):
+            entered.set()
+            self.assertTrue(release.wait(timeout=5), "probe was never released")
+            return {"ok": True, "build": 1, "message": "ok"}
+
+        with tempfile.NamedTemporaryFile() as server_file:
+            with patch.object(server, "get_server_path", return_value=server_file.name), patch.object(
+                server, "validate_llama_server_runtime", side_effect=blocking_runtime_probe
+            ):
+                client = TestClient(server.app)
+
+                def slow_request():
+                    responses["doctor"] = client.get("/doctor")
+                    doctor_done.set()
+
+                worker = threading.Thread(target=slow_request)
+                worker.start()
+                self.assertTrue(entered.wait(timeout=5), "doctor probe never started")
+
+                health_started = time.monotonic()
+                health = client.get("/health")
+                health_elapsed = time.monotonic() - health_started
+
+                release.set()
+                self.assertTrue(doctor_done.wait(timeout=10), "doctor request did not finish")
+                worker.join(timeout=10)
+
+        self.assertEqual(health.status_code, 200)
+        self.assertLess(health_elapsed, 1.0)
+        self.assertEqual(responses["doctor"].status_code, 200)
+
+    def test_doctor_never_invokes_tts_initializer(self):
+        with patch.object(server, "tts_engine", None), patch.object(
+            server,
+            "ensure_tts_initialized",
+            side_effect=AssertionError("/doctor must not initialize TTS"),
+        ):
+            response = TestClient(server.app).get("/doctor")
+
+        self.assertEqual(response.status_code, 200)
+        tts = response.json()["tts"]
+        self.assertFalse(tts["initialized"])
+        self.assertEqual(tts["status_message"], "TTS is not initialized.")
+
+    def test_health_responds_while_doctor_tts_snapshot_blocks(self):
+        entered = threading.Event()
+        release = threading.Event()
+        doctor_done = threading.Event()
+        responses = {}
+
+        def blocking_tts_snapshot(_engine):
+            entered.set()
+            self.assertTrue(release.wait(timeout=5), "TTS snapshot was never released")
+            return {
+                "initialized": True,
+                "loaded": False,
+                "backend": "none",
+                "status_message": "TTS is not loaded.",
+                "fallback": False,
+            }
+
+        with patch.object(server, "tts_engine", object()), patch.object(
+            server, "_snapshot_tts_status", side_effect=blocking_tts_snapshot
+        ):
+            client = TestClient(server.app)
+
+            def slow_request():
+                responses["doctor"] = client.get("/doctor")
+                doctor_done.set()
+
+            worker = threading.Thread(target=slow_request)
+            worker.start()
+            self.assertTrue(entered.wait(timeout=5), "doctor TTS snapshot never started")
+
+            health_started = time.monotonic()
+            health = client.get("/health")
+            health_elapsed = time.monotonic() - health_started
+
+            release.set()
+            self.assertTrue(doctor_done.wait(timeout=10), "doctor request did not finish")
+            worker.join(timeout=10)
+
+        self.assertEqual(health.status_code, 200)
+        self.assertLess(health_elapsed, 1.0)
+        self.assertEqual(responses["doctor"].status_code, 200)
 
 
 if __name__ == "__main__":

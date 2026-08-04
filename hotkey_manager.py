@@ -23,7 +23,7 @@ class HotkeyManager:
 
     @staticmethod
     def _normalize_hotkey(value, default=""):
-        hotkey = str(value or default or "").strip().lower()
+        hotkey = str(default if value is None else value).strip().lower()
         if not hotkey:
             return ""
         parts = [part.strip() for part in hotkey.split("+") if part.strip()]
@@ -39,6 +39,7 @@ class HotkeyManager:
         on_review_tts_callback=None,
         is_busy_callback=None,
         on_watchdog_timeout_callback=None,
+        on_selection_rewrite_callback=None,
     ):
         self.recorder = recorder
         self.on_complete = on_recording_complete_callback
@@ -46,6 +47,7 @@ class HotkeyManager:
         self.on_force_stop = on_force_stop_callback
         self.on_manual_send = on_manual_send_callback
         self.on_review_tts = on_review_tts_callback
+        self.on_selection_rewrite = on_selection_rewrite_callback
         self.is_busy_callback = is_busy_callback
         self.on_watchdog_timeout = on_watchdog_timeout_callback
         self._watchdog_timer = None
@@ -63,6 +65,7 @@ class HotkeyManager:
         self.force_stop_key = ""
         self.manual_send_hotkey = "f9"
         self.review_tts_hotkey = "ctrl+shift+space"
+        self.selection_rewrite_hotkey = "ctrl+alt+r"
         self.mode = "toggle"
         self.controller_enabled = False
         self.controller_binding = InputBinding()
@@ -80,6 +83,7 @@ class HotkeyManager:
         self.force_stop_handle = None
         self.manual_send_handle = None
         self.review_tts_handle = None
+        self.selection_rewrite_handle = None
         self.review_tts_deduped = False
 
         self.stop_threads = False
@@ -109,6 +113,9 @@ class HotkeyManager:
         self.force_stop_key = self._normalize_hotkey(config.get("force_stop_key"), "")
         self.manual_send_hotkey = self._normalize_hotkey(config.get("manual_send_hotkey"), "f9")
         self.review_tts_hotkey = self._normalize_hotkey(config.get("review_tts_hotkey"), "ctrl+shift+space")
+        self.selection_rewrite_hotkey = self._normalize_hotkey(
+            config.get("selection_rewrite_hotkey"), "ctrl+alt+r"
+        )
         self.mode = config.get("recording_mode", "toggle")
         self.controller_enabled = self._coerce_bool(
             config.get("controller_enabled", config.get("controller_ptt", False))
@@ -639,6 +646,11 @@ class HotkeyManager:
         if self.on_review_tts:
             self.on_review_tts()
 
+    def _selection_rewrite_trigger(self):
+        logging.info("Selection rewrite hotkey triggered.")
+        if self.on_selection_rewrite:
+            self.on_selection_rewrite()
+
     def start(self):
         if self._running:
             logging.info("Hotkey listener already running; restart skipped.")
@@ -648,6 +660,7 @@ class HotkeyManager:
             "Hotkey listener start: "
             f"hotkey='{self.hotkey}' force_stop='{self.force_stop_key}' "
             f"manual_send='{self.manual_send_hotkey}' review_tts='{self.review_tts_hotkey}' "
+            f"selection_rewrite='{self.selection_rewrite_hotkey}' "
             f"mode='{self.mode}' (Note: Native keyboard hooks disabled; running via Electron IPC)"
         )
         # Native hooks removed
@@ -670,6 +683,7 @@ class HotkeyManager:
         self.force_stop_handle = None
         self.manual_send_handle = None
         self.review_tts_handle = None
+        self.selection_rewrite_handle = None
         self.review_tts_deduped = False
 
     def update_config(self, profile_name):
@@ -680,6 +694,7 @@ class HotkeyManager:
         old_force_stop = self.force_stop_key
         old_manual_send = self.manual_send_hotkey
         old_review_tts = self.review_tts_hotkey
+        old_selection_rewrite = self.selection_rewrite_hotkey
         old_mode = self.mode
         old_controller_enabled = self.controller_enabled
 
@@ -690,6 +705,7 @@ class HotkeyManager:
             or old_force_stop != self.force_stop_key
             or old_manual_send != self.manual_send_hotkey
             or old_review_tts != self.review_tts_hotkey
+            or old_selection_rewrite != self.selection_rewrite_hotkey
             or old_mode != self.mode
         )
         controller_state_changed = old_controller_enabled != self.controller_enabled

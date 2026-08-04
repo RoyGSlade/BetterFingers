@@ -3,9 +3,11 @@
 - **Objective (the only one):** Publish `v0.2.0-alpha.1` — Linux AppImage + Windows
   .exe — where every shipped feature is **clean, hardened, and simple to set up**,
   and a first-time user is never overloaded.
-- **HEAD at writing:** `be2ebaa` (2026-07-29). Verified live: parity ledger
-  **398 wired / 23 intentional_cut / 17 blocked**, QA board **96/97**, Python suite
-  3074 passed, Node suite 1638 passed.
+- **Historical snapshot (2026-07-29):** `be2ebaa`, parity **398 wired / 23
+  intentional_cut / 17 blocked**, QA board **96/97**, Python suite 3074, Node
+  suite 1638. Current Gate 11 authority is `3d935c6`: **411 wired / 27
+  intentional_cut / 0 blocked**; parity acceptance is not operator, package,
+  CI, audio, hardware, or reliability qualification.
 - **This document supersedes** `docs/archive/REMEDIATION_WHATS_LEFT.md` for planning purposes.
   `RELEASE_BOARD.md` remains the gate authority; this doc is the work queue that
   gets its remaining gates accepted.
@@ -37,18 +39,21 @@ supervisor working from this plan:
 
 All of the following, nothing more:
 
-- [ ] Parity ledger reads `N wired / M intentional_cut / 0 blocked` (Gate 11)
+- [x] Gate 11 parity accepted (`411 wired / 27 intentional_cut / 0 blocked` at
+      the authoritative board record); this does not authorize publication.
 - [ ] Production QA board 97/97, **three consecutive** full-board green runs
 - [ ] The four hardening items in WS-C are closed (they are user-safety, not polish)
 - [ ] Operator QA checklist (§6) completed; all RED findings in `QA_NOTES.md` fixed
 - [ ] First-run flow passes the §5 simplicity bar on a wiped data dir
 - [ ] Wave 12 package qualification: AppImage + .exe built, installed, and
-      smoke-tested on real machines (installer pipeline already proven green
-      once at `8d2f180` — this is re-qualification at release HEAD, not new work)
+      smoke-tested on real machines. A corrected local AppImage and local
+      health/runtime smoke exist, but clean-machine/package acceptance remains
+      open; artifact metadata is recorded pending task #30/later operator.
 - [ ] Release docs corrected (WS-E) so published claims match the code
 
-Signing stays **out** of the alpha bar (see §7) unless the director reverses
-D-marked precedent — record either way in `DECISIONS.md`.
+Signing is **unqualified**; no signed-release claim may be made. Any
+unsigned-alpha treatment requires an explicit recorded director decision in
+`DECISIONS.md`.
 
 ---
 
@@ -351,13 +356,13 @@ tasks — not the workers.
 
 ### WS-F — Package qualification (Wave 12; starts only when Gate 11 is accepted)
 
-#### F-1 · Build + qualify Linux AppImage at release HEAD · `BLOCKED (Gate 11)`
+#### F-1 · Build + qualify Linux AppImage at release HEAD · `OPEN (Gate 11 accepted; corrected package and Linux operator/clean-machine qualification pending)`
 - **Objective:** Re-run the proven installer pipeline at the release commit;
   install on a clean machine/VM; run the operator smoke (§6.8).
 - **Review (Opus + operator):** artifact hashes recorded in
   `PACKAGE_BASELINE.md`; operator smoke checklist signed off.
 
-#### F-2 · Build + qualify Windows .exe at release HEAD · `BLOCKED (Gate 11)`
+#### F-2 · Build + qualify Windows .exe at release HEAD · `OPEN (Gate 11 accepted; Windows artifact and operator qualification pending)`
 - Same shape as F-1. Unsigned per §7 unless the director rules otherwise.
 
 ---
@@ -418,7 +423,9 @@ section with a severity (RED = blocks publish / YEL = fix if cheap / GRN = note)
 **6.2 Talk**
 - [ ] Record → review → send loop feels immediate; ring states match reality
 - [ ] Retry on a failed draft works; nothing claims success that didn't happen
-- [ ] Hotkeys: push-to-talk on X11; degraded toggle mode on Wayland is honest
+- [ ] Hotkeys: the source `Ctrl+Alt+R` selection-rewrite workflow is qualified
+      on X11 only; qualify push-to-talk and other hotkey/injection paths
+      separately. Wayland is best-effort; Windows remains unqualified.
 
 **6.3 Library**
 - [ ] Empty states (no selection, no data) explain themselves
@@ -445,8 +452,9 @@ section with a severity (RED = blocks publish / YEL = fix if cheap / GRN = note)
 **6.8 Package smoke** (after F-1/F-2)
 - [ ] Fresh install → first dictation on a machine with no dev tooling
 - [ ] Uninstall/reinstall keeps or wipes data per what the UI promised
-- [ ] **Gate 10 hardware pass:** controller + Stream Deck per `WAVE10_QA.md`
-      (only if devices are on hand; otherwise director records it as deferred)
+- [ ] **Gate 10 hardware pass:** controller + Stream Deck per `WAVE10_QA.md`;
+      this remains **OPEN** pending the operator/device pass. If devices are
+      unavailable, record an explicit deferral, not a pass.
 
 ## 7. Explicitly deferred — the scope-creep graveyard (do not touch)
 
@@ -458,7 +466,7 @@ section with a severity (RED = blocks publish / YEL = fix if cheap / GRN = note)
 | Phase 9 (KISS adapter boundary) | Zero user-facing effect | Wave 14 |
 | 2.1b review comments (graph_data sensitivity, `opt_in_wipe`, docstrings) | Real but tiny and non-blocking; batch post-publish | post-publish |
 | Contacts completion / audience enable / persona traits enable | Gated features stay off; already honest in the UI | next release |
-| Signed installers (8.5) | Alpha ships unsigned; signing needs credentials that don't exist yet | before public beta |
+| Signed installers (8.5) | Signing remains unqualified; no signed-release claim; unsigned-alpha treatment requires an explicit director decision | before public beta or recorded alpha decision |
 | macOS build | Never in scope for this release | someday |
 | Light theme | Dark-only is a recorded Wave 12 limitation | next release |
 | Controller/Stream Deck hardware matrix | Software-qualified; hardware needs the operator + devices | §6.8 or deferred by decision |

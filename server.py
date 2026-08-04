@@ -821,6 +821,7 @@ def start_hotkey_manager():
         on_force_stop_callback=emergency_stop_runtime,
         on_manual_send_callback=handle_primary_action,
         on_review_tts_callback=handle_review_tts_shortcut,
+        on_selection_rewrite_callback=handle_selection_rewrite_shortcut,
         # Recording is never blocked by draft processing anymore — a finished
         # recording is held in _pending_recordings and processed in order. The
         # only true blocker is a privacy wipe, which must stay quiescent.
@@ -1399,6 +1400,258 @@ def handle_review_tts_shortcut():
         result["message"] = "Can't read selected text — no selected text was captured. Select text and try again."
     broadcast_status_threadsafe("selection_capture_failed", result)
     return result
+
+
+def _selection_rewrite_error(reason, message, *, capture_status=None, status="draft_error"):
+    """Return and surface a privacy-safe selected-text rewrite failure."""
+    result = {
+        "ok": False,
+        "reason": str(reason or "selection_rewrite_failed"),
+        "message": str(message or "Selected-text rewrite failed."),
+    }
+    if capture_status:
+        result["capture_status"] = str(capture_status)
+    broadcast_payload = {
+        "reason": result["reason"],
+        "message": result["message"],
+        "source": "selection_rewrite",
+    }
+    if capture_status:
+        broadcast_payload["capture_status"] = str(capture_status)
+    broadcast_status_threadsafe(status, broadcast_payload)
+    return result
+
+
+def handle_selection_rewrite_shortcut():
+    """Capture, clean, and queue selected text for review without delivery."""
+    global is_processing_draft
+
+    wiping = _reject_if_wiping("selected-text rewrite")
+    if wiping:
+        return _selection_rewrite_error(
+            "privacy_wipe",
+            "Selected-text rewrite is unavailable while a privacy wipe is in progress.",
+        )
+    if hotkey_manager is not None and bool(getattr(hotkey_manager, "is_recording", False)):
+        return _selection_rewrite_error(
+            "recording",
+            "Selected-text rewrite is unavailable while recording.",
+        )
+    with draft_lock:
+        if is_processing_draft:
+            return _selection_rewrite_error(
+                "processing",
+                "Selected-text rewrite is unavailable while another draft is processing.",
+            )
+
+    # Share the dictation single-flight gate so a selection rewrite cannot
+    # overlap transcription, recording cleanup, or another selection rewrite.
+    with dictation_coordinator.session() as lease:
+        if not lease.admitted:
+            return _selection_rewrite_error(
+                "processing",
+                "Selected-text rewrite is unavailable while another draft is processing.",
+            )
+
+        wiping = _reject_if_wiping("selected-text rewrite admission")
+        if wiping:
+            return _selection_rewrite_error(
+                "privacy_wipe",
+                "Selected-text rewrite is unavailable while a privacy wipe is in progress.",
+            )
+        if hotkey_manager is not None and bool(getattr(hotkey_manager, "is_recording", False)):
+            return _selection_rewrite_error(
+                "recording",
+                "Selected-text rewrite is unavailable while recording.",
+            )
+
+        with draft_lock:
+            is_processing_draft = True
+        try:
+            try:
+                from clipboard_capture import capture_selection_text_with_restore
+
+                captured = capture_selection_text_with_restore(timeout_ms=350, poll_ms=25)
+            except Exception as exc:
+                logging.warning(
+                    "Selected-text rewrite capture failed (%s).",
+                    type(exc).__name__,
+                )
+                return _selection_rewrite_error(
+                    "capture_failed",
+                    "Can't read selected text — selection capture failed unexpectedly. Try selecting text again.",
+                    capture_status="exception",
+                    status="selection_capture_failed",
+                )
+
+            captured = dict(captured or {})
+            raw_text = str(captured.get("text") or "")
+            # The shared capture helper can fall back to pre-existing clipboard
+            # text for read-aloud callers. This hotkey promises to rewrite the
+            # current selection, so stale clipboard content must fail closed.
+            if captured.get("used_fallback"):
+                return _selection_rewrite_error(
+                    "empty",
+                    "Can't read selected text — no selected text was captured. Select text and try again.",
+                    capture_status="empty",
+                    status="selection_capture_failed",
+                )
+            if not captured.get("ok") or not raw_text.strip():
+                capture_status = str(captured.get("capture_status") or "empty")
+                if capture_status == "unsupported":
+                    message = str(captured.get("message") or "").strip()
+                    if not message:
+                        missing_tool = str(captured.get("missing_tool") or "a supported clipboard tool")
+                        if missing_tool == "xclip or xsel":
+                            message = "Can't read selected text — xclip or xsel is not installed. Install xclip to enable this."
+                        elif missing_tool in {"wl-clipboard", "wl-copy", "wl-paste"}:
+                            message = "Can't read selected text — wl-clipboard is not installed. Install wl-clipboard to enable this."
+                        else:
+                            message = f"Can't read selected text — {missing_tool} is not available on this system."
+                    reason = "unsupported"
+                elif capture_status == "empty":
+                    message = "Can't read selected text — no selected text was captured. Select text and try again."
+                    reason = "empty"
+                else:
+                    message = "Can't read selected text — selection capture failed. Try selecting text again."
+                    reason = "capture_failed"
+                return _selection_rewrite_error(
+                    reason,
+                    message,
+                    capture_status=capture_status,
+                    status="selection_capture_failed",
+                )
+
+            broadcast_status_threadsafe(
+                "selection_captured",
+                {"source": "selection_rewrite", "char_count": len(raw_text)},
+            )
+            broadcast_status_threadsafe("rewriting", {"source": "selection_rewrite"})
+
+            settings = get_active_recording_config()
+            preset = resolve_dictation_preset(
+                settings.get("current_preset", "True Janitor")
+            )
+            try:
+                llm_chunk_size = max(1, int(settings.get("llm_chunk_size", 750) or 750))
+                completion_tokens = int(
+                    settings.get("max_completion_tokens")
+                    or settings.get("output_token_limit", 1600)
+                    or 1600
+                )
+                stitch_enabled = bool(
+                    settings.get("long_recording_stitch_pass_enabled", True)
+                )
+            except Exception:
+                llm_chunk_size = 750
+                completion_tokens = 1600
+                stitch_enabled = True
+
+            will_chunk = len(raw_text.split()) > llm_chunk_size
+
+            def _chunk_progress(update):
+                if not isinstance(update, dict):
+                    return
+                status = update.get("status")
+                if not status:
+                    return
+                broadcast_status_threadsafe(
+                    status,
+                    {
+                        key: value
+                        for key, value in update.items()
+                        if key != "status"
+                    },
+                )
+
+            heartbeat = None if will_chunk else _StatusHeartbeat("rewriting").start()
+            try:
+                engine = get_selected_llm_engine()
+                with model_runtime.read_lease("llm"):
+                    rewritten = engine.process_fast_lane(
+                        raw_text,
+                        preset,
+                        max_output_tokens=completion_tokens,
+                        chunk_size=llm_chunk_size,
+                        progress_callback=_chunk_progress if will_chunk else None,
+                        stitch_pass=stitch_enabled,
+                        delivery_summary=None,
+                        audience_summary=None,
+                        include_traits=bool(settings.get("use_persona_traits")),
+                    )
+            except Exception as exc:
+                logging.error(
+                    "Selected-text rewrite failed (%s).",
+                    type(exc).__name__,
+                )
+                record_runtime_error(
+                    "selection_rewrite",
+                    "Selected-text rewrite failed.",
+                    details={"source": "selection_rewrite"},
+                )
+                return _selection_rewrite_error(
+                    "model_error",
+                    "Selected-text rewrite failed. Try again.",
+                )
+            finally:
+                if heartbeat is not None:
+                    heartbeat.stop()
+
+            final_text = str(rewritten or "").strip()
+            if not final_text:
+                record_runtime_error(
+                    "selection_rewrite",
+                    "Selected-text rewrite returned no output.",
+                    details={"source": "selection_rewrite"},
+                )
+                return _selection_rewrite_error(
+                    "model_error",
+                    "Selected-text rewrite returned no output. Try again.",
+                )
+
+            wiping = _reject_if_wiping("selected-text rewrite draft creation")
+            if wiping:
+                return _selection_rewrite_error(
+                    "privacy_wipe",
+                    "Selected-text rewrite is unavailable while a privacy wipe is in progress.",
+                )
+            if hotkey_manager is not None and bool(getattr(hotkey_manager, "is_recording", False)):
+                return _selection_rewrite_error(
+                    "recording",
+                    "Selected-text rewrite is unavailable while recording.",
+                )
+
+            draft = create_draft(
+                raw_text=raw_text,
+                final_text=final_text,
+                preset=preset,
+                status="pending",
+                metadata={"source": "selection_rewrite"},
+            )
+            preview = {
+                "draft_id": draft["id"],
+                "raw_text": draft["raw_text"],
+                "final_text": draft["final_text"],
+                "token_count": draft["token_count"],
+                "token_limit": draft["token_limit"],
+                "long_text": draft["long_text"],
+                "confidence": draft["confidence"],
+                "auto_send_ok": draft["auto_send_ok"],
+                "force_review": draft["force_review"],
+                "force_review_reason": draft["force_review_reason"],
+                "source": "selection_rewrite",
+                "preset": draft["preset"],
+            }
+            broadcast_status_threadsafe("preview_ready", preview)
+            return {
+                "ok": True,
+                "draft": draft,
+                "source": "selection_rewrite",
+                "preset": draft["preset"],
+            }
+        finally:
+            with draft_lock:
+                is_processing_draft = False
 
 
 def handle_primary_action():
@@ -2466,6 +2719,29 @@ def ensure_tts_initialized():
     return tts_engine
 
 
+def _snapshot_tts_status(engine):
+    """Read an existing TTS engine without creating or loading one.
+
+    ``is_loaded()`` and ``backend()`` take the engine lock, so callers on the
+    async request path must run this synchronous snapshot in a worker thread.
+    """
+    if engine is None:
+        return {
+            "initialized": False,
+            "loaded": False,
+            "backend": "none",
+            "status_message": "TTS is not initialized.",
+            "fallback": False,
+        }
+    return {
+        "initialized": True,
+        "loaded": bool(engine.is_loaded()),
+        "backend": engine.backend(),
+        "status_message": getattr(engine, "_status_message", "TTS status unavailable."),
+        "fallback": bool(getattr(engine, "_fallback", False)),
+    }
+
+
 def normalize_tts_voice_id(voice_id):
     value = str(voice_id or "").strip()
     aliases = {
@@ -2576,7 +2852,7 @@ async def run_doctor(refresh_audio: bool = False):
     llama_server_exists = os.path.exists(llama_server_path)
     model_exists = check_model_exists(selected_model_id)
     runtime_validation = (
-        validate_llama_server_runtime(llama_server_path)
+        await run_in_threadpool(validate_llama_server_runtime, llama_server_path)
         if llama_server_exists
         else {"ok": False, "message": "llama-server binary is missing."}
     )
@@ -2619,15 +2895,10 @@ async def run_doctor(refresh_audio: bool = False):
         "last_error_details": dict(getattr(engine, "_last_error_details", {}) or {}) if engine else {},
     }
 
-    # TTS details
-    tts_engine_inst = await run_in_threadpool(ensure_tts_initialized)
-    tts_info = {
-        "initialized": tts_engine_inst is not None,
-        "loaded": tts_engine_inst.is_loaded() if tts_engine_inst else False,
-        "backend": tts_engine_inst.backend() if tts_engine_inst else "none",
-        "status_message": tts_engine_inst._status_message if tts_engine_inst else "TTS is not initialized.",
-        "fallback": tts_engine_inst._fallback if tts_engine_inst else False,
-    }
+    # TTS details are observation-only here. Diagnostics must never trigger a
+    # model import, download, or initialization merely because a caller opened
+    # the health panel; only report the singleton that is already present.
+    tts_info = await run_in_threadpool(_snapshot_tts_status, tts_engine)
 
     # Hotkeys details
     hotkeys_info = {
@@ -2647,10 +2918,10 @@ async def run_doctor(refresh_audio: bool = False):
     }
 
     # Audio
-    audio_info = get_audio_devices(refresh=refresh_audio)
+    audio_info = await run_in_threadpool(get_audio_devices, refresh=refresh_audio)
 
     # Capabilities
-    platform_info = get_capabilities()
+    platform_info = await run_in_threadpool(get_capabilities)
 
     # Honest, freshly-checked (not cached-at-import) injection status: the
     # detected method, whether the CLI tool it depends on is actually present
@@ -2661,12 +2932,16 @@ async def run_doctor(refresh_audio: bool = False):
     # (see platform_capabilities.get_injection_status). The interactive,
     # actually-injecting probe in tools/injection_probe.py is a standalone
     # CLI script and is intentionally NOT wired into this route.
-    injection_info = get_injection_status()
+    injection_info = await run_in_threadpool(get_injection_status)
 
     # Hardware specs + model-fit assessment for the selected LLM
-    hardware_info = get_hardware_report()
-    model_fit_info = assess_model_fit(selected_model_id, report=hardware_info)
-    hardware_tier_info = get_hardware_tier(report=hardware_info)
+    hardware_info = await run_in_threadpool(get_hardware_report)
+    model_fit_info = await run_in_threadpool(
+        assess_model_fit, selected_model_id, report=hardware_info
+    )
+    hardware_tier_info = await run_in_threadpool(
+        get_hardware_tier, report=hardware_info
+    )
 
     # Recovery instructions
     recovery_guidelines = {
@@ -2779,6 +3054,12 @@ class RuntimeWarmupRequest(BaseModel):
 @app.get("/runtime/status")
 async def runtime_status():
     return get_runtime_status_snapshot()
+
+
+@app.post("/runtime/rewrite-selection")
+async def runtime_rewrite_selection():
+    """Rewrite the current selection and open it as a review-only draft."""
+    return await run_in_threadpool(handle_selection_rewrite_shortcut)
 
 
 @app.get("/runtime/output-settings")

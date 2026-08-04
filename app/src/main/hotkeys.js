@@ -9,6 +9,7 @@ const EP_STOP = '/runtime/recording/stop';
 const EP_FORCE_STOP = '/runtime/emergency-stop';
 const EP_PRIMARY = '/runtime/primary-action';
 const EP_TTS = '/runtime/tts/toggle';
+const EP_SELECTION_REWRITE = '/runtime/rewrite-selection';
 
 const TOGGLE_DEBOUNCE_MS = 200;
 
@@ -25,7 +26,7 @@ let hookRunning = false; // uIOhook.start() succeeded and listeners attached
 let usingFallback = false; // running on globalShortcut instead
 
 // Parsed matchers for the current config.
-let matchers = { master: null, forceStop: null, primaryAction: null, tts: null };
+let matchers = { master: null, forceStop: null, primaryAction: null, tts: null, selectionRewrite: null };
 let recordingMode = 'toggle';
 
 // Transient key state for the uiohook path.
@@ -206,6 +207,9 @@ function onKeydown(event) {
   } else if (matchers.tts && matchesDown(matchers.tts, event)) {
     downKeycodes.add(event.keycode);
     triggerBackendAction(EP_TTS);
+  } else if (matchers.selectionRewrite && matchesDown(matchers.selectionRewrite, event)) {
+    downKeycodes.add(event.keycode);
+    triggerBackendAction(EP_SELECTION_REWRITE);
   }
 }
 
@@ -270,6 +274,7 @@ function registerGlobalShortcutFallback(config) {
     { key: config.force_stop_key, endpoint: EP_FORCE_STOP },
     { key: config.manual_send_hotkey, endpoint: EP_PRIMARY },
     { key: config.review_tts_hotkey, endpoint: EP_TTS },
+    { key: config.selection_rewrite_hotkey, endpoint: EP_SELECTION_REWRITE },
   ];
   for (const { key, endpoint } of mapping) {
     const accelerator = normalizeToElectronAccelerator(key);
@@ -292,9 +297,15 @@ function registerHotkeys(config, token) {
     authToken = token;
   }
   if (!config) return;
-  activeConfig = config;
+  // Older profiles may arrive without the field. Preserve an explicit empty
+  // value (the UI uses that to disable the shortcut), but keep the shipped
+  // Ctrl+Alt+R default for pre-feature configs.
+  const effectiveConfig = Object.prototype.hasOwnProperty.call(config, 'selection_rewrite_hotkey')
+    ? config
+    : { ...config, selection_rewrite_hotkey: 'ctrl+alt+r' };
+  activeConfig = effectiveConfig;
   // The settings UI stores this as "ptt"; accept the long forms too.
-  const modeRaw = String(config.recording_mode || '').toLowerCase();
+  const modeRaw = String(effectiveConfig.recording_mode || '').toLowerCase();
   recordingMode = ['ptt', 'push_to_talk', 'pushtotalk', 'push-to-talk'].includes(modeRaw)
     ? 'push_to_talk'
     : 'toggle';
@@ -302,10 +313,11 @@ function registerHotkeys(config, token) {
   if (ensureHookRunning()) {
     // uiohook path: matchers are consulted live by the event handlers.
     matchers = {
-      master: parseHotkeyToMatcher(config.hotkey),
-      forceStop: parseHotkeyToMatcher(config.force_stop_key),
-      primaryAction: parseHotkeyToMatcher(config.manual_send_hotkey),
-      tts: parseHotkeyToMatcher(config.review_tts_hotkey),
+      master: parseHotkeyToMatcher(effectiveConfig.hotkey),
+      forceStop: parseHotkeyToMatcher(effectiveConfig.force_stop_key),
+      primaryAction: parseHotkeyToMatcher(effectiveConfig.manual_send_hotkey),
+      tts: parseHotkeyToMatcher(effectiveConfig.review_tts_hotkey),
+      selectionRewrite: parseHotkeyToMatcher(effectiveConfig.selection_rewrite_hotkey),
     };
     // In case we previously registered globalShortcut, clear it.
     globalShortcut.unregisterAll();
@@ -314,7 +326,7 @@ function registerHotkeys(config, token) {
     pttActive = false;
     pttKeycode = null;
   } else {
-    registerGlobalShortcutFallback(config);
+    registerGlobalShortcutFallback(effectiveConfig);
   }
 }
 

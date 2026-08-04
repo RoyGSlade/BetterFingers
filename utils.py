@@ -275,6 +275,9 @@ def _sanitize_profile_values(config, defaults):
     cfg["manual_send_hotkey"] = _coerce_str(
         cfg.get("manual_send_hotkey", d["manual_send_hotkey"]), d["manual_send_hotkey"]
     ).strip()
+    cfg["selection_rewrite_hotkey"] = _coerce_str(
+        cfg.get("selection_rewrite_hotkey", d["selection_rewrite_hotkey"]), d["selection_rewrite_hotkey"]
+    ).strip()
     cfg["recording_mode"] = _coerce_choice(cfg.get("recording_mode", d["recording_mode"]), d["recording_mode"], {"toggle", "ptt"})
     cfg["send_mode"] = _coerce_choice(cfg.get("send_mode", d["send_mode"]), d["send_mode"], {"review_first", "auto_send"})
     cfg["confidence_force_review_enabled"] = _coerce_bool(
@@ -790,6 +793,7 @@ def _profile_defaults():
         "hotkey": "f8",
         "force_stop_key": "",
         "manual_send_hotkey": "f9",
+        "selection_rewrite_hotkey": "ctrl+alt+r",
         "recording_mode": "toggle",
         "min_inter_key_delay": 0.08,
         "max_inter_key_delay": 0.16,
@@ -1172,6 +1176,7 @@ def validate_profile_settings(data: dict):
         "Emergency Stop": data.get("force_stop_key"),
         "Primary Action": data.get("manual_send_hotkey"),
         "Review TTS Hotkey": data.get("review_tts_hotkey"),
+        "Selection Rewrite Hotkey": data.get("selection_rewrite_hotkey"),
         "Open Chat Key": data.get("chat_open_key"),
         "Voice Mute Key": audio_schema.voice_privacy_of(data)["mute_binding"],
     }

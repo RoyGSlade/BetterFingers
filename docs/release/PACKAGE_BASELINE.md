@@ -6,7 +6,20 @@
 - **Branch:** `feat/signal-desk-ui`
 - **Commit:** `093eaf2a2ae3e68c2671d8549d4b583c31558080`
 - **Host:** Linux `x86_64`, kernel `7.0.0-28-generic`
-- **Status:** Measured; distributable packages are **ABSENT/UNBUILT**
+- **Status:** Historical Wave 0 measurements remain below. A corrected local Linux
+  AppImage build exists in current worker evidence, but package acceptance is not
+  complete; Windows remains **ABSENT/UNBUILT**.
+
+The final local AppImage observed on 2026-08-04 is
+`app/release/BetterFingers-0.2.0-alpha.1.AppImage`, 571,977,617 bytes, SHA-256
+`efbdba4c0925b110c18c8d6cdd4fd56f24390169241dab116b2c36d494f67590`, built with
+Electron 43.2.0. Extraction showed BetterFingers identity, one backend sidecar,
+four indicator assets, and no broad `assets`/`images` payload. The desktop entry
+was `Exec=AppRun %U` with no unconditional `--no-sandbox`. This is local
+package/runtime evidence only; authenticated health/capabilities/runtime-version
+and real renderer quit/natural cleanup passed on X11. It is not clean-machine install/upgrade/uninstall,
+signing, public-release, Windows, audio, hardware, reliability, or packaged
+selection/model-load qualification.
 
 This is a size and dependency baseline, not package qualification. All byte
 counts below are local snapshot measurements. Generated output was changing
@@ -25,9 +38,9 @@ The following classes must not be conflated:
 | `app/node_modules` | Present | `du -sb`: 474,877,068 bytes | Node development/install tree; electron-builder selects production dependencies rather than copying this tree wholesale. |
 | `.betterfingers` | Present | `du -sb`: 86,696,771 bytes | Repo-local llama runtime cache; ignored by Git and outside the package include rules. |
 | `app/out` | Present | 30 files; 1,288,162 bytes | Renderer/main/preload build output; **not** a distributable artifact. |
-| `app/resources/backend` | Placeholder only | 1 file; 1 byte (`.gitkeep`) | PyInstaller sidecar is **unbuilt**. |
+| `app/resources/backend` | Historical snapshot placeholder | 1 file; 1 byte (`.gitkeep`) | At the 2026-07-28 snapshot the PyInstaller sidecar was **unbuilt**. |
 | `app/artifacts` | Present | 6 files; 1,483,486 bytes | QA screenshots; **not** a distributable artifact. |
-| `app/release` | **ABSENT** | 0 artifacts; 0 bytes | electron-builder output has not been produced in this checkout. |
+| `app/release` | Historical snapshot **ABSENT** | 0 artifacts; 0 bytes | At the 2026-07-28 snapshot electron-builder output had not been produced. |
 
 The tracked production Python set is 92 files / 1,205,278 bytes. The tracked
 renderer/main/preload source under `app/src` is 51 files / 1,565,506 bytes.
@@ -168,35 +181,15 @@ ASAR unpack:
 
 extraResources:
   app/resources/backend/**/* except .gitkeep -> resources/backend
-  assets/**/*                         -> resources/assets
-  images/**/*                         -> resources/images
+  four named indicator PNGs                -> resources/assets
 ```
 
-The Python sidecar build independently adds `config.yaml`,
-`context_rules.yaml`, `Tutorial_Script.txt`, `images`, and `assets` into the
-one-file PyInstaller executable. Thus `assets` and `images` are selected once
-inside the sidecar and again as Electron `extraResources`; the current rules
-can duplicate all 15,941,784 source bytes before package compression.
-
-Current gaps requiring an explicit Wave 12 ruling:
-
-1. Replace broad `assets`/`images` copies with a named allowlist. At minimum,
-   exclude the two design ZIPs and backup indicator directory unless a
-   release owner documents a runtime need.
-2. Remove `signal-desk-preview.html` from production output once the real
-   Signal Desk composition root lands.
-3. Decide whether the sidecar needs any image/tray resources; avoid copying
-   the same trees into both PyInstaller and Electron resources.
-4. Add a package-content allowlist test. No such test was found in the current
-   app tests, Python tests, scripts, or workflows.
-5. Add the product and model license/notice files intentionally. Root
-   `LICENSE`, `LICENSES-MODELS.md`, release limitations, and support material
-   are not in the explicit Electron or sidecar include lists.
-6. Supply an intentional application icon. The configured
-   `app/build/icon.png` is absent.
-7. Audit PyInstaller `--collect-all` for `kokoro_onnx`, `espeakng_loader`,
-   `language_tags`, and `faster_whisper`; no package-content exclusion test
-   currently proves that only runtime files land in the sidecar.
+Current source uses a named four-indicator Electron resource allowlist and
+excludes root `assets`/`images` from the sidecar data inputs. Source-level
+payload narrowing and a package-resource contract test are present. The
+remaining gate is a fresh accepted build proving the extracted payload,
+sidecar provenance, licenses/notices, icon, and version contract; the local
+AppImage observation above does not by itself close that gate.
 
 The narrow `out/**/*` application-files rule does keep QA screenshots,
 Playwright reports, development logs, dependency caches, and old installers
@@ -210,70 +203,62 @@ out of the ASAR. No old installer is present in this checkout.
 |---|---|---|---:|---:|
 | Windows x64 | NSIS `.exe` | **ABSENT/UNBUILT** | 0 | 0 |
 
-### Linux x64 — PENDING SUPERVISOR BUILD
+### Linux x64 — PACKAGE RESULT PENDING ACCEPTED REBUILD/OPERATOR
 
 The Wave 0 snapshot recorded Linux at **ABSENT/UNBUILT, 0 artifacts / 0
-bytes**, same as Windows. As of this 2026-07-29 reconciliation pass that is
-still the last *measured* state in this document — but the release
-supervisor (`sup-backend`) is running a real `dist:linux` electron-builder
-build concurrently with this doc pass. Rather than leave a stale "0 bytes"
-line that will silently go wrong the moment that build lands, or fabricate
-numbers nobody has measured, the fields the supervisor needs to fill are laid
-out here as an explicit placeholder:
+bytes**. A local AppImage has since been observed (metadata is recorded at the
+top of this document), but release artifact acceptance, provenance, and
+operator qualification remain open. Keep the exact local measurements visible
+without treating them as a release sign-off:
 
 | Field | Value |
 |---|---|
-| AppImage path | `PENDING SUPERVISOR BUILD` |
-| Byte size | `PENDING SUPERVISOR BUILD` |
-| SHA-256 | `PENDING SUPERVISOR BUILD` |
-| Build date (UTC) | `PENDING SUPERVISOR BUILD` |
-| electron-builder version | `PENDING SUPERVISOR BUILD` |
+| AppImage path | `app/release/BetterFingers-0.2.0-alpha.1.AppImage` |
+| Byte size | `571977617` (local observation; not acceptance) |
+| SHA-256 | `efbdba4c0925b110c18c8d6cdd4fd56f24390169241dab116b2c36d494f67590` (local observation; not acceptance) |
+| Build date (UTC) | `2026-08-04` (local observation; exact timestamp not recorded here) |
+| Electron | `43.2.0` (local observation) |
 
-**Do not treat this table as evidence of a successful build.** It is a slot
-to fill with real measurements from a real `dist:linux` run — path under
-`app/release/`, `stat`'d byte size, `sha256sum` of the artifact, the build
-timestamp, and `electron-builder --version` (§3 above already records the
-installed dev dependency as `26.15.3`, but the version that actually produced
-the artifact should be confirmed at build time, not assumed from that). Until
-the supervisor fills every field, the Linux artifact conclusion remains
-**ABSENT/UNBUILT** exactly as it was at the Wave 0 snapshot; no byte count is
-asserted here that this document's author did not personally measure.
+**Do not treat this table as package acceptance.** The local build and runtime
+checks are evidence that an artifact exists and launches on this host. They do
+not establish clean-machine install/upgrade/uninstall, signing, Windows,
+audio, hardware, reliability, or packaged selection/model-load qualification.
 
-`app/release` does not exist at the time of this doc pass. A checkout-wide
-search outside `.git`, `.venv`, and `app/node_modules` found no `.AppImage`,
-`.exe`, `.msi`, `.deb`, `.rpm`, `.snap`, `.blockmap`, or `latest*.yml` package
-artifacts. Therefore there is no local installer checksum, provenance
-attestation, SBOM, unpacked payload measurement, signing evidence, or
-install/launch evidence yet. Workflow comments or historical approximate
-sizes are not substituted for current artifacts, and neither is a guess at
-what the pending build will produce.
+The local AppImage is present in ignored build output, but it is not accepted
+release evidence. No accepted Windows artifact, clean-machine
+install/upgrade/uninstall evidence, signing evidence, final package
+provenance/SBOM, or accepted packaged selection hash is recorded here.
 
 ## 8. Gate conclusions
 
 ### Gate 0 package-baseline conclusion
 
-`W0-D1` now has reproducible source/build/cache measurements and an exact
-artifact ledger. The package result is **ABSENT/UNBUILT**, not PASS. Overall
-Gate 0 remains **NOT PASSED** while the release branch/clean-tree gate and
-other director-owned acceptance items remain open.
+`W0-D1` has reproducible historical source/build/cache measurements and an
+updated local artifact ledger. Package qualification is **NOT PASSED**:
+local Linux build/health/runtime evidence is not package acceptance. Windows,
+clean-machine install, signing, audio/hardware, reliability, and packaged
+selection/model-load gates remain open.
 
 ### Wave 12 blockers exposed by this baseline
 
 - Build both Windows and Linux artifacts from one release tag and record exact
   installer, unpacked-payload, and sidecar sizes.
-- Reconcile release identity before building: package version is `0.1.0`,
-  application ID is `com.betterfingers.desktop`, and the planned public
-  identity is `v0.2.0-alpha.1` / `com.sourcearcanum.betterfingers`.
+- Reconcile release identity before building: current identity is
+  `v0.2.0-alpha.1` / `com.betterfingers.desktop`; regenerate lock-faithful
+  package provenance before release. A generated sidecar has existed in local
+  build output, but final sidecar/payload provenance remains unqualified.
 - Create a clean, lock-faithful per-platform Python build environment; do not
   rely on the current system interpreter or drifted CUDA-heavy repo venv.
-- Build and smoke-test the PyInstaller sidecar; it is presently absent.
+- Build and smoke-test the PyInstaller sidecar from the intended lock-faithful
+  environment; local sidecar health does not establish release provenance.
 - Close the resource allowlist, preview-page, duplicate-resource, license, and
   missing-icon gaps above, then inspect the actual packaged file list.
 - Add the package-content and version-consistency CI gates required by the
   release directive.
 - Produce and verify checksums, provenance, SBOM, signing status, clean
   install/upgrade/uninstall evidence, AppImage clean-launch evidence, and the
-  required Windows/Linux hardware matrix.
+  required Windows/Linux hardware matrix. These remain **OPEN**; the local
+  AppImage hash and runtime smoke do not satisfy them.
 
 ## 9. Reproduction commands
 

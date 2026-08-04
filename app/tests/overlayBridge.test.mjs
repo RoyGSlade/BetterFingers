@@ -68,6 +68,10 @@ test('overlayPayloadFor: the label vocabulary matches the legacy page exactly', 
   );
   assert.equal(overlayPayloadFor({ status: 'draft_blocked', error: 'silence' }).message, 'silence');
   assert.equal(overlayPayloadFor({ status: 'draft_error' }).message, 'Draft failed');
+  assert.equal(
+    overlayPayloadFor({ status: 'draft_error', message: 'Selected-text rewrite failed. Try again.' }).message,
+    'Selected-text rewrite failed. Try again.',
+  );
   assert.equal(overlayPayloadFor({ status: 'long_recording_detected' }).message, 'Long recording…');
   assert.equal(overlayPayloadFor({ status: 'chunking_started', chunk_count: 5 }).message, 'Processing 5 chunks');
   assert.equal(

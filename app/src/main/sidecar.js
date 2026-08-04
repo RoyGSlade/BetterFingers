@@ -25,6 +25,8 @@ const RESTART_COUNTER_RESET_MS = 5 * 60 * 1000; // a clean 5min resets the count
 // real bug, not I/O.
 const DEV_HEALTH_TIMEOUT_MS = 30000;
 const PACKAGED_HEALTH_TIMEOUT_MS = 90000;
+const POSIX_STOP_GRACE_MS = 5000;
+const POSIX_KILL_SETTLE_MS = 1000;
 
 function isChildAlive(child) {
   return Boolean(child) && !child.killed && child.exitCode === null && child.signalCode === null;
@@ -32,6 +34,72 @@ function isChildAlive(child) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Linux exposes the process group and session in /proc/<pid>/stat. Reading
+// this before using a negative PID lets us prove that a detached child is the
+// leader of its own group and is not in Electron's group. On POSIX platforms
+// without /proc we deliberately return null and use the safe direct-child
+// fallback instead of guessing which group owns the process.
+function readProcessStat(pid) {
+  if (!Number.isInteger(pid) || pid <= 0 || process.platform === 'win32') {
+    return null;
+  }
+
+  try {
+    const raw = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const closeParen = raw.lastIndexOf(') ');
+    if (closeParen < 0) {
+      return null;
+    }
+    const fields = raw.slice(closeParen + 2).trim().split(/\s+/);
+    const processGroupId = Number(fields[2]);
+    const sessionId = Number(fields[3]);
+    if (!Number.isInteger(processGroupId) || !Number.isInteger(sessionId)) {
+      return null;
+    }
+    return { processGroupId, sessionId };
+  } catch (error) {
+    return null;
+  }
+}
+
+function getOwnedProcessGroupId(pid, {
+  platform = process.platform,
+  readStat = readProcessStat,
+} = {}) {
+  if (platform === 'win32' || !Number.isInteger(pid) || pid <= 0 || pid === process.pid) {
+    return null;
+  }
+
+  const childStat = readStat(pid);
+  if (!childStat || childStat.processGroupId !== pid) {
+    return null;
+  }
+
+  const currentStat = readStat(process.pid);
+  // A detached POSIX spawn creates a new session as well as a group. If the
+  // session cannot be distinguished from Electron's, do not send a group
+  // signal: direct-child termination is the safer ownership downgrade.
+  if (!currentStat || childStat.sessionId === currentStat.sessionId
+      || childStat.processGroupId === currentStat.processGroupId) {
+    return null;
+  }
+
+  return childStat.processGroupId;
+}
+
+function spawnOwnedBackend(command, args, options = {}, {
+  platform = process.platform,
+  spawnImpl = spawn,
+} = {}) {
+  const spawnOptions = { ...options };
+  if (platform !== 'win32') {
+    // Keep the child attached to Electron's lifetime, but put it in a group
+    // that can be terminated without touching Electron or unrelated peers.
+    spawnOptions.detached = true;
+  }
+  return spawnImpl(command, args, spawnOptions);
 }
 
 // The backend enforces BETTERFINGERS_AUTH_TOKEN on every non-/ws/ route,
@@ -176,7 +244,14 @@ function resolveBackendExecutable() {
   return fallback;
 }
 
-function killChildProcess(child) {
+function killChildProcess(child, {
+  platform = process.platform,
+  spawnImpl = spawn,
+  killImpl = process.kill.bind(process),
+  readStat = readProcessStat,
+  graceMs = POSIX_STOP_GRACE_MS,
+  killSettleMs = POSIX_KILL_SETTLE_MS,
+} = {}) {
   return new Promise((resolve) => {
     if (!child || child.killed || child.exitCode !== null || child.signalCode !== null) {
       // Already gone (killed, or crashed on its own) — nothing to wait for.
@@ -188,14 +263,18 @@ function killChildProcess(child) {
     const finish = () => {
       if (!settled) {
         settled = true;
+        clearTimeout(forceTimer);
+        clearTimeout(killSettleTimer);
         resolve();
       }
     };
 
+    let forceTimer = null;
+    let killSettleTimer = null;
     child.once('exit', finish);
 
-    if (process.platform === 'win32') {
-      const killer = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
+    if (platform === 'win32') {
+      const killer = spawnImpl('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
         stdio: 'ignore',
         windowsHide: true,
       });
@@ -205,20 +284,45 @@ function killChildProcess(child) {
       return;
     }
 
-    child.kill('SIGTERM');
-    const forceTimer = setTimeout(() => {
+    const groupId = getOwnedProcessGroupId(child.pid, { platform, readStat });
+    const signal = (signalName) => {
+      if (groupId !== null) {
+        // Group ownership was established from process/session data. Never
+        // fall back to direct child signaling after this point: if the group
+        // disappeared, it is already stopped; if signaling fails, retrying
+        // the owned group is still safer than guessing at a different tree.
+        try {
+          killImpl(-groupId, signalName);
+        } catch (error) {
+          // The child may have exited between the ownership check and signal.
+        }
+        return;
+      }
+
       try {
-        child.kill('SIGKILL');
+        child.kill(signalName);
       } catch (error) {
         // Ignore kill errors on shutdown.
       }
-      finish();
-    }, 5000);
+    };
 
-    child.once('exit', () => {
-      clearTimeout(forceTimer);
-      finish();
-    });
+    if (groupId !== null) {
+      signal('SIGTERM');
+    } else {
+      try {
+        child.kill('SIGTERM');
+      } catch (error) {
+        // Ignore kill errors on shutdown.
+      }
+    }
+
+    forceTimer = setTimeout(() => {
+      signal('SIGKILL');
+      // A real child should emit exit promptly after SIGKILL. Keep a bounded
+      // settle window for test doubles and unusual reaping conditions.
+      killSettleTimer = setTimeout(finish, killSettleMs);
+    }, graceMs);
+
   });
 }
 
@@ -229,10 +333,22 @@ function createSidecar({
   devCommand = 'python',
   devArgs = [],
   onStatusChange = null,
+  platform = process.platform,
+  spawnProcess = spawn,
+  killProcess = process.kill.bind(process),
+  readStat = readProcessStat,
+  stopGraceMs = POSIX_STOP_GRACE_MS,
+  isTcpPortOpenImpl = isTcpPortOpen,
+  readHealthImpl = tryReadHealth,
+  waitForHealthyImpl = waitForHealthy,
+  fetchImpl = fetch,
+  setIntervalImpl = setInterval,
+  clearIntervalImpl = clearInterval,
+  isPackaged = Boolean(app?.isPackaged),
+  userDataPath = null,
 } = {}) {
   const healthUrl = `http://${host}:${port}/health`;
   const backendHeaders = authHeaders(authToken);
-  const isPackaged = app.isPackaged;
   const backendEnv = {
     ...process.env,
     BETTERFINGERS_LAZY_STARTUP: '1',
@@ -248,6 +364,11 @@ function createSidecar({
   let autoRestartCount = 0;
   let lastRestartAt = 0;
   let restarting = false;
+  // A public stop invalidates every callback from the current lifecycle. An
+  // internal restart advances the generation too, while keeping the lifecycle
+  // open so it can deliberately start the replacement after its stop awaits.
+  let lifecycleGeneration = 0;
+  let lifecycleStopped = true;
   let status = {
     state: 'stopped',
     message: 'Backend has not started yet.',
@@ -297,40 +418,51 @@ function createSidecar({
     }
 
     try {
-      const logFilePath = path.join(app.getPath('userData'), 'sidecar_backend_raw.log');
+      const logFilePath = userDataPath || (app?.getPath ? path.join(app.getPath('userData'), 'sidecar_backend_raw.log') : null);
+      if (!logFilePath) {
+        return;
+      }
       fs.appendFileSync(logFilePath, fileChunk);
     } catch (e) {
       // Ignore write errors to prevent crashing the main process
     }
   }
 
-  async function start() {
+  function start() {
     if (startPromise) {
       return startPromise;
     }
 
-    startPromise = (async () => {
+    lifecycleStopped = false;
+    const startGeneration = ++lifecycleGeneration;
+    const isCurrentLifecycle = () => !lifecycleStopped && lifecycleGeneration === startGeneration;
+
+    let ownedStartPromise;
+    ownedStartPromise = (async () => {
+      let processRef = null;
       let exitListener = null;
       let exitPromise = null;
 
       try {
-        const logFilePath = path.join(app.getPath('userData'), 'sidecar_backend_raw.log');
-        // Preserve prior sessions for diagnostics: append a separator instead of
-        // wiping, and trim from the front if the file grows past ~2 MB.
-        const maxLogFileBytes = 2 * 1024 * 1024;
-        try {
-          const stat = fs.statSync(logFilePath);
-          if (stat.size > maxLogFileBytes) {
-            const kept = fs.readFileSync(logFilePath).slice(-maxLogFileBytes);
-            fs.writeFileSync(logFilePath, kept);
+        const logFilePath = userDataPath || (app?.getPath ? path.join(app.getPath('userData'), 'sidecar_backend_raw.log') : null);
+        if (logFilePath) {
+          // Preserve prior sessions for diagnostics: append a separator instead of
+          // wiping, and trim from the front if the file grows past ~2 MB.
+          const maxLogFileBytes = 2 * 1024 * 1024;
+          try {
+            const stat = fs.statSync(logFilePath);
+            if (stat.size > maxLogFileBytes) {
+              const kept = fs.readFileSync(logFilePath).slice(-maxLogFileBytes);
+              fs.writeFileSync(logFilePath, kept);
+            }
+          } catch (e) {
+            // No existing log file yet — nothing to trim.
           }
-        } catch (e) {
-          // No existing log file yet — nothing to trim.
+          fs.appendFileSync(
+            logFilePath,
+            `\n===== session started ${new Date().toISOString()} =====\n`,
+          );
         }
-        fs.appendFileSync(
-          logFilePath,
-          `\n===== session started ${new Date().toISOString()} =====\n`,
-        );
       } catch (e) {
         console.error('Failed to prepare sidecar backend log file:', e);
       }
@@ -344,9 +476,15 @@ function createSidecar({
         });
         appendLog('electron', `Checking backend port ${host}:${port}...`);
 
-        const portOpen = await isTcpPortOpen(host, port);
+        const portOpen = await isTcpPortOpenImpl(host, port);
+        if (!isCurrentLifecycle()) {
+          return null;
+        }
         if (portOpen) {
-          const existingHealth = await tryReadHealth(healthUrl, backendHeaders);
+          const existingHealth = await readHealthImpl(healthUrl, backendHeaders);
+          if (!isCurrentLifecycle()) {
+            return null;
+          }
           if (existingHealth?.status) {
             setStatus({
               state: 'external',
@@ -375,20 +513,35 @@ function createSidecar({
         if (isPackaged) {
           const executablePath = resolveBackendExecutable();
           appendLog('electron', `Spawning packaged backend executable at: ${executablePath}`);
-          childProcess = spawn(executablePath, ['--host', host, '--port', String(port)], {
+          processRef = spawnOwnedBackend(executablePath, ['--host', host, '--port', String(port)], {
             cwd: path.dirname(executablePath),
             stdio: ['ignore', 'pipe', 'pipe'],
             windowsHide: true,
             env: backendEnv,
-          });
+          }, { platform, spawnImpl: spawnProcess });
         } else {
           appendLog('electron', `Spawning dev backend: ${devCommand} ${devArgs.join(' ')}`);
-          childProcess = spawn(devCommand, devArgs, {
+          processRef = spawnOwnedBackend(devCommand, devArgs, {
             cwd: path.resolve(__dirname, '../../../'),
             stdio: ['ignore', 'pipe', 'pipe'],
             windowsHide: true,
             env: backendEnv,
+          }, { platform, spawnImpl: spawnProcess });
+        }
+        childProcess = processRef;
+
+        if (!isCurrentLifecycle()) {
+          if (childProcess === processRef) {
+            childProcess = null;
+          }
+          await killChildProcess(processRef, {
+            platform,
+            spawnImpl: spawnProcess,
+            killImpl: killProcess,
+            readStat,
+            graceMs: stopGraceMs,
           });
+          return null;
         }
 
         setStatus({
@@ -397,12 +550,12 @@ function createSidecar({
           error: '',
         });
 
-        childProcess.stdout?.on('data', (chunk) => {
+        processRef.stdout?.on('data', (chunk) => {
           process.stdout.write(`[backend] ${chunk}`);
           appendLog('stdout', chunk);
         });
 
-        childProcess.stderr?.on('data', (chunk) => {
+        processRef.stderr?.on('data', (chunk) => {
           process.stderr.write(`[backend] ${chunk}`);
           appendLog('stderr', chunk);
         });
@@ -410,8 +563,14 @@ function createSidecar({
         exitPromise = new Promise((resolve, reject) => {
           exitListener = (code, signal) => {
             const descriptor = signal ? `signal ${signal}` : `code ${code}`;
-            childProcess = null;
+            if (childProcess === processRef) {
+              childProcess = null;
+            }
             const message = `BetterFingers backend exited before readiness (${descriptor}). If port ${port} is occupied, stop the other process and restart Electron.`;
+            if (!isCurrentLifecycle()) {
+              reject(new Error(message));
+              return;
+            }
             setStatus({
               state: 'error',
               message,
@@ -423,8 +582,14 @@ function createSidecar({
             reject(new Error(message));
           };
 
-          childProcess.once('error', (error) => {
-            childProcess = null;
+          processRef.once('error', (error) => {
+            if (childProcess === processRef) {
+              childProcess = null;
+            }
+            if (!isCurrentLifecycle()) {
+              reject(error);
+              return;
+            }
             setStatus({
               state: 'error',
               message: `Failed to start backend: ${error.message}`,
@@ -433,16 +598,19 @@ function createSidecar({
             appendLog('electron', `CRITICAL: Failed to spawn child process: ${error.message}`);
             reject(error);
           });
-          childProcess.once('exit', exitListener);
+          processRef.once('exit', exitListener);
         });
       }
 
       try {
         const healthTimeoutMs = isPackaged ? PACKAGED_HEALTH_TIMEOUT_MS : DEV_HEALTH_TIMEOUT_MS;
         const result = await Promise.race([
-          waitForHealthy(healthUrl, backendHeaders, healthTimeoutMs),
+          waitForHealthyImpl(healthUrl, backendHeaders, healthTimeoutMs),
           exitPromise,
         ].filter(Boolean));
+        if (!isCurrentLifecycle()) {
+          return null;
+        }
 
         // Perform Version Handshake. Compatibility is gated on the API schema
         // version, not the marketing version — a 0.1.0 -> 0.2.0 app bump that
@@ -454,7 +622,7 @@ function createSidecar({
           const versionTid = setTimeout(() => versionController.abort(), 3000);
           let res;
           try {
-            res = await fetch(versionUrl, { cache: 'no-store', headers: backendHeaders, signal: versionController.signal });
+            res = await fetchImpl(versionUrl, { cache: 'no-store', headers: backendHeaders, signal: versionController.signal });
           } finally {
             clearTimeout(versionTid);
           }
@@ -509,22 +677,27 @@ function createSidecar({
           health: result,
         };
       } catch (error) {
-        await stop();
+        if (isCurrentLifecycle()) {
+          await stop();
+        }
         throw error;
       } finally {
-        if (childProcess && exitListener) {
-          childProcess.removeListener('exit', exitListener);
+        if (processRef && exitListener) {
+          processRef.removeListener('exit', exitListener);
         }
-        startPromise = null;
+        if (startPromise === ownedStartPromise && lifecycleGeneration === startGeneration) {
+          startPromise = null;
+        }
       }
     })();
+    startPromise = ownedStartPromise;
 
     return startPromise;
   }
 
   function stopHealthMonitor() {
     if (healthTimer) {
-      clearInterval(healthTimer);
+      clearIntervalImpl(healthTimer);
       healthTimer = null;
     }
     consecutiveHealthFailures = 0;
@@ -534,13 +707,19 @@ function createSidecar({
 
   function startHealthMonitor() {
     stopHealthMonitor();
-    healthTimer = setInterval(async () => {
+    const monitorGeneration = lifecycleGeneration;
+    healthTimer = setIntervalImpl(async () => {
       // Skip while a (re)start is mid-flight or we don't own a process.
-      if (restarting || !childProcess) {
+      if (restarting || !childProcess || lifecycleStopped || lifecycleGeneration !== monitorGeneration) {
         return;
       }
 
-      const health = await tryReadHealth(healthUrl, backendHeaders);
+      const health = await readHealthImpl(healthUrl, backendHeaders);
+      // stop() can run while the request is in flight. Never let its result
+      // mutate status or launch a replacement for the stopped lifecycle.
+      if (lifecycleStopped || lifecycleGeneration !== monitorGeneration) {
+        return;
+      }
       if (health) {
         consecutiveHealthFailures = 0;
         lastHealthyPayload = health;
@@ -565,7 +744,9 @@ function createSidecar({
           message: 'Backend process exited. Attempting to recover…',
           error: 'unhealthy',
         });
-        restartBackend('backend process exited');
+        if (!lifecycleStopped && lifecycleGeneration === monitorGeneration) {
+          restartBackend('backend process exited', monitorGeneration);
+        }
         return;
       }
 
@@ -595,11 +776,14 @@ function createSidecar({
           message: 'Backend stopped responding to health checks. Attempting to recover…',
           error: 'unhealthy',
         });
-        restartBackend(
-          hadActiveJobs
-            ? 'health checks silent for 10min with jobs active'
-            : 'health checks silent for 2min with no active jobs',
-        );
+        if (!lifecycleStopped && lifecycleGeneration === monitorGeneration) {
+          restartBackend(
+            hadActiveJobs
+              ? 'health checks silent for 10min with jobs active'
+              : 'health checks silent for 2min with no active jobs',
+            monitorGeneration,
+          );
+        }
       }
     }, HEALTH_POLL_INTERVAL_MS);
 
@@ -608,8 +792,8 @@ function createSidecar({
     }
   }
 
-  async function restartBackend(reason) {
-    if (restarting) {
+  async function restartBackend(reason, monitorGeneration = lifecycleGeneration) {
+    if (restarting || lifecycleStopped || lifecycleGeneration !== monitorGeneration) {
       return;
     }
     restarting = true;
@@ -645,12 +829,19 @@ function createSidecar({
     });
 
     try {
-      await stop();
+      const restartGeneration = await stop({ internalRestart: true });
+      if (lifecycleStopped || lifecycleGeneration !== restartGeneration) {
+        restarting = false;
+        return;
+      }
     } catch (error) {
       appendLog('electron', `Error while stopping crashed backend: ${error.message}`);
     }
 
     restarting = false;
+    if (lifecycleStopped) {
+      return;
+    }
     try {
       await start();
     } catch (error) {
@@ -658,11 +849,19 @@ function createSidecar({
     }
   }
 
-  async function stop() {
+  async function stop({ internalRestart = false } = {}) {
+    if (internalRestart) {
+      // Invalidate monitor callbacks from the old process, but leave the
+      // lifecycle eligible for the deliberate replacement start below.
+      lifecycleGeneration += 1;
+    } else {
+      lifecycleStopped = true;
+      lifecycleGeneration += 1;
+    }
     stopHealthMonitor();
+    startPromise = null;
     const processRef = childProcess;
     childProcess = null;
-    startPromise = null;
 
     if (!processRef) {
       const preserveStates = ['external', 'error', 'version_mismatch', 'crashed'];
@@ -672,11 +871,17 @@ function createSidecar({
         pid: null,
         ownsProcess: false,
       });
-      return;
+      return lifecycleGeneration;
     }
 
     appendLog('electron', `Stopping backend process (PID ${processRef.pid})...`);
-    await killChildProcess(processRef);
+    await killChildProcess(processRef, {
+      platform,
+      spawnImpl: spawnProcess,
+      killImpl: killProcess,
+      readStat,
+      graceMs: stopGraceMs,
+    });
     setStatus({
       state: 'stopped',
       message: 'Backend process stopped.',
@@ -684,6 +889,7 @@ function createSidecar({
       ownsProcess: false,
     });
     appendLog('electron', `Backend process stopped.`);
+    return lifecycleGeneration;
   }
 
   function getPid() {
@@ -707,8 +913,12 @@ function createSidecar({
 
 module.exports = {
   createSidecar,
+  getOwnedProcessGroupId,
+  killChildProcess,
+  spawnOwnedBackend,
   waitForHealthy,
   resolveBackendExecutable,
   DEV_HEALTH_TIMEOUT_MS,
   PACKAGED_HEALTH_TIMEOUT_MS,
+  POSIX_STOP_GRACE_MS,
 };

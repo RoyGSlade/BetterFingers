@@ -81,6 +81,10 @@ test('destructive routes are refused on the generic channel', () => {
   assert.notEqual(proxy._validateRequest('DELETE', '/tts/voices/v1'), null);
 });
 
+test('selected-text rewrite stays main-process hotkey-only', () => {
+  assert.notEqual(proxy._validateRequest('POST', '/runtime/rewrite-selection'), null);
+});
+
 test('route families unused by the renderer are gone', () => {
   for (const path of ['/ocr/extract', '/graph/load', '/mcp/status', '/intent/state',
                        '/llm/process', '/hardware/tier', '/project/export', '/transcribe',

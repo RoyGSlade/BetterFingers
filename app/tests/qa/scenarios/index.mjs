@@ -26,6 +26,7 @@ import { voiceCloningScenarios } from './voice-cloning.mjs';
 import { messageRescueScenarios } from './message-rescue.mjs';
 import { messageRescueDraftScenarios } from './message-rescue-draft.mjs';
 import { textPlaygroundScenarios } from './text-playground.mjs';
+import { scribeProdScenarios } from './scribe-prod.mjs';
 import { draftsScenarios } from './drafts.mjs';
 import { personaScenarios } from './personas.mjs';
 // Signal Desk scenarios carry `ui: 'signal-desk'`; run.mjs filters by UI
@@ -150,6 +151,7 @@ export const scenarios = [
   ...personaWizardProdScenarios,
   ...overlayProdScenarios,
   ...signalDeskProdSweepScenarios,
+  ...scribeProdScenarios,
   ...shellStatusProdScenarios,
   ...uiControlsProdScenarios,
   // Ordered last among the prod-target scenarios as belt-and-braces, not as a

@@ -75,7 +75,7 @@ moment it could. See [Release impact](#release-impact).
 | OR-10 | **Persona test is incoherent** | Sometimes answers the user instead of demonstrating the persona; sometimes refuses; sometimes generic. Needs a defined contract (voice / tone / formatting / boundaries / rewrite), isolation from normal chat, and a display showing input, rewrite, active persona, settings. |
 | OR-11 | Active persona selection buried in Settings | Belongs in Studio, switchable across all personas, with the globally-active one clearly marked. |
 | OR-12 | **Read Aloud unstable** | Must honour the active voice/blend and expose Play / Pause / Stop / Restart. |
-| OR-13 | Selected-text TTS hotkey doesn't read the selection | Expected: highlight in any app → hotkey → BetterFingers reads it in the active voice. Needs an honest notification when nothing is selected. |
+| OR-13 | Selected-text TTS hotkey doesn't read the selection | **UNQUALIFIED.** The accepted X11 evidence covers only source `Ctrl+Alt+R` selection rewrite into a review-only draft; it does not qualify selected-text TTS. Wayland and Windows operator runs remain open; retain an honest unavailable-selection message. |
 | OR-14 | Recording preview plays TTS, not the recording | Must play the user's own sample, show duration and playback state, and allow discard/rerecord. |
 | OR-15 | Saved voice blends don't appear after creation | Must be listed, editable, renamable, duplicable, deletable, with the active one marked. |
 | OR-16 | Talk volume slider does nothing | Remove it. A control with no audible effect is a lie about capability. |
@@ -175,9 +175,9 @@ The mistake would be reading a green board as permission to skip it.
 
 ## STATUS AFTER WAVE 14 · 2026-07-31 (director)
 
-Ten commits on `publish/wave-13`, nothing pushed, `main` untouched. Node suite
-**1727/1727**. Every claim below was director-verified against the code, not
-taken from a worker's word.
+This is a historical Wave 14 status snapshot. Current branch/remote state must
+be reconciled from `git status` and `git log` before publication. The counts
+below are historical unless explicitly dated otherwise.
 
 ### Fixed — but nobody has watched them run
 
@@ -211,7 +211,7 @@ first** (`npm run build` in `app/`) — the QA harness tests the BUILT renderer.
 | | Item | Why it did not land |
 |---|---|---|
 | OR-08 | Runtime/model incompatibility | The runtime contract does not carry the data. It reports backend/runtime/blend capability, **not** supported TTS model or voice IDs. Building the filter anyway would mean inventing a mapping and presenting a guess as a guarantee — the exact defect class this wave exists to remove. Needs a backend capability first. |
-| OR-13 | Selected-text TTS hotkey | The hotkey reaches TTS fine; **selection capture from another application fails on this host** before any text arrives. That is an OS/display-server problem (Wayland restricts it), not a renderer bug. Needs a decision on approach, and possibly an honest "cannot read your selection here" message. |
+| OR-13 | Selected-text TTS hotkey | **UNQUALIFIED.** The accepted X11 result covers source `Ctrl+Alt+R` selection rewrite only, not selected-text TTS. Require separate X11 TTS, Wayland, and Windows operator evidence, with an honest "cannot read your selection here" message when selection is unavailable. |
 | OR-16 | Talk volume slider | A worker reported no such slider exists in production markup. **Unconfirmed — needs your eyes.** If you can still see it, tell me where. |
 | OR-19 | Real stress test | The injection behaviour is gone, but the actual latency/throughput probe (Light/Medium/Hard, STT/rewrite/TTS timings, CPU/RAM/VRAM) has not been built. It belongs in Pipeline Latency / Diagnostics. |
 | P2 | Scribe, nav restructure, Custom Voice modal | Not started. Backlog by your own ordering. |
@@ -223,6 +223,43 @@ first** (`npm run build` in `app/`) — the QA harness tests the BUILT renderer.
    tradeoffs are in `.collab-reports/w-stt.md`. I deliberately had the worker
    not pick a number — it trades a false reject against a wrong send, and that
    is your tolerance to set.
-2. **OR-13's approach.** If selection capture cannot work under this display
-   server, the honest fix may be to say so in the UI rather than leave a hotkey
-   that silently does nothing.
+2. **OR-13's approach.** Selected-text TTS remains unqualified and needs
+   separate per-platform operator evidence plus an honest unavailable-selection
+   message; the accepted rewrite run does not resolve this decision.
+
+---
+
+## UPDATE — 2026-08-04 (Scribe routing and rewrite review)
+
+Primary Scribe routing and its compose → selected-persona local cleanup → review
+surface are **code-complete**. The source selected-text rewrite hotkey
+(`Ctrl+Alt+R`) is live-qualified on Linux X11 in two isolated targets and
+remains review-first: it must not auto-replace or send text. This does not
+qualify selected-text TTS (OR-13), general push-to-talk/injection, Wayland,
+Windows, package, audio, hardware, or reliability gates.
+
+Selection capture remains display-server dependent. The accepted source X11 run
+used xed and a fresh Chrome textarea; X11 dependencies included `DISPLAY`,
+`xclip` (or `xsel`), and `xdotool`. Wayland remains best-effort and requires a
+native target host/tools/compositor/portal; tool presence alone is not
+qualification. A host where capture is not available must show that honest
+failure rather than imply that text was captured.
+The broader Scribe notebook asks — projects, pages, autosave, and recovery —
+remain separate work if they are not implemented. This update does not change
+the unrelated release blockers or make a publishability claim.
+
+Qualification on 2026-08-04: the current source passed the real X11
+selection-rewrite workflow in xed and a fresh Chrome textarea. The accepted
+interactive evidence recorded **8/8 canonical checks PASS** across the two
+targets: selected-text capture, review-only rewrite draft, clipboard restore,
+and no automatic send. The artifact row remained `UNTESTED`; this is not
+package qualification. The 2026-08-03 `410/28/0` run is historical targeted
+parity evidence; current authoritative Gate 11 is `411/27/0`.
+
+The accepted X11 rewrite run observed the configured runtime ready for this
+source workflow; no general model, selected-text TTS, package, or release
+qualification follows. Selected-text TTS (OR-13), Wayland, Windows,
+clean-machine install, signing, audio, hardware, and reliability remain
+unqualified/open. A packaged selection operator is pending; do not claim a
+packaged selection PASS unless its report and matching final artifact hash are
+present.

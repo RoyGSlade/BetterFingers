@@ -17,8 +17,6 @@ const dataSources = [
   ['config.yaml', '.'],
   ['context_rules.yaml', '.'],
   ['Tutorial_Script.txt', '.'],
-  ['images', 'images'],
-  ['assets', 'assets'],
 ];
 
 // Packages PyInstaller can't fully trace on its own. `collect-all` pulls in data
@@ -52,8 +50,11 @@ function repoVenvPython() {
 function resolvePython() {
   const explicit = process.env.BETTERFINGERS_PYTHON;
   if (explicit) {
-    console.log(`[build-backend] Using BETTERFINGERS_PYTHON override: ${explicit}`);
-    return explicit;
+    const resolved = path.isAbsolute(explicit)
+      ? explicit
+      : path.resolve(process.cwd(), explicit);
+    console.log(`[build-backend] Using BETTERFINGERS_PYTHON override: ${resolved}`);
+    return resolved;
   }
 
   const venvPython = repoVenvPython();
@@ -187,6 +188,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  dataSources,
   repoRoot,
   repoVenvPython,
   resolvePython,

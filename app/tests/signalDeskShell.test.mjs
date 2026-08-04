@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 
 import {
   WORKSPACES,
+  ROUTABLE_WORKSPACES,
   isValidWorkspace,
   getWorkspaceMeta,
   computeNextState,
@@ -95,11 +96,16 @@ function makeShellElements() {
   const workspaces = {};
   WORKSPACES.forEach((id) => {
     navButtons[id] = makeButton();
+  });
+  ROUTABLE_WORKSPACES.forEach((id) => {
     workspaces[id] = makeContainer();
   });
+  const libraryLink = makeButton();
+  libraryLink.setAttribute('data-shell-nav', 'library');
   return {
     navButtons,
     workspaces,
+    utilityLinks: [libraryLink],
     headerTitle: makeTextEl(),
     headerSubtitle: makeTextEl(),
     headerPillLabel: makeTextEl(),
@@ -113,8 +119,8 @@ function makeShellElements() {
 
 // --- isValidWorkspace / getWorkspaceMeta --------------------------------------
 
-test('isValidWorkspace: accepts exactly the 5 known workspaces', () => {
-  for (const id of WORKSPACES) {
+test('isValidWorkspace: accepts the five primary workspaces plus secondary Library', () => {
+  for (const id of ROUTABLE_WORKSPACES) {
     assert.equal(isValidWorkspace(id), true);
   }
   assert.equal(isValidWorkspace('nope'), false);
@@ -123,8 +129,8 @@ test('isValidWorkspace: accepts exactly the 5 known workspaces', () => {
   assert.equal(isValidWorkspace(null), false);
 });
 
-test('getWorkspaceMeta: every known workspace has a title/subtitle/pill', () => {
-  for (const id of WORKSPACES) {
+test('getWorkspaceMeta: every routable workspace has a title/subtitle/pill', () => {
+  for (const id of ROUTABLE_WORKSPACES) {
     const meta = getWorkspaceMeta(id);
     assert.ok(meta, `expected meta for ${id}`);
     assert.equal(typeof meta.title, 'string');
@@ -136,7 +142,7 @@ test('getWorkspaceMeta: every known workspace has a title/subtitle/pill', () => 
 
 test('getWorkspaceMeta: only Talk carries a breadcrumb (SPEC 3b)', () => {
   assert.equal(getWorkspaceMeta('talk').breadcrumb, 'Capture → Refine → Send');
-  for (const id of WORKSPACES.filter((w) => w !== 'talk')) {
+  for (const id of ROUTABLE_WORKSPACES.filter((w) => w !== 'talk')) {
     assert.equal(getWorkspaceMeta(id).breadcrumb, null);
   }
 });
@@ -192,7 +198,7 @@ test('init: defaults to the Talk workspace active and visible, others hidden', (
 
   assert.equal(state.active, 'talk');
   assert.equal(els.workspaces.talk.hidden, false);
-  for (const id of WORKSPACES.filter((w) => w !== 'talk')) {
+  for (const id of ROUTABLE_WORKSPACES.filter((w) => w !== 'talk')) {
     assert.equal(els.workspaces[id].hidden, true, `${id} should be hidden`);
   }
   assert.equal(els.navButtons.talk.classList.contains('is-active'), true);
@@ -235,20 +241,33 @@ test('goTo: switches active nav classes, visibility, and header copy', () => {
   const feature = createSignalDeskShellFeature({ elements: els });
   feature.init();
 
-  const state = feature.goTo('library');
+  const state = feature.goTo('scribe');
 
-  assert.equal(state.active, 'library');
+  assert.equal(state.active, 'scribe');
   assert.equal(els.navButtons.talk.classList.contains('is-active'), false);
-  assert.equal(els.navButtons.library.classList.contains('is-active'), true);
+  assert.equal(els.navButtons.scribe.classList.contains('is-active'), true);
   assert.equal(els.navButtons.talk.getAttribute('aria-current'), 'false');
-  assert.equal(els.navButtons.library.getAttribute('aria-current'), 'page');
+  assert.equal(els.navButtons.scribe.getAttribute('aria-current'), 'page');
 
   assert.equal(els.workspaces.talk.hidden, true);
-  assert.equal(els.workspaces.library.hidden, false);
+  assert.equal(els.workspaces.scribe.hidden, false);
 
-  assert.equal(els.headerTitle.textContent, 'LIBRARY');
-  assert.equal(els.headerSubtitle.textContent, getWorkspaceMeta('library').subtitle);
-  assert.equal(els.headerBreadcrumb.hidden, true, 'Library has no breadcrumb');
+  assert.equal(els.headerTitle.textContent, 'SCRIBE');
+  assert.equal(els.headerSubtitle.textContent, getWorkspaceMeta('scribe').subtitle);
+  assert.equal(els.headerBreadcrumb.hidden, true, 'Scribe has no breadcrumb');
+});
+
+test('Utilities secondary link opens Library without adding it to the primary rail', () => {
+  const els = makeShellElements();
+  const feature = createSignalDeskShellFeature({ elements: els });
+  feature.init('utilities');
+
+  els.utilityLinks[0].click();
+
+  assert.equal(feature.getState().active, 'library');
+  assert.equal(els.workspaces.library.hidden, false);
+  assert.equal(els.utilityLinks[0].getAttribute('aria-current'), 'page');
+  assert.equal(WORKSPACES.includes('library'), false);
 });
 
 test('goTo: clicking a nav button drives the same switch as calling goTo directly', () => {
@@ -358,9 +377,9 @@ test('ArrowDown/ArrowUp move through the rail and wrap', () => {
   feature.init();
 
   els.navButtons.talk.press('ArrowDown');
-  assert.equal(feature.getState().active, 'library');
+  assert.equal(feature.getState().active, 'scribe');
 
-  els.navButtons.library.press('ArrowUp');
+  els.navButtons.scribe.press('ArrowUp');
   assert.equal(feature.getState().active, 'talk');
 
   // Wrapping backwards off the first item lands on the last.
@@ -378,8 +397,8 @@ test('Left/Right also work, so tab-bar muscle memory survives', () => {
   feature.init();
 
   els.navButtons.talk.press('ArrowRight');
-  assert.equal(feature.getState().active, 'library');
-  els.navButtons.library.press('ArrowLeft');
+  assert.equal(feature.getState().active, 'scribe');
+  els.navButtons.scribe.press('ArrowLeft');
   assert.equal(feature.getState().active, 'talk');
 });
 
@@ -403,7 +422,7 @@ test('focus follows the selection', () => {
   feature.init();
 
   els.navButtons.talk.press('ArrowDown');
-  assert.equal(els.navButtons.library.focused, true);
+  assert.equal(els.navButtons.scribe.focused, true);
 });
 
 test('navigation keys are consumed; unrelated keys are left alone', () => {
@@ -413,11 +432,11 @@ test('navigation keys are consumed; unrelated keys are left alone', () => {
 
   assert.equal(els.navButtons.talk.press('ArrowDown'), true, 'ArrowDown should preventDefault');
   assert.equal(
-    els.navButtons.library.press('a'),
+    els.navButtons.scribe.press('a'),
     false,
     'a plain character key must not be swallowed by the rail',
   );
-  assert.equal(feature.getState().active, 'library', 'an unrelated key must not navigate');
+  assert.equal(feature.getState().active, 'scribe', 'an unrelated key must not navigate');
 });
 
 test('Enter and Space are left to the button, not hijacked', () => {

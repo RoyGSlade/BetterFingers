@@ -26,16 +26,14 @@ class SelectionCaptureResult:
 
 
 def selection_capture_supported() -> bool:
-    """Whether this platform has a working clipboard mechanism at all.
+    """Whether the complete selection-capture backend is available right now.
 
-    Mirrors ``platform_capabilities``'s own reasoning for injection-method
-    selection: on Linux, pyperclip without a backing tool (xclip/xsel/wl-copy)
-    silently fails both read and write, so capture must be reported as
-    unsupported rather than as an empty selection.
+    ``clipboard_capture`` owns the live clipboard and copy-trigger capability
+    checks; this adapter only exposes their structured ``supported`` result.
     """
-    import platform_capabilities
+    import clipboard_capture
 
-    return bool(platform_capabilities._detect_clipboard_backend())
+    return bool(clipboard_capture._selection_capture_support().get("supported"))
 
 
 def capture_selection(
@@ -47,9 +45,9 @@ def capture_selection(
     Returns ``unsupported`` before attempting any capture when the platform has
     no working clipboard mechanism (e.g. Wayland without wl-clipboard). Returns
     ``empty`` when capture ran but found no readable text. Otherwise returns
-    ``selection`` (freshly copied text) or ``clipboard_fallback`` (pre-existing
-    clipboard contents, per ``capture_selection_text_with_restore``'s own
-    fallback rule).
+    ``selection`` for freshly copied text. The ``clipboard_fallback`` outcome
+    remains available for explicitly injected legacy adapter results; the
+    concrete clipboard capture path never produces that outcome.
     """
     is_supported = (supported_fn or selection_capture_supported)()
     if not is_supported:
