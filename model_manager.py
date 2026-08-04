@@ -1095,7 +1095,8 @@ def safe_extract_runtime_archive(archive_path, dest_dir, archive_name, required_
             candidate = os.path.join(dest_dir, member)
             if os.path.isfile(candidate) and not member.lower().endswith((".dll", ".so", ".txt")):
                 try:
-                    os.chmod(candidate, 0o755)
+                    # This validated runtime executable must be launchable on POSIX.
+                    os.chmod(candidate, 0o755)  # nosec B103
                 except OSError:
                     pass
 

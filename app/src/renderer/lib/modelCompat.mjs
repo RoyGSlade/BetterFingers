@@ -1,12 +1,9 @@
 // TTS model/runtime compatibility guidance.
 //
-// IMPORTANT: this is a hand-authored table. The runtime does NOT report a
-// supported TTS model or voice list: /runtime/tts-status currently reports
-// backend/runtime/blend_capable only (server.py:5305-5322), and /tts/voices
-// returns a static default list (server.py:5418-5433). Entries below are
-// therefore evidence-backed guidance, not a guarantee. Unknown pairs fail
-// OPEN: callers must continue to offer them and show the caution instead of
-// hiding a model or voice the user may actually have.
+// IMPORTANT: this table remains a fallback for unknown runtimes and model
+// selections. When /runtime/tts-status reports a loaded model or voice table,
+// callers pass that backend truth to assessTtsCompatibility below. Unknown
+// pairs still fail OPEN: callers must continue to offer them and show caution.
 
 const STATIC_KOKORO_VOICE_IDS = Object.freeze([
   'af_heart', 'af_bella', 'af_nicole', 'af_sarah',
@@ -130,7 +127,7 @@ function findEntry(runtime, model, capability) {
  * disappear. `offered` is false only for a table row explicitly marked
  * incompatible; unknown and assumption-backed rows remain offered.
  */
-export function assessTtsCompatibility({ runtime, model, voiceId, capability } = {}) {
+export function assessTtsCompatibility({ runtime, model, voiceId, capability, runtimeCapabilities } = {}) {
   const normalizedRuntime = normalizeRuntime(runtime);
   const normalizedModel = normalizeModel(model);
   const entry = findEntry(normalizedRuntime, normalizedModel, capability);
@@ -146,6 +143,32 @@ export function assessTtsCompatibility({ runtime, model, voiceId, capability } =
     caution = 'This model may not be supported by the selected runtime.';
   } else if (!known || voiceUnknown || assumption) {
     caution = 'This model or voice may not be supported by the selected runtime.';
+  }
+
+  const backendVoiceIds = Array.isArray(runtimeCapabilities?.supported_voice_ids)
+    ? runtimeCapabilities.supported_voice_ids.map((id) => String(id).trim().toLowerCase()).filter(Boolean)
+    : [];
+  const backendKnowsVoice = backendVoiceIds.length > 0;
+  const backendVoiceUnsupported = backendKnowsVoice && voice && !backendVoiceIds.includes(voice.toLowerCase());
+  const backendBlendUnsupported = capability === 'blend'
+    && runtimeCapabilities
+    && runtimeCapabilities.blend_capable === false;
+
+  if (backendVoiceUnsupported || backendBlendUnsupported) {
+    return {
+      runtime: normalizedRuntime,
+      model: normalizedModel,
+      voiceId: voice,
+      known: true,
+      knownBad: true,
+      compatible: false,
+      assumption: false,
+      offered: false,
+      caution: backendVoiceUnsupported
+        ? 'This voice is not present in the loaded TTS runtime.'
+        : 'Voice blending is not supported by the loaded TTS runtime.',
+      entry: entry || null,
+    };
   }
 
   return {
@@ -166,4 +189,3 @@ export const getTtsCompatibility = assessTtsCompatibility;
 export const isModelSupportedByRuntime = (runtime, model) => (
   assessTtsCompatibility({ runtime, model }).compatible === true
 );
-

@@ -201,11 +201,53 @@ jobs:
             app/playwright-report/**
           if-no-files-found: ignore
 
+  qa:
+    # Full deterministic production QA board on every PR. This is separate
+    # from the smaller Electron smoke so the required check proves the
+    # complete scenario registry, not only the boot path.
+    name: qa (production board)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install app dependencies
+        working-directory: app
+        run: npm ci
+
+      - name: Install Playwright browsers + OS deps
+        working-directory: app
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Xvfb
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Allow unprivileged user namespaces (Electron sandbox)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Build Electron app
+        working-directory: app
+        run: npm run build
+
+      - name: Run complete production QA board
+        working-directory: app
+        env:
+          BETTERFINGERS_DATA_DIR: ${{ runner.temp }}/betterfingers-qa-data
+          BF_QA_USER_DATA_DIR: ${{ runner.temp }}/betterfingers-qa-user
+        run: |
+          set -euo pipefail
+          mkdir -p "$BETTERFINGERS_DATA_DIR" "$BF_QA_USER_DATA_DIR"
+          xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" npm run qa:screens
+
   electron-smoke-crossplatform:
-    # Best-effort model-free Electron smoke on Windows. The hosted Windows
-    # runner has a real display (no Xvfb needed), but packaged-app smoke with
-    # signing is a separate manual follow-up; this job is informational.
-    continue-on-error: true
+    # Required model-free Electron smoke on Windows. The hosted Windows runner
+    # has a real display (no Xvfb needed), but packaged-app smoke with signing
+    # is a separate manual follow-up.
     strategy:
       fail-fast: false
       matrix:
@@ -286,7 +328,9 @@ jobs:
 
       - name: ruff check
         continue-on-error: true
-        run: ruff check . --output-format=full | tee ruff-report.txt
+        run: |
+          set -o pipefail
+          ruff check . --output-format=full | tee ruff-report.txt
 
       - name: Upload ruff report
         if: always()
@@ -297,13 +341,12 @@ jobs:
           if-no-files-found: ignore
 
   bandit:
-    # Report-only security gate on the Python backend (PUBLISH_PLAN C-5b).
+    # Required medium/high security gate on the Python backend (PUBLISH_PLAN
+    # C-5b). The triaged low-severity baseline remains visible in the report,
+    # while -ll makes any medium/high finding fail this job.
     # Scoped to the actual server code (root *.py + backend/), not the test
-    # suite or vendored/tooling scripts. continue-on-error keeps this from
-    # failing the build until the baseline is clean or triaged in
-    # QA_NOTES.md; the finding count is still visible in this job's log and
-    # in the uploaded artifact.
-    name: bandit (report-only)
+    # suite or vendored/tooling scripts.
+    name: bandit (medium/high required)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -317,8 +360,7 @@ jobs:
         run: pip install bandit
 
       - name: bandit scan
-        continue-on-error: true
-        run: bandit -c .bandit -r . -f txt -o bandit-report.txt
+        run: bandit -ll -c .bandit -r backend *.py -f txt -o bandit-report.txt
       - name: Print bandit report
         if: always()
         run: cat bandit-report.txt
@@ -332,13 +374,11 @@ jobs:
           if-no-files-found: ignore
 
   npm-audit:
-    # Report-only dependency-vulnerability gate (PUBLISH_PLAN C-5c).
+    # Required production dependency-vulnerability gate (PUBLISH_PLAN C-5c).
     # --omit=dev matches what actually ships; needs only the committed
-    # lockfile, so no `npm ci`/`npm install` step. continue-on-error keeps
-    # this from failing the build until the baseline is clean or triaged in
-    # QA_NOTES.md; the finding count is still visible in this job's log and
-    # in the uploaded artifact.
-    name: npm audit (report-only)
+    # lockfile, so no `npm ci`/`npm install` step. The accepted baseline is
+    # zero production vulnerabilities, so any future finding blocks CI.
+    name: npm audit (required)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -349,8 +389,9 @@ jobs:
 
       - name: npm audit
         working-directory: app
-        continue-on-error: true
-        run: npm audit --omit=dev | tee npm-audit-report.txt
+        run: |
+          set -o pipefail
+          npm audit --omit=dev | tee npm-audit-report.txt
 
       - name: Upload npm audit report
         if: always()

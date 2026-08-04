@@ -1,9 +1,11 @@
 import unittest
+import os
+import tempfile
 from unittest.mock import patch
 
 import numpy as np
 
-from transcriber import Transcriber, get_whisper_download_state
+from transcriber import Transcriber, get_whisper_download_state, list_cached_models, _repo_id_for_model
 
 
 class _DummySegment:
@@ -20,6 +22,38 @@ class _DummyWhisperModel:
 
 
 class TranscriberLifecycleTests(unittest.TestCase):
+    def test_distil_models_use_real_hub_repo_ids(self):
+        self.assertEqual(
+            _repo_id_for_model("distil-medium.en"),
+            "Systran/faster-distil-whisper-medium.en",
+        )
+        self.assertEqual(
+            _repo_id_for_model("distil-large-v3"),
+            "Systran/faster-distil-whisper-large-v3",
+        )
+
+    def test_distil_cache_inventory_and_loader_share_correct_repo_id(self):
+        with tempfile.TemporaryDirectory() as cache_root:
+            repo_dir = os.path.join(
+                cache_root,
+                "models--Systran--faster-distil-whisper-medium.en",
+                "snapshots",
+                "fixture",
+            )
+            os.makedirs(repo_dir)
+            for filename in ("model.bin", "tokenizer.json"):
+                with open(os.path.join(repo_dir, filename), "wb") as handle:
+                    handle.write(b"fixture")
+
+            rows = list_cached_models(download_root=cache_root)
+            row = next(item for item in rows if item["model_size"] == "distil-medium.en")
+            self.assertTrue(row["installed"])
+            self.assertEqual(row["repo_id"], "Systran/faster-distil-whisper-medium.en")
+
+            transcriber = Transcriber.__new__(Transcriber)
+            transcriber.download_root = cache_root
+            self.assertTrue(transcriber._is_model_cached("distil-medium.en"))
+
     @patch("transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
     @patch("transcriber.WhisperModel", return_value=_DummyWhisperModel())
     def test_unload_then_transcribe_reloads_model(self, whisper_model, _load_profile):

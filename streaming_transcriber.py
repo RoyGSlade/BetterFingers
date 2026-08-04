@@ -158,8 +158,15 @@ def aggregate_confidence(parts):
             continue
         dur = max(0.001, float(dur or 0.0))
         score = conf.get("score")
-        if score is not None:
-            score_sum += float(score) * dur
+        try:
+            score = float(score) if score is not None else None
+        except (TypeError, ValueError):
+            score = None
+        # Keep the aggregate on the same documented 0..1 scale as the
+        # single-pass transcriber. A malformed percentage must not become a
+        # high-confidence draft after duration weighting.
+        if score is not None and 0.0 <= score <= 1.0:
+            score_sum += score * dur
             total += dur
         logprob = conf.get("avg_logprob")
         if logprob is not None:

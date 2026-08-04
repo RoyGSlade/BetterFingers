@@ -30,7 +30,7 @@ test('backend sidecar data excludes root assets and images', () => {
 });
 
 test('Linux package identity aligns Electron and desktop-entry names', () => {
-  assert.equal(packageJson.version, '0.2.0-alpha.1');
+  assert.equal(packageJson.version, '1.1.0-alpha.1');
   assert.equal(packageJson.author, 'Donaven Crenshaw');
   assert.equal(packageJson.desktopName, 'BetterFingers');
   assert.equal(packageJson.build.appId, 'com.betterfingers.desktop');

@@ -480,6 +480,14 @@ export function buildPersonaTestMaterial(sample) {
   return `[PERSONA TEST MATERIAL]\n${value}\n[END PERSONA TEST MATERIAL]`;
 }
 
+/** Remove internal material delimiters if a model echoes them in its rewrite. */
+export function cleanPersonaTestOutput(output) {
+  return String(output || '')
+    .replace(/\[PERSONA TEST MATERIAL\]\s*/gi, '')
+    .replace(/\s*\[END PERSONA TEST MATERIAL\]/gi, '')
+    .trim();
+}
+
 /** Add a test-only instruction without changing the saved persona. */
 export function buildPersonaTestPrompt(prompt) {
   const base = String(prompt || '').trim();
@@ -1313,7 +1321,7 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
       });
       livePreview = {
         input: sample,
-        output: res?.result || '',
+        output: cleanPersonaTestOutput(res?.result),
         inputTone: guessToneLabel(traits),
         outputTone: guessToneLabel(traits),
       };

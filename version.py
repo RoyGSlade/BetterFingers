@@ -50,7 +50,7 @@ def _candidate_roots() -> list[Path]:
 
 
 def read_version() -> str:
-    """The release version string, e.g. ``0.2.0-alpha.1``.
+    """The release version string, e.g. ``1.1.0-alpha.1``.
 
     Raises rather than guessing: a build that cannot state its own version
     must fail loudly at import, not report a plausible wrong number into a
@@ -72,7 +72,7 @@ def read_version() -> str:
     raise RuntimeError(f"VERSION file not found or empty (searched: {searched})")
 
 
-#: The release version, e.g. ``0.2.0-alpha.1``.
+#: The release version, e.g. ``1.1.0-alpha.1``.
 APP_VERSION = read_version()
 
 #: The backend reports the SAME number as the app. They were allowed to
@@ -81,7 +81,7 @@ APP_VERSION = read_version()
 #: check that genuinely needs its own cadence (see app/src/main/config.js).
 BACKEND_VERSION = APP_VERSION
 
-#: Tag / manifest form, e.g. ``v0.2.0-alpha.1``.
+#: Tag / manifest form, e.g. ``v1.1.0-alpha.1``.
 RELEASE_TAG = f"v{APP_VERSION}"
 
 #: Where the value came from, for support reports and tests.

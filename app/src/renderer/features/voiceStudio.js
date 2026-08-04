@@ -245,13 +245,14 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
         || capabilities.quantization || status.kokoro_quantization,
       voiceId,
       capability,
+      runtimeCapabilities: capabilities,
     });
   }
 
   /**
-   * Runtime/model compatibility is deliberately advisory. The backend does
-   * not report a supported model or voice list, so an absent mapping must
-   * remain selectable and carry a caution rather than being filtered away.
+   * Runtime/model compatibility is advisory for unknown mappings, but a
+   * loaded backend voice table or explicit capability refusal is authoritative
+   * and must disable the unsupported option.
    */
   function renderTtsCompatibility(doc) {
     const select = doc.getElementById('settingReviewTtsVoiceHint');
@@ -273,6 +274,7 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
 
   function annotateVoiceOption(option, voiceId) {
     const result = currentTtsCompatibility(voiceId);
+    option.disabled = !result.offered;
     if (result.caution) {
       option.title = result.caution;
       option.setAttribute('data-compatibility', result.knownBad ? 'known-bad' : 'unknown');
@@ -342,8 +344,12 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
     const addButton = doc.getElementById('addVoiceLayerButton');
     if (addButton) {
       const atMax = voiceBlendLayers.length >= MAX_BLEND_LAYERS;
-      addButton.disabled = atMax;
-      addButton.title = atMax ? `Up to ${MAX_BLEND_LAYERS} extra voices can be blended with the base.` : '';
+      const blendStatus = currentTtsCompatibility('', 'blend');
+      const blendUnavailable = blendStatus.knownBad && !blendStatus.offered;
+      addButton.disabled = atMax || blendUnavailable;
+      addButton.title = atMax
+        ? `Up to ${MAX_BLEND_LAYERS} extra voices can be blended with the base.`
+        : blendUnavailable ? blendStatus.caution : '';
     }
     const container = doc.getElementById('voiceBlendRows');
     if (!container) return;
@@ -737,9 +743,9 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
       showToast?.(`Could not refresh voices: ${lastError.message}`, 'danger');
       return false;
     }
-    // This endpoint reports backend/runtime/blend capability, but does not
-    // report a TTS model or voice list. Failure therefore leaves compatibility
-    // unknown/open and must never prevent the voice picker from rendering.
+    // Runtime status is optional: if unavailable, compatibility stays
+    // fail-open. When present, loaded model/voice capabilities are used to
+    // disable only combinations the backend explicitly rejects.
     ttsRuntimeStatus = null;
     if (typeof fetchTtsStatus === 'function') {
       try {

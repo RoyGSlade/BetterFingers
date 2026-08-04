@@ -1,13 +1,17 @@
 # PUBLISH PLAN — the one document for shipping BetterFingers
 
-- **Objective (the only one):** Publish `v0.2.0-alpha.1` — Linux AppImage + Windows
+- **Objective (the only one):** Publish `v1.1.0-alpha.1` — Linux AppImage + Windows
   .exe — where every shipped feature is **clean, hardened, and simple to set up**,
   and a first-time user is never overloaded.
-- **Historical snapshot (2026-07-29):** `be2ebaa`, parity **398 wired / 23
+- **Historical `v0.2.0-alpha.1` snapshot (2026-07-29):** `be2ebaa`, parity **398 wired / 23
   intentional_cut / 17 blocked**, QA board **96/97**, Python suite 3074, Node
   suite 1638. Current Gate 11 authority is `3d935c6`: **411 wired / 27
   intentional_cut / 0 blocked**; parity acceptance is not operator, package,
   CI, audio, hardware, or reliability qualification.
+- **Current v1.1.0-alpha.1 working-tree parity:** **410 wired / 28
+  intentional_cut / 0 blocked / 438 total**, regenerated and validated on
+  2026-08-04. The count change from Gate 11 is an evidence classification
+  change, not a newly blocked feature.
 - **This document supersedes** `docs/archive/REMEDIATION_WHATS_LEFT.md` for planning purposes.
   `RELEASE_BOARD.md` remains the gate authority; this doc is the work queue that
   gets its remaining gates accepted.

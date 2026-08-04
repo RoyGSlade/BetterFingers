@@ -161,7 +161,8 @@ async function goToLibrary(page) {
   if (await gate.isVisible().catch(() => false)) {
     throw new Error('#sdOnboarding is visible at scenario start -- broken precondition, refusing to click through it.');
   }
-  await page.click('.sd-nav__button[data-nav="library"]');
+  await page.click('.sd-nav__button[data-nav="utilities"]');
+  await page.locator('.sd-util-nav__item[data-shell-nav="library"]').first().click();
   await expect(page.locator('#workspace-library')).toBeVisible();
 }
 
@@ -558,7 +559,7 @@ export const libraryScenarios = [
       await expect(page.locator('.sd-nav__button[data-nav="talk"]')).toHaveAttribute('aria-current', 'page');
 
       // The original is still there: reopen is read-only on the source.
-      await page.click('.sd-nav__button[data-nav="library"]');
+      await goToLibrary(page);
       await expect(page.locator('#sdLibraryTimeline .sd-message-card')).toHaveCount(1);
       await expect(page.locator('#sdLibraryStatus')).toContainText('original stays in your Library');
     },
