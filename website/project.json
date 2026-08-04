@@ -5,6 +5,7 @@
   "summary": "A private desktop speech editor that transcribes speech, refines it with local models, and lets users review and place text into other applications.",
   "status": "private-alpha",
   "featured": true,
+  "developmentLabel": "Product in development",
   "links": [
     {
       "label": "BetterFingers repository",
@@ -71,5 +72,5 @@
       "state": "planned"
     }
   ],
-  "updatedAt": "2026-08-03T00:00:00-07:00"
+  "updatedAt": "2026-08-03T21:58:14-07:00"
 }
