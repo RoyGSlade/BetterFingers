@@ -55,8 +55,18 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force -Path build | Out-Null
-          python -m pytest -q tests -W default 2>&1 | Tee-Object -FilePath build/pytest.log
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $testFiles = @(Get-ChildItem -Path tests -Filter "test_*.py" -File | Sort-Object FullName)
+          if ($testFiles.Count -eq 0) { throw "No Python test files found." }
+          $chunkCount = 8
+          $chunkSize = [Math]::Ceiling($testFiles.Count / $chunkCount)
+          Remove-Item -Path build/pytest.log -ErrorAction SilentlyContinue
+          for ($start = 0; $start -lt $testFiles.Count; $start += $chunkSize) {
+            $end = [Math]::Min($start + $chunkSize - 1, $testFiles.Count - 1)
+            $chunk = @($testFiles[$start..$end] | ForEach-Object { $_.FullName })
+            Write-Host "Running Python test files $($start + 1)-$($end + 1) of $($testFiles.Count)"
+            python -m pytest -q $chunk -W default 2>&1 | Tee-Object -FilePath build/pytest.log -Append
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
           python tools/check_project_deprecations.py build/pytest.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

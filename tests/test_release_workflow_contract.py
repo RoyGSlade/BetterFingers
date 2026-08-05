@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/build-installer.yml"
+CI_WORKFLOW = ROOT / ".github/workflows/ci.yml"
 
 
 def _workflow_text():
@@ -43,3 +44,12 @@ def test_release_keeps_all_qualification_artifacts():
 
 def test_linux_appimage_smoke_does_not_disable_electron_sandbox():
     assert "--no-sandbox" not in _workflow_text()
+
+
+def test_windows_python_suites_keep_every_file_but_release_memory_between_chunks():
+    installer = _workflow_text()
+    ci = CI_WORKFLOW.read_text(encoding="utf-8")
+    for workflow in (installer, ci):
+        assert 'Get-ChildItem -Path tests -Filter "test_*.py" -File' in workflow
+        assert "$chunkCount = 8" in workflow
+        assert "python -m pytest -q $chunk" in workflow

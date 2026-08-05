@@ -70,8 +70,26 @@ jobs:
           python -m pip install --require-hashes -r ${{ matrix.runtime_lock }}
           python -m pip install --require-hashes -r ${{ matrix.dev_lock }}
 
-      - name: Run Python test suite
+      - name: Run Python test suite (Linux)
+        if: runner.os == 'Linux'
         run: python -m pytest -q tests
+
+      - name: Run Python test suite in bounded processes (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $testFiles = @(Get-ChildItem -Path tests -Filter "test_*.py" -File | Sort-Object FullName)
+          if ($testFiles.Count -eq 0) { throw "No Python test files found." }
+          $chunkCount = 8
+          $chunkSize = [Math]::Ceiling($testFiles.Count / $chunkCount)
+          for ($start = 0; $start -lt $testFiles.Count; $start += $chunkSize) {
+            $end = [Math]::Min($start + $chunkSize - 1, $testFiles.Count - 1)
+            $chunk = @($testFiles[$start..$end] | ForEach-Object { $_.FullName })
+            Write-Host "Running Python test files $($start + 1)-$($end + 1) of $($testFiles.Count)"
+            python -m pytest -q $chunk
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
   node:
     runs-on: ubuntu-latest
