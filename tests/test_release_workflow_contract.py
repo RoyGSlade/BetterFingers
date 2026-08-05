@@ -55,7 +55,11 @@ def test_windows_python_suites_isolate_chunks_and_files_to_release_memory():
         assert "chunk: [0, 1, 2, 3, 4, 5, 6, 7]" in workflow
         assert "$chunkIndex = ${{ matrix.chunk }}" in workflow
         assert "foreach ($testFile in $chunk)" in workflow
-        assert "python -m pytest -q $testFile.FullName" in workflow
+        assert "timeout-minutes: 45" in workflow
+        assert "Start-Process -FilePath (Get-Command python).Source" in workflow
+        assert "$process.WaitForExit(300000)" in workflow
+        assert "$process.Kill($true)" in workflow
+        assert "exceeded the 5-minute per-file timeout" in workflow
 
 
 def test_ci_preserves_required_windows_check_as_chunk_aggregator():

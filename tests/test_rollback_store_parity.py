@@ -48,7 +48,7 @@ def test_the_backend_cannot_tell_which_ui_is_loaded():
     for path in BACKEND_SOURCES:
         text = path.read_text(encoding="utf-8", errors="replace")
         if "BF_UI" in text:
-            offenders.append(str(path.relative_to(ROOT)))
+            offenders.append(path.relative_to(ROOT).as_posix())
     assert not offenders, (
         "the Python backend must never branch on the renderer page; these files "
         f"reference BF_UI: {offenders}"
@@ -61,7 +61,7 @@ def test_no_renderer_page_gets_its_own_storage_root():
     for path in list(RENDERER.rglob("*.js")) + list(RENDERER.rglob("*.mjs")):
         text = path.read_text(encoding="utf-8", errors="replace")
         for match in re.finditer(r"BETTERFINGERS_DATA_DIR|userData\s*[,)]", text):
-            offenders.append(f"{path.relative_to(ROOT)}: {match.group(0)}")
+            offenders.append(f"{path.relative_to(ROOT).as_posix()}: {match.group(0)}")
     assert not offenders, (
         "renderer code must not resolve storage roots itself -- all durable state "
         f"goes through the main process / backend: {offenders}"
@@ -87,7 +87,7 @@ def test_both_pages_share_one_backend_client():
     for path in list(RENDERER.rglob("*.js")) + list(RENDERER.rglob("*.mjs")):
         text = path.read_text(encoding="utf-8", errors="replace")
         origins += [
-            f"{path.relative_to(ROOT)}: {match}"
+            f"{path.relative_to(ROOT).as_posix()}: {match}"
             for match in re.findall(r"http://127\.0\.0\.1:\d+|http://localhost:\d+", text)
         ]
     non_client = [entry for entry in origins if "api/backend.js" not in entry]

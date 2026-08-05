@@ -424,8 +424,14 @@ def main() -> int:
             bucket[index] += 1
             bucket[3] += 1
 
+    # Hash the logical UTF-8 source, not platform-specific checkout bytes.
+    # ``Path.read_text`` applies universal-newline normalization, so the audit
+    # binding remains identical when Git checks the inventory out as CRLF on
+    # Windows and LF on Linux.
     source_sha = pv.hashlib.sha256(
-        (ROOT / "docs/ui/CURRENT_UI_INVENTORY.md").read_bytes()
+        (ROOT / "docs/ui/CURRENT_UI_INVENTORY.md")
+        .read_text(encoding="utf-8")
+        .encode("utf-8")
     ).hexdigest()
 
     header = f"""# BetterFingers 438-item release parity inventory

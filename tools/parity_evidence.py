@@ -390,7 +390,7 @@ class Closure:
         return cls(name=name, files=files, text="\n".join(chunks), element_ids=ids, class_names=classes)
 
     def rel_files(self) -> list[str]:
-        return sorted(str(path.relative_to(ROOT)) for path in self.files)
+        return sorted(path.relative_to(ROOT).as_posix() for path in self.files)
 
 
 # --- identifier extraction --------------------------------------------------

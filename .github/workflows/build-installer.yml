@@ -17,6 +17,7 @@ jobs:
       matrix:
         chunk: [0, 1, 2, 3, 4, 5, 6, 7]
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -52,8 +53,23 @@ jobs:
           Write-Host "Running Python test files $($start + 1)-$($end + 1) of $($testFiles.Count)"
           foreach ($testFile in $chunk) {
             Write-Host "Running $($testFile.Name) in a fresh Python process"
-            python -m pytest -q $testFile.FullName -W default 2>&1 | Tee-Object -FilePath build/pytest.log -Append
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $stdoutPath = Join-Path $env:RUNNER_TEMP "pytest-$chunkIndex-$($testFile.BaseName).stdout.log"
+            $stderrPath = Join-Path $env:RUNNER_TEMP "pytest-$chunkIndex-$($testFile.BaseName).stderr.log"
+            $process = Start-Process -FilePath (Get-Command python).Source `
+              -ArgumentList @("-m", "pytest", "-q", $testFile.FullName, "-W", "default") `
+              -NoNewWindow -PassThru `
+              -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+            if (-not $process.WaitForExit(300000)) {
+              $process.Kill($true)
+              $process.WaitForExit()
+              Get-Content $stdoutPath -ErrorAction SilentlyContinue | Tee-Object -FilePath build/pytest.log -Append
+              Get-Content $stderrPath -ErrorAction SilentlyContinue | Tee-Object -FilePath build/pytest.log -Append
+              throw "$($testFile.Name) exceeded the 5-minute per-file timeout."
+            }
+            $process.WaitForExit()
+            Get-Content $stdoutPath -ErrorAction SilentlyContinue | Tee-Object -FilePath build/pytest.log -Append
+            Get-Content $stderrPath -ErrorAction SilentlyContinue | Tee-Object -FilePath build/pytest.log -Append
+            if ($process.ExitCode -ne 0) { exit $process.ExitCode }
           }
           python tools/check_project_deprecations.py build/pytest.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
