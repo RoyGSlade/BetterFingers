@@ -56,6 +56,18 @@ def test_windows_installer_creates_build_directory_before_smoke_log():
     assert block.index(mkdir) < block.index("Tee-Object -FilePath build/pytest-smoke.log")
 
 
+def test_first_release_history_is_parsed_without_expanding_a_null_tag():
+    workflow = _workflow_text()
+    block = workflow.split(
+        "      - name: Download previous release installer (replacement continuity coverage)\n",
+        1,
+    )[1].split("\n      - name: Smoke check installer", 1)[0]
+    assert '$prevTag = ""' in block
+    assert "ForEach-Object { $_.tagName }" in block
+    assert "Select-Object -ExpandProperty tagName" not in block
+    assert 'Write-Host "No previous release found; skipping replacement/continuity coverage."' in block
+
+
 def test_windows_python_suites_isolate_chunks_and_files_to_release_memory():
     installer = _workflow_text()
     ci = CI_WORKFLOW.read_text(encoding="utf-8")

@@ -235,11 +235,13 @@ jobs:
           if ($listExitCode -ne 0) {
             throw "gh release list failed with exit code $listExitCode; refusing to misreport the release as having no prior installer."
           }
-          $releases = @()
+          $prevTag = ""
           if ($releaseJson) {
-            $releases = @($releaseJson | ConvertFrom-Json)
+            $prevTag = $releaseJson |
+              ConvertFrom-Json |
+              ForEach-Object { $_.tagName } |
+              Select-Object -First 1
           }
-          $prevTag = $releases | Select-Object -ExpandProperty tagName -First 1
           if (-not $prevTag) {
             Write-Host "No previous release found; skipping replacement/continuity coverage."
             "path=" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
