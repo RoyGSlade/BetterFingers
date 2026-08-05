@@ -130,7 +130,8 @@ class FolderTests(unittest.TestCase):
         self.assertTrue(result.ok, [r.to_dict() for r in result.refusals])
 
     def test_a_folder_outside_every_allowed_root_is_refused(self):
-        workflow = build([{"action": "open_folder", "path": "/etc"}])
+        outside = os.path.dirname(self.tmp)
+        workflow = build([{"action": "open_folder", "path": outside}])
         result = V.validate_workflow(
             workflow, REGISTRY, allowed_folder_roots=[self.tmp], **KNOWN,
         )
