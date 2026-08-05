@@ -10,7 +10,56 @@ permissions:
   contents: write
 
 jobs:
+  windows-python-tests:
+    name: windows-python-tests (chunk ${{ matrix.chunk }})
+    strategy:
+      fail-fast: false
+      matrix:
+        chunk: [0, 1, 2, 3, 4, 5, 6, 7]
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install Python dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install --require-hashes -r requirements-win.lock
+          python -m pip install --require-hashes -r requirements-dev-win.lock
+
+      - name: Run isolated Windows test files
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          $testFiles = @(Get-ChildItem -Path tests -Filter "test_*.py" -File | Sort-Object FullName)
+          if ($testFiles.Count -eq 0) { throw "No Python test files found." }
+          $chunkCount = 8
+          $chunkSize = [Math]::Ceiling($testFiles.Count / $chunkCount)
+          $chunkIndex = ${{ matrix.chunk }}
+          $start = $chunkIndex * $chunkSize
+          if ($start -ge $testFiles.Count) { throw "Chunk $chunkIndex has no test files." }
+          $end = [Math]::Min($start + $chunkSize - 1, $testFiles.Count - 1)
+          $chunk = @($testFiles[$start..$end])
+          Remove-Item -Path build/pytest.log -ErrorAction SilentlyContinue
+          Write-Host "Running Python test files $($start + 1)-$($end + 1) of $($testFiles.Count)"
+          foreach ($testFile in $chunk) {
+            Write-Host "Running $($testFile.Name) in a fresh Python process"
+            python -m pytest -q $testFile.FullName -W default 2>&1 | Tee-Object -FilePath build/pytest.log -Append
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          python tools/check_project_deprecations.py build/pytest.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
   windows-installer:
+    needs: windows-python-tests
     runs-on: windows-latest
     permissions:
       contents: read
@@ -49,26 +98,6 @@ jobs:
       - name: Run app unit tests
         working-directory: app
         run: npm run test:unit
-
-      - name: Run test suite
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-          New-Item -ItemType Directory -Force -Path build | Out-Null
-          $testFiles = @(Get-ChildItem -Path tests -Filter "test_*.py" -File | Sort-Object FullName)
-          if ($testFiles.Count -eq 0) { throw "No Python test files found." }
-          $chunkCount = 8
-          $chunkSize = [Math]::Ceiling($testFiles.Count / $chunkCount)
-          Remove-Item -Path build/pytest.log -ErrorAction SilentlyContinue
-          for ($start = 0; $start -lt $testFiles.Count; $start += $chunkSize) {
-            $end = [Math]::Min($start + $chunkSize - 1, $testFiles.Count - 1)
-            $chunk = @($testFiles[$start..$end] | ForEach-Object { $_.FullName })
-            Write-Host "Running Python test files $($start + 1)-$($end + 1) of $($testFiles.Count)"
-            python -m pytest -q $chunk -W default 2>&1 | Tee-Object -FilePath build/pytest.log -Append
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-          python tools/check_project_deprecations.py build/pytest.log
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run smoke suite
         shell: powershell

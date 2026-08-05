@@ -46,10 +46,22 @@ def test_linux_appimage_smoke_does_not_disable_electron_sandbox():
     assert "--no-sandbox" not in _workflow_text()
 
 
-def test_windows_python_suites_keep_every_file_but_release_memory_between_chunks():
+def test_windows_python_suites_isolate_chunks_and_files_to_release_memory():
     installer = _workflow_text()
     ci = CI_WORKFLOW.read_text(encoding="utf-8")
     for workflow in (installer, ci):
         assert 'Get-ChildItem -Path tests -Filter "test_*.py" -File' in workflow
         assert "$chunkCount = 8" in workflow
-        assert "python -m pytest -q $chunk" in workflow
+        assert "chunk: [0, 1, 2, 3, 4, 5, 6, 7]" in workflow
+        assert "$chunkIndex = ${{ matrix.chunk }}" in workflow
+        assert "foreach ($testFile in $chunk)" in workflow
+        assert "python -m pytest -q $testFile.FullName" in workflow
+
+
+def test_ci_preserves_required_windows_check_as_chunk_aggregator():
+    ci = CI_WORKFLOW.read_text(encoding="utf-8")
+    block = ci.split("\n  python-tests-windows:\n", 1)[1].split("\n  node:\n", 1)[0]
+    assert "name: python-tests (windows-latest / py3.13)" in block
+    assert "if: always()" in block
+    assert "needs: python-tests-windows-chunk" in block
+    assert 'run: test "$CHUNK_RESULT" = "success"' in block

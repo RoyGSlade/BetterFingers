@@ -22,33 +22,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  python-tests:
-    # Cross-platform Python test matrix (review finding: P1 CI matrix).
-    # Linux runs the shipped 3.12 runtime and Windows runs the shipped 3.13
-    # runtime. BetterFingers supports Windows + Linux; macOS is intentionally
-    # outside the required product matrix. The packaged-app smoke on a real
-    # Windows runner (with signing) is a separate manual follow-up — see
-    # build-installer.yml — this job exercises the Python unit suite.
-    name: python-tests (${{ matrix.os }} / py${{ matrix.python-version }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            python-version: "3.12"
-            runtime_lock: requirements-linux-cpu.lock
-            dev_lock: requirements-dev.lock
-          - os: windows-latest
-            python-version: "3.13" # matches packaged build (build-installer.yml)
-            runtime_lock: requirements-win.lock
-            dev_lock: requirements-dev-win.lock
-    runs-on: ${{ matrix.os }}
+  python-tests-linux:
+    # Linux runs the shipped 3.12 runtime. Windows coverage is isolated below
+    # because the ML/audio stack can terminate a hosted runner when all test
+    # files share one process or one runner.
+    name: python-tests (ubuntu-latest / py3.12)
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
           cache: pip
 
       - name: Install PortAudio (Linux)
@@ -56,7 +41,6 @@ jobs:
         # Linux; without the system lib, importing sounddevice raises OSError
         # and kills collection of test_audio_gate / test_auto_stop_silence /
         # test_recorder_device.
-        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libportaudio2
 
       - name: Install dependencies
@@ -67,15 +51,36 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install --require-hashes -r ${{ matrix.runtime_lock }}
-          python -m pip install --require-hashes -r ${{ matrix.dev_lock }}
+          python -m pip install --require-hashes -r requirements-linux-cpu.lock
+          python -m pip install --require-hashes -r requirements-dev.lock
 
-      - name: Run Python test suite (Linux)
-        if: runner.os == 'Linux'
+      - name: Run Python test suite
         run: python -m pytest -q tests
 
-      - name: Run Python test suite in bounded processes (Windows)
-        if: runner.os == 'Windows'
+  python-tests-windows-chunk:
+    name: python-tests Windows chunk ${{ matrix.chunk }}
+    strategy:
+      fail-fast: false
+      matrix:
+        chunk: [0, 1, 2, 3, 4, 5, 6, 7]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install --require-hashes -r requirements-win.lock
+          python -m pip install --require-hashes -r requirements-dev-win.lock
+
+      - name: Run isolated Windows test files
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
@@ -83,13 +88,31 @@ jobs:
           if ($testFiles.Count -eq 0) { throw "No Python test files found." }
           $chunkCount = 8
           $chunkSize = [Math]::Ceiling($testFiles.Count / $chunkCount)
-          for ($start = 0; $start -lt $testFiles.Count; $start += $chunkSize) {
-            $end = [Math]::Min($start + $chunkSize - 1, $testFiles.Count - 1)
-            $chunk = @($testFiles[$start..$end] | ForEach-Object { $_.FullName })
-            Write-Host "Running Python test files $($start + 1)-$($end + 1) of $($testFiles.Count)"
-            python -m pytest -q $chunk
+          $chunkIndex = ${{ matrix.chunk }}
+          $start = $chunkIndex * $chunkSize
+          if ($start -ge $testFiles.Count) { throw "Chunk $chunkIndex has no test files." }
+          $end = [Math]::Min($start + $chunkSize - 1, $testFiles.Count - 1)
+          $chunk = @($testFiles[$start..$end])
+          Write-Host "Running Python test files $($start + 1)-$($end + 1) of $($testFiles.Count)"
+          foreach ($testFile in $chunk) {
+            Write-Host "Running $($testFile.Name) in a fresh Python process"
+            python -m pytest -q $testFile.FullName
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+
+  python-tests-windows:
+    # Preserve the required-check context while making every isolated chunk a
+    # prerequisite. This job cannot pass if any Windows test file or runner
+    # fails.
+    name: python-tests (windows-latest / py3.13)
+    if: always()
+    needs: python-tests-windows-chunk
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce all Windows chunks
+        env:
+          CHUNK_RESULT: ${{ needs.python-tests-windows-chunk.result }}
+        run: test "$CHUNK_RESULT" = "success"
 
   node:
     runs-on: ubuntu-latest
