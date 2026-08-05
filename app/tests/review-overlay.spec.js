@@ -23,6 +23,7 @@ test.describe('BetterFingers Review Overlay Tests', () => {
     delete launchEnv.ELECTRON_RUN_AS_NODE;
     delete launchEnv.ELECTRON_NO_ATTACH_CONSOLE;
     launchEnv.BETTERFINGERS_PYTHON = launchEnv.BETTERFINGERS_PYTHON || 'python3';
+    launchEnv.BF_SKIP_BOOT_GATE = '1';
 
     app = await electron.launch({
       cwd: path.resolve(__dirname, '..'),
@@ -188,11 +189,12 @@ test.describe('BetterFingers Review Overlay Tests', () => {
   });
 
   test('Dashboard still functions normally after overlay closes', async () => {
-    // Verify dashboard is still visible and responsive
-    await expect(mainWindow.locator('.hero h1')).toHaveText('BetterFingers');
-    
-    // Check that we can navigate
-    await mainWindow.click('#tabButtonSettings');
-    await expect(mainWindow.locator('#tabSettings')).toBeVisible();
+    // Verify the shipping Signal Desk remains visible and responsive.
+    await expect(mainWindow.locator('#sdShell')).toBeVisible();
+
+    const settingsNav = mainWindow.locator('.sd-nav__button[data-nav="settings"]');
+    await settingsNav.click();
+    await expect(settingsNav).toHaveAttribute('aria-current', 'page');
+    await expect(mainWindow.locator('#workspace-settings')).toBeVisible();
   });
 });
