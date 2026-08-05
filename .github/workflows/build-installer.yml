@@ -15,7 +15,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        chunk: [0, 1, 2, 3, 4, 5, 6, 7]
+        # Chunk 1 is expanded into one-file jobs below because a process in
+        # that slice can starve the Windows runner before it reports a log.
+        chunk: [0, 2, 3, 4, 5, 6, 7]
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -74,8 +76,62 @@ jobs:
           python tools/check_project_deprecations.py build/pytest.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+  windows-python-test-files:
+    name: windows-python-test (${{ matrix.file }})
+    strategy:
+      fail-fast: false
+      matrix:
+        file:
+          - tests/test_clipboard_capture.py
+          - tests/test_clipboard_capture_windows_restore.py
+          - tests/test_clipboard_restore.py
+          - tests/test_clone_provisioning.py
+          - tests/test_confidence_send_policy.py
+          - tests/test_contact_interview.py
+          - tests/test_contacts_routes.py
+          - tests/test_contacts_store.py
+          - tests/test_context_rules_parsing.py
+          - tests/test_context_session.py
+          - tests/test_controller_bindings.py
+          - tests/test_controller_engine.py
+          - tests/test_data_categories.py
+          - tests/test_data_paths.py
+          - tests/test_data_registry.py
+          - tests/test_delivery_preservation.py
+          - tests/test_delivery_signal_prompt.py
+          - tests/test_dev_route_gating.py
+          - tests/test_dictation_commands.py
+          - tests/test_dictation_pipeline.py
+          - tests/test_dictation_preset_resolution.py
+          - tests/test_dictionary.py
+          - tests/test_disk_space_gate.py
+          - tests/test_domain_contracts.py
+          - tests/test_download_verification.py
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install Python dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install --require-hashes -r requirements-win.lock
+          python -m pip install --require-hashes -r requirements-dev-win.lock
+
+      - name: Run isolated Windows test file
+        shell: powershell
+        run: python -m pytest -q "${{ matrix.file }}" -W default
+
   windows-installer:
-    needs: windows-python-tests
+    needs: [windows-python-tests, windows-python-test-files]
     runs-on: windows-latest
     permissions:
       contents: read
