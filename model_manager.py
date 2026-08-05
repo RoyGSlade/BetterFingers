@@ -1173,7 +1173,7 @@ def _ensure_disk_space(dest_dir, required_bytes, *, headroom=1.1):
 
 
 def download_file(url, dest_path, desc="File", progress_callback=None, progress_key="", resume=True,
-                  expected_sha256=None):
+                  expected_sha256=None, expected_size=None):
     """Download a file safely.
 
     The transfer writes to ``dest_path + ".part"`` and atomically replaces the final
@@ -1203,6 +1203,47 @@ def download_file(url, dest_path, desc="File", progress_callback=None, progress_
     logging.info("URL: %s", url)
     part_path = f"{dest_path}.part"
     resumed_bytes = _file_size(part_path) if resume and os.path.exists(part_path) else 0
+    expected_bytes = int(expected_size or 0)
+    if expected_bytes and resumed_bytes >= expected_bytes:
+        # A prior transfer can finish immediately before promotion, or a broken
+        # range response/concurrent writer can leave an oversized partial. Only
+        # an exact, checksum-valid artifact may be promoted; every other case
+        # restarts cleanly instead of issuing an invalid/overlapping Range.
+        if resumed_bytes == expected_bytes and (
+            not expected_sha256
+            or hmac_compare(sha256_file(part_path), expected_sha256)
+        ):
+            if expected_sha256:
+                try:
+                    with open(dest_path + ".sha256", "w", encoding="utf-8") as digest_file:
+                        digest_file.write(
+                            f"{expected_sha256}  {os.path.basename(dest_path)}\n"
+                        )
+                except OSError:
+                    pass
+            os.replace(part_path, dest_path)
+            _emit_progress(
+                progress_callback,
+                {
+                    "key": key,
+                    "status": "complete",
+                    "desc": desc,
+                    "percent": 100.0,
+                    "downloaded_bytes": expected_bytes,
+                    "total_bytes": expected_bytes,
+                    "partial_path": "",
+                    "message": f"{desc} download complete.",
+                },
+            )
+            return
+        logging.warning(
+            "%s partial has invalid size/checksum (%d bytes; expected %d); restarting.",
+            desc,
+            resumed_bytes,
+            expected_bytes,
+        )
+        os.remove(part_path)
+        resumed_bytes = 0
     _emit_progress(
         progress_callback,
         {
@@ -1284,6 +1325,16 @@ def download_file(url, dest_path, desc="File", progress_callback=None, progress_
         if total_size and _file_size(part_path) < total_size:
             raise IOError(
                 f"incomplete download: got {_file_size(part_path)} bytes, expected {total_size}"
+            )
+        if expected_bytes and _file_size(part_path) != expected_bytes:
+            actual_bytes = _file_size(part_path)
+            try:
+                os.remove(part_path)
+            except OSError:
+                pass
+            raise IOError(
+                f"download size mismatch for {desc}: expected {expected_bytes} bytes, "
+                f"got {actual_bytes}. The download was discarded."
             )
         # Cryptographic verification before promotion (§11): size says the
         # transfer finished; only the digest says it's the artifact we pinned.
@@ -1422,6 +1473,7 @@ def check_and_download_resources(model_id=None, progress_callback=None):
                 progress_callback=report,
                 progress_key=target_model_id,
                 expected_sha256=model_info.get("sha256"),
+                expected_size=model_info.get("size_bytes"),
             )
         except InsufficientDiskSpaceError as exc:
             message = str(exc)

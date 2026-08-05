@@ -356,7 +356,15 @@ def _sanitize_profile_values(config, defaults):
     cfg["model_size"] = _coerce_choice(
         cfg.get("model_size", d["model_size"]),
         d["model_size"],
-        {"tiny.en", "base.en", "small.en", "medium.en", "large-v3"},
+        {
+            "tiny.en",
+            "base.en",
+            "small.en",
+            "medium.en",
+            "large-v3",
+            "distil-medium.en",
+            "distil-large-v3",
+        },
     )
 
     cfg["chat_open_key"] = _coerce_str(cfg.get("chat_open_key", d["chat_open_key"]), d["chat_open_key"]).strip()
