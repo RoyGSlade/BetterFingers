@@ -60,40 +60,8 @@ def test_windows_python_suites_isolate_chunks_and_files_to_release_memory():
         assert "$process.Kill($true)" in workflow
         assert "exceeded the 5-minute per-file timeout" in workflow
 
-    assert "chunk: [0, 1, 2, 3, 4, 5, 6, 7]" in ci
-    assert "chunk: [0, 2, 3, 4, 5, 6, 7]" in installer
-    assert "windows-python-test-files:" in installer
-    assert "name: windows-python-test (${{ matrix.file }})" in installer
-    assert "timeout-minutes: 10" in installer
-    assert "needs: [windows-python-tests, windows-python-test-files]" in installer
-    for test_file in (
-        "tests/test_clipboard_capture.py",
-        "tests/test_clipboard_capture_windows_restore.py",
-        "tests/test_clipboard_restore.py",
-        "tests/test_clone_provisioning.py",
-        "tests/test_confidence_send_policy.py",
-        "tests/test_contact_interview.py",
-        "tests/test_contacts_routes.py",
-        "tests/test_contacts_store.py",
-        "tests/test_context_rules_parsing.py",
-        "tests/test_context_session.py",
-        "tests/test_controller_bindings.py",
-        "tests/test_controller_engine.py",
-        "tests/test_data_categories.py",
-        "tests/test_data_paths.py",
-        "tests/test_data_registry.py",
-        "tests/test_delivery_preservation.py",
-        "tests/test_delivery_signal_prompt.py",
-        "tests/test_dev_route_gating.py",
-        "tests/test_dictation_commands.py",
-        "tests/test_dictation_pipeline.py",
-        "tests/test_dictation_preset_resolution.py",
-        "tests/test_dictionary.py",
-        "tests/test_disk_space_gate.py",
-        "tests/test_domain_contracts.py",
-        "tests/test_download_verification.py",
-    ):
-        assert test_file in installer
+    for workflow in (installer, ci):
+        assert "chunk: [0, 1, 2, 3, 4, 5, 6, 7]" in workflow
 
 
 def test_ci_preserves_required_windows_check_as_chunk_aggregator():

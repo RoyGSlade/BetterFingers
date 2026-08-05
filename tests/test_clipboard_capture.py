@@ -148,7 +148,9 @@ class ClipboardCaptureTests(unittest.TestCase):
 
     @patch("clipboard_capture.shutil.which", return_value=None)
     def test_missing_x11_clipboard_tool_is_explicit_and_actionable(self, which):
-        with patch.object(clipboard_capture.platform_capabilities, "is_wayland", False), patch.object(
+        with patch.object(clipboard_capture, "IS_WINDOWS", False), patch.object(
+            clipboard_capture.platform_capabilities, "is_macos", False
+        ), patch.object(clipboard_capture.platform_capabilities, "is_wayland", False), patch.object(
             clipboard_capture.platform_capabilities, "is_x11", True
         ), patch.dict(os.environ, {"DISPLAY": "", "WAYLAND_DISPLAY": ""}, clear=False):
             result = clipboard_capture.capture_selection_text_with_restore()
@@ -163,7 +165,9 @@ class ClipboardCaptureTests(unittest.TestCase):
     @patch("clipboard_capture.shutil.which")
     def test_clipboard_tool_detection_is_live_per_capture_attempt(self, which):
         which.side_effect = [None, None, None, "/usr/bin/xclip", None, "/usr/bin/xdotool"]
-        with patch.object(clipboard_capture.platform_capabilities, "is_wayland", False), patch.object(
+        with patch.object(clipboard_capture, "IS_WINDOWS", False), patch.object(
+            clipboard_capture.platform_capabilities, "is_macos", False
+        ), patch.object(clipboard_capture.platform_capabilities, "is_wayland", False), patch.object(
             clipboard_capture.platform_capabilities, "is_x11", True
         ), patch.dict(os.environ, {"DISPLAY": ":99"}, clear=False):
             first = clipboard_capture._selection_capture_support()
@@ -180,7 +184,9 @@ class ClipboardCaptureTests(unittest.TestCase):
     @patch("clipboard_capture.shutil.which", return_value="/usr/bin/xclip")
     def test_live_xclip_read_bypasses_cached_pyperclip_backend(self, _which, run):
         run.return_value = type("Completed", (), {"returncode": 0, "stdout": b"selected text"})()
-        with patch.object(clipboard_capture.platform_capabilities, "is_wayland", False), patch.object(
+        with patch.object(clipboard_capture, "IS_WINDOWS", False), patch.object(
+            clipboard_capture.platform_capabilities, "is_macos", False
+        ), patch.object(clipboard_capture.platform_capabilities, "is_wayland", False), patch.object(
             clipboard_capture.platform_capabilities, "is_x11", True
         ), patch.object(clipboard_capture.pyperclip, "paste", side_effect=AssertionError("stale pyperclip backend")), patch.dict(
             os.environ, {"DISPLAY": ":99"}, clear=False
@@ -252,7 +258,9 @@ class ClipboardCaptureTests(unittest.TestCase):
     @patch("clipboard_capture.shutil.which")
     def test_x11_support_requires_clipboard_and_copy_trigger(self, which):
         which.side_effect = lambda name: "/usr/bin/" + name if name in {"xclip", "xdotool"} else None
-        with patch.object(clipboard_capture.platform_capabilities, "is_wayland", False), patch.object(
+        with patch.object(clipboard_capture, "IS_WINDOWS", False), patch.object(
+            clipboard_capture.platform_capabilities, "is_macos", False
+        ), patch.object(clipboard_capture.platform_capabilities, "is_wayland", False), patch.object(
             clipboard_capture.platform_capabilities, "is_x11", True
         ), patch.dict(os.environ, {"DISPLAY": ":99"}, clear=False):
             result = clipboard_capture._selection_capture_support()
@@ -263,7 +271,9 @@ class ClipboardCaptureTests(unittest.TestCase):
 
     @patch("clipboard_capture.shutil.which", side_effect=lambda name: "/usr/bin/" + name)
     def test_wayland_requires_live_display_even_when_tools_exist(self, _which):
-        with patch.object(clipboard_capture.platform_capabilities, "is_wayland", True), patch.object(
+        with patch.object(clipboard_capture, "IS_WINDOWS", False), patch.object(
+            clipboard_capture.platform_capabilities, "is_macos", False
+        ), patch.object(clipboard_capture.platform_capabilities, "is_wayland", True), patch.object(
             clipboard_capture.platform_capabilities, "is_x11", False
         ), patch.dict(os.environ, {"WAYLAND_DISPLAY": "", "DISPLAY": ""}, clear=False):
             result = clipboard_capture._selection_capture_support()
@@ -275,7 +285,9 @@ class ClipboardCaptureTests(unittest.TestCase):
 
     @patch("clipboard_capture.shutil.which", side_effect=lambda name: "/usr/bin/" + name)
     def test_x11_requires_live_display_even_when_tools_exist(self, _which):
-        with patch.object(clipboard_capture.platform_capabilities, "is_wayland", False), patch.object(
+        with patch.object(clipboard_capture, "IS_WINDOWS", False), patch.object(
+            clipboard_capture.platform_capabilities, "is_macos", False
+        ), patch.object(clipboard_capture.platform_capabilities, "is_wayland", False), patch.object(
             clipboard_capture.platform_capabilities, "is_x11", True
         ), patch.dict(os.environ, {"WAYLAND_DISPLAY": "", "DISPLAY": ""}, clear=False):
             result = clipboard_capture._selection_capture_support()
@@ -287,7 +299,9 @@ class ClipboardCaptureTests(unittest.TestCase):
 
     @patch("clipboard_capture.shutil.which", return_value=None)
     def test_wayland_without_copy_trigger_is_actionable(self, _which):
-        with patch.object(clipboard_capture.platform_capabilities, "is_wayland", True), patch.object(
+        with patch.object(clipboard_capture, "IS_WINDOWS", False), patch.object(
+            clipboard_capture.platform_capabilities, "is_macos", False
+        ), patch.object(clipboard_capture.platform_capabilities, "is_wayland", True), patch.object(
             clipboard_capture.platform_capabilities, "is_x11", False
         ):
             result = clipboard_capture._selection_capture_support()
@@ -296,7 +310,9 @@ class ClipboardCaptureTests(unittest.TestCase):
         self.assertEqual(result["copy_trigger_backend"]["required"], ["wtype or ydotool"])
 
     def test_macos_selection_capture_remains_explicitly_unsupported(self):
-        with patch.object(clipboard_capture.platform_capabilities, "is_macos", True), patch.object(
+        with patch.object(clipboard_capture, "IS_WINDOWS", False), patch.object(
+            clipboard_capture.platform_capabilities, "is_macos", True
+        ), patch.object(
             clipboard_capture.platform_capabilities, "is_wayland", False
         ), patch.object(clipboard_capture.platform_capabilities, "is_x11", False):
             result = clipboard_capture._selection_capture_support()
