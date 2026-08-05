@@ -119,6 +119,7 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path build | Out-Null
           python -m pytest -q tests -m smoke -W default 2>&1 | Tee-Object -FilePath build/pytest-smoke.log
           if ($LASTEXITCODE -eq 5) {
             Write-Error "Smoke suite collected zero tests -- the smoke marker wiring is broken (see SMOKE_FILES in tests/conftest.py)."

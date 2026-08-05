@@ -46,6 +46,16 @@ def test_linux_appimage_smoke_does_not_disable_electron_sandbox():
     assert "--no-sandbox" not in _workflow_text()
 
 
+def test_windows_installer_creates_build_directory_before_smoke_log():
+    workflow = _workflow_text()
+    block = workflow.split("      - name: Run smoke suite\n", 1)[1].split(
+        "\n      # Windows code signing", 1
+    )[0]
+    mkdir = "New-Item -ItemType Directory -Force -Path build | Out-Null"
+    assert mkdir in block
+    assert block.index(mkdir) < block.index("Tee-Object -FilePath build/pytest-smoke.log")
+
+
 def test_windows_python_suites_isolate_chunks_and_files_to_release_memory():
     installer = _workflow_text()
     ci = CI_WORKFLOW.read_text(encoding="utf-8")
