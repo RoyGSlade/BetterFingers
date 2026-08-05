@@ -17,34 +17,37 @@ test.describe('BetterFingers Review Overlay Tests', () => {
   let reviewWindow;
 
   test.beforeAll(async () => {
-    // Launch Electron app
+    // Keep Electron from inheriting shell flags that turn it into a plain Node
+    // process instead of opening the application window.
+    const launchEnv = { ...process.env };
+    delete launchEnv.ELECTRON_RUN_AS_NODE;
+    delete launchEnv.ELECTRON_NO_ATTACH_CONSOLE;
+    launchEnv.BETTERFINGERS_PYTHON = launchEnv.BETTERFINGERS_PYTHON || 'python3';
+
     app = await electron.launch({
       cwd: path.resolve(__dirname, '..'),
       args: ['.'],
-      env: {
-        ...process.env,
-        BETTERFINGERS_PYTHON: process.env.BETTERFINGERS_PYTHON || 'python3',
-      },
+      env: launchEnv,
     });
 
-    // Wait for the main window (index.html) to open and load
+    // Exercise the shipping Signal Desk route, not the legacy rollback UI.
     const windows = app.windows();
-    mainWindow = windows.find(w => w.url().includes('index.html'));
+    mainWindow = windows.find(w => w.url().includes('signal-desk.html'));
     if (!mainWindow) {
       mainWindow = await app.waitForEvent('window', {
-        predicate: (w) => w.url().includes('index.html'),
+        predicate: (w) => w.url().includes('signal-desk.html'),
         timeout: 20000,
       });
     }
 
     await mainWindow.waitForLoadState('domcontentloaded');
-    await mainWindow.waitForSelector('#backendStatus', { state: 'attached', timeout: 15000 });
+    await mainWindow.waitForSelector('#sdStatusBackendValue', { state: 'attached', timeout: 15000 });
     await dismissOnboardingIfPresent(mainWindow);
-    const statusLocator = mainWindow.locator('#backendStatus');
+    const statusLocator = mainWindow.locator('#sdStatusBackendValue');
     await expect(statusLocator).toHaveText(/ready|active|running|external/i, { timeout: 15000 });
 
     // Wait for WebSocket stream connection to be fully connected
-    const wsConnection = mainWindow.locator('#wsConnection');
+    const wsConnection = mainWindow.locator('#sdStatusStreamValue');
     await expect(wsConnection).toHaveText(/connected/i, { timeout: 15000 });
   });
 

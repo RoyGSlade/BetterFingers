@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 const SIGNAL_DESK = new URL('../src/renderer/signal-desk.html', import.meta.url);
-const markup = readFileSync(SIGNAL_DESK, 'utf8');
+const markup = readFileSync(SIGNAL_DESK, 'utf8').replace(/\r\n/g, '\n');
 
 function regionBetween(source, start, end) {
   const startIndex = source.indexOf(start);

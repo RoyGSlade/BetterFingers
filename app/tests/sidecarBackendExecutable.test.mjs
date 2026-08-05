@@ -43,6 +43,10 @@ test('resolves the preferred executable name when it is executable', (t) => {
 });
 
 test('throws a precise error when the preferred name exists but is not executable', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('Windows executable qualification is based on file existence, not POSIX mode bits');
+    return;
+  }
   const resourcesPath = tempResourcesDir(t);
   const backendDir = path.join(resourcesPath, 'backend');
   fs.mkdirSync(backendDir, { recursive: true });
@@ -73,6 +77,10 @@ test('fallback scan skips non-executable files and does not return an arbitrary 
 });
 
 test('fallback scan throws rather than returning a non-executable file when nothing is executable', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('Windows executable qualification is based on file existence, not POSIX mode bits');
+    return;
+  }
   const resourcesPath = tempResourcesDir(t);
   const backendDir = path.join(resourcesPath, 'backend');
   fs.mkdirSync(backendDir, { recursive: true });

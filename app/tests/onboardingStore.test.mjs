@@ -109,6 +109,10 @@ test('step completion is idempotent', (t) => {
 // user had durably consented — the whole point of the durable store.
 
 test('recordAcceptance on an unwritable root returns ok:false, not a false success', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('Windows does not enforce POSIX directory permission bits');
+    return;
+  }
   if (process.getuid && process.getuid() === 0) {
     t.skip('running as root ignores directory permission bits');
     return;
@@ -125,6 +129,10 @@ test('recordAcceptance on an unwritable root returns ok:false, not a false succe
 });
 
 test('recordStepComplete on an unwritable root returns ok:false, not a false success', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('Windows does not enforce POSIX directory permission bits');
+    return;
+  }
   if (process.getuid && process.getuid() === 0) {
     t.skip('running as root ignores directory permission bits');
     return;
@@ -253,6 +261,10 @@ test('legacy migration only runs once even across a corrupt existing file', (t) 
 });
 
 test('a failed migration write reports migrated:false, not a false success', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('Windows does not enforce POSIX directory permission bits');
+    return;
+  }
   if (process.getuid && process.getuid() === 0) {
     t.skip('running as root ignores directory permission bits');
     return;

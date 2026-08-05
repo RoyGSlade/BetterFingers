@@ -38,3 +38,8 @@ test('Linux package identity aligns Electron and desktop-entry names', () => {
   assert.deepEqual(packageJson.build.linux.executableArgs, []);
   assert.equal(packageJson.build.linux.syncDesktopName, true);
 });
+
+test('the locked Electron version is allowed to install its platform binary', () => {
+  const electronVersion = packageJson.devDependencies.electron;
+  assert.equal(packageJson.allowScripts[`electron@${electronVersion}`], true);
+});
