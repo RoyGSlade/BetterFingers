@@ -72,7 +72,7 @@ export const defaultFlipScenarios = [
         ).toHaveCount(0);
       }
       // The five Signal Desk workspaces, which index.html has none of.
-      for (const nav of ['talk', 'library', 'studio', 'utilities', 'settings']) {
+      for (const nav of ['talk', 'scribe', 'studio', 'utilities', 'settings']) {
         await expect(page.locator(`.sd-nav__button[data-nav="${nav}"]`)).toHaveCount(1);
       }
     },

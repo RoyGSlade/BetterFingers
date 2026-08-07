@@ -149,15 +149,16 @@ class CapabilitiesFieldTests(unittest.TestCase):
     def test_wayland_display_takes_precedence_over_stale_x11_environment(self):
         original_env = dict(os.environ)
         try:
-            os.environ["WAYLAND_DISPLAY"] = "wayland-0"
-            os.environ["DISPLAY"] = ":99"
-            os.environ["XDG_SESSION_TYPE"] = "x11"
-            importlib.reload(platform_capabilities)
+            with patch("platform.system", return_value="Linux"):
+                os.environ["WAYLAND_DISPLAY"] = "wayland-0"
+                os.environ["DISPLAY"] = ":99"
+                os.environ["XDG_SESSION_TYPE"] = "x11"
+                importlib.reload(platform_capabilities)
 
-            self.assertEqual(platform_capabilities.session_type, "wayland")
-            self.assertTrue(platform_capabilities.is_wayland)
-            self.assertFalse(platform_capabilities.is_x11)
-            self.assertFalse(platform_capabilities.supports_global_hotkeys)
+                self.assertEqual(platform_capabilities.session_type, "wayland")
+                self.assertTrue(platform_capabilities.is_wayland)
+                self.assertFalse(platform_capabilities.is_x11)
+                self.assertFalse(platform_capabilities.supports_global_hotkeys)
         finally:
             os.environ.clear()
             os.environ.update(original_env)
@@ -166,15 +167,16 @@ class CapabilitiesFieldTests(unittest.TestCase):
     def test_display_only_session_is_effective_x11(self):
         original_env = dict(os.environ)
         try:
-            os.environ.pop("WAYLAND_DISPLAY", None)
-            os.environ.pop("XDG_SESSION_TYPE", None)
-            os.environ["DISPLAY"] = ":99"
-            importlib.reload(platform_capabilities)
+            with patch("platform.system", return_value="Linux"):
+                os.environ.pop("WAYLAND_DISPLAY", None)
+                os.environ.pop("XDG_SESSION_TYPE", None)
+                os.environ["DISPLAY"] = ":99"
+                importlib.reload(platform_capabilities)
 
-            self.assertEqual(platform_capabilities.session_type, "x11")
-            self.assertFalse(platform_capabilities.is_wayland)
-            self.assertTrue(platform_capabilities.is_x11)
-            self.assertTrue(platform_capabilities.supports_global_hotkeys)
+                self.assertEqual(platform_capabilities.session_type, "x11")
+                self.assertFalse(platform_capabilities.is_wayland)
+                self.assertTrue(platform_capabilities.is_x11)
+                self.assertTrue(platform_capabilities.supports_global_hotkeys)
         finally:
             os.environ.clear()
             os.environ.update(original_env)
@@ -183,28 +185,33 @@ class CapabilitiesFieldTests(unittest.TestCase):
     def test_stale_x11_session_without_display_is_not_x11_capable(self):
         original_env = dict(os.environ)
         try:
-            os.environ.pop("WAYLAND_DISPLAY", None)
-            os.environ.pop("DISPLAY", None)
-            os.environ["XDG_SESSION_TYPE"] = "x11"
-            importlib.reload(platform_capabilities)
+            with patch("platform.system", return_value="Linux"):
+                os.environ.pop("WAYLAND_DISPLAY", None)
+                os.environ.pop("DISPLAY", None)
+                os.environ["XDG_SESSION_TYPE"] = "x11"
+                importlib.reload(platform_capabilities)
 
-            self.assertEqual(platform_capabilities.session_type, "x11")
-            self.assertFalse(platform_capabilities.is_x11)
-            self.assertFalse(platform_capabilities.supports_global_hotkeys)
+                self.assertEqual(platform_capabilities.session_type, "x11")
+                self.assertFalse(platform_capabilities.is_x11)
+                self.assertFalse(platform_capabilities.supports_global_hotkeys)
         finally:
             os.environ.clear()
             os.environ.update(original_env)
             importlib.reload(platform_capabilities)
 
     def test_wayland_xclip_fallback_requires_xwayland_display(self):
-        with patch.object(platform_capabilities, "is_linux", True), patch.object(
+        with patch.object(platform_capabilities, "is_windows", False), patch.object(
+            platform_capabilities, "is_macos", False
+        ), patch.object(platform_capabilities, "is_linux", True), patch.object(
             platform_capabilities, "is_wayland", True
         ), patch("platform_capabilities.shutil.which", _which_map(["xclip"])), patch.dict(
             os.environ, {"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ""}, clear=False
         ):
             self.assertEqual(platform_capabilities._detect_clipboard_backend(), "")
 
-        with patch.object(platform_capabilities, "is_linux", True), patch.object(
+        with patch.object(platform_capabilities, "is_windows", False), patch.object(
+            platform_capabilities, "is_macos", False
+        ), patch.object(platform_capabilities, "is_linux", True), patch.object(
             platform_capabilities, "is_wayland", True
         ), patch("platform_capabilities.shutil.which", _which_map(["xclip"])), patch.dict(
             os.environ, {"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":99"}, clear=False

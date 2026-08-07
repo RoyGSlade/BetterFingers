@@ -76,6 +76,12 @@ test('formatConfidencePercent: missing/NaN score returns null', () => {
   assert.equal(formatConfidencePercent(NaN), null);
 });
 
+test('formatConfidencePercent: out-of-contract percentage values stay unknown', () => {
+  assert.equal(formatConfidencePercent(35), null);
+  assert.equal(formatConfidencePercent(-0.1), null);
+  assert.equal(formatConfidencePercent(1.1), null);
+});
+
 test('mapConfidenceBand: >=85 is always high', () => {
   assert.equal(mapConfidenceBand(0.9, 'pending'), 'high');
   assert.equal(mapConfidenceBand(0.9, 'sent'), 'high');

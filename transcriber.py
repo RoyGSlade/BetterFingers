@@ -119,7 +119,11 @@ def _repo_id_for_model(model_size):
     if "/" in size:
         return size
     if size.startswith("distil"):
-        return f"Systran/faster-{size}"
+        # Distil-Whisper repositories retain the ``whisper`` segment in their
+        # Hub id (for example, ``faster-distil-whisper-large-v3``). Without
+        # it, cache discovery reports an installed model as missing and the
+        # loader asks Hugging Face for a repository that does not exist.
+        return f"Systran/faster-distil-whisper-{size.removeprefix('distil-')}"
     return f"Systran/faster-whisper-{size}"
 
 
@@ -152,6 +156,9 @@ def list_cached_models(download_root=None):
         size_name = ""
         if repo_id.startswith("Systran/faster-whisper-"):
             size_name = repo_id.split("Systran/faster-whisper-", 1)[1].strip()
+        elif repo_id.startswith("Systran/faster-distil-whisper-"):
+            suffix = repo_id.split("Systran/faster-distil-whisper-", 1)[1].strip()
+            size_name = f"distil-{suffix}" if suffix else ""
         if not size_name:
             continue
         if size_name not in rows:

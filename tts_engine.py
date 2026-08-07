@@ -112,6 +112,10 @@ class ReviewTTSEngine:
         self._kokoro_pipeline = None
         self._kokoro_onnx = None
         self._kokoro_runtime = None
+        # Only populated after the ONNX artifact is actually loaded. Native
+        # and SAPI runtimes intentionally report no model id rather than
+        # guessing at an ONNX artifact.
+        self._kokoro_model_id = None
         self._kokoro_voice = "af_heart"
         self._onnx_providers_used = []
         self._prefer_gpu = True
@@ -173,11 +177,25 @@ class ReviewTTSEngine:
         return {
             "backend": self._backend,
             "runtime": self._kokoro_runtime,
+            "model_id": self._kokoro_model_id if self._kokoro_runtime == "onnx" else None,
+            "supported_voice_ids": (
+                self._safe_onnx_voice_names()
+                if self._kokoro_runtime == "onnx" and self._kokoro_onnx is not None
+                else []
+            ),
             # Blending only ever runs on kokoro-onnx (see _resolve_voice_spec) —
             # mirror that exact gate here so this never claims capability the
             # synthesis path can't actually deliver.
             "blend_capable": self._kokoro_runtime == "onnx" and self._kokoro_onnx is not None,
         }
+
+    def _safe_onnx_voice_names(self):
+        try:
+            return self._extract_onnx_voice_names()
+        except Exception:
+            # A partially initialized third-party voice table is not evidence
+            # of supported voices. Keep the capability response honest/open.
+            return []
 
     def get_capabilities(self) -> Dict[str, object]:
         """Cheap, thread-safe snapshot of what the currently loaded backend
@@ -256,6 +274,7 @@ class ReviewTTSEngine:
             self._kokoro_pipeline = None
             self._kokoro_onnx = None
             self._kokoro_runtime = None
+            self._kokoro_model_id = None
             self._onnx_providers_used = []
             self._loaded = False
             self._backend = "none"
@@ -848,6 +867,7 @@ class ReviewTTSEngine:
                     self._kokoro_pipeline = pipeline
                     self._kokoro_onnx = None
                     self._kokoro_runtime = "native"
+                    self._kokoro_model_id = None
                     self._kokoro_voice = self._resolve_kokoro_voice(voice_hint)
                     return True, "Kokoro backend loaded."
                 except BaseException as exc:
@@ -929,6 +949,7 @@ class ReviewTTSEngine:
             self._kokoro_pipeline = None
             self._kokoro_onnx = engine
             self._kokoro_runtime = "onnx"
+            self._kokoro_model_id = model_filename
             self._kokoro_voice = self._resolve_kokoro_voice(voice_hint)
             self._onnx_providers_used = self._extract_onnx_providers(engine, fallback=providers)
             providers_text = ", ".join(self._onnx_providers_used) if self._onnx_providers_used else "default"
@@ -936,6 +957,7 @@ class ReviewTTSEngine:
             return True, msg
         except Exception as exc:
             self._kokoro_onnx = None
+            self._kokoro_model_id = None
             self._onnx_providers_used = []
             return False, f"kokoro-onnx load failed ({exc})."
 

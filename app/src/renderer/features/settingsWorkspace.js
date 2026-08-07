@@ -1357,9 +1357,39 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
       renderSettings(payload.settings ?? {});
       setMessage(els.profileMessage, `Saved ${payload.profile}.`, 'success');
       hks.onProfileSaved?.(payload);
+      return payload;
     } catch (error) {
       setMessage(els.profileMessage, `Save failed: ${error.message}`, 'danger');
+      return null;
     }
+  }
+
+  /**
+   * Persist the persona selected by Studio through this workspace's real
+   * profile form/save route. Keeping this here avoids a second profile writer
+   * in the Studio composition root and preserves all other unsaved fields.
+   */
+  async function setCurrentPersona(name) {
+    const value = String(name || '').trim();
+    const field = fieldEls.current_preset;
+    if (!value || !field) throw new Error('Active persona control is unavailable.');
+    if (field.options && !Array.from(field.options).some((item) => item.value === value)) {
+      throw new Error(`Persona "${value}" is not available in the active profile.`);
+    }
+    const previousValue = field.value;
+    field.value = value;
+    markDirty();
+    runValidation();
+    const saved = await handleSave();
+    if (!saved) {
+      // The host callback must not leave Settings displaying a persona that
+      // the profile store rejected. Restore the last persisted selection;
+      // the existing save error remains visible for the user.
+      field.value = previousValue;
+      runValidation();
+      throw new Error('Active persona was not saved.');
+    }
+    return value;
   }
 
   async function handleDiscard() {
@@ -2063,6 +2093,7 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
     handleImportFileChange,
     handleDelete,
     handleSave,
+    setCurrentPersona,
     handleDiscard,
     handleWipe,
     getValidationErrors: () => ({ ...validationErrors }),

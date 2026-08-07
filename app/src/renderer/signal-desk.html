@@ -1501,7 +1501,7 @@
             <p class="sd-studio-message" id="sdStudioMessage"></p>
 
             <!-- "Teach from my edits" -- features/personaLearning.js reused verbatim; see studioWorkspace.js's file-header ID-COLLISION NOTE for why these use sdTeach* ids rather than personaLearning.js's own canonical personaLearning* ids. -->
-            <div class="sd-teach-panel" id="sdTeachSection" hidden>
+            <div class="sd-teach-panel" id="sdTeachSection">
               <div class="sd-teach-panel__header">
                 <span class="sd-panel-label">Teach From My Edits <span class="sd-help" aria-hidden="true">?</span></span>
                 <span class="sd-teach-panel__persona" id="sdTeachPersonaLabel"></span>
@@ -2270,7 +2270,7 @@
                  the same resolution Wave 7 documented for the Settings nav.
                  Promoting it is a utilitiesWorkspace.js change, written out in
                  docs/release/WAVE9_INTEGRATION_DIFFS.md as an optional diff. -->
-            <div class="sd-util-group" id="sdUtilWorkflowGroup" data-workflow-approved="false" data-workflow-saved="false" hidden>
+            <div class="sd-util-group" id="sdUtilWorkflowGroup" data-workflow-approved="false" data-workflow-saved="false">
               <div class="sd-util-group__header"><span class="sd-util-group__title">Launch Workflows</span></div>
               <p class="sd-util-group__desc">
                 A workflow is a fixed list of approved actions — open an application, a folder or a link,
@@ -2706,7 +2706,7 @@
                 DISCLOSED_TOGGLES -- do not hard-code the text here, or the
                 disclosure and the behaviour can drift apart.
               -->
-              <div class="sd-set-row sd-set-row--disclosed" data-search-row data-search-label="speech delivery signals" hidden>
+              <div class="sd-set-row sd-set-row--disclosed" data-search-row data-search-label="speech delivery signals">
                 <div class="sd-set-row__label">
                   <span class="sd-set-row__label-text">Use speech delivery signals</span>
                   <dl class="sd-disclosure">

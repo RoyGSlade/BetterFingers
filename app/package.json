@@ -1,6 +1,6 @@
 {
   "name": "betterfingers-electron",
-  "version": "0.2.0-alpha.1",
+  "version": "1.1.0-alpha.1",
   "description": "Electron shell for BetterFingers with a FastAPI Python backend.",
   "author": "Donaven Crenshaw",
   "desktopName": "BetterFingers",
@@ -86,7 +86,7 @@
     "publish": null
   },
   "allowScripts": {
-    "electron@43.1.0": true,
+    "electron@43.2.0": true,
     "electron-winstaller@5.4.0": true,
     "esbuild@0.25.12": true,
     "esbuild@0.27.7": true

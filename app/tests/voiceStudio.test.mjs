@@ -540,6 +540,25 @@ test('the Add voice layer button disables itself once MAX_BLEND_LAYERS is reache
   assert.notEqual(fakeDoc.elements.addVoiceLayerButton.title, '', 'the reason must be stated, not just implied by disabled');
 });
 
+test('the Add voice layer button disables when runtime status rejects blending', async () => {
+  const fakeDoc = makeFakeDoc();
+  const feature = createVoiceStudioFeature({
+    ui: {},
+    hooks: {},
+    api: makeApiStub({
+      fetchTtsStatus: async () => ({
+        raw_backend: 'native',
+        capabilities: { runtime: 'native', blend_capable: false },
+      }),
+    }),
+  });
+
+  await feature.refreshVoices(fakeDoc);
+
+  assert.equal(fakeDoc.elements.addVoiceLayerButton.disabled, true);
+  assert.match(fakeDoc.elements.addVoiceLayerButton.title, /blending is not supported/);
+});
+
 test('reset button clears blend layers (blend normalization/reset)', async () => {
   const fakeDoc = makeFakeDoc();
   const feature = createVoiceStudioFeature({ ui: {}, hooks: {}, api: makeApiStub() });

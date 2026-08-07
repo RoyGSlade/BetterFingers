@@ -658,6 +658,10 @@ export function startSignalDeskApp(doc = document) {
       onOpenFoundryRequested: () => personaFlow?.openFoundry(),
       onEditPersonaRequested: (name) => personaFlow?.openWizardForEdit(name),
       getActivePersonaName: () => String(profileSettings?.current_preset ?? '').trim(),
+      onActivePersonaRequested: async (name) => {
+        await settingsWorkspace.setCurrentPersona(name);
+        profileSettings = { ...(profileSettings || {}), current_preset: String(name).trim() };
+      },
     },
   });
   studioWorkspace.init();

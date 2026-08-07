@@ -1,8 +1,8 @@
 # True BetterFingers Known Limitations
 
-- **Release candidate:** `v0.2.0-alpha.1`
+- **Release candidate:** `v1.1.0-alpha.1`
 - **Baseline:** `feat/signal-desk-ui` at `093eaf2a…`
-- **Last updated:** 2026-07-28
+- **Last updated:** 2026-08-04
 
 This is an honest record of the current unreleased baseline. Items here are not
 automatically accepted public-release limitations. A blocker must be fixed,
@@ -135,8 +135,11 @@ publication.
 - **Onboarding is not durable application consent.** The legacy renderer uses a
   page-local `bf_onboarding_complete` value; Signal Desk's flow is QA-triggered
   and receives disposable in-memory storage.
-- **Versions disagree.** Electron package `0.1.0`, preview `v1.2.0`, and planned
-  release `0.2.0-alpha.1` are not centralized.
+- **Historical version disagreement is retained for traceability.** The former
+  baseline had Electron package `0.1.0`, preview `v1.2.0`, and planned release
+  `v0.2.0-alpha.1`; the current release source and Electron package are now
+  centralized at `1.1.0-alpha.1`. This reconciliation does not establish
+  package, signing, CI, or operator qualification.
 - **Strict parity closure remains open, though the count has moved a lot since
   Gate 0.** At the Gate 0 baseline (2026-07-28) the release ledger had 434
   blocked rows and four intentional cuts. That is no longer the current

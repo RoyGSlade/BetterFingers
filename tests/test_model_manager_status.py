@@ -122,6 +122,71 @@ class ModelManagerStatusTests(unittest.TestCase):
             self.assertFalse(os.path.exists(dest))
             self.assertTrue(os.path.exists(f"{dest}.part"))
 
+    def test_download_file_restarts_oversized_partial_before_requesting(self):
+        class FakeResponse:
+            status_code = 200
+            headers = {"content-length": "10"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, chunk_size=8192):
+                yield b"abcdefghij"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = os.path.join(tmp, "model.gguf")
+            with open(f"{dest}.part", "wb") as handle:
+                handle.write(b"oversized-corrupt-partial")
+
+            with patch("model_manager.requests.get", return_value=FakeResponse()) as get:
+                model_manager.download_file(
+                    "https://example.test/model",
+                    dest,
+                    "Model",
+                    expected_size=10,
+                )
+
+            self.assertEqual(get.call_args.kwargs["headers"], {})
+            with open(dest, "rb") as handle:
+                self.assertEqual(handle.read(), b"abcdefghij")
+
+    def test_download_file_rejects_completed_wrong_size(self):
+        class FakeResponse:
+            status_code = 200
+            headers = {"content-length": "11"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, chunk_size=8192):
+                yield b"abcdefghijk"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = os.path.join(tmp, "model.gguf")
+            with patch("model_manager.requests.get", return_value=FakeResponse()):
+                with self.assertRaisesRegex(IOError, "download size mismatch"):
+                    model_manager.download_file(
+                        "https://example.test/model",
+                        dest,
+                        "Model",
+                        expected_size=10,
+                    )
+
+            self.assertFalse(os.path.exists(dest))
+            self.assertFalse(os.path.exists(f"{dest}.part"))
+
     def test_incomplete_final_model_is_moved_to_part_for_resume(self):
         with tempfile.TemporaryDirectory() as tmp:
             model_path = os.path.join(tmp, "bad.gguf")
@@ -302,6 +367,7 @@ class ModelManagerStatusTests(unittest.TestCase):
             self.assertFalse(bool(result.get("ok", True)))
             self.assertIn("unavailable", str(result.get("message", "")).lower())
             self.assertEqual(download_file.call_count, 1)
+            self.assertEqual(download_file.call_args.kwargs["expected_size"], 100)
 
     def test_model_file_status_reports_non_writable_attention(self):
         with tempfile.TemporaryDirectory() as tmp:

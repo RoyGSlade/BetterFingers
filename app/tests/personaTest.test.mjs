@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   buildPersonaTestMaterial,
   buildPersonaTestPrompt,
+  cleanPersonaTestOutput,
   describePersonaTestSettings,
 } from '../src/renderer/features/studioWorkspace.js';
 
@@ -20,6 +21,13 @@ test('persona test prompt explicitly demonstrates rewriting instead of answering
   assert.match(prompt, /rewriting the supplied PERSONA TEST MATERIAL/);
   assert.match(prompt, /not as a request for you to answer/);
   assert.match(prompt, /Return only the rewritten text/);
+});
+
+test('persona test output never exposes echoed internal material markers', () => {
+  assert.equal(
+    cleanPersonaTestOutput('Cleaned: [PERSONA TEST MATERIAL]\nhello there\n[END PERSONA TEST MATERIAL]'),
+    'Cleaned: hello there',
+  );
 });
 
 test('persona test settings summary reports defaults and persona overrides truthfully', () => {

@@ -40,6 +40,8 @@ class GetCapabilitiesTests(unittest.TestCase):
         caps = engine.get_capabilities()
         self.assertEqual(caps["backend"], "kokoro")
         self.assertEqual(caps["runtime"], "native")
+        self.assertIsNone(caps["model_id"])
+        self.assertEqual(caps["supported_voice_ids"], [])
         self.assertFalse(caps["blend_capable"])
 
     def test_onnx_runtime_with_engine_is_blend_capable(self):
@@ -48,10 +50,26 @@ class GetCapabilitiesTests(unittest.TestCase):
         engine._backend = "kokoro_onnx"
         engine._kokoro_runtime = "onnx"
         engine._kokoro_onnx = Mock()
+        engine._kokoro_model_id = "kokoro-v1.0.int8.onnx"
         caps = engine.get_capabilities()
         self.assertEqual(caps["backend"], "kokoro_onnx")
         self.assertEqual(caps["runtime"], "onnx")
+        self.assertEqual(caps["model_id"], "kokoro-v1.0.int8.onnx")
+        self.assertEqual(caps["supported_voice_ids"], [])
         self.assertTrue(caps["blend_capable"])
+
+    def test_onnx_runtime_reports_only_voice_ids_from_loaded_voice_table(self):
+        engine = ReviewTTSEngine()
+        engine._loaded = True
+        engine._backend = "kokoro_onnx"
+        engine._kokoro_runtime = "onnx"
+        engine._kokoro_model_id = "kokoro-v1.0.onnx"
+        engine._kokoro_onnx = Mock(voices={"af_heart": object(), "bf_emma": object()})
+
+        caps = engine.get_capabilities()
+
+        self.assertEqual(caps["model_id"], "kokoro-v1.0.onnx")
+        self.assertEqual(caps["supported_voice_ids"], ["af_heart", "bf_emma"])
 
     def test_onnx_runtime_missing_engine_handle_is_not_blend_capable(self):
         # Defensive: if _kokoro_runtime says "onnx" but the engine handle

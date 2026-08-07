@@ -54,6 +54,11 @@ def evaluate_confidence_send_policy(confidence, long_text, gate_reasons, config)
         score = float(score)
     except (TypeError, ValueError):
         return {"auto_send_ok": False, "force_review": True, "reason": "confidence_missing"}
+    # The public confidence contract is a probability-like score in [0, 1].
+    # Do not clamp malformed percentage-style values (for example 35) to 1.0:
+    # that would turn a bad scale into permission to auto-send.
+    if not 0.0 <= score <= 1.0:
+        return {"auto_send_ok": False, "force_review": True, "reason": "confidence_missing"}
     if score < below:
         return {"auto_send_ok": False, "force_review": True, "reason": "low_confidence"}
     if score >= above:

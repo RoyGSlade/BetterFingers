@@ -22,8 +22,8 @@ const RENDERER = join(APP_DIR, 'src/renderer');
 const versionFile = readFileSync(join(REPO_ROOT, 'VERSION'), 'utf8').trim();
 const pkg = JSON.parse(readFileSync(join(APP_DIR, 'package.json'), 'utf8'));
 
-test('VERSION holds the Wave 11 release target', () => {
-  assert.equal(versionFile, '0.2.0-alpha.1');
+test('VERSION holds the v1.1.0-alpha.1 release target', () => {
+  assert.equal(versionFile, '1.1.0-alpha.1');
 });
 
 test('package.json version equals the VERSION file', () => {
@@ -44,7 +44,7 @@ test('package.json version equals the VERSION file', () => {
 // can be `require`d outside a running Electron app, e.g. under `node --test`,
 // without throwing before anything even reads APP_VERSION — see config.js).
 // Neither form is "the" contract; deriving from app.getVersion() is. A getter
-// that returns a hardcoded literal (e.g. `get() { return '0.2.0-alpha.1'; }`)
+// that returns a hardcoded literal (e.g. `get() { return '1.1.0-alpha.1'; }`)
 // must NOT satisfy this — see the negative-case test below. Do not loosen
 // this to a bare `/APP_VERSION/` or `/app\.getVersion/` presence check; both
 // would pass for code that merely mentions the name/call without wiring one
@@ -74,14 +74,14 @@ test('the app version reaches the renderer through the IPC bridge, not a literal
 
 test('the APP_VERSION contract rejects a hard-coded literal disguised as either form', () => {
   const literalConst = `
-    const APP_VERSION = '0.2.0-alpha.1';
+    const APP_VERSION = '1.1.0-alpha.1';
     module.exports = { APP_VERSION };
   `;
   const literalGetterDisguise = `
     Object.defineProperty(module.exports, 'APP_VERSION', {
       enumerable: true,
       get() {
-        return '0.2.0-alpha.1';
+        return '1.1.0-alpha.1';
       },
     });
   `;

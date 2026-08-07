@@ -46,6 +46,23 @@ class DummyTTS:
         return "dummy"
 
 
+class CapabilityTTS(DummyTTS):
+    def is_loaded(self):
+        return True
+
+    def ensure_loaded(self):
+        return {"ok": True, "backend": "kokoro_onnx"}
+
+    def get_capabilities(self):
+        return {
+            "backend": "kokoro_onnx",
+            "runtime": "onnx",
+            "model_id": "kokoro-v1.0.int8.onnx",
+            "supported_voice_ids": ["af_heart", "bf_emma"],
+            "blend_capable": True,
+        }
+
+
 class DummyLlmEngine:
     _ready = False
     model_id = "gemma-4-12b-q4"
@@ -83,6 +100,23 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
         self.assertIn("supports_stt", data)
         self.assertIn("supports_llm", data)
         self.assertIn("supports_tts", data)
+
+    def test_tts_status_preserves_loaded_runtime_model_and_voice_capabilities(self):
+        with patch.object(server, "ensure_tts_initialized", return_value=CapabilityTTS()):
+            with TestClient(server.app) as client:
+                response = client.get("/runtime/tts-status")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["capabilities"],
+            {
+                "backend": "kokoro_onnx",
+                "runtime": "onnx",
+                "model_id": "kokoro-v1.0.int8.onnx",
+                "supported_voice_ids": ["af_heart", "bf_emma"],
+                "blend_capable": True,
+            },
+        )
 
     def test_linux_tts_voices_works_without_appdata(self):
         with tempfile.TemporaryDirectory() as data_dir, tempfile.TemporaryDirectory() as config_dir:

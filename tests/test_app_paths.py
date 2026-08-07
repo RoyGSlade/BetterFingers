@@ -386,6 +386,9 @@ class MigrationTests(unittest.TestCase):
             self.assertFalse((scratch / "voices").exists())
 
     def test_appdata_on_posix_does_not_pull_the_real_install_in(self):
+        if os.name == "nt":
+            self.skipTest("POSIX-only APPDATA migration semantics")
+
         # On POSIX an APPDATA value is always something a caller set, so it is
         # a pin, not the platform location. Only Windows treats it as native.
         with tempfile.TemporaryDirectory() as root:

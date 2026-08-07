@@ -10,7 +10,72 @@ permissions:
   contents: write
 
 jobs:
+  windows-python-tests:
+    name: windows-python-tests (chunk ${{ matrix.chunk }})
+    strategy:
+      fail-fast: false
+      matrix:
+        chunk: [0, 1, 2, 3, 4, 5, 6, 7]
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install Python dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install --require-hashes -r requirements-win.lock
+          python -m pip install --require-hashes -r requirements-dev-win.lock
+
+      - name: Run isolated Windows test files
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          $testFiles = @(Get-ChildItem -Path tests -Filter "test_*.py" -File | Sort-Object FullName)
+          if ($testFiles.Count -eq 0) { throw "No Python test files found." }
+          $chunkCount = 8
+          $chunkSize = [Math]::Ceiling($testFiles.Count / $chunkCount)
+          $chunkIndex = ${{ matrix.chunk }}
+          $start = $chunkIndex * $chunkSize
+          if ($start -ge $testFiles.Count) { throw "Chunk $chunkIndex has no test files." }
+          $end = [Math]::Min($start + $chunkSize - 1, $testFiles.Count - 1)
+          $chunk = @($testFiles[$start..$end])
+          Remove-Item -Path build/pytest.log -ErrorAction SilentlyContinue
+          Write-Host "Running Python test files $($start + 1)-$($end + 1) of $($testFiles.Count)"
+          foreach ($testFile in $chunk) {
+            Write-Host "Running $($testFile.Name) in a fresh Python process"
+            $stdoutPath = Join-Path $env:RUNNER_TEMP "pytest-$chunkIndex-$($testFile.BaseName).stdout.log"
+            $stderrPath = Join-Path $env:RUNNER_TEMP "pytest-$chunkIndex-$($testFile.BaseName).stderr.log"
+            $process = Start-Process -FilePath (Get-Command python).Source `
+              -ArgumentList @("-m", "pytest", "-q", $testFile.FullName, "-W", "default") `
+              -NoNewWindow -PassThru `
+              -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+            if (-not $process.WaitForExit(300000)) {
+              $process.Kill($true)
+              $process.WaitForExit()
+              Get-Content $stdoutPath -ErrorAction SilentlyContinue | Tee-Object -FilePath build/pytest.log -Append
+              Get-Content $stderrPath -ErrorAction SilentlyContinue | Tee-Object -FilePath build/pytest.log -Append
+              throw "$($testFile.Name) exceeded the 5-minute per-file timeout."
+            }
+            $process.WaitForExit()
+            Get-Content $stdoutPath -ErrorAction SilentlyContinue | Tee-Object -FilePath build/pytest.log -Append
+            Get-Content $stderrPath -ErrorAction SilentlyContinue | Tee-Object -FilePath build/pytest.log -Append
+            if ($process.ExitCode -ne 0) { exit $process.ExitCode }
+          }
+          python tools/check_project_deprecations.py build/pytest.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
   windows-installer:
+    needs: windows-python-tests
     runs-on: windows-latest
     permissions:
       contents: read
@@ -50,20 +115,11 @@ jobs:
         working-directory: app
         run: npm run test:unit
 
-      - name: Run test suite
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-          New-Item -ItemType Directory -Force -Path build | Out-Null
-          python -m pytest -q tests -W default 2>&1 | Tee-Object -FilePath build/pytest.log
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/check_project_deprecations.py build/pytest.log
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
       - name: Run smoke suite
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path build | Out-Null
           python -m pytest -q tests -m smoke -W default 2>&1 | Tee-Object -FilePath build/pytest-smoke.log
           if ($LASTEXITCODE -eq 5) {
             Write-Error "Smoke suite collected zero tests -- the smoke marker wiring is broken (see SMOKE_FILES in tests/conftest.py)."
@@ -179,11 +235,13 @@ jobs:
           if ($listExitCode -ne 0) {
             throw "gh release list failed with exit code $listExitCode; refusing to misreport the release as having no prior installer."
           }
-          $releases = @()
+          $prevTag = ""
           if ($releaseJson) {
-            $releases = @($releaseJson | ConvertFrom-Json)
+            $prevTag = $releaseJson |
+              ConvertFrom-Json |
+              ForEach-Object { $_.tagName } |
+              Select-Object -First 1
           }
-          $prevTag = $releases | Select-Object -ExpandProperty tagName -First 1
           if (-not $prevTag) {
             Write-Host "No previous release found; skipping replacement/continuity coverage."
             "path=" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
@@ -368,7 +426,7 @@ jobs:
           sudo apt-get update && sudo apt-get install -y xvfb
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" \
-            "${{ steps.appimage.outputs.path }}" --appimage-extract-and-run --no-sandbox &
+            "${{ steps.appimage.outputs.path }}" --appimage-extract-and-run &
           pid=$!
           trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
           # Match the packaged sidecar's 90s health budget, with a small
@@ -443,6 +501,10 @@ jobs:
       - linux-appimage
       - sbom
     runs-on: ubuntu-latest
+    # The repository's `release` environment requires an explicit approval.
+    # Manual branch dispatches never reach this job; tag builds wait here
+    # after producing and validating all retained artifacts.
+    environment: release
     permissions:
       contents: write
     steps:
@@ -494,6 +556,18 @@ jobs:
       - name: Publish GitHub Release assets
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228  # v3.0.2
         with:
+          name: BetterFingers ${{ github.ref_name }}
+          body: |
+            BetterFingers ${{ github.ref_name }} is a draft public-alpha candidate for local-first dictation on Windows and Linux.
+
+            The release contains a Windows NSIS installer, Linux AppImage, SHA-256 checksum sidecars, the Windows Authenticode status report, and a CycloneDX SBOM. Review the signature report before publication: alpha Windows builds may be unsigned and can trigger Microsoft SmartScreen.
+
+            Nothing in this draft is a qualification claim. Publish only after the exact tag-generated artifacts pass the recorded clean-install, onboarding, model-installation, restart/cache-rediscovery, dictation, recovery, injection, clipboard-restoration, and reliability matrix on Windows and Linux X11.
+          draft: true
+          prerelease: true
+          make_latest: false
+          generate_release_notes: false
+          fail_on_unmatched_files: true
           files: |
             release-assets/windows/*.exe
             release-assets/windows/*.exe.sha256
