@@ -1,0 +1,347 @@
+{
+  "capability_checks": [
+    {
+      "detail": "linux / x11",
+      "evidence": "local platform and environment inspection",
+      "name": "platform/session detected",
+      "status": "PASS"
+    },
+    {
+      "detail": "xclip detected",
+      "name": "clipboard backend available",
+      "status": "PASS"
+    },
+    {
+      "detail": "xdotool",
+      "evidence": "argv-only Ctrl+C trigger capability; desktop copy still requires an observed workflow check",
+      "name": "copy trigger backend available",
+      "status": "PASS"
+    },
+    {
+      "detail": "X11-global-hotkey",
+      "evidence": "capability discovery only; desktop hotkey still requires an observed workflow check",
+      "name": "global hotkey path available",
+      "status": "PASS"
+    },
+    {
+      "detail": "xdotool",
+      "name": "typing/injection path available",
+      "status": "PASS"
+    }
+  ],
+  "checks": [
+    {
+      "detail": "linux / x11",
+      "evidence": "local platform and environment inspection",
+      "name": "platform/session detected",
+      "status": "PASS"
+    },
+    {
+      "detail": "xclip detected",
+      "name": "clipboard backend available",
+      "status": "PASS"
+    },
+    {
+      "detail": "xdotool",
+      "evidence": "argv-only Ctrl+C trigger capability; desktop copy still requires an observed workflow check",
+      "name": "copy trigger backend available",
+      "status": "PASS"
+    },
+    {
+      "detail": "X11-global-hotkey",
+      "evidence": "capability discovery only; desktop hotkey still requires an observed workflow check",
+      "name": "global hotkey path available",
+      "status": "PASS"
+    },
+    {
+      "detail": "xdotool",
+      "name": "typing/injection path available",
+      "status": "PASS"
+    },
+    {
+      "detail": "operator observed the expected result",
+      "name": "selected-text capture",
+      "status": "PASS"
+    },
+    {
+      "detail": "operator observed the expected result",
+      "name": "rewrite opens review-only draft",
+      "status": "PASS"
+    },
+    {
+      "detail": "operator observed the expected result",
+      "name": "clipboard is restored",
+      "status": "PASS"
+    },
+    {
+      "detail": "operator observed the expected result",
+      "name": "no automatic send occurs",
+      "status": "PASS"
+    },
+    {
+      "detail": "operator observed the expected result",
+      "name": "selected-text capture",
+      "status": "PASS"
+    },
+    {
+      "detail": "operator observed the expected result",
+      "name": "rewrite opens review-only draft",
+      "status": "PASS"
+    },
+    {
+      "detail": "operator observed the expected result",
+      "name": "clipboard is restored",
+      "status": "PASS"
+    },
+    {
+      "detail": "operator observed the expected result",
+      "name": "no automatic send occurs",
+      "status": "PASS"
+    }
+  ],
+  "environment": {
+    "clipboard_backend": {
+      "available": true,
+      "name": "xclip",
+      "required": [
+        "xclip"
+      ]
+    },
+    "copy_trigger_backend": {
+      "available": true,
+      "name": "xdotool",
+      "required": []
+    },
+    "default_selection_rewrite_hotkey": "Ctrl+Alt+R",
+    "display_present": true,
+    "hotkey_backend": {
+      "available": true,
+      "name": "X11-global-hotkey",
+      "required": [
+        "DISPLAY"
+      ]
+    },
+    "metadata": {
+      "app_version": "0.2.0-alpha.1",
+      "artifact": {
+        "name": "BetterFingers-0.2.0-alpha.1.AppImage",
+        "sha256": "efbdba4c0925b110c18c8d6cdd4fd56f24390169241dab116b2c36d494f67590",
+        "size_bytes": 571977617,
+        "status": "PASS"
+      },
+      "model_identifier": "gemma-4-e2b-q4",
+      "os_build": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39",
+      "python_version": "3.12.3",
+      "repo_commit": "ef1ed0ded80aede0ab97838acc138283f8378376",
+      "runtime_identifier": "llama-server-build-9936-64c8b7db7"
+    },
+    "platform": "linux",
+    "platform_name": "linux",
+    "representative_apps": [
+      "a GTK/Qt editor (for example Kate or gedit)",
+      "a browser text area"
+    ],
+    "session_type": "x11",
+    "tools": {
+      "wl-copy": {
+        "available": false,
+        "path": null
+      },
+      "wl-paste": {
+        "available": false,
+        "path": null
+      },
+      "wtype": {
+        "available": false,
+        "path": null
+      },
+      "xclip": {
+        "available": true,
+        "path": "xclip"
+      },
+      "xdotool": {
+        "available": true,
+        "path": "xdotool"
+      },
+      "xsel": {
+        "available": false,
+        "path": null
+      },
+      "ydotool": {
+        "available": false,
+        "path": null
+      }
+    },
+    "typing_backend": {
+      "available": true,
+      "name": "xdotool",
+      "required": [
+        "xdotool"
+      ]
+    }
+  },
+  "failed_check_count": 0,
+  "generated_at_utc": "2026-08-04T10:27:10.692953+00:00",
+  "metadata": {
+    "app_version": "0.2.0-alpha.1",
+    "artifact": {
+      "name": "BetterFingers-0.2.0-alpha.1.AppImage",
+      "sha256": "efbdba4c0925b110c18c8d6cdd4fd56f24390169241dab116b2c36d494f67590",
+      "size_bytes": 571977617,
+      "status": "PASS"
+    },
+    "model_identifier": "gemma-4-e2b-q4",
+    "os_build": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39",
+    "python_version": "3.12.3",
+    "repo_commit": "ef1ed0ded80aede0ab97838acc138283f8378376",
+    "runtime_identifier": "llama-server-build-9936-64c8b7db7"
+  },
+  "metadata_checks": [
+    {
+      "detail": "recorded",
+      "name": "OS build recorded",
+      "status": "PASS"
+    },
+    {
+      "detail": "recorded",
+      "name": "Python version recorded",
+      "status": "PASS"
+    },
+    {
+      "detail": "recorded",
+      "name": "repository commit recorded",
+      "status": "PASS"
+    },
+    {
+      "detail": "recorded",
+      "name": "app version recorded",
+      "status": "PASS"
+    },
+    {
+      "detail": "recorded",
+      "name": "artifact metadata recorded",
+      "status": "PASS"
+    },
+    {
+      "detail": "recorded",
+      "name": "model identifier supplied",
+      "status": "PASS"
+    },
+    {
+      "detail": "recorded",
+      "name": "runtime identifier supplied",
+      "status": "PASS"
+    }
+  ],
+  "observed_check_count": 8,
+  "overall": "PASS",
+  "privacy": {
+    "absolute_paths_recorded": false,
+    "clipboard_contents_recorded": false,
+    "rewritten_text_recorded": false,
+    "selected_text_recorded": false
+  },
+  "schema": "betterfingers.selection_capture_qualification.v1",
+  "sentinel": {
+    "char_count": 78,
+    "sha256": "472278aafcc725e8f54ad8a2e18e18b5f10a26249848624804255b9b3b1da4b9",
+    "text_recorded": false
+  },
+  "untested_check_count": 0,
+  "workflow_checks": [
+    {
+      "detail": "operator observed the expected result",
+      "name": "selected-text capture",
+      "status": "PASS"
+    },
+    {
+      "detail": "operator observed the expected result",
+      "name": "rewrite opens review-only draft",
+      "status": "PASS"
+    },
+    {
+      "detail": "operator observed the expected result",
+      "name": "clipboard is restored",
+      "status": "PASS"
+    },
+    {
+      "detail": "operator observed the expected result",
+      "name": "no automatic send occurs",
+      "status": "PASS"
+    },
+    {
+      "detail": "operator observed the expected result",
+      "name": "selected-text capture",
+      "status": "PASS"
+    },
+    {
+      "detail": "operator observed the expected result",
+      "name": "rewrite opens review-only draft",
+      "status": "PASS"
+    },
+    {
+      "detail": "operator observed the expected result",
+      "name": "clipboard is restored",
+      "status": "PASS"
+    },
+    {
+      "detail": "operator observed the expected result",
+      "name": "no automatic send occurs",
+      "status": "PASS"
+    }
+  ],
+  "workflow_target_count": 2,
+  "workflow_target_pass_count": 2,
+  "workflow_targets": [
+    {
+      "checks": [
+        {
+          "detail": "operator observed the expected result",
+          "name": "selected-text capture",
+          "status": "PASS"
+        },
+        {
+          "detail": "operator observed the expected result",
+          "name": "rewrite opens review-only draft",
+          "status": "PASS"
+        },
+        {
+          "detail": "operator observed the expected result",
+          "name": "clipboard is restored",
+          "status": "PASS"
+        },
+        {
+          "detail": "operator observed the expected result",
+          "name": "no automatic send occurs",
+          "status": "PASS"
+        }
+      ],
+      "target": "a GTK/Qt editor (for example Kate or gedit)"
+    },
+    {
+      "checks": [
+        {
+          "detail": "operator observed the expected result",
+          "name": "selected-text capture",
+          "status": "PASS"
+        },
+        {
+          "detail": "operator observed the expected result",
+          "name": "rewrite opens review-only draft",
+          "status": "PASS"
+        },
+        {
+          "detail": "operator observed the expected result",
+          "name": "clipboard is restored",
+          "status": "PASS"
+        },
+        {
+          "detail": "operator observed the expected result",
+          "name": "no automatic send occurs",
+          "status": "PASS"
+        }
+      ],
+      "target": "a browser text area"
+    }
+  ]
+}
