@@ -1,0 +1,19 @@
+{
+  "schema": "betterfingers.release_manifest.v1",
+  "version": "1.1.0-alpha.1",
+  "tag": "v1.1.0-alpha.1",
+  "commit": "",
+  "source_status": "PENDING_FINAL_FREEZE",
+  "windows": {
+    "filename": "",
+    "size_bytes": 0,
+    "sha256": "",
+    "authenticode_status": ""
+  },
+  "linux": {
+    "filename": "",
+    "size_bytes": 0,
+    "sha256": ""
+  },
+  "qualification_status": "PENDING"
+}

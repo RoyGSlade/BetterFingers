@@ -1,4 +1,4 @@
-# OPERATOR QA — the hands-on pass before `v0.2.0-alpha.1` ships
+# OPERATOR QA — the hands-on pass before `v1.1.0-alpha.1` ships
 
 **This is your script, Donaven.** Everything automatable has been automated and is
 green; what's left is the part only a person can judge. Work top to bottom. Each

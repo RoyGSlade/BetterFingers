@@ -1,8 +1,8 @@
 """Reliability benchmark harness (§6.1) — the M1 gate.
 
 The core dictation loop has to be *dependable*, not just functional. This module
-is the scaffolding for proving it: it automates what can be automated (core-loop
-repetition, backend restart recovery, recovery-after-interrupt) and tracks the
+is the scaffolding for proving it: it automates what can be automated (mock
+core-loop repetition and backend health probes) and tracks the
 hardware-bound checks (audio-device unplug/replug, sleep/resume, long recordings,
 the injection matrix) as manual items an operator marks off. It computes a single
 pass/fail gate over all of them.
@@ -12,7 +12,10 @@ unit-test without a live backend, mic, or models. The live wiring — driving a
 real sidecar over HTTP — lives in ``tools/reliability_benchmark.py``.
 """
 
+import json
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, List, Optional
 
 AUTOMATED = "automated"
@@ -49,6 +52,8 @@ class CheckResult:
 # automated ones — a manual FAIL fails the gate, an unperformed manual check
 # leaves the gate incomplete).
 MANUAL_CHECKS: List[CheckResult] = [
+    CheckResult("real_dictations_100", MANUAL, detail="100 production-path microphone dictations complete or recover."),
+    CheckResult("full_restart_cycles_50", MANUAL, detail="50 full application/backend restarts return to a usable state."),
     CheckResult("long_recording_5min", MANUAL, detail="5-minute dictation completes and is reviewable."),
     CheckResult("long_recording_15min", MANUAL, detail="15-minute dictation completes."),
     CheckResult("long_recording_30min", MANUAL, detail="30-minute dictation completes."),
@@ -57,7 +62,90 @@ MANUAL_CHECKS: List[CheckResult] = [
     CheckResult("sleep_resume", MANUAL, detail="Sleep and resume the machine; the app keeps working."),
     CheckResult("clipboard_restoration", MANUAL, detail="After injection the prior clipboard contents are restored."),
     CheckResult("injection_matrix_top10", MANUAL, detail="Injection succeeds across the M2 top-10 target apps."),
+    CheckResult("backend_killed_during_processing", MANUAL, detail="Killing the backend during processing preserves a recoverable recording and draft."),
+    CheckResult("model_download_interrupt_resume", MANUAL, detail="An interrupted model download resumes and verifies successfully."),
+    CheckResult("privacy_wipe", MANUAL, detail="Privacy wipe removes the data categories it promises to remove."),
+    CheckResult("failed_transcription_recovery", MANUAL, detail="A failed transcription preserves recoverable audio and reports an understandable error."),
+    CheckResult("failed_llm_recovery", MANUAL, detail="A failed local rewrite preserves a recoverable draft and reports an understandable error."),
+    CheckResult("failed_placement_recovery", MANUAL, detail="A failed placement preserves the approved draft and reports an understandable error."),
 ]
+
+REQUIRED_ARTIFACT_FIELDS = ("version", "tag", "commit", "filename", "sha256")
+_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+
+
+class ManualResultsError(ValueError):
+    """The operator-supplied manual evidence does not satisfy the release gate."""
+
+
+def load_manual_results(path) -> tuple[List[CheckResult], dict]:
+    """Load and strictly validate completed hardware/operator evidence.
+
+    The file must bind the results to one exact artifact and provide exactly
+    one PASS or FAIL record for every name in ``MANUAL_CHECKS``.  A report may
+    be honest and red, but it may never be green while evidence is missing.
+    """
+    source = Path(path)
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ManualResultsError("manual results must be a JSON object")
+
+    artifact = payload.get("artifact")
+    if not isinstance(artifact, dict):
+        raise ManualResultsError("manual results must contain an artifact object")
+    normalized_artifact = {}
+    for field_name in REQUIRED_ARTIFACT_FIELDS:
+        value = artifact.get(field_name)
+        if not isinstance(value, str) or not value.strip():
+            raise ManualResultsError(f"artifact.{field_name} must be a nonempty string")
+        normalized_artifact[field_name] = value.strip()
+    if not _SHA256_RE.fullmatch(normalized_artifact["sha256"]):
+        raise ManualResultsError("artifact.sha256 must be exactly 64 hexadecimal characters")
+    normalized_artifact["sha256"] = normalized_artifact["sha256"].lower()
+    if not _COMMIT_RE.fullmatch(normalized_artifact["commit"]):
+        raise ManualResultsError("artifact.commit must be exactly 40 hexadecimal characters")
+    normalized_artifact["commit"] = normalized_artifact["commit"].lower()
+    if normalized_artifact["tag"] != f"v{normalized_artifact['version']}":
+        raise ManualResultsError("artifact.tag must equal v plus artifact.version")
+    for key, value in artifact.items():
+        if key not in normalized_artifact:
+            normalized_artifact[key] = value
+
+    rows = payload.get("checks")
+    if not isinstance(rows, list):
+        raise ManualResultsError("manual results checks must be an array")
+
+    required = {check.name for check in MANUAL_CHECKS}
+    seen = set()
+    results = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise ManualResultsError(f"checks[{index}] must be an object")
+        name = row.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ManualResultsError(f"checks[{index}].name must be a nonempty string")
+        name = name.strip()
+        if name not in required:
+            raise ManualResultsError(f"unknown manual check: {name}")
+        if name in seen:
+            raise ManualResultsError(f"duplicate manual check: {name}")
+        seen.add(name)
+
+        raw_status = row.get("status")
+        if not isinstance(raw_status, str) or raw_status.strip().lower() not in (PASS, FAIL):
+            raise ManualResultsError(f"manual check {name} status must be PASS or FAIL")
+        detail = row.get("detail")
+        if not isinstance(detail, str) or not detail.strip():
+            raise ManualResultsError(f"manual check {name} detail must be a nonempty string")
+        results.append(
+            CheckResult(name, MANUAL, status=raw_status.strip().lower(), detail=detail.strip())
+        )
+
+    missing = sorted(required - seen)
+    if missing:
+        raise ManualResultsError("missing required manual checks: " + ", ".join(missing))
+    return results, normalized_artifact
 
 
 def run_repeated(name: str, iterations: int, step: Callable[[int], None], stop_on_first_failure: bool = False) -> CheckResult:
@@ -110,6 +198,7 @@ def run_once(name: str, step: Callable[[], None]) -> CheckResult:
 @dataclass
 class BenchmarkReport:
     results: List[CheckResult] = field(default_factory=list)
+    artifact: dict = field(default_factory=dict)
 
     def add(self, result: CheckResult):
         self.results.append(result)
@@ -139,6 +228,7 @@ class BenchmarkReport:
     def to_dict(self) -> dict:
         return {
             "passed": self.passed,
+            "artifact": self.artifact,
             "total": len(self.results),
             "failed": len(self.failed),
             "incomplete": len(self.incomplete),
@@ -158,7 +248,14 @@ class BenchmarkReport:
         return "\n".join(lines)
 
 
-def build_report(call: Callable[..., dict], dictations: int = 100, health_checks: int = 50, include_manual: bool = True) -> BenchmarkReport:
+def build_report(
+    call: Callable[..., dict],
+    dictations: int = 100,
+    health_checks: int = 50,
+    include_manual: bool = True,
+    manual_results: Optional[List[CheckResult]] = None,
+    artifact_metadata: Optional[dict] = None,
+) -> BenchmarkReport:
     """Assemble the automated benchmark against a live sidecar. ``call`` is an
     injected transport — ``call(method, path) -> dict`` that raises on any
     non-2xx — so this is testable with a fake backend (the HTTP wiring lives in
@@ -168,7 +265,7 @@ def build_report(call: Callable[..., dict], dictations: int = 100, health_checks
     mock-draft → review → accept → decline plumbing repeatedly. True audio,
     injection, restart-recovery, and the hardware checks are the manual items.
     """
-    report = BenchmarkReport()
+    report = BenchmarkReport(artifact=dict(artifact_metadata or {}))
 
     report.add(run_once("backend_reachable", lambda: bool(call("GET", "/health").get("status"))))
 
@@ -187,6 +284,9 @@ def build_report(call: Callable[..., dict], dictations: int = 100, health_checks
     report.add(run_once("recordings_bin_reachable", lambda: "recordings" in call("GET", "/recordings")))
     report.add(run_once("jobs_registry_reachable", lambda: "jobs" in call("GET", "/jobs")))
 
-    if include_manual:
+    if manual_results is not None:
+        for result in manual_results:
+            report.add(result)
+    elif include_manual:
         report.include_manual()
     return report

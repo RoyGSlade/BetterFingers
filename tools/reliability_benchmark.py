@@ -11,8 +11,9 @@ available):
     python3 tools/reliability_benchmark.py --dictations 100 --health-checks 50
     python3 tools/reliability_benchmark.py --json report.json --skip-manual
 
-Restart-recovery, audio-device unplug/replug, sleep/resume, long recordings, and
-the injection matrix are hardware-bound and reported as manual checks to confirm.
+Real dictations, full restart cycles, recovery failures, audio-device
+unplug/replug, sleep/resume, long recordings, and the injection matrix are
+hardware-bound and reported as manual checks to confirm.
 """
 
 import argparse
@@ -49,15 +50,27 @@ def main(argv=None):
     parser.add_argument("--dictations", type=int, default=100)
     parser.add_argument("--health-checks", type=int, default=50)
     parser.add_argument("--json", dest="json_path", default="")
-    parser.add_argument("--skip-manual", action="store_true")
+    manual_group = parser.add_mutually_exclusive_group()
+    manual_group.add_argument("--manual-results", default="", help="completed manual reliability JSON bound to one exact artifact")
+    manual_group.add_argument("--skip-manual", action="store_true", help="run the automated-only rehearsal; this is not the final reliability gate")
     args = parser.parse_args(argv)
+
+    manual_results = None
+    artifact_metadata = None
+    if args.manual_results:
+        try:
+            manual_results, artifact_metadata = rb.load_manual_results(args.manual_results)
+        except (OSError, json.JSONDecodeError, rb.ManualResultsError) as exc:
+            parser.error(f"invalid --manual-results: {exc}")
 
     call = _http_call(args.base_url, args.token)
     report = rb.build_report(
         call,
         dictations=args.dictations,
         health_checks=args.health_checks,
-        include_manual=not args.skip_manual,
+        include_manual=not args.skip_manual and not args.manual_results,
+        manual_results=manual_results,
+        artifact_metadata=artifact_metadata,
     )
     print(report.summary())
     if args.json_path:

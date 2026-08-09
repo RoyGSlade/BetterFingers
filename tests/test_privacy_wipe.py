@@ -3,6 +3,7 @@ import tempfile
 import time
 import types
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -126,6 +127,32 @@ class PrivacyWipeTests(unittest.TestCase):
             self.assertIn("Searchable history (database)", names)
             self.assertIn("Raw audio recordings", names)
             self.assertTrue(data["retention"]["recordings_persisted_to_disk"])
+
+    def test_privacy_export_parses_registered_json_store(self):
+        """A JSON-backed export category must be parsed, not crash because the
+        composition root forgot the module used by ``_build_privacy_export``."""
+        path = Path(self._tmp.name) / "exportable.json"
+        path.write_text('{"schema_version": 1, "enabled": true}', encoding="utf-8")
+        category = types.SimpleNamespace(
+            id="fixture",
+            label="Fixture",
+            sensitivity="personal",
+            may_contain_user_text=False,
+            included_in_export=True,
+            paths=lambda: [path],
+            size=lambda: path.stat().st_size,
+        )
+        registry = types.SimpleNamespace(all=lambda: [category])
+
+        with patch.object(server.data_categories, "get_registry", return_value=registry):
+            payload = server._build_privacy_export()
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(
+            payload["categories"]["fixture"]["content"][str(path)],
+            {"schema_version": 1, "enabled": True},
+        )
+        self.assertEqual(payload["skipped"], [])
 
     def test_privacy_report_wake_listener_is_live_truthful(self):
         with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
