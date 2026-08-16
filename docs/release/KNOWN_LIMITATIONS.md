@@ -1,13 +1,39 @@
 # True BetterFingers Known Limitations
 
 - **Release candidate:** `v1.1.0-alpha.1`
-- **Baseline:** `feat/signal-desk-ui` at `093eaf2a…`
-- **Last updated:** 2026-08-04
+- **Baseline:** `release/v1.1.0-alpha.1` at `2e923986d34feef0cb93973a22ba4a83fbadf34e`
+- **Last updated:** 2026-08-08
 
 This is an honest record of the current unreleased baseline. Items here are not
 automatically accepted public-release limitations. A blocker must be fixed,
 cut, or explicitly accepted by the release director before Source Arcanum
 publication.
+
+## Binding alpha boundary
+
+[`SUPPORTED_PLATFORMS.md`](SUPPORTED_PLATFORMS.md) is the authoritative
+three-state classification for this release: **Supported and tested**,
+**Experimental and labeled**, or **Hidden from this release**. At this point no
+`v1.1.0-alpha.1` package has completed exact-artifact qualification, so the
+Windows 11 x64 and Linux X11 core workflows remain experimental rather than
+supported. Historical `v0.2.0-alpha.1` results do not change that status.
+
+Release-wide limitations are therefore:
+
+- Windows and Linux packages remain unqualified until their exact hashes pass
+  clean-machine installation/launch, first run, model installation, core
+  workflow, recovery, injection, clipboard, replacement/reinstall, and privacy
+  checks.
+- Wayland, unrecorded target applications, controller mappings beyond tested
+  hardware, and NVIDIA acceleration beyond tested hardware are experimental.
+- macOS, automatic updates, universal Linux/GPU claims, AMD/Vulkan acceleration,
+  selected-text TTS, voice-cloning synthesis, a complete Scribe project system,
+  and production-grade at-rest encryption are hidden/out of scope for this
+  alpha.
+- Model downloads require network access and may be large. Local inference
+  requires meaningful CPU/RAM resources even when acceleration is unavailable.
+- Raw recordings are retained for recovery. Testers should not dictate highly
+  sensitive material; production-grade at-rest encryption is not provided.
 
 ## Release-control limitations
 

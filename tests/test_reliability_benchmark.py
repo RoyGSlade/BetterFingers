@@ -2,7 +2,11 @@
 and the report computes a single pass/fail gate that treats an unperformed
 manual check as incomplete (not passed)."""
 
+import json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 import reliability_benchmark as rb
 
@@ -94,6 +98,7 @@ class BenchmarkReportTests(unittest.TestCase):
         self.assertEqual(payload["failed"], 0)
         self.assertEqual(payload["incomplete"], 1)
         self.assertFalse(payload["passed"])
+        self.assertEqual(payload["artifact"], {})
         summary = report.summary()
         self.assertIn("dictations (2/2)", summary)
         self.assertIn("GATE NOT PASSED", summary)
@@ -151,6 +156,122 @@ class BuildReportTests(unittest.TestCase):
         failed_names = {r.name for r in report.failed}
         self.assertIn("backend_reachable", failed_names)
         self.assertIn("backend_health_stable", failed_names)
+
+
+class ManualResultsTests(unittest.TestCase):
+    def _payload(self, status="PASS"):
+        return {
+            "artifact": {
+                "version": "1.1.0-alpha.1",
+                "tag": "v1.1.0-alpha.1",
+                "commit": "a" * 40,
+                "filename": "BetterFingers-1.1.0-alpha.1.AppImage",
+                "sha256": "B" * 64,
+            },
+            "checks": [
+                {"name": check.name, "status": status, "detail": f"confirmed {check.name}"}
+                for check in rb.MANUAL_CHECKS
+            ],
+        }
+
+    def _load(self, payload):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "manual.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            return rb.load_manual_results(path)
+
+    def test_complete_pass_results_are_normalized_and_artifact_bound(self):
+        results, artifact = self._load(self._payload())
+        self.assertEqual(len(results), len(rb.MANUAL_CHECKS))
+        self.assertTrue(all(result.status == rb.PASS for result in results))
+        self.assertEqual(artifact["sha256"], "b" * 64)
+
+        backend = _FakeBackend()
+        report = rb.build_report(
+            backend.call,
+            dictations=2,
+            health_checks=2,
+            include_manual=False,
+            manual_results=results,
+            artifact_metadata=artifact,
+        )
+        self.assertTrue(report.passed)
+        self.assertEqual(report.incomplete, [])
+        self.assertEqual(report.to_dict()["artifact"]["filename"], artifact["filename"])
+
+    def test_fail_result_makes_merged_gate_fail(self):
+        payload = self._payload()
+        payload["checks"][0]["status"] = "fail"
+        results, artifact = self._load(payload)
+        report = rb.build_report(
+            _FakeBackend().call,
+            dictations=1,
+            health_checks=1,
+            include_manual=False,
+            manual_results=results,
+            artifact_metadata=artifact,
+        )
+        self.assertFalse(report.passed)
+        self.assertEqual([result.name for result in report.failed], [rb.MANUAL_CHECKS[0].name])
+
+    def test_missing_unknown_duplicate_and_invalid_status_are_rejected(self):
+        cases = []
+        missing = self._payload()
+        missing["checks"].pop()
+        cases.append((missing, "missing required manual checks"))
+        unknown = self._payload()
+        unknown["checks"][0]["name"] = "invented_check"
+        cases.append((unknown, "unknown manual check"))
+        duplicate = self._payload()
+        duplicate["checks"][1]["name"] = duplicate["checks"][0]["name"]
+        cases.append((duplicate, "duplicate manual check"))
+        invalid = self._payload()
+        invalid["checks"][0]["status"] = "SKIP"
+        cases.append((invalid, "status must be PASS or FAIL"))
+        for payload, message in cases:
+            with self.subTest(message=message), self.assertRaisesRegex(rb.ManualResultsError, message):
+                self._load(payload)
+
+    def test_missing_artifact_and_bad_hash_are_rejected(self):
+        missing = self._payload()
+        missing.pop("artifact")
+        with self.assertRaisesRegex(rb.ManualResultsError, "artifact object"):
+            self._load(missing)
+        bad_hash = self._payload()
+        bad_hash["artifact"]["sha256"] = "not-a-hash"
+        with self.assertRaisesRegex(rb.ManualResultsError, "64 hexadecimal"):
+            self._load(bad_hash)
+        bad_commit = self._payload()
+        bad_commit["artifact"]["commit"] = "short"
+        with self.assertRaisesRegex(rb.ManualResultsError, "40 hexadecimal"):
+            self._load(bad_commit)
+        mismatched_tag = self._payload()
+        mismatched_tag["artifact"]["tag"] = "v9.9.9"
+        with self.assertRaisesRegex(rb.ManualResultsError, "v plus artifact.version"):
+            self._load(mismatched_tag)
+
+
+class CliTests(unittest.TestCase):
+    def test_manual_results_produce_one_passing_merged_json_report(self):
+        payload = ManualResultsTests()._payload()
+        with tempfile.TemporaryDirectory() as tmp:
+            manual_path = Path(tmp) / "manual.json"
+            output_path = Path(tmp) / "report.json"
+            manual_path.write_text(json.dumps(payload), encoding="utf-8")
+            from tools import reliability_benchmark as cli
+
+            with patch.object(cli, "_http_call", return_value=_FakeBackend().call):
+                exit_code = cli.main([
+                    "--dictations", "2",
+                    "--health-checks", "2",
+                    "--manual-results", str(manual_path),
+                    "--json", str(output_path),
+                ])
+            report = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(exit_code, 0)
+            self.assertTrue(report["passed"])
+            self.assertEqual(report["failed"], 0)
+            self.assertEqual(report["incomplete"], 0)
 
 
 if __name__ == "__main__":
