@@ -76,10 +76,11 @@ test('verifyPythonEnvironment() passes for the repo venv (has PyInstaller + fast
 });
 
 test('verifyPythonEnvironment() fails fast with a clear message for an interpreter missing deps', async () => {
-  // `python3` bare (no venv) is exactly the pre-fix behavior this defect was
-  // about: it exists on this box but lacks fastapi/PyInstaller.
+  // The Node executable is a stable cross-platform stand-in for an invalid
+  // Python environment. A bare runner Python is not hermetic: the packaging
+  // workflow installs these dependencies before this suite runs.
   await assert.rejects(
-    () => verifyPythonEnvironment('python3'),
-    (err) => err.message.includes('python3') && /BETTERFINGERS_PYTHON/.test(err.message),
+    () => verifyPythonEnvironment(process.execPath),
+    (err) => err.message.includes(process.execPath) && /BETTERFINGERS_PYTHON/.test(err.message),
   );
 });

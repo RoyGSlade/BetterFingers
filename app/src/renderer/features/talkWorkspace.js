@@ -157,8 +157,13 @@ export function mapConfidenceBand(score, status) {
 
 /** 0..1 confidence score -> an integer percent, or null if the score is missing. */
 export function formatConfidencePercent(score) {
-  if (score === null || score === undefined || Number.isNaN(Number(score))) return null;
-  return Math.round(Math.max(0, Math.min(1, Number(score))) * 100);
+  if (score === null || score === undefined) return null;
+  const numeric = Number(score);
+  // Backend confidence is a probability-like 0..1 value. Invalid or
+  // percentage-style values stay unknown; clamping 35 to 100% would turn a
+  // scale bug into a reassuring UI and could disagree with send gating.
+  if (!Number.isFinite(numeric) || numeric < 0 || numeric > 1) return null;
+  return Math.round(numeric * 100);
 }
 
 const CONFIDENCE_BAND_CSS_VAR = {

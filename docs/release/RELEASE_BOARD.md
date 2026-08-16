@@ -1,7 +1,8 @@
 # True BetterFingers Release Board
 
-- **Release:** `v0.2.0-alpha.1`
-- **Current wave:** Wave 13 publish plan execution — **Gate 11 ACCEPTED** (D-0044, 2026-07-30). As of `3d935c6` (director-verified): parity ledger **411 wired / 27 intentional_cut / 0 blocked / 438 total**, down from 398/23/17 at wave open and 396/21/21 at the Wave 12A snapshot. Also at this commit: QA board 99/99 (three consecutive, fresh build), node 1668/1668, python 3098/0. Wave 12 (package qualification, F-1/F-2) is now UNBLOCKED and is the next work; it has not been started. Operator QA (`OPERATOR_QA.md`) has not been performed.
+- **Release:** `v1.1.0-alpha.1`
+- **Current wave:** v1.1.0-alpha.1 release preparation. The current regenerated parity ledger is **410 wired / 28 intentional_cut / 0 blocked / 438 total**. Director validation on the release working tree is **3177 Python passed / 4 skipped**, **1772/1772 renderer**, production Electron QA **100/100**, npm audit **0**, and Bandit **0 medium / 0 high**. The Gate 11 decision and measurements below are the prior `v0.2.0-alpha.1` baseline; they do not qualify this release. Fresh Windows/Linux artifacts, clean-machine/operator qualification, signing, public links, and the draft prerelease remain open.
+- **Prior baseline:** Gate 11 was accepted for `v0.2.0-alpha.1` (D-0044, 2026-07-30). At `3d935c6` (director-verified), that baseline recorded parity **411 wired / 27 intentional_cut / 0 blocked / 438 total**, QA board 99/99 (three consecutive, fresh build), node 1668/1668, and python 3098/0.
 - **Gate 0:** **ACCEPTED (2026-07-28, release-director)**
 - **Gate 1:** **ACCEPTED (2026-07-28, release-director, D-0019)**
 - **Gate 2:** **ACCEPTED (2026-07-28, release-director, D-0021)**
@@ -14,7 +15,11 @@
 - **Gate 6:** **ACCEPTED (2026-07-28, release-director, D-0028)**
 - **Gate 10:** **ACCEPTED — software (2026-07-28, D-0029); hardware matrices unqualified pending operator pass**
 - **Gate 11:** **ACCEPTED (D-0044, 2026-07-30)** — the gate forbids any `blocked` row and the ledger now reads **411 `wired` / 27 `intentional_cut` / 0 `blocked` / 438 total**, director-verified live at `3d935c6` via `python3 tools/parity_validator.py`. Baseline at wave open was 398/23/17; seventeen blocked rows closed — eleven wired with evidence, six cut under D-0036, D-0037 and D-0043. Supporting runs at the same commit: production QA board **99/99 three consecutive times** on a fresh build (the board grew from 97 to 99 as this wave added the onboarding keyboard-trap and persona-wizard scenarios), node suite **1668/1668**, python suite **3098 passed / 0 failed** in a clean environment (see QA-DOC-005 — the QA env vars must NOT be set for pytest). Gate 11 is a parity gate: it does not assert operator sign-off (see OPERATOR_QA.md) or CI green (C-5 is unproven).
-- **Last updated:** 2026-07-29
+- **Last updated:** 2026-08-04
+
+The Gate 0–11 decisions listed below are historical decisions for the prior
+`v0.2.0-alpha.1` baseline. They are retained as evidence history and are not
+release qualification for `v1.1.0-alpha.1`.
 
 Statuses: `DONE`, `IN PROGRESS`, `BLOCKED`, `PENDING`, `CUT`.
 
@@ -108,7 +113,7 @@ Wave 1 follow-ups recorded: factory-reset executor exists nowhere (Wave 6 backlo
 |---|---|---|
 | Workspace placement maps | Talk `28/33`; Library `11/23`; Studio `26/31`; Utilities `57/59`; Settings `37/37`; total **159/183 placed/wired in those maps, 24 unwired** | Preview placement signal only; it does not satisfy the strict 438-item production-evidence rule. Wave 11 used these as discovery pointers, never as promotions. |
 | 438-item release ledger | [PARITY_INVENTORY.md](PARITY_INVENTORY.md): **as of Wave 11 (161 `wired`, 10 `intentional_cut`, 267 `blocked`; Gate 0 baseline was 0/4/434) — historical, superseded.** **Current, as of `545e582` (2026-07-29, director-verified): 398 `wired` / 23 `intentional_cut` / 17 `blocked`; total 438.** | Wave 11's split of the 267 then-blocked rows into **91 `(product)`** (no production anchor) and **176 `(evidence)`** (anchored but unevidenced) is recorded in [WAVE11_BLOCKERS.md](archive/WAVE11_BLOCKERS.md) as historical detail. Reproduce the current figure with `python3 tools/parity_validator.py`; it moves as WS-B tasks land. |
-| Version source | `VERSION` = `0.2.0-alpha.1`, read by `version.py`; `app/package.json` is a checked copy | D-0008 single source. Four integration-owned diffs pending — see [WAVE11_INTEGRATION_DIFFS.md](archive/WAVE11_INTEGRATION_DIFFS.md). |
+| Version source | `VERSION` = `1.1.0-alpha.1`, read by `version.py`; `app/package.json` is a checked copy | D-0008 single source; `app/package-lock.json` root metadata is reconciled to the same release identity. |
 | Default UI route | `BF_UI` unset → `signal-desk.html`; `BF_UI=legacy` → `index.html` (rollback); `BF_UI=signal-desk` → preview (QA only) | Wave 11 flip is **landed in code** — `app/src/main/windows.js:220` (`SIGNAL_DESK_PROD_PAGE = 'signal-desk.html'`), `:226` (`LEGACY_PAGE = 'index.html'`), `:229-236` (`dashboardPage()`: `BF_UI=legacy` → `LEGACY_PAGE`, `BF_UI=signal-desk` → preview, everything else including unset/typo'd → `SIGNAL_DESK_PROD_PAGE`). Rollback-contract test evidence, run by sup-backend 2026-07-29 at HEAD `3f86e30`: `cd app && node --test tests/qaTargets.test.mjs tests/senderValidation.test.mjs` → `tests 23 \| pass 23 \| fail 0 \| skipped 0`. `app/tests/qa/scenarios/default-flip.mjs` is the dedicated QA scenario. |
 | Renderer unit baseline | `1533/1533` passed | Superseded the `775/775` source baseline. Run by sup-backend 2026-07-29 at HEAD `3f86e30`: `npm --prefix app run test:unit` → `tests 1533 \| pass 1533 \| fail 0 \| cancelled 0 \| skipped 0 \| todo 0`. |
 | Renderer production build | Passed; `app/out` 30 files / `1,288,162` bytes | Current build evidence; it is not a distributable installer. |
@@ -134,7 +139,7 @@ Wave 1 follow-ups recorded: factory-reset executor exists nowhere (Wave 6 backlo
 | Contacts | Partially implemented | Complete edit/delete/manage, retrofit, export/lifecycle, Settings disclosure, and production composition in Wave 5, or cut entirely. |
 | Audience context | Backend path exists; default off; no visible control | Keep unavailable until current preservation pass plus Wave 5 Settings control/disclosure. |
 | Persona traits | Schema/storage/UI/prompt exist; corrected production protocol passed three consecutive 3/3 suites, but historical 0/3 and invalid earlier methodology leave qualification unreconciled; default is off | Show `Experimental — unavailable`; do not enable until a director-approved repeated policy produces an accepted qualification. |
-| Versioning | Package `0.1.0`; preview `v1.2.0`; planned `0.2.0-alpha.1` | Centralize one build version before the default flip. |
+| Versioning | Historical baseline: package `0.1.0`, preview `v1.2.0`, planned `v0.2.0-alpha.1` | Current source and package identity are centralized at `1.1.0-alpha.1`; historical disagreement is retained for traceability. |
 
 ## Wave queue
 

@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 const SIGNAL_DESK = new URL('../src/renderer/signal-desk.html', import.meta.url);
-const markup = readFileSync(SIGNAL_DESK, 'utf8');
+const markup = readFileSync(SIGNAL_DESK, 'utf8').replace(/\r\n/g, '\n');
 
 function regionBetween(source, start, end) {
   const startIndex = source.indexOf(start);
@@ -32,6 +32,15 @@ test('Scribe has one dedicated workspace and one functional text playground surf
   assert.match(scribe, /id="textPlaygroundSection"/);
   const utilities = regionBetween(markup, 'id="workspace-utilities"', '<section class="sd-workspace" id="workspace-settings"');
   assert.doesNotMatch(utilities, /id="textPlaygroundSection"/);
+});
+
+test('Scribe markup exposes exactly three normal output choices', () => {
+  const scribe = regionBetween(markup, 'id="workspace-scribe"', '<!-- ---------- LIBRARY workspace');
+  assert.equal((scribe.match(/class="sd-message-rescue-column"/g) || []).length, 3);
+  assert.match(scribe, />Base</);
+  assert.match(scribe, />Alternative one</);
+  assert.match(scribe, />Alternative two</);
+  assert.doesNotMatch(scribe, /textPlaygroundColumnRaw/);
 });
 
 test('Utilities exposes the retained-material and runtime destinations', () => {

@@ -46,7 +46,7 @@ class ConfidenceSendPolicyPureTests(unittest.TestCase):
         self.assertEqual(result["reason"], "long_draft")
 
     def test_missing_or_bad_score_forces_review(self):
-        for confidence in (None, {}, {"score": None}, {"score": "abc"}, "notadict"):
+        for confidence in (None, {}, {"score": None}, {"score": "abc"}, {"score": 35}, {"score": -0.1}, {"score": 1.1}, "notadict"):
             with self.subTest(confidence=confidence):
                 result = self.policy(confidence)
                 self.assertTrue(result["force_review"])

@@ -43,6 +43,7 @@ import {
 } from '../features/utilitiesWorkspace.js';
 import { createSettingsWorkspaceFeature, collectSettingsElements } from '../features/settingsWorkspace.js';
 import { createVoiceStudioFeature } from '../features/voiceStudio.js';
+import { createStructuredPersonaEditor } from '../features/structuredPersonaEditor.js';
 import { createPersonasFeature } from '../features/personas.js';
 import { createPersonaFlow, collectPersonaWizardElements } from '../features/personaFlow.js';
 import {
@@ -68,6 +69,8 @@ import {
 import { createFirstRunFeature, collectFirstRunElements } from '../features/firstRun.js';
 import { initMessageRescuePanel } from '../features/messageRescuePanel.js';
 import { initTextPlayground } from '../features/textPlayground.js';
+import { applyAlphaCapabilities } from '../config/alphaCapabilities.js';
+import { createAppNotificationCenter } from '../features/appNotificationCenter.js';
 
 // Same implementation main.js's own escapeHtml wraps (drafts.js's `ui.escapeHtml`
 // contract) -- kept local since drafts.js intentionally has no DOM/string-utils
@@ -123,10 +126,15 @@ export async function loadPersonaList(fetchPersonas, previous = {}) {
  *   socket, clears the status-bar poll, and tears down the Talk signal core.
  */
 export function startSignalDeskApp(doc = document) {
+  applyAlphaCapabilities(doc);
   // --- Shell + keyboard shortcuts ------------------------------------------
 
   const shell = createSignalDeskShellFeature({ elements: collectShellElements(doc) });
   shell.init('talk');
+  const notificationCenter = createAppNotificationCenter({
+    root: doc,
+    onOpenWorkspace: (workspace) => shell.goTo?.(workspace),
+  });
 
   const shortcutSheet = doc.getElementById('sdShortcutSheet');
   const shortcutSheetBody = doc.getElementById('sdShortcutSheetBody');
@@ -302,12 +310,15 @@ export function startSignalDeskApp(doc = document) {
   function renderActivePersona() {
     const nameEl = doc.getElementById('sdTalkActivePersona');
     const noteEl = doc.getElementById('sdTalkActivePersonaNote');
-    if (!nameEl) return;
     const preset = profileSettings?.current_preset;
-    nameEl.textContent = preset || '—';
+    if (nameEl) nameEl.textContent = preset || '—';
     if (noteEl) {
       noteEl.textContent = preset ? '' : 'No persona selected for this profile.';
     }
+    const studioPersona = doc.getElementById('sdStudioActivePersona');
+    if (studioPersona) studioPersona.textContent = preset || 'True Janitor';
+    const studioWritingPreset = doc.getElementById('sdStudioActiveWritingPreset');
+    if (studioWritingPreset) studioWritingPreset.textContent = profileSettings?.writing_preset || 'Default';
   }
 
   // --- Utilities workspace (models, speech input, text tools, diagnostics,
@@ -329,7 +340,7 @@ export function startSignalDeskApp(doc = document) {
   // doesn't reach into a document that isn't theirs) -- so this composition
   // root is now the explicit caller autowire.mjs's own contract expects.
   initMessageRescuePanel({ doc });
-  initTextPlayground({ doc });
+  initTextPlayground({ doc, notificationCenter });
 
   function syncUtilitiesContext(sectionId) {
     const meta = UTILITIES_SECTION_META[sectionId];
@@ -649,6 +660,14 @@ export function startSignalDeskApp(doc = document) {
 
   let personaFlow; // assigned below; hooks only fire on later user clicks.
 
+  const structuredPersonaEditor = createStructuredPersonaEditor({
+    doc,
+    api,
+    showToast,
+    onConfirmed: async () => refreshPersonasAndVoices(),
+  });
+  structuredPersonaEditor.init();
+
   const studioWorkspace = createStudioWorkspaceFeature({
     elements: collectStudioElements(doc),
     hooks: {
@@ -656,8 +675,25 @@ export function startSignalDeskApp(doc = document) {
       confirmFn: (message) => doc.defaultView?.confirm?.(message),
       onNewPersonaRequested: () => personaFlow?.openWizard(),
       onOpenFoundryRequested: () => personaFlow?.openFoundry(),
-      onEditPersonaRequested: (name) => personaFlow?.openWizardForEdit(name),
+      onEditPersonaRequested: async (name) => {
+        await structuredPersonaEditor.load(name);
+        const editor = doc.getElementById('sdStructuredPersonaEditor');
+        if (editor) {
+          editor.hidden = false;
+          editor.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+        }
+      },
+      onPersonaSelected: (name) => structuredPersonaEditor.load(name),
+      onActivePersonaFallback: (name) => {
+        profileSettings = { ...(profileSettings || {}), current_preset: String(name || 'True Janitor') };
+        renderActivePersona();
+      },
       getActivePersonaName: () => String(profileSettings?.current_preset ?? '').trim(),
+      onActivePersonaRequested: async (name) => {
+        await settingsWorkspace.setCurrentPersona(name);
+        profileSettings = { ...(profileSettings || {}), current_preset: String(name).trim() };
+        renderActivePersona();
+      },
     },
   });
   studioWorkspace.init();

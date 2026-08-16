@@ -58,6 +58,7 @@ const PROFILE_IDS = {
 
 const FIELD_IDS = {
   recording_mode: 'sdSetRecordingMode',
+  current_preset: 'sdSetCurrentPreset',
   draft_history_limit: 'sdSetDraftHistoryLimit',
   max_completion_tokens: 'sdSetMaxCompletionTokens',
   // The Long Recording Stitch Pass toggle (inventory §15 orphan UI-15-023): a
@@ -125,6 +126,7 @@ function mount({ routes = defaultRoutes(), hotkeyCapabilities, confirmFn } = {})
     sdSetNewProfileName: { tagName: 'input', type: 'text' },
     sdSetImportProfileFile: { tagName: 'input', type: 'file' },
     sdSetRecordingMode: { tagName: 'select', value: 'toggle' },
+    sdSetCurrentPreset: { tagName: 'select', value: 'Direct' },
     sdSetDraftHistoryLimit: { tagName: 'input', type: 'number', value: '100' },
     sdSetMaxCompletionTokens: { tagName: 'input', type: 'number', value: '2048' },
     sdSetStitchPass: { tagName: 'input', type: 'checkbox' },
@@ -212,6 +214,46 @@ test('#sdSetSaveButton POSTs the collected profile to the active profile route',
   assert.equal(saved[0].settings.recording_mode, 'ptt', 'the DOM value must be what gets saved');
   assert.equal(ctx.el('sdSetProfileMessage').textContent, 'Saved Work.');
   assert.equal(ctx.el('sdSetSaveBar').classList.contains('hidden'), true, 'a successful save clears the bar');
+});
+
+test('setCurrentPersona uses the active profile save route, not renderer-only state', async (t) => {
+  const saved = [];
+  const ctx = mount({
+    routes: defaultRoutes({
+      'POST /settings/profiles/Work': ({ body }) => {
+        saved.push(body);
+        return { profile: 'Work', settings: body.settings };
+      },
+    }),
+  });
+  t.after(ctx.restore);
+  ctx.feature.init();
+  ctx.feature.renderSettings({ ...STORED_SETTINGS, current_preset: 'Direct' });
+  ctx.el('sdSetProfileSelect').value = 'Work';
+  ctx.feature.setPersonaOptions(['Direct', 'Warm'], 'Direct');
+
+  await ctx.feature.setCurrentPersona('Warm');
+
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].settings.current_preset, 'Warm');
+  assert.equal(ctx.el('sdSetSaveBar').classList.contains('hidden'), true);
+});
+
+test('setCurrentPersona does not claim persistence when the profile save fails', async (t) => {
+  const ctx = mount({
+    routes: defaultRoutes({
+      'POST /settings/profiles/Work': { ok: false, status: 500, body: { detail: 'disk is full' } },
+    }),
+  });
+  t.after(ctx.restore);
+  ctx.feature.init();
+  ctx.feature.renderSettings({ ...STORED_SETTINGS, current_preset: 'Direct' });
+  ctx.el('sdSetProfileSelect').value = 'Work';
+  ctx.feature.setPersonaOptions(['Direct', 'Warm'], 'Direct');
+
+  await assert.rejects(() => ctx.feature.setCurrentPersona('Warm'), /not saved/);
+  assert.match(ctx.el('sdSetProfileMessage').textContent, /Save failed: disk is full/);
+  assert.equal(ctx.el('sdSetCurrentPreset').value, 'Direct', 'a rejected save restores the persisted selection');
 });
 
 test('#sdSetSaveButton refuses to save while a validation error stands, and says so', async (t) => {

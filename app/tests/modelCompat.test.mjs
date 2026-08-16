@@ -33,6 +33,36 @@ test('native runtime flags an ONNX model as a known-bad pairing', () => {
   assert.match(result.caution, /may not be supported by the selected runtime/);
 });
 
+test('loaded runtime voice capabilities reject voices absent from the backend truth', () => {
+  const result = assessTtsCompatibility({
+    runtime: 'onnx',
+    model: 'kokoro-v1.0.onnx',
+    voiceId: 'bm_george',
+    runtimeCapabilities: {
+      model_id: 'kokoro-v1.0.onnx',
+      supported_voice_ids: ['af_heart', 'bf_emma'],
+      blend_capable: true,
+    },
+  });
+
+  assert.equal(result.knownBad, true);
+  assert.equal(result.offered, false);
+  assert.match(result.caution, /not present in the loaded TTS runtime/);
+});
+
+test('loaded runtime blend capability rejects blending when the backend says it is unavailable', () => {
+  const result = assessTtsCompatibility({
+    runtime: 'native',
+    model: 'kokoro-v1.0.onnx',
+    capability: 'blend',
+    runtimeCapabilities: { blend_capable: false },
+  });
+
+  assert.equal(result.knownBad, true);
+  assert.equal(result.offered, false);
+  assert.match(result.caution, /blending is not supported/);
+});
+
 test('the smallest supported TTS variant is the declared int8 Kokoro artifact', () => {
   assert.equal(SMALLEST_SUPPORTED_TTS_MODEL.id, 'kokoro-v1.0.int8.onnx');
   assert.equal(SMALLEST_SUPPORTED_TTS_MODEL.quantization, 'int8');
@@ -47,4 +77,3 @@ test('the smallest supported TTS variant is the declared int8 Kokoro artifact', 
   );
   assert.match(SMALLEST_SUPPORTED_TTS_MODEL.basis, /byte size is not recorded/);
 });
-

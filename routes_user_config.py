@@ -76,8 +76,13 @@ async def delete_macro_endpoint(trigger: str):
 # --- Voice presets ---
 class VoicePresetRequest(BaseModel):
     name: str
+    id: Optional[str] = None
+    version: Optional[int] = None
+    display_name: Optional[str] = None
     base: Optional[str] = None
     blend: Optional[dict] = None
+    sources: Optional[list] = None
+    modulation: Optional[dict] = None
     speed: Optional[float] = None
     pitch: Optional[float] = None
     energy: Optional[float] = None
@@ -86,6 +91,9 @@ class VoicePresetRequest(BaseModel):
     pause_style: Optional[str] = None
     stability: Optional[float] = None
     source: Optional[str] = None
+    source_preset_id: Optional[str] = None
+    customized: Optional[bool] = None
+    replace: bool = False
 
 
 @router.get("/voice-presets")
@@ -101,9 +109,29 @@ async def get_voice_presets_endpoint():
 async def save_voice_preset_endpoint(request: VoicePresetRequest):
     if not str(request.name or "").strip():
         raise HTTPException(status_code=400, detail="A preset name is required.")
+    if request.sources is not None:
+        if not 1 <= len(request.sources) <= 4:
+            raise HTTPException(status_code=400, detail="A custom voice requires one to four source voices.")
+        ids = [str(item.get("voice_id", "") or "").strip() for item in request.sources if isinstance(item, dict)]
+        if len(ids) != len(request.sources) or any(not voice_id for voice_id in ids):
+            raise HTTPException(status_code=400, detail="Every source voice requires a voice_id.")
+        if len({voice_id.lower() for voice_id in ids}) != len(ids):
+            raise HTTPException(status_code=400, detail="Duplicate source voices are not allowed.")
+        try:
+            weights = [float(item.get("weight", 0)) for item in request.sources]
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Every source voice requires a positive weight.")
+        if any(weight <= 0 for weight in weights):
+            raise HTTPException(status_code=400, detail="Every source voice requires a positive weight.")
+        collision = next(
+            (item for item in voice_presets.get_presets() if item["name"].lower() == request.name.strip().lower()),
+            None,
+        )
+        if collision is not None and not request.replace:
+            raise HTTPException(status_code=409, detail="A custom voice with that name already exists. Confirm replacement to update it.")
     fields = {
         key: value
-        for key, value in request.model_dump(exclude={"name"}).items()
+        for key, value in request.model_dump(exclude={"name", "replace"}).items()
         if value is not None
     }
     return {"ok": True, "presets": voice_presets.save_preset(request.name, **fields)}

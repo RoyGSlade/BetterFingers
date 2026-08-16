@@ -1,11 +1,25 @@
-# OPERATOR REVIEW — 2026-07-30
+# OPERATOR REVIEW — CURRENT RELEASE STATUS
+
+The 2026-07-30 hands-on review below is retained as historical discovery
+evidence, not the current headline for `v1.1.0-alpha.1`. Its deterministic RED
+items were addressed and the release-director re-test at `acdad4e` passed
+3177 Python tests (4 skipped), renderer `1772/1772`, and production Electron
+QA `100/100`; see [the final automated re-test](#update--2026-08-04-release-director-final-automated-re-test).
+
+The release is still on hold for exact GitHub-built Windows/Linux artifacts,
+clean install/uninstall/reinstall, real model installation and cache
+rediscovery, Windows and Linux X11 dictation/recovery/injection matrices, the
+100-dictation primary-platform run, signing disclosure, and final public-link
+verification. Automated closure does not replace those operator gates.
+
+## Historical hands-on review — 2026-07-30
 
 Donaven's hands-on pass. Consolidated from his notes, triaged by the release
 director, and treated as **the authoritative statement of what this product is
 actually like to use.** Where it contradicts `PUBLISH_PLAN.md`, this document
 wins — the plan was written from the code, this was written from the app.
 
-**Headline: the §2 publishable bar is NOT met.** The plan assumed operator QA
+**Historical headline: the §2 publishable bar was not met.** The plan assumed operator QA
 would surface polish. It surfaced core reliability defects, one safety defect,
 and two subsystems that need redesign rather than repair. That is not a failure
 of the QA process — it is the QA process doing precisely its job, at the only
@@ -263,3 +277,58 @@ clean-machine install, signing, audio, hardware, and reliability remain
 unqualified/open. A packaged selection operator is pending; do not claim a
 packaged selection PASS unless its report and matching final artifact hash are
 present.
+
+## UPDATE — 2026-08-04 (Wave 14 operator re-test, Luna worker)
+
+The built renderer was rebuilt from the current checkout with `npm run build`
+before testing. The focused automated checks covering the Wave 14 RED repairs
+completed cleanly: **294/294 renderer tests passed** across boot readiness,
+runtime truth/hotkeys, Auto Submit acknowledgement, Talk capture/download
+feedback/no-input guidance, Utilities downloads/diagnostics/audio defaults,
+voice cloning, Voice Studio, model compatibility, latency probing, and the
+task-#3 persona/runtime tests; **77/77 Python tests passed** across selection
+capture, Windows restoration, qualification helpers, STT confidence, and voice
+clone QA (2 subtests also passed). These are mechanism checks, not human audio,
+hardware, usability, or package qualification.
+
+The full built Electron production QA board was **NOT RUN** in this worker
+environment: Electron exited before the first scenario with `Missing X server
+or $DISPLAY` / `The platform failed to initialize`, and neither `xvfb-run` nor
+`Xvfb` is installed. The checked-in production report therefore remains the
+older **83/99** artifact and must not be relabelled as a current post-rebuild
+run. No live operator checks were performed, including startup timing, audio
+input/output, hotkey behaviour, model download UX, voice playback, hardware,
+Wayland/Windows, or package smoke.
+
+No deterministic release-blocking RED was reproduced in the focused checks, so
+this re-test made no product or test-file changes. OR-01, OR-02, OR-03, OR-04,
+OR-06, OR-07, OR-09, OR-12, OR-14, OR-15, OR-17, and OR-19 remain subject to
+the human/live qualification steps above; passing unit tests does not convert
+them into operator sign-off. OR-05, OR-08, OR-10, OR-11, and OR-18 remain in
+the separate task-#3 ownership/open-status lane described above.
+
+## UPDATE — 2026-08-04 (release director final automated re-test)
+
+The release director rebuilt the current `release/v1.1.0-alpha.1` working tree
+on a host with `DISPLAY=:0` and ran the complete production Electron board with
+isolated BetterFingers and Electron data roots. The canonical result is now
+**100/100 PASS**, recorded in
+`app/tests/qa/out/signal-desk-prod/qa-report.md`. The run found and closed four
+deterministic issues before the final pass: echoed Persona Studio transport
+markers, a permanently hidden persona-teaching panel, stale Library QA routing,
+and two permanently hidden late-wave disclosure/workflow groups. The default
+route assertion was also reconciled to the actual five primary workspaces.
+
+Final automated release evidence is **3177 Python tests passed / 4 skipped / 26
+subtests**, **1772/1772 renderer tests**, a green production build, parity
+**410 wired / 28 intentional_cut / 0 blocked / 438 total**, npm audit **0
+vulnerabilities**, and Bandit **0 medium / 0 high** in the shipping-backend
+scope. These automated results do not qualify human audio, model quality,
+hardware, Wayland, Windows, clean-machine installation, or release artifacts.
+
+The reported model-loading failure reproduced for distil Whisper: both distil
+sizes mapped to nonexistent Hub repository IDs, and the installed-cache parser
+did not recognize the valid `faster-distil-whisper-*` prefix. The mapping and
+cache discovery are corrected and an isolated backend inventory/load-probe
+smoke passes. No multi-gigabyte model was downloaded or loaded during this
+release run, so live LLM/STT/TTS artifact qualification remains external.

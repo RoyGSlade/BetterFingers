@@ -272,7 +272,7 @@ class PersonaPreviewAndOverrideTests(unittest.TestCase):
         captured = {}
 
         def fake_call_api(text, system_prompt, temperature=0.3, max_output_tokens=None, few_shot=None):
-            captured.update(temperature=temperature, few_shot=few_shot, max_output_tokens=max_output_tokens, system_prompt=system_prompt)
+            captured.update(text=text, temperature=temperature, few_shot=few_shot, max_output_tokens=max_output_tokens, system_prompt=system_prompt)
             return "preview out"
 
         persona = {
@@ -290,6 +290,23 @@ class PersonaPreviewAndOverrideTests(unittest.TestCase):
         self.assertEqual(captured["max_output_tokens"], 800)   # per-persona cap wins
         self.assertTrue(captured["few_shot"])
         self.assertIn("Rewrite warmly.", captured["system_prompt"])
+        self.assertIn("PERSONA TEST MATERIAL", captured["text"])
+        self.assertIn("PERSONA STUDIO TEST MODE", captured["system_prompt"])
+
+    def test_run_persona_preview_does_not_claim_a_result_when_llm_is_unready(self):
+        engine = self._engine()
+        with patch.object(engine, "ensure_ready", return_value=False):
+            with self.assertRaisesRegex(RuntimeError, "persona preview is unavailable"):
+                engine.run_persona_preview({"prompt": "Rewrite."}, "clean this")
+
+    def test_run_persona_preview_removes_echoed_internal_markers(self):
+        engine = self._engine()
+        echoed = "Cleaned: [PERSONA TEST MATERIAL]\nclean this\n[END PERSONA TEST MATERIAL]"
+        with patch.object(engine, "ensure_ready", return_value=True), \
+             patch.object(engine, "_call_api", return_value=echoed):
+            out = engine.run_persona_preview({"prompt": "Rewrite."}, "clean this")
+
+        self.assertEqual(out, "Cleaned: clean this")
 
     def test_per_persona_token_cap_overrides_caller(self):
         with tempfile.TemporaryDirectory() as tmp:

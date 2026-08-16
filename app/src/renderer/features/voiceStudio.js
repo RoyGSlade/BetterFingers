@@ -25,8 +25,9 @@
 // refreshVoices()/preset actions are testable without a real backend.
 import * as backendApi from '../api/backend.js';
 import { assessTtsCompatibility } from '../lib/modelCompat.mjs';
+import { isAlphaCapabilityEnabled } from '../config/alphaCapabilities.js';
 
-export const MAX_BLEND_LAYERS = 2; // base + 2 extra = 3-way blend cap
+export const MAX_BLEND_LAYERS = 3; // base + 3 extra = 4-way alpha cap
 
 export const VOICE_BLEND_QUICK_PRESETS = {
   softer: { blend: { bf_emma: 0.25 }, energy: 0.35, warmth: 0.3 },
@@ -67,6 +68,54 @@ export function normalizeBlendForSend(layers) {
     map.set(id, Math.min(1, Math.max(0, weight)));
   }
   return map.size ? Object.fromEntries(map) : null;
+}
+
+export function normalizeCustomVoiceSources(baseVoiceId, layers, availableIds = null) {
+  const raw = [{ voiceId: baseVoiceId, weight: 1 }, ...(layers || [])];
+  const available = Array.isArray(availableIds) ? new Set(availableIds) : null;
+  const seen = new Set();
+  const sources = [];
+  for (const item of raw) {
+    const voiceId = String(item?.voiceId || '').trim();
+    const key = voiceId.toLowerCase();
+    if (!voiceId) continue;
+    if (available && !available.has(voiceId)) throw new Error(`Source voice "${voiceId}" is no longer available.`);
+    if (seen.has(key)) throw new Error(`Source voice "${voiceId}" is selected more than once.`);
+    seen.add(key);
+    const weight = Number(item?.weight);
+    sources.push({ voice_id: voiceId, weight: Number.isFinite(weight) && weight > 0 ? weight : 1 });
+  }
+  if (!sources.length) throw new Error('Select at least one source voice.');
+  if (sources.length > 4) throw new Error('A custom voice can use at most four source voices.');
+  const total = sources.reduce((sum, source) => sum + source.weight, 0);
+  let running = 0;
+  return sources.map((source, index) => {
+    const weight = index === sources.length - 1 ? Math.max(0, 1 - running) : Math.round((source.weight / total) * 1e8) / 1e8;
+    running += weight;
+    return { voice_id: source.voice_id, weight };
+  });
+}
+
+export function buildCustomVoicePayload(name, settings, { availableIds = null, sourcePresetId = '', replace = false } = {}) {
+  const displayName = String(name || '').trim();
+  if (!displayName) throw new Error('A custom voice name is required.');
+  const sources = normalizeCustomVoiceSources(settings?.base, settings?.blendLayers || [], availableIds);
+  return {
+    name: displayName,
+    display_name: displayName,
+    sources,
+    source_preset_id: String(sourcePresetId || ''),
+    customized: true,
+    replace: Boolean(replace),
+    modulation: {
+      speed: settings.speed,
+      pitch: settings.pitch,
+      energy: settings.energy,
+      warmth: settings.warmth,
+      brightness: settings.brightness,
+      pause_style: settings.pause_style,
+    },
+  };
 }
 
 /**
@@ -213,8 +262,8 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
   const { markProfileDirty, renderVoiceCloningPanel } = hooks || {};
   const {
     fetchTtsVoices, fetchVoicePresets, saveVoicePreset, deleteVoicePreset,
-    setDefaultVoicePreset, cloneVoice, speakTts, stopTts, provisionVoiceCloning,
-    fetchTtsStatus,
+    setDefaultVoicePreset, clearDefaultVoicePreset, cloneVoice, speakTts, stopTts, provisionVoiceCloning,
+    fetchTtsStatus, fetchProfiles, saveProfile,
   } = api || backendApi;
 
   let voiceOptionsCache = []; // [{id, name}]
@@ -245,13 +294,14 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
         || capabilities.quantization || status.kokoro_quantization,
       voiceId,
       capability,
+      runtimeCapabilities: capabilities,
     });
   }
 
   /**
-   * Runtime/model compatibility is deliberately advisory. The backend does
-   * not report a supported model or voice list, so an absent mapping must
-   * remain selectable and carry a caution rather than being filtered away.
+   * Runtime/model compatibility is advisory for unknown mappings, but a
+   * loaded backend voice table or explicit capability refusal is authoritative
+   * and must disable the unsupported option.
    */
   function renderTtsCompatibility(doc) {
     const select = doc.getElementById('settingReviewTtsVoiceHint');
@@ -273,6 +323,7 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
 
   function annotateVoiceOption(option, voiceId) {
     const result = currentTtsCompatibility(voiceId);
+    option.disabled = !result.offered;
     if (result.caution) {
       option.title = result.caution;
       option.setAttribute('data-compatibility', result.knownBad ? 'known-bad' : 'unknown');
@@ -342,8 +393,12 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
     const addButton = doc.getElementById('addVoiceLayerButton');
     if (addButton) {
       const atMax = voiceBlendLayers.length >= MAX_BLEND_LAYERS;
-      addButton.disabled = atMax;
-      addButton.title = atMax ? `Up to ${MAX_BLEND_LAYERS} extra voices can be blended with the base.` : '';
+      const blendStatus = currentTtsCompatibility('', 'blend');
+      const blendUnavailable = blendStatus.knownBad && !blendStatus.offered;
+      addButton.disabled = atMax || blendUnavailable;
+      addButton.title = atMax
+        ? `Up to ${MAX_BLEND_LAYERS} extra voices can be blended with the base.`
+        : blendUnavailable ? blendStatus.caution : '';
     }
     const container = doc.getElementById('voiceBlendRows');
     if (!container) return;
@@ -377,6 +432,14 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
       }
       select.value = layer.voiceId;
       select.addEventListener('change', () => {
+        const next = select.value;
+        const baseId = doc.getElementById('settingReviewTtsVoiceHint')?.value || '';
+        const duplicate = next === baseId || voiceBlendLayers.some((other, otherIndex) => otherIndex !== index && other.voiceId === next);
+        if (duplicate) {
+          select.value = voiceBlendLayers[index].voiceId;
+          showToast?.('Each source voice can be selected only once.', 'warning');
+          return;
+        }
         voiceBlendLayers[index].voiceId = select.value;
         dirty();
         renderEffectiveMix(doc);
@@ -411,9 +474,23 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
         renderVoiceBlendRows(doc);
       });
 
+      const previewButton = doc.createElement('button');
+      previewButton.type = 'button';
+      previewButton.className = 'sd-btn';
+      previewButton.textContent = 'Preview source';
+      previewButton.addEventListener('click', async () => {
+        const text = doc.getElementById('voicePreviewText')?.value?.trim() || 'This is a quick source voice preview.';
+        try {
+          await speakTts(text, layer.voiceId, 1.0, 0, {});
+        } catch (error) {
+          showToast?.(`Source preview failed: ${error.message}`, 'danger');
+        }
+      });
+
       row.appendChild(select);
       row.appendChild(weightInput);
       row.appendChild(weightLabel);
+      row.appendChild(previewButton);
       row.appendChild(removeButton);
       container.appendChild(row);
     });
@@ -558,6 +635,7 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
     renderVoicePresetList(doc);
     const activePreset = loadedVoicePresets.find((preset) => preset.name === loadedVoicePresetDefault);
     if (activePreset) applyVoicePreset(doc, activePreset, { markDirtyAfter: false });
+    renderUnifiedVoiceSelect(doc);
   }
 
   function renderVoicePresetSelect(doc) {
@@ -574,6 +652,47 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
     if (current && loadedVoicePresets.some((p) => p.name === current)) {
       select.value = current;
     }
+  }
+
+  function renderUnifiedVoiceSelect(doc) {
+    const select = doc.getElementById('studioActiveVoiceSelect');
+    if (!select) return;
+    const currentBase = doc.getElementById('settingReviewTtsVoiceHint')?.value || '';
+    select.replaceChildren();
+    const builtins = doc.createElement('optgroup');
+    builtins.label = 'Built-in Voices';
+    for (const voice of voiceOptionsCache) {
+      const option = doc.createElement('option');
+      option.value = `builtin:${voice.id}`;
+      option.textContent = voice.name;
+      builtins.append(option);
+    }
+    select.append(builtins);
+    if (loadedVoicePresets.length) {
+      const custom = doc.createElement('optgroup');
+      custom.label = 'Custom Voices';
+      for (const preset of loadedVoicePresets) {
+        const option = doc.createElement('option');
+        option.value = `custom:${preset.id || preset.name}`;
+        option.textContent = preset.display_name || preset.name;
+        custom.append(option);
+      }
+      select.append(custom);
+    }
+    const activePreset = loadedVoicePresets.find((preset) => preset.name === loadedVoicePresetDefault);
+    select.value = activePreset ? `custom:${activePreset.id || activePreset.name}` : `builtin:${currentBase}`;
+    const label = activePreset?.display_name || activePreset?.name || voiceLabel(currentBase) || 'None selected';
+    const activeName = doc.getElementById('sdStudioActiveVoice');
+    if (activeName) activeName.textContent = label;
+  }
+
+  async function persistBuiltInVoice(doc, voiceId) {
+    if (typeof fetchProfiles !== 'function' || typeof saveProfile !== 'function') return;
+    const payload = await fetchProfiles();
+    const profileName = payload?.active_profile || payload?.profile || 'Default';
+    const settings = { ...(payload?.settings || {}), review_tts_voice_hint: voiceId };
+    await saveProfile(profileName, settings);
+    await clearDefaultVoicePreset?.();
   }
 
   function renderVoicePresetList(doc) {
@@ -678,7 +797,14 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
         let suffix = 2;
         while (names.has(nextName.toLowerCase())) nextName = `${baseName} ${suffix++}`;
         try {
-          const { name: _oldName, created_at: _createdAt, updated_at: _updatedAt, ...fields } = preset;
+          const {
+            name: _oldName,
+            id: _sourceId,
+            version: _sourceVersion,
+            created_at: _createdAt,
+            updated_at: _updatedAt,
+            ...fields
+          } = preset;
           await saveVoicePreset(nextName, fields);
           await refreshVoicePresets(doc);
           setMessage?.(messageEl(doc), `Duplicated voice preset as "${nextName}".`, 'success');
@@ -737,9 +863,9 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
       showToast?.(`Could not refresh voices: ${lastError.message}`, 'danger');
       return false;
     }
-    // This endpoint reports backend/runtime/blend capability, but does not
-    // report a TTS model or voice list. Failure therefore leaves compatibility
-    // unknown/open and must never prevent the voice picker from rendering.
+    // Runtime status is optional: if unavailable, compatibility stays
+    // fail-open. When present, loaded model/voice capabilities are used to
+    // disable only combinations the backend explicitly rejects.
     ttsRuntimeStatus = null;
     if (typeof fetchTtsStatus === 'function') {
       try {
@@ -753,7 +879,9 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
     renderVoiceCloneAvailability(activeDoc, voiceCloningAvailability);
     voiceOptionsCache = [
       ...(Array.isArray(voicesData.defaults) ? voicesData.defaults : []),
-      ...(Array.isArray(voicesData.cloned) ? voicesData.cloned.map((v) => ({ id: v.id, name: `${v.name} (Cloned)` })) : []),
+      ...(isAlphaCapabilityEnabled('voiceCloning') && Array.isArray(voicesData.cloned)
+        ? voicesData.cloned.map((v) => ({ id: v.id, name: `${v.name} (Cloned)` }))
+        : []),
     ];
     const voiceSelect = activeDoc.getElementById('settingReviewTtsVoiceHint');
     if (voiceSelect) {
@@ -785,6 +913,7 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
     }
     renderVoiceBlendRows(activeDoc);
     await refreshVoicePresets(activeDoc).catch((error) => console.error('Failed to load voice presets:', error));
+    renderUnifiedVoiceSelect(activeDoc);
     return true;
   }
 
@@ -1198,6 +1327,40 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
     renderVoiceBlendRows(activeDoc);
     updateModulationLabels(activeDoc);
 
+    const customWorkflow = activeDoc.getElementById('customVoiceWorkflow');
+    activeDoc.getElementById('createCustomVoiceButton')?.addEventListener('click', () => {
+      if (customWorkflow) customWorkflow.hidden = false;
+      activeDoc.getElementById('voicePresetNameInput')?.focus?.();
+    });
+    activeDoc.getElementById('closeCustomVoiceButton')?.addEventListener('click', () => {
+      if (customWorkflow) customWorkflow.hidden = true;
+    });
+    activeDoc.getElementById('studioActiveVoiceSelect')?.addEventListener('change', async (event) => {
+      const [kind, id] = String(event.target.value || '').split(':', 2);
+      try {
+        if (kind === 'custom') {
+          const preset = loadedVoicePresets.find((item) => (item.id || item.name) === id);
+          if (!preset) throw new Error('That custom voice is no longer available.');
+          applyVoicePreset(activeDoc, preset);
+          await setDefaultVoicePreset?.(preset.name);
+          loadedVoicePresetDefault = preset.name;
+        } else if (kind === 'builtin') {
+          const baseSelect = activeDoc.getElementById('settingReviewTtsVoiceHint');
+          if (baseSelect) baseSelect.value = id;
+          await persistBuiltInVoice(activeDoc, id);
+          loadedVoicePresetDefault = null;
+          renderActiveVoiceName(activeDoc);
+          renderEffectiveMix(activeDoc);
+        }
+        renderUnifiedVoiceSelect(activeDoc);
+        renderVoicePresetList(activeDoc);
+        setMessage?.(messageEl(activeDoc), 'Active voice saved.', 'success');
+      } catch (error) {
+        setMessage?.(messageEl(activeDoc), `Could not activate voice: ${error.message}`, 'danger');
+        renderUnifiedVoiceSelect(activeDoc);
+      }
+    });
+
     ['voicePitch', 'voiceEnergy', 'voiceWarmth', 'voiceBrightness'].forEach((id) => {
       activeDoc.getElementById(id)?.addEventListener('input', () => {
         updateModulationLabels(activeDoc);
@@ -1212,6 +1375,10 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
     // a base the user had already changed away from. Found while wiring the
     // active-voice readout, which needs this same event.
     activeDoc.getElementById('settingReviewTtsVoiceHint')?.addEventListener('change', () => {
+      const baseId = activeDoc.getElementById('settingReviewTtsVoiceHint')?.value;
+      const before = voiceBlendLayers.length;
+      voiceBlendLayers = voiceBlendLayers.filter((layer) => layer.voiceId !== baseId);
+      if (voiceBlendLayers.length !== before) showToast?.('Removed the duplicate source from the blend.', 'warning');
       renderEffectiveMix(activeDoc);
       renderTtsCompatibility(activeDoc);
       dirty();
@@ -1248,8 +1415,23 @@ export function createVoiceStudioFeature({ ui, hooks, api } = {}) {
       }
       const settings = gatherVoiceStudioSettings(activeDoc);
       try {
-        await saveVoicePreset(name, { ...settings, blend: settings.blend || {} });
-        setMessage?.(messageEl(activeDoc), `Saved voice preset "${name}".`, 'success');
+        const replacing = loadedVoicePresets.some((preset) => preset.name.toLowerCase() === name.toLowerCase());
+        if (replacing) {
+          const confirmFn = activeDoc.defaultView?.confirm || globalThis.confirm;
+          if (typeof confirmFn !== 'function' || !confirmFn(`Replace the saved custom voice "${name}" with this new version?`)) return;
+        }
+        const payload = buildCustomVoicePayload(name, {
+          ...settings,
+          blendLayers: voiceBlendLayers,
+        }, {
+          availableIds: availableVoiceIds(),
+          sourcePresetId: activeDoc.getElementById('voicePresetSelect')?.value || '',
+          replace: replacing,
+        });
+        await saveVoicePreset(name, payload);
+        await setDefaultVoicePreset?.(name);
+        loadedVoicePresetDefault = name;
+        setMessage?.(messageEl(activeDoc), `Saved and activated custom voice "${name}".`, 'success');
         if (nameInput) nameInput.value = '';
         await refreshVoicePresets(activeDoc);
       } catch (error) {

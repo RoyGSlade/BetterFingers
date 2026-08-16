@@ -474,8 +474,12 @@ async function clearMessageRescueContext(timeoutMs = 5000) {
 // audio to derive delivery signals from. Timeout defaults to just above the
 // route's own 190s generate_timeout_s ceiling so the client never gives up
 // before the server has a chance to return its own graceful "timeout" status.
-async function generateMessageRescue({ transcript, persona = null, useContext = false, signals = null } = {}, timeoutMs = 200000) {
-  const body = { transcript, use_context: Boolean(useContext) };
+async function generateMessageRescue({ transcript, persona = null, useContext = false, signals = null, allowClarifyingQuestion = false } = {}, timeoutMs = 200000) {
+  const body = {
+    transcript,
+    use_context: Boolean(useContext),
+    allow_clarifying_question: Boolean(allowClarifyingQuestion),
+  };
   if (persona) body.persona = persona;
   if (signals) body.signals = signals;
   return postJson(`${MESSAGE_RESCUE_URL}/generate`, body, timeoutMs);
@@ -1004,6 +1008,33 @@ async function getPersonaV2(name, timeoutMs = 2500) {
   return fetchJson(`${PERSONAS_URL}/${encodeURIComponent(name)}`, timeoutMs);
 }
 
+async function fetchPersonaEditor(name, timeoutMs = 5000) {
+  return fetchJson(`${PERSONAS_URL}/${encodeURIComponent(name)}/editor`, timeoutMs);
+}
+
+async function savePersonaDraft(name, structured, baseConfirmedVersion = 1, timeoutMs = 5000) {
+  return proxyRequest('PUT', `${PERSONAS_URL}/${encodeURIComponent(name)}/draft`, {
+    structured,
+    base_confirmed_version: baseConfirmedVersion,
+  }, timeoutMs);
+}
+
+async function discardPersonaDraft(name, timeoutMs = 5000) {
+  return proxyRequest('DELETE', `${PERSONAS_URL}/${encodeURIComponent(name)}/draft`, undefined, timeoutMs);
+}
+
+async function confirmPersonaDraft(name, structured, timeoutMs = 5000) {
+  return postJson(`${PERSONAS_URL}/${encodeURIComponent(name)}/confirm`, { structured }, timeoutMs);
+}
+
+async function renamePersona(name, newName, timeoutMs = 5000) {
+  return postJson(`${PERSONAS_URL}/${encodeURIComponent(name)}/rename`, { new_name: newName }, timeoutMs);
+}
+
+async function fetchPersonaFieldGuidance(fieldId, timeoutMs = 5000) {
+  return fetchJson(`${PERSONAS_URL}/field-guidance/${encodeURIComponent(fieldId)}`, timeoutMs);
+}
+
 async function savePersona(name, prompt, extra = null, timeoutMs = 5000) {
   const body = _mergeExtraFields({ name, prompt }, extra);
   return postJson(PERSONAS_URL, body, timeoutMs);
@@ -1177,6 +1208,12 @@ export {
   clearPersonaExamples,
   fetchBuiltinPersonaNames,
   getPersonaV2,
+  fetchPersonaEditor,
+  savePersonaDraft,
+  discardPersonaDraft,
+  confirmPersonaDraft,
+  renamePersona,
+  fetchPersonaFieldGuidance,
   fetchTtsVoices,
   provisionVoiceCloning,
   fetchVoicePresets,

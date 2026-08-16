@@ -17,6 +17,13 @@ from pydantic import BaseModel, Field
 
 from backend.services import personas as persona_service
 from backend.services.persona_learning import PersonaLearningStore
+from backend.services import persona_drafts
+from backend.services.persona_schema import (
+    get_field_guidance,
+    migrate_legacy_persona,
+    normalize_structured_persona,
+    validate_structured_persona,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -62,7 +69,7 @@ class PersonaExampleRequest(BaseModel):
 
 class PersonaRequest(BaseModel):
     name: str
-    prompt: str
+    prompt: str = ""
     # Optional persona schema v2 fields (U7). Omitted fields are left untouched on
     # update, so legacy {name, prompt} clients keep working unchanged.
     temperature: Optional[float] = None
@@ -81,6 +88,11 @@ class PersonaRequest(BaseModel):
     # Stage 10: five user-set register dials. Optional like every other v2
     # field, so a client that has never heard of traits keeps working.
     traits: Optional[dict] = None
+    structured: Optional[dict] = None
+    migration: Optional[dict] = None
+    revision: Optional[int] = None
+    confirmed_revision: Optional[int] = None
+    writing_preset_id: Optional[str] = None
 
 
 @router.get("/personas")
@@ -113,6 +125,7 @@ async def save_persona_route(request: PersonaRequest):
         "temperature", "model_hint", "dictionary_scope", "voice", "format", "few_shot",
         "output_policy", "safety_mode", "max_completion_tokens", "chunk_size", "persona_card",
         "traits",
+        "structured", "migration", "revision", "confirmed_revision", "writing_preset_id",
     ):
         value = getattr(request, key)
         if value is not None:
@@ -141,7 +154,7 @@ async def lint_persona_route(request: PersonaLintRequest):
 
 
 class PersonaTestRequest(BaseModel):
-    prompt: str
+    prompt: str = ""
     sample: str
     temperature: Optional[float] = None
     few_shot: Optional[list] = None
@@ -150,6 +163,7 @@ class PersonaTestRequest(BaseModel):
     output_policy: Optional[str] = None
     safety_mode: Optional[str] = None
     max_completion_tokens: Optional[int] = None
+    structured: Optional[dict] = None
 
 
 @router.post("/personas/test")
@@ -176,6 +190,131 @@ async def test_persona_route(request: PersonaTestRequest):
             detail="Persona test failed. Check the application logs for details.",
         )
     return {"result": result}
+
+
+class PersonaDraftStateRequest(BaseModel):
+    structured: dict
+    base_confirmed_version: int = 1
+
+
+class PersonaConfirmRequest(BaseModel):
+    structured: dict
+
+
+class PersonaRenameRequest(BaseModel):
+    new_name: str
+
+
+@router.get("/personas/{name}/editor")
+async def get_persona_editor_route(name: str):
+    """Return confirmed structured data plus its separately persisted draft.
+
+    Legacy prompts are decomposed conservatively for review, but the persona
+    registry is not changed until /confirm is called.
+    """
+    entry = persona_service.get_persona(name)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Persona '{name}' not found.")
+    structured, migration = migrate_legacy_persona(name, entry)
+    persona_id = structured["metadata"]["id"]
+    return {
+        "name": name,
+        "confirmed": structured,
+        "confirmed_version": int(entry.get("confirmed_revision", 1) or 1),
+        "draft": persona_drafts.get_draft(persona_id),
+        "migration": migration,
+        "legacy_prompt": str(entry.get("prompt", "") or ""),
+    }
+
+
+@router.put("/personas/{name}/draft")
+async def save_persona_draft_route(name: str, request: PersonaDraftStateRequest):
+    entry = persona_service.get_persona(name)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Persona '{name}' not found.")
+    structured = normalize_structured_persona(request.structured, display_name=name)
+    persona_id = structured["metadata"]["id"]
+    draft = await run_in_threadpool(
+        persona_drafts.save_draft,
+        persona_id,
+        structured,
+        base_version=request.base_confirmed_version,
+    )
+    return {"ok": True, "draft": draft}
+
+
+@router.delete("/personas/{name}/draft")
+async def discard_persona_draft_route(name: str):
+    entry = persona_service.get_persona(name)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Persona '{name}' not found.")
+    structured, _migration = migrate_legacy_persona(name, entry)
+    deleted = await run_in_threadpool(persona_drafts.delete_draft, structured["metadata"]["id"])
+    return {"ok": True, "discarded": deleted}
+
+
+@router.post("/personas/{name}/confirm")
+async def confirm_persona_draft_route(name: str, request: PersonaConfirmRequest):
+    entry = persona_service.get_persona(name)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Persona '{name}' not found.")
+    structured = normalize_structured_persona(request.structured, display_name=name)
+    ok_schema, errors = validate_structured_persona(structured)
+    if not ok_schema:
+        raise HTTPException(status_code=400, detail={"message": "Persona needs review.", "errors": errors})
+    next_version = int(entry.get("confirmed_revision", 1) or 1) + 1
+    structured["metadata"]["version"] = next_version
+    migration = dict(entry.get("migration") or {})
+    if not migration:
+        _preview, migration = migrate_legacy_persona(name, entry)
+    migration["confirmed"] = True
+    payload = {
+        "structured": structured,
+        "migration": migration,
+        "revision": next_version,
+        "confirmed_revision": next_version,
+    }
+    ok, msg = persona_service.save_persona(name, payload)
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    await run_in_threadpool(persona_drafts.delete_draft, structured["metadata"]["id"])
+    return {"ok": True, "message": msg, "structured": structured, "confirmed_version": next_version}
+
+
+@router.get("/personas/field-guidance/{field_path:path}")
+async def persona_field_guidance_route(field_path: str):
+    guidance = get_field_guidance(field_path)
+    if guidance is None:
+        raise HTTPException(status_code=404, detail=f"No guidance is defined for '{field_path}'.")
+    return {"field_id": field_path, **guidance}
+
+
+@router.post("/personas/{name}/rename")
+async def rename_persona_route(name: str, request: PersonaRenameRequest):
+    new_name = str(request.new_name or "").strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="A new persona name is required.")
+    if persona_service.get_persona(new_name) is not None:
+        raise HTTPException(status_code=409, detail=f"Persona '{new_name}' already exists.")
+    entry = persona_service.get_persona(name)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Persona '{name}' not found.")
+    if name in persona_service.list_builtin_persona_names():
+        raise HTTPException(status_code=400, detail="Built-in personas cannot be renamed.")
+    entry = dict(entry)
+    if isinstance(entry.get("structured"), dict):
+        entry["structured"] = normalize_structured_persona(entry["structured"], display_name=new_name)
+        entry["structured"]["metadata"]["display_name"] = new_name
+    ok, msg = persona_service.save_persona(new_name, entry)
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    ok, delete_msg = persona_service.delete_persona(name)
+    if not ok:
+        persona_service.delete_persona(new_name)
+        raise HTTPException(status_code=400, detail=delete_msg)
+    import server
+    server.reconcile_persona_profile_references(name, replacement=new_name)
+    return {"ok": True, "message": f"Renamed persona '{name}' to '{new_name}'.", "name": new_name}
 
 
 class PersonaRefineRequest(BaseModel):
@@ -245,7 +384,9 @@ async def delete_persona_route(name: str):
     ok, msg = persona_service.delete_persona(name)
     if not ok:
         raise HTTPException(status_code=400, detail=msg)
-    return {"message": msg}
+    import server
+    changed = server.reconcile_persona_profile_references(name, replacement="True Janitor")
+    return {"message": msg, "active_fallback": bool(changed), "fallback_persona": "True Janitor"}
 
 
 # --- Persona example learning (F2.6 store, I3.3 routes) ---------------------

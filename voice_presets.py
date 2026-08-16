@@ -20,6 +20,7 @@ whatever dict was on disk, and `.get("default")` on a dict missing the key is
 None, so old stores load with "no default set" for free.
 """
 import json
+import hashlib
 import logging
 import os
 import threading
@@ -30,8 +31,32 @@ from utils import get_user_data_path
 
 _lock = threading.RLock()
 
-_SCHEMA_VERSION = 1
-_MIGRATIONS = {}  # {from_version: fn(data) -> data}, empty until v2 exists
+_SCHEMA_VERSION = 2
+
+
+def _stable_legacy_id(name, created_at=""):
+    digest = hashlib.sha256(f"{name}|{created_at}".encode("utf-8")).hexdigest()[:16]
+    return f"custom-voice-{digest}"
+
+
+def _migrate_v1_to_v2(data):
+    payload = dict(data) if isinstance(data, dict) else _default_store()
+    migrated = []
+    for item in payload.get("presets", []) or []:
+        if not isinstance(item, dict):
+            continue
+        entry = dict(item)
+        entry.setdefault("id", _stable_legacy_id(entry.get("name", "voice"), entry.get("created_at", "")))
+        entry.setdefault("display_name", entry.get("name", ""))
+        entry.setdefault("version", 1)
+        entry.setdefault("source_preset_id", "")
+        entry.setdefault("customized", True)
+        migrated.append(entry)
+    payload["presets"] = migrated
+    return payload
+
+
+_MIGRATIONS = {1: _migrate_v1_to_v2}
 
 # Field -> default value. Every preset dict always has exactly these keys
 # (plus name/created_at/updated_at), fully defaulted and type-coerced.
@@ -46,6 +71,8 @@ _DEFAULTS = {
     "pause_style": "natural",
     "stability": 0.5,
     "source": "manual",
+    "source_preset_id": "",
+    "customized": True,
 }
 
 
@@ -75,6 +102,60 @@ def _coerce_blend(value):
     return result
 
 
+def _normalize_sources(value, *, base="", blend=None):
+    raw = value if isinstance(value, list) else []
+    if not raw and str(base or "").strip():
+        raw = [{"voice_id": str(base).strip(), "weight": 1.0}]
+        raw.extend(
+            {"voice_id": voice_id, "weight": weight}
+            for voice_id, weight in _coerce_blend(blend).items()
+        )
+    sources = []
+    seen = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        voice_id = str(item.get("voice_id", "") or "").strip()
+        key = voice_id.lower()
+        if not voice_id or key in seen:
+            continue
+        try:
+            weight = float(item.get("weight", 0))
+        except (TypeError, ValueError):
+            continue
+        if weight <= 0:
+            continue
+        seen.add(key)
+        sources.append({"voice_id": voice_id, "weight": weight})
+        if len(sources) == 4:
+            break
+    total = sum(item["weight"] for item in sources)
+    if total <= 0:
+        return []
+    normalized = []
+    running = 0.0
+    for index, item in enumerate(sources):
+        if index == len(sources) - 1:
+            weight = round(max(0.0, 1.0 - running), 8)
+        else:
+            weight = round(item["weight"] / total, 8)
+            running += weight
+        normalized.append({"voice_id": item["voice_id"], "weight": weight})
+    return normalized
+
+
+def _legacy_fields_from_sources(sources):
+    if not sources:
+        return "", {}
+    base = sources[0]["voice_id"]
+    base_weight = max(float(sources[0]["weight"]), 1e-9)
+    blend = {
+        item["voice_id"]: round(float(item["weight"]) / base_weight, 8)
+        for item in sources[1:]
+    }
+    return base, blend
+
+
 def _normalize(entry):
     """Fully-defaulted, type-coerced preset dict from a raw stored entry, or
     None if it has no usable name."""
@@ -84,20 +165,39 @@ def _normalize(entry):
     if not name:
         return None
 
-    result = {"name": name}
+    created_at = entry.get("created_at") or time.time()
+    try:
+        version = max(1, int(entry.get("version", 1) or 1))
+    except (TypeError, ValueError):
+        version = 1
+    result = {
+        "id": str(entry.get("id") or _stable_legacy_id(name, created_at)),
+        "name": name,
+        "display_name": str(entry.get("display_name") or name),
+        "version": version,
+    }
     for key, default in _DEFAULTS.items():
         value = entry.get(key, default)
         if key == "blend":
             result[key] = _coerce_blend(value)
-        elif key in ("pause_style", "source", "base"):
+        elif key in ("pause_style", "source", "base", "source_preset_id"):
             result[key] = str(value or default)
+        elif key == "customized":
+            result[key] = bool(value)
         else:
             try:
                 result[key] = float(value)
             except (TypeError, ValueError):
                 result[key] = default
 
-    result["created_at"] = entry.get("created_at") or time.time()
+    result["sources"] = _normalize_sources(entry.get("sources"), base=result["base"], blend=result["blend"])
+    if result["sources"]:
+        result["base"], result["blend"] = _legacy_fields_from_sources(result["sources"])
+    result["modulation"] = {
+        key: result[key]
+        for key in ("speed", "pitch", "energy", "warmth", "brightness", "pause_style")
+    }
+    result["created_at"] = created_at
     result["updated_at"] = entry.get("updated_at") or result["created_at"]
     return result
 
@@ -176,6 +276,19 @@ def save_preset(name, **fields):
         base_entry["updated_at"] = time.time()
         if prior is None:
             base_entry["created_at"] = base_entry["updated_at"]
+            base_entry["id"] = str(fields.get("id") or _stable_legacy_id(name, base_entry["created_at"]))
+            try:
+                base_entry["version"] = max(1, int(fields.get("version", 0) or 0) + 1)
+            except (TypeError, ValueError):
+                base_entry["version"] = 1
+        else:
+            base_entry["version"] = max(1, int(prior.get("version", 1) or 1)) + 1
+        if "sources" in fields:
+            base_entry["sources"] = fields["sources"]
+        if isinstance(fields.get("modulation"), dict):
+            for key in ("speed", "pitch", "energy", "warmth", "brightness", "pause_style"):
+                if key in fields["modulation"]:
+                    base_entry[key] = fields["modulation"][key]
 
         normalized = _normalize(base_entry)
         presets = [p for p in existing if p["name"].lower() != name.lower()]

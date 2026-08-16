@@ -95,10 +95,16 @@ function deriveServices(doctor) {
     const m = doctor.models;
     let status;
     let message = '';
+    // `models.default_model_exists` describes the catalog's legacy default,
+    // not necessarily the model the user selected. A different selected
+    // model can already be verified and serving requests while that default
+    // file is absent. Treat the selected model evidence from /doctor.llm as
+    // authoritative so the splash cannot wait forever on an unused file.
+    const selectedModelExists = doctor.llm && doctor.llm.model_exists === true;
     if (!m.models_dir_exists) {
       status = 'failed';
       message = 'Models directory is missing.';
-    } else if (m.default_model_exists) {
+    } else if (selectedModelExists || m.default_model_exists) {
       status = 'online';
     } else {
       status = 'starting';
@@ -150,7 +156,15 @@ function describeHardware(doctor) {
 }
 
 function hasUnresolvedServices(services) {
-  return services.some((s) => s.status === 'pending' || s.status === 'starting');
+  return services.some((s) => {
+    // Global hotkeys are intentionally lazy: the backend does not start its
+    // hook manager merely to answer /health or /doctor. Treating that honest
+    // `started: false` report as a boot dependency leaves a healthy app on the
+    // splash forever. The row may still describe the current state while the
+    // backend is starting, but it must not veto the sidecar health gate.
+    if (s.key === 'hotkeys') return false;
+    return s.status === 'pending' || s.status === 'starting';
+  });
 }
 
 // sidecarOutcome is supplied by the caller and must be one of:

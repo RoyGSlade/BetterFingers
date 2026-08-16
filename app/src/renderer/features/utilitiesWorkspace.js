@@ -253,8 +253,8 @@ import './textPlayground.js';
 export const UTILITIES_SECTIONS = ['models', 'speech', 'text', 'diagnostics', 'advanced'];
 
 export const UTILITIES_SECTION_META = {
-  models: { label: 'Models', description: 'LLM, Whisper, wake-word backbones, runtime memory, and voice cloning.' },
-  speech: { label: 'Speech Input', description: 'Audio device, hotkeys, and wake word.' },
+  models: { label: 'Models', description: 'LLM, Whisper, and runtime memory.' },
+  speech: { label: 'Speech Input', description: 'Audio device and hotkeys.' },
   text: { label: 'Text Tools', description: 'Dictionary, macros, and two Message Rescue surfaces.' },
   diagnostics: { label: 'Diagnostics', description: 'Doctor checkup, latency, recovery, jobs, and logs.' },
   advanced: { label: 'Advanced', description: 'Warmup, residency, send & injection, and raw dumps.' },
@@ -1045,12 +1045,33 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
 
   async function patchProfileSetting(key, value, { messageEl } = {}) {
     const name = await ensureActiveProfile();
+    const previous = profileSettingsCache[key];
     profileSettingsCache = { ...profileSettingsCache, [key]: value };
     try {
-      await saveProfile(name, profileSettingsCache);
-      if (messageEl) setMessage(messageEl, 'Saved.', 'success');
-      else hks.showToast?.('Saved.', 'success', 1200);
+      const response = await saveProfile(name, profileSettingsCache);
+      const component = {
+        model_keep_llm_loaded: 'llm',
+        model_keep_stt_loaded: 'stt',
+        model_keep_tts_loaded: 'tts',
+      }[key];
+      const residency = component ? response?.residency?.[component] : null;
+      let text = 'Saved.';
+      let tone = 'success';
+      if (component && value === true) {
+        if (residency && residency.ok === false) {
+          text = `Keep Loaded was saved, but ${component.toUpperCase()} failed to load: ${residency.error || residency.message || 'unknown error'}`;
+          tone = 'danger';
+        } else if (residency) {
+          text = `${component.toUpperCase()} is loaded and will stay resident.`;
+        }
+      } else if (component && value === false) {
+        text = `${component.toUpperCase()} may unload after active work finishes.`;
+      }
+      if (messageEl) setMessage(messageEl, text, tone);
+      else hks.showToast?.(text, tone, tone === 'success' ? 1600 : 5000);
+      if (component) await refreshRuntimeStatusDump();
     } catch (error) {
+      profileSettingsCache = { ...profileSettingsCache, [key]: previous };
       if (messageEl) setMessage(messageEl, `Save failed: ${error.message}`, 'danger');
       else hks.showToast?.(`Save failed: ${error.message}`, 'danger');
     }
@@ -1201,16 +1222,43 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
     try {
       const result = await fetchState();
       const state = result?.download_state || result;
-      if (!state) return;
+      if (!state) return null;
       modelDownloadOverrides[kind] = state;
       if (kind === 'whisper' && result?.models) whisperPayload = result;
       if (kind === 'llm' && result?.models) llmPayload = result;
       if (kind === 'whisper') renderWhisperPanel();
       else renderLlmPanel();
+      return { result, state };
     } catch (_error) {
       // A missed progress sample must not turn a real download into a false
       // failure. The download request remains the source of truth.
+      return null;
     }
+  }
+
+  async function waitForBackgroundModelDownload(kind, label, fetchState, timeoutMs = 1800000) {
+    // The LLM POST only acknowledges that a background thread was started.
+    // Follow that job until the backend reports a terminal state; otherwise an
+    // immediate inventory refresh races the thread and falsely reports that a
+    // successful download was not installed.
+    stopModelDownloadPolling();
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const sample = await pollModelDownload(kind, fetchState);
+      if (sample) {
+        const { state } = sample;
+        const status = String(state?.status || '').toLowerCase();
+        const active = state?.active === true || ['queued', 'starting', 'downloading', 'verifying'].includes(status);
+        if (['error', 'failed'].includes(status)) {
+          return { ok: false, message: state?.message || `${label} download failed.`, state };
+        }
+        if (!active && (state?.installed === true || ['complete', 'ready', 'already_installed'].includes(status))) {
+          return { ok: true, message: state?.message || `${label} download complete.`, state };
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    return { ok: false, message: `${label} download did not finish within 30 minutes.` };
   }
 
   async function runExplicitModelDownload({ kind, id, label, download, fetchState }) {
@@ -1224,6 +1272,9 @@ export function createUtilitiesWorkspaceFeature({ elements, hooks } = {}) {
     let result;
     try {
       result = await download();
+      if (result?.background && result?.ok !== false) {
+        result = await waitForBackgroundModelDownload(kind, label, fetchState);
+      }
     } catch (error) {
       modelDownloadOverrides[kind] = { status: 'error', percent: 0, message: error.message || `${label} download failed.` };
       modelVerifications[kind] = { status: 'failed', message: `Verification failed: ${error.message || 'download failed'}` };

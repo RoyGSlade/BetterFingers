@@ -62,7 +62,10 @@ BetterFingers is a real local-first application with automated tests and a deep 
 set. It is **not yet a tagged public release.** Remaining gates include operator QA,
 release reproducibility/package qualification, a signing decision, core-loop reliability
 evidence, injection compatibility, audio/hardware qualification, and platform-specific
-selection evidence. The active execution source is [ACCOMPLISH.md](ACCOMPLISH.md).
+selection evidence. Current release truth lives in the
+[release board](docs/release/RELEASE_BOARD.md) and
+[prerelease rehearsal](docs/release/PRERELEASE_REHEARSAL.md), not the historical
+execution plan.
 
 **Platforms:** Windows and Linux are intended targets. The source `Ctrl+Alt+R`
 selection-rewrite workflow is qualified on X11 only; selected-text TTS, general
@@ -135,7 +138,9 @@ Overrides: `BETTERFINGERS_LLAMA_SERVER=/path/to/llama-server`,
 - **End-to-end:** `cd app && npx playwright test` (needs a local LLM + `llama-server` on
   disk for the review-overlay spec; close any running instance first).
 - **JS syntax check:** `node --check app/src/renderer/main.js`.
-- Execution status and release gates live in **[ACCOMPLISH.md](ACCOMPLISH.md)**;
+- Release status and qualification gates live in the
+  **[release board](docs/release/RELEASE_BOARD.md)** and
+  [prerelease rehearsal](docs/release/PRERELEASE_REHEARSAL.md);
   [DESIGN.md](DESIGN.md) is long-horizon product design.
 
 ## Architecture

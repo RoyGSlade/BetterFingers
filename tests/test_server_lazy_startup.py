@@ -263,6 +263,54 @@ class ServerLazyStartupTests(unittest.TestCase):
         self.assertFalse(payload["llm"]["ready"])
         self.assertIn("llama-server missing", payload["llm"]["error"])
 
+    def test_apply_residency_warms_enabled_missing_resources_and_reports_failure(self):
+        snapshot = {
+            "ledger": {"llm": None, "stt": {"model_id": "small"}, "tts": None},
+            "pinned": {"llm": False, "stt": False, "tts": False},
+        }
+        with patch.object(server.model_runtime, "resources_snapshot", return_value=snapshot), patch.object(
+            server.model_runtime, "set_pinned"
+        ) as pinned, patch.object(
+            server, "warm_start_resident_models", return_value={"llm": {"ok": False, "error": "missing model"}}
+        ) as warm:
+            result = server.apply_model_residency_preferences(
+                {"llm": True, "stt": True, "tts": False}, warm_enabled=True
+            )
+
+        self.assertEqual(pinned.call_count, 3)
+        warm.assert_called_once_with({"llm": True, "stt": False, "tts": False})
+        self.assertFalse(result["llm"]["ok"])
+        self.assertEqual(result["llm"]["error"], "missing model")
+        self.assertTrue(result["llm"]["keep_loaded"])
+
+    def test_disabling_tts_syncs_concrete_idle_policy_without_forced_unload(self):
+        class DummyTts:
+            def __init__(self):
+                self.values = []
+
+            def set_keep_loaded(self, value):
+                self.values.append(value)
+
+        dummy = DummyTts()
+        server.tts_engine = dummy
+        snapshot = {
+            "ledger": {"llm": None, "stt": None, "tts": {"model_id": "kokoro"}},
+            "pinned": {"llm": False, "stt": False, "tts": True},
+        }
+        try:
+            with patch.object(server.model_runtime, "resources_snapshot", return_value=snapshot), patch.object(
+                server.model_runtime, "set_pinned"
+            ), patch.object(server, "warm_start_resident_models") as warm:
+                result = server.apply_model_residency_preferences(
+                    {"llm": False, "stt": False, "tts": False}, warm_enabled=True
+                )
+            self.assertEqual(dummy.values, [False])
+            warm.assert_not_called()
+            self.assertFalse(result["tts"]["keep_loaded"])
+            self.assertTrue(result["tts"]["loaded"], "resident now, eligible for safe idle cleanup")
+        finally:
+            server.tts_engine = None
+
 
 if __name__ == "__main__":
     unittest.main()

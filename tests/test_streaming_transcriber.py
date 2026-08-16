@@ -234,6 +234,13 @@ class AggregateConfidenceTests(unittest.TestCase):
         self.assertIsNone(agg["avg_logprob"])
         self.assertIsNone(agg["no_speech_prob"])
 
+    def test_out_of_range_scores_are_not_aggregated_as_high_confidence(self):
+        agg = aggregate_confidence([
+            ({"score": 35, "avg_logprob": -0.2, "no_speech_prob": 0.1}, 1.0),
+            ({"score": 0.9, "avg_logprob": -0.1, "no_speech_prob": 0.0}, 1.0),
+        ])
+        self.assertEqual(agg["score"], 0.9)
+
 
 if __name__ == "__main__":
     unittest.main()

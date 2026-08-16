@@ -24,11 +24,22 @@ import requests
 from utils import get_user_data_path
 
 # --- Constants ---
+#
+# Hugging Face model repositories are mutable. These revisions are the exact
+# commits whose LFS objects match the size and SHA-256 pins below. Using
+# ``resolve/main`` made an upstream chat-template metadata update change every
+# GGUF by a few KB, so BetterFingers correctly rejected the newly served bytes
+# after downloading several GB. Pin the URL and digest to the same immutable
+# artifact instead of weakening verification.
+_GEMMA4_E2B_REVISION = "739965d73654c0ead8020786aa998fc813070087"
+_GEMMA4_E4B_REVISION = "0720adb23527c2cd5ea01d1db067cd960327fdac"
+_GEMMA4_12B_REVISION = "d997c805aafe035a8024f961c6e1afd6b30d79a5"
+
 AVAILABLE_MODELS = {
     "gemma-4-e2b-q4": {
         "name": "Gemma 4 E2B (Q4_K_M)",
         "filename": "gemma-4-E2B-it-Q4_K_M.gguf",
-        "url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf",
+        "url": f"https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/{_GEMMA4_E2B_REVISION}/gemma-4-E2B-it-Q4_K_M.gguf",
         # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
         "sha256": "9378bc471710229ef165709b62e34bfb62231420ddaf6d729e727305b5b8672d",
         "size_bytes": 3106736256,
@@ -43,7 +54,7 @@ AVAILABLE_MODELS = {
     "gemma-4-e2b-q8": {
         "name": "Gemma 4 E2B (Q8_0)",
         "filename": "gemma-4-E2B-it-Q8_0.gguf",
-        "url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q8_0.gguf",
+        "url": f"https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/{_GEMMA4_E2B_REVISION}/gemma-4-E2B-it-Q8_0.gguf",
         # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
         "sha256": "0a8488b149e1f700712c35d5bf0a3795f9dcc2563b4944d5ef2fb89375f9483e",
         "size_bytes": 5048350848,
@@ -58,7 +69,7 @@ AVAILABLE_MODELS = {
     "gemma-4-e4b-q4": {
         "name": "Gemma 4 E4B (Q4_K_M)",
         "filename": "gemma-4-E4B-it-Q4_K_M.gguf",
-        "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
+        "url": f"https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/{_GEMMA4_E4B_REVISION}/gemma-4-E4B-it-Q4_K_M.gguf",
         # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
         "sha256": "519b9793ed6ce0ff530f1b7c96e848e08e49e7af4d57bb97f76215963a54146d",
         "size_bytes": 4977169568,
@@ -73,7 +84,7 @@ AVAILABLE_MODELS = {
     "gemma-4-e4b-q8": {
         "name": "Gemma 4 E4B (Q8_0)",
         "filename": "gemma-4-E4B-it-Q8_0.gguf",
-        "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q8_0.gguf",
+        "url": f"https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/{_GEMMA4_E4B_REVISION}/gemma-4-E4B-it-Q8_0.gguf",
         # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
         "sha256": "a2232a649523c36bf530f1dc3614eb8c800645c4227390381c8b05d4d6eee05a",
         "size_bytes": 8192951456,
@@ -88,7 +99,7 @@ AVAILABLE_MODELS = {
     "gemma-4-12b-q4": {
         "name": "Gemma 4 12B (Q4_K_M)",
         "filename": "gemma-4-12b-it-Q4_K_M.gguf",
-        "url": "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-Q4_K_M.gguf",
+        "url": f"https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/{_GEMMA4_12B_REVISION}/gemma-4-12b-it-Q4_K_M.gguf",
         # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
         "sha256": "43fec98c5102b1c446b4ddd0a9439f1db3a2e1f2e0b8cd143ce1ea619a9403d6",
         "size_bytes": 7121860000,
@@ -103,7 +114,7 @@ AVAILABLE_MODELS = {
     "gemma-4-12b-q8": {
         "name": "Gemma 4 12B (Q8_0)",
         "filename": "gemma-4-12b-it-Q8_0.gguf",
-        "url": "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-Q8_0.gguf",
+        "url": f"https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/{_GEMMA4_12B_REVISION}/gemma-4-12b-it-Q8_0.gguf",
         # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
         "sha256": "74d2d4f0b5b08ca8589d1a5f50e689c0984469f3cedbdc7d67458c6e9e35496a",
         "size_bytes": 12669646240,
@@ -1095,7 +1106,8 @@ def safe_extract_runtime_archive(archive_path, dest_dir, archive_name, required_
             candidate = os.path.join(dest_dir, member)
             if os.path.isfile(candidate) and not member.lower().endswith((".dll", ".so", ".txt")):
                 try:
-                    os.chmod(candidate, 0o755)
+                    # This validated runtime executable must be launchable on POSIX.
+                    os.chmod(candidate, 0o755)  # nosec B103
                 except OSError:
                     pass
 
@@ -1172,7 +1184,7 @@ def _ensure_disk_space(dest_dir, required_bytes, *, headroom=1.1):
 
 
 def download_file(url, dest_path, desc="File", progress_callback=None, progress_key="", resume=True,
-                  expected_sha256=None):
+                  expected_sha256=None, expected_size=None):
     """Download a file safely.
 
     The transfer writes to ``dest_path + ".part"`` and atomically replaces the final
@@ -1202,6 +1214,47 @@ def download_file(url, dest_path, desc="File", progress_callback=None, progress_
     logging.info("URL: %s", url)
     part_path = f"{dest_path}.part"
     resumed_bytes = _file_size(part_path) if resume and os.path.exists(part_path) else 0
+    expected_bytes = int(expected_size or 0)
+    if expected_bytes and resumed_bytes >= expected_bytes:
+        # A prior transfer can finish immediately before promotion, or a broken
+        # range response/concurrent writer can leave an oversized partial. Only
+        # an exact, checksum-valid artifact may be promoted; every other case
+        # restarts cleanly instead of issuing an invalid/overlapping Range.
+        if resumed_bytes == expected_bytes and (
+            not expected_sha256
+            or hmac_compare(sha256_file(part_path), expected_sha256)
+        ):
+            if expected_sha256:
+                try:
+                    with open(dest_path + ".sha256", "w", encoding="utf-8") as digest_file:
+                        digest_file.write(
+                            f"{expected_sha256}  {os.path.basename(dest_path)}\n"
+                        )
+                except OSError:
+                    pass
+            os.replace(part_path, dest_path)
+            _emit_progress(
+                progress_callback,
+                {
+                    "key": key,
+                    "status": "complete",
+                    "desc": desc,
+                    "percent": 100.0,
+                    "downloaded_bytes": expected_bytes,
+                    "total_bytes": expected_bytes,
+                    "partial_path": "",
+                    "message": f"{desc} download complete.",
+                },
+            )
+            return
+        logging.warning(
+            "%s partial has invalid size/checksum (%d bytes; expected %d); restarting.",
+            desc,
+            resumed_bytes,
+            expected_bytes,
+        )
+        os.remove(part_path)
+        resumed_bytes = 0
     _emit_progress(
         progress_callback,
         {
@@ -1283,6 +1336,16 @@ def download_file(url, dest_path, desc="File", progress_callback=None, progress_
         if total_size and _file_size(part_path) < total_size:
             raise IOError(
                 f"incomplete download: got {_file_size(part_path)} bytes, expected {total_size}"
+            )
+        if expected_bytes and _file_size(part_path) != expected_bytes:
+            actual_bytes = _file_size(part_path)
+            try:
+                os.remove(part_path)
+            except OSError:
+                pass
+            raise IOError(
+                f"download size mismatch for {desc}: expected {expected_bytes} bytes, "
+                f"got {actual_bytes}. The download was discarded."
             )
         # Cryptographic verification before promotion (§11): size says the
         # transfer finished; only the digest says it's the artifact we pinned.
@@ -1421,6 +1484,7 @@ def check_and_download_resources(model_id=None, progress_callback=None):
                 progress_callback=report,
                 progress_key=target_model_id,
                 expected_sha256=model_info.get("sha256"),
+                expected_size=model_info.get("size_bytes"),
             )
         except InsufficientDiskSpaceError as exc:
             message = str(exc)

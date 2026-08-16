@@ -57,6 +57,20 @@ test('ready is trusted when sidecar is healthy and doctor has nothing further to
   assert.equal(phase, 'ready');
 });
 
+test('an intentionally lazy hotkey manager cannot hold a healthy backend on the splash', () => {
+  const doctor = {
+    hotkeys: {
+      started: false,
+      active: false,
+      keyboard_hooks_ok: false,
+      keyboard_hook_errors: [],
+    },
+  };
+  const hotkeyRow = deriveServices(doctor).find((service) => service.key === 'hotkeys');
+  assert.equal(hotkeyRow.status, 'pending');
+  assert.equal(derivePhase({ elapsedMs: 30000, doctor, sidecarOutcome: 'ready' }), 'ready');
+});
+
 test('deriveServices renders a row only for subsystems /doctor actually mentioned', () => {
   const doctor = { stt: { initialized: true, loaded: true }, llm: { runtime_status: 'ready' } };
   const services = deriveServices(doctor);
@@ -71,6 +85,35 @@ test('deriveServices renders a row only for subsystems /doctor actually mentione
 
 test('deriveServices renders nothing at all when doctor has not answered yet', () => {
   assert.deepEqual(deriveServices(null), []);
+});
+
+test('a verified selected model satisfies Model files even when the unused catalog default is absent', () => {
+  const doctor = {
+    llm: {
+      initialized: true,
+      ready: true,
+      runtime_status: 'ready',
+      model_id: 'gemma-4-e4b-q4',
+      model_exists: true,
+    },
+    models: {
+      models_dir_exists: true,
+      default_model_path: '/models/gemma-4-E2B-it-Q4_K_M.gguf',
+      default_model_exists: false,
+    },
+  };
+  const modelRow = deriveServices(doctor).find((service) => service.key === 'models');
+  assert.equal(modelRow.status, 'online');
+  assert.equal(derivePhase({ elapsedMs: 500, doctor, sidecarOutcome: 'ready' }), 'ready');
+});
+
+test('Model files remains unresolved when neither the selected nor default model exists', () => {
+  const doctor = {
+    llm: { initialized: true, runtime_status: 'not_loaded', model_exists: false },
+    models: { models_dir_exists: true, default_model_exists: false },
+  };
+  const modelRow = deriveServices(doctor).find((service) => service.key === 'models');
+  assert.equal(modelRow.status, 'starting');
 });
 
 test('an llm runtime_status of a named failure produces a failed row, not a guessed pending/starting one', () => {

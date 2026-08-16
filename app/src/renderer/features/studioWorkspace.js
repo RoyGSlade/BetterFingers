@@ -148,6 +148,7 @@ import {
   fetchBuiltinPersonaNames,
   savePersona,
   deletePersona,
+  renamePersona,
   testPersona,
   fetchTtsVoices,
   saveVoicePreset,
@@ -155,6 +156,7 @@ import {
 } from '../api/backend.js';
 import { computeEffectiveMix, normalizeBlendForSend, MAX_BLEND_LAYERS } from './voiceStudio.js';
 import { createPersonaLearningFeature } from './personaLearning.js';
+import { isAlphaCapabilityEnabled } from '../config/alphaCapabilities.js';
 
 // --- Pure helpers (no DOM) ---------------------------------------------------
 
@@ -480,6 +482,14 @@ export function buildPersonaTestMaterial(sample) {
   return `[PERSONA TEST MATERIAL]\n${value}\n[END PERSONA TEST MATERIAL]`;
 }
 
+/** Remove internal material delimiters if a model echoes them in its rewrite. */
+export function cleanPersonaTestOutput(output) {
+  return String(output || '')
+    .replace(/\[PERSONA TEST MATERIAL\]\s*/gi, '')
+    .replace(/\s*\[END PERSONA TEST MATERIAL\]/gi, '')
+    .trim();
+}
+
 /** Add a test-only instruction without changing the saved persona. */
 export function buildPersonaTestPrompt(prompt) {
   const base = String(prompt || '').trim();
@@ -583,6 +593,7 @@ export const STUDIO_ELEMENT_IDS = {
   duplicateButton: 'sdPersonaDuplicateButton',
   menuButton: 'sdPersonaMenuButton',
   menu: 'sdPersonaMenu',
+  renameButton: 'sdPersonaRenameButton',
   deleteButton: 'sdPersonaDeleteButton',
   description: 'sdPersonaDescription',
 
@@ -814,7 +825,9 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
     } else {
       voiceOptionsCache = [
         ...(Array.isArray(voicesResult.payload.defaults) ? voicesResult.payload.defaults : []),
-        ...(Array.isArray(voicesResult.payload.cloned) ? voicesResult.payload.cloned.map((v) => ({ id: v.id, name: `${v.name} (Cloned)` })) : []),
+        ...(isAlphaCapabilityEnabled('voiceCloning') && Array.isArray(voicesResult.payload.cloned)
+          ? voicesResult.payload.cloned.map((v) => ({ id: v.id, name: `${v.name} (Cloned)` }))
+          : []),
       ];
     }
     if (!blendBase.voiceId && voiceOptionsCache[0]) {
@@ -825,6 +838,7 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
     }
     if (!selectedName && personaOrder.length) selectedName = personaOrder[0];
     renderAll();
+    hks.onPersonaSelected?.(selectedName, getSelectedPersona());
     ensurePersonaLearning()?.syncPersonaName();
     return personaMap;
   }
@@ -842,6 +856,7 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
     }
     if (!selectedName || !personaMap[selectedName]) selectedName = personaOrder[0] || null;
     renderAll();
+    hks.onPersonaSelected?.(selectedName, getSelectedPersona());
     ensurePersonaLearning()?.syncPersonaName();
     return personaMap;
   }
@@ -853,6 +868,7 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
     stressResults = [];
     renderAll();
     ensurePersonaLearning()?.syncPersonaName();
+    hks.onPersonaSelected?.(selectedName, getSelectedPersona());
   }
 
   // --- rendering: PERSONAS grid --------------------------------------------------
@@ -1012,6 +1028,11 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
         event.preventDefault();
         selectPersona(name);
       }
+    });
+    card.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      selectPersona(name);
+      toggleMenu(true);
     });
     return card;
   }
@@ -1313,7 +1334,7 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
       });
       livePreview = {
         input: sample,
-        output: res?.result || '',
+        output: cleanPersonaTestOutput(res?.result),
         inputTone: guessToneLabel(traits),
         outputTone: guessToneLabel(traits),
       };
@@ -1448,13 +1469,38 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
     if (!doConfirm(`Delete persona "${selectedName}"? This cannot be undone.`)) return;
     const deletedName = selectedName;
     try {
-      await deletePersona(deletedName);
+      const result = await deletePersona(deletedName);
       hks.showToast?.(`Deleted "${deletedName}".`, 'success', 2000);
+      if (result?.active_fallback) {
+        hks.onActivePersonaFallback?.(result.fallback_persona || 'True Janitor');
+        hks.showToast?.(`The active persona was deleted. Switched to ${result.fallback_persona || 'True Janitor'}.`, 'warning', 5000);
+      }
       selectedName = null;
       toggleMenu(false);
       await refresh();
     } catch (error) {
       hks.showToast?.(`Delete failed: ${error.message}`, 'danger');
+    }
+  }
+
+  async function handleRenameClick() {
+    if (!selectedName || isBuiltinPersonaName(selectedName, builtinNames)) {
+      hks.showToast?.('Built-in personas can’t be renamed.', 'warning');
+      return;
+    }
+    const promptFn = typeof window !== 'undefined' ? window.prompt?.bind(window) : null;
+    const nextName = String(promptFn?.('Rename persona', selectedName) || '').trim();
+    if (!nextName || nextName === selectedName) return;
+    try {
+      const prior = selectedName;
+      await renamePersona(prior, nextName);
+      selectedName = null;
+      toggleMenu(false);
+      await refresh();
+      selectPersona(nextName);
+      hks.showToast?.(`Renamed "${prior}" to "${nextName}".`, 'success');
+    } catch (error) {
+      hks.showToast?.(`Rename failed: ${error.message}`, 'danger');
     }
   }
 
@@ -1488,6 +1534,7 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
     els.editButton?.addEventListener?.('click', handleEditClick);
     els.duplicateButton?.addEventListener?.('click', () => handleDuplicateClick());
     els.menuButton?.addEventListener?.('click', () => toggleMenu());
+    els.renameButton?.addEventListener?.('click', () => handleRenameClick());
     els.deleteButton?.addEventListener?.('click', () => handleDeleteClick());
 
     els.testButton?.addEventListener?.('click', () => handleTestPersonaClick());
@@ -1510,6 +1557,7 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
   function init() {
     bindOnce();
     renderAll();
+    hks.onPersonaSelected?.(selectedName, getSelectedPersona());
     return { getSelectedPersona };
   }
 
@@ -1537,6 +1585,7 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
     handleEditClick,
     handleDuplicateClick,
     handleDeleteClick,
+    handleRenameClick,
     handleAddVoiceClick,
     playText,
     renderTraitsStatus,

@@ -13,6 +13,8 @@ import assert from 'node:assert/strict';
 import {
   MAX_BLEND_LAYERS,
   normalizeBlendForSend,
+  normalizeCustomVoiceSources,
+  buildCustomVoicePayload,
   resolveAvailableVoiceId,
   filterAvailableBlendLayers,
   computeEffectiveMix,
@@ -50,6 +52,33 @@ test('normalizeBlendForSend: clamps weight to [0,1]', () => {
 test('normalizeBlendForSend: empty/all-dropped input is null, not {}', () => {
   assert.equal(normalizeBlendForSend([]), null);
   assert.equal(normalizeBlendForSend([{ voiceId: '', weight: 0.5 }]), null);
+});
+
+test('custom voice accepts one to four unique sources and normalizes exactly to one', () => {
+  const sources = normalizeCustomVoiceSources('heart', [
+    { voiceId: 'bella', weight: 0.6 },
+    { voiceId: 'adam', weight: 0.3 },
+    { voiceId: 'george', weight: 0.1 },
+  ], ['heart', 'bella', 'adam', 'george']);
+  assert.equal(sources.length, 4);
+  assert.equal(sources.reduce((sum, source) => sum + source.weight, 0), 1);
+  assert.throws(() => normalizeCustomVoiceSources('heart', [{ voiceId: 'heart', weight: 1 }]), /more than once/);
+  assert.throws(() => normalizeCustomVoiceSources('heart', [
+    { voiceId: 'a', weight: 1 }, { voiceId: 'b', weight: 1 },
+    { voiceId: 'c', weight: 1 }, { voiceId: 'd', weight: 1 },
+  ]), /at most four/);
+});
+
+test('custom voice payload stores only engine-supported modulation fields', () => {
+  const payload = buildCustomVoicePayload('Calm Narrator', {
+    base: 'heart', blendLayers: [{ voiceId: 'bella', weight: 0.5 }],
+    speed: 0.9, pitch: -1, energy: 0.4, warmth: 0.2, brightness: 0.1, pause_style: 'natural',
+    stability: 0.99, expressiveness: 0.8,
+  }, { availableIds: ['heart', 'bella'], sourcePresetId: 'quiet' });
+  assert.equal(payload.sources.length, 2);
+  assert.equal(payload.source_preset_id, 'quiet');
+  assert.equal('stability' in payload.modulation, false);
+  assert.equal('expressiveness' in payload.modulation, false);
 });
 
 // --- resolveAvailableVoiceId (unavailable/deleted voice fallback) -----------
@@ -538,6 +567,25 @@ test('the Add voice layer button disables itself once MAX_BLEND_LAYERS is reache
   fireClick(fakeDoc.elements.addVoiceLayerButton); // the MAX_BLEND_LAYERS-th layer
   assert.equal(fakeDoc.elements.addVoiceLayerButton.disabled, true, 'the button must go dead-and-honest, not dead-and-silent');
   assert.notEqual(fakeDoc.elements.addVoiceLayerButton.title, '', 'the reason must be stated, not just implied by disabled');
+});
+
+test('the Add voice layer button disables when runtime status rejects blending', async () => {
+  const fakeDoc = makeFakeDoc();
+  const feature = createVoiceStudioFeature({
+    ui: {},
+    hooks: {},
+    api: makeApiStub({
+      fetchTtsStatus: async () => ({
+        raw_backend: 'native',
+        capabilities: { runtime: 'native', blend_capable: false },
+      }),
+    }),
+  });
+
+  await feature.refreshVoices(fakeDoc);
+
+  assert.equal(fakeDoc.elements.addVoiceLayerButton.disabled, true);
+  assert.match(fakeDoc.elements.addVoiceLayerButton.title, /blending is not supported/);
 });
 
 test('reset button clears blend layers (blend normalization/reset)', async () => {

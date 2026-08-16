@@ -118,6 +118,78 @@
   --sd-border-selected-width: 1.5px;
 }
 
+/* Alpha operation center: persistent while work is active, dismissible only
+   after a terminal state. */
+.sd-operation-center {
+  position: fixed;
+  z-index: 1200;
+  top: 4.5rem;
+  right: 1rem;
+  width: min(24rem, calc(100vw - 2rem));
+  display: grid;
+  gap: .5rem;
+}
+
+.sd-operation {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: .25rem .75rem;
+  padding: .75rem;
+  border: 1px solid var(--sd-border);
+  border-left: 3px solid var(--sd-cyan);
+  border-radius: .65rem;
+  background: var(--sd-surface-raised);
+  box-shadow: 0 .75rem 2rem rgb(0 0 0 / 35%);
+}
+
+.sd-operation > span { grid-column: 1; color: var(--sd-text-muted); }
+.sd-operation[data-state="error"], .sd-operation[data-state="paused"] { border-left-color: var(--sd-danger); }
+.sd-operation[data-state="completed"] { border-left-color: var(--sd-success); }
+
+.sd-studio-active-config {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 0 1rem;
+  padding: 1rem;
+  border: 1px solid var(--sd-border);
+  border-radius: .75rem;
+  background: var(--sd-surface-raised);
+}
+
+.sd-studio-active-config p { display: inline-block; margin: .45rem 1rem 0 0; }
+.sd-studio-active-config__hint { max-width: 30rem; color: var(--sd-text-muted); }
+
+.sd-structured-persona {
+  display: grid;
+  gap: .85rem;
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid var(--sd-border);
+  border-radius: .75rem;
+  background: var(--sd-surface-inset);
+}
+
+.sd-structured-persona__field { display: grid; gap: .35rem; color: var(--sd-text-muted); }
+.sd-structured-persona__field textarea { width: 100%; }
+.sd-structured-persona__test { display: grid; gap: .65rem; border-top: 1px solid var(--sd-border); padding-top: .85rem; }
+.sd-structured-persona pre { max-height: 12rem; overflow: auto; white-space: pre-wrap; }
+
+.sd-scribe-progress {
+  display: grid;
+  gap: .35rem;
+  margin: .75rem 0;
+  padding: .75rem;
+  border: 1px solid var(--sd-border);
+  border-left: 3px solid var(--sd-cyan);
+  border-radius: .5rem;
+  background: var(--sd-surface-inset);
+}
+
+@media (max-width: 760px) {
+  .sd-studio-active-config { flex-direction: column; }
+}
+
 /* ==========================================================================
    App shell (SPEC 3)
    Grid: [nav 96px] [center 1fr] [context 320px], full-width bottom status bar.
@@ -6338,6 +6410,42 @@ select.sd-library-filters__control {
 .sd-confirm__actions {
   display: flex;
   justify-content: flex-end;
+  gap: var(--sd-space-8);
+  margin-top: var(--sd-space-16);
+}
+
+/* Scribe keeps context editable before and after every model pass. The
+   clarification dialog reuses the shared confirmation overlay, but its action
+   is constructive: the answer becomes explicit context for one local rerun. */
+.sd-scribe-context-form {
+  display: grid;
+  gap: var(--sd-space-8);
+  padding: var(--sd-space-12);
+  border: 1px solid var(--sd-border);
+  border-radius: var(--sd-radius-16);
+  background: rgba(255, 255, 255, .02);
+}
+
+.sd-scribe-clarification-permission {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sd-space-8);
+}
+
+.sd-scribe-clarification-permission .sd-util-group__desc {
+  flex: 1 1 320px;
+  margin: 0;
+}
+
+.sd-scribe-clarification__question {
+  margin: var(--sd-space-12) 0;
+  font-size: var(--sd-font-sm);
+  color: var(--sd-text-primary);
+}
+
+.sd-scribe-clarification__answer {
+  display: grid;
   gap: var(--sd-space-8);
   margin-top: var(--sd-space-16);
 }

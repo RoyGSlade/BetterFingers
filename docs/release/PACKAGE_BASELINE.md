@@ -9,8 +9,11 @@
 - **Status:** Historical Wave 0 measurements remain below. A corrected local Linux
   AppImage build exists in current worker evidence, but package acceptance is not
   complete; Windows remains **ABSENT/UNBUILT**.
+- **Intended release identity:** `v1.1.0-alpha.1`; the artifact observations below
+  retain their historical `v0.2.0-alpha.1` filename and identity for traceability.
 
-The final local AppImage observed on 2026-08-04 is
+The final local AppImage observed on 2026-08-04 (historical `v0.2.0-alpha.1`
+identity) is
 `app/release/BetterFingers-0.2.0-alpha.1.AppImage`, 571,977,617 bytes, SHA-256
 `efbdba4c0925b110c18c8d6cdd4fd56f24390169241dab116b2c36d494f67590`, built with
 Electron 43.2.0. Extraction showed BetterFingers identity, one backend sidecar,
@@ -243,8 +246,8 @@ selection/model-load gates remain open.
 
 - Build both Windows and Linux artifacts from one release tag and record exact
   installer, unpacked-payload, and sidecar sizes.
-- Reconcile release identity before building: current identity is
-  `v0.2.0-alpha.1` / `com.betterfingers.desktop`; regenerate lock-faithful
+- Reconcile release identity before building: current identity is now
+  `v1.1.0-alpha.1` / `com.betterfingers.desktop`; regenerate lock-faithful
   package provenance before release. A generated sidecar has existed in local
   build output, but final sidecar/payload provenance remains unqualified.
 - Create a clean, lock-faithful per-platform Python build environment; do not
