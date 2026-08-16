@@ -14,6 +14,8 @@ import {
   createInitialState,
   setText,
   setContextText,
+  setAllowClarifyingQuestion,
+  setClarificationAnswer,
   setPersona,
   setSelectedVariant,
   setSelectedDraftId,
@@ -27,6 +29,8 @@ import {
   computeStatusLine,
   buildRanInfoText,
   computeFallbackNotice,
+  clarificationGatePassed,
+  buildClarificationGateText,
   buildPersonaOptions,
   buildPersonaOptionsHtml,
   buildDraftOptions,
@@ -48,6 +52,8 @@ test('createInitialState: idle, empty, nothing has run yet', () => {
   assert.equal(state.status, 'idle');
   assert.equal(state.text, '');
   assert.equal(state.contextText, '');
+  assert.equal(state.allowClarifyingQuestion, false);
+  assert.equal(state.clarificationOpen, false);
   assert.equal(state.persona, '');
   assert.equal(state.result, null);
   assert.equal(state.ranPersona, null);
@@ -92,8 +98,8 @@ test('beginRequest: bumps requestId, snapshots persona/model/context-usage, clea
   assert.equal(started.ranPersona, 'friendly');
   assert.equal(started.ranModelId, 'gemma-4');
   assert.equal(started.ranUsedContext, true);
-  // Context text itself is untouched until receiveResult -- the DOM layer
-  // still needs it to actually send the capture call.
+  // Context stays editable throughout; the DOM layer still needs this value
+  // to create a fresh one-use server capture for each run.
   assert.equal(started.contextText, 'they asked about the deadline');
 });
 
@@ -133,7 +139,7 @@ test('receiveResult: a response after a local cancel is ignored (soft cancel)', 
   assert.equal(after.result, null);
 });
 
-test('receiveResult: done outcome stores the result, resets to the faithful variant, clears context', () => {
+test('receiveResult: done outcome stores the result, resets to faithful, and keeps editable context', () => {
   let state = beginRequest(setText(setContextText(createInitialState(), 'ctx'), 'hi'), { modelId: 'm' });
   state.selectedVariant = 'alternate';
   const result = { variants: { faithful: 'a', clearer: 'b', alternate: 'c' } };
@@ -142,7 +148,7 @@ test('receiveResult: done outcome stores the result, resets to the faithful vari
   assert.equal(after.status, 'done');
   assert.equal(after.result, result);
   assert.equal(after.selectedVariant, 'faithful');
-  assert.equal(after.contextText, '', 'context is one-time-use and must not linger after a request completes');
+  assert.equal(after.contextText, 'ctx', 'the backend consumes one capture, but Scribe keeps the editable form for a rerun');
 });
 
 test('receiveResult: timeout/cancelled/error outcomes map to the matching status', () => {
@@ -222,6 +228,43 @@ test('computeFallbackNotice: fires when only faithful came back (the safety-net 
   assert.match(notice, /faithful-only/);
 });
 
+test('computeFallbackNotice: identifies the safe failure category when the backend supplies it', () => {
+  let state = beginRequest(setText(createInitialState(), 'hi'), {});
+  state = receiveResult(state, {
+    requestId: state.requestId,
+    outcome: {
+      kind: 'done',
+      result: {
+        variants: { faithful: 'hi', clearer: '', alternate: '' },
+        warnings: ['clearer variant dropped: failed preservation checks'],
+        preservation_checks: [
+          { name: 'clearer/names', passed: false },
+          { name: 'alternate/modality', passed: false },
+        ],
+      },
+    },
+  });
+  assert.match(computeFallbackNotice(state), /required names, modality preservation checks/);
+
+  state.result.warnings = ['model output was not valid JSON'];
+  state.result.preservation_checks = [];
+  assert.match(computeFallbackNotice(state), /response was not valid JSON/);
+});
+
+test('clarification gate requires an explicit backend pass, a question, and missing details', () => {
+  const result = {
+    assessment: {
+      clarification_question: 'Which Friday?',
+      missing_details: ['which Friday'],
+      clarification_gate: { passed: true, confidence: 0.91, threshold: 0.75 },
+    },
+  };
+  assert.equal(clarificationGatePassed(result), true);
+  assert.equal(buildClarificationGateText(result), 'Confidence gate passed: 91% (minimum 75%). A best-effort rewrite is already available.');
+  assert.equal(clarificationGatePassed({ assessment: { ...result.assessment, clarification_gate: { passed: false } } }), false);
+  assert.equal(clarificationGatePassed({ assessment: { ...result.assessment, missing_details: [] } }), false);
+});
+
 // --- persona / draft option builders (XSS + shape) -----------------------------
 
 test('buildPersonaOptions: always includes a "no persona" default first, sorted names after', () => {
@@ -264,16 +307,15 @@ test('buildDraftOptionsHtml: escapes raw draft text (XSS-shaped content is dicta
 
 // --- side-by-side comparison columns --------------------------------------------
 
-test('buildComparisonColumns: before anything has run, only "raw" reflects live typed text', () => {
+test('buildComparisonColumns: normal workflow exposes exactly three centrally labelled outputs', () => {
   const state = setText(createInitialState(), 'still typing');
   const columns = buildComparisonColumns(state);
-  assert.deepEqual(columns.map((c) => c.key), ['raw', 'faithful', 'clearer', 'alternate']);
-  // ranText is only snapshotted by beginRequest, not by every keystroke.
-  assert.equal(columns[0].available, false);
-  assert.equal(columns[1].available, false);
+  assert.deepEqual(columns.map((c) => c.key), ['faithful', 'clearer', 'alternate']);
+  assert.deepEqual(columns.map((c) => c.label), ['Base', 'Alternative one', 'Alternative two']);
+  assert.ok(columns.every((column) => column.available === false));
 });
 
-test('buildComparisonColumns: after a run, raw is the submitted text and unavailable variants are flagged', () => {
+test('buildComparisonColumns: after a run unavailable variants are flagged', () => {
   let state = beginRequest(setText(createInitialState(), 'original message'), {});
   state = receiveResult(state, {
     requestId: state.requestId,
@@ -281,21 +323,18 @@ test('buildComparisonColumns: after a run, raw is the submitted text and unavail
   });
   const columns = buildComparisonColumns(state);
   const byKey = Object.fromEntries(columns.map((c) => [c.key, c]));
-  assert.equal(byKey.raw.text, 'original message');
-  assert.equal(byKey.raw.available, true);
   assert.equal(byKey.faithful.available, true);
   assert.equal(byKey.clearer.available, false);
   assert.equal(byKey.alternate.available, true);
   assert.equal(byKey.faithful.selected, true, 'faithful is selected by default after a done result');
 });
 
-test('buildComparisonColumns: raw stays selectable even when the model produced nothing usable', () => {
+test('buildComparisonColumns: no fourth/raw mode appears after a timeout', () => {
   let state = beginRequest(setText(createInitialState(), 'keep my words'), {});
-  state = setSelectedVariant(state, 'raw');
   state = receiveResult(state, { requestId: state.requestId, outcome: { kind: 'timeout' } });
-  // selectedVariant persists through a non-done outcome (state isn't reset).
   const columns = buildComparisonColumns(state);
-  assert.equal(columns.find((c) => c.key === 'raw').selected, true);
+  assert.equal(columns.length, 3);
+  assert.equal(columns.some((c) => c.key === 'raw'), false);
 });
 
 // --- composite view model -------------------------------------------------------
@@ -389,6 +428,12 @@ function makeStubElements() {
     clarification: makeStubElement(),
     clarificationQuestion: makeStubElement(),
     clarificationDetails: makeStubElement(),
+    clarificationYesButton: makeStubElement(),
+    clarificationNoButton: makeStubElement(),
+    clarificationAnswer: makeStubElement(),
+    clarificationGateStatus: makeStubElement(),
+    clarificationSubmitButton: makeStubElement(),
+    clarificationDismissButton: makeStubElement(),
     columns: {
       raw: { text: makeStubElement(), button: makeStubElement() },
       faithful: { text: makeStubElement(), button: makeStubElement() },
@@ -434,7 +479,7 @@ test('renderTextPlayground: error state shows the error banner with the message'
   assert.equal(elements.error.textContent, 'local LLM call timed out');
 });
 
-test('renderTextPlayground: comparison columns are written via textContent (no HTML sink), one per key, raw included', () => {
+test('renderTextPlayground: three comparison columns are written via textContent (no HTML sink)', () => {
   const elements = makeStubElements();
   let state = beginRequest(setText(createInitialState(), 'hi there'), {});
   state = receiveResult(state, {
@@ -443,7 +488,7 @@ test('renderTextPlayground: comparison columns are written via textContent (no H
   });
   renderTextPlayground(elements, buildTextPlaygroundModel(state, {}));
 
-  assert.equal(elements.columns.raw.text.textContent, 'hi there');
+  assert.equal(elements.columns.raw.text.textContent, '', 'legacy raw test element is untouched');
   assert.equal(elements.columns.faithful.text.textContent, 'safe <b>text</b>');
   assert.equal(elements.columns.clearer.text.textContent, 'nicer');
   assert.equal(elements.columns.alternate.text.textContent, 'Not available.');
@@ -491,13 +536,51 @@ test('createTextPlaygroundFeature.run: happy path calls generate with transcript
   assert.equal(calls[0].transcript, 'please reschedule');
   assert.equal(calls[0].persona, 'friendly');
   assert.equal(calls[0].useContext, false);
+  assert.equal(calls[0].allowClarifyingQuestion, false);
   assert.equal(feature.getState().status, 'done');
   assert.equal(feature.getState().result.variants.faithful, 'reply text');
 });
 
+test('createTextPlaygroundFeature.run: long input pauses for a user batch choice before any model call', async () => {
+  const elements = makeStubElementsWithListeners();
+  let calls = 0;
+  const feature = createTextPlaygroundFeature({
+    elements,
+    api: makeFakeApi({ generate: async () => { calls += 1; return { status: 'done', result: {} }; } }),
+  });
+  feature.wire();
+  elements.text.value = Array.from({ length: 501 }, () => 'word').join(' ');
+  elements.text._listeners.input();
+  await feature.run();
+  assert.equal(calls, 0);
+  assert.equal(feature.getState().batchChoiceOpen, true);
+});
+
+test('createTextPlaygroundFeature.run: chosen batching processes sequentially and assembles in order', async () => {
+  const elements = makeStubElementsWithListeners();
+  const calls = [];
+  const api = makeFakeApi({
+    generate: async ({ transcript }) => {
+      calls.push(transcript);
+      return { status: 'done', result: { variants: { faithful: `OUT-${calls.length}`, clearer: `C-${calls.length}`, alternate: `A-${calls.length}` }, preservation_checks: [] } };
+    },
+  });
+  const feature = createTextPlaygroundFeature({ elements, api, storage: { setItem() {} } });
+  feature.wire();
+  elements.text.value = Array.from({ length: 530 }, (_, index) => `word${index}`).join(' ');
+  elements.text._listeners.input();
+  await feature.run({ batchMode: '250' });
+  assert.equal(calls.length, 3);
+  assert.equal(feature.getState().result.variants.faithful, 'OUT-1\n\nOUT-2\n\nOUT-3');
+  assert.equal(feature.getState().batchOperation.state, 'completed');
+});
+
 function makeStubElementsWithListeners() {
   const elements = makeStubElements();
-  for (const key of ['text', 'context', 'personaSelect', 'draftSelect', 'runButton', 'cancelButton', 'clearButton', 'applyButton', 'copyButton']) {
+  for (const key of [
+    'text', 'context', 'personaSelect', 'draftSelect', 'runButton', 'cancelButton', 'clearButton', 'applyButton', 'copyButton',
+    'clarificationYesButton', 'clarificationNoButton', 'clarificationAnswer', 'clarificationSubmitButton', 'clarificationDismissButton',
+  ]) {
     elements[key]._listeners = {};
     elements[key].addEventListener = function (evt, fn) {
       this._listeners[evt] = fn;
@@ -513,7 +596,7 @@ function makeStubElementsWithListeners() {
   return elements;
 }
 
-test('createTextPlaygroundFeature.run: non-empty context is captured then consumed (useContext=true)', async () => {
+test('createTextPlaygroundFeature.run: context is captured for one backend use but stays editable after the result', async () => {
   const elements = makeStubElementsWithListeners();
   const captured = [];
   const generateArgs = [];
@@ -538,8 +621,84 @@ test('createTextPlaygroundFeature.run: non-empty context is captured then consum
   await feature.run();
   assert.deepEqual(captured, ['they asked about tomorrow']);
   assert.equal(generateArgs[0].useContext, true);
-  // Context is one-time-use: gone from state once the request completes.
-  assert.equal(feature.getState().contextText, '');
+  assert.equal(feature.getState().contextText, 'they asked about tomorrow');
+  assert.equal(elements.context.value, 'they asked about tomorrow');
+});
+
+test('createTextPlaygroundFeature: gated clarification opens after best effort and an answer reruns as context', async () => {
+  const elements = makeStubElementsWithListeners();
+  const generateArgs = [];
+  const captured = [];
+  const firstResult = {
+    assessment: {
+      intent: 'schedule a meeting',
+      ambiguity_risk: 'high',
+      missing_details: ['which day'],
+      clarification_question: 'Which day should I use?',
+      clarification_confidence: 0.92,
+      clarification_gate: { passed: true, reason: 'passed', confidence: 0.92, threshold: 0.75 },
+    },
+    variants: { faithful: 'Can we meet?', clearer: 'Can we schedule a meeting?', alternate: '' },
+  };
+  const api = makeFakeApi({
+    captureManualContext: async (text) => { captured.push(text); return { active: true }; },
+    generate: async (args) => {
+      generateArgs.push(args);
+      return generateArgs.length === 1
+        ? { id: 'j1', status: 'done', result: firstResult }
+        : { id: 'j2', status: 'done', result: { variants: { faithful: 'Can we meet Tuesday?' } } };
+    },
+  });
+  const feature = createTextPlaygroundFeature({ elements, api });
+  feature.wire();
+
+  elements.clarificationYesButton._listeners.click();
+  elements.text.value = 'Can we meet?';
+  elements.text._listeners.input();
+  await feature.run();
+
+  assert.equal(generateArgs[0].allowClarifyingQuestion, true);
+  assert.equal(feature.getState().result.variants.faithful, 'Can we meet?', 'best effort exists before the question');
+  assert.equal(feature.getState().clarificationOpen, true);
+  assert.equal(elements.clarification.hidden, false);
+  assert.match(elements.clarificationGateStatus.textContent, /92%.*75%/);
+
+  elements.clarificationAnswer.value = 'Tuesday';
+  elements.clarificationAnswer._listeners.input();
+  assert.equal(elements.clarificationSubmitButton.disabled, false);
+  await feature.submitClarification();
+
+  assert.equal(generateArgs[1].allowClarifyingQuestion, false, 'one answer cannot recursively open another popup');
+  assert.equal(generateArgs[1].useContext, true);
+  assert.match(captured[0], /Which day should I use\?/);
+  assert.match(captured[0], /Answer: Tuesday/);
+  assert.match(feature.getState().contextText, /Answer: Tuesday/);
+  assert.equal(feature.getState().clarificationOpen, false);
+  assert.equal(feature.getState().result.variants.faithful, 'Can we meet Tuesday?');
+});
+
+test('createTextPlaygroundFeature: No permission suppresses a popup even for a malformed passed response', async () => {
+  const elements = makeStubElementsWithListeners();
+  const api = makeFakeApi({
+    generate: async () => ({
+      id: 'j', status: 'done', result: {
+        assessment: {
+          missing_details: ['which day'], clarification_question: 'Which day?',
+          clarification_gate: { passed: true, confidence: 1, threshold: 0.75 },
+        },
+        variants: { faithful: 'Best effort.' },
+      },
+    }),
+  });
+  const feature = createTextPlaygroundFeature({ elements, api });
+  feature.wire();
+  elements.text.value = 'Meet?';
+  elements.text._listeners.input();
+  await feature.run();
+
+  assert.equal(feature.getState().clarificationOpen, false);
+  assert.equal(elements.clarification.hidden, true);
+  assert.equal(feature.getState().result.variants.faithful, 'Best effort.');
 });
 
 test('createTextPlaygroundFeature.run: a context-capture failure runs anyway without context (best-effort)', async () => {
@@ -842,6 +1001,9 @@ test('defaultApi surface exposed to the DOM layer has no audio/TTS/send methods'
   const methodNames = Object.keys(feature);
   assert.deepEqual(
     methodNames.sort(),
-    ['applyToDraft', 'cancel', 'clear', 'copy', 'getState', 'refreshDrafts', 'refreshPersonas', 'rerender', 'run', 'wire'].sort(),
+    [
+      'applyToDraft', 'cancel', 'clear', 'copy', 'dismissClarification', 'getState', 'refreshDrafts', 'refreshPersonas',
+      'rerender', 'retryBatch', 'run', 'setClarificationPermission', 'submitClarification', 'wire',
+    ].sort(),
   );
 });

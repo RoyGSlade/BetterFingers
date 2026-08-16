@@ -83,6 +83,7 @@ class GenerateRequest(BaseModel):
     signals: SpeechSignalsIn | None = None
     persona: str | None = Field(None, max_length=MAX_PERSONA_NAME_CHARS)
     use_context: bool = False
+    allow_clarifying_question: bool = False
 
 
 def _empty_context_status() -> dict[str, Any]:
@@ -199,6 +200,7 @@ def create_message_rescue_router(
                     persona=persona_obj,
                     examples=examples,
                     call_fn=guarded_call_fn,
+                    allow_clarifying_question=request.allow_clarifying_question,
                 ),
                 timeout=generate_timeout_s,
             )

@@ -34,6 +34,15 @@ test('Scribe has one dedicated workspace and one functional text playground surf
   assert.doesNotMatch(utilities, /id="textPlaygroundSection"/);
 });
 
+test('Scribe markup exposes exactly three normal output choices', () => {
+  const scribe = regionBetween(markup, 'id="workspace-scribe"', '<!-- ---------- LIBRARY workspace');
+  assert.equal((scribe.match(/class="sd-message-rescue-column"/g) || []).length, 3);
+  assert.match(scribe, />Base</);
+  assert.match(scribe, />Alternative one</);
+  assert.match(scribe, />Alternative two</);
+  assert.doesNotMatch(scribe, /textPlaygroundColumnRaw/);
+});
+
 test('Utilities exposes the retained-material and runtime destinations', () => {
   const utilitiesNav = regionBetween(markup, '<nav class="sd-util-nav"', '</nav>');
   for (const label of ['Library', 'History', 'Runtime Diagnostics', 'Game Mode']) {

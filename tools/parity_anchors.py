@@ -893,6 +893,15 @@ ROW_ANCHORS: dict[str, dict] = {
 # `intentional_cut` by parity_ledger_build.py.
 
 CUTS: dict[str, str] = {
+    'UI-06-075': (
+        'Intentional cut: the alpha Scribe comparison previously exposed four choices '
+        '(Raw / Faithful / Clearer / Alternate). The approved alpha contract exposes exactly '
+        'three normal results — Base, Alternative one, and Alternative two — through the '
+        'central `SCRIBE_OUTPUT_CHOICES` configuration in `features/textPlayground.js`. The raw '
+        'source remains in the input editor and preserved draft data, so removing '
+        '`#textPlaygroundColumnRawButton` removes a redundant fourth output choice without '
+        'discarding the user\'s original content.'
+    ),
     'UI-07-002': (
         'Intentional cut: the 14-button `.settings-nav-button` sidebar is replaced by the '
         'workspace split Signal Desk is built around. Its 14 categories now live behind three '

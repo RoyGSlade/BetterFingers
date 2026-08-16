@@ -52,6 +52,7 @@ VALID_MODEL_JSON = json.dumps(
             "ambiguity_risk": "low",
             "missing_details": [],
             "clarification_question": "",
+            "clarification_confidence": 0.0,
         },
         "variants": {
             "faithful": "hello world, see you tomorrow",
@@ -203,6 +204,37 @@ class GenerateRoutesTests(unittest.TestCase):
             fetched = client.get(f"/message-rescue/generate/{body['id']}")
             self.assertEqual(fetched.status_code, 200)
             self.assertEqual(fetched.json(), body)
+
+    def test_generate_clarification_requires_explicit_permission_and_confidence_gate(self):
+        model_json = json.dumps(
+            {
+                "assessment": {
+                    "intent": "schedule a meeting",
+                    "ambiguity_risk": "high",
+                    "missing_details": ["which day"],
+                    "clarification_question": "Which day should I use?",
+                    "clarification_confidence": 0.92,
+                },
+                "variants": {
+                    "faithful": "Can we meet?",
+                    "clearer": "Can we schedule a meeting?",
+                    "alternate": "Could we find a time to meet?",
+                },
+            }
+        )
+        app, _ = _build_app(call_fn=lambda _messages: model_json)
+        with TestClient(app) as client:
+            denied = client.post("/message-rescue/generate", json={"transcript": "Can we meet?"}).json()
+            allowed = client.post(
+                "/message-rescue/generate",
+                json={"transcript": "Can we meet?", "allow_clarifying_question": True},
+            ).json()
+
+        self.assertEqual(denied["result"]["assessment"]["clarification_question"], "")
+        self.assertEqual(denied["result"]["assessment"]["clarification_gate"]["reason"], "permission_denied")
+        self.assertEqual(allowed["result"]["assessment"]["clarification_question"], "Which day should I use?")
+        self.assertTrue(allowed["result"]["assessment"]["clarification_gate"]["passed"])
+        self.assertEqual(allowed["result"]["variants"]["faithful"], "Can we meet?")
 
     def test_generate_empty_transcript_rejected_by_schema(self):
         app, _ = _build_app()

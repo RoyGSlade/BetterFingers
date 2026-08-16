@@ -13,6 +13,8 @@ import assert from 'node:assert/strict';
 import {
   MAX_BLEND_LAYERS,
   normalizeBlendForSend,
+  normalizeCustomVoiceSources,
+  buildCustomVoicePayload,
   resolveAvailableVoiceId,
   filterAvailableBlendLayers,
   computeEffectiveMix,
@@ -50,6 +52,33 @@ test('normalizeBlendForSend: clamps weight to [0,1]', () => {
 test('normalizeBlendForSend: empty/all-dropped input is null, not {}', () => {
   assert.equal(normalizeBlendForSend([]), null);
   assert.equal(normalizeBlendForSend([{ voiceId: '', weight: 0.5 }]), null);
+});
+
+test('custom voice accepts one to four unique sources and normalizes exactly to one', () => {
+  const sources = normalizeCustomVoiceSources('heart', [
+    { voiceId: 'bella', weight: 0.6 },
+    { voiceId: 'adam', weight: 0.3 },
+    { voiceId: 'george', weight: 0.1 },
+  ], ['heart', 'bella', 'adam', 'george']);
+  assert.equal(sources.length, 4);
+  assert.equal(sources.reduce((sum, source) => sum + source.weight, 0), 1);
+  assert.throws(() => normalizeCustomVoiceSources('heart', [{ voiceId: 'heart', weight: 1 }]), /more than once/);
+  assert.throws(() => normalizeCustomVoiceSources('heart', [
+    { voiceId: 'a', weight: 1 }, { voiceId: 'b', weight: 1 },
+    { voiceId: 'c', weight: 1 }, { voiceId: 'd', weight: 1 },
+  ]), /at most four/);
+});
+
+test('custom voice payload stores only engine-supported modulation fields', () => {
+  const payload = buildCustomVoicePayload('Calm Narrator', {
+    base: 'heart', blendLayers: [{ voiceId: 'bella', weight: 0.5 }],
+    speed: 0.9, pitch: -1, energy: 0.4, warmth: 0.2, brightness: 0.1, pause_style: 'natural',
+    stability: 0.99, expressiveness: 0.8,
+  }, { availableIds: ['heart', 'bella'], sourcePresetId: 'quiet' });
+  assert.equal(payload.sources.length, 2);
+  assert.equal(payload.source_preset_id, 'quiet');
+  assert.equal('stability' in payload.modulation, false);
+  assert.equal('expressiveness' in payload.modulation, false);
 });
 
 // --- resolveAvailableVoiceId (unavailable/deleted voice fallback) -----------

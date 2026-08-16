@@ -44,6 +44,22 @@ class ModelManagerStatusTests(unittest.TestCase):
             self.assertTrue(model["filename"].endswith(".gguf"))
             self.assertGreater(model["size_mb"], 0)
 
+    def test_gemma_4_download_urls_pin_the_revision_matching_the_digest(self):
+        expected_revision = {
+            "gemma-4-e2b-q4": model_manager._GEMMA4_E2B_REVISION,
+            "gemma-4-e2b-q8": model_manager._GEMMA4_E2B_REVISION,
+            "gemma-4-e4b-q4": model_manager._GEMMA4_E4B_REVISION,
+            "gemma-4-e4b-q8": model_manager._GEMMA4_E4B_REVISION,
+            "gemma-4-12b-q4": model_manager._GEMMA4_12B_REVISION,
+            "gemma-4-12b-q8": model_manager._GEMMA4_12B_REVISION,
+        }
+        for model_id, revision in expected_revision.items():
+            model = model_manager.AVAILABLE_MODELS[model_id]
+            self.assertIn(f"/resolve/{revision}/", model["url"])
+            self.assertNotIn("/resolve/main/", model["url"])
+            self.assertRegex(model["sha256"], r"^[0-9a-f]{64}$")
+            self.assertGreater(model["size_bytes"], 0)
+
     def test_gemma_4_models_use_jinja_server_args(self):
         args = get_model_server_args("gemma-4-e4b-q4")
 

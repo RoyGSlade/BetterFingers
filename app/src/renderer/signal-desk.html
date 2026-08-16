@@ -22,6 +22,7 @@
 </style>
 </head>
 <body>
+  <aside class="sd-operation-center" id="sdOperationCenter" aria-label="Active operations" aria-live="polite" hidden></aside>
 
 <!--
   Toast mount point. Every Signal Desk workspace module already calls
@@ -1217,7 +1218,17 @@
           <div class="sd-util-group__header"><span class="sd-util-group__title">Scribe</span></div>
           <p class="sd-util-group__desc">Text-only — no mic, transcription, or TTS anywhere in this flow. Raw text and every safe variant stay available for comparison.</p>
           <textarea class="sd-util-input sd-util-input--wide" id="textPlaygroundText" rows="3" placeholder="Type or paste a rough message…"></textarea>
-          <input type="text" class="sd-util-input sd-util-input--wide" id="textPlaygroundContext" placeholder="Optional context (one-time use)…" />
+          <div class="sd-scribe-context-form">
+            <label class="sd-panel-label" for="textPlaygroundContext">Add or update context anytime</label>
+            <textarea class="sd-util-input sd-util-input--wide" id="textPlaygroundContext" rows="2"
+                      placeholder="Optional context — it stays here so you can refine the result after the first pass."></textarea>
+            <div class="sd-scribe-clarification-permission" role="group" aria-label="Can BetterFingers ask one clarifying question?">
+              <span class="sd-util-group__desc">Can BetterFingers ask one clarifying question when the confidence gate passes?</span>
+              <button type="button" class="sd-filter-chip" id="textPlaygroundClarificationYes" aria-pressed="false">Yes</button>
+              <button type="button" class="sd-filter-chip is-active" id="textPlaygroundClarificationNo" aria-pressed="true">No</button>
+            </div>
+            <p class="sd-util-group__desc">Best effort always runs first. A question is optional, local-only, and never blocks the reviewable variants.</p>
+          </div>
           <div class="sd-util-row">
             <select class="sd-util-select" id="textPlaygroundPersonaSelect"></select>
             <button type="button" class="sd-btn sd-btn--primary" id="textPlaygroundRunButton">Clean up message</button>
@@ -1228,6 +1239,27 @@
           <span class="sd-util-message" id="textPlaygroundError" data-tone="danger" hidden></span>
           <span class="sd-util-message" id="textPlaygroundRanInfo"></span>
           <span class="sd-util-message" id="textPlaygroundFallback" data-tone="warning" hidden></span>
+
+          <div class="sd-confirm" id="textPlaygroundBatchChoice" role="dialog" aria-modal="true"
+               aria-labelledby="textPlaygroundBatchChoiceTitle" hidden>
+            <div class="sd-confirm__card">
+              <h2 class="sd-confirm__title" id="textPlaygroundBatchChoiceTitle">This is a large amount of text</h2>
+              <p class="sd-confirm__body">BetterFingers can process it in smaller batches for greater reliability, or send it as one request.</p>
+              <div class="sd-confirm__actions sd-confirm__actions--stacked">
+                <button type="button" class="sd-btn" data-scribe-batch="250">250 words per batch</button>
+                <button type="button" class="sd-btn sd-btn--primary" data-scribe-batch="500">500 words per batch <span class="sd-badge">Recommended</span></button>
+                <button type="button" class="sd-btn" data-scribe-batch="full">Process as one request</button>
+              </div>
+            </div>
+          </div>
+          <div class="sd-scribe-progress" id="textPlaygroundBatchProgress" hidden>
+            <strong id="textPlaygroundBatchProgressTitle">Processing text</strong>
+            <span id="textPlaygroundBatchProgressDetail"></span>
+            <div class="sd-actions-row">
+              <button type="button" class="sd-btn" id="textPlaygroundBatchRetry" hidden>Retry failed chunk</button>
+              <button type="button" class="sd-btn" id="textPlaygroundBatchContinue" hidden>Continue</button>
+            </div>
+          </div>
 
           <div class="sd-message-rescue-block" id="textPlaygroundAssessment" hidden>
             <span class="sd-panel-label">Assessment</span>
@@ -1240,30 +1272,38 @@
             <span class="sd-util-message" id="textPlaygroundDeliveryConfidence"></span>
             <ul id="textPlaygroundDeliveryEvidence"></ul>
           </div>
-          <div class="sd-message-rescue-block" id="textPlaygroundClarification" hidden>
-            <span class="sd-panel-label">Clarification</span>
-            <p class="draft-text" id="textPlaygroundClarificationQuestion"></p>
-            <ul id="textPlaygroundClarificationDetails"></ul>
+          <div class="sd-confirm sd-scribe-clarification" id="textPlaygroundClarification" role="dialog" aria-modal="true"
+               aria-labelledby="textPlaygroundClarificationTitle" aria-describedby="textPlaygroundClarificationQuestion" hidden>
+            <div class="sd-confirm__card">
+              <h2 class="sd-confirm__title" id="textPlaygroundClarificationTitle">BetterFingers has one question</h2>
+              <p class="sd-confirm__body" id="textPlaygroundClarificationGateStatus"></p>
+              <p class="draft-text sd-scribe-clarification__question" id="textPlaygroundClarificationQuestion"></p>
+              <ul class="sd-confirm__list" id="textPlaygroundClarificationDetails"></ul>
+              <label class="sd-scribe-clarification__answer">
+                <span class="sd-panel-label">Your answer</span>
+                <textarea class="sd-util-input sd-util-input--wide" id="textPlaygroundClarificationAnswer" rows="3"
+                          placeholder="Add the missing detail…"></textarea>
+              </label>
+              <div class="sd-confirm__actions">
+                <button type="button" class="sd-btn" id="textPlaygroundClarificationDismiss">Not now</button>
+                <button type="button" class="sd-btn sd-btn--primary" id="textPlaygroundClarificationSubmit">Use answer and run again</button>
+              </div>
+            </div>
           </div>
 
           <div class="sd-message-rescue-columns">
             <div class="sd-message-rescue-column">
-              <span class="sd-message-rescue-column__label">Raw</span>
-              <p class="draft-text" id="textPlaygroundColumnRawText"></p>
-              <button type="button" class="sd-btn" id="textPlaygroundColumnRawButton">Use this</button>
-            </div>
-            <div class="sd-message-rescue-column">
-              <span class="sd-message-rescue-column__label">Faithful</span>
+              <span class="sd-message-rescue-column__label">Base</span>
               <p class="draft-text" id="textPlaygroundColumnFaithfulText"></p>
               <button type="button" class="sd-btn" id="textPlaygroundColumnFaithfulButton">Use this</button>
             </div>
             <div class="sd-message-rescue-column">
-              <span class="sd-message-rescue-column__label">Clearer</span>
+              <span class="sd-message-rescue-column__label">Alternative one</span>
               <p class="draft-text" id="textPlaygroundColumnClearerText"></p>
               <button type="button" class="sd-btn" id="textPlaygroundColumnClearerButton">Use this</button>
             </div>
             <div class="sd-message-rescue-column">
-              <span class="sd-message-rescue-column__label">Alternate</span>
+              <span class="sd-message-rescue-column__label">Alternative two</span>
               <p class="draft-text" id="textPlaygroundColumnAlternateText"></p>
               <button type="button" class="sd-btn" id="textPlaygroundColumnAlternateButton">Use this</button>
             </div>
@@ -1398,6 +1438,15 @@
 
     <!-- ---------- STUDIO workspace ---------- -->
     <section class="sd-workspace" id="workspace-studio" data-workspace="studio" hidden>
+      <section class="sd-studio-active-config" aria-labelledby="sdStudioActiveConfigTitle">
+        <div>
+          <span class="sd-panel-label" id="sdStudioActiveConfigTitle">Active Configuration</span>
+          <p>Voice: <strong id="sdStudioActiveVoice">Loading…</strong></p>
+          <p>Persona: <strong id="sdStudioActivePersona">Loading…</strong></p>
+          <p>Writing preset: <strong id="sdStudioActiveWritingPreset">Default</strong></p>
+        </div>
+        <p class="sd-studio-active-config__hint">Voice shapes playback. Persona shapes rewrites. Test changes below before confirming them.</p>
+      </section>
       <div class="sd-studio-grid">
 
         <!-- LEFT: PERSONAS -->
@@ -1437,6 +1486,7 @@
                 <div class="sd-studio-detail-card__menu-wrap">
                   <button type="button" class="sd-icon-btn" id="sdPersonaMenuButton" aria-label="More persona actions">&#8942;</button>
                   <div class="sd-persona-menu" id="sdPersonaMenu" hidden>
+                    <button type="button" class="sd-persona-menu__item" id="sdPersonaRenameButton">Rename Persona</button>
                     <button type="button" class="sd-persona-menu__item" id="sdPersonaDeleteButton">Delete Persona</button>
                   </div>
                 </div>
@@ -1444,6 +1494,50 @@
             </div>
 
             <p class="sd-studio-detail-card__description" id="sdPersonaDescription"></p>
+
+            <section class="sd-structured-persona" id="sdStructuredPersonaEditor" hidden>
+              <div class="sd-util-group__header">
+                <span class="sd-panel-label">Structured Persona Draft</span>
+                <span class="sd-badge" id="sdPersonaStructuredDraftState">Confirmed</span>
+              </div>
+              <p class="sd-util-group__desc">Changes stay in a separate draft until Confirm. Critical meaning locks are always enforced by the engine.</p>
+              <div class="sd-util-grid-2">
+                <label class="sd-structured-persona__field">Display name <input id="sdPersonaFieldDisplayName" class="sd-util-input" required /></label>
+                <label class="sd-structured-persona__field">Description <input id="sdPersonaFieldDescription" class="sd-util-input" required /></label>
+                <label class="sd-structured-persona__field">Persona kind <select id="sdPersonaFieldKind" class="sd-util-select"><option value="voice_filter">Voice filter</option><option value="character_filter">Character filter</option><option value="narrator">Narrator</option><option value="mentor">Mentor</option></select></label>
+                <label class="sd-structured-persona__field">Language <input id="sdPersonaFieldLanguage" class="sd-util-input" value="en-US" required /></label>
+                <label class="sd-structured-persona__field">Cleanup strength <input id="sdPersonaFieldCleanup" type="range" min="0" max="4" /></label>
+                <label class="sd-structured-persona__field">Persona strength <input id="sdPersonaFieldStrength" type="range" min="0" max="4" /></label>
+                <label class="sd-structured-persona__field">Source voice retention <input id="sdPersonaFieldRetention" type="range" min="0" max="4" /></label>
+                <label class="sd-structured-persona__field">Target length <select id="sdPersonaFieldTargetLength" class="sd-util-select"><option value="shorter">Shorter</option><option value="similar">Similar</option><option value="longer">Longer</option><option value="concise">Concise</option></select></label>
+                <label class="sd-structured-persona__field">Formality <input id="sdPersonaFieldFormality" type="range" min="0" max="4" /></label>
+                <label class="sd-structured-persona__field">Directness <input id="sdPersonaFieldDirectness" type="range" min="0" max="4" /></label>
+                <label class="sd-structured-persona__field">Warmth <input id="sdPersonaFieldWarmth" type="range" min="0" max="4" /></label>
+                <label class="sd-structured-persona__field">Humor <input id="sdPersonaFieldHumor" type="range" min="0" max="4" /></label>
+                <label class="sd-structured-persona__field">Vocabulary complexity <input id="sdPersonaFieldVocabulary" type="range" min="0" max="4" /></label>
+                <label class="sd-structured-persona__field">Sentence length <select id="sdPersonaFieldSentenceLength" class="sd-util-select"><option value="short">Short</option><option value="short_to_medium">Short to medium</option><option value="medium">Medium</option><option value="medium_to_long">Medium to long</option><option value="long">Long</option></select></label>
+              </div>
+              <label class="sd-structured-persona__field">Core impression <textarea id="sdPersonaFieldCoreImpression" class="sd-util-input" rows="2" placeholder="One item per line" required></textarea></label>
+              <label class="sd-structured-persona__field">Speaking habits <textarea id="sdPersonaFieldSpeakingHabits" class="sd-util-input" rows="3" placeholder="One observable behavior per line" required></textarea></label>
+              <button type="button" class="sd-link-btn" id="sdPersonaSpeakingHabitsAssist">AI Assist for speaking habits</button>
+              <label class="sd-structured-persona__field">Forbidden behaviors <textarea id="sdPersonaFieldForbidden" class="sd-util-input" rows="3" placeholder="One behavior per line" required></textarea></label>
+              <details id="sdPersonaLegacyMigration">
+                <summary>Legacy prompt and migration review</summary>
+                <p id="sdPersonaMigrationStatus"></p>
+                <pre id="sdPersonaLegacyPrompt"></pre>
+              </details>
+              <div class="sd-actions-row">
+                <button type="button" class="sd-btn" id="sdPersonaSaveDraftButton">Save Draft</button>
+                <button type="button" class="sd-btn" id="sdPersonaDiscardDraftButton">Discard Draft</button>
+                <button type="button" class="sd-btn sd-btn--primary" id="sdPersonaConfirmDraftButton">Confirm Changes</button>
+              </div>
+              <div class="sd-structured-persona__test">
+                <label class="sd-structured-persona__field">Test text <textarea id="sdPersonaStructuredTestText" class="sd-util-input" rows="2"></textarea></label>
+                <button type="button" class="sd-btn" id="sdPersonaStructuredTestButton">Generate Preview</button>
+                <div id="sdPersonaAttemptHistory" aria-live="polite"></div>
+              </div>
+              <p class="sd-util-message" id="sdPersonaEditorMessage"></p>
+            </section>
 
             <div class="sd-rewrites-panel" hidden>
               <span class="sd-panel-label">Example Rewrites <span class="sd-help" aria-hidden="true">?</span></span>
@@ -1477,7 +1571,7 @@
 
             <div class="sd-stress-results" id="sdStressTestResults"></div>
 
-            <div class="sd-studio-actions-row">
+            <div class="sd-studio-actions-row" id="sdDeprecatedPersonaActions">
               <button type="button" class="sd-btn" id="sdTestPersonaButton">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="10" x2="4" y2="14"></line><line x1="8" y1="6" x2="8" y2="18"></line><line x1="12" y1="3" x2="12" y2="21"></line><line x1="16" y1="7" x2="16" y2="17"></line></svg>
                 Test Persona
@@ -1540,7 +1634,7 @@
           </div>
 
           <!-- VOICE & DELIVERY blend strip -->
-          <div class="sd-voice-delivery-strip">
+          <div class="sd-voice-delivery-strip" id="sdDeprecatedVoiceDelivery">
             <span class="sd-panel-label">Voice &amp; Delivery <span class="sd-help" aria-hidden="true">?</span></span>
             <p class="sd-voice-delivery-strip__desc">Blend shapes how your persona sounds across every message.</p>
             <div class="sd-voice-blend-cards" id="sdVoiceBlendCards">
@@ -1588,7 +1682,23 @@
           <div class="sd-voice-studio">
 
             <section class="sd-voice-studio__group">
-              <span class="sd-panel-label">Read-aloud voice</span>
+              <span class="sd-panel-label">Voice Editor</span>
+              <div class="sd-voice-studio__row">
+                <label class="sd-voice-studio__label" for="studioActiveVoiceSelect">Voice</label>
+                <select class="sd-review-select" id="studioActiveVoiceSelect"></select>
+                <button type="button" class="sd-btn sd-btn--primary" id="createCustomVoiceButton">Create Custom Voice</button>
+              </div>
+              <p class="sd-voice-studio__hint">Built-in and completed custom voices appear in one list. Advanced controls open only while creating or editing a custom voice.</p>
+            </section>
+
+            <div id="customVoiceWorkflow" hidden>
+              <div class="sd-util-group__header">
+                <span class="sd-panel-label">Custom Voice Builder</span>
+                <button type="button" class="sd-icon-btn" id="closeCustomVoiceButton" aria-label="Close custom voice builder">×</button>
+              </div>
+
+            <section class="sd-voice-studio__group">
+              <span class="sd-panel-label">Step 1 · Source voices</span>
               <!--
                 Wave 12A, product-owner finding (3): "the user cannot SEE which
                 voice is selected". The <select> below has always KNOWN, but a
@@ -1620,7 +1730,7 @@
             </section>
 
             <section class="sd-voice-studio__group">
-              <span class="sd-panel-label">Blend</span>
+              <span class="sd-panel-label">Step 2 · Blend weights</span>
               <div id="voiceBlendRows"></div>
               <div class="sd-voice-studio__row">
                 <button type="button" class="sd-btn" id="addVoiceLayerButton">Add layer</button>
@@ -1647,7 +1757,7 @@
             </section>
 
             <section class="sd-voice-studio__group">
-              <span class="sd-panel-label">Modulation</span>
+              <span class="sd-panel-label">Step 3 · Preset and modulation</span>
               <!--
                 RANGES ARE PART OF THE CONTRACT, not cosmetic. Energy/warmth/
                 brightness are 0..1 floats everywhere else in the stack:
@@ -1734,18 +1844,20 @@
             </section>
 
             <section class="sd-voice-studio__group">
-              <span class="sd-panel-label">Presets</span>
+              <span class="sd-panel-label">Step 4 · Name and confirm</span>
               <div class="sd-voice-studio__row">
                 <label class="sd-visually-hidden" for="voicePresetSelect">Apply preset</label>
                 <select class="sd-review-select" id="voicePresetSelect"></select>
                 <label class="sd-visually-hidden" for="voicePresetNameInput">New preset name</label>
                 <input class="sd-review-select" type="text" id="voicePresetNameInput" placeholder="Save current as…" />
-                <button type="button" class="sd-btn" id="saveVoicePresetButton">Save preset</button>
+                <button type="button" class="sd-btn sd-btn--primary" id="saveVoicePresetButton">Confirm &amp; save custom voice</button>
               </div>
               <div id="voicePresetList" class="sd-voice-studio__preset-list"></div>
             </section>
 
-            <section class="sd-voice-studio__group sd-voice-studio__group--gated">
+            </div>
+
+            <section class="sd-voice-studio__group sd-voice-studio__group--gated" id="voiceCloneGroup">
               <span class="sd-panel-label">Clone a voice</span>
               <!--
                 Last, and visually set apart, because it is the only
@@ -1796,7 +1908,7 @@
 
           <!-- ============================== MODELS (inventory §8) ============================== -->
           <section class="sd-util-section" id="sdUtilSectionModels">
-            <p class="sd-util-section__intro">LLM, Whisper, wake-word backbones, runtime memory, and voice cloning.</p>
+            <p class="sd-util-section__intro">LLM, Whisper, and runtime memory.</p>
 
             <div class="sd-util-group">
               <div class="sd-util-group__header">
@@ -1848,7 +1960,7 @@
             </div>
 
             <div class="sd-util-grid-2">
-              <div class="sd-util-group">
+              <div class="sd-util-group" id="sdUtilWakeBackboneGroup">
                 <div class="sd-util-group__header">
                   <span class="sd-util-group__title">Wake Word Engine</span>
                   <span class="sd-badge" id="sdUtilWakeEngineBadge">Unknown</span>
@@ -1880,7 +1992,7 @@
 
           <!-- ============================== SPEECH INPUT (audio device + hotkeys + wake word: §7.7/§7.3/§7.8) ============================== -->
           <section class="sd-util-section" id="sdUtilSectionSpeech" hidden>
-            <p class="sd-util-section__intro">Audio device, hotkeys, and wake word.</p>
+            <p class="sd-util-section__intro">Audio device and hotkeys.</p>
 
             <div class="sd-util-group">
               <div class="sd-util-group__header"><span class="sd-util-group__title">Audio Device</span></div>
@@ -1970,7 +2082,7 @@
               <span class="sd-util-message" id="sdUtilHotkeyMessage"></span>
             </div>
 
-            <div class="sd-util-group">
+            <div class="sd-util-group" id="sdUtilWakeSettingsGroup">
               <div class="sd-util-group__header">
                 <span class="sd-util-group__title">Wake Word</span>
                 <label class="sd-util-row__control"><input type="checkbox" class="sd-util-checkbox" id="sdUtilWakeEnabledToggle" /> Enabled</label>
@@ -3523,7 +3635,7 @@
         <div class="sd-context__section">
           <span class="sd-context__section-label">Section</span>
           <span class="sd-context__description" id="sdUtilCtxSectionLabel">Models</span>
-          <span class="sd-context__description" id="sdUtilCtxSectionDesc">LLM, Whisper, wake-word backbones, runtime memory, and voice cloning.</span>
+          <span class="sd-context__description" id="sdUtilCtxSectionDesc">LLM, Whisper, and runtime memory.</span>
         </div>
 
         <div class="sd-context__section">

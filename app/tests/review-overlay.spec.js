@@ -68,11 +68,19 @@ test.describe('BetterFingers Review Overlay Tests', () => {
     );
     expect(result.ok).toBe(true);
 
-    // Wait for review window to open
-    reviewWindow = await app.waitForEvent('window', {
-      predicate: (w) => w.url().includes('review-overlay.html'),
-      timeout: 10000,
-    });
+    // The backend response and its WebSocket broadcast race: on a fast local
+    // run the review window can be created before backendRequest resolves and
+    // before this listener is attached. Reuse an already-created window first,
+    // just as the production-window setup above does, then wait only when the
+    // window truly has not appeared yet.
+    const isReviewWindow = (candidate) => candidate.url().includes('review-overlay.html');
+    reviewWindow = app.windows().find(isReviewWindow);
+    if (!reviewWindow) {
+      reviewWindow = await app.waitForEvent('window', {
+        predicate: isReviewWindow,
+        timeout: 10000,
+      });
+    }
 
     await reviewWindow.waitForLoadState('domcontentloaded');
 

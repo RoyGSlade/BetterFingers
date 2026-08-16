@@ -24,11 +24,22 @@ import requests
 from utils import get_user_data_path
 
 # --- Constants ---
+#
+# Hugging Face model repositories are mutable. These revisions are the exact
+# commits whose LFS objects match the size and SHA-256 pins below. Using
+# ``resolve/main`` made an upstream chat-template metadata update change every
+# GGUF by a few KB, so BetterFingers correctly rejected the newly served bytes
+# after downloading several GB. Pin the URL and digest to the same immutable
+# artifact instead of weakening verification.
+_GEMMA4_E2B_REVISION = "739965d73654c0ead8020786aa998fc813070087"
+_GEMMA4_E4B_REVISION = "0720adb23527c2cd5ea01d1db067cd960327fdac"
+_GEMMA4_12B_REVISION = "d997c805aafe035a8024f961c6e1afd6b30d79a5"
+
 AVAILABLE_MODELS = {
     "gemma-4-e2b-q4": {
         "name": "Gemma 4 E2B (Q4_K_M)",
         "filename": "gemma-4-E2B-it-Q4_K_M.gguf",
-        "url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf",
+        "url": f"https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/{_GEMMA4_E2B_REVISION}/gemma-4-E2B-it-Q4_K_M.gguf",
         # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
         "sha256": "9378bc471710229ef165709b62e34bfb62231420ddaf6d729e727305b5b8672d",
         "size_bytes": 3106736256,
@@ -43,7 +54,7 @@ AVAILABLE_MODELS = {
     "gemma-4-e2b-q8": {
         "name": "Gemma 4 E2B (Q8_0)",
         "filename": "gemma-4-E2B-it-Q8_0.gguf",
-        "url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q8_0.gguf",
+        "url": f"https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/{_GEMMA4_E2B_REVISION}/gemma-4-E2B-it-Q8_0.gguf",
         # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
         "sha256": "0a8488b149e1f700712c35d5bf0a3795f9dcc2563b4944d5ef2fb89375f9483e",
         "size_bytes": 5048350848,
@@ -58,7 +69,7 @@ AVAILABLE_MODELS = {
     "gemma-4-e4b-q4": {
         "name": "Gemma 4 E4B (Q4_K_M)",
         "filename": "gemma-4-E4B-it-Q4_K_M.gguf",
-        "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
+        "url": f"https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/{_GEMMA4_E4B_REVISION}/gemma-4-E4B-it-Q4_K_M.gguf",
         # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
         "sha256": "519b9793ed6ce0ff530f1b7c96e848e08e49e7af4d57bb97f76215963a54146d",
         "size_bytes": 4977169568,
@@ -73,7 +84,7 @@ AVAILABLE_MODELS = {
     "gemma-4-e4b-q8": {
         "name": "Gemma 4 E4B (Q8_0)",
         "filename": "gemma-4-E4B-it-Q8_0.gguf",
-        "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q8_0.gguf",
+        "url": f"https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/{_GEMMA4_E4B_REVISION}/gemma-4-E4B-it-Q8_0.gguf",
         # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
         "sha256": "a2232a649523c36bf530f1dc3614eb8c800645c4227390381c8b05d4d6eee05a",
         "size_bytes": 8192951456,
@@ -88,7 +99,7 @@ AVAILABLE_MODELS = {
     "gemma-4-12b-q4": {
         "name": "Gemma 4 12B (Q4_K_M)",
         "filename": "gemma-4-12b-it-Q4_K_M.gguf",
-        "url": "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-Q4_K_M.gguf",
+        "url": f"https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/{_GEMMA4_12B_REVISION}/gemma-4-12b-it-Q4_K_M.gguf",
         # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
         "sha256": "43fec98c5102b1c446b4ddd0a9439f1db3a2e1f2e0b8cd143ce1ea619a9403d6",
         "size_bytes": 7121860000,
@@ -103,7 +114,7 @@ AVAILABLE_MODELS = {
     "gemma-4-12b-q8": {
         "name": "Gemma 4 12B (Q8_0)",
         "filename": "gemma-4-12b-it-Q8_0.gguf",
-        "url": "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-Q8_0.gguf",
+        "url": f"https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/{_GEMMA4_12B_REVISION}/gemma-4-12b-it-Q8_0.gguf",
         # Verified against Hugging Face LFS metadata (supply-chain gate, §11).
         "sha256": "74d2d4f0b5b08ca8589d1a5f50e689c0984469f3cedbdc7d67458c6e9e35496a",
         "size_bytes": 12669646240,

@@ -14,10 +14,10 @@
 // - Nothing is sent anywhere automatically; Apply/Copy are explicit user
 //   actions, and applying to a draft only ever overwrites that draft's
 //   final_text (server-side /drafts/:id/edit), never its raw_text.
-// - The optional context field is captured server-side only at Run time and
-//   is one-time-use (F2.5 ContextSession semantics); this module never
-//   re-sends or displays it back after a request completes, and Clear also
-//   asks the server to drop any lingering unconsumed context.
+// - The optional context field stays visible and editable so the user can add
+//   detail after a first pass. Each Run captures its current value into a new
+//   server-side, one-use context envelope (F2.5 ContextSession semantics);
+//   Clear removes both the local form value and any unconsumed server copy.
 // - No microphone, transcription, playback, or TTS call exists anywhere in
 //   this file (grep-verified in tests) -- `signals` is never populated,
 //   since there is no dictation in this flow.
@@ -35,6 +35,16 @@ import {
 import { formatMessageRescueViewModel, formatVariants } from './messageRescue.js';
 import { buildMessageRescuePanelModel, renderMessageRescuePanel, escapeHtml } from './messageRescuePanel.js';
 import { shouldAutowire } from '../lib/autowire.mjs';
+import {
+  assembleBatchResults,
+  cancelBatch,
+  createBatchOperation,
+  needsLongInputChoice,
+  recordBatchFailure,
+  recordBatchSuccess,
+  resumeBatch,
+  splitLongInput,
+} from './scribeBatching.js';
 
 const STATUS = {
   IDLE: 'idle',
@@ -51,6 +61,10 @@ export function createInitialState() {
   return {
     text: '',
     contextText: '',
+    allowClarifyingQuestion: false,
+    ranAllowedClarifyingQuestion: false,
+    clarificationOpen: false,
+    clarificationAnswer: '',
     persona: '',
     status: STATUS.IDLE,
     requestId: 0,
@@ -63,6 +77,9 @@ export function createInitialState() {
     selectedVariant: 'faithful', // 'raw' | 'faithful' | 'clearer' | 'alternate'
     selectedDraftId: '',
     applyMessage: '',
+    batchChoiceOpen: false,
+    batchPreference: '500',
+    batchOperation: null,
   };
 }
 
@@ -72,6 +89,18 @@ export function setText(state, text) {
 
 export function setContextText(state, contextText) {
   return { ...state, contextText: String(contextText ?? '') };
+}
+
+export function setAllowClarifyingQuestion(state, allowed) {
+  return { ...state, allowClarifyingQuestion: Boolean(allowed) };
+}
+
+export function setClarificationAnswer(state, answer) {
+  return { ...state, clarificationAnswer: String(answer ?? '') };
+}
+
+export function dismissClarification(state) {
+  return { ...state, clarificationOpen: false, clarificationAnswer: '' };
 }
 
 export function setPersona(state, persona) {
@@ -101,7 +130,7 @@ export function canCancel(state) {
 // Begins a new generation attempt: bumps requestId (a stale-response guard
 // for receiveResult), snapshots persona/model/context-usage for the "what
 // ran" display, and clears any prior result/error/apply feedback.
-export function beginRequest(state, { modelId = null } = {}) {
+export function beginRequest(state, { modelId = null, allowClarifyingQuestion = state.allowClarifyingQuestion } = {}) {
   const requestId = state.requestId + 1;
   return {
     ...state,
@@ -113,6 +142,9 @@ export function beginRequest(state, { modelId = null } = {}) {
     ranPersona: state.persona || null,
     ranModelId: modelId,
     ranUsedContext: state.contextText.trim().length > 0,
+    ranAllowedClarifyingQuestion: Boolean(allowClarifyingQuestion),
+    clarificationOpen: false,
+    clarificationAnswer: '',
     ranText: state.text,
   };
 }
@@ -134,16 +166,23 @@ export function receiveResult(state, { requestId, outcome }) {
   if (requestId !== state.requestId || state.status !== STATUS.BUSY) {
     return state; // superseded by a newer request, or already cancelled/cleared locally
   }
-  const cleared = { ...state, contextText: '' }; // context is one-time-use once a request is sent
   switch (outcome.kind) {
-    case 'done':
-      return { ...cleared, status: STATUS.DONE, result: outcome.result, selectedVariant: 'faithful' };
+    case 'done': {
+      const result = outcome.result || null;
+      return {
+        ...state,
+        status: STATUS.DONE,
+        result,
+        selectedVariant: 'faithful',
+        clarificationOpen: state.ranAllowedClarifyingQuestion && clarificationGatePassed(result),
+      };
+    }
     case 'timeout':
-      return { ...cleared, status: STATUS.TIMEOUT };
+      return { ...state, status: STATUS.TIMEOUT };
     case 'cancelled':
-      return { ...cleared, status: STATUS.CANCELLED };
+      return { ...state, status: STATUS.CANCELLED };
     default:
-      return { ...cleared, status: STATUS.ERROR, errorMessage: String(outcome.message || 'Request failed.') };
+      return { ...state, status: STATUS.ERROR, errorMessage: String(outcome.message || 'Request failed.') };
   }
 }
 
@@ -192,9 +231,46 @@ export function computeFallbackNotice(state) {
   const variants = formatVariants(state.result.variants);
   const byKey = Object.fromEntries(variants.map((v) => [v.key, v]));
   const onlyFaithful = byKey.faithful && byKey.faithful.available && !(byKey.clearer && byKey.clearer.available) && !(byKey.alternate && byKey.alternate.available);
-  return onlyFaithful
-    ? 'Fallback: only a safe, faithful-only result was produced. The model output could not be used for Clearer/Alternate (parse failure, size limit, or a preservation/context check failed).'
-    : '';
+  if (!onlyFaithful) return '';
+
+  const warnings = Array.isArray(state.result.warnings) ? state.result.warnings.map((warning) => String(warning || '')) : [];
+  const failedChecks = Array.isArray(state.result.preservation_checks)
+    ? state.result.preservation_checks.filter((check) => check && check.passed === false)
+    : [];
+  const failedCategories = [...new Set(failedChecks.map((check) => String(check.name || '').split('/').pop()).filter(Boolean))];
+  let reason = 'The local model did not return two additional safe variants.';
+  if (warnings.some((warning) => warning.includes('not valid JSON'))) {
+    reason = 'The local model response was not valid JSON.';
+  } else if (warnings.some((warning) => warning.includes('exceeded size limit'))) {
+    reason = 'The local model response exceeded the size limit.';
+  } else if (warnings.some((warning) => warning.includes('model call timed out'))) {
+    reason = 'The local model timed out.';
+  } else if (warnings.some((warning) => warning.includes('model call failed'))) {
+    reason = 'The local model call failed.';
+  } else if (failedCategories.length > 0) {
+    const labels = failedCategories.map((category) => category.replaceAll('_', ' ')).join(', ');
+    reason = `Clearer/Alternate did not pass the required ${labels} preservation check${failedCategories.length === 1 ? '' : 's'}.`;
+  }
+  return `Fallback: only a safe, faithful-only result was produced. ${reason}`;
+}
+
+export function clarificationGatePassed(result) {
+  const assessment = result && typeof result.assessment === 'object' ? result.assessment : null;
+  const gate = assessment && typeof assessment.clarification_gate === 'object' ? assessment.clarification_gate : null;
+  return Boolean(
+    gate?.passed === true
+    && String(assessment?.clarification_question || '').trim()
+    && Array.isArray(assessment?.missing_details)
+    && assessment.missing_details.length > 0,
+  );
+}
+
+export function buildClarificationGateText(result) {
+  if (!clarificationGatePassed(result)) return '';
+  const gate = result.assessment.clarification_gate;
+  const confidence = Math.round(Number(gate.confidence || 0) * 100);
+  const threshold = Math.round(Number(gate.threshold || 0) * 100);
+  return `Confidence gate passed: ${confidence}% (minimum ${threshold}%). A best-effort rewrite is already available.`;
 }
 
 function truncateForDisplay(text, max) {
@@ -228,12 +304,11 @@ export function buildDraftOptions(drafts) {
 
 // --- side-by-side comparison columns --------------------------------------
 
-const COLUMN_DEFS = [
-  { key: 'raw', label: 'Raw (as typed)' },
-  { key: 'faithful', label: 'Faithful' },
-  { key: 'clearer', label: 'Clearer' },
-  { key: 'alternate', label: 'Alternate' },
-];
+export const SCRIBE_OUTPUT_CHOICES = Object.freeze([
+  { key: 'faithful', label: 'Base' },
+  { key: 'clearer', label: 'Alternative one' },
+  { key: 'alternate', label: 'Alternative two' },
+]);
 
 // The literal task ask: raw/faithful/clearer/alternate, side by side, so the
 // user can compare all four at once instead of toggling one at a time. `raw`
@@ -242,12 +317,8 @@ const COLUMN_DEFS = [
 // original. Text fields here are RAW/unescaped; the DOM layer must write
 // them via textContent, never innerHTML.
 export function buildComparisonColumns(state) {
-  const rawText = state.ranText || '';
   const variantsByKey = Object.fromEntries(formatVariants(state.result && state.result.variants).map((v) => [v.key, v]));
-  return COLUMN_DEFS.map(({ key, label }) => {
-    if (key === 'raw') {
-      return { key, label, text: rawText, available: rawText.length > 0, selected: state.selectedVariant === key };
-    }
+  return SCRIBE_OUTPUT_CHOICES.map(({ key, label }) => {
     const variant = variantsByKey[key];
     return {
       key,
@@ -293,6 +364,11 @@ export function buildTextPlaygroundModel(state, { personas = {}, drafts = [] } =
   return {
     text: state.text,
     contextText: state.contextText,
+    allowClarifyingQuestion: state.allowClarifyingQuestion,
+    clarificationOpen: state.clarificationOpen && clarificationGatePassed(state.result),
+    clarificationAnswer: state.clarificationAnswer,
+    clarificationGateText: buildClarificationGateText(state.result),
+    canSubmitClarification: state.clarificationOpen && state.clarificationAnswer.trim().length > 0 && state.status !== STATUS.BUSY,
     personaOptionsHtml: buildPersonaOptionsHtml(personas, state.persona),
     canRun: canRun(state),
     canCancel: canCancel(state),
@@ -307,6 +383,8 @@ export function buildTextPlaygroundModel(state, { personas = {}, drafts = [] } =
     applyMessage: state.applyMessage,
     rawSelectedText,
     columns,
+    batchChoiceOpen: state.batchChoiceOpen,
+    batchOperation: state.batchOperation,
     rescuePanelModel,
   };
 }
@@ -316,6 +394,14 @@ export function buildTextPlaygroundModel(state, { personas = {}, drafts = [] } =
 export function renderTextPlayground(elements, model) {
   if (elements.text && elements.text.value !== model.text) elements.text.value = model.text;
   if (elements.context && elements.context.value !== model.contextText) elements.context.value = model.contextText;
+  if (elements.clarificationYesButton) {
+    elements.clarificationYesButton.setAttribute?.('aria-pressed', String(model.allowClarifyingQuestion));
+    elements.clarificationYesButton.classList?.toggle?.('is-active', model.allowClarifyingQuestion);
+  }
+  if (elements.clarificationNoButton) {
+    elements.clarificationNoButton.setAttribute?.('aria-pressed', String(!model.allowClarifyingQuestion));
+    elements.clarificationNoButton.classList?.toggle?.('is-active', !model.allowClarifyingQuestion);
+  }
   if (elements.personaSelect) elements.personaSelect.innerHTML = model.personaOptionsHtml;
   if (elements.runButton) elements.runButton.disabled = !model.canRun;
   if (elements.cancelButton) elements.cancelButton.disabled = !model.canCancel;
@@ -338,8 +424,23 @@ export function renderTextPlayground(elements, model) {
   if (elements.applyButton) elements.applyButton.disabled = !model.canApply;
   if (elements.copyButton) elements.copyButton.disabled = !model.canCopy;
   if (elements.applyMessage) elements.applyMessage.textContent = model.applyMessage;
+  if (elements.batchChoice) elements.batchChoice.hidden = !model.batchChoiceOpen;
+  if (elements.batchProgress) {
+    const operation = model.batchOperation;
+    elements.batchProgress.hidden = !operation;
+    const total = operation?.chunks?.length || 0;
+    const current = operation?.state === 'completed' ? total : Math.min(total, (operation?.index || 0) + 1);
+    if (elements.batchProgressTitle) elements.batchProgressTitle.textContent = operation?.state === 'completed' ? 'Processing complete' : 'Processing text';
+    if (elements.batchProgressDetail) {
+      elements.batchProgressDetail.textContent = operation
+        ? `${operation.state === 'paused' ? 'Paused by error' : operation.state} · Chunk ${current} of ${total}${operation.error ? ` · ${operation.error}` : ''}`
+        : '';
+    }
+    if (elements.batchRetryButton) elements.batchRetryButton.hidden = operation?.state !== 'paused';
+    if (elements.batchContinueButton) elements.batchContinueButton.hidden = operation?.state !== 'paused';
+  }
 
-  // Side-by-side raw/faithful/clearer/alternate comparison -- each column's
+  // Side-by-side Base/Alternative one/Alternative two comparison -- each column's
   // text is written via textContent (never innerHTML), so no escaping is
   // needed here even though the text is raw model/user output.
   for (const column of model.columns) {
@@ -361,6 +462,15 @@ export function renderTextPlayground(elements, model) {
   // renders its own comparison columns above instead); renderMessageRescuePanel
   // no-ops any element key it doesn't find on `elements`.
   renderMessageRescuePanel(elements, model.rescuePanelModel);
+  if (elements.clarification) {
+    elements.clarification.hidden = !model.clarificationOpen;
+    if (model.clarificationOpen) elements.clarificationAnswer?.focus?.();
+  }
+  if (elements.clarificationAnswer && elements.clarificationAnswer.value !== model.clarificationAnswer) {
+    elements.clarificationAnswer.value = model.clarificationAnswer;
+  }
+  if (elements.clarificationGateStatus) elements.clarificationGateStatus.textContent = model.clarificationGateText;
+  if (elements.clarificationSubmitButton) elements.clarificationSubmitButton.disabled = !model.canSubmitClarification;
 }
 
 // --- live feature (DOM composition + backend client) -------------------------
@@ -373,7 +483,9 @@ const defaultApi = {
   applyToDraft: (draftId, finalText) => editDraft(draftId, finalText),
   captureManualContext: (text) => captureManualMessageRescueContext(text),
   clearContext: () => clearMessageRescueContext(),
-  generate: ({ transcript, persona, useContext }) => generateMessageRescue({ transcript, persona, useContext }),
+  generate: ({ transcript, persona, useContext, allowClarifyingQuestion }) => generateMessageRescue({
+    transcript, persona, useContext, allowClarifyingQuestion,
+  }),
 };
 
 /**
@@ -381,12 +493,14 @@ const defaultApi = {
  * @param {object} deps.elements DOM element references (see queryElements below)
  * @param {object} [deps.api] injected backend client (defaults to the real one)
  */
-export function createTextPlaygroundFeature({ elements, api = defaultApi }) {
+export function createTextPlaygroundFeature({ elements, api = defaultApi, notificationCenter = null, storage = globalThis.localStorage } = {}) {
   let state = createInitialState();
   let personas = {};
   let drafts = [];
   let modelId = null;
+  let modelLimits = {};
   let personaExplicitlySelected = false;
+  const batchOperationId = 'scribe-long-input';
 
   const rerender = () => {
     renderTextPlayground(elements, buildTextPlaygroundModel(state, { personas, drafts }));
@@ -434,60 +548,220 @@ export function createTextPlaygroundFeature({ elements, api = defaultApi }) {
     try {
       const res = await api.fetchLlmModels();
       modelId = (res && res.selected_model_id) || null;
+      const selected = (res?.models || []).find?.((item) => item.id === modelId) || {};
+      modelLimits = {
+        contextTokens: selected.context_tokens || selected.context_length || res?.context_tokens,
+        reservedOutputTokens: selected.max_output_tokens || res?.max_output_tokens,
+      };
     } catch (_e) {
       modelId = null;
+      modelLimits = {};
     }
   }
 
-  async function run() {
+  async function generateOne(transcript, { contextText, allowClarifyingQuestion }) {
+    let useContext = false;
+    if (contextText) {
+      try {
+        await api.captureManualContext(contextText);
+        useContext = true;
+      } catch (_captureErr) {
+        useContext = false;
+      }
+    }
+    const response = await api.generate({
+      transcript,
+      persona: state.persona || null,
+      useContext,
+      allowClarifyingQuestion,
+    });
+    if (response?.status !== 'done') {
+      const message = response?.status === 'timeout'
+        ? 'The model call timed out.'
+        : `Chunk ended with status ${response?.status || 'unknown'}.`;
+      throw new Error(message);
+    }
+    return response.result;
+  }
+
+  async function processBatch(myRequestId, pendingContextText, allowClarifyingQuestion) {
+    let operation = state.batchOperation;
+    while (operation && operation.index < operation.chunks.length) {
+      if (state.requestId !== myRequestId || state.status !== STATUS.BUSY) return;
+      operation = { ...operation, state: operation.state === 'retrying' ? 'retrying' : 'processing' };
+      state = { ...state, batchOperation: operation };
+      notificationCenter?.update({
+        id: batchOperationId,
+        title: 'Processing text',
+        state: operation.state,
+        detail: operation.state === 'retrying' ? 'Retrying chunk' : `Processing chunk ${operation.index + 1} of ${operation.chunks.length}`,
+        current: operation.index + 1,
+        total: operation.chunks.length,
+        workspace: 'scribe',
+      });
+      rerender();
+      try {
+        const result = await generateOne(operation.chunks[operation.index], {
+          contextText: pendingContextText,
+          allowClarifyingQuestion: allowClarifyingQuestion && operation.index === 0,
+        });
+        operation = recordBatchSuccess(operation, result);
+        state = { ...state, batchOperation: operation };
+      } catch (error) {
+        operation = recordBatchFailure(operation, error?.message || error);
+        const partial = assembleBatchResults(operation.completed, state.ranText);
+        partial.batch.complete = false;
+        partial.batch.failed_chunk = operation.failedIndex;
+        state = {
+          ...state,
+          status: STATUS.ERROR,
+          result: partial,
+          selectedVariant: 'faithful',
+          errorMessage: `Chunk ${operation.index + 1} failed. Retry to continue; completed output is preserved. ${operation.error}`,
+          batchOperation: operation,
+        };
+        notificationCenter?.update({
+          id: batchOperationId,
+          title: 'Processing text',
+          state: 'error',
+          detail: `Paused at chunk ${operation.index + 1}. Completed chunks were preserved.`,
+          current: operation.index + 1,
+          total: operation.chunks.length,
+          workspace: 'scribe',
+        });
+        rerender();
+        return;
+      }
+    }
+    const result = assembleBatchResults(operation?.completed || [], state.ranText);
+    state = receiveResult({ ...state, batchOperation: operation }, {
+      requestId: myRequestId,
+      outcome: { kind: 'done', result },
+    });
+    notificationCenter?.update({
+      id: batchOperationId,
+      title: 'Processing text',
+      state: 'completed',
+      detail: 'All chunks completed and were assembled in order.',
+      current: operation?.chunks?.length || 0,
+      total: operation?.chunks?.length || 0,
+      workspace: 'scribe',
+    });
+    rerender();
+  }
+
+  async function run({ allowClarifyingQuestion = state.allowClarifyingQuestion, batchMode = null } = {}) {
     if (!canRun(state)) return;
+
+    if (!batchMode && needsLongInputChoice(state.text)) {
+      state = { ...state, batchChoiceOpen: true };
+      notificationCenter?.update({
+        id: batchOperationId,
+        title: 'Large Scribe input',
+        state: 'preparing',
+        detail: 'Choose a batch size before generation.',
+        workspace: 'scribe',
+      });
+      rerender();
+      return;
+    }
 
     // Flip to busy synchronously (before any await) so Cancel is immediately
     // available and the UI never sits in a silent gap waiting on the model-id
     // lookup below.
     const pendingContextText = state.contextText.trim();
-    state = beginRequest(state, { modelId });
+    state = { ...beginRequest(state, { modelId, allowClarifyingQuestion }), batchChoiceOpen: false };
     const myRequestId = state.requestId;
+    if (batchMode && batchMode !== 'full') {
+      const chunks = splitLongInput(state.ranText, Number(batchMode), modelLimits);
+      state = { ...state, batchPreference: String(batchMode), batchOperation: createBatchOperation(chunks) };
+      try { storage?.setItem?.('betterfingers.scribe.batchPreference', String(batchMode)); } catch (_error) { /* best effort */ }
+    } else {
+      state = { ...state, batchOperation: null };
+      if (batchMode === 'full') {
+        try { storage?.setItem?.('betterfingers.scribe.batchPreference', 'full'); } catch (_error) { /* best effort */ }
+      }
+    }
     rerender();
 
     await refreshModelId();
     if (state.requestId === myRequestId && state.status === STATUS.BUSY) {
       state = { ...state, ranModelId: modelId };
+      if (batchMode && batchMode !== 'full') {
+        state = { ...state, batchOperation: createBatchOperation(splitLongInput(state.ranText, Number(batchMode), modelLimits)) };
+      }
       rerender();
     }
 
     try {
-      let useContext = false;
-      if (pendingContextText) {
-        try {
-          await api.captureManualContext(pendingContextText);
-          useContext = true;
-        } catch (_captureErr) {
-          // Best-effort: run without context rather than blocking the whole
-          // request on a context-capture failure (e.g. whitespace-only text).
-          useContext = false;
-        }
+      if (state.batchOperation) {
+        await processBatch(myRequestId, pendingContextText, allowClarifyingQuestion);
+        return;
       }
-      const response = await api.generate({ transcript: state.text, persona: state.persona || null, useContext });
-      const status = response && response.status;
-      const outcome =
-        status === 'done'
-          ? { kind: 'done', result: response.result }
-          : status === 'timeout'
-            ? { kind: 'timeout' }
-            : status === 'cancelled'
-              ? { kind: 'cancelled' }
-              : { kind: 'error', message: 'Unexpected response from the model.' };
-      state = receiveResult(state, { requestId: myRequestId, outcome });
+      const result = await generateOne(state.ranText, { contextText: pendingContextText, allowClarifyingQuestion });
+      state = receiveResult(state, { requestId: myRequestId, outcome: { kind: 'done', result } });
     } catch (err) {
-      state = receiveResult(state, { requestId: myRequestId, outcome: { kind: 'error', message: err && err.message } });
+      const timedOut = String(err?.message || '').toLowerCase().includes('timed out');
+      state = receiveResult(state, {
+        requestId: myRequestId,
+        outcome: timedOut ? { kind: 'timeout' } : { kind: 'error', message: err && err.message },
+      });
     }
     rerender();
   }
 
   function cancel() {
     state = cancelRequest(state);
+    if (state.batchOperation) state = { ...state, batchOperation: cancelBatch(state.batchOperation) };
+    notificationCenter?.update({
+      id: batchOperationId,
+      title: 'Processing text',
+      state: 'cancelled',
+      detail: 'Remaining chunks were cancelled.',
+      workspace: 'scribe',
+    });
     rerender();
+  }
+
+  async function retryBatch() {
+    if (state.batchOperation?.state !== 'paused') return;
+    state = {
+      ...state,
+      status: STATUS.BUSY,
+      errorMessage: '',
+      batchOperation: resumeBatch(state.batchOperation),
+    };
+    const myRequestId = state.requestId;
+    rerender();
+    await processBatch(myRequestId, state.contextText.trim(), false);
+  }
+
+  function setClarificationPermission(allowed) {
+    state = setAllowClarifyingQuestion(state, allowed);
+    rerender();
+  }
+
+  function dismissClarificationPopup() {
+    state = dismissClarification(state);
+    rerender();
+  }
+
+  async function submitClarification() {
+    if (!state.clarificationOpen || !clarificationGatePassed(state.result)) return;
+    const answer = state.clarificationAnswer.trim();
+    if (!answer) return;
+    const question = String(state.result?.assessment?.clarification_question || '').trim();
+    const clarificationContext = `Clarification question: ${question}\nAnswer: ${answer}`;
+    const existingContext = state.contextText.trim();
+    state = {
+      ...dismissClarification(state),
+      contextText: existingContext ? `${existingContext}\n\n${clarificationContext}` : clarificationContext,
+    };
+    rerender();
+    // The answer is context for one best-effort rerun. Suppress a second
+    // popup in the same clarification round even when the user's general
+    // permission remains Yes for future manual runs.
+    await run({ allowClarifyingQuestion: false });
   }
 
   async function clear() {
@@ -543,6 +817,14 @@ export function createTextPlaygroundFeature({ elements, api = defaultApi }) {
         rerender();
       });
     }
+    elements.clarificationYesButton?.addEventListener?.('click', () => setClarificationPermission(true));
+    elements.clarificationNoButton?.addEventListener?.('click', () => setClarificationPermission(false));
+    elements.clarificationAnswer?.addEventListener?.('input', () => {
+      state = setClarificationAnswer(state, elements.clarificationAnswer.value);
+      rerender();
+    });
+    elements.clarificationSubmitButton?.addEventListener?.('click', () => { submitClarification(); });
+    elements.clarificationDismissButton?.addEventListener?.('click', dismissClarificationPopup);
     if (elements.personaSelect && typeof elements.personaSelect.addEventListener === 'function') {
       elements.personaSelect.addEventListener('change', () => {
         personaExplicitlySelected = true;
@@ -561,6 +843,11 @@ export function createTextPlaygroundFeature({ elements, api = defaultApi }) {
         run();
       });
     }
+    for (const button of elements.batchChoiceButtons || []) {
+      button?.addEventListener?.('click', () => run({ batchMode: button.dataset.scribeBatch }));
+    }
+    elements.batchRetryButton?.addEventListener?.('click', () => retryBatch());
+    elements.batchContinueButton?.addEventListener?.('click', () => retryBatch());
     if (elements.cancelButton && typeof elements.cancelButton.addEventListener === 'function') {
       elements.cancelButton.addEventListener('click', cancel);
     }
@@ -596,6 +883,10 @@ export function createTextPlaygroundFeature({ elements, api = defaultApi }) {
     clear,
     applyToDraft,
     copy,
+    setClarificationPermission,
+    submitClarification,
+    dismissClarification: dismissClarificationPopup,
+    retryBatch,
     refreshPersonas,
     refreshDrafts,
     wire,
@@ -609,6 +900,8 @@ function queryElements(doc) {
     section: byId('textPlaygroundSection'),
     text: byId('textPlaygroundText'),
     context: byId('textPlaygroundContext'),
+    clarificationYesButton: byId('textPlaygroundClarificationYes'),
+    clarificationNoButton: byId('textPlaygroundClarificationNo'),
     personaSelect: byId('textPlaygroundPersonaSelect'),
     runButton: byId('textPlaygroundRunButton'),
     cancelButton: byId('textPlaygroundCancelButton'),
@@ -617,6 +910,13 @@ function queryElements(doc) {
     error: byId('textPlaygroundError'),
     ranInfo: byId('textPlaygroundRanInfo'),
     fallback: byId('textPlaygroundFallback'),
+    batchChoice: byId('textPlaygroundBatchChoice'),
+    batchChoiceButtons: Array.from(doc.querySelectorAll?.('[data-scribe-batch]') || []),
+    batchProgress: byId('textPlaygroundBatchProgress'),
+    batchProgressTitle: byId('textPlaygroundBatchProgressTitle'),
+    batchProgressDetail: byId('textPlaygroundBatchProgressDetail'),
+    batchRetryButton: byId('textPlaygroundBatchRetry'),
+    batchContinueButton: byId('textPlaygroundBatchContinue'),
     draftSelect: byId('textPlaygroundDraftSelect'),
     applyButton: byId('textPlaygroundApplyButton'),
     copyButton: byId('textPlaygroundCopyButton'),
@@ -630,8 +930,11 @@ function queryElements(doc) {
     clarification: byId('textPlaygroundClarification'),
     clarificationQuestion: byId('textPlaygroundClarificationQuestion'),
     clarificationDetails: byId('textPlaygroundClarificationDetails'),
+    clarificationAnswer: byId('textPlaygroundClarificationAnswer'),
+    clarificationGateStatus: byId('textPlaygroundClarificationGateStatus'),
+    clarificationSubmitButton: byId('textPlaygroundClarificationSubmit'),
+    clarificationDismissButton: byId('textPlaygroundClarificationDismiss'),
     columns: {
-      raw: { text: byId('textPlaygroundColumnRawText'), button: byId('textPlaygroundColumnRawButton') },
       faithful: { text: byId('textPlaygroundColumnFaithfulText'), button: byId('textPlaygroundColumnFaithfulButton') },
       clearer: { text: byId('textPlaygroundColumnClearerText'), button: byId('textPlaygroundColumnClearerButton') },
       alternate: { text: byId('textPlaygroundColumnAlternateText'), button: byId('textPlaygroundColumnAlternateButton') },
@@ -646,14 +949,14 @@ function queryElements(doc) {
 // call against a doc that doesn't have #textPlaygroundSection, e.g. an older
 // build or a test doc). Kicks off persona/draft list loads but never touches
 // audio, transcription, or TTS.
-export function initTextPlayground({ doc } = {}) {
+export function initTextPlayground({ doc, notificationCenter } = {}) {
   const activeDoc = doc || (typeof document !== 'undefined' ? document : null);
   if (!activeDoc || typeof activeDoc.getElementById !== 'function') return null;
 
   const elements = queryElements(activeDoc);
   if (!elements.section) return null;
 
-  const feature = createTextPlaygroundFeature({ elements, api: defaultApi });
+  const feature = createTextPlaygroundFeature({ elements, api: defaultApi, notificationCenter });
   feature.wire();
   feature.rerender();
   feature.refreshPersonas();

@@ -19,6 +19,18 @@ class _FakeEngine:
     api_url = "http://127.0.0.1:8080"
 
 
+class _LazyFakeEngine:
+    api_url = "http://127.0.0.1:8080"
+
+    def __init__(self, ready=True):
+        self.ready = ready
+        self.ensure_ready_calls = 0
+
+    def ensure_ready(self):
+        self.ensure_ready_calls += 1
+        return self.ready
+
+
 class _FakeResponse:
     def __init__(self, status_code=200, payload=None):
         self.status_code = status_code
@@ -54,9 +66,27 @@ class BuildLlmCallFnTests(unittest.TestCase):
         args, kwargs = mock_post.call_args
         self.assertEqual(args[0], "http://127.0.0.1:8080/v1/chat/completions")
         self.assertEqual(kwargs["json"]["messages"], [{"role": "user", "content": "hi"}])
+        self.assertEqual(kwargs["json"]["temperature"], 0.0)
         self.assertEqual(kwargs["json"]["stream"], False)
         self.assertIsInstance(kwargs["timeout"], tuple)
         self.assertEqual(len(kwargs["timeout"]), 2)
+
+    def test_lazy_engine_is_started_before_the_completion_request(self):
+        engine = _LazyFakeEngine()
+        call_fn = build_llm_call_fn(engine)
+        with patch("backend.services.rescue_llm_adapter.requests.post", return_value=_FakeResponse()) as mock_post:
+            self.assertEqual(call_fn([{"role": "user", "content": "hi"}]), "hello")
+        self.assertEqual(engine.ensure_ready_calls, 1)
+        mock_post.assert_called_once()
+
+    def test_unready_lazy_engine_fails_before_opening_the_socket(self):
+        engine = _LazyFakeEngine(ready=False)
+        call_fn = build_llm_call_fn(engine)
+        with patch("backend.services.rescue_llm_adapter.requests.post") as mock_post:
+            with self.assertRaises(ConnectionError):
+                call_fn([{"role": "user", "content": "hi"}])
+        self.assertEqual(engine.ensure_ready_calls, 1)
+        mock_post.assert_not_called()
 
     def test_timeout_raised_as_plain_timeout_error(self):
         call_fn = build_llm_call_fn(_FakeEngine())

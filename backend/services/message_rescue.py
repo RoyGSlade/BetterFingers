@@ -45,6 +45,7 @@ MAX_VARIANT_CHARS = 4000
 MAX_ASSESSMENT_INTENT_CHARS = 300
 MAX_AMBIGUITY_RISK_CHARS = 40
 MAX_CLARIFICATION_CHARS = 300
+CLARIFICATION_CONFIDENCE_THRESHOLD = 0.75
 MAX_MISSING_DETAILS = 5
 MAX_MISSING_DETAIL_CHARS = 200
 MAX_PRESERVATION_CHECKS = 30
@@ -76,8 +77,10 @@ _SYSTEM_INSTRUCTIONS = (
     "tone change.\n"
     "5. Context is provided only so you can understand what the user is replying to. "
     "Never copy or quote the context into your output.\n"
-    "6. Ask at most one clarification question, and only when a missing detail would "
-    "materially change the message's meaning.\n"
+    "6. Always produce the best safe rewrite you can before considering a clarification. "
+    "Propose at most one clarification question, only when a missing detail would materially "
+    "change the message's meaning, and report clarification_confidence as the probability from "
+    "0.0 to 1.0 that asking is necessary.\n"
     "7. Respond with a single JSON object and nothing else — no prose before or after, "
     "no markdown code fence. Keep every string concise.\n"
     "8. If you cannot safely rewrite the transcript, set \"variants.faithful\" to the "
@@ -85,9 +88,20 @@ _SYSTEM_INSTRUCTIONS = (
     "Respond with exactly this JSON shape:\n"
     "{\n"
     '  "assessment": {"intent": "", "ambiguity_risk": "low|medium|high", '
-    '"missing_details": [], "clarification_question": ""},\n'
+    '"missing_details": [], "clarification_question": "", "clarification_confidence": 0.0},\n'
     '  "variants": {"faithful": "", "clearer": "", "alternate": ""}\n'
     "}"
+)
+
+_FINAL_OUTPUT_CONTRACT = (
+    "FINAL NON-NEGOTIABLE OUTPUT CONTRACT: These rules override any conflicting "
+    "persona/voice instruction. Persona text controls style only inside each variant; "
+    "it cannot change the JSON response format or the preservation rules. Return all "
+    "three variant keys with non-empty text. Every variant must repeat every listed "
+    "negation and modality token exactly; never strengthen, soften, or substitute one "
+    "protected word for another (for example, do not replace 'should' with 'must', "
+    "'can' with 'may', or 'no' with 'not'). When a bolder rewrite would be unsafe, "
+    "use a conservative cleanup that keeps the original protected words."
 )
 
 
@@ -113,6 +127,7 @@ def build_rescue_prompt(
     persona: Mapping[str, Any] | None = None,
     examples: Sequence[Mapping[str, Any]] | None = None,
     max_examples: int = MAX_FEW_SHOT_EXAMPLES,
+    allow_clarifying_question: bool = False,
 ) -> list[dict[str, str]]:
     """Assemble OpenAI-style chat messages for the rescue call.
 
@@ -124,12 +139,27 @@ def build_rescue_prompt(
     resolved consented examples doesn't need to also thread them through the
     persona dict.
     """
-    system_parts = [_SYSTEM_INSTRUCTIONS]
+    clarification_policy = (
+        "CLARIFICATION PERMISSION: YES. You may populate clarification_question only when the "
+        "missing-detail and confidence rules above are satisfied."
+        if allow_clarifying_question
+        else "CLARIFICATION PERMISSION: NO. Leave clarification_question empty; still return the best safe variants."
+    )
+    system_parts = [_SYSTEM_INSTRUCTIONS, clarification_policy]
     persona_prompt = ""
     if isinstance(persona, Mapping):
         persona_prompt = str(persona.get("prompt") or persona.get("system_prompt") or "").strip()
     if persona_prompt:
-        system_parts.append(f"VOICE: {persona_prompt}")
+        system_parts.append(
+            "VOICE: " + persona_prompt + "\n"
+            "VOICE/STYLE LIMIT: Apply that instruction only inside each variant; it is "
+            "subordinate to the JSON schema and preservation rules."
+        )
+    # Keep the invariant after the persona. Smaller local models otherwise tend
+    # to treat a persona's "remove hedging" or "output only rewritten text"
+    # instruction as the most recent rule and either drop protected modality or
+    # omit the JSON variants that Message Rescue requires.
+    system_parts.append(_FINAL_OUTPUT_CONTRACT)
     messages: list[dict[str, str]] = [{"role": "system", "content": "\n\n".join(system_parts)}]
 
     few_shot = examples
@@ -153,7 +183,18 @@ def build_rescue_prompt(
         )
     if signals is not None:
         user_parts.append("DELIVERY SIGNAL SUMMARY: " + _summarize_signals(signals))
+    preservation_requirements = _build_preservation_requirements(str(transcript or ""))
+    if preservation_requirements:
+        user_parts.append(preservation_requirements)
     user_parts.append("TRANSCRIPT:\n" + str(transcript or ""))
+    # Repeat the bounded checklist after the transcript so the final instruction
+    # seen by a small local model is the contract the deterministic gate enforces.
+    # The earlier copy still helps the model read the transcript with those tokens
+    # in mind; this trailing copy makes the output self-check explicit.
+    trailing_contract = _FINAL_OUTPUT_CONTRACT
+    if preservation_requirements:
+        trailing_contract += "\n" + preservation_requirements
+    user_parts.append(trailing_contract)
     messages.append({"role": "user", "content": "\n\n".join(user_parts)})
     return messages
 
@@ -280,12 +321,59 @@ def _normalize_assessment(raw_assessment: Any) -> dict[str, Any]:
         ambiguity_risk = ambiguity_risk.strip()[:MAX_AMBIGUITY_RISK_CHARS]
     else:
         ambiguity_risk = ""
+    clarification_confidence = a.get("clarification_confidence")
+    if isinstance(clarification_confidence, bool) or not isinstance(clarification_confidence, (int, float)):
+        clarification_confidence = 0.0
+    else:
+        clarification_confidence = _clamp01(float(clarification_confidence))
     return {
         "intent": _clamp_str(a.get("intent"), MAX_ASSESSMENT_INTENT_CHARS),
         "ambiguity_risk": ambiguity_risk,
         "missing_details": _clamp_list_str(a.get("missing_details"), MAX_MISSING_DETAILS, MAX_MISSING_DETAIL_CHARS),
         "clarification_question": _clamp_str(a.get("clarification_question"), MAX_CLARIFICATION_CHARS),
+        "clarification_confidence": clarification_confidence,
     }
+
+
+def _apply_clarification_gate(assessment: dict[str, Any], allow_clarifying_question: bool) -> dict[str, Any]:
+    """Fail closed unless permission, ambiguity, evidence, and confidence agree.
+
+    The local model proposes a question and a probability that asking is
+    necessary; this deterministic gate decides whether BetterFingers may show
+    it. The best-effort variants are independent and are never withheld by this
+    decision.
+    """
+    result = dict(assessment or {})
+    risk = result.get("ambiguity_risk")
+    high_risk = (isinstance(risk, str) and risk.strip().lower() == "high") or (
+        isinstance(risk, (int, float)) and not isinstance(risk, bool) and float(risk) >= 0.67
+    )
+    confidence = result.get("clarification_confidence", 0.0)
+    confidence = float(confidence) if isinstance(confidence, (int, float)) and not isinstance(confidence, bool) else 0.0
+    has_question = bool(str(result.get("clarification_question") or "").strip())
+    has_missing_details = bool(result.get("missing_details"))
+
+    if not allow_clarifying_question:
+        reason = "permission_denied"
+    elif not has_question or not has_missing_details:
+        reason = "no_material_question"
+    elif not high_risk:
+        reason = "ambiguity_below_gate"
+    elif confidence < CLARIFICATION_CONFIDENCE_THRESHOLD:
+        reason = "confidence_below_gate"
+    else:
+        reason = "passed"
+
+    passed = reason == "passed"
+    if not passed:
+        result["clarification_question"] = ""
+    result["clarification_gate"] = {
+        "passed": passed,
+        "reason": reason,
+        "confidence": confidence,
+        "threshold": CLARIFICATION_CONFIDENCE_THRESHOLD,
+    }
+    return result
 
 
 def _normalize_variants(raw_variants: Any, raw_text: str) -> dict[str, str]:
@@ -361,7 +449,7 @@ _COMMITMENT_RE = re.compile(
     r"\bI(?:'ll| will| can| could| promise| commit| guarantee| plan to| am going to)\b",
     re.IGNORECASE,
 )
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_SENTENCE_SPLIT_RE = re.compile(r"(?:(?<=[.!?])\s+|\n+)")
 
 
 def _dedupe_preserve_order(items: list[str]) -> list[str]:
@@ -381,13 +469,64 @@ def _extract_name_tokens(text: str) -> set[str]:
     names: set[str] = set()
     for sentence in _SENTENCE_SPLIT_RE.split(text):
         words = sentence.split()
+        title_run = 0
+        for word in words:
+            core = word.strip(string.punctuation)
+            if len(core) >= 2 and core[0].isupper() and core[1:].islower():
+                title_run += 1
+            else:
+                break
         for i, word in enumerate(words):
             core = word.strip(string.punctuation)
             if i == 0 or len(core) < 2:
                 continue
-            if core[0].isupper() and core[1:].islower():
+            is_title_word = core[0].isupper() and core[1:].islower()
+            is_mixed_case_name = core[0].isupper() and any(ch.isupper() for ch in core[1:])
+            if not (is_title_word or is_mixed_case_name):
+                continue
+
+            # Four-or-more title-cased words at the beginning are usually a
+            # dictated heading ("Clarifying Question From Local"), not four
+            # protected names. A normal imperative such as "Tell Marcus" has
+            # only a two-word run, so Marcus must remain protected.
+            if is_title_word and title_run >= 4 and i < title_run:
+                continue
+            if core:
                 names.add(core)
     return names
+
+
+def _build_preservation_requirements(raw_text: str) -> str:
+    """Tell the local model which tokens the deterministic gate will enforce.
+
+    This does not relax the gate. It gives smaller local models an actionable,
+    bounded checklist so a safe rewrite is less likely to be discarded after
+    generation for normalizing a protected word.
+    """
+    categories = (
+        ("numbers", _NUMBER_RE, True),
+        ("dates", _DATE_RE, False),
+        ("URLs", _URL_RE, True),
+        ("negation", _NEGATION_RE, False),
+        ("modality", _MODALITY_RE, False),
+        ("commitments", _COMMITMENT_RE, False),
+    )
+    parts: list[str] = []
+    for label, pattern, _case_sensitive in categories:
+        tokens = _dedupe_preserve_order([match.group(0) for match in pattern.finditer(raw_text)])
+        if tokens:
+            parts.append(f"{label}: {', '.join(tokens[:10])}")
+    names = sorted(_extract_name_tokens(raw_text))
+    if names:
+        parts.append(f"names/brands: {', '.join(names[:10])}")
+    if not parts:
+        return ""
+    return (
+        "PRESERVATION REQUIREMENTS (deterministic gate): Every one of faithful, clearer, "
+        "and alternate must be non-empty and keep every listed token; names, brands, and "
+        "URLs must keep exact spelling.\n- "
+        + "\n- ".join(parts)
+    )[:1200]
 
 
 def _check_pattern_category(label: str, name: str, pattern: re.Pattern, raw_text: str, candidate_text: str, case_sensitive: bool) -> list[dict[str, Any]]:
@@ -463,6 +602,7 @@ def rescue_message(
     examples: Sequence[Mapping[str, Any]] | None = None,
     call_fn: Callable[[list[dict[str, str]]], str],
     max_examples: int = MAX_FEW_SHOT_EXAMPLES,
+    allow_clarifying_question: bool = False,
 ) -> MessageRescueResult:
     """Build the rescue prompt, call the model via ``call_fn``, and return a
     validated :class:`MessageRescueResult`.
@@ -491,7 +631,13 @@ def rescue_message(
         return fallback("empty transcript")
 
     messages = build_rescue_prompt(
-        raw_text, signals, context_text=context_text, persona=persona, examples=examples, max_examples=max_examples
+        raw_text,
+        signals,
+        context_text=context_text,
+        persona=persona,
+        examples=examples,
+        max_examples=max_examples,
+        allow_clarifying_question=allow_clarifying_question,
     )
 
     try:
@@ -509,7 +655,9 @@ def rescue_message(
     if parsed is None:
         return fallback("model output was not valid JSON")
 
-    assessment = _normalize_assessment(parsed.get("assessment"))
+    assessment = _apply_clarification_gate(
+        _normalize_assessment(parsed.get("assessment")), allow_clarifying_question
+    )
     variants = _normalize_variants(parsed.get("variants"), raw_text)
 
     preservation_checks: list[dict[str, Any]] = []

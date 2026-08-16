@@ -463,6 +463,28 @@ def sanitize_profile_name(raw_name):
     return value or "Default"
 
 
+def reconcile_persona_profile_references(unavailable_name, replacement="True Janitor"):
+    """Replace stale active-persona references across every persisted profile.
+
+    Returns the profile names that changed.  If the active profile changes,
+    callers already run inside the server process, so the in-memory LLM
+    selection is updated immediately without waiting for a restart.
+    """
+    unavailable = str(unavailable_name or "").strip()
+    replacement = str(replacement or "True Janitor").strip() or "True Janitor"
+    changed = []
+    if not unavailable:
+        return changed
+    for profile_name in list_profiles():
+        config = load_profile(profile_name)
+        if str(config.get("current_preset", "") or "").strip() != unavailable:
+            continue
+        config["current_preset"] = replacement
+        save_runtime_profile(profile_name, config)
+        changed.append(profile_name)
+    return changed
+
+
 def get_active_profile_payload():
     name = get_last_active_profile()
     return {
@@ -511,10 +533,11 @@ def apply_active_profile_runtime(profile_name):
     # means a keep-loaded toggle takes effect immediately — no restart needed
     # for A3's idle sweep / admission eviction to keep skipping pinned components.
     residency = get_model_residency_settings()
-    for component, pinned in residency.items():
-        model_runtime.set_pinned(component, pinned)
+    residency_result = apply_model_residency_preferences(residency, warm_enabled=True)
 
-    return get_active_profile_payload()
+    payload = get_active_profile_payload()
+    payload["residency"] = residency_result
+    return payload
 
 
 def is_lazy_startup_enabled():
@@ -652,6 +675,48 @@ def warm_start_resident_models(settings=None):
             record_runtime_error("tts", str(exc), {"action": "keep_loaded_startup"})
             results["tts"] = {"ok": False, "loaded": False, "error": str(exc)}
 
+    return results
+
+
+def apply_model_residency_preferences(settings=None, *, warm_enabled=True):
+    """Apply Keep Loaded to both the coordinator and concrete engines.
+
+    Merely pinning the ledger never loaded a model, and TTS also owns its own
+    idle timer.  This function keeps those two layers synchronized, warms any
+    enabled-but-not-resident component, and leaves disabled components to the
+    existing lease-aware idle cleanup (never unloading active inference).
+    """
+    desired = settings or get_model_residency_settings()
+    snapshot = model_runtime.resources_snapshot()
+    ledger = snapshot.get("ledger", {})
+    results = {}
+
+    for component in ("llm", "stt", "tts"):
+        model_runtime.set_pinned(component, bool(desired.get(component)))
+
+    engine = tts_engine
+    if engine is not None and hasattr(engine, "set_keep_loaded"):
+        try:
+            engine.set_keep_loaded(bool(desired.get("tts")))
+        except Exception as exc:
+            record_runtime_error("tts", str(exc), {"action": "keep_loaded_sync"})
+            results["tts"] = {"ok": False, "loaded": False, "error": str(exc)}
+
+    if warm_enabled:
+        needs_warm = {
+            component: bool(desired.get(component)) and not bool(ledger.get(component))
+            for component in ("llm", "stt", "tts")
+        }
+        if any(needs_warm.values()):
+            results.update(warm_start_resident_models(needs_warm))
+
+    for component in ("llm", "stt", "tts"):
+        results.setdefault(component, {
+            "ok": True,
+            "loaded": bool(model_runtime.resources_snapshot().get("ledger", {}).get(component)),
+            "keep_loaded": bool(desired.get(component)),
+        })
+        results[component]["keep_loaded"] = bool(desired.get(component))
     return results
 
 
@@ -3140,13 +3205,17 @@ async def settings_save_profile(profile_name: str, request: ProfileSaveRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Save failed: {e}")
+    residency = None
     if safe_name == get_last_active_profile():
-        apply_active_profile_runtime(safe_name)
-    return {
+        residency = apply_active_profile_runtime(safe_name).get("residency")
+    response = {
         "profile": safe_name,
         "active": safe_name == get_last_active_profile(),
         "settings": load_profile(safe_name),
     }
+    if residency is not None:
+        response["residency"] = residency
+    return response
 
 
 @app.post("/settings/profiles")

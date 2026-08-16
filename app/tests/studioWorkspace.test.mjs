@@ -561,13 +561,16 @@ test('the blend strip distinguishes a full blend from an exhausted roster', () =
       voices: [...THREE_VOICES, { id: 'bf_emma', name: 'Emma' }],
       blend: {
         base: { voiceId: 'af_bella', label: 'Bella' },
-        layers: [{ voiceId: 'af_nicole', weight: 0.3 }, { voiceId: 'am_michael', weight: 0.3 }],
+        layers: [
+          { voiceId: 'af_nicole', weight: 0.3 },
+          { voiceId: 'am_michael', weight: 0.3 },
+          { voiceId: 'bf_emma', weight: 0.3 },
+        ],
       },
     },
   );
 
-  assert.match(blendAvailable.textContent, /^Blend is full at 2 layers/);
-  assert.doesNotMatch(blendAvailable.textContent, /Emma/, 'Emma is available; the cap is what blocks adding her');
+  assert.match(blendAvailable.textContent, /^Blend is full at 3 layers/);
 });
 
 test('the blend strip does not claim voices are available before any have loaded', () => {

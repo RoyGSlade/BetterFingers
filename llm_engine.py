@@ -35,6 +35,10 @@ from model_manager import (
 from hardware_report import _estimate_runtime_mb
 from log_redaction import redact_stderr_lines
 from store_migration import load_versioned_store
+from backend.services.persona_schema import (
+    compile_persona_instruction,
+    normalize_structured_persona,
+)
 
 
 def _estimate_llm_runtime_mb(model_id):
@@ -369,6 +373,14 @@ def default_persona(prompt=""):
         # the prompt it composes to today. Set by the user, never inferred --
         # see docs/PERSONA_TRAITS_DESIGN.md §6.
         "traits": neutral_traits(),
+        # Alpha structured-editor data. ``prompt`` remains intact for legacy
+        # personas and migration review; confirmed structured data is compiled
+        # deterministically by compose_persona_system_prompt().
+        "structured": None,
+        "migration": {},
+        "revision": 1,
+        "confirmed_revision": 1,
+        "writing_preset_id": "",
     }
 
 
@@ -434,6 +446,15 @@ def normalize_persona(entry):
     # complete neutral dict, so a persona written before this field existed is
     # indistinguishable from one whose sliders were never moved.
     result["traits"] = normalize_traits(entry.get("traits"))
+    structured = entry.get("structured")
+    if isinstance(structured, dict):
+        display_name = str((structured.get("metadata") or {}).get("display_name") or "Persona")
+        result["structured"] = normalize_structured_persona(structured, display_name=display_name)
+    migration = entry.get("migration")
+    result["migration"] = copy.deepcopy(migration) if isinstance(migration, dict) else {}
+    result["revision"] = _coerce_int_or_none(entry.get("revision"), 1, 1_000_000) or 1
+    result["confirmed_revision"] = _coerce_int_or_none(entry.get("confirmed_revision"), 1, 1_000_000) or 1
+    result["writing_preset_id"] = str(entry.get("writing_preset_id", "") or "")
     return result
 
 
@@ -750,6 +771,11 @@ def compose_persona_system_prompt(persona, include_traits=False):
     docs/PERSONA_TRAITS_DESIGN.md §8a.
     """
     persona = normalize_persona(persona)
+    if isinstance(persona.get("structured"), dict):
+        # Transcript/source material remains a separate user message in
+        # compose_persona_messages()/run_persona_preview(). Never serialize it
+        # into this system instruction.
+        return compile_persona_instruction(persona["structured"])
     parts = []
     base = str(persona.get("prompt", "") or "").strip()
     if base:

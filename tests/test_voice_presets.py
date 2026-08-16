@@ -38,6 +38,48 @@ class VoicePresetsTests(unittest.TestCase):
         self.assertEqual(preset["pause_style"], "natural")
         self.assertIn("created_at", preset)
         self.assertIn("updated_at", preset)
+        self.assertTrue(preset["id"].startswith("custom-voice-"))
+        self.assertEqual(preset["version"], 1)
+        self.assertEqual(preset["sources"], [{"voice_id": "af_heart", "weight": 1.0}])
+
+    def test_four_sources_round_trip_with_exact_normalized_weights(self):
+        presets = voice_presets.save_preset("Crew", sources=[
+            {"voice_id": "heart", "weight": 50},
+            {"voice_id": "bella", "weight": 30},
+            {"voice_id": "adam", "weight": 15},
+            {"voice_id": "george", "weight": 5},
+        ])
+        preset = presets[0]
+        self.assertEqual(len(preset["sources"]), 4)
+        self.assertAlmostEqual(sum(item["weight"] for item in preset["sources"]), 1.0)
+        self.assertEqual(preset["sources"][0]["weight"], 0.5)
+        self.assertEqual(preset["sources"][-1]["weight"], 0.05)
+        self.assertEqual(voice_presets.get_presets()[0]["sources"], preset["sources"])
+
+    def test_edit_preserves_stable_id_and_increments_version(self):
+        first = voice_presets.save_preset("Calm", base="heart")[0]
+        second = voice_presets.save_preset("Calm", speed=0.9)[0]
+        self.assertEqual(second["id"], first["id"])
+        self.assertEqual(second["version"], first["version"] + 1)
+
+    def test_rename_can_preserve_stable_id_and_advance_version(self):
+        first = voice_presets.save_preset("Calm", base="heart")[0]
+        presets = voice_presets.save_preset(
+            "Calm Reader",
+            id=first["id"],
+            version=first["version"],
+            sources=first["sources"],
+        )
+        renamed = next(preset for preset in presets if preset["name"] == "Calm Reader")
+        self.assertEqual(renamed["id"], first["id"])
+        self.assertEqual(renamed["version"], first["version"] + 1)
+
+    def test_malformed_stored_version_falls_back_safely(self):
+        path = self._path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"schema_version": voice_presets._SCHEMA_VERSION, "presets": [{"name": "Calm", "version": "bad"}]}, handle)
+        self.assertEqual(voice_presets.get_presets()[0]["version"], 1)
 
     def test_save_then_get_round_trips(self):
         voice_presets.save_preset(

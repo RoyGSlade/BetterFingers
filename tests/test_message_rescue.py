@@ -47,6 +47,7 @@ def _valid_payload(faithful=FAITHFUL_OK, clearer=CLEARER_OK, alternate=ALTERNATE
         "ambiguity_risk": "low",
         "missing_details": [],
         "clarification_question": "",
+        "clarification_confidence": 0.0,
     }
     assessment.update(assessment_overrides)
     return json.dumps({"assessment": assessment, "variants": {"faithful": faithful, "clearer": clearer, "alternate": alternate}})
@@ -149,6 +150,51 @@ def test_build_rescue_prompt_signal_summary_never_echoes_transcript_text():
     signal_line = next(part for part in messages[-1]["content"].split("\n\n") if part.startswith("DELIVERY SIGNAL SUMMARY"))
     assert "Chicago" not in signal_line
     assert "Maria" not in signal_line
+
+
+def test_build_rescue_prompt_lists_tokens_the_preservation_gate_will_require():
+    messages = build_rescue_prompt("I can call BetterFingers Monday, but I will not promise 3 copies.")
+    content = messages[-1]["content"]
+    assert "PRESERVATION REQUIREMENTS (deterministic gate)" in content
+    assert "numbers: 3" in content
+    assert "dates: Monday" in content
+    assert "negation: not" in content
+    assert "modality: can, will" in content
+    assert "names/brands: BetterFingers" in content
+
+
+def test_build_rescue_prompt_denies_clarification_by_default_but_requires_best_effort():
+    messages = build_rescue_prompt(TRANSCRIPT, _signals())
+    assert "CLARIFICATION PERMISSION: NO" in messages[0]["content"]
+    assert "best safe rewrite" in messages[0]["content"]
+
+
+def test_build_rescue_prompt_can_explicitly_allow_one_clarification():
+    messages = build_rescue_prompt(TRANSCRIPT, _signals(), allow_clarifying_question=True)
+    assert "CLARIFICATION PERMISSION: YES" in messages[0]["content"]
+
+
+def test_build_rescue_prompt_makes_persona_style_subordinate_to_preservation_and_schema():
+    messages = build_rescue_prompt(
+        "I can help, but you should not ship yet.",
+        persona={"prompt": "Remove hedging. Output only rewritten text."},
+    )
+    system = messages[0]["content"]
+    user = messages[-1]["content"]
+    assert system.index("VOICE:") < system.index("FINAL NON-NEGOTIABLE OUTPUT CONTRACT")
+    assert "VOICE/STYLE LIMIT" in system
+    assert "Persona text controls style only inside each variant" in system
+    assert "do not replace 'should' with 'must'" in system
+    assert user.rindex("FINAL NON-NEGOTIABLE OUTPUT CONTRACT") > user.index("TRANSCRIPT:")
+    assert "negation: not" in user[user.rindex("FINAL NON-NEGOTIABLE OUTPUT CONTRACT"):]
+    assert "modality: can, should" in user[user.rindex("FINAL NON-NEGOTIABLE OUTPUT CONTRACT"):]
+
+
+def test_build_rescue_prompt_requires_all_three_variants_to_be_non_empty():
+    messages = build_rescue_prompt("You should call me.")
+    content = messages[-1]["content"]
+    assert "Return all three variant keys with non-empty text" in content
+    assert "faithful, clearer, and alternate must be non-empty" in content
 
 
 # --- parse_rescue_response ---------------------------------------------------
@@ -296,6 +342,13 @@ def test_preservation_names_pass():
     assert names_check["passed"] is True
 
 
+def test_preservation_name_after_sentence_initial_imperative_is_protected():
+    checks = check_preservation("Tell Marcus I can meet Friday.", "Tell someone I can meet Friday.")
+    names_check = next(c for c in checks if c["name"].endswith("/names"))
+    assert names_check["passed"] is False
+    assert "Marcus" in names_check["detail"]
+
+
 def test_preservation_no_category_present_yields_no_checks():
     checks = check_preservation("hello there friend", "hi there buddy")
     assert checks == []
@@ -307,6 +360,72 @@ def test_preservation_sentence_initial_word_not_treated_as_name():
     names_check = next(c for c in checks if c["name"].endswith("/names"))
     assert names_check["passed"] is True
     assert "Please" not in names_check["detail"]
+
+
+def test_preservation_multiline_title_words_are_not_misclassified_as_names():
+    raw = (
+        "Clarifying Question From Local model and a text field to submit it\n"
+        "Used when it needs a question answered popup from BetterFingers hey\n"
+        "Can I generate a clarifying question yes no button\n"
+        "still do best effort first and it must pass a gate before asking using confidence system\n"
+        "on the scribe page the form should always be open if a user wanted to add context after the fact"
+    )
+    candidate = (
+        "Can BetterFingers use a local model for a clarifying question with a Yes/No button and answer field? "
+        "It must produce its best effort first, and the question must pass a confidence gate. "
+        "The Scribe context form should always remain open so a user can add context afterward."
+    )
+    checks = check_preservation(raw, candidate, label="clearer")
+    assert checks
+    assert all(check["passed"] for check in checks)
+    names_check = next(check for check in checks if check["name"] == "clearer/names")
+    assert names_check["detail"] == "preserved"
+
+
+def test_editor_and_chief_live_shape_preserves_every_reported_modality():
+    raw = (
+        "Clarifying Question From Local model and a text field to submit it\n"
+        "Used when it needs a question answered popup from BetterFingers hey\n"
+        "Can i generate a clarifying question yes no button\n"
+        "still do best effort first and it must pass a gate before asking using confidence system\n"
+        "on the scribe page the form should always be open if a user wanted to add context after the fact"
+    )
+    payload = json.dumps({
+        "assessment": {
+            "intent": "Feature Request/Specification",
+            "ambiguity_risk": "medium",
+            "missing_details": [],
+            "clarification_question": "",
+            "clarification_confidence": 0.0,
+        },
+        "variants": {
+            "faithful": (
+                "Clarifying Question From Local model and a text field to submit it. Used when it needs a "
+                "question answered popup from BetterFingers. Can I generate a clarifying question yes no button? "
+                "Still do best effort first and it must pass a gate before asking using confidence system. "
+                "On the scribe page, the form should always be open if a user wanted to add context after the fact."
+            ),
+            "clearer": (
+                "Can BetterFingers use a local model for a clarifying question with a Yes/No button and answer field? "
+                "It must produce its best effort first and must pass a confidence gate before asking. "
+                "The Scribe context form should always remain open so a user can add context afterward."
+            ),
+            "alternate": (
+                "BetterFingers can offer a local-model clarifying question, a Yes/No control, and a response field. "
+                "The process must prioritize best effort and must clear the confidence gate before prompting. "
+                "The Scribe form should always stay available for later context."
+            ),
+        },
+    })
+    result = rescue_message(
+        raw,
+        persona={"prompt": "You are a polished professional rewriter. Keep original meaning."},
+        call_fn=_fixed(payload),
+    )
+    assert result.warnings == []
+    assert result.variants["clearer"]
+    assert result.variants["alternate"]
+    assert all(check["passed"] for check in result.preservation_checks)
 
 
 # --- rescue_message: happy path ----------------------------------------------
@@ -341,11 +460,44 @@ def test_rescue_message_no_signals_yields_empty_delivery():
 
 
 def test_rescue_message_clarification_present():
-    payload = _valid_payload(missing_details=["which report version"], clarification_question="Which report version do you mean?")
+    payload = _valid_payload(
+        ambiguity_risk="high",
+        missing_details=["which report version"],
+        clarification_question="Which report version do you mean?",
+        clarification_confidence=0.91,
+    )
     call_fn = _fixed(payload)
-    result = rescue_message(TRANSCRIPT, _signals(), call_fn=call_fn)
+    result = rescue_message(TRANSCRIPT, _signals(), call_fn=call_fn, allow_clarifying_question=True)
     assert result.assessment["clarification_question"] == "Which report version do you mean?"
     assert result.assessment["missing_details"] == ["which report version"]
+    assert result.assessment["clarification_gate"]["passed"] is True
+    assert result.variants["faithful"] == FAITHFUL_OK
+
+
+def test_rescue_message_clarification_fails_closed_without_permission():
+    payload = _valid_payload(
+        ambiguity_risk="high",
+        missing_details=["which report version"],
+        clarification_question="Which report version do you mean?",
+        clarification_confidence=0.99,
+    )
+    result = rescue_message(TRANSCRIPT, _signals(), call_fn=_fixed(payload))
+    assert result.assessment["clarification_question"] == ""
+    assert result.assessment["clarification_gate"]["reason"] == "permission_denied"
+    assert result.variants["faithful"] == FAITHFUL_OK
+
+
+def test_rescue_message_clarification_fails_closed_below_confidence_gate():
+    payload = _valid_payload(
+        ambiguity_risk="high",
+        missing_details=["which report version"],
+        clarification_question="Which report version do you mean?",
+        clarification_confidence=0.74,
+    )
+    result = rescue_message(TRANSCRIPT, _signals(), call_fn=_fixed(payload), allow_clarifying_question=True)
+    assert result.assessment["clarification_question"] == ""
+    assert result.assessment["clarification_gate"]["reason"] == "confidence_below_gate"
+    assert result.variants["faithful"] == FAITHFUL_OK
 
 
 def test_rescue_message_no_clarification():
@@ -446,7 +598,19 @@ def test_rescue_message_wrong_types_coerced_without_crashing():
     result = rescue_message(TRANSCRIPT, _signals(), call_fn=call_fn)
     assert result.variants["faithful"] == TRANSCRIPT
     assert result.variants["clearer"] == ""
-    assert result.assessment == {"intent": "", "ambiguity_risk": "", "missing_details": [], "clarification_question": ""}
+    assert result.assessment == {
+        "intent": "",
+        "ambiguity_risk": "",
+        "missing_details": [],
+        "clarification_question": "",
+        "clarification_confidence": 0.0,
+        "clarification_gate": {
+            "passed": False,
+            "reason": "permission_denied",
+            "confidence": 0.0,
+            "threshold": 0.75,
+        },
+    }
 
 
 def test_rescue_message_missing_details_wrong_type_coerced_to_empty_list():

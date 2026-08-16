@@ -51,7 +51,7 @@ def build_llm_call_fn(
     engine: _EngineLike,
     *,
     max_output_tokens: int | None = None,
-    temperature: float = 0.2,
+    temperature: float = 0.0,
 ):
     """Return a ``list[dict] -> str`` callable bound to ``engine.api_url``.
 
@@ -64,10 +64,20 @@ def build_llm_call_fn(
     ``isinstance(exc, TimeoutError)`` first) reliably takes the "model call
     timed out" branch rather than the generic failure one.
     """
+    # Message Rescue is a schema- and preservation-gated transformation, not
+    # creative generation. Greedy decoding makes identical requests stable
+    # and reduces one-run-only omissions of protected words such as "should".
     safe_max_tokens = max(64, min(4096, int(max_output_tokens or DEFAULT_MAX_OUTPUT_TOKENS)))
     read_timeout = compute_read_timeout_s(safe_max_tokens)
 
     def call_fn(messages: list[dict[str, str]]) -> str:
+        # Message Rescue can be the first LLM feature used after lazy startup,
+        # an explicit unload, or a model switch. Other LLMEngine entry points
+        # call ensure_ready themselves; this direct OpenAI-compatible adapter
+        # must do the same before opening the socket.
+        ensure_ready = getattr(engine, "ensure_ready", None)
+        if callable(ensure_ready) and not ensure_ready():
+            raise ConnectionError("local LLM is not ready")
         try:
             response = requests.post(
                 f"{engine.api_url}/v1/chat/completions",
