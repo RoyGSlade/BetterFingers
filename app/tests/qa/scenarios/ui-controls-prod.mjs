@@ -318,19 +318,17 @@ export const uiControlsProdScenarios = [
     name: 'the-active-voice-is-named-on-screen',
     kind: 'standard',
     description:
-      'Finding (3), UI half: "the user cannot SEE which voice is selected, nor what voices exist to blend." The ' +
-      'stub serves three voices, so the assertion is that the Studio voice surfaces NAME one of them in text -- ' +
-      'not that a <select> holds a value, which was already true while the user could not see it. Two surfaces ' +
-      'are checked because there are two: #voiceActiveVoiceName in the Voice Studio section, and ' +
-      '#sdVoiceBlendAvailable under the Voice & Delivery blend strip, whose "+ Add Voice" button used to add a ' +
-      'silently-chosen voice from a roster shown nowhere. The active-voice readout is then asserted to TRACK the ' +
-      'select: it is changed through the real control and the text must follow, which is what proves the readout ' +
-      'is wired rather than a hard-coded label that happens to be right on first paint.',
+      'The stub serves three voices, so the custom-voice workflow must name the selected voice in text rather ' +
+      'than relying on a closed select. The readout is then asserted to track a real selection change, proving it ' +
+      'is wired rather than a hard-coded label. The deprecated persona-tied delivery strip remains installed for ' +
+      'migration but must stay hidden and inert in the alpha.',
     backendState: voiceProfile,
     async navigate(page) {
       await assertNoOnboardingGate(page);
       await page.click('.sd-nav__button[data-nav="studio"]');
       await expect(page.locator('#workspace-studio')).toBeVisible();
+      await page.click('#createCustomVoiceButton');
+      await expect(page.locator('#customVoiceWorkflow')).toBeVisible();
     },
     async expects(page) {
       const active = page.locator('#voiceActiveVoiceName');
@@ -358,33 +356,12 @@ export const uiControlsProdScenarios = [
         'changing the base voice must move the readout -- otherwise it is a label, not a readout',
       ).toHaveText(targetName);
 
-      // The blend roster. The strip names what "+ Add Voice" can reach.
-      const available = page.locator('#sdVoiceBlendAvailable');
-      await expect(available, '#sdVoiceBlendAvailable must exist exactly once').toHaveCount(1);
-      await expect(
-        available,
-        'the blend strip must say something about what is available -- an empty line is the old behaviour',
-      ).not.toHaveText('');
-
-      // UI-07-127: #sdVoiceBlendCards (studioWorkspace.js's persona-tied
-      // blend strip, distinct from voiceStudio.js's Settings-side
-      // #voiceBlendRows checked elsewhere) must render a REAL card for the
-      // current base voice, and clicking the strip's own "+ Add Voice"
-      // button (#sdAddVoiceButton, a sibling inside the same container) must
-      // grow it to a second card -- existence alone would still pass a
-      // strip that renders one static card and never updates.
-      const blendCards = page.locator('#sdVoiceBlendCards');
-      await expect(blendCards, '#sdVoiceBlendCards must exist exactly once').toHaveCount(1);
-      await expect(
-        blendCards.locator('.sd-voice-blend-card'),
-        'the blend strip must render exactly one card (the base voice) before any layer is added',
-      ).toHaveCount(1);
-
-      await page.click('#sdAddVoiceButton');
-      await expect(
-        blendCards.locator('.sd-voice-blend-card'),
-        'clicking "+ Add Voice" must grow the blend strip to a second real card, not silently no-op',
-      ).toHaveCount(2);
+      // The old persona-tied delivery strip remains installed for migration,
+      // but the alpha replaces it with this custom-voice workflow.
+      const deprecatedStrip = page.locator('#sdDeprecatedVoiceDelivery');
+      await expect(deprecatedStrip).toBeHidden();
+      await expect(deprecatedStrip).toHaveAttribute('aria-hidden', 'true');
+      await expect(deprecatedStrip).toHaveAttribute('inert', '');
     },
     screenshots: [{ name: 'the-active-voice-is-named-on-screen' }],
   },
@@ -408,6 +385,8 @@ export const uiControlsProdScenarios = [
       await assertNoOnboardingGate(page);
       await page.click('.sd-nav__button[data-nav="studio"]');
       await expect(page.locator('#workspace-studio')).toBeVisible();
+      await page.click('#createCustomVoiceButton');
+      await expect(page.locator('#customVoiceWorkflow')).toBeVisible();
       await page.click('#addVoiceLayerButton');
     },
     async expects(page) {
@@ -423,7 +402,7 @@ export const uiControlsProdScenarios = [
         ).toHaveCount(0);
       }
 
-      const removeButton = row.locator('button.sd-btn');
+      const removeButton = row.locator('button.sd-btn[aria-label^="Remove blend voice"]');
       await expect(removeButton, 'the Remove control must be an .sd-btn').toHaveCount(1);
       const removeStyle = await removeButton.evaluate((el) => {
         const cs = getComputedStyle(el);

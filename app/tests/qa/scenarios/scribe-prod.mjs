@@ -110,7 +110,7 @@ export const scribeProdScenarios = [
 
         await expect(page.locator('#textPlaygroundStatus')).toHaveText('Done.');
         await expect(page.locator('#textPlaygroundRanInfo')).toContainText('persona: Formal');
-        await expect(page.locator('#textPlaygroundColumnRawText')).toHaveText('hey can we move standup later');
+        await expect(page.locator('#textPlaygroundText')).toHaveValue('hey can we move standup later');
         await expect(page.locator('#textPlaygroundColumnFaithfulText')).toHaveText('hey can we move standup later');
         await expect(page.locator('#textPlaygroundColumnClearerText')).toContainText('move the standup meeting');
         await expect(page.locator('#textPlaygroundColumnAlternateText')).toContainText('later standup time');

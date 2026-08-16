@@ -184,14 +184,10 @@ export const shellStatusProdScenarios = [
     name: 'hotkey-and-wake-capture-controls-are-reachable',
     kind: 'standard',
     description:
-      'The Wave 11 blockers list recorded 48 rows across Settings and Utilities as having no production anchor, ' +
-      'and concluded a user "cannot rebind a hotkey or train a wake phrase from the product". That was a ' +
-      'measurement defect, not a product gap: the controls moved from Settings to Utilities > Speech Input, and ' +
-      'the audit\'s rename rule could follow a rename but not a workspace MOVE. This scenario is the standing ' +
-      'proof of the correction -- all six hotkey capture fields, the wake enable toggle, the classifier import, ' +
-      'the Build-a-Wake-Phrase training group and the live wake test are asserted reachable and visible on the ' +
-      'page that ships. If any of them ever stops being reachable, the anchors in tools/parity_anchors.py that ' +
-      'promote those rows become false, and this fails.',
+      'Utilities > Speech Input keeps all six hotkey capture fields and the audio-device test reachable. ' +
+      'Wake-word configuration remains installed for migration, but the alpha capability registry deliberately ' +
+      'hides and inerts both wake groups. This scenario verifies both halves so the walkbook cannot mistake ' +
+      'installed backend/UI support for a user-visible alpha feature.',
     backendState: coldBoot,
     async navigate(page) {
       await assertNoOnboardingGate(page);
@@ -233,22 +229,15 @@ export const shellStatusProdScenarios = [
       await expect(page.locator('#sdUtilHotkeyWaylandWarning')).toHaveCount(1);
       await expect(page.locator('#sdUtilHotkeyMessage')).toHaveCount(1);
 
-      // Wake word (§7.8): enable, choose a classifier, import one, train a
-      // phrase, tune detection, test it live.
-      for (const id of [
-        '#sdUtilWakeEnabledToggle',
-        '#sdUtilWakeModelSelect',
-        '#sdUtilWakeImportButton',
-        '#sdUtilWakeTrainGroup',
-        '#sdUtilWakeTrainPhrase',
-        '#sdUtilWakeTrainButton',
-        '#sdUtilWakeSensitivity',
-        '#sdUtilWakeCooldown',
-        '#sdUtilWakeMaxRecording',
-        '#sdUtilWakeTestButton',
-        '#sdUtilWakeScoreBar',
-      ]) {
-        await expect(page.locator(id), `${id} must be reachable in Utilities > Speech Input`).toBeVisible();
+      // Wake-word configuration is intentionally outside the alpha surface.
+      // Keep its installed controls present for migration, but hidden and
+      // inert so the production walkbook verifies the same contract as the
+      // capability registry instead of exercising a disabled feature.
+      for (const id of ['#sdUtilWakeBackboneGroup', '#sdUtilWakeSettingsGroup']) {
+        await expect(page.locator(id), `${id} remains installed for migration`).toHaveCount(1);
+        await expect(page.locator(id), `${id} must be hidden in the alpha`).toBeHidden();
+        await expect(page.locator(id)).toHaveAttribute('aria-hidden', 'true');
+        await expect(page.locator(id)).toHaveAttribute('inert', '');
       }
 
       // Audio device test (§7.7), the third group that moved here.
@@ -263,11 +252,10 @@ export const shellStatusProdScenarios = [
     name: 'model-manager-controls-are-reachable',
     kind: 'standard',
     description:
-      'The same correction for inventory §8. The legacy Models tab was reported as 17 rows with no production ' +
-      'anchor; it is in fact Utilities > Models, complete. This asserts the LLM and Whisper managers -- badge, ' +
-      'picker, detail grid, and the select/download/unload/delete actions for each -- plus the recommendation ' +
-      'box, the status summary and the voice-cloning provisioning panel are all reachable on the shipping page. ' +
-      'Nothing is clicked: every action here either downloads gigabytes or deletes a model.',
+      'Utilities > Models keeps the LLM and Whisper managers -- badge, picker, detail grid, and the ' +
+      'select/download/unload/delete actions for each -- plus the recommendation and status summary reachable. ' +
+      'Voice-cloning provisioning remains installed for migration but is hidden and inert in the alpha. Nothing ' +
+      'is clicked: every reachable action here either downloads gigabytes or deletes a model.',
     backendState: coldBoot,
     async navigate(page) {
       await assertNoOnboardingGate(page);
@@ -295,11 +283,14 @@ export const shellStatusProdScenarios = [
         '#sdUtilWhisperDownloadButton',
         '#sdUtilWhisperUnloadButton',
         '#sdUtilWhisperDeleteButton',
-        '#sdUtilVoiceCloningPanel',
-        '#sdUtilVoiceCloningProvisionButton',
       ]) {
         await expect(page.locator(id), `${id} must be reachable in Utilities > Models`).toBeVisible();
       }
+      const voiceCloning = page.locator('#sdUtilVoiceCloningPanel');
+      await expect(voiceCloning, 'voice-cloning controls remain installed for migration').toHaveCount(1);
+      await expect(voiceCloning, 'voice cloning must be hidden in the alpha').toBeHidden();
+      await expect(voiceCloning).toHaveAttribute('aria-hidden', 'true');
+      await expect(voiceCloning).toHaveAttribute('inert', '');
     },
     screenshots: [{ name: 'model-manager-controls-are-reachable' }],
   },
@@ -335,6 +326,8 @@ export const shellStatusProdScenarios = [
       await assertNoOnboardingGate(page);
       await page.click('.sd-nav__button[data-nav="studio"]');
       await expect(page.locator('#workspace-studio')).toBeVisible();
+      await page.click('#createCustomVoiceButton');
+      await expect(page.locator('#customVoiceWorkflow')).toBeVisible();
     },
     async expects(page) {
       // Keys copied from voiceStudio.js's two preset maps. If a preset is

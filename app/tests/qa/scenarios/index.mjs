@@ -121,6 +121,12 @@ import { shellStatusProdScenarios } from './shell-status-prod.mjs';
 // screenshot suite.
 import { uiControlsProdScenarios } from './ui-controls-prod.mjs';
 
+function requireCapability(items, capability, predicate = () => true) {
+  return items.map((scenario) => (
+    predicate(scenario) ? { ...scenario, requiredCapability: capability } : scenario
+  ));
+}
+
 export const scenarios = [
   ...baselineScenarios,
   ...voiceControlScenarios,
@@ -135,16 +141,27 @@ export const scenarios = [
   ...personaScenarios,
   ...signalDeskShellScenarios,
   ...signalDeskSectionScenarios,
-  ...signalDeskTalkScenarios,
+  ...requireCapability(
+    signalDeskTalkScenarios,
+    'teachFromEdits',
+    (scenario) => scenario.name === 'editing-teaches-only-with-approval',
+  ),
   ...onboardingScenarios,
   ...firstRunBannerScenarios,
   ...personaFlowScenarios,
   ...contactsScenarios,
-  ...personaLearningScenarios,
+  ...requireCapability(personaLearningScenarios, 'teachFromEdits'),
   ...libraryScenarios,
-  ...wave5StudioScenarios,
+  ...requireCapability(
+    wave5StudioScenarios,
+    'deprecatedPersonaActions',
+    (scenario) => [
+      'edit-opens-the-same-shell-at-review',
+      'new-persona-and-edit-share-one-dialog',
+    ].includes(scenario.name),
+  ),
   ...wave7AppContextScenarios,
-  ...wave9ActionScenarios,
+  ...requireCapability(wave9ActionScenarios, 'workflowSettings'),
   ...wave10InputScenarios,
   ...defaultFlipScenarios,
   ...foundryProdScenarios,

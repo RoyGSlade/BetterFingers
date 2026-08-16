@@ -22,6 +22,7 @@
 import { expect } from '@playwright/test';
 import { coldBoot } from './fixtures/cold-boot.mjs';
 import { waitForText } from '../harness.mjs';
+import { ALPHA_CAPABILITIES } from '../../../src/renderer/config/alphaCapabilities.js';
 
 // The primary rail has five workspaces. Library remains a secondary, routable
 // workspace reached from Utilities' data-shell-nav link, not a sixth rail item.
@@ -58,7 +59,7 @@ const LATE_WAVE_SURFACES = [
   // than an eighth Settings section -- see signal-desk.html's comment there.
   { wave: 7, workspace: 'settings', section: '#sdSetSectionAiCleanup', nav: '#sdSetNavAiCleanup', id: '#sdSetAppProfileGroup' },
   // Wave 9 (D-0027) and Wave 10 (D-0029) both live in Utilities > Advanced.
-  { wave: 9, workspace: 'utilities', section: '#sdUtilSectionAdvanced', nav: '#sdUtilNavAdvanced', id: '#sdUtilWorkflowGroup' },
+  { wave: 9, workspace: 'utilities', section: '#sdUtilSectionAdvanced', nav: '#sdUtilNavAdvanced', id: '#sdUtilWorkflowGroup', capability: 'workflowSettings' },
   { wave: 10, workspace: 'utilities', section: '#sdUtilSectionAdvanced', nav: '#sdUtilNavAdvanced', id: '#sdUtilGameSetupGroup' },
 ];
 
@@ -286,11 +287,10 @@ export const signalDeskProdSweepScenarios = [
       'Waves 6, 7, 9 and 10 each added surfaces to sections the original reachability sweep never opened: the ' +
       'five new Privacy groups (store list, persona-learning disclosure, export, wipe mode, factory reset), ' +
       'application profiles inside AI Cleanup, and the workflow builder plus game-setup wizard inside Utilities > ' +
-      'Advanced. Gate 6 explicitly deferred dedicated scenarios for the Privacy groups to Wave 11, so this is that ' +
-      'coverage. Each surface is navigated to and asserted VISIBLE rather than merely present: these all sit inside ' +
-      '[hidden] sections, so a toHaveCount(1) alone would pass even if the section that owns them never opened, ' +
-      'which is precisely the failure this is here to catch. Nothing is clicked -- several of these are ' +
-      'irreversible data-destruction controls (D-0028), and rendering is the property under test.',
+      'Advanced. Enabled surfaces are asserted visible; the workflow builder remains installed but is asserted ' +
+      'hidden and inert while workflowSettings is disabled for the alpha. A count-only check would pass either a ' +
+      'broken section or an accidentally exposed disabled feature, so this verifies the actual release contract. ' +
+      'Nothing is clicked because several controls are irreversible.',
     backendState: coldBoot,
     async navigate(page) {
       await assertNoOnboardingGate(page);
@@ -311,6 +311,15 @@ export const signalDeskProdSweepScenarios = [
           page.locator(surface.id),
           `Wave ${surface.wave} surface ${surface.id} must exist exactly once in ${surface.section}`,
         ).toHaveCount(1);
+        if (surface.capability && ALPHA_CAPABILITIES[surface.capability] !== true) {
+          await expect(
+            page.locator(surface.id),
+            `${surface.id} must stay hidden while ${surface.capability} is disabled`,
+          ).toBeHidden();
+          await expect(page.locator(surface.id)).toHaveAttribute('aria-hidden', 'true');
+          await expect(page.locator(surface.id)).toHaveAttribute('inert', '');
+          continue;
+        }
         await expect(
           page.locator(surface.id),
           `Wave ${surface.wave} surface ${surface.id} must be VISIBLE once ${surface.section} is open`,
