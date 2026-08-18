@@ -409,6 +409,58 @@ def record_runtime_error(component, message, severity="recoverable", details=Non
         return dict(row)
 
 
+def _record_transcriber_runtime_event(event):
+    """Bridge Transcriber diagnostics without importing server from STT.
+
+    Transcriber sends a fixed-vocabulary event, never an exception object or
+    decoded text. Keep the allow-list here as a second privacy boundary before
+    an event reaches /runtime/errors.
+    """
+    event = event if isinstance(event, dict) else {}
+    code = str(event.get("code") or "stt_runtime_error")
+    allowed_codes = {
+        "cuda_runtime_missing",
+        "stt_model_load_failed",
+        "stt_model_not_loaded",
+        "stt_inference_failed",
+    }
+    if code not in allowed_codes:
+        code = "stt_runtime_error"
+    state = str(event.get("state") or "unknown")
+    if state not in {
+        "construction_failed",
+        "inference_failed",
+        "fallback_active",
+        "fallback_load_failed",
+        "fallback_inference_failed",
+        "probe_failed",
+        "unknown",
+    }:
+        state = "unknown"
+    active_device = event.get("active_device")
+    if active_device not in {None, "cuda", "cpu"}:
+        active_device = None
+    active_compute_type = event.get("active_compute_type")
+    if active_compute_type not in {None, "float16", "int8"}:
+        active_compute_type = None
+    fallback_reason = event.get("device_fallback_reason")
+    if fallback_reason not in {None, "CUDA initialization failed", "CUDA inference initialization failed"}:
+        fallback_reason = None
+    fallback_code = event.get("device_fallback_code")
+    if fallback_code != "cuda_runtime_missing":
+        fallback_code = None
+    details = {
+        "code": code,
+        "state": state,
+        "fallback": bool(event.get("fallback", False)),
+        "active_device": active_device,
+        "active_compute_type": active_compute_type,
+        "device_fallback_reason": fallback_reason,
+        "device_fallback_code": fallback_code,
+    }
+    return record_runtime_error("stt", code, str(event.get("severity") or "recoverable"), details)
+
+
 
 def get_runtime_error_history():
     with runtime_error_lock:
@@ -620,6 +672,8 @@ def ensure_transcriber_initialized(preload=False):
             transcriber.set_admission_fn(lambda est, size=None: model_runtime.request_admission("stt", est, size))
         if hasattr(transcriber, "set_load_reporter"):
             transcriber.set_load_reporter(lambda size, est: model_runtime.note_loaded("stt", size, est))
+        if hasattr(transcriber, "set_error_reporter"):
+            transcriber.set_error_reporter(_record_transcriber_runtime_event)
         if preload:
             transcriber.ensure_loaded()
     elif preload:
@@ -637,9 +691,12 @@ def warm_start_resident_models(settings=None):
             trans = ensure_transcriber_initialized(preload=True)
             results["stt"] = {"ok": True, "loaded": bool(getattr(trans, "model", None))}
         except Exception as exc:
-            logging.error(f"STT keep-loaded startup failure: {exc}")
-            record_runtime_error("stt", str(exc), {"action": "keep_loaded_startup"})
-            results["stt"] = {"ok": False, "error": str(exc)}
+            logging.error("STT keep-loaded startup failure (stt_model_load_failed).")
+            _record_transcriber_runtime_event({
+                "code": "stt_model_load_failed",
+                "state": "construction_failed",
+            })
+            results["stt"] = {"ok": False, "error": "stt_model_load_failed"}
 
     if settings.get("llm"):
         try:
@@ -747,6 +804,7 @@ def get_runtime_status_snapshot():
         except Exception:
             engine_ready = False
 
+    stt_status = _transcriber_status_snapshot(transcriber)
     return {
         "transcriber_initialized": transcriber is not None,
         "llm_initialized": engine is not None,
@@ -759,7 +817,77 @@ def get_runtime_status_snapshot():
             bool(getattr(hotkey_manager, "is_recording", False)) if hotkey_manager else False
         ),
         "transcriber_loaded": bool(getattr(transcriber, "model", None)),
+        "stt": stt_status,
         "llm_ready": engine_ready,
+    }
+
+
+def _transcriber_status_snapshot(stt, status_override=None):
+    """Return a safe status snapshot without constructing/probing STT."""
+    if stt is None:
+        return {
+            "constructed": False,
+            "probe_passed": False,
+            "inference_ready": False,
+            "error_code": None,
+            "error_state": None,
+            "active_device": None,
+            "active_compute_type": None,
+            "device_fallback_reason": None,
+            "device_fallback_code": None,
+        }
+    getter = getattr(stt, "get_runtime_status", None)
+    if isinstance(status_override, dict) or callable(getter):
+        try:
+            status = status_override if isinstance(status_override, dict) else getter()
+            if isinstance(status, dict):
+                raw = dict(status)
+                allowed_codes = {
+                    None,
+                    "cuda_runtime_missing",
+                    "stt_model_load_failed",
+                    "stt_model_not_loaded",
+                    "stt_inference_failed",
+                }
+                allowed_states = {
+                    None,
+                    "construction_failed",
+                    "inference_failed",
+                    "fallback_active",
+                    "fallback_load_failed",
+                    "fallback_inference_failed",
+                    "probe_failed",
+                    "unknown",
+                }
+                reason = raw.get("device_fallback_reason")
+                if reason not in {None, "CUDA initialization failed", "CUDA inference initialization failed"}:
+                    reason = None
+                fallback_code = raw.get("device_fallback_code")
+                if fallback_code != "cuda_runtime_missing":
+                    fallback_code = None
+                return {
+                    "constructed": bool(raw.get("constructed", False)),
+                    "probe_passed": bool(raw.get("probe_passed", False)),
+                    "inference_ready": bool(raw.get("inference_ready", False)),
+                    "error_code": raw.get("error_code") if raw.get("error_code") in allowed_codes else None,
+                    "error_state": raw.get("error_state") if raw.get("error_state") in allowed_states else None,
+                    "active_device": raw.get("active_device") if raw.get("active_device") in {None, "cuda", "cpu"} else None,
+                    "active_compute_type": raw.get("active_compute_type") if raw.get("active_compute_type") in {None, "float16", "int8"} else None,
+                    "device_fallback_reason": reason,
+                    "device_fallback_code": fallback_code,
+                }
+        except Exception:
+            pass
+    return {
+        "constructed": bool(getattr(stt, "model", None)),
+        "probe_passed": False,
+        "inference_ready": False,
+        "error_code": None,
+        "error_state": None,
+        "active_device": getattr(stt, "active_device", None),
+        "active_compute_type": getattr(stt, "active_compute_type", None),
+        "device_fallback_reason": getattr(stt, "device_fallback_reason", None),
+        "device_fallback_code": getattr(stt, "device_fallback_code", None),
     }
 
 
@@ -2643,8 +2771,11 @@ async def startup_event():
             ensure_transcriber_initialized(preload=bool(residency_settings.get("stt")))
             logging.info("Transcriber initialized successfully.")
         except Exception as e:
-            logging.error(f"Transcriber startup failure: {e}")
-            record_runtime_error("stt", str(e))
+            logging.error("Transcriber startup failure (stt_model_load_failed).")
+            _record_transcriber_runtime_event({
+                "code": "stt_model_load_failed",
+                "state": "construction_failed",
+            })
 
         if any(residency_settings.values()):
             warm_results = warm_start_resident_models(residency_settings)
@@ -2901,14 +3032,21 @@ async def run_doctor(refresh_audio: bool = False):
     # loaded with (set in transcriber._load_model()), not just the user's
     # prefer_gpu setting -- e.g. on Windows without cuDNN, CUDA init fails and
     # this honestly reports device="cpu" instead of implying GPU acceleration.
-    stt_fallback_reason = getattr(transcriber, "device_fallback_reason", None) if transcriber else None
+    stt_status = _transcriber_status_snapshot(transcriber)
+    stt_fallback_reason = stt_status.get("device_fallback_reason")
     stt_info = {
         "initialized": transcriber is not None,
         "loaded": bool(getattr(transcriber, "model", None)) if transcriber else False,
         "model_size": getattr(transcriber, "model_size", None) if transcriber else None,
-        "device": getattr(transcriber, "active_device", None) if transcriber else None,
-        "compute_type": getattr(transcriber, "active_compute_type", None) if transcriber else None,
+        "constructed": stt_status.get("constructed", False),
+        "probe_passed": stt_status.get("probe_passed", False),
+        "inference_ready": stt_status.get("inference_ready", False),
+        "error_code": stt_status.get("error_code"),
+        "error_state": stt_status.get("error_state"),
+        "device": stt_status.get("active_device"),
+        "compute_type": stt_status.get("active_compute_type"),
         "device_fallback_reason": stt_fallback_reason,
+        "device_fallback_code": stt_status.get("device_fallback_code"),
         "using_cpu_fallback": bool(stt_fallback_reason),
     }
 
@@ -2933,6 +3071,8 @@ async def run_doctor(refresh_audio: bool = False):
         llm_runtime_status = "missing_llama_server"
     elif not model_exists:
         llm_runtime_status = "missing_model"
+    elif runtime_validation.get("error_code") == "runtime_validation_timeout":
+        llm_runtime_status = "runtime_validation_timeout"
     elif not runtime_validation.get("ok", False):
         llm_runtime_status = "runtime_link_failure"
     elif not runtime_build_ok:
@@ -2956,6 +3096,9 @@ async def run_doctor(refresh_audio: bool = False):
         "runtime_compatible": bool(runtime_validation.get("ok", False) and runtime_build_ok),
         "runtime_build": runtime_build,
         "required_runtime_build": required_runtime_build,
+        "runtime_validation_error_code": runtime_validation.get("error_code"),
+        "runtime_validation_elapsed_sec": runtime_validation.get("elapsed_sec"),
+        "runtime_validation_timeout_sec": runtime_validation.get("timeout_sec"),
         "runtime_message": runtime_validation.get("message", ""),
         "last_error": llm_last_error,
         "last_error_details": dict(getattr(engine, "_last_error_details", {}) or {}) if engine else {},
@@ -4775,6 +4918,8 @@ def gather_support_report():
         llm_status = "missing_llama_server"
     elif not model_exists:
         llm_status = "missing_model"
+    elif runtime_validation.get("error_code") == "runtime_validation_timeout":
+        llm_status = "runtime_validation_timeout"
     elif not runtime_validation.get("ok", False):
         llm_status = "runtime_invalid"
     elif engine_ready:
@@ -4785,11 +4930,20 @@ def gather_support_report():
         llm_status = "not_loaded"
 
     stt = transcriber
+    stt_status = _transcriber_status_snapshot(stt)
     stt_info = {
         "initialized": stt is not None,
         "loaded": bool(getattr(stt, "model", None)) if stt is not None else False,
         "model_size": getattr(stt, "model_size", None) if stt is not None else None,
-        "device": getattr(stt, "device", None) if stt is not None else None,
+        "constructed": stt_status.get("constructed", False),
+        "probe_passed": stt_status.get("probe_passed", False),
+        "inference_ready": stt_status.get("inference_ready", False),
+        "error_code": stt_status.get("error_code"),
+        "error_state": stt_status.get("error_state"),
+        "device": stt_status.get("active_device"),
+        "compute_type": stt_status.get("active_compute_type"),
+        "device_fallback_reason": stt_status.get("device_fallback_reason"),
+        "device_fallback_code": stt_status.get("device_fallback_code"),
     }
 
     tts = tts_engine
@@ -4804,6 +4958,9 @@ def gather_support_report():
             "runtime_status": llm_status,
             "runtime_build": runtime_build,
             "required_runtime_build": required_runtime_build,
+            "runtime_validation_error_code": runtime_validation.get("error_code"),
+            "runtime_validation_elapsed_sec": runtime_validation.get("elapsed_sec"),
+            "runtime_validation_timeout_sec": runtime_validation.get("timeout_sec"),
             "last_error": llm_last_error,
         },
         "stt": stt_info,
@@ -5438,21 +5595,40 @@ async def runtime_warmup(request: RuntimeWarmupRequest):
     result: typing.Dict[str, typing.Any] = {"requested": request.model_dump()}
 
     if request.stt:
+        trans = None
         try:
             trans = await run_in_threadpool(ensure_transcriber_initialized, preload=False)
+            probe_fn = getattr(trans, "runtime_probe", None) if trans is not None else None
+            if callable(probe_fn):
+                probe = await run_in_threadpool(probe_fn)
+                stt_status = _transcriber_status_snapshot(trans, probe)
+            else:
+                # Compatibility for test doubles/older injected transcribers:
+                # constructor success is the only fact available when there is
+                # no probe API, and is not called inference-ready by new code.
+                loaded = bool(trans and await run_in_threadpool(trans.ensure_loaded))
+                stt_status = _transcriber_status_snapshot(trans)
+                stt_status["constructed"] = loaded or stt_status.get("constructed", False)
             result["stt"] = {
-                "ok": True,
+                "ok": bool(stt_status.get("probe_passed", False)),
                 "initialized": trans is not None,
-                "loaded": bool(trans and await run_in_threadpool(trans.ensure_loaded)),
+                "loaded": bool(stt_status.get("constructed", False)),
+                **stt_status,
             }
         except Exception as e:
-            logging.exception("Transcriber warmup failure")
-            record_runtime_error("stt", str(e), {"action": "warmup"})
+            logging.error("Transcriber warmup failure (stt_inference_failed).")
+            _record_transcriber_runtime_event({
+                "code": "stt_inference_failed",
+                "state": "probe_failed",
+                "severity": "recoverable",
+            })
+            stt_status = _transcriber_status_snapshot(trans)
             result["stt"] = {
                 "ok": False,
                 "initialized": transcriber is not None,
-                "loaded": bool(getattr(transcriber, "model", None)),
-                "error": str(e),
+                "loaded": bool(stt_status.get("constructed", False)),
+                **stt_status,
+                "error": stt_status.get("error_code") or "stt_inference_failed",
             }
 
     if request.llm:
@@ -5499,8 +5675,12 @@ async def runtime_warmup(request: RuntimeWarmupRequest):
                 "error": str(e),
             }
 
-    result.update(get_runtime_status_snapshot())
-    return result
+    # The warmup result contains stronger, action-specific evidence than the
+    # observation-only snapshot (notably the STT probe result). Merge it last
+    # so /runtime/warmup never overwrites that proof with a stale status row.
+    status_snapshot = get_runtime_status_snapshot()
+    status_snapshot.update(result)
+    return status_snapshot
 
 class LLMRequest(BaseModel):
     text: str

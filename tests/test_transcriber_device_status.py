@@ -53,6 +53,8 @@ class TranscriberCudaFallbackTests(unittest.TestCase):
     @patch("transcriber.WhisperModel", side_effect=_cuda_fails_cpu_succeeds)
     def test_cuda_failure_records_cpu_device_and_reason(self, whisper_model, _load_profile):
         transcriber = Transcriber(profile_name="Default", preload=False)
+        events = []
+        transcriber.set_error_reporter(events.append)
         self.assertTrue(transcriber.prefer_gpu)
 
         ok = transcriber.ensure_loaded()
@@ -62,6 +64,10 @@ class TranscriberCudaFallbackTests(unittest.TestCase):
         self.assertEqual(transcriber.active_device, "cpu")
         self.assertEqual(transcriber.active_compute_type, "int8")
         self.assertEqual(transcriber.device_fallback_reason, "CUDA initialization failed")
+        self.assertEqual(transcriber.device_fallback_code, "cuda_runtime_missing")
+        self.assertEqual(events[-1]["code"], "cuda_runtime_missing")
+        self.assertEqual(events[-1]["state"], "fallback_active")
+        self.assertTrue(events[-1]["fallback"])
         # Every constructor call attempted CUDA before the successful CPU one.
         whisper_model.assert_called()
 

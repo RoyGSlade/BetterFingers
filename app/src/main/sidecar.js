@@ -4,6 +4,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { app } = require('electron');
 const { EXPECTED_API_SCHEMA_VERSION } = require('./config');
+const { resolveUserDataRoot } = require('./userDataRoot');
 
 // How the post-startup health monitor behaves once the backend is ready.
 // A busy backend is not a dead backend: restarting on missed pings alone
@@ -100,6 +101,53 @@ function spawnOwnedBackend(command, args, options = {}, {
     spawnOptions.detached = true;
   }
   return spawnImpl(command, args, spawnOptions);
+}
+
+function sameWindowsPath(left, right) {
+  const normalize = (value) => path.win32.normalize(value).replace(/[\\/]+$/, '').toLowerCase();
+  return normalize(left) === normalize(right);
+}
+
+function prependWindowsPath(existingPath, modelsDir) {
+  if (typeof existingPath === 'string' && existingPath
+      .split(';')
+      .some((entry) => entry && sameWindowsPath(entry, modelsDir))) {
+    return existingPath;
+  }
+  return existingPath ? `${modelsDir};${existingPath}` : modelsDir;
+}
+
+function buildBackendEnv({
+  platform = process.platform,
+  parentEnv = process.env,
+  runtimeEnv = {},
+  userDataRoot = null,
+  resolveUserDataRootImpl = resolveUserDataRoot,
+} = {}) {
+  const backendEnv = {
+    ...parentEnv,
+    ...runtimeEnv,
+  };
+
+  if (platform !== 'win32') {
+    return backendEnv;
+  }
+
+  const resolvedRoot = userDataRoot ?? resolveUserDataRootImpl({
+    env: parentEnv,
+    platform,
+  });
+  const modelsDir = path.win32.resolve(resolvedRoot, 'models');
+  const pathKeys = Object.keys(backendEnv).filter((key) => key.toLowerCase() === 'path');
+  if (pathKeys.length === 0) {
+    backendEnv.PATH = modelsDir;
+  } else {
+    for (const key of pathKeys) {
+      backendEnv[key] = prependWindowsPath(backendEnv[key], modelsDir);
+    }
+  }
+
+  return backendEnv;
 }
 
 // The backend enforces BETTERFINGERS_AUTH_TOKEN on every non-/ws/ route,
@@ -345,16 +393,23 @@ function createSidecar({
   setIntervalImpl = setInterval,
   clearIntervalImpl = clearInterval,
   isPackaged = Boolean(app?.isPackaged),
+  parentEnv = process.env,
+  dataRoot = null,
+  resolveBackendExecutableImpl = resolveBackendExecutable,
   userDataPath = null,
 } = {}) {
   const healthUrl = `http://${host}:${port}/health`;
   const backendHeaders = authHeaders(authToken);
-  const backendEnv = {
-    ...process.env,
-    BETTERFINGERS_LAZY_STARTUP: '1',
-    BETTERFINGERS_ENV: isPackaged ? 'production' : 'development',
-    BETTERFINGERS_AUTH_TOKEN: authToken,
-  };
+  const backendEnv = buildBackendEnv({
+    platform,
+    parentEnv,
+    userDataRoot: dataRoot,
+    runtimeEnv: {
+      BETTERFINGERS_LAZY_STARTUP: '1',
+      BETTERFINGERS_ENV: isPackaged ? 'production' : 'development',
+      BETTERFINGERS_AUTH_TOKEN: authToken,
+    },
+  });
   let childProcess = null;
   let startPromise = null;
   let logBuffer = [];
@@ -511,7 +566,7 @@ function createSidecar({
         }
 
         if (isPackaged) {
-          const executablePath = resolveBackendExecutable();
+          const executablePath = resolveBackendExecutableImpl();
           appendLog('electron', `Spawning packaged backend executable at: ${executablePath}`);
           processRef = spawnOwnedBackend(executablePath, ['--host', host, '--port', String(port)], {
             cwd: path.dirname(executablePath),
@@ -912,6 +967,7 @@ function createSidecar({
 }
 
 module.exports = {
+  buildBackendEnv,
   createSidecar,
   getOwnedProcessGroupId,
   killChildProcess,

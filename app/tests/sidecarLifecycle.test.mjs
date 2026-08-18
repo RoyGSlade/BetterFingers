@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 
 import {
+  buildBackendEnv,
   createSidecar,
   getOwnedProcessGroupId,
   killChildProcess,
@@ -27,6 +28,123 @@ function fakeChild(pid = 4321, { onKill = null } = {}) {
   };
   return child;
 }
+
+test('Windows backend env prepends the resolved models directory to a clean PATH', () => {
+  const parentEnv = {
+    PATH: 'C:\\Windows\\System32',
+    KEEP_ME: 'unchanged',
+  };
+  const result = buildBackendEnv({
+    platform: 'win32',
+    parentEnv,
+    userDataRoot: 'C:\\Users\\Ada\\AppData\\Roaming\\BetterFingers',
+  });
+
+  assert.equal(
+    result.PATH,
+    'C:\\Users\\Ada\\AppData\\Roaming\\BetterFingers\\models;C:\\Windows\\System32',
+  );
+  assert.equal(result.KEEP_ME, 'unchanged');
+});
+
+test('Windows backend env preserves both existing PATH casings and their values', () => {
+  const parentEnv = {
+    Path: 'C:\\Windows\\System32',
+    PATH: 'C:\\Legacy\\bin',
+    KEEP_ME: 'unchanged',
+  };
+  const result = buildBackendEnv({
+    platform: 'win32',
+    parentEnv,
+    userDataRoot: 'C:\\Users\\Ada\\AppData\\Roaming\\BetterFingers',
+  });
+
+  assert.equal(
+    result.Path,
+    'C:\\Users\\Ada\\AppData\\Roaming\\BetterFingers\\models;C:\\Windows\\System32',
+  );
+  assert.equal(
+    result.PATH,
+    'C:\\Users\\Ada\\AppData\\Roaming\\BetterFingers\\models;C:\\Legacy\\bin',
+  );
+  assert.equal(result.KEEP_ME, 'unchanged');
+});
+
+test('Windows backend env does not duplicate the models directory', () => {
+  const modelsDir = 'C:\\Users\\Ada\\AppData\\Roaming\\BetterFingers\\models';
+  const result = buildBackendEnv({
+    platform: 'win32',
+    parentEnv: { PATH: `${modelsDir};C:\\Windows\\System32` },
+    userDataRoot: 'C:\\Users\\Ada\\AppData\\Roaming\\BetterFingers',
+  });
+
+  assert.equal(result.PATH, `${modelsDir};C:\\Windows\\System32`);
+});
+
+test('Linux and macOS backend env remains unchanged and does not touch LD_LIBRARY_PATH', () => {
+  const parentEnv = {
+    PATH: '/usr/local/bin:/usr/bin',
+    LD_LIBRARY_PATH: '/opt/vendor/lib',
+    KEEP_ME: 'unchanged',
+  };
+
+  for (const platform of ['linux', 'darwin']) {
+    assert.deepEqual(
+      buildBackendEnv({ platform, parentEnv, userDataRoot: '/data/BetterFingers' }),
+      parentEnv,
+      `${platform} environment should remain byte-for-byte equivalent in intent`,
+    );
+  }
+});
+
+test('development and packaged sidecar spawns receive the hardened Windows env', async () => {
+  const root = 'C:\\Users\\Ada\\AppData\\Roaming\\BetterFingers';
+  const parentEnv = {
+    PATH: 'C:\\Windows\\System32',
+    KEEP_ME: 'unchanged',
+  };
+  const expectedPath = `${root}\\models;${parentEnv.PATH}`;
+
+  for (const isPackaged of [false, true]) {
+    const calls = [];
+    const spawnProcess = (command, args, options) => {
+      calls.push({ command, args, options });
+      if (command === 'taskkill') {
+        const killer = new EventEmitter();
+        queueMicrotask(() => killer.emit('exit', 0, null));
+        return killer;
+      }
+      return fakeChild(isPackaged ? 2002 : 2001);
+    };
+    const sidecar = createSidecar({
+      platform: 'win32',
+      parentEnv,
+      dataRoot: root,
+      isPackaged,
+      devCommand: 'python.exe',
+      devArgs: ['backend.py'],
+      resolveBackendExecutableImpl: () => 'C:\\Program Files\\BetterFingers\\backend.exe',
+      isTcpPortOpenImpl: async () => false,
+      waitForHealthyImpl: async () => ({ status: 'ok' }),
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({ schema_version: 1, backend_version: 'test' }),
+      }),
+      setIntervalImpl: () => ({ unref() {} }),
+      clearIntervalImpl: () => {},
+      spawnProcess,
+    });
+
+    await sidecar.start();
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].options.env.PATH, expectedPath);
+    assert.equal(calls[0].options.env.KEEP_ME, 'unchanged');
+    assert.equal(calls[0].command, isPackaged
+      ? 'C:\\Program Files\\BetterFingers\\backend.exe'
+      : 'python.exe');
+    await sidecar.stop();
+  }
+});
 
 test('POSIX owned spawn requests a detached process group and Windows stays attached', () => {
   const calls = [];

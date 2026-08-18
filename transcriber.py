@@ -11,7 +11,7 @@ from huggingface_hub import scan_cache_dir
 from huggingface_hub.constants import HF_HUB_CACHE
 
 from backend.domain.contracts import TimedSegment, TranscriptionResult
-from log_redaction import redact_exc, redact_user_text
+from log_redaction import redact_user_text
 from text_formatter import TextFormatter
 from utils import load_profile
 
@@ -40,6 +40,24 @@ _WHISPER_RUNTIME_MB_ESTIMATES = {
     "distil-large-v3": 1700,
 }
 _DEFAULT_WHISPER_RUNTIME_MB = 500
+
+# Stable, privacy-safe runtime diagnostics.  Keep this classifier deliberately
+# narrow: an arbitrary CUDA/inference exception must not cause a CPU reload or
+# leak its payload into logs/runtime errors.
+CUDA_RUNTIME_MISSING_CODE = "cuda_runtime_missing"
+_CUDA_RUNTIME_LIBRARY_RE = re.compile(r"(?:cublas|cudnn|cudart)", re.IGNORECASE)
+_CUDA_RUNTIME_LOAD_RE = re.compile(
+    r"(?:missing|not found|(?:unable\s+)?to\s+load|cannot\s+load|could not\s+load|failed\s+to\s+load|load(?:ing)?\s+failed|dll)",
+    re.IGNORECASE,
+)
+
+
+def classify_cuda_runtime_error(exc):
+    """Return a stable code only for the known CUDA DLL-load family."""
+    text = str(exc or "")
+    if _CUDA_RUNTIME_LIBRARY_RE.search(text) and _CUDA_RUNTIME_LOAD_RE.search(text):
+        return CUDA_RUNTIME_MISSING_CODE
+    return None
 
 
 def _estimate_whisper_runtime_mb(model_size):
@@ -329,6 +347,7 @@ class Transcriber:
         self.active_device = None          # "cuda" | "cpu" | None
         self.active_compute_type = None    # "float16" | "int8" | None
         self.device_fallback_reason = None  # short string, or None if no fallback happened
+        self.device_fallback_code = None   # stable privacy-safe code, if fallback happened
         self.download_root = HF_HUB_CACHE
         os.makedirs(self.download_root, exist_ok=True)
 
@@ -338,7 +357,13 @@ class Transcriber:
         # None-safe: unset means "no admission control".
         self._admission_fn = None      # (estimated_mb, model_size) -> AdmissionResult dict
         self._load_reporter = None     # (model_size, estimated_mb) -> None
+        self._error_reporter = None    # (privacy-safe event dict) -> None
         self._last_error = ""
+        self._last_error_code = None
+        self._last_error_state = None
+        self._probe_passed = False
+        self._inference_ready = False
+        self._decode_fallback_attempted = False
 
         self.reload_profile(profile_name=profile_name, preload=preload)
 
@@ -347,6 +372,54 @@ class Transcriber:
 
     def set_load_reporter(self, fn):
         self._load_reporter = fn
+
+    def set_error_reporter(self, fn):
+        """Inject an owner-level reporter without importing the server."""
+        self._error_reporter = fn
+        if callable(fn) and self.device_fallback_code:
+            self._emit_runtime_error(
+                self.device_fallback_code,
+                "fallback_active",
+                fallback=True,
+            )
+
+    def _emit_runtime_error(self, code, state, *, severity="recoverable", fallback=False):
+        """Send only fixed vocabulary/device state to the server reporter."""
+        self._last_error_code = code
+        self._last_error_state = state
+        reporter = self._error_reporter
+        if not callable(reporter):
+            return
+        event = {
+            "code": code,
+            "state": state,
+            "severity": severity,
+            "fallback": bool(fallback),
+            "active_device": self.active_device,
+            "active_compute_type": self.active_compute_type,
+            "device_fallback_reason": self.device_fallback_reason,
+            "device_fallback_code": getattr(self, "device_fallback_code", None),
+        }
+        try:
+            reporter(event)
+        except Exception:
+            # Diagnostics must never break transcription or model lifecycle.
+            logging.debug("STT runtime error reporter failed.")
+
+    def get_runtime_status(self):
+        """Return observation-only, privacy-safe model/probe state."""
+        with self._model_lock:
+            return {
+                "constructed": self.model is not None,
+                "probe_passed": bool(self._probe_passed),
+                "inference_ready": bool(self._inference_ready),
+                "error_code": self._last_error_code,
+                "error_state": self._last_error_state,
+                "active_device": self.active_device,
+                "active_compute_type": self.active_compute_type,
+                "device_fallback_reason": self.device_fallback_reason,
+                "device_fallback_code": getattr(self, "device_fallback_code", None),
+            }
 
     def _load_runtime_config(self, profile_name):
         try:
@@ -384,6 +457,11 @@ class Transcriber:
                 self.active_device = None
                 self.active_compute_type = None
                 self.device_fallback_reason = None
+                self.device_fallback_code = None
+                self._probe_passed = False
+                self._inference_ready = False
+                self._last_error_code = None
+                self._last_error_state = None
 
         if preload is None:
             preload = self.model is not None
@@ -404,6 +482,7 @@ class Transcriber:
         # Stays None when prefer_gpu is False (CPU was never a "fallback") or
         # when CUDA loads successfully.
         fallback_reason = None
+        fallback_code = None
 
         if self.prefer_gpu:
             try:
@@ -423,14 +502,13 @@ class Transcriber:
                 self.active_device = device
                 self.active_compute_type = compute_type
                 self.device_fallback_reason = None
+                self.device_fallback_code = None
                 return model
             except Exception as exc:
                 if local_files_only:
                     # Cache may be partial/corrupt; retry once with network allowed.
                     try:
-                        logging.warning(
-                            f"CUDA load from local cache failed ({exc}). Retrying with remote fetch enabled."
-                        )
+                        logging.warning("CUDA load from local cache failed; retrying with remote fetch enabled.")
                         # Explicit GC before retry
                         gc.collect()
                         model = WhisperModel(
@@ -444,11 +522,15 @@ class Transcriber:
                         self.active_device = device
                         self.active_compute_type = compute_type
                         self.device_fallback_reason = None
+                        self.device_fallback_code = None
                         return model
                     except Exception as retry_exc:
                         exc = retry_exc
+                fallback_code = classify_cuda_runtime_error(exc)
+                if fallback_code is None:
+                    raise
                 fallback_reason = "CUDA initialization failed"
-                logging.warning(f"CUDA initialization failed ({exc}). Falling back to CPU.")
+                logging.warning("CUDA initialization failed; falling back to CPU.")
 
         device = "cpu"
         compute_type = "int8"
@@ -465,9 +547,7 @@ class Transcriber:
             )
         except Exception as exc:
             if local_files_only:
-                logging.warning(
-                    f"CPU load from local cache failed ({exc}). Retrying with remote fetch enabled."
-                )
+                logging.warning("CPU load from local cache failed; retrying with remote fetch enabled.")
                 model = WhisperModel(
                     model_size,
                     device=device,
@@ -481,6 +561,7 @@ class Transcriber:
         self.active_device = device
         self.active_compute_type = compute_type
         self.device_fallback_reason = fallback_reason
+        self.device_fallback_code = fallback_code if fallback_reason else None
         return model
 
     def _is_model_cached(self, model_size):
@@ -558,14 +639,18 @@ class Transcriber:
                     })
                 self.model = self._load_model()
             except Exception as exc:
-                logging.error(f"Failed to load Whisper model: {exc}")
+                logging.error("Failed to load Whisper model (stt_model_load_failed).")
                 self.model = None
                 # Nothing loaded -- don't let a stale device from a previous
                 # successful load misreport status as still-accelerated.
                 self.active_device = None
                 self.active_compute_type = None
                 self.device_fallback_reason = None
+                self.device_fallback_code = None
                 self._last_error = str(exc)
+                self._probe_passed = False
+                self._inference_ready = False
+                self._emit_runtime_error("stt_model_load_failed", "construction_failed")
                 if will_download:
                     _set_whisper_download_state(self.model_size, {
                         "model_size": self.model_size,
@@ -577,6 +662,17 @@ class Transcriber:
 
             if self.model is not None:
                 self._last_error = ""
+                if self.device_fallback_code:
+                    self._emit_runtime_error(
+                        self.device_fallback_code,
+                        "fallback_active",
+                        fallback=True,
+                    )
+                else:
+                    self._last_error_code = None
+                    self._last_error_state = None
+                self._probe_passed = False
+                self._inference_ready = False
                 if will_download:
                     _set_whisper_download_state(self.model_size, {
                         "model_size": self.model_size,
@@ -587,8 +683,8 @@ class Transcriber:
                 if self._load_reporter is not None:
                     try:
                         self._load_reporter(self.model_size, _estimate_whisper_runtime_mb(self.model_size))
-                    except Exception as exc:
-                        logging.debug(f"Whisper load reporter failed: {exc}")
+                    except Exception:
+                        logging.debug("Whisper load reporter failed.")
             return self.model is not None
 
     def unload(self):
@@ -597,11 +693,124 @@ class Transcriber:
             self.active_device = None
             self.active_compute_type = None
             self.device_fallback_reason = None
+            self.device_fallback_code = None
+            self._probe_passed = False
+            self._inference_ready = False
+            self._last_error_code = None
+            self._last_error_state = None
         logging.info("Whisper model unloaded.")
 
     def transcribe(self, audio_array, hotwords=None):
         # Kept for callers that only need text; delegates to the confidence path.
         return self.transcribe_with_confidence(audio_array, hotwords=hotwords)[0]
+
+    def _load_cpu_fallback_model(self):
+        """Construct exactly one CPU/int8 model for a lazy CUDA recovery."""
+        model_size = self.model_size
+        local_files_only = self._is_model_cached(model_size)
+        model = WhisperModel(
+            model_size,
+            device="cpu",
+            compute_type="int8",
+            download_root=self.download_root,
+            local_files_only=local_files_only,
+        )
+        self.active_device = "cpu"
+        self.active_compute_type = "int8"
+        self.device_fallback_reason = "CUDA inference initialization failed"
+        self.device_fallback_code = CUDA_RUNTIME_MISSING_CODE
+        return model
+
+    def _decode_segments_with_recovery(self, audio_array, hotwords=None):
+        """Consume the lazy faster-whisper generator under the model lock.
+
+        Returns ``(segments, error_code)`` where ``segments`` is ``None`` for
+        an infrastructure failure.  The recovery branch is intentionally
+        bounded: one CPU model construction and one retry of this same audio.
+        """
+        audio_duration_s = len(audio_array) / 16000.0
+        beam_size = 1 if audio_duration_s < 2.0 else 5
+        transcribe_kwargs = {"beam_size": beam_size}
+        if hotwords:
+            transcribe_kwargs["hotwords"] = hotwords
+
+        with self._model_lock:
+            model = self.model
+            if model is None:
+                self._inference_ready = False
+                return None, "stt_model_not_loaded"
+
+            def consume(active_model):
+                # faster-whisper's encoder/decoder work can be lazy until the
+                # iterator is advanced. Keep both call and iteration locked.
+                segments, _info = active_model.transcribe(audio_array, **transcribe_kwargs)
+                return list(segments)
+
+            try:
+                segments = consume(model)
+                self._inference_ready = True
+                return segments, None
+            except Exception as exc:
+                code = classify_cuda_runtime_error(exc)
+                if self.active_device != "cuda" or code != CUDA_RUNTIME_MISSING_CODE:
+                    self._inference_ready = False
+                    self._emit_runtime_error("stt_inference_failed", "inference_failed")
+                    return None, "stt_inference_failed"
+
+                # No recursion and no second CUDA/CPU fallback attempt within
+                # this decode. The marker is diagnostic and reset only after a
+                # successful probe/normal call boundary.
+                self._decode_fallback_attempted = True
+                try:
+                    cpu_model = self._load_cpu_fallback_model()
+                except Exception:
+                    self.model = None
+                    self.active_device = None
+                    self.active_compute_type = None
+                    self._probe_passed = False
+                    self._inference_ready = False
+                    self._emit_runtime_error(code, "fallback_load_failed", fallback=True)
+                    return None, code
+
+                self.model = cpu_model
+                try:
+                    segments = consume(cpu_model)
+                except Exception:
+                    # The CPU retry was attempted exactly once. Preserve the
+                    # truthful CPU active state but report that inference did
+                    # not become ready.
+                    self._probe_passed = False
+                    self._inference_ready = False
+                    self._emit_runtime_error("stt_inference_failed", "fallback_inference_failed", fallback=True)
+                    return None, "stt_inference_failed"
+
+                self._inference_ready = True
+                self._emit_runtime_error(code, "fallback_active", fallback=True)
+                return segments, None
+
+    def runtime_probe(self):
+        """Construct and exercise the real lazy encoder with in-memory silence."""
+        silence = np.zeros(1600, dtype=np.float32)
+        with self._model_lock:
+            constructed = self.ensure_loaded()
+            if not constructed:
+                self._probe_passed = False
+                self._inference_ready = False
+                if not self._last_error_code:
+                    self._emit_runtime_error("stt_model_load_failed", "construction_failed")
+                return self.get_runtime_status()
+
+        _segments, error_code = self._decode_segments_with_recovery(silence)
+        with self._model_lock:
+            self._probe_passed = error_code is None
+            if self._probe_passed and error_code is None and self._last_error_state not in {
+                "fallback_active",
+            }:
+                self._last_error_code = None
+                self._last_error_state = None
+            elif error_code is not None and self._last_error_code is None:
+                self._emit_runtime_error(error_code, "probe_failed")
+            return self.get_runtime_status()
 
     @staticmethod
     def _compute_confidence(seg_list):
@@ -657,25 +866,14 @@ class Transcriber:
             if hasattr(audio_array, "dtype") and audio_array.dtype != np.float32:
                 audio_array = audio_array.astype(np.float32)
 
-            with self._model_lock:
-                model = self.model
-                if model is None:
-                    return "", empty_conf, [], audio_duration_s
+            seg_list, error_code = self._decode_segments_with_recovery(audio_array, hotwords=hotwords)
+            if seg_list is None:
+                return "", empty_conf, [], audio_duration_s
 
-                # --- Fast Lane & VRAM Protection ---
-                # For short audio (< 2.0s), use greedy search (beam_size=1) for speed.
-                beam_size = 1 if audio_duration_s < 2.0 else 5
+            # Periodic GC to prevent VRAM fragmentation/leaks
+            if audio_duration_s > 5.0:
+                gc.collect()
 
-                transcribe_kwargs = {"beam_size": beam_size}
-                if hotwords:
-                    transcribe_kwargs["hotwords"] = hotwords
-                segments, _info = model.transcribe(audio_array, **transcribe_kwargs)
-
-                # Periodic GC to prevent VRAM fragmentation/leaks
-                if audio_duration_s > 5.0:
-                    gc.collect()
-
-            seg_list = list(segments)
             if not seg_list:
                 return "", empty_conf, [], audio_duration_s
             raw = TextFormatter.format_segments(seg_list, paragraph_threshold=1.2)
@@ -688,7 +886,7 @@ class Transcriber:
             # operates directly on the decoded transcript — an exception here
             # could echo it (found by the logging-leak regression gate, not
             # in the original Phase 0 audit).
-            logging.error(f"Error during transcription: {redact_exc(exc)}")
+            logging.error("Error during transcription (stt_inference_failed).")
             return "", empty_conf, [], audio_duration_s
 
     def transcribe_with_confidence(self, audio_array, hotwords=None):

@@ -25,6 +25,40 @@ class DummyTranscriber:
         return True
 
 
+class ProbeDummyTranscriber(DummyTranscriber):
+    def __init__(self, profile_name="Default", preload=True):
+        super().__init__(profile_name=profile_name, preload=preload)
+        self.probe_calls = 0
+
+    def runtime_probe(self):
+        self.probe_calls += 1
+        self.ensure_loaded()
+        return {
+            "constructed": True,
+            "probe_passed": True,
+            "inference_ready": True,
+            "error_code": None,
+            "error_state": None,
+            "active_device": "cuda",
+            "active_compute_type": "float16",
+            "device_fallback_reason": None,
+            "device_fallback_code": None,
+        }
+
+    def get_runtime_status(self):
+        return {
+            "constructed": self.model is not None,
+            "probe_passed": self.probe_calls > 0,
+            "inference_ready": self.probe_calls > 0,
+            "error_code": None,
+            "error_state": None,
+            "active_device": "cuda" if self.model is not None else None,
+            "active_compute_type": "float16" if self.model is not None else None,
+            "device_fallback_reason": None,
+            "device_fallback_code": None,
+        }
+
+
 class DummyEngine:
     def __init__(self):
         self._ready = True
@@ -262,6 +296,24 @@ class ServerLazyStartupTests(unittest.TestCase):
         self.assertFalse(payload["llm"]["initialized"])
         self.assertFalse(payload["llm"]["ready"])
         self.assertIn("llama-server missing", payload["llm"]["error"])
+
+    def test_stt_warmup_preserves_probe_evidence_in_response(self):
+        probe = ProbeDummyTranscriber(preload=False)
+        server.transcriber = probe
+
+        result = asyncio.run(
+            server.runtime_warmup(
+                server.RuntimeWarmupRequest(stt=True, llm=False, hotkeys=False)
+            )
+        )
+
+        self.assertEqual(probe.probe_calls, 1)
+        self.assertTrue(result["stt"]["initialized"])
+        self.assertTrue(result["stt"]["loaded"])
+        self.assertTrue(result["stt"]["ok"])
+        self.assertTrue(result["stt"]["probe_passed"])
+        self.assertTrue(result["stt"]["inference_ready"])
+        self.assertEqual(result["stt"]["active_device"], "cuda")
 
     def test_apply_residency_warms_enabled_missing_resources_and_reports_failure(self):
         snapshot = {

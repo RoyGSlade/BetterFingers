@@ -66,6 +66,56 @@ class ModelManagerStatusTests(unittest.TestCase):
         self.assertIn("--jinja", args)
         self.assertIn("--chat-template-kwargs", args)
 
+    def test_runtime_validation_allows_bounded_cold_windows_startup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server_path = os.path.join(tmp, "llama-server.exe")
+            with open(server_path, "wb") as handle:
+                handle.write(b"fixture")
+
+            completed = model_manager.subprocess.CompletedProcess(
+                [server_path, "--version"],
+                0,
+                stdout="version: 9548",
+                stderr="",
+            )
+            with patch("model_manager.subprocess.run", return_value=completed) as run, patch(
+                "model_manager.time.monotonic", side_effect=[100.0, 120.5]
+            ):
+                result = model_manager.validate_llama_server_runtime(server_path)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["build"], 9548)
+        self.assertEqual(result["elapsed_sec"], 20.5)
+        self.assertEqual(
+            run.call_args.kwargs["timeout"],
+            model_manager.LLAMA_RUNTIME_VALIDATION_TIMEOUT_S,
+        )
+        self.assertGreaterEqual(model_manager.LLAMA_RUNTIME_VALIDATION_TIMEOUT_S, 20)
+
+    def test_runtime_validation_timeout_is_stable_and_actionable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server_path = os.path.join(tmp, "llama-server.exe")
+            with open(server_path, "wb") as handle:
+                handle.write(b"fixture")
+
+            timeout = model_manager.subprocess.TimeoutExpired(
+                [server_path, "--version"],
+                model_manager.LLAMA_RUNTIME_VALIDATION_TIMEOUT_S,
+            )
+            with patch("model_manager.subprocess.run", side_effect=timeout), patch(
+                "model_manager.time.monotonic", side_effect=[50.0, 80.0]
+            ):
+                result = model_manager.validate_llama_server_runtime(server_path)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], "runtime_validation_timeout")
+        self.assertEqual(
+            result["timeout_sec"],
+            model_manager.LLAMA_RUNTIME_VALIDATION_TIMEOUT_S,
+        )
+        self.assertEqual(result["elapsed_sec"], 30.0)
+        self.assertNotIn(server_path, result["message"])
+
     def test_models_expose_studio_and_betterfingers_roles(self):
         dispatcher = model_manager.AVAILABLE_MODELS["gemma-4-e4b-q4"]
         writer = model_manager.AVAILABLE_MODELS["gemma-4-12b-q4"]

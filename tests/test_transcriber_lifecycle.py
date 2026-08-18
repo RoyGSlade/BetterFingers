@@ -21,6 +21,28 @@ class _DummyWhisperModel:
         return [_DummySegment("hello world", start=0.0, end=0.5)], None
 
 
+class _LazySegment:
+    start = 0.0
+    end = 0.25
+    text = "probe text must never be logged"
+
+
+class _LazyWhisperModel:
+    def __init__(self, device, error=None):
+        self.device = device
+        self.error = error
+
+    def transcribe(self, _audio, beam_size=1):
+        del beam_size
+
+        def iterator():
+            if self.error is not None:
+                raise self.error
+            yield _LazySegment()
+
+        return iterator(), None
+
+
 class TranscriberLifecycleTests(unittest.TestCase):
     def test_distil_models_use_real_hub_repo_ids(self):
         self.assertEqual(
@@ -107,6 +129,98 @@ class TranscriberAdmissionTests(unittest.TestCase):
         self.assertTrue(ok)
         whisper_model.assert_called_once()
         self.assertEqual(reported, [("base.en", 300)])
+
+
+class TranscriberLazyProbeRecoveryTests(unittest.TestCase):
+    def _make(self, cuda_error, cpu_error=None):
+        calls = []
+
+        def factory(*_args, **kwargs):
+            device = kwargs["device"]
+            calls.append(device)
+            return _LazyWhisperModel(device, cuda_error if device == "cuda" else cpu_error)
+
+        patches = [
+            patch("transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": True}),
+            patch("transcriber.WhisperModel", side_effect=factory),
+            patch.object(Transcriber, "_is_model_cached", return_value=True),
+        ]
+        for item in patches:
+            item.start()
+            self.addCleanup(item.stop)
+        transcriber = Transcriber(profile_name="Default", preload=False)
+        return transcriber, calls
+
+    def test_known_lazy_cuda_failure_retries_same_audio_once_on_cpu(self):
+        transcriber, calls = self._make(RuntimeError("Unable to load cublas64_12.dll: file not found"))
+        events = []
+        transcriber.set_error_reporter(events.append)
+
+        result = transcriber.transcribe(np.zeros(1600, dtype=np.float32))
+
+        self.assertEqual(result, "probe text must never be logged")
+        self.assertEqual(calls, ["cuda", "cpu"])
+        self.assertEqual(transcriber.active_device, "cpu")
+        self.assertEqual(transcriber.active_compute_type, "int8")
+        self.assertEqual(transcriber.device_fallback_code, "cuda_runtime_missing")
+        self.assertEqual(events[-1]["code"], "cuda_runtime_missing")
+        self.assertTrue(events[-1]["fallback"])
+
+    def test_unknown_lazy_decode_failure_does_not_retry(self):
+        transcriber, calls = self._make(RuntimeError("secret transcript payload and arbitrary failure"))
+        events = []
+        transcriber.set_error_reporter(events.append)
+
+        result = transcriber.transcribe(np.zeros(1600, dtype=np.float32))
+
+        self.assertEqual(result, "")
+        self.assertEqual(calls, ["cuda"])
+        self.assertEqual(events[-1]["code"], "stt_inference_failed")
+        self.assertNotIn("secret transcript", str(events))
+
+    def test_cpu_retry_failure_stops_after_one_guarded_fallback(self):
+        transcriber, calls = self._make(
+            RuntimeError("Library cublas64_12.dll is not found or cannot be loaded"),
+            cpu_error=RuntimeError("CPU inference failed"),
+        )
+        events = []
+        transcriber.set_error_reporter(events.append)
+
+        result = transcriber.transcribe(np.zeros(1600, dtype=np.float32))
+        status = transcriber.get_runtime_status()
+
+        self.assertEqual(result, "")
+        self.assertEqual(calls, ["cuda", "cpu"])
+        self.assertFalse(status["inference_ready"])
+        self.assertEqual(status["error_state"], "fallback_inference_failed")
+        self.assertEqual(events[-1]["state"], "fallback_inference_failed")
+
+    def test_runtime_probe_distinguishes_constructor_from_lazy_inference(self):
+        transcriber, calls = self._make(None)
+
+        before = transcriber.get_runtime_status()
+        self.assertTrue(transcriber.ensure_loaded())
+        constructed = transcriber.get_runtime_status()
+        self.assertFalse(before["constructed"])
+        self.assertTrue(constructed["constructed"])
+        self.assertFalse(constructed["probe_passed"])
+
+        probed = transcriber.runtime_probe()
+        self.assertTrue(probed["probe_passed"])
+        self.assertTrue(probed["inference_ready"])
+        self.assertEqual(calls, ["cuda"])
+
+    def test_successful_normal_decode_sets_inference_ready_without_claiming_probe(self):
+        transcriber, calls = self._make(None)
+
+        result = transcriber.transcribe(np.zeros(1600, dtype=np.float32))
+        status = transcriber.get_runtime_status()
+
+        self.assertEqual(result, "probe text must never be logged")
+        self.assertTrue(status["constructed"])
+        self.assertFalse(status["probe_passed"])
+        self.assertTrue(status["inference_ready"])
+        self.assertEqual(calls, ["cuda"])
 
     @patch("transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
     @patch("transcriber.WhisperModel", return_value=_DummyWhisperModel())

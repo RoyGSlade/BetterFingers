@@ -265,6 +265,11 @@ def resolve_runtime_spec():
 
 PACKAGED_LLAMA_CPP_BUILD = 9548
 GEMMA4_MIN_LLAMA_CPP_BUILD = 8660
+# A cold Windows llama-server may spend about 20 seconds loading its bundled
+# runtime before it can print --version.  Keep validation bounded, but leave
+# enough room for that observed first-run cost instead of misclassifying a
+# valid checksum-pinned runtime as corrupt after the old 10-second budget.
+LLAMA_RUNTIME_VALIDATION_TIMEOUT_S = 30
 
 LINUX_RUNTIME_LINKS = {
     "libmtmd.so.0": "libmtmd.so.0.0.7870",
@@ -696,6 +701,7 @@ def validate_llama_server_runtime(server_path=None):
     if not sys.platform.startswith("win"):
         repair_result = repair_linux_runtime_links(os.path.dirname(os.path.abspath(server_path)))
 
+    validation_started_at = time.monotonic()
     try:
         result = subprocess.run(
             [server_path, "--version"],
@@ -703,21 +709,48 @@ def validate_llama_server_runtime(server_path=None):
             env=get_llama_runtime_env(server_path),
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=LLAMA_RUNTIME_VALIDATION_TIMEOUT_S,
         )
+    except subprocess.TimeoutExpired:
+        elapsed_sec = max(0.0, time.monotonic() - validation_started_at)
+        return {
+            "ok": False,
+            "error_code": "runtime_validation_timeout",
+            "message": (
+                "llama-server runtime validation timed out after "
+                f"{LLAMA_RUNTIME_VALIDATION_TIMEOUT_S} seconds."
+            ),
+            "timeout_sec": LLAMA_RUNTIME_VALIDATION_TIMEOUT_S,
+            "elapsed_sec": round(elapsed_sec, 3),
+        }
     except Exception as exc:
-        return {"ok": False, "message": f"llama-server runtime failed validation: {exc}"}
+        elapsed_sec = max(0.0, time.monotonic() - validation_started_at)
+        return {
+            "ok": False,
+            "message": f"llama-server runtime failed validation: {exc}",
+            "elapsed_sec": round(elapsed_sec, 3),
+        }
 
+    elapsed_sec = max(0.0, time.monotonic() - validation_started_at)
     output = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part and part.strip())
     if result.returncode != 0:
         detail = output or f"exit code {result.returncode}"
         if repair_result and not repair_result.get("ok", False):
             repair_detail = "; ".join(repair_result.get("missing", []) + repair_result.get("errors", []))
             detail = f"{detail}; runtime libraries incomplete: {repair_detail}"
-        return {"ok": False, "message": f"llama-server runtime failed validation: {detail}"}
+        return {
+            "ok": False,
+            "message": f"llama-server runtime failed validation: {detail}",
+            "elapsed_sec": round(elapsed_sec, 3),
+        }
 
     message = output or "llama-server runtime validated."
-    return {"ok": True, "message": message, "build": parse_llama_server_build(message)}
+    return {
+        "ok": True,
+        "message": message,
+        "build": parse_llama_server_build(message),
+        "elapsed_sec": round(elapsed_sec, 3),
+    }
 
 
 def _parse_content_range_total(value):

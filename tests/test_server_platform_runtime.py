@@ -390,6 +390,34 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
         self.assertEqual(llm["runtime_status"], "runtime_link_failure")
         self.assertIn("libmtmd.so.0", llm["runtime_message"])
 
+    def test_doctor_distinguishes_llm_runtime_validation_timeout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server_path = os.path.join(tmp, "llama-server")
+            with open(server_path, "w", encoding="utf-8") as handle:
+                handle.write("#!/bin/sh\nexit 0\n")
+
+            validation = {
+                "ok": False,
+                "error_code": "runtime_validation_timeout",
+                "message": "llama-server runtime validation timed out after 30 seconds.",
+                "timeout_sec": 30,
+                "elapsed_sec": 30.001,
+            }
+            with patch.object(server, "get_engine_if_initialized", return_value=DummyLlmEngine()), patch.object(
+                server, "get_server_path", return_value=server_path
+            ), patch.object(server, "check_model_exists", return_value=True), patch.object(
+                server, "validate_llama_server_runtime", return_value=validation
+            ), patch.object(server, "ensure_tts_initialized", return_value=DummyTTS()):
+                with TestClient(server.app) as client:
+                    response = client.get("/doctor")
+
+        self.assertEqual(response.status_code, 200)
+        llm = response.json()["llm"]
+        self.assertEqual(llm["runtime_status"], "runtime_validation_timeout")
+        self.assertEqual(llm["runtime_validation_error_code"], "runtime_validation_timeout")
+        self.assertEqual(llm["runtime_validation_elapsed_sec"], 30.001)
+        self.assertEqual(llm["runtime_validation_timeout_sec"], 30)
+
     def test_record_runtime_error_severity(self):
         server.record_runtime_error("stt", "failed loading model", "fatal", {"model": "base.en"})
         with TestClient(server.app) as client:
