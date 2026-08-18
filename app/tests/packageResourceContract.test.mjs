@@ -84,17 +84,42 @@ test('Azure Artifact Signing config is exact and only enabled explicitly', () =>
   });
   assert.equal(unsigned.status, 0, unsigned.stderr);
   assert.equal('azureSignOptions' in JSON.parse(unsigned.stdout).win, false);
+  assert.equal('signtoolOptions' in JSON.parse(unsigned.stdout).win, false);
+  assert.equal(JSON.parse(unsigned.stdout).forceCodeSigning, undefined);
+
+  const cliSigned = loadConfig({
+    BETTERFINGERS_SIGNING_MODE: 'azure-cli',
+    BETTERFINGERS_EXPECTED_SIGNER_SUBJECT: 'CN=Donaven Crenshaw',
+  });
+  assert.equal(cliSigned.status, 0, cliSigned.stderr);
+  const cliConfig = JSON.parse(cliSigned.stdout);
+  assert.equal(cliConfig.forceCodeSigning, true);
+  assert.deepEqual(cliConfig.win.signExts, ['.exe', '.dll', '.msi', '.msix']);
+  assert.deepEqual(cliConfig.win.signtoolOptions, {
+    signingHashAlgorithms: ['sha256'],
+    publisherName: 'CN=Donaven Crenshaw',
+  });
+  const hookType = spawnSync(
+    process.execPath,
+    ['-e', `process.stdout.write(typeof require(${JSON.stringify(configPath)}).win.signtoolOptions.sign)`],
+    {
+      encoding: 'utf8',
+      env: { ...process.env, BETTERFINGERS_SIGNING_MODE: 'azure-cli' },
+    },
+  );
+  assert.equal(hookType.status, 0, hookType.stderr);
+  assert.equal(hookType.stdout, 'function');
 
   const signed = loadConfig({
     BETTERFINGERS_SIGNING_MODE: 'azure',
-    AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: 'better-fingers-public',
+    AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: 'better-fingers',
     AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: 'CN=Donaven Crenshaw',
   });
   assert.equal(signed.status, 0, signed.stderr);
   assert.deepEqual(JSON.parse(signed.stdout).win.azureSignOptions, {
     endpoint: 'https://wus2.codesigning.azure.net/',
     codeSigningAccountName: 'better-fingers',
-    certificateProfileName: 'better-fingers-public',
+    certificateProfileName: 'better-fingers',
     publisherName: 'CN=Donaven Crenshaw',
     fileDigest: 'SHA256',
     timestampDigest: 'SHA256',

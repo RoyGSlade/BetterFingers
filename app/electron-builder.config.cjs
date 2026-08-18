@@ -1,11 +1,28 @@
 'use strict';
 
-// Keep package.json as the readable package contract, then add cloud signing
-// only when CI explicitly selects it. This preserves unsigned alpha/manual
-// builds while making a partially configured Azure signing run fail closed.
+// Keep package.json as the readable package contract, then add signing only
+// when a release path explicitly selects it. The production workstation path
+// uses Azure CLI through the Artifact Signing dlib/SignTool hook. The legacy
+// service-principal mode remains available to CI until its release workflow is
+// migrated, but neither mode stores credentials in this configuration.
 const packageBuild = JSON.parse(JSON.stringify(require('./package.json').build));
+const signingMode = String(process.env.BETTERFINGERS_SIGNING_MODE || '').trim();
 
-if (process.env.BETTERFINGERS_SIGNING_MODE === 'azure') {
+if (signingMode === 'azure-cli') {
+  const expectedSignerSubject = String(
+    process.env.BETTERFINGERS_EXPECTED_SIGNER_SUBJECT || '',
+  ).trim();
+
+  packageBuild.forceCodeSigning = true;
+  packageBuild.win.signExts = ['.exe', '.dll', '.msi', '.msix'];
+  packageBuild.win.signtoolOptions = {
+    sign: require('./scripts/azure-artifact-signing.cjs'),
+    signingHashAlgorithms: ['sha256'],
+    ...(expectedSignerSubject ? { publisherName: expectedSignerSubject } : {}),
+  };
+}
+
+if (signingMode === 'azure') {
   const certificateProfileName = String(
     process.env.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE || '',
   ).trim();

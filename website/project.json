@@ -2,15 +2,25 @@
   "schemaVersion": 1,
   "id": "betterfingers",
   "name": "BetterFingers",
-  "summary": "A private desktop speech editor that transcribes speech, refines it with local models, and lets users review and place text into other applications.",
-  "status": "private-alpha",
+  "summary": "A local-first desktop dictation app that transcribes speech, optionally refines it with a local language model, and lets users review text before placing it into another application.",
+  "status": "public-alpha",
   "featured": true,
-  "developmentLabel": "Product in development",
+  "developmentLabel": "Unsigned friend-testing alpha",
   "links": [
     {
       "label": "BetterFingers repository",
       "url": "https://github.com/RoyGSlade/BetterFingers",
       "type": "repository"
+    },
+    {
+      "label": "Download Windows alpha",
+      "url": "https://github.com/RoyGSlade/BetterFingers/releases/download/v1.1.0-alpha.2/BetterFingers-Setup-1.1.0-alpha.2-x64.exe",
+      "type": "download"
+    },
+    {
+      "label": "Release notes, checksums, and Linux build",
+      "url": "https://github.com/RoyGSlade/BetterFingers/releases/tag/v1.1.0-alpha.2",
+      "type": "documentation"
     }
   ],
   "features": [
@@ -23,7 +33,7 @@
     {
       "id": "local-persona-refinement",
       "title": "Local persona refinement",
-      "summary": "Refines transcribed text with local LLM personas, formatting commands, a personal dictionary, and text macros.",
+      "summary": "Optionally refines transcribed text with local LLM personas, formatting commands, a personal dictionary, and text macros; this separate language model is off on a fresh install.",
       "state": "available"
     },
     {
@@ -54,7 +64,7 @@
   "screenshots": [],
   "showcase": {
     "title": "BetterFingers product tour",
-    "summary": "Follow the current private-alpha workflow from speech capture and review through personas, recoverable history, and local controls.",
+    "summary": "Follow the current public-alpha workflow from speech capture and review through personas, recoverable history, and local controls.",
     "variant": "gallery",
     "loop": true,
     "slides": [
@@ -172,9 +182,9 @@
   },
   "roadmap": [
     {
-      "id": "public-release-qualification",
-      "title": "Public release qualification",
-      "summary": "Complete release signing and reproducibility work, core-loop reliability evidence, and an injection compatibility matrix before a tagged public release.",
+      "id": "signed-release-qualification",
+      "title": "Signed release qualification",
+      "summary": "Complete Azure Artifact Signing validation, broader friend-test reliability evidence, and the injection compatibility matrix before promoting the alpha beyond experimental status.",
       "state": "in-progress"
     },
     {
@@ -190,5 +200,5 @@
       "state": "planned"
     }
   ],
-  "updatedAt": "2026-08-03T23:16:56-07:00"
+  "updatedAt": "2026-08-18T04:48:00-07:00"
 }

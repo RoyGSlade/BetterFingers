@@ -19,6 +19,7 @@
     "setup:llama:linux": "python3 ../tools/setup_linux_llama_server.py",
     "dist": "npm run build && npm run build:backend && electron-builder --config electron-builder.config.cjs",
     "dist:win": "npm run build && npm run build:backend && electron-builder --config electron-builder.config.cjs --win",
+    "dist:win:signed": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ../tools/build_and_sign_windows.ps1 -SkipNodeInstall",
     "dist:linux": "npm run build && npm run build:backend && electron-builder --config electron-builder.config.cjs --linux"
   },
   "devDependencies": {

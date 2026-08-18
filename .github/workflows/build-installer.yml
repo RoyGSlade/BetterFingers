@@ -145,11 +145,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # Prefer the provisioned Azure Artifact Signing account (called Azure
-      # Trusted Signing by this electron-builder integration). Until its
-      # certificate profile, certificate subject and service-principal secrets
-      # are all configured, alpha/manual runs remain explicitly unsigned. A
-      # legacy PFX remains a supported fallback; partial configuration of
-      # either mode fails instead of silently producing the wrong artifact.
+      # Trusted Signing by this electron-builder integration). Manual
+      # qualification runs may remain explicitly unsigned, but every tag is
+      # required to be signed before it can reach publication. A legacy PFX
+      # remains a supported fallback; partial configuration of either mode
+      # fails instead of silently producing the wrong artifact.
       - name: Configure Windows code signing
         id: signing
         shell: powershell
@@ -268,10 +268,8 @@ jobs:
             if ($signature.Status -ne "NotSigned") {
               throw "Signing was not configured, but Authenticode returned $($signature.Status); expected exactly NotSigned."
             }
-            $releaseVersion = (Get-Content -Raw app/package.json | ConvertFrom-Json).version
-            $precedenceVersion = ($releaseVersion -split '\+', 2)[0]
-            if ("${{ github.ref_type }}" -eq "tag" -and $precedenceVersion -notmatch '-') {
-              throw "Stable Windows tags must be signed. Unsigned builds are allowed only for prerelease tags or manual qualification runs."
+            if ("${{ github.ref_type }}" -eq "tag") {
+              throw "Every Windows tag must be signed. Unsigned builds are allowed only for manual qualification runs."
             }
             Write-Host "UNSIGNED ALPHA: no Windows signing certificate was configured."
             "unsigned alpha; authenticode_status=$($signature.Status)" | Out-File -Encoding ascii "$installer.signature.txt"
@@ -629,19 +627,20 @@ jobs:
           fi
           (cd release-assets/windows && sha256sum --check *.exe.sha256)
           (cd release-assets/linux && sha256sum --check *.AppImage.sha256)
+          grep -q '^signed via ' "${windows_signatures[0]}"
 
       - name: Publish GitHub Release assets
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228  # v3.0.2
         with:
           name: BetterFingers ${{ github.ref_name }}
           body: |
-            BetterFingers ${{ github.ref_name }} is an unsigned public alpha for invited friend testing of local-first dictation on Windows and Linux.
+            BetterFingers ${{ github.ref_name }} is a code-signed public alpha for invited friend testing of local-first dictation on Windows and Linux.
 
-            This is experimental software, not a broadly qualified stable release. The release contains a Windows NSIS installer, Linux AppImage, SHA-256 checksum sidecars, the Windows Authenticode status report, and a CycloneDX SBOM. The exact Windows signing mode for this tag is `${{ needs.windows-installer.outputs.signing_mode }}`. An unsigned Windows build can trigger Microsoft SmartScreen. Verify the SHA-256 sidecar before running it; do not disable Windows security controls.
+            This is experimental software, not a broadly qualified stable release. The release contains a signed Windows NSIS installer, Linux AppImage, SHA-256 checksum sidecars, the Windows Authenticode status report, and a CycloneDX SBOM. The exact Windows signing mode for this tag is `${{ needs.windows-installer.outputs.signing_mode }}`. Verify the installer signature and SHA-256 sidecar before running it; do not disable Windows security controls.
 
             Speech-to-text requires a local Whisper model downloaded during setup. The separate multi-gigabyte language model used for AI cleanup is optional and disabled on a fresh install. Model downloads require network access. Do not use this alpha for highly sensitive dictation because production-grade at-rest encryption is not included.
 
-            The tag workflow verifies installation, launch, authenticated local-backend health, a real pinned model download, upgrade continuity when a prior installer exists, and uninstall behavior. Friend testing is intended to find the remaining hardware, audio, injection, clipboard, and usability problems before signed release qualification. Report reproducible problems at https://github.com/RoyGSlade/BetterFingers/issues.
+            The tag workflow verifies installation, launch, authenticated local-backend health, a real pinned model download, upgrade continuity when a prior installer exists, and uninstall behavior. Friend testing is intended to find the remaining hardware, audio, injection, clipboard, and usability problems before wider release qualification. Report reproducible problems at https://github.com/RoyGSlade/BetterFingers/issues.
           draft: true
           prerelease: true
           make_latest: false

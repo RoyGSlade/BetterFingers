@@ -30,14 +30,13 @@ def test_tag_publication_is_an_approval_gated_draft_prerelease():
     assert "generate_release_notes: false" in block
 
 
-def test_friend_alpha_release_body_is_explicit_about_unsigned_experimental_limits():
+def test_friend_alpha_release_body_is_explicit_about_signed_experimental_limits():
     block = _publish_block()
     for required in (
-        "unsigned public alpha for invited friend testing",
+        "code-signed public alpha for invited friend testing",
         "not a broadly qualified stable release",
         "exact Windows signing mode for this tag is `${{ needs.windows-installer.outputs.signing_mode }}`",
-        "An unsigned Windows build can trigger Microsoft SmartScreen",
-        "Verify the SHA-256 sidecar before running it",
+        "Verify the installer signature and SHA-256 sidecar before running it",
         "do not disable Windows security controls",
         "language model used for AI cleanup is optional and disabled on a fresh install",
         "Do not use this alpha for highly sensitive dictation",
@@ -109,9 +108,9 @@ def test_release_identity_and_unsigned_policy_fail_closed():
     assert "Package version '$version' does not match VERSION '$versionFile'." in workflow
     assert "Tag '${{ github.ref_name }}' does not match package version" in workflow
     assert 'expected exactly NotSigned' in workflow
-    assert "Stable Windows tags must be signed." in workflow
-    assert "$precedenceVersion = ($releaseVersion -split '\\+', 2)[0]" in workflow
-    assert "$precedenceVersion -notmatch '-'" in workflow
+    assert "Every Windows tag must be signed." in workflow
+    assert 'if ("${{ github.ref_type }}" -eq "tag")' in workflow
+    assert "Unsigned builds are allowed only for manual qualification runs." in workflow
 
 
 def test_azure_signing_account_is_wired_conditionally_and_partial_config_fails():
