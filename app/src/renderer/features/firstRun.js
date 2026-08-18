@@ -101,6 +101,10 @@ export function computeFirstRunStatus({ health, runtime, llmModels, whisperModel
   const llm = summarizeLlmState(llmModels);
   const whisper = summarizeWhisperState(whisperModels);
 
+  // Missing field means an older backend where LLM cleanup was mandatory.
+  // Current backends report false for a fresh profile, making both the model
+  // and llama-server optional without weakening compatibility.
+  const llmEnabled = runtime?.llm_enabled !== false;
   const runtimeReady = llm.runtimeExists;
   const llmReady = llm.installed && (llm.ready || Boolean(runtime?.llm_ready));
   const whisperReady = whisper.selectedInstalled || whisper.anyInstalled;
@@ -109,33 +113,35 @@ export function computeFirstRunStatus({ health, runtime, llmModels, whisperModel
   if (!backendReachable) {
     missing.push({ key: 'backend', label: 'Waiting for the local backend to respond.' });
   }
-  if (!runtimeReady) {
+  if (llmEnabled && !runtimeReady) {
     missing.push({
       key: 'runtime',
       label: 'The llama-server runtime is not installed yet (it installs automatically with the language model).',
     });
   }
-  if (!llm.installed) {
-    missing.push({ key: 'llm', label: 'No language model is installed.' });
-  } else if (!llmReady) {
-    missing.push({
-      key: 'llm-not-ready',
-      label: `${llm.name || 'The language model'} is installed but not ready to run yet.`,
-    });
+  if (llmEnabled) {
+    if (!llm.installed) {
+      missing.push({ key: 'llm', label: 'No language model is installed.' });
+    } else if (!llmReady) {
+      missing.push({
+        key: 'llm-not-ready',
+        label: `${llm.name || 'The language model'} is installed but not ready to run yet.`,
+      });
+    }
   }
   if (!whisperReady) {
     missing.push({ key: 'whisper', label: 'No speech-to-text (Whisper) model is installed.' });
   }
 
-  const ready = backendReachable && runtimeReady && llmReady && whisperReady;
+  const ready = backendReachable && whisperReady && (!llmEnabled || (runtimeReady && llmReady));
 
   return {
     ready,
     backendReachable,
     missing,
-    llm: { ...llm, ready: llmReady },
+    llm: { ...llm, ready: llmReady, enabled: llmEnabled },
     whisper: { ...whisper, ready: whisperReady },
-    runtime: { exists: runtimeReady },
+    runtime: { exists: runtimeReady, required: llmEnabled },
   };
 }
 
@@ -332,17 +338,30 @@ export function createFirstRunFeature({
       return;
     }
 
-    setBadge(els.runtimeBadgeEl, status.runtime.exists ? 'Found' : 'Missing', status.runtime.exists ? 'success' : 'danger');
+    const runtimeOptional = !status.runtime.required;
+    setBadge(
+      els.runtimeBadgeEl,
+      status.runtime.exists ? 'Found' : runtimeOptional ? 'Optional' : 'Missing',
+      status.runtime.exists ? 'success' : runtimeOptional ? 'neutral' : 'danger',
+    );
     if (els.runtimeDetailEl) {
       els.runtimeDetailEl.textContent = status.runtime.exists
         ? 'llama-server binary is installed.'
-        : 'Installs automatically with the language model.';
+        : runtimeOptional
+          ? 'Not required while AI cleanup is off.'
+          : 'Installs automatically with the language model.';
     }
 
-    const llmTone = !status.llm.installed ? 'danger' : status.llm.ready ? 'success' : 'warning';
-    setBadge(els.llmBadgeEl, !status.llm.installed ? 'Missing' : status.llm.ready ? 'Ready' : 'Not ready', llmTone);
+    const llmTone = !status.llm.enabled ? 'neutral' : !status.llm.installed ? 'danger' : status.llm.ready ? 'success' : 'warning';
+    setBadge(
+      els.llmBadgeEl,
+      !status.llm.enabled ? 'Off' : !status.llm.installed ? 'Missing' : status.llm.ready ? 'Ready' : 'Not ready',
+      llmTone,
+    );
     if (els.llmDetailEl) {
-      els.llmDetailEl.textContent = status.llm.name || 'No model selected';
+      els.llmDetailEl.textContent = !status.llm.enabled
+        ? 'Optional — enable AI cleanup in Settings to use it.'
+        : status.llm.name || 'No model selected';
     }
 
     setBadge(els.whisperBadgeEl, status.whisper.ready ? 'Installed' : 'Missing', status.whisper.ready ? 'success' : 'danger');

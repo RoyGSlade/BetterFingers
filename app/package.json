@@ -1,8 +1,10 @@
 {
   "name": "betterfingers-electron",
   "version": "1.1.0-alpha.1",
-  "description": "Electron shell for BetterFingers with a FastAPI Python backend.",
+  "description": "Private, local-first dictation for Windows and Linux.",
   "author": "Donaven Crenshaw",
+  "license": "MIT",
+  "homepage": "https://github.com/RoyGSlade/BetterFingers",
   "desktopName": "BetterFingers",
   "main": "out/main/main.js",
   "private": true,
@@ -15,9 +17,9 @@
     "test:e2e": "playwright test",
     "qa:screens": "node tests/qa/run.mjs",
     "setup:llama:linux": "python3 ../tools/setup_linux_llama_server.py",
-    "dist": "npm run build && npm run build:backend && electron-builder",
-    "dist:win": "npm run build && npm run build:backend && electron-builder --win",
-    "dist:linux": "npm run build && npm run build:backend && electron-builder --linux"
+    "dist": "npm run build && npm run build:backend && electron-builder --config electron-builder.config.cjs",
+    "dist:win": "npm run build && npm run build:backend && electron-builder --config electron-builder.config.cjs --win",
+    "dist:linux": "npm run build && npm run build:backend && electron-builder --config electron-builder.config.cjs --linux"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.0",
@@ -28,6 +30,7 @@
   "build": {
     "appId": "com.betterfingers.desktop",
     "productName": "BetterFingers",
+    "copyright": "Copyright © 2026 Donaven Crenshaw",
     "icon": "build/icon.png",
     "asar": true,
     "npmRebuild": false,
@@ -63,8 +66,16 @@
     ],
     "win": {
       "target": [
-        "nsis"
-      ]
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "executableName": "BetterFingers",
+      "requestedExecutionLevel": "asInvoker"
     },
     "linux": {
       "target": [
@@ -81,7 +92,21 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "perMachine": false,
+      "selectPerMachineByDefault": false,
+      "allowElevation": false,
+      "packElevateHelper": false,
+      "allowToChangeInstallationDirectory": true,
+      "createStartMenuShortcut": true,
+      "createDesktopShortcut": false,
+      "shortcutName": "BetterFingers",
+      "uninstallDisplayName": "BetterFingers ${version}",
+      "artifactName": "BetterFingers-Setup-${version}-${arch}.${ext}",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "runAfterFinish": true,
+      "license": "../LICENSE",
+      "deleteAppDataOnUninstall": false
     },
     "publish": null
   },

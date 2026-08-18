@@ -22,6 +22,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
+      - name: Verify release identity
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = (Get-Content -Raw app/package.json | ConvertFrom-Json).version
+          $versionFile = (Get-Content -Raw VERSION).Trim()
+          if ($version -ne $versionFile) {
+            throw "Package version '$version' does not match VERSION '$versionFile'."
+          }
+          $expectedTag = "v$version"
+          if ("${{ github.ref_name }}" -ne $expectedTag) {
+            throw "Tag '${{ github.ref_name }}' does not match package version; expected '$expectedTag'."
+          }
+
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
@@ -77,6 +92,8 @@ jobs:
   windows-installer:
     needs: windows-python-tests
     runs-on: windows-latest
+    outputs:
+      signing_mode: ${{ steps.signing.outputs.mode }}
     permissions:
       contents: read
       id-token: write # actions/attest-build-provenance (OIDC)
@@ -127,33 +144,52 @@ jobs:
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      # Windows code signing (optional). electron-builder auto-signs when
-      # CSC_LINK / CSC_KEY_PASSWORD are set (see its Code Signing docs) — no
-      # config needed beyond exporting them. Decode the base64 PFX from a repo
-      # secret to a temp file so the cert never touches disk unencoded outside
-      # the runner's own temp dir, and never appears in logs. Unsigned builds
-      # still produce a working installer (electron-builder just skips
-      # signtool), so this stays best-effort until the repo owner adds the
-      # secrets: WIN_CERTIFICATE_BASE64 (base64-encoded .pfx) and
-      # WIN_CERTIFICATE_PASSWORD.
-      - name: Set up code-signing certificate
+      # Prefer the provisioned Azure Artifact Signing account (called Azure
+      # Trusted Signing by this electron-builder integration). Until its
+      # certificate profile, certificate subject and service-principal secrets
+      # are all configured, alpha/manual runs remain explicitly unsigned. A
+      # legacy PFX remains a supported fallback; partial configuration of
+      # either mode fails instead of silently producing the wrong artifact.
+      - name: Configure Windows code signing
         id: signing
         shell: powershell
         env:
+          AZURE_PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
+          AZURE_PUBLISHER: ${{ vars.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
+          AZURE_TENANT: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           CERT_B64: ${{ secrets.WIN_CERTIFICATE_BASE64 }}
           CERT_PASSWORD: ${{ secrets.WIN_CERTIFICATE_PASSWORD }}
         run: |
-          if ([string]::IsNullOrEmpty($env:CERT_B64)) {
-            Write-Host "WIN_CERTIFICATE_BASE64 not set; building an unsigned installer."
-            "configured=false" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
-          } else {
-            if ([string]::IsNullOrEmpty($env:CERT_PASSWORD)) {
-              throw "WIN_CERTIFICATE_BASE64 is set but WIN_CERTIFICATE_PASSWORD is missing; refusing an unverifiable signing configuration."
+          $azureValues = @($env:AZURE_PROFILE, $env:AZURE_PUBLISHER, $env:AZURE_TENANT, $env:AZURE_CLIENT, $env:AZURE_SECRET)
+          $azureCount = @($azureValues | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
+          if ($azureCount -gt 0 -and $azureCount -ne $azureValues.Count) {
+            throw "Azure signing is partially configured. Set the certificate profile, publisher subject, tenant ID, client ID, and client secret together."
+          }
+          $hasPfx = -not [string]::IsNullOrWhiteSpace($env:CERT_B64)
+          $hasPfxPassword = -not [string]::IsNullOrWhiteSpace($env:CERT_PASSWORD)
+          if ($hasPfx -ne $hasPfxPassword) {
+            throw "PFX signing is partially configured. Set WIN_CERTIFICATE_BASE64 and WIN_CERTIFICATE_PASSWORD together."
+          }
+
+          if ($azureCount -eq $azureValues.Count) {
+            if ($hasPfx) {
+              throw "Azure and PFX signing are both configured; choose exactly one signing authority."
             }
+            "configured=true" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
+            "mode=azure" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
+            Write-Host "Azure Artifact Signing is configured for account better-fingers."
+          } elseif ($hasPfx) {
             $certPath = Join-Path $env:RUNNER_TEMP "betterfingers-signing.pfx"
             [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($env:CERT_B64))
-            "CSC_LINK=$certPath" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_ENV
             "configured=true" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
+            "mode=pfx" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
+            "cert_path=$certPath" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
+          } else {
+            Write-Host "No complete Azure or PFX signing configuration; building an explicitly unsigned alpha."
+            "configured=false" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
+            "mode=unsigned" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
           }
 
       # Runs electron-vite build + the PyInstaller backend bundle + electron-builder's
@@ -162,13 +198,20 @@ jobs:
       - name: Build installer (electron-builder)
         working-directory: app
         env:
+          BETTERFINGERS_SIGNING_MODE: ${{ steps.signing.outputs.mode }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
+          AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ vars.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          CSC_LINK: ${{ steps.signing.outputs.cert_path }}
           CSC_KEY_PASSWORD: ${{ secrets.WIN_CERTIFICATE_PASSWORD }}
         run: npm run dist:win
 
       - name: Clean up code-signing certificate
-        if: always() && steps.signing.outputs.configured == 'true'
+        if: always() && steps.signing.outputs.mode == 'pfx'
         shell: powershell
-        run: Remove-Item -Path "$env:CSC_LINK" -ErrorAction SilentlyContinue
+        run: Remove-Item -LiteralPath "${{ steps.signing.outputs.cert_path }}" -ErrorAction SilentlyContinue
 
       - name: Enforce payload size budget
         shell: powershell
@@ -194,15 +237,20 @@ jobs:
         id: installer
         shell: powershell
         run: |
-          $installer = Get-ChildItem "app\release" -Filter "*.exe" | Select-Object -First 1
-          if (-not $installer) {
-            throw "No .exe installer found in app\release"
+          $version = (Get-Content -Raw app/package.json | ConvertFrom-Json).version
+          $expectedName = "BetterFingers-Setup-$version-x64.exe"
+          $expectedPath = Join-Path "app\release" $expectedName
+          if (-not (Test-Path -LiteralPath $expectedPath -PathType Leaf)) {
+            throw "Expected installer not found: $expectedPath"
           }
+          $installer = Get-Item -LiteralPath $expectedPath
           Write-Host "Found installer: $($installer.FullName)"
           "path=$($installer.FullName)" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
 
       - name: Verify installer signature status
         shell: powershell
+        env:
+          AZURE_EXPECTED_PUBLISHER: ${{ vars.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
         run: |
           $installer = "${{ steps.installer.outputs.path }}"
           $signature = Get-AuthenticodeSignature -FilePath $installer
@@ -211,10 +259,19 @@ jobs:
             if ($signature.Status -ne "Valid") {
               throw "Signing was configured, but Authenticode verification returned $($signature.Status)."
             }
-            "signed; authenticode_status=$($signature.Status)" | Out-File -Encoding ascii "$installer.signature.txt"
+            $signerSubject = [string]$signature.SignerCertificate.Subject
+            if ("${{ steps.signing.outputs.mode }}" -eq "azure" -and $signerSubject -cne $env:AZURE_EXPECTED_PUBLISHER) {
+              throw "Azure signer subject was '$signerSubject'; expected exactly '$env:AZURE_EXPECTED_PUBLISHER'."
+            }
+            "signed via ${{ steps.signing.outputs.mode }}; authenticode_status=$($signature.Status); signer_subject=$signerSubject" | Out-File -Encoding ascii "$installer.signature.txt"
           } else {
-            if ($signature.Status -eq "Valid") {
-              throw "Signing was not configured, but the installer reports a valid Authenticode signature; refusing an ambiguous release record."
+            if ($signature.Status -ne "NotSigned") {
+              throw "Signing was not configured, but Authenticode returned $($signature.Status); expected exactly NotSigned."
+            }
+            $releaseVersion = (Get-Content -Raw app/package.json | ConvertFrom-Json).version
+            $precedenceVersion = ($releaseVersion -split '\+', 2)[0]
+            if ("${{ github.ref_type }}" -eq "tag" -and $precedenceVersion -notmatch '-') {
+              throw "Stable Windows tags must be signed. Unsigned builds are allowed only for prerelease tags or manual qualification runs."
             }
             Write-Host "UNSIGNED ALPHA: no Windows signing certificate was configured."
             "unsigned alpha; authenticode_status=$($signature.Status)" | Out-File -Encoding ascii "$installer.signature.txt"
@@ -230,7 +287,7 @@ jobs:
           # Optional replacement/continuity coverage: on the very first
           # release there is no prior installer, so an empty release history
           # skips this leg without weakening the build job.
-          $releaseJson = gh release list --limit 1 --exclude-drafts --exclude-pre-releases --json tagName 2>$null
+          $releaseJson = gh release list --limit 1 --exclude-drafts --json tagName 2>$null
           $listExitCode = $LASTEXITCODE
           if ($listExitCode -ne 0) {
             throw "gh release list failed with exit code $listExitCode; refusing to misreport the release as having no prior installer."
@@ -255,7 +312,7 @@ jobs:
           }
           $assets = @($assetJson | ConvertFrom-Json).assets
           $prevAssetName = $assets |
-            Where-Object { $_.name -like "*.exe" } |
+            Where-Object { $_.name -like "BetterFingers-Setup-*-x64.exe" } |
             Sort-Object name |
             Select-Object -ExpandProperty name -First 1
           if (-not $prevAssetName) {
@@ -275,9 +332,17 @@ jobs:
 
       - name: Smoke check installer install/replacement/uninstall
         shell: powershell
+        env:
+          AZURE_EXPECTED_PUBLISHER: ${{ vars.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
         run: |
           $ErrorActionPreference = "Stop"
           $args = @("-InstallerPath", "${{ steps.installer.outputs.path }}")
+          $args += @("-ExpectedVersion", ((Get-Content -Raw app/package.json | ConvertFrom-Json).version))
+          $expectedSignature = if ("${{ steps.signing.outputs.configured }}" -eq "true") { "Valid" } else { "NotSigned" }
+          $args += @("-ExpectedSignatureStatus", $expectedSignature)
+          if ("${{ steps.signing.outputs.mode }}" -eq "azure") {
+            $args += @("-ExpectedSignerSubject", $env:AZURE_EXPECTED_PUBLISHER)
+          }
           if ("${{ steps.previous.outputs.path }}" -ne "") {
             $args += @("-PreviousInstallerPath", "${{ steps.previous.outputs.path }}")
           }
@@ -552,17 +617,21 @@ jobs:
             find release-assets/sbom -type f -print
             exit 1
           fi
+          (cd release-assets/windows && sha256sum --check *.exe.sha256)
+          (cd release-assets/linux && sha256sum --check *.AppImage.sha256)
 
       - name: Publish GitHub Release assets
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228  # v3.0.2
         with:
           name: BetterFingers ${{ github.ref_name }}
           body: |
-            BetterFingers ${{ github.ref_name }} is a draft public-alpha candidate for local-first dictation on Windows and Linux.
+            BetterFingers ${{ github.ref_name }} is an unsigned public alpha for invited friend testing of local-first dictation on Windows and Linux.
 
-            The release contains a Windows NSIS installer, Linux AppImage, SHA-256 checksum sidecars, the Windows Authenticode status report, and a CycloneDX SBOM. Review the signature report before publication: alpha Windows builds may be unsigned and can trigger Microsoft SmartScreen.
+            This is experimental software, not a broadly qualified stable release. The release contains a Windows NSIS installer, Linux AppImage, SHA-256 checksum sidecars, the Windows Authenticode status report, and a CycloneDX SBOM. The exact Windows signing mode for this tag is `${{ needs.windows-installer.outputs.signing_mode }}`. An unsigned Windows build can trigger Microsoft SmartScreen. Verify the SHA-256 sidecar before running it; do not disable Windows security controls.
 
-            Nothing in this draft is a qualification claim. Publish only after the exact tag-generated artifacts pass the recorded clean-install, onboarding, model-installation, restart/cache-rediscovery, dictation, recovery, injection, clipboard-restoration, and reliability matrix on Windows and Linux X11.
+            Speech-to-text requires a local Whisper model downloaded during setup. The separate multi-gigabyte language model used for AI cleanup is optional and disabled on a fresh install. Model downloads require network access. Do not use this alpha for highly sensitive dictation because production-grade at-rest encryption is not included.
+
+            The tag workflow verifies installation, launch, authenticated local-backend health, a real pinned model download, upgrade continuity when a prior installer exists, and uninstall behavior. Friend testing is intended to find the remaining hardware, audio, injection, clipboard, and usability problems before signed release qualification. Report reproducible problems at https://github.com/RoyGSlade/BetterFingers/issues.
           draft: true
           prerelease: true
           make_latest: false
@@ -575,3 +644,25 @@ jobs:
             release-assets/linux/*.AppImage
             release-assets/linux/*.AppImage.sha256
             release-assets/sbom/*.cdx.json
+
+      - name: Verify draft release download and checksum
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          download_dir="$(mktemp -d)"
+          trap 'rm -rf "$download_dir"' EXIT
+          gh release download "${GITHUB_REF_NAME}" \
+            --pattern 'BetterFingers-Setup-*-x64.exe' \
+            --pattern 'BetterFingers-Setup-*-x64.exe.sha256' \
+            --dir "$download_dir"
+          installers=("$download_dir"/BetterFingers-Setup-*-x64.exe)
+          checksums=("$download_dir"/BetterFingers-Setup-*-x64.exe.sha256)
+          if [ "${#installers[@]}" -ne 1 ] || [ "${#checksums[@]}" -ne 1 ]; then
+            echo "Draft release did not serve exactly one Windows installer and checksum."
+            find "$download_dir" -type f -print
+            exit 1
+          fi
+          (cd "$download_dir" && sha256sum --check "$(basename "${checksums[0]}")")
+          echo "Authenticated draft-release download and SHA-256 verification passed."

@@ -48,7 +48,7 @@ function deriveServices(doctor) {
     });
   }
 
-  if (doctor.llm) {
+  if (doctor.llm && doctor.llm.enabled !== false) {
     const llm = doctor.llm;
     let status = 'pending';
     let message = '';
@@ -91,7 +91,7 @@ function deriveServices(doctor) {
     services.push({ key: 'hotkeys', name: 'Global hotkeys', status, message });
   }
 
-  if (doctor.models) {
+  if (doctor.models && (!doctor.llm || doctor.llm.enabled !== false)) {
     const m = doctor.models;
     let status;
     let message = '';

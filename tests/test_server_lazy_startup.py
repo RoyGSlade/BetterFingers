@@ -139,6 +139,17 @@ class ServerLazyStartupTests(unittest.TestCase):
         self.assertIsNotNone(server.transcriber)
         self.assertFalse(server.hotkey_manager_started)
 
+    def test_disabled_ai_cleanup_overrides_a_stale_keep_loaded_flag(self):
+        profile = {
+            "llm_enabled": False,
+            "model_keep_llm_loaded": True,
+            "model_keep_stt_loaded": False,
+            "model_keep_tts_loaded": False,
+        }
+        with patch.object(server, "load_profile", return_value=profile):
+            settings = server.get_model_residency_settings()
+        self.assertFalse(settings["llm"])
+
     def test_default_startup_keeps_eager_behavior(self):
         started = DummyHotkeyManager()
 
@@ -149,6 +160,7 @@ class ServerLazyStartupTests(unittest.TestCase):
 
         # Keep-loaded on so the background warmup preloads STT and warms the LLM.
         profile = {
+            "llm_enabled": True,
             "model_keep_llm_loaded": True,
             "model_keep_stt_loaded": True,
             "model_keep_tts_loaded": False,
@@ -203,6 +215,7 @@ class ServerLazyStartupTests(unittest.TestCase):
 
     def test_lazy_startup_still_warms_keep_loaded_models(self):
         profile = {
+            "llm_enabled": True,
             "model_keep_llm_loaded": True,
             "model_keep_stt_loaded": True,
             "model_keep_tts_loaded": False,

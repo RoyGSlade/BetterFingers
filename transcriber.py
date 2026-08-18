@@ -886,7 +886,7 @@ class Transcriber:
             # operates directly on the decoded transcript — an exception here
             # could echo it (found by the logging-leak regression gate, not
             # in the original Phase 0 audit).
-            logging.error("Error during transcription (stt_inference_failed).")
+            logging.error("STT inference failed (stt_inference_failed).")
             return "", empty_conf, [], audio_duration_s
 
     def transcribe_with_confidence(self, audio_array, hotwords=None):

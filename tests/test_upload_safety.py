@@ -11,6 +11,10 @@ import struct
 import tempfile
 import unittest
 import wave
+from unittest.mock import patch
+
+import numpy as np
+from scipy.io import wavfile
 
 from fastapi.testclient import TestClient
 
@@ -25,6 +29,13 @@ def _wav_bytes(seconds=0.1, rate=16000):
         w.setsampwidth(2)
         w.setframerate(rate)
         w.writeframes(b"\x00\x00" * int(rate * seconds))
+    return buf.getvalue()
+
+
+def _float_wav_bytes(seconds=0.1, rate=16000):
+    """Match recordings.save_recording(): mono scipy float32 / format tag 3."""
+    buf = io.BytesIO()
+    wavfile.write(buf, rate, np.zeros(int(rate * seconds), dtype=np.float32))
     return buf.getvalue()
 
 
@@ -82,6 +93,41 @@ class SignatureTests(unittest.TestCase):
             with self.assertRaises(us.UploadRejected):
                 us.validate_wav_duration(path, max_seconds=0.5)
             self.assertLess(us.validate_wav_duration(path, max_seconds=10), 2.0)
+        finally:
+            os.remove(path)
+
+    def test_wav_duration_accepts_betterfingers_float32_recording(self):
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            f.write(_float_wav_bytes(seconds=0.25))
+            path = f.name
+        try:
+            self.assertAlmostEqual(us.validate_wav_duration(path), 0.25, places=3)
+        finally:
+            os.remove(path)
+
+    def test_wav_duration_rejects_unsupported_compressed_format(self):
+        payload = bytearray(_wav_bytes())
+        self.assertEqual(payload[12:16], b"fmt ")
+        payload[20:22] = struct.pack("<H", 6)  # WAVE_FORMAT_ALAW
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            f.write(payload)
+            path = f.name
+        try:
+            with self.assertRaisesRegex(us.UploadRejected, "unsupported WAV format"):
+                us.validate_wav_duration(path)
+        finally:
+            os.remove(path)
+
+    def test_wav_duration_rejects_padding_outside_riff_container(self):
+        payload = bytearray(_wav_bytes())
+        payload.extend(b"JUNK\x01\x00\x00\x00x")
+        payload[4:8] = struct.pack("<I", len(payload) - 8)
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            f.write(payload)
+            path = f.name
+        try:
+            with self.assertRaisesRegex(us.UploadRejected, "truncated chunk data"):
+                us.validate_wav_duration(path)
         finally:
             os.remove(path)
 
@@ -147,6 +193,23 @@ class UploadRouteTests(unittest.TestCase):
             "/transcribe", files={"file": ("evil.wav", b"nope not audio", "audio/wav")}
         )
         self.assertEqual(resp.status_code, 400)
+
+    def test_transcribe_accepts_betterfingers_float32_wav(self):
+        class FloatWavTranscriber:
+            def transcribe(self, path):
+                self.duration = us.validate_wav_duration(path)
+                return "accepted"
+
+        transcriber = FloatWavTranscriber()
+        with patch.object(server, "transcriber", transcriber):
+            resp = self.client.post(
+                "/transcribe",
+                files={"file": ("recording.wav", _float_wav_bytes(), "audio/wav")},
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"text": "accepted"})
+        self.assertAlmostEqual(transcriber.duration, 0.1, places=3)
 
     def test_ocr_rejects_non_image_content(self):
         resp = self.client.post(

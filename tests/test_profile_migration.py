@@ -28,7 +28,8 @@ class ProfileMigrationTests(unittest.TestCase):
                 self.assertEqual(binding.get("style"), "single")
                 self.assertEqual(binding.get("events"), ["button:9"])
                 self.assertEqual(float(loaded.get("review_tts_speed")), 1.5)
-                self.assertTrue(bool(loaded.get("model_keep_llm_loaded")))
+                self.assertFalse(bool(loaded.get("llm_enabled")))
+                self.assertFalse(bool(loaded.get("model_keep_llm_loaded")))
                 self.assertTrue(bool(loaded.get("model_keep_stt_loaded")))
                 self.assertFalse(bool(loaded.get("model_keep_tts_loaded")))
             finally:

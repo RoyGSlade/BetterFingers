@@ -101,10 +101,11 @@ for _var in ("XDG_DATA_HOME", "XDG_CONFIG_HOME", "APPDATA"):
 # out-ranked or forgotten. Tests wanting an explicit root use the
 # `isolated_data_root` fixture, which sets both vars together.
 
-# keep-loaded defaults to True for LLM/STT (server.warm_start_resident_models),
-# so even a pristine profile warm-loads real multi-GB models on every server
-# TestClient startup. Seed the isolated profile with residency off; tests that
-# exercise warmup behavior patch load_profile explicitly.
+# Production defaults AI cleanup and its residency off, but most legacy
+# pipeline tests intentionally exercise the cleanup stage. Seed this isolated
+# test profile with cleanup explicitly enabled while keeping all startup
+# residency off; tests of the production opt-in default call _profile_defaults
+# or patch load_profile themselves.
 _profiles = os.path.join(_isolated, "BetterFingers", "profiles")
 os.makedirs(_profiles, exist_ok=True)
 with open(os.path.join(_profiles, "Default.yaml"), "w") as _fh:
@@ -112,6 +113,7 @@ with open(os.path.join(_profiles, "Default.yaml"), "w") as _fh:
         "model_keep_llm_loaded: false\n"
         "model_keep_stt_loaded: false\n"
         "model_keep_tts_loaded: false\n"
+        "llm_enabled: true\n"
     )
 
 

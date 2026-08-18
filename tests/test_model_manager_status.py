@@ -269,6 +269,7 @@ class ModelManagerStatusTests(unittest.TestCase):
             self.assertFalse(os.path.exists(model_path))
             self.assertTrue(os.path.exists(part_path))
 
+    @unittest.skipIf(sys.platform.startswith("win"), "requires POSIX symlink semantics")
     def test_linux_runtime_tar_symlinks_are_preserved_and_repaired(self):
         with tempfile.TemporaryDirectory() as tmp:
             archive_path = os.path.join(tmp, "runtime.tar.gz")
@@ -321,6 +322,7 @@ class ModelManagerStatusTests(unittest.TestCase):
             with open(stale_path, "rb") as handle:
                 self.assertEqual(handle.read(), b"new")
 
+    @unittest.skipIf(sys.platform.startswith("win"), "requires POSIX symlink semantics")
     def test_linux_runtime_extract_allows_symlink_before_target(self):
         with tempfile.TemporaryDirectory() as tmp:
             archive_path = os.path.join(tmp, "runtime.tar.gz")

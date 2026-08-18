@@ -220,6 +220,9 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
         self.assertEqual(data["expected_electron_api_version"], version_module.APP_VERSION)
         self.assertEqual(data["schema_version"], 1)
 
+        runtime = server.get_runtime_status_snapshot()
+        self.assertIn("llm_enabled", runtime)
+
     def test_doctor_endpoint(self):
         with patch("sys.platform", "linux"):
             with TestClient(server.app) as client:
@@ -229,6 +232,7 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
         self.assertEqual(data["health"], "active")
         self.assertIn("stt", data)
         self.assertIn("llm", data)
+        self.assertIn("enabled", data["llm"])
         self.assertIn("tts", data)
         self.assertIn("audio", data)
         self.assertIn("recovery", data)

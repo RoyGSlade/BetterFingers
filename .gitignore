@@ -12,6 +12,10 @@ __pycache__/
 
 # Build/package outputs
 build/
+!app/build/
+app/build/*
+!app/build/icon.png
+!app/build/icon.ico
 dist/
 app/out/
 app/release/

@@ -123,6 +123,22 @@ test('computeFirstRunStatus: fully ready -- runtime + llm + whisper all installe
   assert.deepEqual(status.missing, []);
 });
 
+test('computeFirstRunStatus: fresh profile is ready with Whisper only when AI cleanup is off', () => {
+  const status = computeFirstRunStatus({
+    health: { status: 'active' },
+    runtime: { llm_enabled: false, llm_ready: false },
+    llmModels: { models: [], selected_model_id: null, llama_server_exists: false },
+    whisperModels: {
+      models: [{ model_size: 'base.en', installed: true }],
+      selected_model_size: 'base.en',
+    },
+  });
+  assert.equal(status.ready, true);
+  assert.equal(status.llm.enabled, false);
+  assert.equal(status.runtime.required, false);
+  assert.deepEqual(status.missing, []);
+});
+
 test('computeFirstRunStatus: llama-server runtime missing is flagged even if the LLM itself claims ready', () => {
   const status = computeFirstRunStatus({
     health: { status: 'active' },
@@ -323,6 +339,26 @@ test('init(): fully ready -- panel stays hidden, badges read Ready/Found/Install
   assert.equal(elements.llmBadgeEl.textContent, 'Ready');
   assert.equal(elements.whisperBadgeEl.textContent, 'Installed');
   assert.equal(elements.continueButton.disabled, false);
+});
+
+test('init(): optional LLM is visibly off and does not block Whisper-only setup', async () => {
+  const elements = makeElements();
+  const { ui } = makeUi();
+  const api = makeApiStub({
+    fetchRuntimeStatus: async () => ({ llm_enabled: false, llm_ready: false }),
+    fetchLlmModels: async () => ({ models: [], selected_model_id: null, llama_server_exists: false }),
+  });
+  const feature = createFirstRunFeature({ elements, ui, hooks: {}, api, storage: makeFakeStorage() });
+
+  const status = await feature.init();
+
+  assert.equal(status.ready, true);
+  assert.equal(elements.runtimeBadgeEl.textContent, 'Optional');
+  assert.equal(elements.llmBadgeEl.textContent, 'Off');
+  assert.match(elements.llmDetailEl.textContent, /Optional/);
+  assert.equal(elements.whisperBadgeEl.textContent, 'Installed');
+  assert.equal(elements.continueButton.disabled, false);
+  assert.equal(elements.downloadLlmButton.disabled, false, 'optional model remains available for an explicit download');
 });
 
 test('init(): not ready -- panel shows, missing pieces render as Missing/danger', async () => {

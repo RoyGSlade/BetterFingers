@@ -648,8 +648,9 @@ def get_model_residency_settings():
         logging.warning(f"Failed loading active profile for model residency settings: {exc}")
         config = {}
 
+    llm_enabled = bool(config.get("llm_enabled", False))
     return {
-        "llm": bool(config.get("model_keep_llm_loaded", True)),
+        "llm": llm_enabled and bool(config.get("model_keep_llm_loaded", False)),
         "stt": bool(config.get("model_keep_stt_loaded", True)),
         "tts": bool(config.get("model_keep_tts_loaded", False)),
     }
@@ -805,6 +806,10 @@ def get_runtime_status_snapshot():
             engine_ready = False
 
     stt_status = _transcriber_status_snapshot(transcriber)
+    try:
+        llm_enabled = bool(load_profile(get_last_active_profile()).get("llm_enabled", False))
+    except Exception:
+        llm_enabled = False
     return {
         "transcriber_initialized": transcriber is not None,
         "llm_initialized": engine is not None,
@@ -819,6 +824,7 @@ def get_runtime_status_snapshot():
         "transcriber_loaded": bool(getattr(transcriber, "model", None)),
         "stt": stt_status,
         "llm_ready": engine_ready,
+        "llm_enabled": llm_enabled,
     }
 
 
@@ -2106,7 +2112,7 @@ def process_recording_result(
     streamed_stt_ms=None,
     wait_for_gate=False,
 ):
-    """Run one recording through STT → post-passes → LLM cleanup → draft.
+    """Run one recording through STT → post-passes → optional LLM cleanup → draft.
 
     ``streamed_text`` (from a StreamingTranscriptionSession) skips the
     full-audio Whisper pass — the transcript was already built while the user
@@ -2364,6 +2370,14 @@ def process_recording_result(
 
     def _stage_rewrite(ctx, deps):
         nonlocal final_text, llm_ms
+        if not bool(profile_config.get("llm_enabled", False)):
+            # Local speech-to-text is the core product path. AI cleanup is an
+            # explicit opt-in, so this branch must not construct an engine,
+            # validate llama-server, or trigger any LLM/runtime download.
+            final_text = raw_text
+            llm_ms = 0.0
+            ctx.final_text = final_text
+            return
         broadcast_status_threadsafe("rewriting")
         engine = get_selected_llm_engine()
         # llm_chunk_size + completion cap come from the profile dict already
@@ -3050,16 +3064,22 @@ async def run_doctor(refresh_audio: bool = False):
         "using_cpu_fallback": bool(stt_fallback_reason),
     }
 
-    # LLM details
+    # LLM details. Diagnostics remain observation-only when AI cleanup is off;
+    # in particular, this route never constructs the engine or downloads it.
+    try:
+        llm_enabled = bool(load_profile(get_last_active_profile()).get("llm_enabled", False))
+    except Exception:
+        llm_enabled = False
     selected_model_id = model_id or get_selected_llm_model_id()
     llama_server_path = str(get_server_path())
     llama_server_exists = os.path.exists(llama_server_path)
     model_exists = check_model_exists(selected_model_id)
-    runtime_validation = (
-        await run_in_threadpool(validate_llama_server_runtime, llama_server_path)
-        if llama_server_exists
-        else {"ok": False, "message": "llama-server binary is missing."}
-    )
+    if not llm_enabled:
+        runtime_validation = {"ok": False, "message": "AI cleanup is disabled."}
+    elif llama_server_exists:
+        runtime_validation = await run_in_threadpool(validate_llama_server_runtime, llama_server_path)
+    else:
+        runtime_validation = {"ok": False, "message": "llama-server binary is missing."}
     required_runtime_build = required_llama_server_build(selected_model_id)
     runtime_build = runtime_validation.get("build")
     runtime_build_ok = (
@@ -3067,7 +3087,9 @@ async def run_doctor(refresh_audio: bool = False):
         or (runtime_build is not None and int(runtime_build) >= required_runtime_build)
     )
     llm_last_error = str(getattr(engine, "_last_error", "") or "") if engine else ""
-    if not llama_server_exists:
+    if not llm_enabled:
+        llm_runtime_status = "disabled"
+    elif not llama_server_exists:
         llm_runtime_status = "missing_llama_server"
     elif not model_exists:
         llm_runtime_status = "missing_model"
@@ -3085,6 +3107,7 @@ async def run_doctor(refresh_audio: bool = False):
         llm_runtime_status = "not_loaded"
 
     llm_info = {
+        "enabled": llm_enabled,
         "initialized": engine is not None,
         "ready": engine_ready,
         "model_id": selected_model_id,

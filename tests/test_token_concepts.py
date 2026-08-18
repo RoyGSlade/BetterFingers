@@ -145,6 +145,7 @@ class Phase2PassThroughTest(unittest.TestCase):
                 return f"clean: {text}"
 
         profile = utils._profile_defaults()
+        profile["llm_enabled"] = True
         profile["max_completion_tokens"] = 2222
         profile["llm_chunk_size"] = 640
         utils.save_profile("Cap", profile)

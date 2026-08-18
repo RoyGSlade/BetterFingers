@@ -529,6 +529,7 @@ export function runSettingsValidation(values) {
 // audio device, wake word, TTS, dictionary/macros, and advanced/developer
 // residency are Utilities'/Studio's, see the file-header placement map).
 export const SETTINGS_FIELD_KEYS = [
+  'llm_enabled',
   'recording_mode',
   'auto_stop_after_silence_enabled',
   'auto_stop_silence_ms',
@@ -561,6 +562,7 @@ export const SETTINGS_FIELD_KEYS = [
 ];
 
 export const SETTINGS_FIELD_TYPES = {
+  llm_enabled: 'checkbox',
   recording_mode: 'select',
   auto_stop_after_silence_enabled: 'checkbox',
   auto_stop_silence_ms: 'number',
@@ -759,6 +761,7 @@ export const SETTINGS_ELEMENT_IDS = {
 
   // --- Profile fields (SETTINGS_FIELD_KEYS -> element id) ---
   fields: {
+    llm_enabled: 'sdSetLlmEnabled',
     recording_mode: 'sdSetRecordingMode',
     auto_stop_after_silence_enabled: 'sdSetAutoStopSilence',
     auto_stop_silence_ms: 'sdSetAutoStopSilenceMs',

@@ -87,6 +87,17 @@ test('deriveServices renders nothing at all when doctor has not answered yet', (
   assert.deepEqual(deriveServices(null), []);
 });
 
+test('disabled AI cleanup contributes no LLM or model-files boot dependency', () => {
+  const doctor = {
+    llm: { enabled: false, initialized: false, runtime_status: 'disabled', model_exists: false },
+    models: { models_dir_exists: false, default_model_exists: false },
+    stt: { initialized: true, loaded: true },
+  };
+  const keys = deriveServices(doctor).map((service) => service.key);
+  assert.deepEqual(keys, ['stt']);
+  assert.equal(derivePhase({ elapsedMs: 500, doctor, sidecarOutcome: 'ready' }), 'ready');
+});
+
 test('a verified selected model satisfies Model files even when the unused catalog default is absent', () => {
   const doctor = {
     llm: {

@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/build-installer.yml"
 CI_WORKFLOW = ROOT / ".github/workflows/ci.yml"
+INSTALLER_SMOKE = ROOT / "tools/smoke_installer.ps1"
 
 
 def _workflow_text():
@@ -27,6 +28,25 @@ def test_tag_publication_is_an_approval_gated_draft_prerelease():
     assert "prerelease: true" in block
     assert "make_latest: false" in block
     assert "generate_release_notes: false" in block
+
+
+def test_friend_alpha_release_body_is_explicit_about_unsigned_experimental_limits():
+    block = _publish_block()
+    for required in (
+        "unsigned public alpha for invited friend testing",
+        "not a broadly qualified stable release",
+        "exact Windows signing mode for this tag is `${{ needs.windows-installer.outputs.signing_mode }}`",
+        "An unsigned Windows build can trigger Microsoft SmartScreen",
+        "Verify the SHA-256 sidecar before running it",
+        "do not disable Windows security controls",
+        "language model used for AI cleanup is optional and disabled on a fresh install",
+        "Do not use this alpha for highly sensitive dictation",
+        "Report reproducible problems at https://github.com/RoyGSlade/BetterFingers/issues",
+    ):
+        assert required in block
+
+    workflow = _workflow_text()
+    assert "signing_mode: ${{ steps.signing.outputs.mode }}" in workflow
 
 
 def test_release_keeps_all_qualification_artifacts():
@@ -66,6 +86,95 @@ def test_first_release_history_is_parsed_without_expanding_a_null_tag():
     assert "ForEach-Object { $_.tagName }" in block
     assert "Select-Object -ExpandProperty tagName" not in block
     assert 'Write-Host "No previous release found; skipping replacement/continuity coverage."' in block
+    assert "--exclude-pre-releases" not in block
+    assert 'Where-Object { $_.name -like "BetterFingers-Setup-*-x64.exe" }' in block
+
+
+def test_release_identity_and_unsigned_policy_fail_closed():
+    workflow = _workflow_text()
+    assert "Package version '$version' does not match VERSION '$versionFile'." in workflow
+    assert "Tag '${{ github.ref_name }}' does not match package version" in workflow
+    assert 'expected exactly NotSigned' in workflow
+    assert "Stable Windows tags must be signed." in workflow
+    assert "$precedenceVersion = ($releaseVersion -split '\\+', 2)[0]" in workflow
+    assert "$precedenceVersion -notmatch '-'" in workflow
+
+
+def test_azure_signing_account_is_wired_conditionally_and_partial_config_fails():
+    workflow = _workflow_text()
+    for required in (
+        'AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE',
+        'AZURE_TRUSTED_SIGNING_PUBLISHER_NAME',
+        'AZURE_TENANT_ID',
+        'AZURE_CLIENT_ID',
+        'AZURE_CLIENT_SECRET',
+        'BETTERFINGERS_SIGNING_MODE: ${{ steps.signing.outputs.mode }}',
+        'Azure signing is partially configured.',
+        'Azure and PFX signing are both configured',
+        'PFX signing is partially configured.',
+        'mode=azure',
+        'mode=pfx',
+        'mode=unsigned',
+    ):
+        assert required in workflow
+
+    configure = workflow.split("      - name: Configure Windows code signing\n", 1)[1].split(
+        "\n      # Runs electron-vite build", 1
+    )[0]
+    build = workflow.split("      - name: Build installer (electron-builder)\n", 1)[1].split(
+        "\n      - name: Clean up code-signing certificate", 1
+    )[0]
+    assert "GITHUB_ENV" not in configure
+    assert "AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}" in build
+    assert "CSC_LINK: ${{ steps.signing.outputs.cert_path }}" in build
+
+
+def test_installer_artifact_name_and_installed_smoke_contract_are_exact():
+    workflow = _workflow_text()
+    assert 'BetterFingers-Setup-$version-x64.exe' in workflow
+    assert '-ExpectedVersion' in workflow
+    assert '-ExpectedSignatureStatus' in workflow
+    assert 'tools/smoke_installer.ps1' in workflow
+
+
+def test_publish_job_rehashes_downloaded_artifacts_and_redownloads_draft():
+    block = _publish_block()
+    assert '(cd release-assets/windows && sha256sum --check *.exe.sha256)' in block
+    assert '(cd release-assets/linux && sha256sum --check *.AppImage.sha256)' in block
+    assert 'Verify draft release download and checksum' in block
+    assert 'gh release download "${GITHUB_REF_NAME}"' in block
+    assert "--pattern 'BetterFingers-Setup-*-x64.exe'" in block
+    assert 'sha256sum --check "$(basename "${checksums[0]}")"' in block
+
+
+def test_installed_app_smoke_proves_no_llm_and_a_real_verified_download():
+    smoke = INSTALLER_SMOKE.read_text(encoding="utf-8")
+    for required in (
+        'llm_enabled -ne $false',
+        'llm_initialized -ne $false',
+        'wake/models/melspectrogram/download',
+        'wake/models/melspectrogram/download-state',
+        '1087958',
+        'ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f',
+        'Assert-AuthenticodeStatus -Path $exePath',
+        'Assert-AuthenticodeStatus -Path $backendExePath',
+        'Assert-AuthenticodeStatus -Path $uninstallerPath',
+        'ExpectedSignerSubject',
+        'SignerCertificate.Subject',
+        'DisplayVersion',
+        'Publisher',
+    ):
+        assert required in smoke
+
+
+def test_azure_signer_subject_is_enforced_on_artifact_and_installed_payloads():
+    workflow = _workflow_text()
+    smoke = INSTALLER_SMOKE.read_text(encoding="utf-8")
+    assert "$signature.SignerCertificate.Subject" in workflow
+    assert "$signerSubject -cne $env:AZURE_EXPECTED_PUBLISHER" in workflow
+    assert '$args += @("-ExpectedSignerSubject", $env:AZURE_EXPECTED_PUBLISHER)' in workflow
+    assert '$actualSubject -cne $ExpectedSubject' in smoke
+    assert smoke.count('-ExpectedSubject $ExpectedSignerSubject') == 4
 
 
 def test_windows_python_suites_isolate_chunks_and_files_to_release_memory():

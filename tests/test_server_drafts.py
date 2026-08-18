@@ -259,6 +259,28 @@ class ServerDraftTests(unittest.TestCase):
         self.assertEqual(draft["metadata"]["sample_rate"], 16000)
         self.assertEqual(draft["metadata"]["stop_reason"], "manual")
 
+    def test_process_recording_result_bypasses_llm_when_ai_cleanup_is_disabled(self):
+        import utils
+
+        statuses = []
+        profile = utils._profile_defaults()
+        self.assertFalse(profile["llm_enabled"], "fresh-profile contract must keep cleanup opt-in")
+        with patch.object(server, "Transcriber", DummyTranscriber), patch.object(
+            server, "get_active_recording_config", return_value=profile
+        ), patch.object(
+            server, "get_selected_llm_engine", side_effect=AssertionError("disabled cleanup must never construct the LLM")
+        ), patch.object(
+            server,
+            "broadcast_status_threadsafe",
+            side_effect=lambda status, data=None: statuses.append((status, data or {})),
+        ):
+            draft = server.process_recording_result(DummyRecordingResult())
+
+        self.assertEqual(draft["raw_text"], "raw transcript")
+        self.assertEqual(draft["final_text"], "raw transcript")
+        self.assertEqual(draft["status"], "pending")
+        self.assertEqual([status for status, _data in statuses], ["transcribing", "preview_ready", "idle"])
+
     def test_process_recording_result_persists_structured_transcription_and_speech_signals(self):
         """I3.1: a transcriber exposing transcribe_with_structured() gets its
         structured result + computed speech signals attached to the finalized
@@ -369,6 +391,7 @@ class ServerDraftTests(unittest.TestCase):
             self.addCleanup(lambda: os.environ.__setitem__("APPDATA", original))
 
         profile = utils._profile_defaults()
+        profile["llm_enabled"] = True
         profile["llm_chunk_size"] = 50  # 60-word transcript will chunk
         utils.save_profile("LongTest", profile)
         utils.set_last_active_profile("LongTest")
@@ -412,6 +435,7 @@ class ServerDraftTests(unittest.TestCase):
             self.addCleanup(lambda: os.environ.__setitem__("APPDATA", original))
 
         profile = utils._profile_defaults()
+        profile["llm_enabled"] = True
         profile["llm_chunk_size"] = 50
         profile["long_recording_stitch_pass_enabled"] = False
         utils.save_profile("NoStitch", profile)

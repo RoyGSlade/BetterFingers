@@ -916,7 +916,9 @@ def _profile_defaults():
         "review_tts_brightness": 0.0,
         "review_tts_pause_style": "natural",
         "organic_formatting_enabled": True,
-        "model_keep_llm_loaded": True,
+        # AI cleanup is opt-in. A fresh install must not start or download the
+        # multi-gigabyte LLM merely because the local backend launched.
+        "model_keep_llm_loaded": False,
         "model_keep_stt_loaded": True,
         "model_keep_tts_loaded": False,
         "llm_model_id": "gemma-4-e2b-q4",
@@ -945,7 +947,7 @@ def _profile_defaults():
         "no_audio_min_duration_sec": 0.30,
         "no_audio_min_rms": 0.003,
         "no_audio_min_peak": 0.015,
-        "llm_enabled": True,
+        "llm_enabled": False,
         "current_preset": "True Janitor",
         "experience_preset": "custom",
         "true_gen": False,

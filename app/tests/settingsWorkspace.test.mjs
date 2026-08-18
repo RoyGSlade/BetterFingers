@@ -257,6 +257,14 @@ test('SETTINGS_FIELD_KEYS: includes draft_history_limit (the wiring-fix field) e
   assert.equal(occurrences.length, 1);
 });
 
+test('AI cleanup is a Settings-owned opt-in checkbox', () => {
+  assert.equal(SETTINGS_FIELD_KEYS.filter((key) => key === 'llm_enabled').length, 1);
+  assert.equal(SETTINGS_FIELD_TYPES.llm_enabled, 'checkbox');
+  assert.equal(SETTINGS_ELEMENT_IDS.fields.llm_enabled, 'sdSetLlmEnabled');
+  assert.equal(restoreFieldStatesFromSettings({}).llm_enabled.checked, false);
+  assert.equal(collectPatchFromFieldStates({ llm_enabled: { checked: true, disabled: false } }).llm_enabled, true);
+});
+
 test('SETTINGS_FIELD_KEYS: does NOT include fields owned by Utilities/Studio (no duplication)', () => {
   const forbidden = ['hotkey', 'force_stop_key', 'manual_send_hotkey', 'review_tts_hotkey', 'selection_rewrite_hotkey', 'chat_open_key', 'voice_mute_key', 'input_device_index', 'audio_ducking', 'wake_word_model', 'wake_word_sensitivity', 'wake_word_cooldown_s', 'wake_word_max_recording_s', 'macros_enabled', 'model_keep_llm_loaded', 'model_keep_stt_loaded', 'model_keep_tts_loaded', 'review_tts_voice_hint', 'review_tts_speed'];
   for (const key of forbidden) {
@@ -320,6 +328,7 @@ test('restoreFieldStatesFromSettings: draft_history_limit round-trips a real sto
 
 test('collect/restore ROUND TRIP: a full settings object survives restore -> (simulated DOM) -> collect unchanged', () => {
   const original = {
+    llm_enabled: true,
     recording_mode: 'ptt',
     auto_stop_after_silence_enabled: true,
     auto_stop_silence_ms: 900,

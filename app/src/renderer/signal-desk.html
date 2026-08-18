@@ -820,14 +820,14 @@
         <div class="sd-first-run__head">
           <div class="sd-first-run__headline">
             <span class="sd-first-run__label">First-run setup</span>
-            <h2 id="sdFirstRunHeading">BetterFingers needs a couple of local models</h2>
+            <h2 id="sdFirstRunHeading">Finish local model setup</h2>
           </div>
           <span class="sd-first-run__badge" id="sdFirstRunOverallBadge" data-tone="warning">Checking&hellip;</span>
           <button type="button" class="sd-btn" id="sdFirstRunRefreshButton">Check again</button>
         </div>
 
         <p class="sd-first-run__note">
-          These are multi-gigabyte downloads &mdash; keep the app open while they run.
+          Download size depends on the model you choose &mdash; keep the app open while it runs.
         </p>
 
         <div class="sd-first-run__warning" id="sdFirstRunDiskWarning" role="alert" hidden>
@@ -2750,7 +2750,20 @@
 
           <!-- ============================== AI CLEANUP (inventory §7.5 numeric knobs; wizard/Foundry live in Studio) ============================== -->
           <section class="sd-set-section" id="sdSetSectionAiCleanup" data-search-section hidden>
-            <p class="sd-set-section__intro">Active persona and the numeric tuning knobs for LLM cleanup and chunking. The persona wizard and Persona Foundry live in Studio.</p>
+            <p class="sd-set-section__intro">AI cleanup is optional and off on a fresh install. Speech-to-text dictation works without downloading a separate large language model (LLM). The persona wizard and Persona Foundry live in Studio.</p>
+
+            <div class="sd-set-group" data-search-group>
+              <div class="sd-set-group__header"><span class="sd-set-group__title">AI Cleanup</span></div>
+              <div class="sd-set-row" data-search-row data-search-label="ai cleanup language model optional enable disable">
+                <div class="sd-set-row__label">
+                  <span class="sd-set-row__label-text">Enable AI cleanup</span>
+                  <span class="sd-set-row__label-hint">Uses a local language model to refine the speech transcript. Leave this off to dictate with Whisper only and avoid the separate multi-gigabyte LLM download.</span>
+                </div>
+                <div class="sd-set-row__control">
+                  <input type="checkbox" class="sd-set-checkbox" id="sdSetLlmEnabled" />
+                </div>
+              </div>
+            </div>
 
             <div class="sd-set-group" data-search-group>
               <div class="sd-set-group__header"><span class="sd-set-group__title">Active Persona</span></div>
