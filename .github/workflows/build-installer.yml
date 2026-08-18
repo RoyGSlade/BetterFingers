@@ -440,6 +440,16 @@ jobs:
         working-directory: app
         run: npm ci
 
+      - name: Verify Electron binary is installed
+        # Electron's package install can occasionally leave the package files
+        # behind without the platform binary (for example after a stale or
+        # interrupted download cache). The repair script is a no-op when the
+        # locked binary is healthy and downloads the exact locked version when
+        # it is missing, so the unit tests and AppImage build fail on product
+        # behavior rather than a half-installed toolchain.
+        working-directory: app
+        run: npm run fix:electron
+
       - name: Run app unit tests
         working-directory: app
         run: npm run test:unit

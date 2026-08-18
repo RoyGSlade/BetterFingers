@@ -19,7 +19,7 @@ if str(ROOT) not in sys.path:
 
 import version  # noqa: E402
 
-TARGET_VERSION = "1.1.0-alpha.1"
+TARGET_VERSION = "1.1.0-alpha.2"
 
 
 def test_version_file_holds_the_release_target():

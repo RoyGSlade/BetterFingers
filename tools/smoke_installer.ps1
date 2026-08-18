@@ -5,7 +5,7 @@ param(
     # exercises upgrade-over-an-existing-install rather than only clean
     # install. When omitted, the upgrade leg is skipped.
     [string]$PreviousInstallerPath = "",
-    [string]$ExpectedVersion = "1.1.0-alpha.1",
+    [string]$ExpectedVersion = "1.1.0-alpha.2",
     [ValidateSet("NotSigned", "Valid")]
     [string]$ExpectedSignatureStatus = "NotSigned",
     # Azure Artifact Signing must prove the exact certificate identity, not
@@ -284,8 +284,12 @@ try {
     if ($versionInfo.CompanyName -ne "Donaven Crenshaw") {
         throw "Installed CompanyName was '$($versionInfo.CompanyName)'; expected Donaven Crenshaw."
     }
-    if ($versionInfo.FileDescription -ne "Private, local-first dictation for Windows and Linux.") {
-        throw "Installed FileDescription was '$($versionInfo.FileDescription)'; expected the release description."
+    # electron-builder deliberately stamps the product name into the Windows
+    # executable's FileDescription (the package description is used by
+    # installer/Linux metadata instead). Assert the real Windows identity so
+    # the smoke test still catches a generic Electron executable.
+    if ($versionInfo.FileDescription -ne "BetterFingers") {
+        throw "Installed FileDescription was '$($versionInfo.FileDescription)'; expected BetterFingers."
     }
 
     if ($PreviousInstallerPath -ne "") {

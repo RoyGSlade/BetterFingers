@@ -66,6 +66,20 @@ def test_linux_appimage_smoke_does_not_disable_electron_sandbox():
     assert "--no-sandbox" not in _workflow_text()
 
 
+def test_linux_release_repairs_a_missing_locked_electron_binary_before_tests():
+    workflow = _workflow_text()
+    block = workflow.split("\n  linux-appimage:\n", 1)[1].split(
+        "\n  sbom:\n", 1
+    )[0]
+    install = "run: npm ci"
+    repair = "run: npm run fix:electron"
+    unit_tests = "run: npm run test:unit"
+    assert install in block
+    assert repair in block
+    assert unit_tests in block
+    assert block.index(install) < block.index(repair) < block.index(unit_tests)
+
+
 def test_windows_installer_creates_build_directory_before_smoke_log():
     workflow = _workflow_text()
     block = workflow.split("      - name: Run smoke suite\n", 1)[1].split(
@@ -163,6 +177,7 @@ def test_installed_app_smoke_proves_no_llm_and_a_real_verified_download():
         'SignerCertificate.Subject',
         'DisplayVersion',
         'Publisher',
+        'if ($versionInfo.FileDescription -ne "BetterFingers")',
     ):
         assert required in smoke
 
