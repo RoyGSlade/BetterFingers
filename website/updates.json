@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "items": [
     {
+      "id": "v1-1-0-alpha-2-friend-testing",
+      "date": "2026-08-18",
+      "title": "Unsigned friend-testing alpha published",
+      "summary": "BetterFingers v1.1.0-alpha.2 provides an experimental Windows installer and Linux AppImage with checksums, a Windows signature-status report, and an SBOM while Azure signing validation continues.",
+      "body": "## What is available\n\nThe tagged alpha includes a Windows 11 x64 NSIS installer and an experimental Linux AppImage. The release page carries SHA-256 sidecars, the Windows Authenticode status report, and a CycloneDX SBOM.\n\n## Important boundary\n\nThe Windows build is unsigned while Azure Artifact Signing validation is pending, so SmartScreen can warn. Testers should use only the official release links, verify the checksum, keep Windows security protections enabled, and avoid sensitive dictation. A Whisper speech model is required for transcription; the separate multi-gigabyte LLM used for AI cleanup is optional and off on a fresh install.\n\n## Feedback\n\nFriend testing is meant to identify hardware, audio, injection, clipboard, setup, and usability failures before signed-release qualification. Reports should include reproducible steps and system details without private transcripts or recordings.",
+      "type": "release",
+      "state": "published",
+      "url": "https://github.com/RoyGSlade/BetterFingers/releases/tag/v1.1.0-alpha.2"
+    },
+    {
       "id": "project-source-contract-adopted",
       "date": "2026-08-03",
       "title": "Project source contract adopted",
