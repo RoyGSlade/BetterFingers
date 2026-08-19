@@ -141,7 +141,7 @@ export const scribeProdScenarios = [
       await page.click('#sdUtilNavSpeech');
       await expect(page.locator('#sdUtilSectionSpeech')).toBeVisible();
       await expect(page.locator('#sdUtilHotkeySelectionRewriteInput')).toHaveValue('ctrl+alt+r');
-      await expect(page.locator('#sdUtilSectionSpeech')).toContainText(/never auto-replaces or sends text/i);
+      await expect(page.locator('#sdUtilSectionSpeech')).toContainText(/never replaces or sends text automatically/i);
 
       // Leave the walkbook on the core user outcome: the reviewed Scribe
       // variants. The hotkey panel was asserted above in the same real app.
