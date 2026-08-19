@@ -128,3 +128,28 @@ test('selection rewrite defaults to Ctrl+Alt+R when an older config omits the fi
     ctx.restore();
   }
 });
+
+test('restoreActiveHotkeys restores the retained configuration after unregistering', () => {
+  const ctx = loadHotkeysWithStubs({ hookStarts: false });
+  try {
+    ctx.hotkeys.registerHotkeys(CONFIG, 'test-token');
+    ctx.hotkeys.unregisterAllHotkeys();
+    assert.equal(ctx.registeredShortcuts.length, 0);
+    assert.equal(ctx.hotkeys.restoreActiveHotkeys(), true);
+    assert.ok(ctx.registeredShortcuts.some(({ accelerator }) => accelerator === 'CommandOrControl+Alt+R'));
+  } finally {
+    ctx.hotkeys.unregisterAllHotkeys();
+    ctx.restore();
+  }
+});
+
+test('restoreActiveHotkeys safely no-ops when no configuration was registered', () => {
+  const ctx = loadHotkeysWithStubs();
+  try {
+    assert.equal(ctx.hotkeys.restoreActiveHotkeys(), false);
+    assert.equal(ctx.registeredShortcuts.length, 0);
+  } finally {
+    ctx.hotkeys.unregisterAllHotkeys();
+    ctx.restore();
+  }
+});

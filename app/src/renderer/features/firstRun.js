@@ -65,10 +65,11 @@ export function formatBytes(value) {
 export function summarizeLlmState(llmModels) {
   const models = Array.isArray(llmModels?.models) ? llmModels.models : [];
   const selectedId = llmModels?.selected_model_id ?? null;
-  const selected = models.find((model) => model.id === selectedId) || null;
+  const selected = models.find((model) => model.id === selectedId) || models[0] || null;
+  const resolvedId = selected?.id ?? null;
   return {
-    selectedId,
-    name: selected?.name ?? selectedId ?? null,
+    selectedId: resolvedId,
+    name: selected?.name ?? null,
     installed: Boolean(selected?.installed),
     ready: selected?.ready === true,
     sizeMb: Number(selected?.size_mb || 0),

@@ -145,11 +145,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # Prefer the provisioned Azure Artifact Signing account (called Azure
-      # Trusted Signing by this electron-builder integration). Until its
-      # certificate profile, certificate subject and service-principal secrets
-      # are all configured, alpha/manual runs remain explicitly unsigned. A
-      # legacy PFX remains a supported fallback; partial configuration of
-      # either mode fails instead of silently producing the wrong artifact.
+      # Trusted Signing by this electron-builder integration). Manual
+      # qualification runs may remain explicitly unsigned, but every tag is
+      # required to be signed before it can reach publication. A legacy PFX
+      # remains a supported fallback; partial configuration of either mode
+      # fails instead of silently producing the wrong artifact.
       - name: Configure Windows code signing
         id: signing
         shell: powershell
@@ -268,14 +268,57 @@ jobs:
             if ($signature.Status -ne "NotSigned") {
               throw "Signing was not configured, but Authenticode returned $($signature.Status); expected exactly NotSigned."
             }
-            $releaseVersion = (Get-Content -Raw app/package.json | ConvertFrom-Json).version
-            $precedenceVersion = ($releaseVersion -split '\+', 2)[0]
-            if ("${{ github.ref_type }}" -eq "tag" -and $precedenceVersion -notmatch '-') {
-              throw "Stable Windows tags must be signed. Unsigned builds are allowed only for prerelease tags or manual qualification runs."
+            if ("${{ github.ref_type }}" -eq "tag") {
+              throw "Every Windows tag must be signed. Unsigned builds are allowed only for manual qualification runs."
             }
             Write-Host "UNSIGNED ALPHA: no Windows signing certificate was configured."
             "unsigned alpha; authenticode_status=$($signature.Status)" | Out-File -Encoding ascii "$installer.signature.txt"
           }
+          [ordered]@{
+            schemaVersion = 1
+            file = Split-Path -Leaf $installer
+            status = [string]$signature.Status
+            signingMode = "${{ steps.signing.outputs.mode }}"
+            signerSubject = if ($null -eq $signature.SignerCertificate) { $null } else { [string]$signature.SignerCertificate.Subject }
+            sha256 = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          } | ConvertTo-Json | Out-File -Encoding utf8 "$installer.authenticode.json"
+
+      - name: Validate updater metadata and blockmap
+        id: updater
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installer = "${{ steps.installer.outputs.path }}"
+          $version = (Get-Content -Raw app/package.json | ConvertFrom-Json).version
+          $channel = if ($version -match "-") { "alpha" } else { "latest" }
+          $metadata = Join-Path "app\release" "$channel.yml"
+          $blockmap = "$installer.blockmap"
+          foreach ($asset in @($metadata, $blockmap)) {
+            if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) {
+              throw "Required updater asset is missing: $asset"
+            }
+          }
+          $installerName = Split-Path -Leaf $installer
+          $yaml = Get-Content -Raw -LiteralPath $metadata
+          $escapedName = [regex]::Escape($installerName)
+          $metadataPathPattern = '(?m)^path:\s*[''"]?{0}[''"]?\s*$' -f $escapedName
+          if ($yaml -notmatch $metadataPathPattern) {
+            throw "Updater metadata does not name the exact signed installer '$installerName'."
+          }
+          $sha512Provider = [Security.Cryptography.SHA512]::Create()
+          try {
+            $sha512 = [Convert]::ToBase64String($sha512Provider.ComputeHash([IO.File]::ReadAllBytes($installer)))
+          } finally {
+            $sha512Provider.Dispose()
+          }
+          $escapedSha512 = [regex]::Escape($sha512)
+          $metadataShaPattern = '(?m)^sha512:\s*[''"]?{0}[''"]?\s*$' -f $escapedSha512
+          if ($yaml -notmatch $metadataShaPattern) {
+            throw "Updater metadata SHA-512 does not match the signed installer."
+          }
+          "metadata=$((Resolve-Path -LiteralPath $metadata).Path)" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
+          "blockmap=$((Resolve-Path -LiteralPath $blockmap).Path)" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
+          "channel=$channel" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
 
       - name: Download previous release installer (replacement continuity coverage)
         id: previous
@@ -346,6 +389,10 @@ jobs:
           if ("${{ steps.previous.outputs.path }}" -ne "") {
             $args += @("-PreviousInstallerPath", "${{ steps.previous.outputs.path }}")
           }
+          # Hosted release runners start clean, so exercise every opt-in data
+          # cleanup category as part of qualification. The script refuses to
+          # run this destructive leg if canonical user data pre-existed.
+          $args += "-ExerciseCleanupCategories"
           powershell -ExecutionPolicy Bypass -File tools/smoke_installer.ps1 @args
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -390,6 +437,9 @@ jobs:
             ${{ steps.installer.outputs.path }}
             ${{ steps.installer.outputs.path }}.sha256
             ${{ steps.installer.outputs.path }}.signature.txt
+            ${{ steps.installer.outputs.path }}.authenticode.json
+            ${{ steps.updater.outputs.blockmap }}
+            ${{ steps.updater.outputs.metadata }}
           if-no-files-found: error
 
   linux-appimage:
@@ -569,20 +619,38 @@ jobs:
           output-file: betterfingers-sbom.cdx.json
           artifact-name: betterfingers-sbom.cdx.json
 
-  publish-release:
+  draft-release:
     if: startsWith(github.ref, 'refs/tags/')
     needs:
       - windows-installer
       - linux-appimage
       - sbom
     runs-on: ubuntu-latest
-    # The repository's `release` environment requires an explicit approval.
-    # Manual branch dispatches never reach this job; tag builds wait here
-    # after producing and validating all retained artifacts.
-    environment: release
+    # Draft creation is intentionally not environment-gated: the draft stays
+    # private while its downloaded assets are reverified. Public promotion is
+    # a separate release-environment job below.
     permissions:
       contents: write
+    env:
+      # This job intentionally runs without a checkout. Bind gh explicitly so
+      # it never tries to discover a repository from a missing .git directory.
+      GH_REPO: ${{ github.repository }}
     steps:
+      - name: Determine release channel
+        id: release_kind
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            echo "channel=alpha" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "make_latest=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "channel=latest" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "make_latest=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Download Windows installer artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
@@ -609,11 +677,14 @@ jobs:
           windows_installers=(release-assets/windows/*.exe)
           windows_checksums=(release-assets/windows/*.exe.sha256)
           windows_signatures=(release-assets/windows/*.exe.signature.txt)
+          windows_authenticode=(release-assets/windows/*.exe.authenticode.json)
+          windows_blockmaps=(release-assets/windows/*.exe.blockmap)
+          windows_metadata=(release-assets/windows/${{ steps.release_kind.outputs.channel }}.yml)
           linux_images=(release-assets/linux/*.AppImage)
           linux_checksums=(release-assets/linux/*.AppImage.sha256)
           sboms=(release-assets/sbom/*.cdx.json)
-          if [ "${#windows_installers[@]}" -ne 1 ] || [ "${#windows_checksums[@]}" -ne 1 ] || [ "${#windows_signatures[@]}" -ne 1 ]; then
-            echo "Expected exactly one Windows installer, checksum, and signature sidecar."
+          if [ "${#windows_installers[@]}" -ne 1 ] || [ "${#windows_checksums[@]}" -ne 1 ] || [ "${#windows_signatures[@]}" -ne 1 ] || [ "${#windows_authenticode[@]}" -ne 1 ] || [ "${#windows_blockmaps[@]}" -ne 1 ] || [ "${#windows_metadata[@]}" -ne 1 ]; then
+            echo "Expected exactly one Windows installer, checksum, Authenticode report, blockmap, and channel manifest."
             find release-assets/windows -type f -print
             exit 1
           fi
@@ -629,21 +700,23 @@ jobs:
           fi
           (cd release-assets/windows && sha256sum --check *.exe.sha256)
           (cd release-assets/linux && sha256sum --check *.AppImage.sha256)
+          grep -q '^signed via ' "${windows_signatures[0]}"
+          grep -q '"status"[[:space:]]*:[[:space:]]*"Valid"' "${windows_authenticode[0]}"
 
-      - name: Publish GitHub Release assets
+      - name: Create or update private draft release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228  # v3.0.2
         with:
           name: BetterFingers ${{ github.ref_name }}
           body: |
-            BetterFingers ${{ github.ref_name }} is an unsigned public alpha for invited friend testing of local-first dictation on Windows and Linux.
+            BetterFingers ${{ github.ref_name }} is a code-signed release candidate for local-first dictation on Windows and Linux. Its update channel is `${{ steps.release_kind.outputs.channel }}`.
 
-            This is experimental software, not a broadly qualified stable release. The release contains a Windows NSIS installer, Linux AppImage, SHA-256 checksum sidecars, the Windows Authenticode status report, and a CycloneDX SBOM. The exact Windows signing mode for this tag is `${{ needs.windows-installer.outputs.signing_mode }}`. An unsigned Windows build can trigger Microsoft SmartScreen. Verify the SHA-256 sidecar before running it; do not disable Windows security controls.
+            The release contains a signed Windows NSIS installer, updater channel metadata and blockmap, Linux AppImage, SHA-256 checksum sidecars, the Windows Authenticode report, and a CycloneDX SBOM. The exact Windows signing mode for this tag is `${{ needs.windows-installer.outputs.signing_mode }}`. Verify the installer signature and SHA-256 sidecar before running it; do not disable Windows security controls.
 
             Speech-to-text requires a local Whisper model downloaded during setup. The separate multi-gigabyte language model used for AI cleanup is optional and disabled on a fresh install. Model downloads require network access. Do not use this alpha for highly sensitive dictation because production-grade at-rest encryption is not included.
 
-            The tag workflow verifies installation, launch, authenticated local-backend health, a real pinned model download, upgrade continuity when a prior installer exists, and uninstall behavior. Friend testing is intended to find the remaining hardware, audio, injection, clipboard, and usability problems before signed release qualification. Report reproducible problems at https://github.com/RoyGSlade/BetterFingers/issues.
+            The tag workflow verifies installation, launch, authenticated local-backend health, a real pinned model download, upgrade continuity when a prior installer exists, and uninstall behavior. Friend testing is intended to find the remaining hardware, audio, injection, clipboard, and usability problems before wider release qualification. Report reproducible problems at https://github.com/RoyGSlade/BetterFingers/issues.
           draft: true
-          prerelease: true
+          prerelease: ${{ steps.release_kind.outputs.prerelease }}
           make_latest: false
           generate_release_notes: false
           fail_on_unmatched_files: true
@@ -651,28 +724,117 @@ jobs:
             release-assets/windows/*.exe
             release-assets/windows/*.exe.sha256
             release-assets/windows/*.exe.signature.txt
+            release-assets/windows/*.exe.authenticode.json
+            release-assets/windows/*.exe.blockmap
+            release-assets/windows/${{ steps.release_kind.outputs.channel }}.yml
             release-assets/linux/*.AppImage
             release-assets/linux/*.AppImage.sha256
             release-assets/sbom/*.cdx.json
 
-      - name: Verify draft release download and checksum
+      - name: Verify every downloaded draft asset
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          shopt -s nullglob
           download_dir="$(mktemp -d)"
           trap 'rm -rf "$download_dir"' EXIT
           gh release download "${GITHUB_REF_NAME}" \
             --pattern 'BetterFingers-Setup-*-x64.exe' \
             --pattern 'BetterFingers-Setup-*-x64.exe.sha256' \
+            --pattern 'BetterFingers-Setup-*-x64.exe.signature.txt' \
+            --pattern 'BetterFingers-Setup-*-x64.exe.authenticode.json' \
+            --pattern 'BetterFingers-Setup-*-x64.exe.blockmap' \
+            --pattern '${{ steps.release_kind.outputs.channel }}.yml' \
             --dir "$download_dir"
           installers=("$download_dir"/BetterFingers-Setup-*-x64.exe)
           checksums=("$download_dir"/BetterFingers-Setup-*-x64.exe.sha256)
-          if [ "${#installers[@]}" -ne 1 ] || [ "${#checksums[@]}" -ne 1 ]; then
-            echo "Draft release did not serve exactly one Windows installer and checksum."
+          signatures=("$download_dir"/BetterFingers-Setup-*-x64.exe.signature.txt)
+          reports=("$download_dir"/BetterFingers-Setup-*-x64.exe.authenticode.json)
+          blockmaps=("$download_dir"/BetterFingers-Setup-*-x64.exe.blockmap)
+          metadata=("$download_dir"/${{ steps.release_kind.outputs.channel }}.yml)
+          if [ "${#installers[@]}" -ne 1 ] || [ "${#checksums[@]}" -ne 1 ] || [ "${#signatures[@]}" -ne 1 ] || [ "${#reports[@]}" -ne 1 ] || [ "${#blockmaps[@]}" -ne 1 ] || [ "${#metadata[@]}" -ne 1 ]; then
+            echo "Draft release did not serve the complete Windows update asset set."
             find "$download_dir" -type f -print
             exit 1
           fi
           (cd "$download_dir" && sha256sum --check "$(basename "${checksums[0]}")")
-          echo "Authenticated draft-release download and SHA-256 verification passed."
+          grep -q '^signed via ' "${signatures[0]}"
+          grep -q '"status"[[:space:]]*:[[:space:]]*"Valid"' "${reports[0]}"
+          installer_name="$(basename "${installers[0]}")"
+          sha512="$(openssl dgst -sha512 -binary "${installers[0]}" | base64 -w0)"
+          grep -Eq "^path:[[:space:]]*['\"]?${installer_name//./\\.}['\"]?[[:space:]]*$" "${metadata[0]}"
+          grep -Fq "sha512: $sha512" "${metadata[0]}"
+          echo "Authenticated private-draft download, signature, metadata, blockmap, and hashes passed."
+
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: draft-release
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    env:
+      # Public promotion also runs without a checkout; pin every gh command to
+      # the repository that triggered this workflow.
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Reverify private draft before public promotion
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          release_json="$(gh release view "$GITHUB_REF_NAME" --json isDraft,isPrerelease,assets)"
+          if [ "$(jq -r '.isDraft' <<<"$release_json")" != "true" ]; then
+            echo "Release is no longer a private draft; refusing promotion."
+            exit 1
+          fi
+          asset_names="$(jq -r '.assets[].name' <<<"$release_json")"
+          for pattern in 'BetterFingers-Setup-' '.exe.sha256' '.exe.signature.txt' '.exe.authenticode.json' '.exe.blockmap' '.AppImage' '.AppImage.sha256' '.cdx.json'; do
+            grep -Fq "$pattern" <<<"$asset_names" || { echo "Missing draft asset pattern: $pattern"; exit 1; }
+          done
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            grep -Fxq 'alpha.yml' <<<"$asset_names" || { echo 'Missing alpha.yml'; exit 1; }
+          else
+            grep -Fxq 'latest.yml' <<<"$asset_names" || { echo 'Missing latest.yml'; exit 1; }
+          fi
+          download_dir="$(mktemp -d)"
+          trap 'rm -rf "$download_dir"' EXIT
+          gh release download "$GITHUB_REF_NAME" --dir "$download_dir"
+          installers=("$download_dir"/BetterFingers-Setup-*-x64.exe)
+          checksums=("$download_dir"/BetterFingers-Setup-*-x64.exe.sha256)
+          signatures=("$download_dir"/BetterFingers-Setup-*-x64.exe.signature.txt)
+          reports=("$download_dir"/BetterFingers-Setup-*-x64.exe.authenticode.json)
+          blockmaps=("$download_dir"/BetterFingers-Setup-*-x64.exe.blockmap)
+          appimages=("$download_dir"/*.AppImage)
+          appimage_checksums=("$download_dir"/*.AppImage.sha256)
+          sboms=("$download_dir"/*.cdx.json)
+          if [ "${#installers[@]}" -ne 1 ] || [ "${#checksums[@]}" -ne 1 ] || [ "${#signatures[@]}" -ne 1 ] || [ "${#reports[@]}" -ne 1 ] || [ "${#blockmaps[@]}" -ne 1 ] || [ "${#appimages[@]}" -ne 1 ] || [ "${#appimage_checksums[@]}" -ne 1 ] || [ "${#sboms[@]}" -ne 1 ]; then
+            echo "Private draft asset set changed after qualification."
+            find "$download_dir" -type f -print
+            exit 1
+          fi
+          (cd "$download_dir" && sha256sum --check "$(basename "${checksums[0]}")")
+          (cd "$download_dir" && sha256sum --check "$(basename "${appimage_checksums[0]}")")
+          grep -q '^signed via ' "${signatures[0]}"
+          grep -q '"status"[[:space:]]*:[[:space:]]*"Valid"' "${reports[0]}"
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then metadata="$download_dir/alpha.yml"; else metadata="$download_dir/latest.yml"; fi
+          installer_name="$(basename "${installers[0]}")"
+          sha512="$(openssl dgst -sha512 -binary "${installers[0]}" | base64 -w0)"
+          grep -Eq "^path:[[:space:]]*['\"]?${installer_name//./\\.}['\"]?[[:space:]]*$" "$metadata"
+          grep -Fq "sha512: $sha512" "$metadata"
+
+      - name: Publish verified draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease=true --latest=false
+          else
+            gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease=false --latest
+          fi

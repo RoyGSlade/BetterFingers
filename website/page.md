@@ -1,21 +1,25 @@
 BetterFingers is a local-first desktop dictation app. It captures speech, transcribes it locally, gives the user a review step, and places approved text into the focused application. Local language-model cleanup is available as an option, but it is off on a fresh install and is not required for basic dictation.
 
-## Download the friend-testing alpha
+## Download the signed friend-testing alpha
 
-Version `v1.1.0-alpha.2` is available for invited friend testing:
+Version `v1.1.0-alpha.3` is the signed Windows updater bootstrap for invited friend testing:
 
-- [Download the Windows 11 x64 installer](https://github.com/RoyGSlade/BetterFingers/releases/download/v1.1.0-alpha.2/BetterFingers-Setup-1.1.0-alpha.2-x64.exe)
-- [Open the release page for SHA-256 checksums, the signature report, SBOM, and experimental Linux AppImage](https://github.com/RoyGSlade/BetterFingers/releases/tag/v1.1.0-alpha.2)
+- [Download the signed Windows 11 x64 installer](https://github.com/RoyGSlade/BetterFingers/releases/download/v1.1.0-alpha.3/BetterFingers-Setup-1.1.0-alpha.3-x64.exe)
+- [Open the release page for updater metadata, SHA-256 checksums, the Authenticode report, SBOM, and experimental Linux AppImage](https://github.com/RoyGSlade/BetterFingers/releases/tag/v1.1.0-alpha.3)
 
-This is experimental alpha software. Azure signing validation is still pending, so the Windows installer is unsigned and Microsoft SmartScreen can warn about it. Download only from the official links above, compare the installer against its `.sha256` sidecar, and do not disable Windows Security or antivirus protections.
+This is experimental alpha software. The Windows installer is Authenticode signed by Donaven Crenshaw and carries a Microsoft timestamp, but a new publisher or low-download build can still receive a Microsoft SmartScreen reputation warning. Download only from the official links above, confirm the signature, compare the installer against its `.sha256` sidecar, and do not disable Windows Security or antivirus protections.
 
 In PowerShell, calculate the downloaded installer's hash with:
 
 ```powershell
-Get-FileHash .\BetterFingers-Setup-1.1.0-alpha.2-x64.exe -Algorithm SHA256
+Get-FileHash .\BetterFingers-Setup-1.1.0-alpha.3-x64.exe -Algorithm SHA256
 ```
 
-The resulting value must match the hash in `BetterFingers-Setup-1.1.0-alpha.2-x64.exe.sha256` on the release page before running the installer.
+The resulting value must match the hash in `BetterFingers-Setup-1.1.0-alpha.3-x64.exe.sha256` on the release page before running the installer. Alpha 2 users install Alpha 3 manually over the existing copy; the installer keeps the same application identity and preserves user data by default.
+
+## Updates after Alpha 3
+
+Alpha 3 is the one-time updater bootstrap. Once it is installed, supported later Windows builds can be checked from the BetterFingers Update card in Settings. BetterFingers never downloads an update merely because it found one: **Download update** and **Restart and install** are separate user-approved actions. The signed update feed remains the public `RoyGSlade/BetterFingers` GitHub Releases channel.
 
 ## First setup
 
@@ -38,13 +42,13 @@ Report reproducible problems through [GitHub Issues](https://github.com/RoyGSlad
 
 ## Current capabilities
 
-The alpha includes local speech capture and Whisper-based transcription, optional local LLM refinement with personas, formatting commands, a personal dictionary, text macros, an editable review overlay, text-to-speech read-back, cross-application text placement, searchable history, recording recovery, privacy reporting, and data-wipe controls. Hardware-aware model recommendations help identify local model tiers that fit the machine.
+The alpha includes local speech capture and Whisper-based transcription, optional local LLM refinement with personas, formatting commands, a personal dictionary, text macros, an editable review overlay, text-to-speech read-back, cross-application text placement, searchable history, recording recovery, privacy reporting, data-wipe controls, a guided setup tour, and consent-based signed Windows updates. Hardware-aware model recommendations help identify local model tiers that fit the machine.
 
 ## Boundaries and supported platforms
 
 Windows 11 x64 is the primary friend-testing installer target for this alpha. A Linux AppImage is included as an experimental artifact; Linux X11 has the stronger compatibility path, while global hotkeys and text injection on Wayland remain best effort. macOS is not supported.
 
-Raw recordings can be retained for recovery, and production-grade at-rest encryption is not included. Testers should not dictate highly sensitive, regulated, or confidential material. Automatic updates are not included, and friend testers will need to install later builds manually.
+Raw recordings can be retained for recovery, and production-grade at-rest encryption is not included. Testers should not dictate highly sensitive, regulated, or confidential material. Updates do not remove settings, models, recordings, history, or other user data; optional data-category removal is available only through explicit uninstall choices.
 
 ## Running from source
 
@@ -60,4 +64,4 @@ The local language-model runtime is required only when AI cleanup is enabled. Th
 
 ## Release status
 
-BetterFingers `v1.1.0-alpha.2` is an unsigned tagged public alpha for invited testing, not a stable or broadly qualified release. Friend feedback, Azure signing, reliability evidence, and wider hardware and application compatibility remain active qualification work.
+BetterFingers `v1.1.0-alpha.3` is a signed updater-enabled public alpha for invited testing, not a stable or broadly qualified release. Alpha 2 users must install this bootstrap manually. Friend feedback, reliability evidence, the first real Alpha 3-to-later-version updater test, and wider hardware and application compatibility remain active qualification work.

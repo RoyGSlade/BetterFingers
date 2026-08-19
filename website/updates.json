@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "items": [
     {
+      "id": "v1-1-0-alpha-3-signed-updater",
+      "date": "2026-08-19",
+      "title": "Signed Alpha 3 updater release prepared",
+      "summary": "BetterFingers v1.1.0-alpha.3 adds a signed Windows installer, consent-based in-app updates for later builds, safer upgrade and uninstall handling, and a guided setup tour.",
+      "body": "## What is prepared\n\nAlpha 3 is the signed Windows updater bootstrap. Its protected GitHub release carries the Authenticode-signed NSIS installer, SHA-256 sidecar, updater channel metadata, matching blockmap, Authenticode report, Linux AppImage, and SBOM.\n\n## Update boundary\n\nAlpha 2 users install Alpha 3 manually over their existing copy. After that bootstrap, supported later Windows releases can be checked from Settings. Finding an update does not download or install it: downloading and restarting remain separate user-approved actions. Updates replace program files while preserving settings, models, recordings, history, and other user data.\n\n## Publication gate\n\nKeep this entry in draft until the protected GitHub workflow rebuilds, signs, smoke-tests, downloads, and verifies every release asset and the public v1.1.0-alpha.3 prerelease is confirmed. The website download must continue pointing to the public RoyGSlade/BetterFingers GitHub release rather than a website-only installer.",
+      "type": "release",
+      "state": "draft",
+      "url": "https://github.com/RoyGSlade/BetterFingers/releases/tag/v1.1.0-alpha.3"
+    },
+    {
       "id": "v1-1-0-alpha-2-friend-testing",
       "date": "2026-08-18",
       "title": "Unsigned friend-testing alpha published",

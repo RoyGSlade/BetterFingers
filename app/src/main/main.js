@@ -2,6 +2,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { randomUUID } = require('node:crypto');
 const { app } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const {
   createMainWindow,
   getMainWindow,
@@ -15,9 +16,10 @@ const { createSidecar } = require('./sidecar');
 const { createTray } = require('./tray');
 const { registerIpc } = require('./ipc');
 const backendProxy = require('./backendProxy');
-const { unregisterAllHotkeys, triggerBackendAction } = require('./hotkeys');
+const { restoreActiveHotkeys, unregisterAllHotkeys, triggerBackendAction } = require('./hotkeys');
 const { BACKEND_HOST, BACKEND_PORT, BACKEND_ORIGIN } = require('./config');
 const { derivePhase, deriveServices, describeHardware } = require('./bootPhases');
+const { createUpdateController } = require('./updateController');
 
 // Adopt an inherited token when the backend is managed by something else (the
 // Linux launcher starts it before us, so sidecar.js finds it already listening
@@ -35,6 +37,12 @@ backendProxy.init({ origin: BACKEND_ORIGIN, token: authToken });
 let tray = null;
 let sidecar = null;
 let isQuitting = false;
+let shutdownMode = null;
+let runtimeStopPromise = null;
+let runtimeActivityStatus = 'idle';
+let updateController = null;
+let updateCheckTimer = null;
+let updateCheckScheduled = false;
 
 // The hidden overlay window keeps Electron alive after the dashboard is
 // closed, so `mainWindow` can be destroyed (null via windows.js) while the
@@ -161,6 +169,7 @@ function revealMainWindow() {
   bootFinished = true;
   stopBootTimers();
   const win = ensureMainWindow();
+  scheduleInitialUpdateCheck(win);
   win.once('ready-to-show', () => {
     closeSplashWindow();
   });
@@ -169,6 +178,30 @@ function revealMainWindow() {
     closeSplashWindow();
   }
   focusMainWindow(win);
+}
+
+function broadcastUpdateState(state) {
+  const win = getMainWindow();
+  if (
+    !win || win.isDestroyed()
+    || !win.webContents
+    || win.webContents.isDestroyed?.()
+  ) return;
+  win.webContents.send('updates:state', state);
+}
+
+function scheduleInitialUpdateCheck(win) {
+  if (updateCheckScheduled || !updateController?.isSupported?.()) return;
+  updateCheckScheduled = true;
+  const startDelay = () => {
+    if (updateCheckTimer || isQuitting) return;
+    updateCheckTimer = setTimeout(() => {
+      updateCheckTimer = null;
+      if (!isQuitting) updateController.check().catch(() => {});
+    }, 15000);
+  };
+  if (win?.webContents?.isLoading?.()) win.webContents.once('did-finish-load', startDelay);
+  else startDelay();
 }
 
 // Runs once at cold boot, and again from the splash's Retry action
@@ -299,6 +332,27 @@ function notifyRendererSidecarStatus(status) {
   }
 }
 
+async function getAuthoritativeRuntimeActivity() {
+  const response = await backendProxy.request({
+    method: 'GET',
+    path: '/runtime/status',
+    timeoutMs: 2500,
+  });
+  const body = response?.body;
+  if (
+    response?.ok !== true
+    || !body
+    || typeof body.recording_active !== 'boolean'
+    || typeof body.processing_active !== 'boolean'
+  ) {
+    throw new Error('Authoritative runtime activity is unavailable.');
+  }
+  return {
+    recording: body.recording_active,
+    processing: body.processing_active,
+  };
+}
+
 function bootstrapApp() {
   sidecar = createSidecar({
     host: BACKEND_HOST,
@@ -315,6 +369,18 @@ function bootstrapApp() {
     onStatusChange: notifyRendererSidecarStatus,
   });
 
+  updateController = createUpdateController({
+    app,
+    updater: autoUpdater,
+    // Renderer status is only a provisional UI hint. Installation always
+    // rechecks the authenticated backend through this main-process guard.
+    activityGuard: () => runtimeActivityStatus,
+    authoritativeActivityGuard: getAuthoritativeRuntimeActivity,
+    prepareQuit: prepareForUpdateInstall,
+    recoverFromFailedInstall: recoverFromFailedUpdateInstall,
+  });
+  updateController.subscribe(broadcastUpdateState);
+
   registerIpc({
     getMainWindow: () => getMainWindow(),
     getSidecarStatus: () => sidecar?.getStatus?.() ?? { state: 'unknown', message: 'Sidecar is unavailable.' },
@@ -328,6 +394,11 @@ function bootstrapApp() {
     // already started and would otherwise miss the earlier pushed events.
     onSplashRetry: retryBackendBoot,
     getSplashBootState: () => currentBootSnapshot(),
+    updateController,
+    onRuntimeStatus: (status) => {
+      runtimeActivityStatus = String(status || 'idle').toLowerCase();
+      updateController?.refreshInstallEligibility?.();
+    },
   });
 
   // The dashboard window is NOT created here -- only once boot succeeds (see
@@ -360,20 +431,69 @@ function bootstrapApp() {
   startBackendBoot();
 }
 
-async function requestQuit() {
-  if (isQuitting) {
-    return;
-  }
+function stopRuntimeServices() {
+  if (runtimeStopPromise) return runtimeStopPromise;
+  runtimeStopPromise = (async () => {
+    if (updateCheckTimer) {
+      clearTimeout(updateCheckTimer);
+      updateCheckTimer = null;
+    }
+    stopBootTimers();
+    bootGeneration += 1;
+    try {
+      if (sidecar) await sidecar.stop();
+    } finally {
+      unregisterAllHotkeys();
+    }
+  })();
+  return runtimeStopPromise;
+}
 
+async function prepareForUpdateInstall() {
+  if (shutdownMode === 'update') return;
+  if (shutdownMode) throw new Error('Shutdown is already in progress.');
+  shutdownMode = 'update';
+  isQuitting = true;
+  try {
+    await stopRuntimeServices();
+  } catch (error) {
+    // Preserve update mode until the controller invokes recovery. The stop
+    // path unregisters hotkeys in a finally block, so resetting here would
+    // make recovery return early with the app only half alive.
+    throw error;
+  }
+}
+
+async function recoverFromFailedUpdateInstall() {
+  if (shutdownMode !== 'update') return;
+  runtimeStopPromise = null;
+  let recoveryError = null;
+  try {
+    if (sidecar) await sidecar.start();
+  } catch (error) {
+    recoveryError = error;
+  }
+  try {
+    restoreActiveHotkeys();
+  } catch (error) {
+    recoveryError ||= error;
+  } finally {
+    shutdownMode = null;
+    isQuitting = false;
+    runtimeStopPromise = null;
+  }
+  if (recoveryError) throw recoveryError;
+}
+
+async function requestQuit() {
+  if (shutdownMode) return;
+  shutdownMode = 'ordinary';
   isQuitting = true;
   stopBootTimers();
   bootGeneration += 1;
 
   try {
-    if (sidecar) {
-      await sidecar.stop();
-    }
-    unregisterAllHotkeys();
+    await stopRuntimeServices();
   } catch (error) {
     console.error('Failed to stop backend cleanly:', error);
   } finally {

@@ -5,7 +5,7 @@
   "summary": "A local-first desktop dictation app that transcribes speech, optionally refines it with a local language model, and lets users review text before placing it into another application.",
   "status": "public-alpha",
   "featured": true,
-  "developmentLabel": "Unsigned friend-testing alpha",
+  "developmentLabel": "Signed updater-enabled alpha",
   "links": [
     {
       "label": "BetterFingers repository",
@@ -14,12 +14,12 @@
     },
     {
       "label": "Download Windows alpha",
-      "url": "https://github.com/RoyGSlade/BetterFingers/releases/download/v1.1.0-alpha.2/BetterFingers-Setup-1.1.0-alpha.2-x64.exe",
+      "url": "https://github.com/RoyGSlade/BetterFingers/releases/download/v1.1.0-alpha.3/BetterFingers-Setup-1.1.0-alpha.3-x64.exe",
       "type": "download"
     },
     {
       "label": "Release notes, checksums, and Linux build",
-      "url": "https://github.com/RoyGSlade/BetterFingers/releases/tag/v1.1.0-alpha.2",
+      "url": "https://github.com/RoyGSlade/BetterFingers/releases/tag/v1.1.0-alpha.3",
       "type": "documentation"
     }
   ],
@@ -52,6 +52,12 @@
       "id": "hardware-aware-model-selection",
       "title": "Hardware-aware model selection",
       "summary": "Reports hardware capabilities and recommends local model tiers that fit the machine's available resources.",
+      "state": "available"
+    },
+    {
+      "id": "consent-based-windows-updates",
+      "title": "Consent-based Windows updates",
+      "summary": "Packaged Windows builds check the signed public channel from Settings; downloading and restarting to install remain separate user-approved actions.",
       "state": "available"
     },
     {
@@ -184,7 +190,7 @@
     {
       "id": "signed-release-qualification",
       "title": "Signed release qualification",
-      "summary": "Complete Azure Artifact Signing validation, broader friend-test reliability evidence, and the injection compatibility matrix before promoting the alpha beyond experimental status.",
+      "summary": "Azure Artifact Signing is validated; broader friend-test reliability evidence and the injection compatibility matrix remain before promotion beyond experimental alpha status.",
       "state": "in-progress"
     },
     {
@@ -200,5 +206,5 @@
       "state": "planned"
     }
   ],
-  "updatedAt": "2026-08-18T04:48:00-07:00"
+  "updatedAt": "2026-08-19T09:33:35-07:00"
 }

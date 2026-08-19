@@ -124,6 +124,8 @@ test('detectHotkeyCollisions: three-way collision lists both other fields', () =
 test('HOTKEY_FIELD_KEYS: exactly the 7 hotkey fields from inventory §7.3, each with a label', () => {
   assert.deepEqual(HOTKEY_FIELD_KEYS, ['hotkey', 'force_stop_key', 'manual_send_hotkey', 'review_tts_hotkey', 'selection_rewrite_hotkey', 'chat_open_key', 'voice_mute_key']);
   for (const key of HOTKEY_FIELD_KEYS) assert.ok(HOTKEY_FIELD_LABELS[key], `${key} missing a label`);
+  assert.equal(HOTKEY_FIELD_LABELS.chat_open_key, 'Target App Open Key');
+  assert.equal(HOTKEY_FIELD_LABELS.voice_mute_key, 'Voice Privacy Mute Key');
 });
 
 // --- models: formatMb / clampPct / buildDownloadProgressModel ---------------

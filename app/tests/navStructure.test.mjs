@@ -48,10 +48,10 @@ test('Utilities exposes the retained-material and runtime destinations', () => {
   for (const label of ['Library', 'History', 'Runtime Diagnostics', 'Game Mode']) {
     assert.match(utilitiesNav, new RegExp(`>${label}<`), `${label} must be reachable under Utilities`);
   }
-  assert.match(markup, /id="sdUtilHotkeySelectionRewriteInput"[^>]+value="Ctrl\+Alt\+R"/);
+  assert.match(markup, /id="sdUtilHotkeySelectionRewriteInput"[^>]+value=""[^>]+placeholder="Loading current binding…"/);
   assert.match(markup, /id="sdUtilHotkeySelectionRewriteClear"/);
   assert.match(markup, /id="sdUtilHotkeySelectionRewriteError"/);
-  assert.match(markup, /Select text in another app[\s\S]*never auto-replaces or sends text/);
+  assert.match(markup, /Creates a cleaned, review-only draft from selected text[\s\S]*never replaces or sends text automatically/);
 });
 
 test('the renamed surface has no orphaned visible Text Playground label', () => {

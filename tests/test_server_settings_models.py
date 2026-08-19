@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -42,16 +43,32 @@ class ServerSettingsModelsTests(unittest.TestCase):
         self._hotkey_manager = server.hotkey_manager
         self._output_injector = server.output_injector
         self._tts_engine = server.tts_engine
+        self._is_processing_draft = server.is_processing_draft
         server.transcriber = None
         server.hotkey_manager = None
         server.output_injector = None
         server.tts_engine = None
+        server.is_processing_draft = False
 
     def tearDown(self):
         server.transcriber = self._transcriber
         server.hotkey_manager = self._hotkey_manager
         server.output_injector = self._output_injector
         server.tts_engine = self._tts_engine
+        server.is_processing_draft = self._is_processing_draft
+
+    def test_runtime_status_reports_authoritative_recording_and_processing(self):
+        server.hotkey_manager = SimpleNamespace(is_recording=True, keyboard_hook_errors=[])
+        server.is_processing_draft = True
+        with patch.object(server, "get_engine_if_initialized", return_value=None), patch.object(
+            server, "get_last_active_profile", return_value="Default"
+        ), patch.object(server, "load_profile", return_value={}), patch.object(
+            server, "_publish_recording_state", side_effect=lambda active: active
+        ):
+            snapshot = server.get_runtime_status_snapshot()
+
+        self.assertIs(snapshot["recording_active"], True)
+        self.assertIs(snapshot["processing_active"], True)
 
     def test_settings_profile_create_save_and_activate(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -73,6 +90,34 @@ class ServerSettingsModelsTests(unittest.TestCase):
         self.assertEqual(activated.json()["active_profile"], "Linux Dev")
         self.assertEqual(deleted.status_code, 200)
         self.assertNotIn("Linux Dev", deleted.json()["profiles"])
+
+    def test_stale_llm_selection_recovers_and_persists_default(self):
+        profile = {"llm_model_id": "removed-model"}
+        with patch.object(server, "load_profile", return_value=profile), patch.object(
+            server, "save_runtime_profile"
+        ) as save_profile:
+            selected = server.get_selected_llm_model_id("Default")
+
+        self.assertEqual(selected, server.DEFAULT_MODEL)
+        self.assertEqual(profile["llm_model_id"], server.DEFAULT_MODEL)
+        save_profile.assert_called_once_with("Default", profile)
+
+    def test_blank_llm_selection_recovers_and_persists_default(self):
+        profile = {"llm_model_id": "   "}
+        with patch.object(server, "load_profile", return_value=profile), patch.object(
+            server, "save_runtime_profile"
+        ) as save_profile:
+            selected = server.get_selected_llm_model_id("Default")
+
+        self.assertEqual(selected, server.DEFAULT_MODEL)
+        self.assertEqual(profile["llm_model_id"], server.DEFAULT_MODEL)
+        save_profile.assert_called_once_with("Default", profile)
+
+    def test_explicit_invalid_llm_selection_stays_bad_request(self):
+        with TestClient(server.app) as client:
+            response = client.post("/models/llm/select", json={"model_id": "removed-model"})
+
+        self.assertEqual(response.status_code, 400)
 
     def test_llm_model_endpoints_select_download_delete_and_unload(self):
         engine = DummyEngine()

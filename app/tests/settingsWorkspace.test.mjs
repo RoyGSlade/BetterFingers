@@ -53,6 +53,8 @@ import {
   disclosureRowsFor,
   toggleIsInteractive,
   toggleStateFrom,
+  normalizeUpdateState,
+  buildUpdateViewModel,
 } from '../src/renderer/features/settingsWorkspace.js';
 
 // --- section routing (pure reducer, same contract as signalDeskShell.js / utilitiesWorkspace.js) ---
@@ -959,4 +961,169 @@ test('with no inspect hook the link still goes somewhere real', () => {
   feature.init();
   groups.use_delivery_signals.inspect.click();
   assert.equal(feature.getSectionState().active, 'privacy');
+});
+
+// --- persistent BetterFingers Update card ---------------------------------
+
+test('update view models cover every updater state with honest actions', () => {
+  const cases = [
+    ['unsupported', null, '', true],
+    ['idle', 'check', 'Check again', false],
+    ['checking', 'check', 'Checking…', false],
+    ['up_to_date', 'check', 'Check again', false],
+    ['available', 'download', 'Download update', false],
+    ['downloading', null, '', false],
+    ['ready', 'install', 'Restart and install', false],
+    ['installing', 'install', 'Installing…', false],
+    ['error', 'check', 'Try again', true],
+  ];
+  for (const [status, action, label, manual] of cases) {
+    const view = buildUpdateViewModel({
+      status,
+      currentVersion: '1.1.0-alpha.3',
+      availableVersion: '1.1.0-alpha.4',
+      channel: 'alpha',
+      percent: 42,
+    });
+    assert.equal(view.primaryAction, action, `${status} action`);
+    assert.equal(view.primaryLabel, label, `${status} label`);
+    assert.equal(view.showManual, manual, `${status} manual link`);
+    assert.equal(view.channelLabel, 'Public alpha');
+  }
+});
+
+test('update view model separates download from restart and exposes real progress', () => {
+  const available = buildUpdateViewModel({
+    status: 'available', currentVersion: '1.1.0-alpha.3', availableVersion: '1.1.0-alpha.4',
+    channel: 'alpha', releaseDate: '2026-08-19T00:00:00Z', releaseNotes: 'Safer update',
+    bytesTotal: 12 * 1024 * 1024,
+  });
+  assert.equal(available.primaryAction, 'download');
+  assert.equal(available.showLater, true);
+  assert.match(available.releaseMeta, /2026-08-19/);
+  assert.match(available.releaseMeta, /12 MB/);
+
+  const downloading = buildUpdateViewModel({
+    status: 'downloading', currentVersion: '1.1.0-alpha.3',
+    availableVersion: '1.1.0-alpha.4', channel: 'alpha', percent: 48.6,
+  });
+  assert.equal(downloading.showProgress, true);
+  assert.match(downloading.detail, /49%/);
+  assert.equal(downloading.primaryAction, null, 'there is no fake cancel action');
+
+  const ready = buildUpdateViewModel({
+    status: 'ready', currentVersion: '1.1.0-alpha.3', availableVersion: '1.1.0-alpha.4', channel: 'alpha',
+  });
+  assert.equal(ready.primaryAction, 'install');
+  assert.match(ready.detail, /stop its active services/);
+});
+
+test('active dictation disables restart and Later remains reversible', () => {
+  const blocked = buildUpdateViewModel({
+    status: 'ready', currentVersion: '1.1.0-alpha.3', availableVersion: '1.1.0-alpha.4',
+    channel: 'alpha', errorCode: 'ACTIVE_DICTATION',
+  });
+  assert.equal(blocked.primaryDisabled, true);
+  assert.match(blocked.detail, /recording or processing/);
+
+  const deferred = buildUpdateViewModel({
+    status: 'available', currentVersion: '1.1.0-alpha.3', availableVersion: '1.1.0-alpha.4', channel: 'alpha',
+  }, { deferred: true });
+  assert.equal(deferred.showResume, true);
+  assert.equal(deferred.primaryAction, null);
+  assert.match(deferred.detail, /Nothing was changed/);
+});
+
+test('unavailable runtime verification is honest, fail-closed, and retryable', () => {
+  const unavailable = buildUpdateViewModel({
+    status: 'ready', currentVersion: '1.1.0-alpha.3', availableVersion: '1.1.0-alpha.4',
+    channel: 'alpha', errorCode: 'RUNTIME_STATUS_UNAVAILABLE',
+  });
+  assert.match(unavailable.headline, /verify a safe restart/);
+  assert.match(unavailable.detail, /Nothing was changed/);
+  assert.match(unavailable.detail, /still running/);
+  assert.equal(unavailable.primaryAction, 'install');
+  assert.equal(unavailable.primaryLabel, 'Try restart and install again');
+  assert.equal(unavailable.primaryDisabled, false);
+});
+
+function updateElement() {
+  const listeners = {};
+  return {
+    textContent: '', hidden: false, disabled: false, value: 0, max: 0,
+    dataset: {}, attrs: {},
+    classList: { add() {}, remove() {}, toggle() {} },
+    setAttribute(name, value) { this.attrs[name] = value; },
+    addEventListener(name, listener) { listeners[name] = listener; },
+    fire(name) { return listeners[name]?.({ preventDefault() {} }); },
+  };
+}
+
+function updateCardHarness(initialState) {
+  const elements = { fields: {}, fieldErrors: {}, disclosedToggles: {} };
+  for (const key of [
+    'updateCard', 'updateCurrentVersion', 'updateChannel', 'updateStatus', 'updateDetail',
+    'updateRelease', 'updateReleaseMeta', 'updateReleaseNotes', 'updateProgress',
+    'updateProgressText', 'updatePrimaryButton', 'updateLaterButton', 'updateResumeButton',
+    'updateManualLink',
+  ]) elements[key] = updateElement();
+  const calls = [];
+  let pushed = null;
+  let unsubscribed = false;
+  const updatesApi = {
+    getState: async () => initialState,
+    check: async () => { calls.push('check'); return { ...initialState, status: 'checking' }; },
+    download: async () => { calls.push('download'); return { ...initialState, status: 'downloading' }; },
+    install: async () => { calls.push('install'); return { ...initialState, status: 'installing' }; },
+    onState(callback) { pushed = callback; return () => { unsubscribed = true; }; },
+  };
+  const feature = createSettingsWorkspaceFeature({ elements, hooks: { updatesApi } });
+  feature.init();
+  return { calls, elements, feature, push: (state) => pushed?.(state), wasUnsubscribed: () => unsubscribed };
+}
+
+test('update card renders text-only state, semantic progress, actions, and listener cleanup', async () => {
+  const initial = {
+    status: 'available', currentVersion: '1.1.0-alpha.3', availableVersion: '1.1.0-alpha.4',
+    channel: 'alpha', releaseNotes: '<b>already sanitized by main</b>', bytesTotal: 1024,
+  };
+  const h = updateCardHarness(initial);
+  await h.feature.refreshUpdateState();
+  assert.equal(h.elements.updateCurrentVersion.textContent, 'Version 1.1.0-alpha.3');
+  assert.equal(h.elements.updateChannel.textContent, 'Public alpha');
+  assert.equal(h.elements.updateReleaseNotes.textContent, '<b>already sanitized by main</b>', 'textContent never interprets notes as markup');
+  assert.equal(h.elements.updatePrimaryButton.textContent, 'Download update');
+  await h.feature.runUpdateAction('download');
+  assert.deepEqual(h.calls, ['download']);
+  assert.equal(h.elements.updateProgress.hidden, false);
+
+  h.push({ ...initial, status: 'downloading', percent: 63 });
+  assert.equal(h.elements.updateProgress.value, 63);
+  assert.equal(h.elements.updateProgress.max, 100);
+  assert.equal(h.elements.updateProgress.attrs['aria-valuetext'], '63% downloaded');
+  h.feature.destroy();
+  assert.equal(h.wasUnsubscribed(), true);
+  h.push({ ...initial, status: 'ready' });
+  assert.equal(h.elements.updateStatus.textContent, 'Downloading BetterFingers 1.1.0-alpha.4…');
+});
+
+test('Later hides update actions without invoking main and Show options restores them', async () => {
+  const h = updateCardHarness({
+    status: 'ready', currentVersion: '1.1.0-alpha.3', availableVersion: '1.1.0-alpha.4', channel: 'alpha',
+  });
+  await h.feature.refreshUpdateState();
+  h.elements.updateLaterButton.fire('click');
+  assert.equal(h.elements.updateResumeButton.hidden, false);
+  assert.equal(h.elements.updatePrimaryButton.hidden, true);
+  assert.deepEqual(h.calls, []);
+  h.elements.updateResumeButton.fire('click');
+  assert.equal(h.elements.updatePrimaryButton.hidden, false);
+  assert.equal(h.elements.updatePrimaryButton.textContent, 'Restart and install');
+});
+
+test('malformed update payloads normalize to unsupported finite state', () => {
+  const state = normalizeUpdateState({ status: 'made-up', percent: Infinity, bytesTotal: -5 });
+  assert.equal(state.status, 'unsupported');
+  assert.equal(state.percent, 0);
+  assert.equal(state.bytesTotal, 0);
 });

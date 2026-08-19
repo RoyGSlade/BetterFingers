@@ -67,6 +67,7 @@ import {
   createConsentController,
 } from '../features/onboardingConsent.js';
 import { createFirstRunFeature, collectFirstRunElements } from '../features/firstRun.js';
+import { createQuickSetupTour } from '../features/quickSetupTour.js';
 import { initMessageRescuePanel } from '../features/messageRescuePanel.js';
 import { initTextPlayground } from '../features/textPlayground.js';
 import { applyAlphaCapabilities } from '../config/alphaCapabilities.js';
@@ -703,7 +704,11 @@ export function startSignalDeskApp(doc = document) {
   const settingsElements = collectSettingsElements(doc);
   const settingsWorkspace = createSettingsWorkspaceFeature({
     elements: settingsElements,
-    hooks: { showToast, confirmFn: (message) => doc.defaultView?.confirm?.(message) },
+    hooks: {
+      showToast,
+      confirmFn: (message) => doc.defaultView?.confirm?.(message),
+      updatesApi: doc.defaultView?.betterFingers?.updates,
+    },
   });
   settingsWorkspace.init('profile');
   doc.querySelectorAll('[data-set-nav]').forEach((button) => {
@@ -898,6 +903,17 @@ export function startSignalDeskApp(doc = document) {
 
   // --- Onboarding + first-run panel -----------------------------------------
 
+  let quickSetupTour = null;
+  let quickSetupQueued = false;
+  const maybeStartQuickSetup = () => {
+    if (quickSetupQueued || !quickSetupTour?.shouldAutoRun()) return;
+    quickSetupQueued = true;
+    setTimeout(() => {
+      quickSetupQueued = false;
+      if (quickSetupTour.shouldAutoRun()) quickSetupTour.open();
+    }, 0);
+  };
+
   // Durable consent gate: resolve the record (migrating the legacy
   // localStorage flag at most once), then hand the flow a consent controller
   // so acceptance closes the gate only after the durable write is confirmed.
@@ -932,11 +948,13 @@ export function startSignalDeskApp(doc = document) {
         quitApp: () => doc.defaultView?.betterFingers?.quitApp?.(),
         fetchWhisperModels: () => api.fetchWhisperModels(),
         fetchRecommendation: () => api.fetchModelRecommendation(),
+        onComplete: maybeStartQuickSetup,
         onConsentError: (error) =>
           showToast(`Saving consent failed: ${error?.message || error}`, 'danger'),
       },
     });
     onboarding.init();
+    if (!gate.show) maybeStartQuickSetup();
     return onboarding;
   })();
   onboardingReady.catch(() => {});
@@ -956,6 +974,28 @@ export function startSignalDeskApp(doc = document) {
     },
   });
   firstRun.init().catch(() => {});
+
+  quickSetupTour = createQuickSetupTour({
+    doc,
+    navigate: (step) => {
+      if (step === 'talk') {
+        shell.goTo('talk');
+        return;
+      }
+      if (step === 'speech' || step === 'models') {
+        shell.goTo('utilities');
+        utilitiesWorkspace.goToSection(step);
+        syncUtilitiesContext(step);
+        return;
+      }
+      if (['recording', 'review', 'cleanup', 'privacy'].includes(step)) {
+        shell.goTo('settings');
+        const section = step === 'cleanup' ? 'aicleanup' : step;
+        settingsWorkspace.goToSection(section);
+      }
+    },
+  });
+  doc.getElementById('sdSetReplayQuickSetup')?.addEventListener('click', () => quickSetupTour.replay());
 
   // --- App version (no bridge exists yet -- see handoff for the exact
   //     preload/main diff needed; renders an honest placeholder until then) -
@@ -1039,6 +1079,7 @@ export function startSignalDeskApp(doc = document) {
       clearInterval(backendBannerInterval);
       clearInterval(initialPopulateInterval);
       applicationProfiles.destroy?.();
+      settingsWorkspace.destroy?.();
       voiceStatusConnection.close?.();
       talkWorkspace.destroy?.();
       talkCapture.destroy?.();

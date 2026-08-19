@@ -347,6 +347,14 @@ function unregisterAllHotkeys() {
   pttKeycode = null;
 }
 
+function restoreActiveHotkeys() {
+  if (!activeConfig) {
+    return false;
+  }
+  registerHotkeys(activeConfig, authToken);
+  return true;
+}
+
 // Report what the hotkey subsystem can actually do, so the UI can tell the user
 // whether push-to-talk is available on this platform/session.
 function getHotkeyCapabilities() {
@@ -361,6 +369,7 @@ function getHotkeyCapabilities() {
 module.exports = {
   registerHotkeys,
   unregisterAllHotkeys,
+  restoreActiveHotkeys,
   getHotkeyCapabilities,
   triggerBackendAction,
 };

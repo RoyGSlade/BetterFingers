@@ -83,7 +83,7 @@ function isAllowedOpenTarget(targetPath) {
 
 function registerIpc({
   getMainWindow, getSidecarStatus, getSidecarLogs, getAuthToken, getBackendOrigin, onQuit, onShow,
-  onSplashRetry, getSplashBootState,
+  onSplashRetry, getSplashBootState, updateController, onRuntimeStatus,
 } = {}) {
   const backendProxy = require('./backendProxy');
 
@@ -204,6 +204,26 @@ function registerIpc({
     const { APP_VERSION } = require('./config');
     return APP_VERSION;
   });
+
+  // The renderer can request one of four fixed actions; it cannot provide a
+  // feed URL, channel, executable, path, or updater options. All transition
+  // checks and the recording/processing gate live in the main controller.
+  const unavailableUpdateState = () => ({
+    status: 'unsupported',
+    currentVersion: app.getVersion?.() || '',
+    availableVersion: null,
+    channel: null,
+    releaseDate: null,
+    releaseNotes: '',
+    percent: 0,
+    bytesTransferred: 0,
+    bytesTotal: 0,
+    errorCode: null,
+  });
+  handleTrusted('updates:get-state', () => updateController?.getState?.() || unavailableUpdateState());
+  handleTrusted('updates:check', () => updateController?.check?.() || unavailableUpdateState());
+  handleTrusted('updates:download', () => updateController?.download?.() || unavailableUpdateState());
+  handleTrusted('updates:install', () => updateController?.install?.() || unavailableUpdateState());
 
   // Wave 9 restricted actions. The registry is the ONLY thing a workflow may
   // name, so these channels are the boundary: discovery returns unconfirmed
@@ -346,6 +366,7 @@ function registerIpc({
 
     const payload = typeof update === 'string' ? { status: update } : { ...(update ?? {}) };
     const status = String(payload.status ?? 'unknown');
+    onRuntimeStatus?.(status);
 
     // Reflect pipeline state in the tray icon/menu too.
     const { getTray } = require('./tray');

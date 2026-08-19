@@ -69,8 +69,8 @@
 //   speech.hotkeys.manualSend      Primary Action key field + clear                -> profile field `manual_send_hotkey`    [wired]
 //   speech.hotkeys.reviewTts       Review TTS Hotkey field + clear                 -> profile field `review_tts_hotkey`     [wired]
 //   speech.hotkeys.selectionRewrite Selection Rewrite Hotkey field + clear         -> profile field `selection_rewrite_hotkey` [wired]
-//   speech.hotkeys.chatOpen        Open Chat Key field + clear                     -> profile field `chat_open_key`         [wired]
-//   speech.hotkeys.voiceMute       Voice Mute Key field + clear                    -> profile field `voice_mute_key`        [wired]
+//   speech.hotkeys.chatOpen        Target App Open Key field + clear               -> profile field `chat_open_key`         [wired]
+//   speech.hotkeys.voiceMute       Voice Privacy Mute Key field + clear             -> profile field `voice_mute_key`        [wired]
 //   speech.hotkeys.customWidget    click-to-record chord capture (all 7 fields)    -> wireHotkeyRecorder() (keydown chord accumulation, pure describeKeyEvent()) [wired]
 //   speech.hotkeys.collisionDetection inline per-field collision errors           -> detectHotkeyCollisions() (pure helper) [wired]
 //   speech.wake.enableToggle       Wake word enable/disable toggle                 -> enableWake()/disableWake()            [wired]
@@ -306,8 +306,8 @@ export const INVENTORY_PLACEMENT_MAP = {
   'speech.hotkeys.manualSend': { section: 'speech', control: 'Primary Action key field', wired: true },
   'speech.hotkeys.reviewTts': { section: 'speech', control: 'Review TTS Hotkey field', wired: true },
   'speech.hotkeys.selectionRewrite': { section: 'speech', control: 'Selection Rewrite Hotkey field', wired: true },
-  'speech.hotkeys.chatOpen': { section: 'speech', control: 'Open Chat Key field', wired: true },
-  'speech.hotkeys.voiceMute': { section: 'speech', control: 'Voice Mute Key field', wired: true },
+  'speech.hotkeys.chatOpen': { section: 'speech', control: 'Target App Open Key field', wired: true },
+  'speech.hotkeys.voiceMute': { section: 'speech', control: 'Voice Privacy Mute Key field', wired: true },
   'speech.hotkeys.customWidget': { section: 'speech', control: 'Click-to-record chord widget', wired: true },
   'speech.hotkeys.collisionDetection': { section: 'speech', control: 'Hotkey collision detection', wired: true },
   'speech.wake.enableToggle': { section: 'speech', control: 'Wake word enable toggle', wired: true },
@@ -358,8 +358,8 @@ export const HOTKEY_FIELD_LABELS = {
   manual_send_hotkey: 'Primary Action key',
   review_tts_hotkey: 'Review TTS Hotkey',
   selection_rewrite_hotkey: 'Selection Rewrite Hotkey',
-  chat_open_key: 'Open Chat Key',
-  voice_mute_key: 'Voice Mute Key',
+  chat_open_key: 'Target App Open Key',
+  voice_mute_key: 'Voice Privacy Mute Key',
 };
 
 const MODIFIER_KEY_NAMES = new Set(['Control', 'Meta', 'Alt', 'Shift']);

@@ -48,6 +48,20 @@ test('summarizeLlmState: no models payload is all-false, not a throw', () => {
   assert.equal(state.name, null);
 });
 
+test('summarizeLlmState: stale selection falls back to the first catalog model', () => {
+  const state = summarizeLlmState({
+    models: [
+      { id: 'default-model', name: 'Default Model', installed: false, ready: false },
+      { id: 'alternate-model', name: 'Alternate Model', installed: true, ready: true },
+    ],
+    selected_model_id: 'removed-model',
+  });
+
+  assert.equal(state.selectedId, 'default-model');
+  assert.equal(state.name, 'Default Model');
+  assert.equal(state.installed, false);
+});
+
 test('summarizeLlmState: installed and ready', () => {
   const state = summarizeLlmState({
     models: [{ id: 'gemma', name: 'Gemma', installed: true, ready: true, size_mb: 4000 }],
@@ -443,7 +457,7 @@ test('downloadLlm: success path re-enables the button, reports success, and sync
   const { ui, messages, toasts } = makeUi();
   let afterModelsChangedCalls = 0;
   const api = makeApiStub({
-    fetchLlmModels: async () => ({ models: [], selected_model_id: 'gemma', llama_server_exists: false }),
+    fetchLlmModels: async () => ({ models: [{ id: 'gemma', name: 'Gemma', installed: false, ready: false }], selected_model_id: 'gemma', llama_server_exists: false }),
     downloadLlmModel: async (modelId) => {
       assert.equal(modelId, 'gemma');
       return { ok: true, message: 'Language model download complete.' };
@@ -473,7 +487,7 @@ test('downloadLlm: disk-space failure surfaces the exact backend message, not a 
   const { ui, messages } = makeUi();
   const diskMessage = 'Not enough disk space to download this file: need 4.4 GB free, only 1.2 GB available at /models.';
   const api = makeApiStub({
-    fetchLlmModels: async () => ({ models: [], selected_model_id: 'gemma', llama_server_exists: false }),
+    fetchLlmModels: async () => ({ models: [{ id: 'gemma', name: 'Gemma', installed: false, ready: false }], selected_model_id: 'gemma', llama_server_exists: false }),
     downloadLlmModel: async () => ({ ok: false, message: diskMessage }),
   });
   const feature = createFirstRunFeature({ elements, ui, hooks: {}, api, storage: makeFakeStorage() });
@@ -496,7 +510,7 @@ test('downloadLlm: a thrown transport error (e.g. bridge unavailable) still show
   const elements = makeElements();
   const { ui } = makeUi();
   const api = makeApiStub({
-    fetchLlmModels: async () => ({ models: [], selected_model_id: 'gemma', llama_server_exists: false }),
+    fetchLlmModels: async () => ({ models: [{ id: 'gemma', name: 'Gemma', installed: false, ready: false }], selected_model_id: 'gemma', llama_server_exists: false }),
     downloadLlmModel: async () => { throw new Error('Backend bridge is unavailable.'); },
   });
   const feature = createFirstRunFeature({ elements, ui, hooks: {}, api, storage: makeFakeStorage() });

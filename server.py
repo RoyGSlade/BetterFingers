@@ -572,10 +572,9 @@ def apply_active_profile_runtime(profile_name):
                 logging.warning(f"Failed applying profile to output injector: {exc}")
 
     try:
-        cfg = load_profile(safe_name)
         engine = get_engine_if_initialized()
         if engine is not None:
-            model_id = str(cfg.get("llm_model_id", DEFAULT_MODEL) or DEFAULT_MODEL).strip()
+            model_id = get_selected_llm_model_id(safe_name)
             engine.set_model_id(model_id)
     except Exception as exc:
         logging.warning(f"Failed applying profile to LLM engine: {exc}")
@@ -821,6 +820,7 @@ def get_runtime_status_snapshot():
         "recording_active": _publish_recording_state(
             bool(getattr(hotkey_manager, "is_recording", False)) if hotkey_manager else False
         ),
+        "processing_active": bool(is_processing_draft),
         "transcriber_loaded": bool(getattr(transcriber, "model", None)),
         "stt": stt_status,
         "llm_ready": engine_ready,
@@ -3567,9 +3567,24 @@ class WhisperModelRequest(BaseModel):
     prefer_gpu: bool = True
 
 
-def get_selected_llm_model_id():
-    cfg = load_profile(get_last_active_profile())
-    return str(cfg.get("llm_model_id", DEFAULT_MODEL) or DEFAULT_MODEL).strip()
+def get_selected_llm_model_id(profile_name=None):
+    """Return a catalog-backed LLM selection, repairing stale profile state."""
+    safe_name = sanitize_profile_name(profile_name or get_last_active_profile())
+    cfg = load_profile(safe_name)
+    raw_model_id = str(cfg.get("llm_model_id", "") or "").strip()
+    if raw_model_id in AVAILABLE_MODELS:
+        return raw_model_id
+
+    repaired_model_id = DEFAULT_MODEL
+    cfg["llm_model_id"] = repaired_model_id
+    save_runtime_profile(safe_name, cfg)
+    logging.warning(
+        "Recovered unsupported persisted LLM model '%s' in profile '%s' to '%s'",
+        raw_model_id or "<blank>",
+        safe_name,
+        repaired_model_id,
+    )
+    return repaired_model_id
 
 
 def get_selected_llm_engine():

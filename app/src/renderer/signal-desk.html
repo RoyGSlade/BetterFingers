@@ -673,7 +673,7 @@
       </div>
 
       <div class="sd-nav__primary" role="tablist" aria-label="Workspaces">
-        <button type="button" class="sd-nav__button is-active" data-nav="talk" aria-current="page">
+        <button type="button" class="sd-nav__button is-active" data-nav="talk" aria-current="page" data-tour-target="talk">
           <span class="sd-nav__button-icon" aria-hidden="true">
             <!-- waveform-bars -->
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
@@ -945,7 +945,7 @@
                 points="0,20 8,20 14,10 20,30 26,14 32,26 38,8 44,32 50,18 56,22 62,6 68,34 74,16 80,24 86,12 92,28 98,20 104,20 110,4 116,36 122,18 128,22 134,10 140,30 146,16 152,24 158,20 164,20 170,12 176,28 182,20 188,20 194,20 200,20" />
             </svg>
           </div>
-          <p class="sd-signal-core-hint"><strong>Hold Ctrl + Space</strong><br />Speak naturally</p>
+          <p class="sd-signal-core-hint"><strong>Use your configured recording hotkey</strong><br />Speak naturally</p>
         </div>
       </div>
 
@@ -1002,7 +1002,7 @@
         -->
         <label class="sd-visually-hidden" for="sdRefinedHero">Cleaned message, editable</label>
         <textarea class="sd-refined-card__hero" id="sdRefinedHero" rows="2"
-                  spellcheck="true" placeholder="Nothing captured yet. Hold Ctrl + Space and speak naturally."></textarea>
+                  spellcheck="true" placeholder="Nothing captured yet. Use your configured recording hotkey and speak naturally."></textarea>
         <p class="sd-refined-card__status" id="sdDraftMessage" role="status" aria-live="polite"></p>
         <!--
           Why this draft is being held for review, when it is. The reason comes
@@ -1907,7 +1907,7 @@
         <div class="sd-util-content">
 
           <!-- ============================== MODELS (inventory §8) ============================== -->
-          <section class="sd-util-section" id="sdUtilSectionModels">
+          <section class="sd-util-section" id="sdUtilSectionModels" data-tour-target="models">
             <p class="sd-util-section__intro">LLM, Whisper, and runtime memory.</p>
 
             <div class="sd-util-group">
@@ -1991,7 +1991,7 @@
           </section>
 
           <!-- ============================== SPEECH INPUT (audio device + hotkeys + wake word: §7.7/§7.3/§7.8) ============================== -->
-          <section class="sd-util-section" id="sdUtilSectionSpeech" hidden>
+          <section class="sd-util-section" id="sdUtilSectionSpeech" hidden data-tour-target="speech">
             <p class="sd-util-section__intro">Audio device and hotkeys.</p>
 
             <div class="sd-util-group">
@@ -2018,66 +2018,72 @@
               <div class="sd-util-row">
                 <div class="sd-util-row__label"><span class="sd-util-row__label-text">Recording Hotkey</span></div>
                 <div class="sd-util-row__control sd-util-hotkey-row">
-                  <input type="text" readonly class="sd-util-hotkey-input" id="sdUtilHotkeyRecordingInput" value="Ctrl+Space" aria-label="Click to record a new hotkey" />
+                  <input type="text" readonly class="sd-util-hotkey-input" id="sdUtilHotkeyRecordingInput" value="" placeholder="Loading current binding…" aria-label="Click to record a new recording hotkey" />
                   <button type="button" class="sd-util-hotkey-clear" id="sdUtilHotkeyRecordingClear" aria-label="Clear Recording Hotkey">&times;</button>
                 </div>
               </div>
               <span class="sd-util-field-error" id="sdUtilHotkeyRecordingError"></span>
+              <p class="sd-util-group__desc">In Toggle mode, press once to start or stop recording; in Push-to-Talk mode, hold to record and release to stop.</p>
 
               <div class="sd-util-row">
                 <div class="sd-util-row__label"><span class="sd-util-row__label-text">Emergency Stop key</span></div>
                 <div class="sd-util-row__control sd-util-hotkey-row">
-                  <input type="text" readonly class="sd-util-hotkey-input" id="sdUtilHotkeyForceStopInput" value="Escape" aria-label="Click to record a new hotkey" />
+                  <input type="text" readonly class="sd-util-hotkey-input" id="sdUtilHotkeyForceStopInput" value="" placeholder="Loading current binding…" aria-label="Click to record a new emergency stop key" />
                   <button type="button" class="sd-util-hotkey-clear" id="sdUtilHotkeyForceStopClear" aria-label="Clear Emergency Stop key">&times;</button>
                 </div>
               </div>
               <span class="sd-util-field-error" id="sdUtilHotkeyForceStopError"></span>
+              <p class="sd-util-group__desc">Stops recording, transcription, automated typing, and text-to-speech immediately.</p>
 
               <div class="sd-util-row">
                 <div class="sd-util-row__label"><span class="sd-util-row__label-text">Primary Action key</span></div>
                 <div class="sd-util-row__control sd-util-hotkey-row">
-                  <input type="text" readonly class="sd-util-hotkey-input" id="sdUtilHotkeyManualSendInput" value="Ctrl+Enter" aria-label="Click to record a new hotkey" />
+                  <input type="text" readonly class="sd-util-hotkey-input" id="sdUtilHotkeyManualSendInput" value="" placeholder="Loading current binding…" aria-label="Click to record a new primary action key" />
                   <button type="button" class="sd-util-hotkey-clear" id="sdUtilHotkeyManualSendClear" aria-label="Clear Primary Action key">&times;</button>
                 </div>
               </div>
               <span class="sd-util-field-error" id="sdUtilHotkeyManualSendError"></span>
+              <p class="sd-util-group__desc">Pastes the oldest pending draft; while idle, it captures selected text and reads it aloud.</p>
 
               <div class="sd-util-row">
                 <div class="sd-util-row__label"><span class="sd-util-row__label-text">Review TTS Hotkey</span></div>
                 <div class="sd-util-row__control sd-util-hotkey-row">
-                  <input type="text" readonly class="sd-util-hotkey-input" id="sdUtilHotkeyReviewTtsInput" value="Ctrl+R" aria-label="Click to record a new hotkey" />
+                  <input type="text" readonly class="sd-util-hotkey-input" id="sdUtilHotkeyReviewTtsInput" value="" placeholder="Loading current binding…" aria-label="Click to record a new Review TTS hotkey" />
                   <button type="button" class="sd-util-hotkey-clear" id="sdUtilHotkeyReviewTtsClear" aria-label="Clear Review TTS Hotkey">&times;</button>
                 </div>
               </div>
               <span class="sd-util-field-error" id="sdUtilHotkeyReviewTtsError"></span>
+              <p class="sd-util-group__desc">Starts or stops text-to-speech for the current review draft.</p>
 
               <div class="sd-util-row">
-                <div class="sd-util-row__label"><span class="sd-util-row__label-text">Rewrite Selection Hotkey</span></div>
+                <div class="sd-util-row__label"><span class="sd-util-row__label-text">Selection Rewrite Hotkey</span></div>
                 <div class="sd-util-row__control sd-util-hotkey-row">
-                  <input type="text" readonly class="sd-util-hotkey-input" id="sdUtilHotkeySelectionRewriteInput" value="Ctrl+Alt+R" aria-label="Click to record a new hotkey" />
-                  <button type="button" class="sd-util-hotkey-clear" id="sdUtilHotkeySelectionRewriteClear" aria-label="Clear Rewrite Selection Hotkey">&times;</button>
+                  <input type="text" readonly class="sd-util-hotkey-input" id="sdUtilHotkeySelectionRewriteInput" value="" placeholder="Loading current binding…" aria-label="Click to record a new Selection Rewrite hotkey" />
+                  <button type="button" class="sd-util-hotkey-clear" id="sdUtilHotkeySelectionRewriteClear" aria-label="Clear Selection Rewrite Hotkey">&times;</button>
                 </div>
               </div>
               <span class="sd-util-field-error" id="sdUtilHotkeySelectionRewriteError"></span>
-              <p class="sd-util-group__desc">Select text in another app, then press this hotkey to create a persona-cleaned draft for review. It never auto-replaces or sends text.</p>
+              <p class="sd-util-group__desc">Creates a cleaned, review-only draft from selected text; it never replaces or sends text automatically.</p>
 
               <div class="sd-util-row">
-                <div class="sd-util-row__label"><span class="sd-util-row__label-text">Open Chat Key</span></div>
+                <div class="sd-util-row__label"><span class="sd-util-row__label-text">Target App Open Key</span></div>
                 <div class="sd-util-row__control sd-util-hotkey-row">
-                  <input type="text" readonly class="sd-util-hotkey-input" id="sdUtilHotkeyChatOpenInput" value="Ctrl+G" aria-label="Click to record a new hotkey" />
-                  <button type="button" class="sd-util-hotkey-clear" id="sdUtilHotkeyChatOpenClear" aria-label="Clear Open Chat Key">&times;</button>
+                  <input type="text" readonly class="sd-util-hotkey-input" id="sdUtilHotkeyChatOpenInput" value="" placeholder="Loading current binding…" aria-label="Click to record a new Target App Open Key" />
+                  <button type="button" class="sd-util-hotkey-clear" id="sdUtilHotkeyChatOpenClear" aria-label="Clear Target App Open Key">&times;</button>
                 </div>
               </div>
               <span class="sd-util-field-error" id="sdUtilHotkeyChatOpenError"></span>
+              <p class="sd-util-group__desc">BetterFingers simulates this app-specific key before pasting into the target app.</p>
 
               <div class="sd-util-row">
-                <div class="sd-util-row__label"><span class="sd-util-row__label-text">Voice Mute Key</span></div>
+                <div class="sd-util-row__label"><span class="sd-util-row__label-text">Voice Privacy Mute Key</span></div>
                 <div class="sd-util-row__control sd-util-hotkey-row">
-                  <input type="text" readonly class="sd-util-hotkey-input" id="sdUtilHotkeyVoiceMuteInput" value="Ctrl+M" aria-label="Click to record a new hotkey" />
-                  <button type="button" class="sd-util-hotkey-clear" id="sdUtilHotkeyVoiceMuteClear" aria-label="Clear Voice Mute Key">&times;</button>
+                  <input type="text" readonly class="sd-util-hotkey-input" id="sdUtilHotkeyVoiceMuteInput" value="" placeholder="Loading current binding…" aria-label="Click to record a new Voice Privacy Mute Key" />
+                  <button type="button" class="sd-util-hotkey-clear" id="sdUtilHotkeyVoiceMuteClear" aria-label="Clear Voice Privacy Mute Key">&times;</button>
                 </div>
               </div>
               <span class="sd-util-field-error" id="sdUtilHotkeyVoiceMuteError"></span>
+              <p class="sd-util-group__desc">BetterFingers holds this key while recording when push-to-mute is enabled.</p>
 
               <span class="sd-util-message" id="sdUtilHotkeyMessage"></span>
             </div>
@@ -2527,6 +2533,35 @@
 
         <div class="sd-set-content">
 
+          <article class="sd-set-update" id="sdSetUpdateCard" data-search-group data-search-label="BetterFingers update version download restart install">
+            <div class="sd-set-update__header">
+              <div>
+                <span class="sd-set-update__eyebrow">BetterFingers Update</span>
+                <h2 class="sd-set-update__title" id="sdSetUpdateStatus">Checking update support…</h2>
+              </div>
+              <div class="sd-set-update__identity" aria-label="Installed update channel">
+                <span id="sdSetUpdateCurrentVersion">Version unknown</span>
+                <span aria-hidden="true">·</span>
+                <span id="sdSetUpdateChannel">Windows installer</span>
+              </div>
+            </div>
+            <p class="sd-set-update__detail" id="sdSetUpdateDetail" aria-live="polite" aria-atomic="true">Nothing downloads or restarts without your permission.</p>
+            <div class="sd-set-update__release" id="sdSetUpdateRelease" hidden>
+              <span class="sd-set-update__meta" id="sdSetUpdateReleaseMeta"></span>
+              <p class="sd-set-update__notes" id="sdSetUpdateReleaseNotes"></p>
+            </div>
+            <div class="sd-set-update__progress" id="sdSetUpdateProgressWrap">
+              <progress id="sdSetUpdateProgress" max="100" value="0" aria-label="Update download progress" hidden></progress>
+              <span id="sdSetUpdateProgressText" hidden>0%</span>
+            </div>
+            <div class="sd-set-update__actions">
+              <button type="button" class="sd-btn sd-btn--primary" id="sdSetUpdatePrimaryButton" hidden>Check again</button>
+              <button type="button" class="sd-btn" id="sdSetUpdateLaterButton" hidden>Later</button>
+              <button type="button" class="sd-btn" id="sdSetUpdateResumeButton" hidden>Show update options</button>
+              <a class="sd-set-update__manual" id="sdSetUpdateManualLink" href="https://github.com/RoyGSlade/BetterFingers/releases" target="_blank" rel="noreferrer" hidden>Download manually</a>
+            </div>
+          </article>
+
           <!-- ============================== PROFILE (inventory §7.0/§7.1) ============================== -->
           <section class="sd-set-section" id="sdSetSectionProfile" data-search-section>
             <p class="sd-set-section__intro">Switch, create, rename, duplicate, export/import, and delete configuration profiles.</p>
@@ -2546,6 +2581,7 @@
 
             <div class="sd-set-group" data-search-group>
               <div class="sd-set-group__header"><span class="sd-set-group__title">Profile Operations</span></div>
+              <div class="sd-set-row"><div class="sd-set-row__label"><span class="sd-set-row__label-text">Quick Setup</span><span class="sd-set-row__label-hint">Replay the guided tour of the main controls.</span></div><button type="button" class="sd-btn" id="sdSetReplayQuickSetup">Replay Quick Setup</button></div>
               <p class="sd-set-group__desc">Create new, duplicate, rename, delete, import, or export profiles.</p>
               <div class="sd-set-profile-actions" data-search-row data-search-label="profile operations create rename duplicate export import delete">
                 <input type="text" class="sd-set-input sd-set-input--wide" id="sdSetNewProfileName" placeholder="Profile name / action target" />
@@ -2568,7 +2604,7 @@
           </section>
 
           <!-- ============================== RECORDING (inventory §7.2) ============================== -->
-          <section class="sd-set-section" id="sdSetSectionRecording" data-search-section hidden>
+          <section class="sd-set-section" id="sdSetSectionRecording" data-search-section hidden data-tour-target="recording">
             <p class="sd-set-section__intro">Recording mode, auto-stop on silence, voice commands, and the no-audio gate.</p>
 
             <div class="sd-set-group" data-search-group>
@@ -2662,7 +2698,7 @@
           </section>
 
           <!-- ============================== REVIEW & DRAFTS (inventory §7.4) ============================== -->
-          <section class="sd-set-section" id="sdSetSectionReview" data-search-section hidden>
+          <section class="sd-set-section" id="sdSetSectionReview" data-search-section hidden data-tour-target="review">
             <p class="sd-set-section__intro">How drafts are sent, confidence gating, auto-submit, and clipboard/draft history behavior.</p>
 
             <div class="sd-set-group" data-search-group>
@@ -2749,7 +2785,7 @@
           </section>
 
           <!-- ============================== AI CLEANUP (inventory §7.5 numeric knobs; wizard/Foundry live in Studio) ============================== -->
-          <section class="sd-set-section" id="sdSetSectionAiCleanup" data-search-section hidden>
+          <section class="sd-set-section" id="sdSetSectionAiCleanup" data-search-section hidden data-tour-target="cleanup">
             <p class="sd-set-section__intro">AI cleanup is optional and off on a fresh install. Speech-to-text dictation works without downloading a separate large language model (LLM). The persona wizard and Persona Foundry live in Studio.</p>
 
             <div class="sd-set-group" data-search-group>
@@ -3142,7 +3178,7 @@
           </section>
 
           <!-- ============================== PRIVACY (inventory §7.14) ============================== -->
-          <section class="sd-set-section" id="sdSetSectionPrivacy" data-search-section hidden>
+          <section class="sd-set-section" id="sdSetSectionPrivacy" data-search-section hidden data-tour-target="privacy">
             <p class="sd-set-section__intro">What touches the network, what is stored on this device, and wiping your data. BetterFingers runs offline.</p>
 
             <div class="sd-set-group" data-search-group>

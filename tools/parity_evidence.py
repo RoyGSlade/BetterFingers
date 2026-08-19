@@ -792,10 +792,10 @@ class Coverage:
             # scenarios were written against index.html's ids and prove
             # nothing about the production page, so they are excluded.
             if targets & {t for t in PROD_QA_TARGETS if t}:
-                qa.append((str(path.relative_to(ROOT)), text))
+                qa.append((path.relative_to(ROOT).as_posix(), text))
         unit = [
             (
-                str(path.relative_to(ROOT)),
+                path.relative_to(ROOT).as_posix(),
                 strip_comments(path, path.read_text(encoding="utf-8", errors="replace")),
             )
             for path in sorted(UNIT_DIR.glob("*.test.mjs"))

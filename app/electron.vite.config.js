@@ -13,6 +13,7 @@ module.exports = defineConfig({
           sidecar: resolve(__dirname, 'src/main/sidecar.js'),
           tray: resolve(__dirname, 'src/main/tray.js'),
           ipc: resolve(__dirname, 'src/main/ipc.js'),
+          updateController: resolve(__dirname, 'src/main/updateController.js'),
           hotkeys: resolve(__dirname, 'src/main/hotkeys.js'),
           senderValidation: resolve(__dirname, 'src/main/senderValidation.js'),
           backendProxy: resolve(__dirname, 'src/main/backendProxy.js'),

@@ -657,6 +657,111 @@ export function buildLegacyProfileImportPayload(parsed, fallbackName) {
   return { kind: 'betterfingers_profile', schema_version: 1, name, settings };
 }
 
+const UPDATE_STATUSES = new Set([
+  'unsupported', 'idle', 'checking', 'up_to_date', 'available',
+  'downloading', 'ready', 'installing', 'error',
+]);
+
+export function normalizeUpdateState(value = {}) {
+  const status = UPDATE_STATUSES.has(value?.status) ? value.status : 'unsupported';
+  const number = (input, max = Number.MAX_SAFE_INTEGER) => {
+    const parsed = Number(input);
+    return Number.isFinite(parsed) ? Math.max(0, Math.min(max, parsed)) : 0;
+  };
+  return {
+    status,
+    currentVersion: String(value?.currentVersion || 'Unknown'),
+    availableVersion: value?.availableVersion ? String(value.availableVersion) : null,
+    channel: value?.channel === 'alpha' ? 'alpha' : value?.channel === 'latest' ? 'latest' : null,
+    releaseDate: value?.releaseDate ? String(value.releaseDate) : null,
+    releaseNotes: String(value?.releaseNotes || '').slice(0, 12000),
+    percent: number(value?.percent, 100),
+    bytesTransferred: number(value?.bytesTransferred),
+    bytesTotal: number(value?.bytesTotal),
+    errorCode: value?.errorCode ? String(value.errorCode) : null,
+  };
+}
+
+function formatUpdateBytes(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value <= 0) return '';
+  if (value < 1024 * 1024) return `${Math.max(1, Math.round(value / 1024))} KB`;
+  return `${(value / (1024 * 1024)).toFixed(value >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+}
+
+export function buildUpdateViewModel(input, { deferred = false } = {}) {
+  const state = normalizeUpdateState(input);
+  const version = state.availableVersion || 'the new version';
+  const base = {
+    ...state,
+    channelLabel: state.channel === 'alpha' ? 'Public alpha' : state.channel === 'latest' ? 'Stable' : 'Windows installer',
+    headline: '', detail: '', primaryAction: null, primaryLabel: '',
+    primaryDisabled: false, showLater: false, showResume: false,
+    showProgress: false, showRelease: false, showManual: false, releaseMeta: '',
+  };
+
+  if (deferred && ['available', 'ready'].includes(state.status)) {
+    return {
+      ...base,
+      headline: `Update ${version} postponed.`,
+      detail: 'Nothing was changed. You can reopen the update options whenever you are ready.',
+      showResume: true,
+    };
+  }
+
+  switch (state.status) {
+    case 'idle':
+      return { ...base, headline: 'Updates are checked automatically.', detail: 'You can also check whenever you want.', primaryAction: 'check', primaryLabel: 'Check again' };
+    case 'checking':
+      return { ...base, headline: 'Checking for updates…', detail: 'Nothing downloads during this check.', primaryAction: 'check', primaryLabel: 'Checking…', primaryDisabled: true };
+    case 'up_to_date':
+      return { ...base, headline: 'You’re up to date.', detail: 'No files were changed.', primaryAction: 'check', primaryLabel: 'Check again' };
+    case 'available': {
+      const date = state.releaseDate ? state.releaseDate.slice(0, 10) : '';
+      const size = formatUpdateBytes(state.bytesTotal);
+      return {
+        ...base, headline: `BetterFingers ${version} is available.`,
+        detail: 'Review the notes, then choose when to download it.',
+        primaryAction: 'download', primaryLabel: 'Download update', showLater: true,
+        showRelease: true, releaseMeta: [date, size].filter(Boolean).join(' · '),
+      };
+    }
+    case 'downloading':
+      return {
+        ...base, headline: `Downloading BetterFingers ${version}…`,
+        detail: `${Math.round(state.percent)}% downloaded. Keep BetterFingers open.`,
+        showProgress: true,
+      };
+    case 'ready': {
+      const blocked = state.errorCode === 'ACTIVE_DICTATION';
+      const unavailable = state.errorCode === 'RUNTIME_STATUS_UNAVAILABLE';
+      return {
+        ...base,
+        headline: blocked
+          ? 'Finish dictation before restarting.'
+          : unavailable
+            ? 'Couldn’t verify a safe restart yet.'
+            : `BetterFingers ${version} is ready to install.`,
+        detail: blocked
+          ? 'Restart is disabled while BetterFingers is recording or processing.'
+          : unavailable
+            ? 'Nothing was changed. BetterFingers is still running; try again when its local service is available.'
+            : 'BetterFingers will stop its active services, close, install the update, and restart.',
+        primaryAction: 'install',
+        primaryLabel: unavailable ? 'Try restart and install again' : 'Restart and install',
+        primaryDisabled: blocked,
+        showLater: true, showRelease: Boolean(state.releaseNotes || state.releaseDate),
+      };
+    }
+    case 'installing':
+      return { ...base, headline: 'Restarting to install…', detail: 'BetterFingers is stopping its services safely.', primaryAction: 'install', primaryLabel: 'Installing…', primaryDisabled: true };
+    case 'error':
+      return { ...base, headline: 'Couldn’t check for that update.', detail: 'Nothing was changed. Your current BetterFingers install still works.', primaryAction: 'check', primaryLabel: 'Try again', showManual: true };
+    default:
+      return { ...base, headline: 'Updates are available in the installed Windows app.', detail: 'Development and non-Windows builds do not use the Windows updater.', showManual: true };
+  }
+}
+
 // --- Pure helper: search matching ------------------------------------------
 
 /**
@@ -683,6 +788,21 @@ export const SETTINGS_ELEMENT_IDS = {
   discardButton: 'sdSetDiscardButton',
   saveButton: 'sdSetSaveButton',
   profileMessage: 'sdSetProfileMessage',
+
+  updateCard: 'sdSetUpdateCard',
+  updateCurrentVersion: 'sdSetUpdateCurrentVersion',
+  updateChannel: 'sdSetUpdateChannel',
+  updateStatus: 'sdSetUpdateStatus',
+  updateDetail: 'sdSetUpdateDetail',
+  updateRelease: 'sdSetUpdateRelease',
+  updateReleaseMeta: 'sdSetUpdateReleaseMeta',
+  updateReleaseNotes: 'sdSetUpdateReleaseNotes',
+  updateProgress: 'sdSetUpdateProgress',
+  updateProgressText: 'sdSetUpdateProgressText',
+  updatePrimaryButton: 'sdSetUpdatePrimaryButton',
+  updateLaterButton: 'sdSetUpdateLaterButton',
+  updateResumeButton: 'sdSetUpdateResumeButton',
+  updateManualLink: 'sdSetUpdateManualLink',
 
   navProfile: 'sdSetNavProfile',
   navRecording: 'sdSetNavRecording',
@@ -876,12 +996,18 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
   // and the on-screen preview describe the same stores.
   let lastPrivacyReport = null;
   const overlayBridge = hks.overlayBridge || (typeof window !== 'undefined' ? window.betterFingers : undefined);
+  const updatesApi = hks.updatesApi || (typeof window !== 'undefined' ? window.betterFingers?.updates : undefined);
 
   let sectionState = { active: SETTINGS_SECTIONS[0] };
   let activeProfileName = null;
   let activeProfileSettings = {};
   let validationErrors = {};
   let profileDirty = false;
+  let updateState = normalizeUpdateState();
+  let updateDeferred = false;
+  let updatePrimaryAction = null;
+  let updateUnsubscribe = null;
+  let destroyed = false;
 
   function setMessage(el, text = '', tone = '') {
     if (!el) return;
@@ -2045,6 +2171,99 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
     }
   }
 
+  function renderUpdateState(nextState) {
+    const normalized = normalizeUpdateState(nextState);
+    if (
+      normalized.availableVersion !== updateState.availableVersion
+      || !['available', 'ready'].includes(normalized.status)
+    ) {
+      updateDeferred = false;
+    }
+    updateState = normalized;
+    const view = buildUpdateViewModel(updateState, { deferred: updateDeferred });
+    updatePrimaryAction = view.primaryAction;
+
+    if (els.updateCard?.dataset) els.updateCard.dataset.status = view.status;
+    if (els.updateCurrentVersion) els.updateCurrentVersion.textContent = `Version ${view.currentVersion}`;
+    if (els.updateChannel) els.updateChannel.textContent = view.channelLabel;
+    if (els.updateStatus) els.updateStatus.textContent = view.headline;
+    if (els.updateDetail) els.updateDetail.textContent = view.detail;
+    if (els.updateRelease) els.updateRelease.hidden = !view.showRelease;
+    if (els.updateReleaseMeta) els.updateReleaseMeta.textContent = view.releaseMeta;
+    if (els.updateReleaseNotes) els.updateReleaseNotes.textContent = view.releaseNotes;
+    if (els.updateProgress) {
+      els.updateProgress.hidden = !view.showProgress;
+      els.updateProgress.max = 100;
+      els.updateProgress.value = view.percent;
+      els.updateProgress.setAttribute?.('aria-valuetext', `${Math.round(view.percent)}% downloaded`);
+    }
+    if (els.updateProgressText) {
+      els.updateProgressText.hidden = !view.showProgress;
+      els.updateProgressText.textContent = `${Math.round(view.percent)}%`;
+    }
+    if (els.updatePrimaryButton) {
+      els.updatePrimaryButton.hidden = !view.primaryAction;
+      els.updatePrimaryButton.disabled = view.primaryDisabled;
+      els.updatePrimaryButton.textContent = view.primaryLabel;
+    }
+    if (els.updateLaterButton) els.updateLaterButton.hidden = !view.showLater;
+    if (els.updateResumeButton) els.updateResumeButton.hidden = !view.showResume;
+    if (els.updateManualLink) els.updateManualLink.hidden = !view.showManual;
+    return view;
+  }
+
+  function renderUpdateFailure() {
+    return renderUpdateState({
+      ...updateState,
+      status: 'error',
+      errorCode: 'UPDATE_FAILED',
+    });
+  }
+
+  async function runUpdateAction(action) {
+    if (!updatesApi || !['check', 'download', 'install'].includes(action)) return renderUpdateState();
+    const method = updatesApi[action];
+    if (typeof method !== 'function') return renderUpdateFailure();
+    try {
+      const nextState = await method.call(updatesApi);
+      if (nextState && !destroyed) return renderUpdateState(nextState);
+    } catch {
+      if (!destroyed) return renderUpdateFailure();
+    }
+    return buildUpdateViewModel(updateState, { deferred: updateDeferred });
+  }
+
+  async function refreshUpdateState() {
+    if (!updatesApi || typeof updatesApi.getState !== 'function') return renderUpdateState();
+    try {
+      const nextState = await updatesApi.getState();
+      return destroyed ? buildUpdateViewModel(updateState) : renderUpdateState(nextState);
+    } catch {
+      return destroyed ? buildUpdateViewModel(updateState) : renderUpdateFailure();
+    }
+  }
+
+  function bindUpdateCard() {
+    els.updatePrimaryButton?.addEventListener?.('click', () => {
+      if (!els.updatePrimaryButton.disabled && updatePrimaryAction) runUpdateAction(updatePrimaryAction);
+    });
+    els.updateLaterButton?.addEventListener?.('click', () => {
+      updateDeferred = true;
+      renderUpdateState(updateState);
+    });
+    els.updateResumeButton?.addEventListener?.('click', () => {
+      updateDeferred = false;
+      renderUpdateState(updateState);
+    });
+    if (typeof updatesApi?.onState === 'function') {
+      const unsubscribe = updatesApi.onState((nextState) => {
+        if (!destroyed) renderUpdateState(nextState);
+      });
+      if (typeof unsubscribe === 'function') updateUnsubscribe = unsubscribe;
+    }
+    renderUpdateState(updateState);
+  }
+
   function bindOnce() {
     bindSectionNav();
     bindFieldDirtyTracking();
@@ -2055,6 +2274,7 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
     bindDisclosedToggles();
     bindAutoSubmitGate();
     bindSearch();
+    bindUpdateCard();
   }
 
   function init(initialSection) {
@@ -2064,15 +2284,23 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
       sectionState = { active: initialSection };
     }
     renderSectionNav();
+    refreshUpdateState().catch(() => {});
     return getSectionState();
   }
 
   /** Real network refresh (profiles + privacy + persona options). Fails gracefully with no backend bridge, same as every other workspace's refreshAll(). */
   async function refreshAll() {
+    await refreshUpdateState();
     await refreshProfilesList().catch((error) => setMessage(els.profileMessage, `Load failed: ${error.message}`, 'danger'));
     await refreshPersonaOptions();
     await refreshPrivacyReport();
     await refreshPttAvailabilityNote();
+  }
+
+  function destroy() {
+    destroyed = true;
+    updateUnsubscribe?.();
+    updateUnsubscribe = null;
   }
 
   return {
@@ -2080,6 +2308,9 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
     goToSection,
     getSectionState,
     refreshAll,
+    refreshUpdateState,
+    renderUpdateState,
+    runUpdateAction,
     setProfilesList,
     setPersonaOptions,
     refreshPersonaOptions,
@@ -2103,5 +2334,6 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
     isDirty: () => profileDirty,
     getActiveProfileName: () => activeProfileName,
     getActiveProfileSettings: () => ({ ...activeProfileSettings }),
+    destroy,
   };
 }

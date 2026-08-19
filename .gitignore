@@ -14,6 +14,7 @@ __pycache__/
 build/
 !app/build/
 app/build/*
+!app/build/installer.nsh
 !app/build/icon.png
 !app/build/icon.ico
 dist/

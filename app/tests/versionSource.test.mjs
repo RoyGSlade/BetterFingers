@@ -22,8 +22,8 @@ const RENDERER = join(APP_DIR, 'src/renderer');
 const versionFile = readFileSync(join(REPO_ROOT, 'VERSION'), 'utf8').trim();
 const pkg = JSON.parse(readFileSync(join(APP_DIR, 'package.json'), 'utf8'));
 
-test('VERSION holds the v1.1.0-alpha.2 release target', () => {
-  assert.equal(versionFile, '1.1.0-alpha.2');
+test('VERSION holds the v1.1.0-alpha.3 release target', () => {
+  assert.equal(versionFile, '1.1.0-alpha.3');
 });
 
 test('package.json version equals the VERSION file', () => {

@@ -47,6 +47,18 @@ const api = {
   showApp: () => ipcRenderer.invoke('app:show'),
   getAppState: () => ipcRenderer.invoke('app:get-state'),
   getAppVersion: () => ipcRenderer.invoke('app:get-version'),
+  updates: {
+    getState: () => ipcRenderer.invoke('updates:get-state'),
+    check: () => ipcRenderer.invoke('updates:check'),
+    download: () => ipcRenderer.invoke('updates:download'),
+    install: () => ipcRenderer.invoke('updates:install'),
+    onState: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      const handler = (_event, state) => callback(state);
+      ipcRenderer.on('updates:state', handler);
+      return () => ipcRenderer.removeListener('updates:state', handler);
+    },
+  },
   // Durable onboarding consent record. quit reuses the existing app:quit
   // channel so declining consent exits through the ordinary shutdown path.
   onboarding: {

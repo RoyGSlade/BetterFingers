@@ -1,9 +1,10 @@
 const path = require('node:path');
 const fs = require('node:fs');
-const { BrowserWindow, app } = require('electron');
+const { BrowserWindow, app, shell } = require('electron');
 const { isTrustedRendererUrl } = require('./senderValidation');
 
 let mainWindow = null;
+const MANUAL_UPDATE_URL = 'https://github.com/RoyGSlade/BetterFingers/releases';
 
 const OVERLAY_SIZE = { width: 220, height: 54 };
 
@@ -178,7 +179,10 @@ function rendererDir() {
 function hardenWindowNavigation(window) {
   const devOrigin = process.env.ELECTRON_RENDERER_URL;
   const rendererRoot = rendererDir();
-  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (url === MANUAL_UPDATE_URL) shell.openExternal(MANUAL_UPDATE_URL).catch(() => {});
+    return { action: 'deny' };
+  });
   window.webContents.on('will-navigate', (event, url) => {
     if (!isTrustedRendererUrl(url, { rendererDir: rendererRoot, devOrigin })) {
       console.warn(`[windows] Blocked navigation to ${url}`);

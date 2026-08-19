@@ -18,26 +18,47 @@ def _publish_block():
     return text.split("\n  publish-release:\n", 1)[1]
 
 
-def test_tag_publication_is_an_approval_gated_draft_prerelease():
-    block = _publish_block()
-    assert "if: startsWith(github.ref, 'refs/tags/')" in block
-    assert "environment: release" in block
-    assert "name: BetterFingers ${{ github.ref_name }}" in block
-    assert "body: |" in block
-    assert "draft: true" in block
-    assert "prerelease: true" in block
-    assert "make_latest: false" in block
-    assert "generate_release_notes: false" in block
+def _draft_block():
+    text = _workflow_text()
+    return text.split("\n  draft-release:\n", 1)[1].split(
+        "\n  publish-release:\n", 1
+    )[0]
 
 
-def test_friend_alpha_release_body_is_explicit_about_unsigned_experimental_limits():
-    block = _publish_block()
+def test_tag_publication_qualifies_a_private_draft_before_approval():
+    draft = _draft_block()
+    publish = _publish_block()
+    assert "if: startsWith(github.ref, 'refs/tags/')" in draft
+    assert "environment: release" not in draft
+    assert "name: BetterFingers ${{ github.ref_name }}" in draft
+    assert "body: |" in draft
+    assert "draft: true" in draft
+    assert "prerelease: ${{ steps.release_kind.outputs.prerelease }}" in draft
+    assert "make_latest: false" in draft
+    assert "generate_release_notes: false" in draft
+    assert "Verify every downloaded draft asset" in draft
+
+    assert "needs: draft-release" in publish
+    assert "environment: release" in publish
+    assert "Reverify private draft before public promotion" in publish
+    assert "gh release edit" in publish
+    assert "--draft=false --prerelease=true --latest=false" in publish
+    assert "--draft=false --prerelease=false --latest" in publish
+    assert "draft: true" not in publish
+
+
+def test_no_checkout_release_jobs_bind_gh_to_the_workflow_repository():
+    for block in (_draft_block(), _publish_block()):
+        assert "GH_REPO: ${{ github.repository }}" in block
+
+
+def test_release_body_is_explicit_about_signed_experimental_limits():
+    block = _draft_block()
     for required in (
-        "unsigned public alpha for invited friend testing",
-        "not a broadly qualified stable release",
+        "code-signed release candidate",
+        "update channel is `${{ steps.release_kind.outputs.channel }}`",
         "exact Windows signing mode for this tag is `${{ needs.windows-installer.outputs.signing_mode }}`",
-        "An unsigned Windows build can trigger Microsoft SmartScreen",
-        "Verify the SHA-256 sidecar before running it",
+        "Verify the installer signature and SHA-256 sidecar before running it",
         "do not disable Windows security controls",
         "language model used for AI cleanup is optional and disabled on a fresh install",
         "Do not use this alpha for highly sensitive dictation",
@@ -50,11 +71,14 @@ def test_friend_alpha_release_body_is_explicit_about_unsigned_experimental_limit
 
 
 def test_release_keeps_all_qualification_artifacts():
-    block = _publish_block()
+    block = _draft_block()
     for pattern in (
         "release-assets/windows/*.exe",
         "release-assets/windows/*.exe.sha256",
         "release-assets/windows/*.exe.signature.txt",
+        "release-assets/windows/*.exe.authenticode.json",
+        "release-assets/windows/*.exe.blockmap",
+        "release-assets/windows/${{ steps.release_kind.outputs.channel }}.yml",
         "release-assets/linux/*.AppImage",
         "release-assets/linux/*.AppImage.sha256",
         "release-assets/sbom/*.cdx.json",
@@ -109,9 +133,9 @@ def test_release_identity_and_unsigned_policy_fail_closed():
     assert "Package version '$version' does not match VERSION '$versionFile'." in workflow
     assert "Tag '${{ github.ref_name }}' does not match package version" in workflow
     assert 'expected exactly NotSigned' in workflow
-    assert "Stable Windows tags must be signed." in workflow
-    assert "$precedenceVersion = ($releaseVersion -split '\\+', 2)[0]" in workflow
-    assert "$precedenceVersion -notmatch '-'" in workflow
+    assert "Every Windows tag must be signed." in workflow
+    assert 'if ("${{ github.ref_type }}" -eq "tag")' in workflow
+    assert "Unsigned builds are allowed only for manual qualification runs." in workflow
 
 
 def test_azure_signing_account_is_wired_conditionally_and_partial_config_fails():
@@ -148,17 +172,55 @@ def test_installer_artifact_name_and_installed_smoke_contract_are_exact():
     assert 'BetterFingers-Setup-$version-x64.exe' in workflow
     assert '-ExpectedVersion' in workflow
     assert '-ExpectedSignatureStatus' in workflow
+    assert '$args += "-ExerciseCleanupCategories"' in workflow
     assert 'tools/smoke_installer.ps1' in workflow
 
 
+def test_updater_assets_are_validated_before_upload_and_before_promotion():
+    workflow = _workflow_text()
+    draft = _draft_block()
+    publish = _publish_block()
+    for required in (
+        'Validate updater metadata and blockmap',
+        r'$metadata = Join-Path "app\release" "$channel.yml"',
+        '$blockmap = "$installer.blockmap"',
+        '[Security.Cryptography.SHA512]::Create()',
+        "Updater metadata SHA-512 does not match the signed installer.",
+        '${{ steps.updater.outputs.blockmap }}',
+        '${{ steps.updater.outputs.metadata }}',
+    ):
+        assert required in workflow
+    for block in (draft, publish):
+        assert ".exe.authenticode.json" in block
+        assert ".exe.blockmap" in block
+        assert "sha512" in block
+        assert "Valid" in block
+
+
+def test_channel_classification_keeps_alpha_and_stable_isolated():
+    draft = _draft_block()
+    publish = _publish_block()
+    assert 'if [[ "$GITHUB_REF_NAME" == *-* ]]' in draft
+    assert 'echo "channel=alpha"' in draft
+    assert 'echo "channel=latest"' in draft
+    assert 'echo "prerelease=true"' in draft
+    assert 'echo "prerelease=false"' in draft
+    assert "grep -Fxq 'alpha.yml'" in publish
+    assert "grep -Fxq 'latest.yml'" in publish
+
+
 def test_publish_job_rehashes_downloaded_artifacts_and_redownloads_draft():
-    block = _publish_block()
-    assert '(cd release-assets/windows && sha256sum --check *.exe.sha256)' in block
-    assert '(cd release-assets/linux && sha256sum --check *.AppImage.sha256)' in block
-    assert 'Verify draft release download and checksum' in block
-    assert 'gh release download "${GITHUB_REF_NAME}"' in block
-    assert "--pattern 'BetterFingers-Setup-*-x64.exe'" in block
-    assert 'sha256sum --check "$(basename "${checksums[0]}")"' in block
+    draft = _draft_block()
+    publish = _publish_block()
+    assert '(cd release-assets/windows && sha256sum --check *.exe.sha256)' in draft
+    assert '(cd release-assets/linux && sha256sum --check *.AppImage.sha256)' in draft
+    assert 'Verify every downloaded draft asset' in draft
+    assert 'gh release download "${GITHUB_REF_NAME}"' in draft
+    assert "--pattern 'BetterFingers-Setup-*-x64.exe'" in draft
+    assert 'sha256sum --check "$(basename "${checksums[0]}")"' in draft
+    assert 'gh release download "$GITHUB_REF_NAME" --dir "$download_dir"' in publish
+    assert 'openssl dgst -sha512 -binary' in draft
+    assert 'openssl dgst -sha512 -binary' in publish
 
 
 def test_installed_app_smoke_proves_no_llm_and_a_real_verified_download():
@@ -178,6 +240,37 @@ def test_installed_app_smoke_proves_no_llm_and_a_real_verified_download():
         'DisplayVersion',
         'Publisher',
         'if ($versionInfo.FileDescription -ne "BetterFingers")',
+    ):
+        assert required in smoke
+
+
+def test_installer_smoke_reads_http_error_status_across_powershell_versions():
+    smoke = INSTALLER_SMOKE.read_text(encoding="utf-8")
+    helper = smoke.split("function Get-HttpStatus {", 1)[1].split(
+        "function Invoke-AuthenticatedJson {", 1
+    )[0]
+    assert "catch [System.Net.WebException]" not in helper
+    assert "$response = $_.Exception.Response" in helper
+    assert "return [int]$response.StatusCode" in helper
+
+
+def test_installer_smoke_proves_upgrade_preservation_and_selective_cleanup():
+    smoke = INSTALLER_SMOKE.read_text(encoding="utf-8")
+    for required in (
+        'obsolete-upgrade-sentinel.bin',
+        'Upgrade left an obsolete program file behind',
+        '$seedSettingsHash',
+        '$seedModelHash',
+        'Expected exactly one BetterFingers uninstall entry',
+        'Default uninstall removed or changed downloaded model data',
+        '[switch]$ExerciseCleanupCategories',
+        '/BF_DELETE_MODELS',
+        '/BF_DELETE_RECORDINGS',
+        '/BF_DELETE_HISTORY',
+        '/BF_DELETE_SETTINGS',
+        '/BF_DELETE_LOGS',
+        'removed an unselected category path',
+        '$canonicalDataRootExistedBefore',
     ):
         assert required in smoke
 

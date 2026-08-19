@@ -9,6 +9,25 @@
    unprefixed `--bg`/`--text`/etc.) without collisions.
    ========================================================================== */
 
+.bf-quick-setup {
+  position: fixed; right: 1.25rem; bottom: 1.25rem; z-index: 1000;
+  max-width: min(28rem, calc(100vw - 2rem));
+}
+.bf-quick-setup__card {
+  padding: 1rem 1.15rem; border: 1px solid #6ad7ff; border-radius: .75rem;
+  background: Canvas; color: CanvasText; box-shadow: 0 1rem 3rem rgb(0 0 0 / .3);
+}
+.bf-quick-setup__progress { margin: 0 0 .35rem; font-size: .8rem; }
+.bf-quick-setup__body { line-height: 1.45; }
+.bf-quick-setup__actions { display: flex; justify-content: flex-end; gap: .5rem; }
+.bf-quick-setup-target { outline: 3px solid #6ad7ff; outline-offset: 4px; }
+@media (prefers-reduced-motion: reduce) { .bf-quick-setup * { scroll-behavior: auto; } }
+@media (max-width: 38rem) { .bf-quick-setup { right: .5rem; bottom: .5rem; left: .5rem; max-width: none; } }
+@media (forced-colors: active) {
+  .bf-quick-setup__card { border: 2px solid CanvasText; box-shadow: none; }
+  .bf-quick-setup-target { outline: 3px solid Highlight; }
+}
+
 :root {
   /* --- Color (SPEC 2, "Color") ------------------------------------------ */
   --sd-bg-base: #0A0E14;
@@ -4344,6 +4363,122 @@ select.sd-util-input {
   min-width: 0;
   /* Room at the bottom so the sticky save bar never overlaps the last card. */
   padding-bottom: 88px;
+}
+
+.sd-set-update {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-12);
+  padding: var(--sd-space-20);
+  border: 1px solid rgba(34, 211, 238, 0.38);
+  border-radius: var(--sd-radius-card);
+  background: linear-gradient(135deg, rgba(34, 211, 238, 0.08), var(--sd-surface-raised) 48%);
+  box-shadow: var(--sd-shadow-card);
+}
+
+.sd-set-update__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sd-space-16);
+}
+
+.sd-set-update__eyebrow {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--sd-cyan);
+  font-size: var(--sd-font-label);
+  font-weight: 700;
+  letter-spacing: var(--sd-label-letter-spacing);
+  text-transform: uppercase;
+}
+
+.sd-set-update__title {
+  margin: 0;
+  color: var(--sd-text-primary);
+  font-size: var(--sd-font-body);
+  line-height: 1.35;
+}
+
+.sd-set-update__identity {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  color: var(--sd-text-secondary);
+  font-size: var(--sd-font-xs);
+  white-space: nowrap;
+}
+
+.sd-set-update__detail,
+.sd-set-update__notes {
+  margin: 0;
+  color: var(--sd-text-secondary);
+  font-size: var(--sd-font-sm);
+  white-space: pre-wrap;
+}
+
+.sd-set-update__release {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sd-space-8);
+  padding: var(--sd-space-12);
+  border-radius: var(--sd-radius-pill);
+  background: var(--sd-surface-inset);
+}
+
+.sd-set-update__release[hidden] {
+  display: none;
+}
+
+.sd-set-update__meta {
+  color: var(--sd-text-muted);
+  font-size: var(--sd-font-xs);
+}
+
+.sd-set-update__progress {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-12);
+  color: var(--sd-text-secondary);
+  font-size: var(--sd-font-xs);
+}
+
+.sd-set-update__progress progress {
+  width: min(420px, 100%);
+  height: 10px;
+  accent-color: var(--sd-cyan);
+}
+
+.sd-set-update__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sd-space-8);
+  flex-wrap: wrap;
+}
+
+.sd-set-update__actions .sd-btn--primary {
+  margin-left: 0;
+}
+
+.sd-set-update__manual {
+  color: var(--sd-cyan);
+  font-size: var(--sd-font-sm);
+  font-weight: 600;
+}
+
+.sd-set-update__actions :is(button, a):focus-visible {
+  outline: 2px solid var(--sd-cyan);
+  outline-offset: 3px;
+}
+
+@media (max-width: 720px) {
+  .sd-set-update__header {
+    flex-direction: column;
+  }
+  .sd-set-update__identity {
+    justify-content: flex-start;
+  }
 }
 
 .sd-set-section {

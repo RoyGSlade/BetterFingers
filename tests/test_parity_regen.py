@@ -19,6 +19,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools import parity_ledger_build as build  # noqa: E402
+from tools import parity_evidence as evidence  # noqa: E402
+
+
+def test_coverage_paths_are_platform_independent():
+    coverage = evidence.Coverage.build()
+    paths = [path for path, _ in (*coverage.qa_files, *coverage.unit_files)]
+    assert paths
+    assert all("\\" not in path for path in paths)
 
 
 def test_committed_ledger_matches_its_generator(tmp_path, monkeypatch):

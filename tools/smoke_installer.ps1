@@ -5,12 +5,13 @@ param(
     # exercises upgrade-over-an-existing-install rather than only clean
     # install. When omitted, the upgrade leg is skipped.
     [string]$PreviousInstallerPath = "",
-    [string]$ExpectedVersion = "1.1.0-alpha.2",
+    [string]$ExpectedVersion = "1.1.0-alpha.3",
     [ValidateSet("NotSigned", "Valid")]
     [string]$ExpectedSignatureStatus = "NotSigned",
     # Azure Artifact Signing must prove the exact certificate identity, not
     # merely that Windows trusts whichever certificate signed the file.
-    [string]$ExpectedSignerSubject = ""
+    [string]$ExpectedSignerSubject = "",
+    [switch]$ExerciseCleanupCategories
 )
 
 $ErrorActionPreference = "Stop"
@@ -37,6 +38,13 @@ $appProcess = $null
 $uninstallerPath = $null
 $previousDataDir = $env:BETTERFINGERS_DATA_DIR
 $previousAuthToken = $env:BETTERFINGERS_AUTH_TOKEN
+$canonicalDataRoot = Join-Path $env:APPDATA "BetterFingers"
+$canonicalDataRootExistedBefore = Test-Path -LiteralPath $canonicalDataRoot
+$seedSettingsPath = $null
+$seedModelPath = $null
+$seedSettingsHash = $null
+$seedModelHash = $null
+$obsoleteProgramPath = $null
 
 function Get-BetterFingersProcesses {
     @(Get-Process -Name "BetterFingers", "betterfingers-backend" -ErrorAction SilentlyContinue)
@@ -131,13 +139,15 @@ function Get-HttpStatus {
     try {
         $response = Invoke-WebRequest -UseBasicParsing -Uri $Uri -Headers $headers -Method Get -TimeoutSec 3
         return [int]$response.StatusCode
-    } catch [System.Net.WebException] {
+    } catch {
+        # Windows PowerShell 5 reports HTTP failures as WebException, while
+        # PowerShell 7 uses HttpResponseException. Both expose Response and
+        # StatusCode, so inspect the common shape instead of the exception
+        # class or a deliberate 401 will be mistaken for a transport failure.
         $response = $_.Exception.Response
         if ($response -and $response.StatusCode) {
             return [int]$response.StatusCode
         }
-        return 0
-    } catch {
         return 0
     }
 }
@@ -248,6 +258,18 @@ try {
         $sentinelPath = Join-Path $qaDataRoot "installer-data-continuity-sentinel.txt"
         $sentinelContents = "BetterFingers installer data continuity sentinel"
         [IO.File]::WriteAllText($sentinelPath, $sentinelContents, [Text.Encoding]::UTF8)
+        $seedSettingsPath = Join-Path $qaDataRoot "profiles\installer-smoke.yaml"
+        $seedModelPath = Join-Path $qaDataRoot "models\installer-smoke-model.bin"
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $seedSettingsPath), (Split-Path -Parent $seedModelPath) | Out-Null
+        [IO.File]::WriteAllText($seedSettingsPath, "profile: preserved", [Text.Encoding]::UTF8)
+        [IO.File]::WriteAllBytes($seedModelPath, [byte[]](0..255))
+        $seedSettingsHash = (Get-FileHash -LiteralPath $seedSettingsPath -Algorithm SHA256).Hash
+        $seedModelHash = (Get-FileHash -LiteralPath $seedModelPath -Algorithm SHA256).Hash
+
+        # A registered NSIS upgrade replaces the old program tree. This file is
+        # deliberately outside the new payload and must not survive.
+        $obsoleteProgramPath = Join-Path $installDir "obsolete-upgrade-sentinel.bin"
+        [IO.File]::WriteAllBytes($obsoleteProgramPath, [byte[]](1, 3, 3, 7))
     }
 
     # ---- Install the installer under test ----
@@ -300,6 +322,15 @@ try {
         }
         if ((-not (Test-Path $sentinelPath)) -or ([IO.File]::ReadAllText($sentinelPath) -ne $sentinelContents)) {
             throw "Installer data-directory continuity failed: current install did not preserve the isolated sentinel"
+        }
+        if (Test-Path -LiteralPath $obsoleteProgramPath) {
+            throw "Upgrade left an obsolete program file behind: $obsoleteProgramPath"
+        }
+        if ((Get-FileHash -LiteralPath $seedSettingsPath -Algorithm SHA256).Hash -ne $seedSettingsHash) {
+            throw "Upgrade changed the seeded settings file."
+        }
+        if ((Get-FileHash -LiteralPath $seedModelPath -Algorithm SHA256).Hash -ne $seedModelHash) {
+            throw "Upgrade changed the seeded model bytes."
         }
         Write-Host "Installer data-directory continuity sentinel survived current install."
     }
@@ -426,6 +457,62 @@ try {
         throw "Uninstall left a registry entry behind: $uninstallRegPath"
     }
 
+    # Default uninstall is deliberately conservative: program files go, user
+    # data does not. This includes custom override roots, which the uninstaller
+    # is forbidden to discover or follow.
+    if (-not (Test-Path -LiteralPath $wakeModelPath -PathType Leaf) -or
+        (Get-FileHash -LiteralPath $wakeModelPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $wakeHash) {
+        throw "Default uninstall removed or changed downloaded model data."
+    }
+    if ($PreviousInstallerPath -ne "") {
+        if ((Get-FileHash -LiteralPath $seedSettingsPath -Algorithm SHA256).Hash -ne $seedSettingsHash -or
+            (Get-FileHash -LiteralPath $seedModelPath -Algorithm SHA256).Hash -ne $seedModelHash) {
+            throw "Default uninstall changed preserved settings or model data."
+        }
+    }
+
+    if ($ExerciseCleanupCategories) {
+        if ($canonicalDataRootExistedBefore) {
+            throw "Refusing category cleanup smoke because canonical data already existed before this run: $canonicalDataRoot"
+        }
+        $categoryCases = @(
+            @{ Flag = "/BF_DELETE_MODELS"; Selected = @("models\smoke.bin", "wake_models\smoke.bin") },
+            @{ Flag = "/BF_DELETE_RECORDINGS"; Selected = @("recordings\smoke.wav", "voices\smoke.wav") },
+            @{ Flag = "/BF_DELETE_HISTORY"; Selected = @("draft_history.json", "history.db", "exports\smoke.txt") },
+            @{ Flag = "/BF_DELETE_SETTINGS"; Selected = @("profiles\smoke.yaml", "contacts.json", "launcher_workflows.json") },
+            @{ Flag = "/BF_DELETE_LOGS"; Selected = @("tmp\smoke.tmp", "logs\smoke.log", "debug.log") }
+        )
+        $allCategoryPaths = @($categoryCases | ForEach-Object { $_.Selected } | ForEach-Object { $_ })
+        foreach ($case in $categoryCases) {
+            Install-Silently -Path $InstallerPath
+            foreach ($relativePath in $allCategoryPaths) {
+                $target = Join-Path $canonicalDataRoot $relativePath
+                New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+                [IO.File]::WriteAllText($target, "owned installer cleanup smoke", [Text.Encoding]::UTF8)
+            }
+            $metadata = Get-InstalledMetadata
+            $categoryUninstaller = Get-ChildItem -Path $installDir -Filter "Uninstall*.exe" | Select-Object -First 1
+            if (-not $categoryUninstaller) { throw "Category cleanup uninstaller was not found." }
+            $categoryProcess = Start-Process -FilePath $categoryUninstaller.FullName `
+                -ArgumentList @("/S", $case.Flag) -Wait -NoNewWindow -PassThru
+            if ($categoryProcess.ExitCode -ne 0) {
+                throw "Category cleanup $($case.Flag) failed with exit code $($categoryProcess.ExitCode)."
+            }
+            foreach ($relativePath in $allCategoryPaths) {
+                $exists = Test-Path -LiteralPath (Join-Path $canonicalDataRoot $relativePath)
+                if ($case.Selected -contains $relativePath) {
+                    if ($exists) { throw "$($case.Flag) left selected data behind: $relativePath" }
+                } elseif (-not $exists) {
+                    throw "$($case.Flag) removed an unselected category path: $relativePath"
+                }
+            }
+            if (Test-Path -LiteralPath $metadata.PSPath) {
+                throw "$($case.Flag) left an uninstall registry entry behind."
+            }
+        }
+        Write-Host "Every optional uninstall category removed only its selected canonical paths."
+    }
+
     $legs = if ($PreviousInstallerPath -ne "") { "install + upgrade + uninstall" } else { "install + uninstall" }
     Write-Host "Installer smoke test passed ($legs, exact identity/signature/version metadata, no-LLM fresh launch, real verified download, authenticated backend health, and clean uninstall)."
 } finally {
@@ -438,6 +525,11 @@ try {
     }
     if ($qaDataRoot -and (Test-Path $qaDataRoot)) {
         Remove-Item -LiteralPath $qaDataRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (-not $canonicalDataRootExistedBefore -and (Test-Path -LiteralPath $canonicalDataRoot)) {
+        # The test owned this previously-absent exact root. Never clean a root
+        # that predated the run.
+        Remove-Item -LiteralPath $canonicalDataRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
     if ($null -eq $previousDataDir) {
         Remove-Item Env:BETTERFINGERS_DATA_DIR -ErrorAction SilentlyContinue
