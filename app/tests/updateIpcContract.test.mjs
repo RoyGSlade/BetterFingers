@@ -30,9 +30,11 @@ test('preload exposes fixed no-argument actions and removes state listeners', ()
   }
   assert.match(preload, /ipcRenderer\.on\('updates:state', handler\)/);
   assert.match(preload, /return \(\) => ipcRenderer\.removeListener\('updates:state', handler\)/);
-  const updateBridge = preload.match(/updates:\s*\{([\s\S]*?)\n\s{2}\},\n\s{2}\/\/ Durable/)?.[1] || '';
-  assert.ok(updateBridge, 'updates bridge block must be extractable');
-  assert.doesNotMatch(updateBridge, /(?:url|channel|path|executable)\s*:/i);
+  for (const source of [preload, preload.replace(/\r?\n/g, '\r\n')]) {
+    const updateBridge = source.match(/updates:\s*\{([\s\S]*?)\r?\n\s{2}\},\r?\n\s{2}\/\/ Durable/)?.[1] || '';
+    assert.ok(updateBridge, 'updates bridge block must be extractable with LF or CRLF line endings');
+    assert.doesNotMatch(updateBridge, /(?:url|channel|path|executable)\s*:/i);
+  }
 });
 
 test('main schedules one delayed packaged check and guards destroyed renderer windows', () => {
