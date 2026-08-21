@@ -48,5 +48,26 @@ app/playwright-report/
 # deliberately under a separate path, not this one.
 app/artifacts/
 
-# multi-session collab runtime state
-.claude/collab/
+# Local coding-agent, editor, and collaboration tooling
+/.agents/
+/.claude/
+/.codex/
+/.vscode/
+/.mcp.json
+/AGENTS.md
+/ACCOMPLISH.md
+
+# Internal plans and archived execution logs
+/docs/BUILD_WEEK_LOG.md
+/docs/archive/
+/docs/release/ALPHA3_RELEASE_HANDOFF.md
+/docs/release/DECISIONS.md
+/docs/release/DIRECTOR_LOG.md
+/docs/release/KNOWN_LIMITATIONS.md
+/docs/release/OPERATOR_QA.md
+/docs/release/PRERELEASE_REHEARSAL.md
+/docs/release/PUBLISH_PLAN.md
+/docs/release/QA_NOTES.md
+/docs/release/RELEASE_BOARD.md
+/docs/release/TRUE_BETTERFINGERS_RELEASE_PLAN.md
+/docs/release/archive/

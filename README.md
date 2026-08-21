@@ -2,15 +2,13 @@
 
 **A private desktop speech editor.** Speak messy thoughts, watch them get refined by a
 local LLM, review the result, and place clean text into a focused target when the
-configured platform/backend supports it — all running 100% on your own machine. No
-cloud, no account, no subscription, no telemetry.
+configured platform/backend supports it. Core speech processing runs on your machine:
+no cloud inference, account, subscription, or telemetry.
 
 > A [Donaven Crenshaw](#about) project · MIT licensed · Windows + Linux
-> ⚠️ **Status: pre-release (alpha in progress).** The core dictation loop is under
-> qualification; see
-> [Project status](#project-status) for what is and isn't ready.
-
-<!-- TODO(M0): 15-second demo GIF here — voice → clean text landing in a real app. -->
+> **Status: public alpha.** [v1.1.0-alpha.3](https://github.com/RoyGSlade/BetterFingers/releases/tag/v1.1.0-alpha.3)
+> includes a signed Windows x64 installer. It is still alpha software; see
+> [Project status](#project-status) for the honest boundaries.
 
 ---
 
@@ -33,16 +31,16 @@ The whole product is built around one loop:
 
 ## Why it's different
 
-- **Private by design.** STT, LLM, and TTS all run locally; the only outbound network
-  traffic is model downloads. A built-in privacy dashboard enumerates every touchpoint
-  and wipes your data on demand.
+- **Private by design.** STT, LLM, and TTS run locally. Network access is used for
+  user-initiated model/runtime downloads and update checks, not cloud inference. A
+  built-in privacy dashboard enumerates data locations and wipes your data on demand.
 - **Smart, not literal.** LLM personas (Formal, Polished, Unhinged, and your own) rewrite
   what you say. Build new ones with a guided interview (**Persona Foundry**).
 - **Cross-app when supported.** Hotkeys, selection capture, and injection depend on the
   desktop/platform path; Wayland is best-effort with honest capability reporting.
 - **Respects your hardware.** The recommender reports model tiers from detected hardware;
   hardware compatibility remains subject to operator qualification.
-- **Free forever.** MIT-licensed and donation-supported. No paywall waiting to appear.
+- **MIT licensed.** No account, subscription, or paywall.
 
 ## Feature highlights
 
@@ -59,17 +57,14 @@ The whole product is built around one loop:
 ## Project status
 
 BetterFingers is a real local-first application with automated tests and a deep feature
-set. It is **not yet a tagged public release.** Remaining gates include operator QA,
-release reproducibility/package qualification, a signing decision, core-loop reliability
-evidence, injection compatibility, audio/hardware qualification, and platform-specific
-selection evidence. Current release truth lives in the
-[release board](docs/release/RELEASE_BOARD.md) and
-[prerelease rehearsal](docs/release/PRERELEASE_REHEARSAL.md), not the historical
-execution plan.
+set. **v1.1.0-alpha.3 is a public prerelease with a signed Windows x64 installer.** It is
+not a stable release: hardware/model compatibility, desktop injection paths, and
+platform-specific selection behavior still need broader outside testing. The release
+page and its CI-built assets are the public source of truth.
 
-**Platforms:** Windows and Linux are intended targets. The source `Ctrl+Alt+R`
-selection-rewrite workflow is qualified on X11 only; selected-text TTS, general
-hotkeys/injection, Wayland, and Windows remain unqualified. **macOS is not supported yet.**
+**Platforms:** Windows is the primary packaged target. Linux can run from source; the
+source `Ctrl+Alt+R` selection-rewrite workflow is qualified on X11, while Wayland paths
+remain compositor-dependent and best-effort. **macOS is not supported yet.**
 
 ## Hardware tiers
 
@@ -84,8 +79,8 @@ RAM. Bigger models are always opt-in.
 
 ## Privacy model
 
-Everything runs on-device. The **only** outbound requests are model/runtime downloads you
-initiate. No accounts, no analytics, no cloud inference. The Privacy dashboard
+Speech processing runs on-device. Network access is limited to model/runtime downloads
+and update checks. No accounts, analytics, or cloud inference. The Privacy dashboard
 (`GET /privacy`) lists every data location on disk with sizes and retention, and
 `POST /privacy/wipe` verifiably clears drafts, the searchable-history database, and raw
 recordings. See [DESIGN.md §9](DESIGN.md) for the full data-lifecycle model (a unified
@@ -93,11 +88,15 @@ recordings. See [DESIGN.md §9](DESIGN.md) for the full data-lifecycle model (a 
 
 ## Install
 
-> CI can build Windows NSIS and Linux AppImage artifacts on release tags, but no public
-> release package is currently qualified or shipped. A local AppImage build is not
-> clean-machine/install/signing evidence; for now, run from source.
+### Windows
 
-## Run from source (Linux)
+Download the installer from the
+**[v1.1.0-alpha.3 release](https://github.com/RoyGSlade/BetterFingers/releases/tag/v1.1.0-alpha.3)**.
+The published Windows installer is Authenticode-signed. Windows SmartScreen can still
+warn on a new, low-reputation alpha; verify the signature and release URL instead of
+downloading copies from third-party mirrors.
+
+### Run from source (Linux)
 
 ```bash
 # Hardware-aware bootstrap: creates ./.venv and installs the torch build that
@@ -138,10 +137,10 @@ Overrides: `BETTERFINGERS_LLAMA_SERVER=/path/to/llama-server`,
 - **End-to-end:** `cd app && npx playwright test` (needs a local LLM + `llama-server` on
   disk for the review-overlay spec; close any running instance first).
 - **JS syntax check:** `node --check app/src/renderer/main.js`.
-- Release status and qualification gates live in the
-  **[release board](docs/release/RELEASE_BOARD.md)** and
-  [prerelease rehearsal](docs/release/PRERELEASE_REHEARSAL.md);
-  [DESIGN.md](DESIGN.md) is long-horizon product design.
+- Platform boundaries are documented in
+  [SUPPORTED_PLATFORMS.md](docs/release/SUPPORTED_PLATFORMS.md); Windows release signing
+  lives in [WINDOWS_SIGNING.md](docs/release/WINDOWS_SIGNING.md), and
+  [DESIGN.md](DESIGN.md) remains the product/architecture reference.
 
 ## Architecture
 
@@ -164,15 +163,16 @@ recordings, history, privacy). The boundary is an inspectable, version-gated RES
 ## Known limitations
 
 - No macOS build.
-- No signed installer / auto-update channel yet.
+- The signed Windows installer is still an alpha and may trigger SmartScreen reputation
+  warnings.
 - On X11, selection/copy and typing paths require `DISPLAY`, `xclip` (or `xsel`), and
   `xdotool` where those paths are used. Wayland best-effort paths use `WAYLAND_DISPLAY`,
   `wl-copy`/`wl-paste` from `wl-clipboard`, and `wtype` or `ydotool` where the
   compositor permits them; tool presence alone is not qualification.
 - Wayland global hotkeys and text injection are best-effort (OS limitation, not a bug),
   and Wayland is not qualified on the current host.
-- Selected-text TTS (OR-13), general injection/PTT, Windows, package installation,
-  audio, hardware, and reliability remain unqualified.
+- Selected-text TTS, injection/PTT, audio devices, and model performance still vary by
+  desktop, hardware, and target application.
 - A local LLM has a real resource footprint on weak hardware — use the tier recommender.
 - Voice cloning ships a consent + QA gate but **no synthesis engine is bundled yet**.
 
