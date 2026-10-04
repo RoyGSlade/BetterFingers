@@ -9,9 +9,18 @@ dictation_commands.py, these commands are always-on during active dictation
 (profile-gated), not context-gated the way app-control commands are —
 "scratch that" mid-dictation is expected and safe to act on, same risk
 category as "new paragraph".
+
+Negation: a command a negation governs ("don't scratch that", "do not delete
+last word", "scratch that? No, don't.") is NOT a command -- both
+``parse_edit_command`` and ``apply_inline_edits`` skip it, so the words fall
+through to ordinary dictation. The rule is shared with the app-command parser
+(``backend/commands/negation.py``); benign phrasing such as "no, scratch that"
+or "scratch that, no problem" still fires.
 """
 import re
 from dataclasses import dataclass, field
+
+from backend.commands import negation
 
 # Applied first, longest phrases first so a more specific phrase wins.
 _COMMANDS = [
@@ -37,29 +46,71 @@ class EditCommand:
     args: dict = field(default_factory=dict)
 
 
+_COMMAND_PATTERNS = [(re.compile(pattern), action) for pattern, action in _COMMANDS]
+
+
+def _any_negated(matches, text):
+    """True when ANY mention of the command in ``text`` is governed by a
+    negation. One negated mention refuses the command outright: "scratch that,
+    no, don't scratch that" must not scratch."""
+    return any(negation.is_negated(text, m.start(), m.end()) for m in matches)
+
+
 def parse_edit_command(text):
     """Classify a transcript into an EditCommand, or None if it contains no
-    recognized editing command. Only inspects the first match found."""
+    recognized editing command. Only inspects the first match found, in the
+    priority order replace > capitalize > the fixed phrases above. A command
+    whose phrase is negated ("don't scratch that") is skipped, never executed,
+    and never swaps in a different action for the same words."""
     if not text:
         return None
     lowered = text.lower()
 
-    replace_match = _REPLACE_RE.search(lowered)
-    if replace_match:
-        return EditCommand(
-            action="replace",
-            args={"old": replace_match.group(1).strip(), "new": replace_match.group(2).strip()},
-        )
+    found = []
+    vetoed = set()
 
-    capitalize_match = _CAPITALIZE_RE.search(lowered)
-    if capitalize_match:
-        return EditCommand(action="capitalize_word", args={"word": capitalize_match.group(1).strip()})
+    replace_matches = list(_REPLACE_RE.finditer(lowered))
+    if replace_matches:
+        if _any_negated(replace_matches, lowered):
+            vetoed.add("replace")
+        else:
+            first = replace_matches[0]
+            found.append(EditCommand(
+                action="replace",
+                args={"old": first.group(1).strip(), "new": first.group(2).strip()},
+            ))
 
-    for pattern, action in _COMMANDS:
-        if re.search(pattern, lowered):
-            return EditCommand(action=action)
+    capitalize_matches = list(_CAPITALIZE_RE.finditer(lowered))
+    if capitalize_matches:
+        if _any_negated(capitalize_matches, lowered):
+            vetoed.add("capitalize_word")
+        else:
+            found.append(EditCommand(
+                action="capitalize_word", args={"word": capitalize_matches[0].group(1).strip()},
+            ))
 
+    for pattern, action in _COMMAND_PATTERNS:
+        matches = list(pattern.finditer(lowered))
+        if not matches:
+            continue
+        if _any_negated(matches, lowered):
+            vetoed.add(action)
+        else:
+            found.append(EditCommand(action=action))
+
+    for command in found:
+        if command.action not in vetoed:
+            return command
     return None
+
+
+def _first_match_unless_negated(pattern, text):
+    """First match of ``pattern`` in ``text`` for an in-utterance edit, or None
+    when there is none or a negation governs any mention of it."""
+    matches = list(pattern.finditer(text))
+    if not matches or _any_negated(matches, text):
+        return None
+    return matches[0]
 
 
 def delete_last_word(text):
@@ -136,41 +187,44 @@ def apply_inline_edits(text):
     """Apply editing commands that target the text preceding them within the
     same utterance ("...brown fox delete last word" -> "...brown"). This does
     NOT handle `scratch_that` — that targets the *previous* utterance via
-    utterance_history, which only the caller (server.py) has access to."""
+    utterance_history, which only the caller (server.py) has access to.
+
+    An edit whose phrase a negation governs ("do not delete last word") is left
+    in the text as plain words, exactly as ``parse_edit_command`` refuses it."""
     if not text:
         return text
     result = text
 
-    match = _DELETE_LAST_WORD_RE.search(result)
+    match = _first_match_unless_negated(_DELETE_LAST_WORD_RE, result)
     if match:
         before = delete_last_word(result[: match.start()])
         after = result[match.end() :]
         result = (before + after).strip()
 
-    match = _UNDO_LAST_SENTENCE_RE.search(result)
+    match = _first_match_unless_negated(_UNDO_LAST_SENTENCE_RE, result)
     if match:
         before = delete_last_sentence(result[: match.start()])
         after = result[match.end() :].strip()
         result = f"{before} {after}".strip() if after else before
 
-    match = _QUOTE_THAT_RE.search(result)
+    match = _first_match_unless_negated(_QUOTE_THAT_RE, result)
     if match:
         before = result[: match.start()].strip()
         after = result[match.end() :]
         result = (quote(before) + after) if before else after.strip()
 
-    match = _REPLACE_RE.search(result)
+    match = _first_match_unless_negated(_REPLACE_RE, result)
     if match:
         stripped = (result[: match.start()] + result[match.end() :]).strip()
         result = replace_word(stripped, match.group(1).strip(), match.group(2).strip())
 
-    match = _CAPITALIZE_RE.search(result)
+    match = _first_match_unless_negated(_CAPITALIZE_RE, result)
     if match:
         stripped = (result[: match.start()] + result[match.end() :]).strip()
         result = capitalize_word(stripped, match.group(1).strip())
 
     for pattern, action in _STRUCTURAL_PATTERNS:
-        match = pattern.search(result)
+        match = _first_match_unless_negated(pattern, result)
         if match:
             insert = structural_insert(action)
             result = result[: match.start()].rstrip() + insert + result[match.end() :].lstrip()

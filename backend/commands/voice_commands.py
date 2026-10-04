@@ -9,7 +9,13 @@ mode toggled on, or the utterance carries a command prefix like
 "BetterFingers, ..."). Outside those contexts, ordinary dictation containing
 a phrase like "send it" inside a paragraph must NOT be treated as a command.
 The one exception is "emergency stop", which always resolves regardless of
-context or confidence — it's a safety valve, not a risky action.
+context or confidence — it's a safety valve, not a risky action. It is checked
+before, and is never subject to, the negation veto.
+
+A command a negation governs ("don't send it", "send it? No, don't.") never
+resolves; benign phrasing around a command ("no, send it", "send it, no
+problem") does. The rule lives in ``backend/commands/negation.py`` and is shared
+with the dictation-time edit parser (``voice_edit_commands``).
 
 Wave 9 adds a *classification* layer on top of this parser (see the second half
 of the file). It does not replace anything above: ``parse_command`` keeps its
@@ -23,14 +29,12 @@ import difflib
 import re
 from dataclasses import dataclass
 
+from backend.commands import negation
+
 FUZZY_THRESHOLD = 0.82
 
 _PREFIX_RE = re.compile(r"^\s*(?:hey\s+)?betterfingers[,:]?\s+", re.IGNORECASE)
 _EMERGENCY_STOP_RE = re.compile(r"\bemergency\s+stop\b", re.IGNORECASE)
-_NEGATION_RE = re.compile(
-    r"\b(?:no|not|never|cannot|(?:don|won|can|shouldn|wouldn|couldn|mustn|isn|aren|wasn|weren|haven|hasn|hadn|didn|doesn)['’]?t)\b",
-    re.IGNORECASE,
-)
 _SWITCH_PERSONA_RE = re.compile(
     r"\b(?:switch\s+to|use)\s+(?:the\s+)?([a-z][a-z '-]*)", re.IGNORECASE
 )
@@ -95,29 +99,52 @@ def parse_command(text, context=None):
     if not _context_is_clear(context, had_prefix):
         return None
 
-    # Conservative veto before contained/fuzzy positives: cancellation words
-    # in a command utterance must never turn into the action being refused.
-    if _NEGATION_RE.search(stripped_lower):
-        return None
+    # Negation veto (backend/commands/negation.py, shared with the dictation-time
+    # edit parser): a command is refused when a negation GOVERNS it -- "don't
+    # send it", "send it? No, don't." -- not when the utterance merely contains
+    # a harmless "no problem"/"never mind,"/"no," next to it. The veto is scoped
+    # to the command it governs, and a refused phrase is never rescued by the
+    # fuzzy fallback below.
+    vetoed = False
 
     switch_match = _SWITCH_PERSONA_RE.search(stripped_lower)
     if switch_match:
-        return VoiceCommandIntent(
-            kind="app_action", action="switch_persona", confidence=1.0,
-            requires_confirmation=False, target=switch_match.group(1).strip(),
-        )
+        if negation.is_negated(stripped_lower, switch_match.start(), switch_match.end()):
+            vetoed = True
+        else:
+            return VoiceCommandIntent(
+                kind="app_action", action="switch_persona", confidence=1.0,
+                requires_confirmation=False, target=switch_match.group(1).strip(),
+            )
 
     # Exact/contained phrase match first (longest phrase first so a more
     # specific phrase wins), then a fuzzy whole-utterance fallback for near-miss ASR.
+    hits = []
+    vetoed_actions = set()
     for action, kind, phrases, requires_confirmation in sorted(
         _VOCABULARY, key=lambda v: max(len(p) for p in v[2]), reverse=True
     ):
         for phrase in phrases:
-            if re.search(r"\b" + re.escape(phrase) + r"\b", stripped_lower):
-                return VoiceCommandIntent(
-                    kind=kind, action=action, confidence=1.0,
-                    requires_confirmation=requires_confirmation,
-                )
+            spans = [m.span() for m in re.finditer(r"\b" + re.escape(phrase) + r"\b", stripped_lower)]
+            if not spans:
+                continue
+            # ANY negated mention of an action refuses that action outright
+            # ("send it, no, don't send it" must not send).
+            if any(negation.is_negated(stripped_lower, start, end) for start, end in spans):
+                vetoed_actions.add(action)
+            else:
+                hits.append((action, kind, requires_confirmation))
+    for action, kind, requires_confirmation in hits:
+        if action not in vetoed_actions:
+            return VoiceCommandIntent(
+                kind=kind, action=action, confidence=1.0,
+                requires_confirmation=requires_confirmation,
+            )
+    if vetoed or vetoed_actions:
+        return None
+
+    if negation.is_negated(stripped_lower):
+        return None
 
     best = None
     for action, kind, phrases, requires_confirmation in _VOCABULARY:
