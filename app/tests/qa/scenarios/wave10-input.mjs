@@ -140,8 +140,6 @@ async function reachRehearsal(page, { delivery = 'review_only' } = {}) {
   await expect(page.locator('#sdUtilGameSetupDictationValue')).toHaveText('button:4');
   await page.click('#sdUtilGameSetupRecordCommand');
   await expect(page.locator('#sdUtilGameSetupCommandValue')).toHaveText('button:5');
-  await page.fill('#sdUtilGameSetupChatKey', 'Enter');
-  await page.dispatchEvent('#sdUtilGameSetupChatKey', 'change');
   await page.selectOption('#sdUtilGameSetupDelivery', delivery);
 }
 
