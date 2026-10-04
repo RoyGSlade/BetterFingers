@@ -3365,51 +3365,14 @@ def _build_privacy_export():
     }
 
 
-@app.get("/privacy/export")
-async def privacy_export():
-    """Export the user's own data — one bundle, generated from the registry."""
-    return await run_in_threadpool(_build_privacy_export)
-
-
-@app.delete("/privacy/persona-learning")
-async def privacy_clear_persona_learning():
-    """Delete every learned example for every persona, then verify.
-
-    Goes through the registry's category wipe (which goes through
-    PersonaLearningStore.clear_all()) rather than unlinking the file, so the
-    store's atomic-write and dedupe invariants hold and the result is checked
-    by re-reading rather than trusted. Keys are dropped, not blacklisted — a
-    later approved example recreates them.
-    """
-    category = data_categories.get_registry().get("persona_learning")
-
-    def _clear():
-        wipe = category.wipe()
-        verification = category.verify()
-        return {
-            "ok": verification.ok,
-            "wiped": wipe.ok,
-            "message": (wipe.message if verification.ok else
-                        "Examples remain after clearing; nothing is being claimed "
-                        "that did not happen."),
-            "remaining": verification.remaining,
-            "detail": verification.detail,
-        }
-
-    result = await run_in_threadpool(_clear)
-    return JSONResponse(status_code=200 if result["ok"] else 500, content=result)
-
-
-@app.get("/privacy/persona-learning/verify")
-async def privacy_persona_learning_verify():
-    """Prove the learned-examples store is empty by re-reading it.
-
-    "Clear all" returning ok is the store's claim about its own write; this is
-    the independent check the privacy screen shows next to it.
-    """
-    category = data_categories.get_registry().get("persona_learning")
-    result = category.verify()
-    return {"ok": result.ok, "remaining": result.remaining, "detail": result.detail}
+# Privacy routes (/privacy, /privacy/export, /privacy/wipe, /privacy/modes,
+# /privacy/factory-reset[/verify], /privacy/persona-learning[/verify]) are their own
+# slice in backend/api/routes/privacy.py (R9); registered via app.include_router at
+# the end of this file. ONLY the thin handlers and their two request models moved:
+# _perform_privacy_wipe, _perform_factory_reset, the quiescence guards
+# (privacy_wipe_in_progress, output_coordinator, _reject_if_wiping, _drain_*),
+# get_privacy_report, _build_privacy_export, _wipe_status_code/_WIPE_ERROR_STATUS and
+# FACTORY_RESET_CONFIRMATION all stay here and are read by the router as s.<name>.
 
 
 def get_privacy_report():
@@ -3525,28 +3488,6 @@ def get_privacy_report():
             "draft_history_limit": MAX_DRAFT_HISTORY,
         },
     }
-
-
-@app.get("/privacy")
-async def privacy_report():
-    return get_privacy_report()
-
-
-class PrivacyWipeRequest(BaseModel):
-    wipe_voices: bool = False
-    # Defaults to the lightest mode, which is exactly what the shipped button
-    # has always done. Widening the default would silently delete personas,
-    # dictionaries and macros for anyone whose client predates this field.
-    mode: str = data_registry.WIPE_MODE_CONVERSATIONS
-
-
-class FactoryResetRequest(BaseModel):
-    """A factory reset is unrecoverable, so the request has to carry proof the
-    user meant it. ``confirm`` must be the exact phrase — a boolean flag is
-    one stray ``true`` in a client away from erasing an install."""
-
-    confirm: str = ""
-    delete_downloaded_models: bool = False
 
 
 FACTORY_RESET_CONFIRMATION = "DELETE EVERYTHING"
@@ -3954,42 +3895,6 @@ def _wipe_status_code(result: dict) -> int:
     return _WIPE_ERROR_STATUS.get(result.get("error"), 500)
 
 
-@app.post("/privacy/wipe")
-async def privacy_wipe(request: PrivacyWipeRequest = PrivacyWipeRequest()):
-    """Delete app-generated conversational data: drafts, the draft-history
-    file, the searchable history database (C8), and persisted raw-audio
-    recordings (C6), plus in-memory queues. Also drains any active TTS
-    playback and voice-clone conversion and clears the synthesized-audio
-    cache unconditionally (it holds spoken user text regardless of the
-    wipe_voices toggle). Models and profiles are intentionally NOT touched;
-    cloned voice samples are removed only when explicitly requested. Note:
-    without at-rest encryption this is logical deletion — nothing readable
-    remains through the app or its files, but SSD-level forensic erasure is
-    not promised.
-
-    Returns an honest HTTP status (see _wipe_status_code): a wipe that did not
-    fully succeed never reports 200."""
-    result = await run_in_threadpool(_perform_privacy_wipe, request.wipe_voices, request.mode)
-    return JSONResponse(status_code=_wipe_status_code(result), content=result)
-
-
-@app.get("/privacy/modes")
-async def privacy_wipe_modes():
-    """What each mode would delete, right now, with real sizes.
-
-    The confirmation dialog reads this instead of carrying its own copy of the
-    list. That is the whole point: the sentence the user agrees to and the
-    sweep that runs are generated from one inventory.
-    """
-    registry = data_categories.get_registry()
-    return {
-        "ok": True,
-        "modes": {mode: data_lifecycle.preview_mode(registry, mode)
-                  for mode in sorted(data_registry.WIPE_MODES)},
-        "factory_reset_confirmation": FACTORY_RESET_CONFIRMATION,
-    }
-
-
 def _perform_factory_reset(delete_downloaded_models: bool):
     """Run the declared factory reset under the same quiescence protocol the
     privacy wipe uses.
@@ -4024,42 +3929,6 @@ def _perform_factory_reset(delete_downloaded_models: bool):
                     "The reset finished with data still on disk — see reset.failed "
                     "and residual_files. Nothing is being claimed that did not happen."),
     }
-
-
-@app.post("/privacy/factory-reset")
-async def privacy_factory_reset(request: FactoryResetRequest):
-    """Erase every declared store — Python-owned and Electron-owned — and then
-    prove it by re-reading the disk.
-
-    ``data_registry`` has declared WIPE_MODE_FACTORY_RESET since phase 2.1 and
-    nothing performed it; this is that executor. Requires the exact
-    confirmation phrase (see FactoryResetRequest) because it is unrecoverable:
-    it removes the onboarding consent record, the overlay state, application
-    profiles, workflows, personas, dictionaries, macros and settings, not only
-    conversation data.
-    """
-    if request.confirm != FACTORY_RESET_CONFIRMATION:
-        return JSONResponse(status_code=400, content={
-            "ok": False, "error": "confirmation_required",
-            "message": (f"A factory reset requires confirm={FACTORY_RESET_CONFIRMATION!r}. "
-                        "Nothing was deleted."),
-        })
-    result = await run_in_threadpool(_perform_factory_reset,
-                                     request.delete_downloaded_models)
-    status = 200 if result.get("ok") else _WIPE_ERROR_STATUS.get(result.get("error"), 500)
-    return JSONResponse(status_code=status, content=result)
-
-
-@app.get("/privacy/factory-reset/verify")
-async def privacy_factory_reset_verify():
-    """Re-read the disk and report whether a factory reset actually landed.
-
-    Deliberately a separate GET with no deletion path: the Settings surface
-    offers "check again" after a failed reset, and a user re-checking must not
-    be able to trigger a second erase.
-    """
-    registry = data_categories.get_registry()
-    return await run_in_threadpool(data_lifecycle.verify_factory_reset, registry)
 
 
 # Recordings (/recordings: list, retranscribe, delete one, delete all) and
@@ -4663,6 +4532,7 @@ from backend.api.routes import diagnostics as routes_diagnostics  # noqa: E402
 from backend.api.routes import models as routes_models  # noqa: E402
 from backend.api.routes import tts as routes_tts  # noqa: E402
 from backend.api.routes import drafts as routes_drafts  # noqa: E402
+from backend.api.routes import privacy as routes_privacy  # noqa: E402
 
 app.include_router(routes_foundry.router)
 app.include_router(routes_user_config.router)
@@ -4681,6 +4551,7 @@ app.include_router(routes_diagnostics.router)
 app.include_router(routes_models.router)
 app.include_router(routes_tts.router)
 app.include_router(routes_drafts.router)
+app.include_router(routes_privacy.router)
 from backend.api.routes import input_devices as input_devices_routes  # noqa: E402
 app.include_router(input_devices_routes.router)
 _foundry_sessions = routes_foundry._foundry_sessions
