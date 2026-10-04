@@ -27,6 +27,10 @@ FUZZY_THRESHOLD = 0.82
 
 _PREFIX_RE = re.compile(r"^\s*(?:hey\s+)?betterfingers[,:]?\s+", re.IGNORECASE)
 _EMERGENCY_STOP_RE = re.compile(r"\bemergency\s+stop\b", re.IGNORECASE)
+_NEGATION_RE = re.compile(
+    r"\b(?:no|not|never|cannot|(?:don|won|can|shouldn|wouldn|couldn|mustn|isn|aren|wasn|weren|haven|hasn|hadn|didn|doesn)['’]?t)\b",
+    re.IGNORECASE,
+)
 _SWITCH_PERSONA_RE = re.compile(
     r"\b(?:switch\s+to|use)\s+(?:the\s+)?([a-z][a-z '-]*)", re.IGNORECASE
 )
@@ -89,6 +93,11 @@ def parse_command(text, context=None):
     stripped_lower = stripped.lower().strip()
 
     if not _context_is_clear(context, had_prefix):
+        return None
+
+    # Conservative veto before contained/fuzzy positives: cancellation words
+    # in a command utterance must never turn into the action being refused.
+    if _NEGATION_RE.search(stripped_lower):
         return None
 
     switch_match = _SWITCH_PERSONA_RE.search(stripped_lower)
