@@ -296,7 +296,11 @@ class ServerLazyStartupTests(unittest.TestCase):
                 self.assertFalse(status_after.json()["hotkey_manager_started"])
 
     def test_warmup_returns_200_with_structured_llm_failure(self):
-        with TestClient(server.app) as client, patch.object(
+        # DummyTranscriber: this test is about LLM warmup, but TestClient
+        # startup runs the real warm-up thread (this module is exempt from
+        # conftest's warm-start guard), which would otherwise load the real
+        # Whisper model -- on CUDA once a GPU runtime is installed (~30 s).
+        with patch.object(server, "Transcriber", DummyTranscriber), TestClient(server.app) as client, patch.object(
             server, "get_engine", side_effect=RuntimeError("llama-server missing")
         ), patch.object(server, "get_engine_if_initialized", return_value=None):
             warmup = client.post(
