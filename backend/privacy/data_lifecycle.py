@@ -153,6 +153,30 @@ def make_wipe(paths_fn: Callable[[], list[Path]],
     return _wipe
 
 
+def artifacts_beside_live_file(paths_fn: Callable[[], list[Path]],
+                               live_path: str | os.PathLike) -> Callable[[], list[Path]]:
+    """A category's declared paths MINUS the live store file itself.
+
+    For a store that clears through its own API (persona learning, contacts) the
+    live file is the store's to rewrite, and it legitimately stays behind as an
+    empty envelope. Everything else the category declares — the ``.bak-v<N>``
+    copies and ``.corrupt`` quarantines ``store_migration`` leaves beside it —
+    is byte-for-byte user data that no store API knows about, so the wipe has to
+    remove it and the verification has to look for it.
+
+    This is a filter over ``paths_fn``, never a second definition of what the
+    category owns: wipe and verify both read the same declared list, so they
+    cannot disagree about it. The live file is matched by name (all of a
+    store's declared paths share one directory), which is immune to the path
+    spelling differences that make equality checks flaky.
+    """
+    live_name = os.path.basename(os.fspath(live_path))
+
+    def _artifacts() -> list[Path]:
+        return [p for p in paths_fn() if p.name != live_name]
+    return _artifacts
+
+
 def make_verify(paths_fn: Callable[[], list[Path]],
                 *, allow: Callable[[Path], bool] | None = None
                 ) -> Callable[[], VerificationResult]:

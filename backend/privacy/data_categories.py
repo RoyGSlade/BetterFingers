@@ -233,16 +233,30 @@ def _wipe_persona_learning() -> WipeResult:
     and silently stop working the moment the store gains an index or a second
     file. Keys are dropped, not blacklisted — a later add_example with fresh
     consent recreates them.
+
+    The store API only rewrites the live file. The category also declares the
+    ``.bak-v<N>`` copies (a v1 copy of the user's examples, written by the
+    v1->v2 migration) and ``.corrupt`` quarantines beside it, so those are
+    removed here too, from the SAME declared list the verification reads. Before
+    this, a user who had been through the migration could not wipe at all: the
+    verification (correctly) found their examples in the ``.bak-v1`` copy.
     """
     from backend.services.persona_learning import PersonaLearningStore
     store = PersonaLearningStore()
     path = store.path
     result = store.clear_all()
-    if result.get("ok") and not store.list_personas():
-        return WipeResult(ok=True, removed=[path],
-                          message="all learned persona examples cleared")
-    return WipeResult(ok=False, removed=[], error="persona_learning_clear_failed",
-                      message=str(result.get("message") or "personas remain after clear"))
+    cleared = bool(result.get("ok")) and not store.list_personas()
+    artifacts = data_lifecycle.make_wipe(
+        data_lifecycle.artifacts_beside_live_file(data_paths.persona_learning, path))()
+    if not cleared:
+        return WipeResult(ok=False, removed=artifacts.removed,
+                          error="persona_learning_clear_failed",
+                          message=str(result.get("message") or "personas remain after clear"))
+    if not artifacts.ok:
+        return WipeResult(ok=False, removed=[path, *artifacts.removed],
+                          error=artifacts.error, message=artifacts.message)
+    return WipeResult(ok=True, removed=[path, *artifacts.removed],
+                      message="all learned persona examples cleared")
 
 
 def _verify_persona_learning() -> VerificationResult:
@@ -288,15 +302,28 @@ def _verify_persona_learning() -> VerificationResult:
 
 def _wipe_contacts() -> WipeResult:
     """Clear through ``ContactStore`` for the same reason as persona learning:
-    the store owns its own atomicity and id bookkeeping."""
+    the store owns its own atomicity and id bookkeeping.
+
+    Like persona learning, the category declares more than the live file: the
+    ``.bak-v<N>`` / ``.corrupt`` siblings are copies of the user's contacts
+    (names, relationships, the notes they wrote about each person). They are
+    removed here from the same declared list ``_verify_contacts`` reads."""
     from backend.services.contacts import ContactStore
     store = ContactStore()
     path = store.path
     result = store.clear_all()
-    if result.get("ok") and store.count() == 0:
-        return WipeResult(ok=True, removed=[path], message="all contacts cleared")
-    return WipeResult(ok=False, removed=[], error="contacts_clear_failed",
-                      message=str(result.get("message") or "contacts remain after clear"))
+    cleared = bool(result.get("ok")) and store.count() == 0
+    artifacts = data_lifecycle.make_wipe(
+        data_lifecycle.artifacts_beside_live_file(data_paths.contacts, path))()
+    if not cleared:
+        return WipeResult(ok=False, removed=artifacts.removed,
+                          error="contacts_clear_failed",
+                          message=str(result.get("message") or "contacts remain after clear"))
+    if not artifacts.ok:
+        return WipeResult(ok=False, removed=[path, *artifacts.removed],
+                          error=artifacts.error, message=artifacts.message)
+    return WipeResult(ok=True, removed=[path, *artifacts.removed],
+                      message="all contacts cleared")
 
 
 def _verify_contacts() -> VerificationResult:
@@ -304,12 +331,22 @@ def _verify_contacts() -> VerificationResult:
     # ContactStore reads without migrating, so there is no write side effect to
     # avoid here (unlike persona_learning), and asking the store keeps a store
     # that reports contacts it cannot write from passing verification.
+    #
+    # The store only knows its live file, though, and the category declares
+    # more: a ``.bak-v<N>`` or ``.corrupt`` copy is the same contacts under
+    # another name. Verifying through the store alone let those sit on disk
+    # while the wipe reported success, so they are checked from the declared
+    # list too — the one the wipe deletes from.
     from backend.services.contacts import ContactStore
     store = ContactStore()
     count = store.count()
-    if count:
-        return VerificationResult(ok=False, remaining=[store.path],
-                                  detail=f"{count} contact(s) remain")
+    leftovers = [str(p) for p in data_lifecycle.artifacts_beside_live_file(
+        data_paths.contacts, store.path)()]
+    if count or leftovers:
+        remaining = ([store.path] if count else []) + leftovers
+        parts = ([f"{count} contact(s) remain"] if count else []) + (
+            [f"{len(leftovers)} backup/quarantine copy(ies) remain"] if leftovers else [])
+        return VerificationResult(ok=False, remaining=remaining, detail="; ".join(parts))
     return VerificationResult(ok=True, detail="no contacts remain")
 
 

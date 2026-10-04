@@ -31,6 +31,7 @@ be the exact failure this wave closes:
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -105,6 +106,10 @@ def _electron_files(filename: str) -> list[Path]:
 
 # --- Migration debris --------------------------------------------------------
 
+# The name after ``<store>.`` for a collision-renamed quarantine:
+# ``f"{path}.{int(time.time())}.corrupt"``.
+_TIMESTAMPED_QUARANTINE = re.compile(r"[0-9]+\.corrupt")
+
 
 def _with_migration_siblings(*candidates: Path) -> list[Path]:
     """A store's own file plus the siblings ``store_migration`` leaves beside it.
@@ -115,8 +120,12 @@ def _with_migration_siblings(*candidates: Path) -> list[Path]:
 
     * ``<path>.bak-v<N>`` — written *before* each migration step, so a v1 store
       that migrates to v2 leaves a complete v1 copy on disk.
-    * ``<path>.corrupt`` / ``<path>.corrupt-<timestamp>`` — a quarantined file
-      that would not parse.
+    * a quarantined file that would not parse. The shapes the code really
+      writes are ``<path>.corrupt`` and, when that name is already taken,
+      ``<path>.<unix-ts>.corrupt`` (``store_migration``, ``dictionary`` and
+      ``macros`` all do this). ``<path>.corrupt-<anything>`` is also declared:
+      Wave 6 documented that spelling, no current code writes it, and a
+      quarantine copy under any such name is still a copy of the store.
 
     Wave 6 found these undeclared. For ``persona_learning.json`` that meant a
     verbatim copy of the user's dictated examples sat next to a store the
@@ -124,6 +133,11 @@ def _with_migration_siblings(*candidates: Path) -> list[Path]:
     wipe mode — and it was created by the very act of opening the store after
     an upgrade. A backup of user text is user text; it is declared with the
     store it came from, reported with it, and deleted with it.
+
+    Wave 6 missed the ``<unix-ts>.corrupt`` spelling (it matched only names
+    that *start with* ``corrupt``), so the second quarantine of any store sat
+    beside it undeclared. The match for it is deliberately exact — digits, then
+    ``.corrupt``, nothing else — so only the name the code writes is claimed.
 
     Globbed rather than enumerated because the quarantine name carries a
     timestamp and a store can accumulate one backup per version step.
@@ -136,7 +150,8 @@ def _with_migration_siblings(*candidates: Path) -> list[Path]:
                 continue
             for sibling in parent.glob(f"{candidate.name}.*"):
                 name = sibling.name[len(candidate.name) + 1:]
-                if name.startswith("bak-v") or name.startswith("corrupt"):
+                if (name.startswith("bak-v") or name.startswith("corrupt")
+                        or _TIMESTAMPED_QUARANTINE.fullmatch(name)):
                     out.append(sibling)
         except OSError:
             continue
