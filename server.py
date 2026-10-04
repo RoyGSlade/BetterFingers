@@ -1254,7 +1254,16 @@ def perform_output_action(text, action="copy_only", open_chat=False):
         from backend.domain.gaming_policy import resolve_send_action
         from backend.services.app_context import get_service
 
-        _ctx = get_service().current()
+        # Judge the window that will actually receive the text. The cached
+        # snapshot is refreshed only by the dashboard's 4 s poll (throttled when
+        # hidden), so alt-tabbing into a game and dictating used to decide
+        # against the previous window. poll() is one local foreground query;
+        # if it fails, fall back to the cached snapshot as before.
+        _service = get_service()
+        try:
+            _ctx = _service.poll()
+        except Exception:
+            _ctx = _service.current()
         requested_action = resolve_send_action(
             requested_action, active=bool((_ctx.get("gaming_policy") or {}).get("active")),
         )
