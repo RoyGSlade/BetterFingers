@@ -5,6 +5,15 @@ import os
 import queue
 import re
 import sys
+
+# Script mode (`python server.py`, and the PyInstaller entry script) runs this
+# file as __main__, and uvicorn serves THIS module's app. Register it under its
+# import name too, so the routers' lazy `import server` reach the live module
+# instead of importing a second copy with its own drafts, engines and runtime
+# state (tests/test_server_main_alias.py).
+if __name__ == "__main__":
+    sys.modules.setdefault("server", sys.modules[__name__])
+
 import shutil
 import tempfile
 import logging
