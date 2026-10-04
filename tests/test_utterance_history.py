@@ -1,6 +1,6 @@
 import unittest
 
-from utterance_history import Utterance, UtteranceHistory
+from backend.runtime.utterance_history import Utterance, UtteranceHistory
 
 
 def _utt(text, ts=0.0):

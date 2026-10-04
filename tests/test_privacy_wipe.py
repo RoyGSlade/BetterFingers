@@ -501,7 +501,7 @@ class KeyboardReviewTTSGatingTests(unittest.TestCase):
         # without actually blocking this thread on the real read lease, which
         # would deadlock synchronously against the write lease we're holding.
         fake = _FakeTTSEngine()
-        from model_runtime_coordinator import RuntimeBusyError
+        from backend.runtime.model_runtime_coordinator import RuntimeBusyError
 
         with patch.object(server, "ensure_tts_initialized", return_value=fake), \
              patch.object(server, "load_profile", return_value={"review_tts_enabled": True}), \

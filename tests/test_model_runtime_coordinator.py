@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-import model_runtime_coordinator as mrc
+from backend.runtime import model_runtime_coordinator as mrc
 import server
 
 

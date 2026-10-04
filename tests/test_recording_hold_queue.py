@@ -19,7 +19,7 @@ from unittest.mock import patch
 import numpy as np
 
 import server
-from dictation_coordinator import DictationCoordinator
+from backend.runtime.dictation_coordinator import DictationCoordinator
 
 
 class FakeRecording:

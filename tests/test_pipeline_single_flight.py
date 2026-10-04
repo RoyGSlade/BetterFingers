@@ -19,7 +19,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import server
-from dictation_coordinator import DictationCoordinator
+from backend.runtime.dictation_coordinator import DictationCoordinator
 
 
 class DictationCoordinatorTests(unittest.TestCase):

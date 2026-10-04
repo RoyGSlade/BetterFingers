@@ -3,7 +3,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from user_profile_manager import _sanitize_filename, UserProfileManager
+from backend.stores.user_profile_manager import _sanitize_filename, UserProfileManager
 
 
 class SanitizeFilenameTests(unittest.TestCase):

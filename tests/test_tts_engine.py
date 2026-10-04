@@ -5,8 +5,8 @@ import time
 import numpy as np
 from unittest.mock import Mock, patch
 
-from job_manager import JOBS, JobState
-from model_runtime_coordinator import ModelRuntimeCoordinator, RuntimeBusyError
+from backend.runtime.job_manager import JOBS, JobState
+from backend.runtime.model_runtime_coordinator import ModelRuntimeCoordinator, RuntimeBusyError
 from tts_engine import ReviewTTSEngine
 
 

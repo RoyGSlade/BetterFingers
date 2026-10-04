@@ -67,13 +67,17 @@ class _Base(unittest.TestCase):
         import ast
         import inspect
 
+        # Every segment of every dotted path, plus names imported with `from`,
+        # so moving a module into a package (backend.runtime.model_runtime_coordinator,
+        # `from backend.runtime import model_runtime_coordinator`) cannot slip past.
         names = set()
         for node in ast.walk(ast.parse(inspect.getsource(ac))):
             if isinstance(node, ast.Import):
-                names.update(alias.name.split(".")[0] for alias in node.names)
+                for alias in node.names:
+                    names.update(alias.name.split("."))
             elif isinstance(node, ast.ImportFrom) and node.module:
-                names.add(node.module.split(".")[0])
-                names.add(node.module)
+                names.update(node.module.split("."))
+                names.update(alias.name for alias in node.names)
         return names
 
 

@@ -29,7 +29,7 @@ from transcriber import Transcriber
 from streaming_transcriber import BatchCutter, StreamingTranscriptionSession
 from hotkey_manager import HotkeyManager
 from audio_gate import should_block_for_no_audio
-from user_profile_manager import profile_manager
+from backend.stores.user_profile_manager import profile_manager
 from backend.dev.intent_engine import intent_engine, IntentState
 from backend.dev.project_generator import project_generator
 from platform_capabilities import get_capabilities, get_injection_status
@@ -51,16 +51,16 @@ import data_registry
 import data_categories
 import data_lifecycle
 from backend.dev import mcp_client
-from job_manager import JOBS, JobState
+from backend.runtime.job_manager import JOBS, JobState
 from backend.runtime.dependencies import JobManagerCancellationBridge, PipelineDependencies
 from backend.services.dictation_pipeline import DictationPipeline, FunctionStage
 from backend.services.speech_signals import compute_speech_signals, summarize_signals
 from backend.services.audio_energy import rms_windows
 from backend.domain.contracts import to_dict as _contract_to_dict
-from output_coordinator import OutputCoordinator
+from backend.runtime.output_coordinator import OutputCoordinator
 from backend.commands import voice_commands
 from backend.commands import voice_edit_commands
-from utterance_history import Utterance, utterance_history
+from backend.runtime.utterance_history import Utterance, utterance_history
 from model_manager import (
     DEFAULT_MODEL,
     AVAILABLE_MODELS,
@@ -129,7 +129,7 @@ def _require_dev_routes():
 # development. Additional origins can be granted explicitly via env.
 # Pure startup-security policy lives in server_security.py (M6); re-imported here
 # so server.validate_startup_security / server._allowed_cors_origins still exist.
-from server_security import (  # noqa: E402
+from backend.api.security import (  # noqa: E402
     _LOOPBACK_HOSTS,
     _allowed_cors_origins,
     validate_startup_security,
@@ -280,13 +280,13 @@ cancellation_event = threading.Event()
 # a read-only mirror for status displays/hotkey guards; the coordinator owns
 # admission (atomic try_begin) so competing invocations are rejected instead of
 # interleaving (a boolean is not a mutex).
-from dictation_coordinator import DictationCoordinator
+from backend.runtime.dictation_coordinator import DictationCoordinator
 
 dictation_coordinator = DictationCoordinator(cancellation_event=cancellation_event)
 # Read/write leases guarding the model runtimes (STT/LLM/TTS): inference takes
 # a read lease, destructive ops (unload/reload/select/delete) take an exclusive
 # write lease that fails fast (→ 409) while inference is active.
-from model_runtime_coordinator import ModelRuntimeCoordinator, RuntimeBusyError
+from backend.runtime.model_runtime_coordinator import ModelRuntimeCoordinator, RuntimeBusyError
 
 model_runtime = ModelRuntimeCoordinator()
 # Resource ledger + admission control (DESIGN.md M6): each evictor is the
@@ -1150,7 +1150,7 @@ def get_active_long_draft_warning_words():
 # Pure send/review-gating policy lives in send_policy.py (M6); re-imported so
 # server.evaluate_confidence_send_policy / server.count_draft_tokens still exist.
 # The config readers below stay here (tests patch server.load_profile).
-from send_policy import count_draft_tokens, evaluate_confidence_send_policy  # noqa: E402
+from backend.output.send_policy import count_draft_tokens, evaluate_confidence_send_policy  # noqa: E402
 
 
 def update_draft_review_fields(draft):
@@ -4920,7 +4920,7 @@ def gather_support_report():
     """
     import platform as _platform
 
-    import support_report
+    from backend.services import support_report
 
     generated_at = datetime.now(timezone.utc).isoformat()
 

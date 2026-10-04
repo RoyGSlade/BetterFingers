@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-import dictation_coordinator as dc
+from backend.runtime import dictation_coordinator as dc
 import history_store
 import recordings
 import server

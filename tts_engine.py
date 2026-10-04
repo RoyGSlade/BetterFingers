@@ -12,9 +12,9 @@ from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 import sounddevice as sd
-from job_manager import JOBS, JobState
+from backend.runtime.job_manager import JOBS, JobState
 from log_redaction import redact_user_text
-from model_runtime_coordinator import RuntimeBusyError
+from backend.runtime.model_runtime_coordinator import RuntimeBusyError
 from utils import get_user_data_path
 import voice_clone_engine
 from tts_text import apply_pause_style, normalize_for_speech

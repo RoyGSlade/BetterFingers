@@ -1,6 +1,6 @@
 import unittest
 
-import support_report
+from backend.services import support_report
 
 
 def _sample_data():
