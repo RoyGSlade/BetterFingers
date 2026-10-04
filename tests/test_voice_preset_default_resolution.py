@@ -19,6 +19,7 @@ import unittest
 from unittest.mock import patch
 
 import server
+from backend.api.routes import tts as routes_tts
 
 
 def _preset(name, **overrides):
@@ -51,7 +52,7 @@ class ResolveVoiceDefaultPresetLayerTests(unittest.TestCase):
         # brightness/pause_style/preset_name/persona), all defaulting to
         # None -- using the real request model instead of a hand-rolled
         # double keeps this honest against either call site.
-        return server.TTSRequest(text="hello", **kwargs)
+        return routes_tts.TTSRequest(text="hello", **kwargs)
 
     def test_no_default_falls_through_to_profile_config(self):
         with patch("backend.stores.voice_presets.get_presets", return_value=[]), patch(

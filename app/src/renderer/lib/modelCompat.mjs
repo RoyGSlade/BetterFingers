@@ -13,7 +13,7 @@ const STATIC_KOKORO_VOICE_IDS = Object.freeze([
 
 // The three ONNX artifact names are selected explicitly by the loader.
 // backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_onnx_backend.
-// The voice IDs are only the server's static offerings (server.py::list_voices);
+// The voice IDs are only the server's static offerings (backend/api/routes/tts.py::list_voices);
 // the ONNX voice pack is checked dynamically by
 // backend/tts/tts_engine.py::ReviewTTSEngine._onnx_voice_exists. They are marked
 // assumptions below rather than being presented as runtime proof.
@@ -26,7 +26,7 @@ export const TTS_MODEL_COMPATIBILITY = Object.freeze([
     compatible: true,
     supportedVoiceIds: STATIC_KOKORO_VOICE_IDS,
     voiceSupport: 'assumption',
-    evidence: 'backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_onnx_backend; server.py::list_voices',
+    evidence: 'backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_onnx_backend; backend/api/routes/tts.py::list_voices',
   },
   // DERIVED: backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_onnx_backend
   // selects this exact artifact for fp16 and downloads it for the ONNX runtime.
@@ -36,7 +36,7 @@ export const TTS_MODEL_COMPATIBILITY = Object.freeze([
     compatible: true,
     supportedVoiceIds: STATIC_KOKORO_VOICE_IDS,
     voiceSupport: 'assumption',
-    evidence: 'backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_onnx_backend; server.py::list_voices',
+    evidence: 'backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_onnx_backend; backend/api/routes/tts.py::list_voices',
   },
   // DERIVED: backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_onnx_backend
   // selects this exact artifact for int8 and downloads it for the ONNX runtime.
@@ -46,7 +46,7 @@ export const TTS_MODEL_COMPATIBILITY = Object.freeze([
     compatible: true,
     supportedVoiceIds: STATIC_KOKORO_VOICE_IDS,
     voiceSupport: 'assumption',
-    evidence: 'backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_onnx_backend; server.py::list_voices',
+    evidence: 'backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_onnx_backend; backend/api/routes/tts.py::list_voices',
   },
   // DERIVED KNOWN-BAD: the native path constructs KPipeline
   // (backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_backend), while ONNX
