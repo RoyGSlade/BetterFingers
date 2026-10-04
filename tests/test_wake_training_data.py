@@ -2,8 +2,8 @@ import unittest
 
 import numpy as np
 
-import wake_training_data as wtd
-import wake_trainer as wt
+from backend.wake import wake_training_data as wtd
+from backend.wake import wake_trainer as wt
 
 
 class _StubScorer:

@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-import wake_trainer as wt
+from backend.wake import wake_trainer as wt
 
 
 def _make_separable(n, center, spread=0.15, seed=0):

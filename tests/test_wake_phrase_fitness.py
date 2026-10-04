@@ -2,7 +2,7 @@ import json
 import unittest
 from unittest import mock
 
-import wake_phrase_fitness as wpf
+from backend.wake import wake_phrase_fitness as wpf
 
 
 class WakePhraseFitnessTests(unittest.TestCase):

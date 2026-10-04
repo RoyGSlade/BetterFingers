@@ -5,9 +5,9 @@ from unittest.mock import patch
 
 import numpy as np
 
-import wake_models
-import wake_trainer
-import wake_training_service as wts
+from backend.wake import wake_models
+from backend.wake import wake_trainer
+from backend.wake import wake_training_service as wts
 
 
 class _StubScorer:

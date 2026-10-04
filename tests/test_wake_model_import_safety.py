@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 
 import server
 from backend.privacy import upload_safety as us
-import wake_models
+from backend.wake import wake_models
 
 
 class _TrackingSource:

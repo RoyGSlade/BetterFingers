@@ -11,10 +11,10 @@ from fastapi.testclient import TestClient
 
 from backend.stores import history_store
 from backend.stores import recordings
-import routes_wake
+from backend.api.routes import wake as routes_wake
 import server
 from backend.tts import voice_clone_engine
-import wake_setup_registry
+from backend.wake import wake_setup_registry
 
 
 class DummyTranscriber:

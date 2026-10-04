@@ -10,10 +10,10 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-import routes_wake
+from backend.api.routes import wake as routes_wake
 import server
-import wake_setup_registry
-import wake_word
+from backend.wake import wake_setup_registry
+from backend.wake import wake_word
 
 
 class _StubInputStream:
@@ -75,7 +75,7 @@ class WakeRoutesTests(unittest.TestCase):
 
     def test_enable_reports_unavailable_when_no_classifier(self):
         with patch(
-            "wake_word.build_openwakeword_detector",
+            "backend.wake.wake_word.build_openwakeword_detector",
             return_value=(None, False, "unavailable: no wake-phrase classifier selected"),
         ):
             with self._client() as client:
@@ -88,7 +88,7 @@ class WakeRoutesTests(unittest.TestCase):
 
     def test_enable_starts_listener_and_status_reflects_it(self):
         detector = _StubDetector()
-        with patch("wake_word.build_openwakeword_detector", return_value=(detector, True, "ready")), patch(
+        with patch("backend.wake.wake_word.build_openwakeword_detector", return_value=(detector, True, "ready")), patch(
             "sounddevice.InputStream", _StubInputStream
         ):
             with self._client() as client:
@@ -107,7 +107,7 @@ class WakeRoutesTests(unittest.TestCase):
 
     def test_double_enable_is_idempotent_one_stream(self):
         detector = _StubDetector()
-        with patch("wake_word.build_openwakeword_detector", return_value=(detector, True, "ready")), patch(
+        with patch("backend.wake.wake_word.build_openwakeword_detector", return_value=(detector, True, "ready")), patch(
             "sounddevice.InputStream", _StubInputStream
         ):
             with self._client() as client:
@@ -118,7 +118,7 @@ class WakeRoutesTests(unittest.TestCase):
 
     def test_disable_closes_stream(self):
         detector = _StubDetector()
-        with patch("wake_word.build_openwakeword_detector", return_value=(detector, True, "ready")), patch(
+        with patch("backend.wake.wake_word.build_openwakeword_detector", return_value=(detector, True, "ready")), patch(
             "sounddevice.InputStream", _StubInputStream
         ):
             with self._client() as client:
@@ -134,7 +134,7 @@ class WakeRoutesTests(unittest.TestCase):
                 raise RuntimeError("device busy")
 
         detector = _StubDetector()
-        with patch("wake_word.build_openwakeword_detector", return_value=(detector, True, "ready")), patch(
+        with patch("backend.wake.wake_word.build_openwakeword_detector", return_value=(detector, True, "ready")), patch(
             "sounddevice.InputStream", _BoomStream
         ):
             with self._client() as client:
@@ -147,7 +147,7 @@ class WakeRoutesTests(unittest.TestCase):
         """server.py's privacy-wipe path calls routes_wake.stop_wake_listener()
         directly (not via HTTP) -- verify it fully closes the stream."""
         detector = _StubDetector()
-        with patch("wake_word.build_openwakeword_detector", return_value=(detector, True, "ready")), patch(
+        with patch("backend.wake.wake_word.build_openwakeword_detector", return_value=(detector, True, "ready")), patch(
             "sounddevice.InputStream", _StubInputStream
         ):
             with self._client() as client:
@@ -165,7 +165,7 @@ class WakeRoutesTests(unittest.TestCase):
         self.assertIn("embedding_model", ids)
 
     def test_models_download_starts_background_job(self):
-        with patch("wake_models.download_wake_model") as mock_dl:
+        with patch("backend.wake.wake_models.download_wake_model") as mock_dl:
             mock_dl.side_effect = lambda model_id: time.sleep(0.05)
             with self._client() as client:
                 r = client.post("/wake/models/melspectrogram/download")
@@ -183,7 +183,7 @@ class WakeRoutesTests(unittest.TestCase):
         # A failing download must leave a queryable record (status=failed +
         # error), not vanish the instant the thread exits.
         routes_wake._download_jobs.pop("melspectrogram", None)
-        with patch("wake_models.download_wake_model", side_effect=RuntimeError("network down")):
+        with patch("backend.wake.wake_models.download_wake_model", side_effect=RuntimeError("network down")):
             with self._client() as client:
                 r = client.post("/wake/models/melspectrogram/download")
                 self.assertTrue(r.json()["background"])
@@ -206,7 +206,7 @@ class WakeRoutesTests(unittest.TestCase):
     def test_download_state_reports_truthful_downloaded(self):
         # download-state's "downloaded" reflects loadability, not mere presence.
         with patch(
-            "wake_models.backbone_status",
+            "backend.wake.wake_models.backbone_status",
             return_value={"downloaded": True, "verified": False, "loadable": False, "error": "digest_mismatch"},
         ):
             with self._client() as client:
@@ -240,7 +240,7 @@ class WakeRoutesTests(unittest.TestCase):
             self.assertNotIn(body["id"], ids_after)
 
     def test_import_model_rejects_oversized_file(self):
-        import wake_models
+        from backend.wake import wake_models
 
         payload = b"x" * (wake_models.MAX_IMPORT_BYTES + 1)
         with self._client() as client:
@@ -258,7 +258,7 @@ class WakeRoutesTests(unittest.TestCase):
 
     def test_wake_test_route_reports_score_peaks(self):
         detector = _StubDetector(score=0.42)
-        with patch("wake_word.build_openwakeword_detector", return_value=(detector, True, "ready")), patch(
+        with patch("backend.wake.wake_word.build_openwakeword_detector", return_value=(detector, True, "ready")), patch(
             "sounddevice.InputStream", _StubInputStream
         ):
             with self._client() as client:
@@ -272,7 +272,7 @@ class WakeRoutesTests(unittest.TestCase):
 
     def test_wake_test_reuses_already_enabled_listener(self):
         detector = _StubDetector(score=0.1)
-        with patch("wake_word.build_openwakeword_detector", return_value=(detector, True, "ready")), patch(
+        with patch("backend.wake.wake_word.build_openwakeword_detector", return_value=(detector, True, "ready")), patch(
             "sounddevice.InputStream", _StubInputStream
         ):
             with self._client() as client:
@@ -296,9 +296,9 @@ class WakeRoutesTests(unittest.TestCase):
         fake = {"ok": True, "verdict": "reliable", "threshold": 0.5,
                 "model_id": "trained_123", "n_pos": 40, "n_neg": 80}
         with patch.object(server, "ensure_tts_initialized", return_value=object()), patch(
-            "wake_training_service.preflight_training", return_value={"ok": True}
+            "backend.wake.wake_training_service.preflight_training", return_value={"ok": True}
         ), patch(
-            "wake_training_service.train_phrase_model", return_value=fake
+            "backend.wake.wake_training_service.train_phrase_model", return_value=fake
         ) as train:
             with self._client() as client:
                 start = client.post("/wake/train", json={"phrase": "hey fingers"})
@@ -370,7 +370,7 @@ class WakeRoutesTests(unittest.TestCase):
         self.assertEqual(result.status_code, 422)
 
     def test_qwen_capability_uses_backend_owned_hardware_snapshot(self):
-        import wake_qwen_capability
+        from backend.wake import wake_qwen_capability
 
         snapshot = wake_qwen_capability.HardwareSnapshot(
             platform="win32",
@@ -410,7 +410,7 @@ class WakeRoutesTests(unittest.TestCase):
 
     def test_rejected_phrase_never_loads_tts_or_starts_training(self):
         with patch.object(server, "ensure_tts_initialized") as load_tts, patch(
-            "wake_training_service.train_phrase_model"
+            "backend.wake.wake_training_service.train_phrase_model"
         ) as train:
             with self._client() as client:
                 result = client.post("/wake/train", json={"phrase": "hello"})
@@ -426,9 +426,9 @@ class WakeRoutesTests(unittest.TestCase):
         # A failed preflight returns the exact reason immediately and never
         # flips training into the running state.
         with patch.object(server, "ensure_tts_initialized", return_value=object()), patch(
-            "wake_training_service.preflight_training",
+            "backend.wake.wake_training_service.preflight_training",
             return_value={"ok": False, "message": "Wake backbone not ready: melspectrogram is not downloaded."},
-        ), patch("wake_training_service.train_phrase_model") as train:
+        ), patch("backend.wake.wake_training_service.train_phrase_model") as train:
             with self._client() as client:
                 r = client.post("/wake/train", json={"phrase": "hey fingers"})
         body = r.json()
@@ -456,8 +456,8 @@ class WakeRoutesTests(unittest.TestCase):
         positive = _wav_b64(np.ones(1600, dtype=np.float32) * 0.5)
         fake = {"ok": True, "verdict": "reliable", "model_id": "trained_9"}
         with patch.object(server, "ensure_tts_initialized", return_value=object()), patch(
-            "wake_training_service.preflight_training", return_value={"ok": True}
-        ), patch("wake_training_service.train_phrase_model", return_value=fake) as train:
+            "backend.wake.wake_training_service.preflight_training", return_value={"ok": True}
+        ), patch("backend.wake.wake_training_service.train_phrase_model", return_value=fake) as train:
             with self._client() as client:
                 start = client.post(
                     "/wake/train", json={"phrase": "hey fingers", "positive_clips": [positive]}
@@ -492,9 +492,9 @@ class WakeRoutesTests(unittest.TestCase):
     def test_train_failure_surfaces_in_status(self):
         fail = {"ok": False, "message": "Wake backbone not ready."}
         with patch.object(server, "ensure_tts_initialized", return_value=object()), patch(
-            "wake_training_service.preflight_training", return_value={"ok": True}
+            "backend.wake.wake_training_service.preflight_training", return_value={"ok": True}
         ), patch(
-            "wake_training_service.train_phrase_model", return_value=fail
+            "backend.wake.wake_training_service.train_phrase_model", return_value=fail
         ):
             with self._client() as client:
                 client.post("/wake/train", json={"phrase": "hey fingers"})
@@ -504,7 +504,7 @@ class WakeRoutesTests(unittest.TestCase):
 
     def test_wake_test_unavailable_when_no_classifier(self):
         with patch(
-            "wake_word.build_openwakeword_detector",
+            "backend.wake.wake_word.build_openwakeword_detector",
             return_value=(None, False, "unavailable: no wake-phrase classifier selected"),
         ):
             with self._client() as client:

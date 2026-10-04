@@ -3,8 +3,8 @@ wiped at every moment privacy requires."""
 
 import unittest
 
-import wake_pretrigger
-from wake_pretrigger import PreTriggerRing, WakeHandoff, build_command_capture_detector
+from backend.wake import wake_pretrigger
+from backend.wake.wake_pretrigger import PreTriggerRing, WakeHandoff, build_command_capture_detector
 
 try:
     import numpy as np

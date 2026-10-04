@@ -19,8 +19,8 @@ import numpy as np
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from backend.audio import recorder as recorder_mod  # noqa: E402
-import wake_pretrigger  # noqa: E402
-import wake_word  # noqa: E402
+from backend.wake import wake_pretrigger  # noqa: E402
+from backend.wake import wake_word  # noqa: E402
 
 
 class FakeSubscription:
@@ -272,7 +272,7 @@ class RoutesWakeHandoffTests(unittest.TestCase):
     disable — the four calls D-0025 listed as not landed."""
 
     def setUp(self):
-        import routes_wake
+        from backend.api.routes import wake as routes_wake
 
         self.routes_wake = routes_wake
         routes_wake._handoff = None

@@ -381,7 +381,7 @@ def register_trained_model(display_name, weights, metadata=None):
     Distinguished by origin="trained", license="self-trained" (no third-party
     weights, so nothing to redistribute), and a .npz filename that wake_word
     loads via wake_trainer.NumpyClassifierSession instead of onnxruntime."""
-    import wake_trainer
+    from backend.wake import wake_trainer
 
     os.makedirs(get_wake_models_dir(), exist_ok=True)
     manifest = load_imported_models()

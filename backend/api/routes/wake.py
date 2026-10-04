@@ -48,7 +48,7 @@ def get_wake_handoff():
     global _handoff
     with _lock:
         if _handoff is None:
-            import wake_pretrigger
+            from backend.wake import wake_pretrigger
 
             _handoff = wake_pretrigger.WakeHandoff()
         return _handoff
@@ -228,8 +228,8 @@ async def wake_phrase_preflight(request: WakePhrasePreflightRequest):
     deliberately a suitability screen rather than a promise that the phrase
     will work in the user's room; real enrollment tests remain mandatory.
     """
-    import wake_phrase_fitness
-    import wake_setup_registry
+    from backend.wake import wake_phrase_fitness
+    from backend.wake import wake_setup_registry
     import server
 
     wiping = server._reject_if_wiping("wake phrase setup")
@@ -274,7 +274,7 @@ def _collect_qwen_hardware_snapshot():
     import sys
 
     from backend.models import hardware_report
-    import wake_qwen_capability
+    from backend.wake import wake_qwen_capability
 
     report = hardware_report.get_hardware_report()
     gpu = report.get("gpu") or {}
@@ -343,7 +343,7 @@ def _collect_qwen_hardware_snapshot():
 @router.get("/wake/qwen/capability")
 async def wake_qwen_capability_status():
     """Return the backend-owned precheck; never starts/downloads Qwen."""
-    import wake_qwen_capability
+    from backend.wake import wake_qwen_capability
 
     snapshot = await run_in_threadpool(_collect_qwen_hardware_snapshot)
     return wake_qwen_capability.evaluate_precheck(snapshot).to_dict()
@@ -365,7 +365,7 @@ async def wake_status():
 
 @router.post("/wake/enable")
 async def wake_enable(request: WakeEnableRequest):
-    import wake_word
+    from backend.wake import wake_word
 
     global _listener, _status_reason
 
@@ -450,14 +450,14 @@ async def wake_disable():
 
 @router.get("/wake/models")
 async def wake_models_list():
-    import wake_models
+    from backend.wake import wake_models
 
     return {"models": wake_models.list_wake_models()}
 
 
 @router.post("/wake/models/{model_id}/download")
 def wake_model_download(model_id: str):
-    import wake_models
+    from backend.wake import wake_models
 
     if model_id not in wake_models.AVAILABLE_WAKE_MODELS:
         raise HTTPException(status_code=400, detail="Unknown wake model id")
@@ -502,7 +502,7 @@ def wake_model_download(model_id: str):
 
 @router.get("/wake/models/{model_id}/download-state")
 async def wake_model_download_state(model_id: str):
-    import wake_models
+    from backend.wake import wake_models
 
     with _download_jobs_lock:
         job = _download_jobs.get(model_id)
@@ -535,7 +535,7 @@ async def wake_model_download_state(model_id: str):
 
 @router.post("/wake/models/import")
 async def wake_model_import(name: str = Form(...), file: UploadFile = File(...)):
-    import wake_models
+    from backend.wake import wake_models
 
     suffix = os.path.splitext(file.filename or "")[1] or ".onnx"
     fd, tmp_path = tempfile.mkstemp(suffix=suffix)
@@ -561,7 +561,7 @@ async def wake_model_import(name: str = Form(...), file: UploadFile = File(...))
 
 @router.delete("/wake/models/{model_id}")
 async def wake_model_delete(model_id: str):
-    import wake_models
+    from backend.wake import wake_models
 
     if not wake_models.remove_imported_model(model_id):
         raise HTTPException(status_code=404, detail="Unknown imported wake model")
@@ -574,7 +574,7 @@ async def wake_test(request: WakeTestRequest = None):
     tester. Reuses the currently-enabled listener when there is one;
     otherwise spins up a temporary listener for just the test window and
     tears it down afterward (never left running, never persists anything)."""
-    import wake_word
+    from backend.wake import wake_word
 
     duration_s = max(0.0, float((request or WakeTestRequest()).duration_s))
 
@@ -626,7 +626,7 @@ def _decode_wav_clips(clips):
 
     import numpy as np
 
-    import wake_training_service
+    from backend.wake import wake_training_service
 
     decoded = []
     for index, item in enumerate(clips):
@@ -664,8 +664,8 @@ async def wake_train(request: WakeTrainRequest):
     thread spends up to a minute synthesizing audio that would otherwise fail
     with a generic empty-class error."""
     import server
-    import wake_phrase_fitness
-    import wake_training_service
+    from backend.wake import wake_phrase_fitness
+    from backend.wake import wake_training_service
 
     supplied_phrase = (request.phrase or "").strip()
     if not supplied_phrase:

@@ -19,7 +19,7 @@ the real Kokoro adapter (24 kHz -> 16 kHz mono) and the real backbone scorer.
 
 import numpy as np
 
-import wake_trainer
+from backend.wake import wake_trainer
 
 # Decoy phrases for synthetic negatives — ordinary words/short phrases that are
 # NOT a wake phrase, so the classifier learns the phrase rather than "any

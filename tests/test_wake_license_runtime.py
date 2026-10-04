@@ -13,8 +13,8 @@ from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import wake_models  # noqa: E402
-import wake_word  # noqa: E402
+from backend.wake import wake_models  # noqa: E402
+from backend.wake import wake_word  # noqa: E402
 
 
 class LicenseGateTests(unittest.TestCase):

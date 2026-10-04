@@ -3,7 +3,7 @@ from dataclasses import replace
 
 import pytest
 
-from wake_qwen_capability import (
+from backend.wake.wake_qwen_capability import (
     BENCHMARK_REQUIRED,
     CANDIDATE_VRAM_FLOOR_MIB,
     MIN_ACCEPTED_GENERATION_RATIO,

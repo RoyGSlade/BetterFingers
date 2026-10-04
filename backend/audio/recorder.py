@@ -132,7 +132,7 @@ class AudioRecorder:
         """
         try:
             if reason in HANDS_FREE_REASONS:
-                import wake_pretrigger
+                from backend.wake import wake_pretrigger
 
                 return wake_pretrigger.build_command_capture_detector(config)
             if not config.get("auto_stop_after_silence_enabled", False):

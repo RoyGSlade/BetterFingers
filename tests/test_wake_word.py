@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from wake_word import (
+from backend.wake.wake_word import (
     DEFAULT_THRESHOLD,
     FakeWakeDetector,
     OpenWakeWordDetector,
@@ -178,15 +178,15 @@ class OpenWakeWordDetectorTests(unittest.TestCase):
 
 class BuildOpenWakeWordDetectorTests(unittest.TestCase):
     def test_missing_backbone_model_reports_not_downloaded(self):
-        with patch("wake_models.is_backbone_model_downloaded", return_value=False):
+        with patch("backend.wake.wake_models.is_backbone_model_downloaded", return_value=False):
             detector, available, reason = build_openwakeword_detector()
         self.assertIsNone(detector)
         self.assertFalse(available)
         self.assertIn("not downloaded", reason)
 
     def test_corrupt_backbone_model_reports_verification_failure(self):
-        with patch("wake_models.is_backbone_model_downloaded", return_value=True), patch(
-            "wake_models.verify_wake_model_file", return_value={"ok": False, "reason": "digest_mismatch"}
+        with patch("backend.wake.wake_models.is_backbone_model_downloaded", return_value=True), patch(
+            "backend.wake.wake_models.verify_wake_model_file", return_value={"ok": False, "reason": "digest_mismatch"}
         ):
             detector, available, reason = build_openwakeword_detector()
         self.assertIsNone(detector)
@@ -194,12 +194,12 @@ class BuildOpenWakeWordDetectorTests(unittest.TestCase):
         self.assertIn("digest_mismatch", reason)
 
     def test_onnxruntime_failure_reports_unavailable(self):
-        import wake_models
+        from backend.wake import wake_models
 
-        with patch("wake_models.is_backbone_model_downloaded", return_value=True), patch(
-            "wake_models.verify_wake_model_file", return_value={"ok": True, "reason": "verified"}
+        with patch("backend.wake.wake_models.is_backbone_model_downloaded", return_value=True), patch(
+            "backend.wake.wake_models.verify_wake_model_file", return_value={"ok": True, "reason": "verified"}
         ), patch(
-            "wake_models.build_onnx_session",
+            "backend.wake.wake_models.build_onnx_session",
             side_effect=wake_models.WakeEngineUnavailable("onnxruntime not available"),
         ):
             with self.assertLogs(level="ERROR") as logs:
@@ -213,10 +213,10 @@ class BuildOpenWakeWordDetectorTests(unittest.TestCase):
         self.assertTrue(any("onnxruntime not available" in m for m in logs.output))
 
     def test_backbone_ready_with_no_classifier_is_honestly_unavailable(self):
-        with patch("wake_models.is_backbone_model_downloaded", return_value=True), patch(
-            "wake_models.verify_wake_model_file", return_value={"ok": True, "reason": "verified"}
-        ), patch("wake_models.get_wake_model_path", return_value="/fake/path.onnx"), patch(
-            "wake_models.build_onnx_session", return_value=_StubMelspecSession()
+        with patch("backend.wake.wake_models.is_backbone_model_downloaded", return_value=True), patch(
+            "backend.wake.wake_models.verify_wake_model_file", return_value={"ok": True, "reason": "verified"}
+        ), patch("backend.wake.wake_models.get_wake_model_path", return_value="/fake/path.onnx"), patch(
+            "backend.wake.wake_models.build_onnx_session", return_value=_StubMelspecSession()
         ):
             detector, available, reason = build_openwakeword_detector()
         self.assertIsInstance(detector, OpenWakeWordDetector)
@@ -225,10 +225,10 @@ class BuildOpenWakeWordDetectorTests(unittest.TestCase):
 
     def test_backbone_and_classifier_ready_is_available(self):
         sessions = iter([_StubMelspecSession(), _StubEmbeddingSession(), _StubClassifierSession()])
-        with patch("wake_models.is_backbone_model_downloaded", return_value=True), patch(
-            "wake_models.verify_wake_model_file", return_value={"ok": True, "reason": "verified"}
-        ), patch("wake_models.get_wake_model_path", return_value="/fake/path.onnx"), patch(
-            "wake_models.build_onnx_session", side_effect=lambda path: next(sessions)
+        with patch("backend.wake.wake_models.is_backbone_model_downloaded", return_value=True), patch(
+            "backend.wake.wake_models.verify_wake_model_file", return_value={"ok": True, "reason": "verified"}
+        ), patch("backend.wake.wake_models.get_wake_model_path", return_value="/fake/path.onnx"), patch(
+            "backend.wake.wake_models.build_onnx_session", side_effect=lambda path: next(sessions)
         ):
             detector, available, reason = build_openwakeword_detector(classifier_id="hey_fingers")
         self.assertIsInstance(detector, OpenWakeWordDetector)
@@ -236,12 +236,12 @@ class BuildOpenWakeWordDetectorTests(unittest.TestCase):
         self.assertEqual(reason, "ready")
 
     def test_user_imported_classifier_verification_failure_is_unavailable(self):
-        with patch("wake_models.is_backbone_model_downloaded", return_value=True), patch(
-            "wake_models.verify_wake_model_file", return_value={"ok": True, "reason": "verified"}
-        ), patch("wake_models.get_wake_model_path", return_value="/fake/path.onnx"), patch(
-            "wake_models.build_onnx_session", return_value=_StubMelspecSession()
+        with patch("backend.wake.wake_models.is_backbone_model_downloaded", return_value=True), patch(
+            "backend.wake.wake_models.verify_wake_model_file", return_value={"ok": True, "reason": "verified"}
+        ), patch("backend.wake.wake_models.get_wake_model_path", return_value="/fake/path.onnx"), patch(
+            "backend.wake.wake_models.build_onnx_session", return_value=_StubMelspecSession()
         ), patch(
-            "wake_models.verify_imported_model", return_value={"ok": False, "reason": "digest_mismatch"}
+            "backend.wake.wake_models.verify_imported_model", return_value={"ok": False, "reason": "digest_mismatch"}
         ):
             detector, available, reason = build_openwakeword_detector(
                 classifier_id="user_123", classifier_origin="user-imported"

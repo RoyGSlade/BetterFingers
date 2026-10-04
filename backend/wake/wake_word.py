@@ -68,7 +68,7 @@ class OpenWakeWordDetector(WakeDetector):
         label="wake_word",
         embed_window=None,
     ):
-        from wake_models import EMBED_WINDOW_DEFAULT, WakeScorer
+        from backend.wake.wake_models import EMBED_WINDOW_DEFAULT, WakeScorer
 
         self.scorer = WakeScorer(melspec_session, embedding_session)
         self.classifier_session = classifier_session
@@ -107,7 +107,7 @@ def build_openwakeword_detector(classifier_id=None, classifier_origin="bundled")
     missing/corrupt/undownloaded model degrades to a truthful "unavailable"
     status (D1) rather than crashing the caller.
     """
-    import wake_models
+    from backend.wake import wake_models
 
     # License gate, enforced by the code and not only by a test (WMP-3). It
     # runs first, before any file is hashed or loaded: whether an artifact may
@@ -160,7 +160,7 @@ def build_openwakeword_detector(classifier_id=None, classifier_origin="bundled")
             if path and path.lower().endswith(".npz"):
                 # Locally-trained NumPy head — no ONNX, plugs in via the
                 # duck-typed session wake_trainer provides.
-                import wake_trainer
+                from backend.wake import wake_trainer
                 classifier_session = wake_trainer.NumpyClassifierSession(wake_trainer.load_model(path))
             else:
                 classifier_session = wake_models.build_onnx_session(path)

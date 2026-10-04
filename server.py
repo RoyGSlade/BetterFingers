@@ -43,7 +43,7 @@ from backend.stores import macros
 from backend.stores import voice_presets
 from backend.tts import voice_clone_qa
 from backend.stores import history_store
-import wake_setup_registry
+from backend.wake import wake_setup_registry
 # Wave 6: the privacy report, every wipe mode, and the factory reset are all
 # generated from one declared inventory, so the screen cannot describe a store
 # the wipe misses (or miss one the screen describes).
@@ -2822,7 +2822,7 @@ def shutdown_event():
     stop_hotkey_manager()
     # Safety net in case /wake/disable was never called before shutdown --
     # idempotent, safe even if wake word was never enabled this run.
-    import routes_wake
+    from backend.api.routes import wake as routes_wake
     routes_wake.stop_wake_listener()
     # Last chance to put another application's microphone back. A clean
     # shutdown that skipped this would leave a journal for the next startup to
@@ -3516,7 +3516,7 @@ async def settings_export_profile(profile_name: str):
 @app.get("/capabilities")
 async def capabilities():
     from backend.audio import audio_status
-    import routes_wake
+    from backend.api.routes import wake as routes_wake
 
     payload = get_capabilities()
     push_to_mute_available = bool(payload.get("supports_input_injection", False))
@@ -3539,7 +3539,7 @@ async def capabilities():
 async def audio_runtime_status():
     from backend.audio import audio_input_broker
     from backend.audio import audio_status
-    import routes_wake
+    from backend.api.routes import wake as routes_wake
 
     from backend.platform.audio_privacy import lease as privacy_lease
     lease = privacy_lease.get_lease()
@@ -4201,7 +4201,7 @@ def get_privacy_report():
     ]
 
     import app_paths
-    import routes_wake
+    from backend.api.routes import wake as routes_wake
 
     # Wave 6 (Gate 6): the authoritative store table, generated from the data
     # registry. `data_locations` above is the six-entry summary the current
@@ -4434,7 +4434,7 @@ def _perform_privacy_wipe(wipe_voices: bool, mode: str = data_registry.WIPE_MODE
         #    consumer) -- before draining the recorder, so no audio consumer
         #    is left running while we quiesce the rest of the pipeline.
         #    Idempotent/no-op-safe: True even if wake word was never enabled.
-        import routes_wake
+        from backend.api.routes import wake as routes_wake
         cleared["wake_listener_stopped"] = bool(routes_wake.stop_wake_listener())
         # The pre-trigger ring is the only place in the wake pipeline where raw
         # audio lives at all, so "no retained audio" has to include it.
@@ -6306,7 +6306,7 @@ async def generate_project(data: dict):
 import routes_foundry  # noqa: E402
 import routes_user_config  # noqa: E402
 import routes_models_resources  # noqa: E402
-import routes_wake  # noqa: E402
+from backend.api.routes import wake as routes_wake  # noqa: E402
 from backend.api.routes import personas as routes_personas  # noqa: E402
 from backend.api.routes import message_rescue as routes_message_rescue  # noqa: E402
 from backend.api.routes import contacts as routes_contacts  # noqa: E402

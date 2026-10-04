@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import wake_models as wm
+from backend.wake import wake_models as wm
 
 
 class CatalogIntegrityTests(unittest.TestCase):
@@ -42,7 +42,7 @@ class _IsolatedWakeModelsDirMixin:
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        self._patch = patch("wake_models.get_user_data_path", return_value=self._tmp.name)
+        self._patch = patch("backend.wake.wake_models.get_user_data_path", return_value=self._tmp.name)
         self._patch.start()
         self.addCleanup(self._patch.stop)
 
@@ -150,7 +150,7 @@ class BackboneStatusTests(_IsolatedWakeModelsDirMixin, unittest.TestCase):
         info["sha256"] = digest
         self._write("melspectrogram", payload)
         with patch.dict(wm.AVAILABLE_WAKE_MODELS, {"melspectrogram": info}), patch(
-            "wake_models.build_onnx_session",
+            "backend.wake.wake_models.build_onnx_session",
             side_effect=wm.WakeEngineUnavailable("onnxruntime not available"),
         ):
             status = wm.backbone_status("melspectrogram")
@@ -168,7 +168,7 @@ class BackboneStatusTests(_IsolatedWakeModelsDirMixin, unittest.TestCase):
         info["sha256"] = digest
         self._write("melspectrogram", payload)
         with patch.dict(wm.AVAILABLE_WAKE_MODELS, {"melspectrogram": info}), patch(
-            "wake_models.build_onnx_session", return_value=object()
+            "backend.wake.wake_models.build_onnx_session", return_value=object()
         ):
             status = wm.backbone_status("melspectrogram")
         self.assertEqual(

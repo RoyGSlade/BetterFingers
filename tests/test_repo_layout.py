@@ -21,20 +21,10 @@ ROOT_MODULES = frozenset({
     "routes_foundry.py",
     "routes_models_resources.py",
     "routes_user_config.py",
-    "routes_wake.py",
     "server.py",
     "store_migration.py",
     "utils.py",
     "version.py",
-    "wake_models.py",
-    "wake_phrase_fitness.py",
-    "wake_pretrigger.py",
-    "wake_qwen_capability.py",
-    "wake_setup_registry.py",
-    "wake_trainer.py",
-    "wake_training_data.py",
-    "wake_training_service.py",
-    "wake_word.py",
 })
 
 

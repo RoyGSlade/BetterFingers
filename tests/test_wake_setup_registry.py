@@ -6,7 +6,7 @@ import threading
 
 import pytest
 
-import wake_setup_registry as wsr
+from backend.wake import wake_setup_registry as wsr
 
 
 class _Clock:
@@ -131,7 +131,7 @@ def test_evidence_fields_reject_nested_path_audio_or_tts_payloads(evidence, fiel
 
 
 def test_full_phrase_evaluator_report_survives_exact_evidence_validation():
-    import wake_phrase_fitness
+    from backend.wake import wake_phrase_fitness
 
     report = wake_phrase_fitness.evaluate_wake_phrase("hey betterfingers")
     assert report["verdict"] in {"good", "workable"}
