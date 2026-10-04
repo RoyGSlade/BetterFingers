@@ -113,17 +113,23 @@ def trim_spoken_text(text, active: bool = True) -> str:
     return " ".join(out)
 
 
+# Delivery actions that synthesise no input. Everything else is treated as a
+# keystroke under the policy -- an allowlist, because a denylist of typing
+# actions let ``open_chat_then_send`` (chat key + paste) straight through.
+_NON_SYNTHETIC_ACTIONS = frozenset({"copy_only", "review"})
+
+
 def resolve_send_action(requested, active: bool = True) -> str:
     """The delivery action to use. Under the policy, never a keystroke.
 
-    ``type_text`` (and anything else that synthesises input) becomes
-    ``copy_only``: the clipboard fallback the policy guarantees. Anything
-    already non-typing is left alone.
+    ``type_text``, ``paste``, ``open_chat_then_send`` and any action not known
+    to be non-synthetic become ``copy_only``: the clipboard fallback the policy
+    guarantees. Only actions in ``_NON_SYNTHETIC_ACTIONS`` are left alone.
     """
     action = str(requested or "").strip() or "copy_only"
     if not active:
         return action
-    return "copy_only" if action in ("type_text", "type", "paste", "auto_send") else action
+    return action if action in _NON_SYNTHETIC_ACTIONS else "copy_only"
 
 
 def policy_for(profile) -> dict:
