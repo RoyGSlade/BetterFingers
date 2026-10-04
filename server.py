@@ -3037,24 +3037,6 @@ def get_audio_devices(refresh=False):
 # and are read by the router as s.<name>.
 
 
-@app.get("/hardware/tier")
-async def hardware_tier():
-    return {"ok": True, "tier": get_hardware_tier()}
-
-
-@app.get("/models/recommend")
-async def models_recommend():
-    from backend.models import model_recommender
-
-    report = get_hardware_report()
-    tier_info = get_hardware_tier(report=report)
-    ram_mb = (report.get("memory") or {}).get("total_mb") or 0
-    recommendation = model_recommender.recommend(tier_info["tier"], ram_mb)
-    recommendation["tier_label"] = tier_info.get("label")
-    recommendation["tier_guidance"] = tier_info.get("guidance")
-    return {"ok": True, "recommendation": recommendation}
-
-
 class RuntimeWarmupRequest(BaseModel):
     stt: bool = False
     llm: bool = False
@@ -3082,15 +3064,6 @@ async def runtime_rewrite_selection():
 # at the end of this file, after get_selected_llm_engine and
 # get_active_completion_tokens below are defined (the test route reaches them
 # via a lazy ``import server`` at request time).
-
-
-class LlmModelSelectRequest(BaseModel):
-    model_id: str
-
-
-class WhisperModelRequest(BaseModel):
-    model_size: str
-    prefer_gpu: bool = True
 
 
 def get_selected_llm_model_id(profile_name=None):
@@ -3123,189 +3096,13 @@ def get_selected_llm_engine():
     return engine
 
 
-@app.get("/models/llm")
-async def list_llm_models():
-    selected = get_selected_llm_model_id()
-    models = []
-    for model_id, info in AVAILABLE_MODELS.items():
-        model_path = get_model_path(model_id)
-        download_state = get_download_state(model_id)
-        file_status = get_model_file_status(model_id)
-        with _llm_download_jobs_lock:
-            job = _llm_download_jobs.get(model_id)
-            download_active = bool(job and job.is_alive())
-        download_state["active"] = download_active
-        download_state["file_status"] = file_status
-        models.append(
-            {
-                "id": model_id,
-                "selected": model_id == selected,
-                "installed": check_model_exists(model_id),
-                "ready": is_llm_model_ready(model_id),
-                "path": model_path,
-                "file_status": file_status,
-                "download_state": download_state,
-                "download_active": download_active,
-                "partial_bytes": download_state.get("partial_bytes", 0),
-                "resumable": bool(download_state.get("resumable")),
-                **info,
-            }
-        )
-    return {
-        "selected_model_id": selected,
-        "models": models,
-        "download_state": get_download_state(selected),
-        "llama_server_path": get_server_path(),
-        "llama_server_exists": os.path.exists(get_server_path()),
-    }
-
-
-@app.post("/models/llm/select")
-async def select_llm_model(request: LlmModelSelectRequest, force: int = 0):
-    if request.model_id not in AVAILABLE_MODELS:
-        raise HTTPException(status_code=400, detail="Unsupported LLM model")
-    # Switching the model reconfigures the LLM runtime — take the exclusive
-    # lease so it can't race an in-flight completion (409 if busy).
-    try:
-        with model_runtime.write_lease("llm", wait=bool(force), timeout=15.0):
-            profile_name = get_last_active_profile()
-            cfg = load_profile(profile_name)
-            cfg["llm_model_id"] = request.model_id
-            save_runtime_profile(profile_name, cfg)
-            engine = get_engine_if_initialized()
-            if engine is not None:
-                engine.set_model_id(request.model_id)
-    except RuntimeBusyError:
-        raise HTTPException(status_code=409, detail="LLM is busy with active inference. Retry, or pass force=1.")
-    return await list_llm_models()
-
-
-@app.post("/models/llm/{model_id}/download")
-def download_llm_model(model_id: str):
-    if model_id not in AVAILABLE_MODELS:
-        raise HTTPException(status_code=400, detail="Unsupported LLM model")
-    with _llm_download_jobs_lock:
-        job = _llm_download_jobs.get(model_id)
-        if job and job.is_alive():
-            state = get_download_state(model_id)
-            return {
-                "ok": True,
-                "model_id": model_id,
-                "background": True,
-                "already_running": True,
-                "message": state.get("message") or "Download is already running in the background.",
-                "state": state,
-            }
-
-        def run_download():
-            try:
-                check_and_download_resources(model_id)
-            except Exception as exc:
-                logging.error("Background LLM download failed for %s: %s", model_id, exc)
-            finally:
-                with _llm_download_jobs_lock:
-                    current = _llm_download_jobs.get(model_id)
-                    if current is threading.current_thread():
-                        _llm_download_jobs.pop(model_id, None)
-
-        thread = threading.Thread(target=run_download, name=f"llm-download-{model_id}", daemon=True)
-        _llm_download_jobs[model_id] = thread
-        thread.start()
-
-    return {
-        "ok": True,
-        "model_id": model_id,
-        "background": True,
-        "message": f"Started background download for {AVAILABLE_MODELS[model_id]['name']}.",
-        "state": get_download_state(model_id),
-    }
-
-
-@app.delete("/models/llm/{model_id}")
-async def delete_llm_model(model_id: str, force: int = 0):
-    if model_id not in AVAILABLE_MODELS:
-        raise HTTPException(status_code=400, detail="Unsupported LLM model")
-    with _llm_download_jobs_lock:
-        job = _llm_download_jobs.get(model_id)
-        if job and job.is_alive():
-            raise HTTPException(status_code=409, detail="That model is downloading. Wait for it to finish or restart the app before deleting it.")
-    # Deleting model files must not race an active LLM inference reading them.
-    try:
-        with model_runtime.write_lease("llm", wait=bool(force), timeout=15.0):
-            ok, message = delete_model(model_id)
-    except RuntimeBusyError:
-        raise HTTPException(status_code=409, detail="LLM is busy with active inference. Retry, or pass force=1.")
-    return {"ok": ok, "model_id": model_id, "message": message}
-
-
-@app.get("/models/llm/{model_id}/download-state")
-async def llm_download_state(model_id: str):
-    if model_id not in AVAILABLE_MODELS:
-        raise HTTPException(status_code=400, detail="Unsupported LLM model")
-    state = get_download_state(model_id)
-    state["file_status"] = get_model_file_status(model_id)
-    with _llm_download_jobs_lock:
-        job = _llm_download_jobs.get(model_id)
-        active = bool(job and job.is_alive())
-    state["active"] = active
-    if active and state.get("status") in (None, "", "error"):
-        state["status"] = "downloading"
-    return state
-
-
-@app.get("/models/whisper")
-async def list_whisper_models():
-    selected = str(load_profile(get_last_active_profile()).get("model_size", "base.en") or "base.en").strip()
-    return {
-        "selected_model_size": selected,
-        "supported": list(SUPPORTED_MODEL_SIZES),
-        "models": list_cached_models(),
-        "download_state": get_whisper_download_state(selected),
-    }
-
-
-@app.post("/models/whisper/download")
-def download_whisper(request: WhisperModelRequest):
-    result = download_whisper_model(request.model_size, prefer_gpu=request.prefer_gpu)
-    return result
-
-
-@app.delete("/models/whisper/{model_size}")
-async def delete_whisper(model_size: str):
-    result = remove_cached_model(model_size)
-    if transcriber is not None and getattr(transcriber, "model_size", "") == model_size:
-        transcriber.unload()
-    return result
-
-
-@app.post("/models/whisper/test")
-def test_whisper(request: WhisperModelRequest):
-    if request.model_size not in SUPPORTED_MODEL_SIZES:
-        return {"ok": False, "message": f"Unsupported Whisper model: {request.model_size}"}
-    try:
-        probe = Transcriber(profile_name=get_last_active_profile(), preload=False)
-        probe.model_size = request.model_size
-        ok = probe.ensure_loaded()
-        probe.unload()
-        return {"ok": bool(ok), "message": f"Whisper {request.model_size} {'loaded' if ok else 'failed to load'}."}
-    except Exception as exc:
-        logging.exception("Whisper test failed")
-        return {"ok": False, "message": str(exc)}
-
-
-@app.post("/models/whisper/select")
-async def select_whisper_model(request: WhisperModelRequest):
-    if request.model_size not in SUPPORTED_MODEL_SIZES:
-        raise HTTPException(status_code=400, detail="Unsupported Whisper model")
-    # The active Whisper model is the active profile's `model_size`; persist the
-    # choice there and reload the live transcriber so it takes effect immediately.
-    profile_name = get_last_active_profile()
-    cfg = load_profile(profile_name)
-    cfg["model_size"] = request.model_size
-    save_runtime_profile(profile_name, cfg)
-    if transcriber is not None:
-        transcriber.reload_profile(profile_name)
-    return await list_whisper_models()
+# Model-management routes (/hardware/tier, /models/recommend, /models/llm*,
+# /models/whisper*, /models/unload/{component}) are their own slice in
+# backend/api/routes/models.py (R6); registered via app.include_router at the end
+# of this file, as is /models/resources in models_resources.py. The helpers and
+# state they use stay here and are read by the router as s.<name>; in particular
+# _unload_model_component_locked below owns the `global transcriber, tts_engine`
+# rebinding, and the router's /models/unload/{component} just calls it.
 
 
 def _unload_model_component_locked(component: str):
@@ -3393,27 +3190,6 @@ def _unload_model_component_locked(component: str):
         }
 
     raise HTTPException(status_code=400, detail="Unsupported component")
-
-
-@app.post("/models/unload/{component}")
-async def unload_model_component(component: str, force: int = 0):
-    """Release a model component's memory under an exclusive runtime lease.
-
-    Returns 409 if inference is active on that runtime (a destructive drop must
-    not race an in-flight request); pass ?force=1 to cancel-and-wait for active
-    inference to drain first.
-    """
-    normalized = component.strip().lower()
-    if normalized not in ("stt", "llm", "tts"):
-        raise HTTPException(status_code=400, detail="Unsupported component")
-    try:
-        with model_runtime.write_lease(normalized, wait=bool(force), timeout=15.0):
-            return await run_in_threadpool(_unload_model_component_locked, normalized)
-    except RuntimeBusyError:
-        raise HTTPException(
-            status_code=409,
-            detail=f"{normalized.upper()} is in use by active inference. Retry, or pass force=1 to wait.",
-        )
 
 
 def _path_size_bytes(path):
@@ -5488,6 +5264,7 @@ from backend.api.routes import dev as routes_dev  # noqa: E402
 from backend.api.routes import settings as routes_settings  # noqa: E402
 from backend.api.routes import history as routes_history  # noqa: E402
 from backend.api.routes import diagnostics as routes_diagnostics  # noqa: E402
+from backend.api.routes import models as routes_models  # noqa: E402
 
 app.include_router(routes_foundry.router)
 app.include_router(routes_user_config.router)
@@ -5503,6 +5280,7 @@ app.include_router(routes_dev.router)
 app.include_router(routes_settings.router)
 app.include_router(routes_history.router)
 app.include_router(routes_diagnostics.router)
+app.include_router(routes_models.router)
 from backend.api.routes import input_devices as input_devices_routes  # noqa: E402
 app.include_router(input_devices_routes.router)
 _foundry_sessions = routes_foundry._foundry_sessions
