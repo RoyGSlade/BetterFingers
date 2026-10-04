@@ -206,6 +206,10 @@ jobs:
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           CSC_LINK: ${{ steps.signing.outputs.cert_path }}
           CSC_KEY_PASSWORD: ${{ secrets.WIN_CERTIFICATE_PASSWORD }}
+          # The installer bundles Systran base.en. The fetch is pinned to one
+          # revision and every file is SHA-256-verified against
+          # backend/stt/bundled_manifest.json before it is packaged.
+          BETTERFINGERS_ALLOW_MODEL_DOWNLOAD: "1"
         run: npm run dist:win
 
       - name: Clean up code-signing certificate
@@ -526,6 +530,10 @@ jobs:
       # AppImage packaging in one step. Output lands in app/release/.
       - name: Build AppImage (electron-builder)
         working-directory: app
+        env:
+          # Bundled base.en: pinned revision, per-file SHA-256-verified against
+          # backend/stt/bundled_manifest.json before it is packaged.
+          BETTERFINGERS_ALLOW_MODEL_DOWNLOAD: "1"
         run: npm run dist:linux
 
       - name: Locate AppImage artifact

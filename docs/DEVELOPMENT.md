@@ -83,4 +83,14 @@ nvidia-cudnn-cu12==9.10.2.21 --hash=sha256:c6288de7d63e6cf62988f0923f96dc339cea3
 
 ## Building
 
-`npm run dist:win` builds the renderer, freezes the backend with PyInstaller (`app/scripts/build-backend.js`) and packages the installer. Note that `build-backend.js` empties `app/resources/backend` first. To check what the backend bundle contains without touching that folder, run PyInstaller with the same arguments and `--distpath/--workpath/--specpath` pointed at a temp directory. Signing is documented in [docs/release/WINDOWS_SIGNING.md](release/WINDOWS_SIGNING.md).
+`npm run dist:win` builds the renderer, freezes the backend with PyInstaller (`app/scripts/build-backend.js`) and packages the installer. Note that `build-backend.js` empties `app/resources/backend` first.
+
+The installer ships the pinned Systran `base.en` speech model (`backend/stt/bundled_manifest.json`) so first dictation needs no download. `build-backend.js` stages and hash-verifies it before PyInstaller, adds it at `_internal/bundled_models/base.en/`, and re-verifies the frozen copy afterwards, so every backend build must say where the model comes from. Set one of these (first match wins; only the exact value `1` enables a switch):
+
+| Variable | Effect |
+|---|---|
+| `BETTERFINGERS_BUNDLED_MODEL_SOURCE=<dir>` | Stage from a local snapshot folder (e.g. the Hugging Face cache `snapshots/<revision>` directory). Wins over the other two; a source that fails verification fails the build with no network fallback. |
+| `BETTERFINGERS_ALLOW_MODEL_DOWNLOAD=1` | Fetch the pinned revision from Hugging Face (about 148 MB), hash-verified. This is what the release workflow uses. Downloads into a short temp directory (the build also redirects `HF_HOME`/`HF_XET_CACHE` there for every step, so it never writes into your `~/.cache/huggingface`). |
+| `BETTERFINGERS_SKIP_MODEL_BUNDLE=1` | Dev only: build without the model, with a loud warning. The result is not release-ready. |
+
+With none of them set the build fails before touching `app/resources/backend`. The signed local build (`npm run dist:win:signed`) inherits the same variables. To check what the backend bundle contains without touching that folder, run PyInstaller with the same arguments and `--distpath/--workpath/--specpath` pointed at a temp directory. Signing is documented in [docs/release/WINDOWS_SIGNING.md](release/WINDOWS_SIGNING.md).

@@ -1,17 +1,23 @@
 # Model and Runtime Licenses
 
 Source inventory checked 2026-10-04 against worktree base `33b7cf4` and the
-primary upstream pages linked below. This records licenses, packaging intent,
+primary upstream pages linked below; the bundled `base.en` entries were updated
+the same day against base `49aa64f`. This records licenses, packaging intent,
 and unresolved provenance; it is **not legal clearance or proof that an
-installer contains the required notices**. No model/runtime was downloaded or
-loaded. SHA-256 values referenced here are code pins, not recomputed hashes.
+installer contains the required notices**. No model/runtime was loaded for this
+inventory. SHA-256 values referenced here are code pins, not recomputed hashes,
+except the four `base.en` digests in `backend/stt/bundled_manifest.json`, which
+were hashed from a local snapshot of the pinned revision.
 
 "Bundled" means the build collects a dependency into the frozen backend;
 "downloaded" means app code obtains it separately at runtime. The actual release
 manifest still needs comparison. `app/scripts/build-backend.js`
 (`collectAllPackages`, `hiddenImports`, `dataSources`) collects runtime packages,
-including eSpeak NG, but does not add speech/LLM/TTS/wake weights.
-Proposed bundled first-run speech assets are not implemented by this source.
+including eSpeak NG. It also stages exactly one speech model into the installer:
+Systran `base.en` at a pinned revision, verified against
+`backend/stt/bundled_manifest.json` before PyInstaller runs and added at
+`_internal/bundled_models/base.en/` (`bundledModelTarget`). No other speech, LLM,
+TTS or wake weights are bundled; every other model below is downloaded at runtime.
 
 The Apache-2.0/CC0-1.0/MIT catalog gate is project policy, explicitly enforced
 for wake models in `wake_models.py::ALLOWED_LICENSES`. It does not make every
@@ -21,8 +27,10 @@ Integrity hashes establish identity, not licensing rights.
 
 ### Local source evidence
 
-Anchors below refer to this worktree at base `33b7cf4`. Symbols remain the
-primary identifiers after file reorganization; recheck line numbers when porting.
+Anchors below refer to this worktree at base `33b7cf4`, except the
+`build-backend.js`, `build-installer.yml` and bundled-`base.en` rows, which refer
+to base `49aa64f` plus the BF-U3 build wiring. Symbols remain the primary
+identifiers after file reorganization; recheck line numbers when porting.
 
 | Claim | Local file:line / symbol |
 |---|---|
@@ -31,9 +39,10 @@ primary identifiers after file reorganization; recheck line numbers when porting
 | Gemma revisions and six artifacts | `backend/models/model_manager.py:34` — `_GEMMA4_E2B_REVISION` and following revision constants; `backend/models/model_manager.py:38` — `AVAILABLE_MODELS` |
 | llama.cpp archive pins / selection | `backend/models/model_manager.py:137` — `RUNTIME_ARTIFACT_SHA256`; `backend/models/model_manager.py:157` — `_LLAMA_RELEASE`; `backend/models/model_manager.py:245` — `resolve_runtime_spec` |
 | Native/ONNX TTS acquisition and integrity behavior | `backend/tts/tts_engine.py:830` — `ReviewTTSEngine._load_kokoro_backend`; `backend/tts/tts_engine.py:881` — `_load_kokoro_onnx_backend`; `backend/tts/tts_engine.py:993` — `_ensure_artifact` |
-| Frozen data and runtime package collection | `app/scripts/build-backend.js:18` — `dataSources`; `app/scripts/build-backend.js:31` — `collectAllPackages`; `app/scripts/build-backend.js:37` — `hiddenImports` |
+| Frozen data and runtime package collection | `app/scripts/build-backend.js:19` — `dataSources`; `app/scripts/build-backend.js:62` — `collectAllPackages`; `app/scripts/build-backend.js:68` — `hiddenImports` |
+| Bundled `base.en` pin, staging, source selection, shipping | `backend/stt/bundled_manifest.json:5` — pinned revision and per-file SHA-256; `backend/stt/bundle_staging.py:30` — `stage_bundled_model`; `app/scripts/build-backend.js:201` — `resolveModelBundlePlan`; `app/scripts/build-backend.js:314` — `planBackendBuild`; `backend/stt/bundled_models.py:107` — `bundled_model_dir` (runtime locator) |
 | Windows speech/TTS runtime versions | `requirements-win.lock:331` — CTranslate2; `requirements-win.lock:372` — loader; `requirements-win.lock:384` — faster-whisper; `requirements-win.lock:481` — Kokoro ONNX; `requirements-win.lock:544` — ONNX Runtime; `requirements-win.lock:578` — phonemizer-fork |
-| Linux CPU installer lock / native fallback versions | `.github/workflows/build-installer.yml:479` — lock installation; `requirements-linux-cpu.lock:661` — Kokoro; `requirements-linux-cpu.lock:780` — Misaki; `requirements-linux-cpu.lock:2005` — CPU PyTorch |
+| Linux CPU installer lock / native fallback versions | `.github/workflows/build-installer.yml:483` — lock installation; `requirements-linux-cpu.lock:661` — Kokoro; `requirements-linux-cpu.lock:780` — Misaki; `requirements-linux-cpu.lock:2005` — CPU PyTorch |
 | Wake release, two hashes and license gate | `wake_models.py:30` — `WAKE_BACKBONE_RELEASE`; `wake_models.py:36` — `AVAILABLE_WAKE_MODELS`; `wake_models.py:59` — `ALLOWED_LICENSES`; `wake_models.py:297` — `import_wake_model` |
 | Kanade pins / vocoder delegation | `backend/tts/voice_clone_engine.py:69` — `KANADE_TOKENIZER_REPO` and following pin constants; `backend/tts/voice_clone_engine.py:173` — `_ensure_loaded` |
 | Optional clone runtime / WavLM pin / refused provisioning | `backend/tts/voice_clone_engine.py:306` — `CLONE_RUNTIME_CATALOG`; `backend/tts/voice_clone_engine.py:332` — `CLONE_WAVLM_PIN`; `backend/tts/voice_clone_engine.py:462` — `provision_clone_runtime` |
@@ -43,14 +52,19 @@ primary identifiers after file reorganization; recheck line numbers when porting
 ### Default catalog — MIT model cards
 
 `SUPPORTED_MODEL_SIZES` and `_repo_id_for_model` cover all seven rows.
-All are **downloaded at runtime**, including tokenizer/configuration files.
-The downloader and model loader supply no Hugging Face commit or artifact
-digest pin: source IDs are exact, downloaded revisions are not.
+`base.en` is **bundled in the installer** at a pinned revision (see the next
+subsection). The other six are **downloaded at runtime**, including
+tokenizer/configuration files. The runtime downloader and model loader supply
+no Hugging Face commit or artifact digest pin: source IDs are exact, downloaded
+revisions are not. Only the installer's copy of `base.en` is pinned and
+hash-verified, and that happens at build time; at this commit the runtime
+loader does not yet prefer the bundled copy (a separate change), so a runtime
+`base.en` download remains unpinned until it does.
 
 | Model | Exact source repo / revision used | License / primary source |
 |---|---|---|
 | `tiny.en` | `Systran/faster-whisper-tiny.en`, unpinned | MIT — [conversion card](https://huggingface.co/Systran/faster-whisper-tiny.en) |
-| `base.en` | `Systran/faster-whisper-base.en`, unpinned | MIT — [conversion card](https://huggingface.co/Systran/faster-whisper-base.en) |
+| `base.en` | `Systran/faster-whisper-base.en`, **bundled** at pinned `3d3d5dee26484f91867d81cb899cfcf72b96be6c`; the runtime downloader for this ID is unpinned | MIT — [conversion card](https://huggingface.co/Systran/faster-whisper-base.en) |
 | `small.en` | `Systran/faster-whisper-small.en`, unpinned | MIT — [conversion card](https://huggingface.co/Systran/faster-whisper-small.en) |
 | `medium.en` | `Systran/faster-whisper-medium.en`, unpinned | MIT — [conversion card](https://huggingface.co/Systran/faster-whisper-medium.en) |
 | `large-v3` | `Systran/faster-whisper-large-v3`, unpinned | MIT — [conversion card](https://huggingface.co/Systran/faster-whisper-large-v3) |
@@ -61,14 +75,49 @@ The first five cards identify OpenAI Whisper conversions, the last two
 Distil-Whisper conversions. Preserve original and conversion copyright/MIT
 permission notices with redistributed copies. MIT permits commercial use and
 redistribution subject to its notice requirement; these cards impose no
-non-commercial restriction. **UNVERIFIED:** exact fetched revisions and complete
-artifact-level notices. Next check: freeze selected repo commits, record all
-fetched filenames/digests, and retain their licenses/attributions before
-bundling or mirroring them.
+non-commercial restriction. **UNVERIFIED** for the six downloaded rows: exact
+fetched revisions and complete artifact-level notices. Next check: freeze
+selected repo commits, record all fetched filenames/digests, and retain their
+licenses/attributions before bundling or mirroring them. For `base.en` the
+revision and per-file digests are now frozen (next subsection); its notice text
+is still open.
 
 Arbitrary slash-containing repo IDs are also accepted by `_repo_id_for_model`.
 Those are user-selected sources, not blanket approval under this inventory;
 their weights, tokenizer and license require separate verification.
+
+### Pinned installer speech payload — base.en
+
+The owner approved bundling `Systran/faster-whisper-base.en` revision
+`3d3d5dee26484f91867d81cb899cfcf72b96be6c` in the installer on 2026-10-04.
+The [public model metadata](https://huggingface.co/api/models/Systran/faster-whisper-base.en)
+declares MIT and identified this pin as the current `main` commit that day.
+The weights are OpenAI Whisper `base.en` converted to CTranslate2 format by
+SYSTRAN; both the upstream OpenAI Whisper release and the SYSTRAN conversion
+are MIT. `backend/stt/bundled_manifest.json` records the pinned source URL and
+size/SHA-256 for `config.json`, `model.bin`, `tokenizer.json` and
+`vocabulary.txt`. All four files were hashed locally from a cached snapshot, and
+`model.bin`'s SHA-256 was cross-checked against the
+[upstream LFS oid](https://huggingface.co/api/models/Systran/faster-whisper-base.en/tree/main).
+The complete model payload is 147,769,510 bytes (147.769510 decimal MB).
+
+Packaging uses the build-only, explicit-source `tools.bundle_models` step
+(`backend/stt/bundle_staging.py`). The build takes the bytes from a local
+snapshot (`BETTERFINGERS_BUNDLED_MODEL_SOURCE`) or, only when
+`BETTERFINGERS_ALLOW_MODEL_DOWNLOAD=1`, from a pinned-revision fetch; every file
+is verified against the manifest before PyInstaller runs and again inside the
+frozen backend afterwards. The release workflow sets the download switch for
+both installers. This inventory file is itself added to the frozen backend
+(`_internal/LICENSES-MODELS.md`) as the provenance record.
+
+**UNVERIFIED release obligations:** preserve the original OpenAI Whisper and
+SYSTRAN conversion MIT copyright and permission notices with the redistributed
+weights. The four manifest files carry no license file, and the notice text has
+not been retrieved from upstream or added to the installer; this inventory entry
+and the hashes do not replace that, and do not prove inference readiness. Next
+checks: retrieve the complete applicable upstream notice text, retain it in the
+installer, then compare the signed installer's actual file manifest. No signed
+installer has been built or inventoried.
 
 ### Bundled speech runtime
 

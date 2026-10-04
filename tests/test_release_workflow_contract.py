@@ -92,6 +92,28 @@ def test_linux_appimage_smoke_does_not_disable_electron_sandbox():
     assert "--no-sandbox" not in _workflow_text()
 
 
+def test_both_installer_builds_provide_a_pinned_bundled_model_source():
+    # app/scripts/build-backend.js refuses to build without a model source (the
+    # installer ships Systran base.en so first dictation needs no download). CI
+    # supplies the pinned, hash-verified fetch for both packaged builds, and must
+    # never use the dev-only skip flag or a release would ship without the model.
+    import yaml
+
+    jobs = yaml.safe_load(_workflow_text())["jobs"]
+    expected = {
+        "windows-installer": "npm run dist:win",
+        "linux-appimage": "npm run dist:linux",
+    }
+    for job, command in expected.items():
+        steps = [step for step in jobs[job]["steps"] if step.get("run") == command]
+        assert len(steps) == 1, f"{job} must run {command} exactly once"
+        env = steps[0].get("env") or {}
+        assert env.get("BETTERFINGERS_ALLOW_MODEL_DOWNLOAD") == "1"
+        assert "BETTERFINGERS_SKIP_MODEL_BUNDLE" not in env
+        assert "BETTERFINGERS_BUNDLED_MODEL_SOURCE" not in env
+    assert "BETTERFINGERS_SKIP_MODEL_BUNDLE" not in _workflow_text()
+
+
 def test_linux_release_repairs_a_missing_locked_electron_binary_before_tests():
     workflow = _workflow_text()
     block = workflow.split("\n  linux-appimage:\n", 1)[1].split(
