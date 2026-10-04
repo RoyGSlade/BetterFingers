@@ -924,7 +924,7 @@ class ServerDraftTests(unittest.TestCase):
 
         # speak_text_aloud is mocked: unmocked it initializes the real Kokoro TTS
         # engine and speaks, which cost ~158 s per run (and could play audio).
-        with patch("clipboard_capture.capture_selection_text_with_restore", return_value=capture_result), patch.object(
+        with patch("backend.output.clipboard_capture.capture_selection_text_with_restore", return_value=capture_result), patch.object(
             server, "broadcast_status_threadsafe"
         ) as broadcast, patch.object(server, "speak_text_aloud") as speak:
             result = server.handle_primary_action()

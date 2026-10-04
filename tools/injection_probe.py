@@ -22,7 +22,7 @@ from tools.lib import injection_matrix as im
 
 
 def _platform_string():
-    import platform_capabilities as pc
+    from backend.platform import platform_capabilities as pc
 
     if pc.is_windows:
         return "windows"
@@ -43,7 +43,7 @@ def _ask(prompt, choices=("pass", "fail", "partial", "skip")):
 
 
 def probe(app, out_path, countdown=4):
-    from injector import InputInjector
+    from backend.output.injector import InputInjector
 
     injector = InputInjector()
     platform = _platform_string()

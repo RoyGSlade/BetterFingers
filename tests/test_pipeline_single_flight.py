@@ -229,14 +229,14 @@ class WhitespacePreservationTests(unittest.TestCase):
         self.assertEqual(payload.get("error"), "empty_text")
 
     def test_injector_compose_preserves_whitespace(self):
-        from injector import InputInjector
+        from backend.output.injector import InputInjector
         injector = InputInjector.__new__(InputInjector)
         injector.config = {}
         text = "  def f():\n      return 1\n\n"
         self.assertEqual(injector._compose_output_text(text), text)
 
     def test_injector_compose_appends_sign_off_without_stripping(self):
-        from injector import InputInjector
+        from backend.output.injector import InputInjector
         injector = InputInjector.__new__(InputInjector)
         injector.config = {"sign_off_text": "-- sent by voice"}
         self.assertEqual(
@@ -245,7 +245,7 @@ class WhitespacePreservationTests(unittest.TestCase):
         )
 
     def test_injector_compose_rejects_whitespace_only(self):
-        from injector import InputInjector
+        from backend.output.injector import InputInjector
         injector = InputInjector.__new__(InputInjector)
         injector.config = {}
         self.assertEqual(injector._compose_output_text("   \n "), "")

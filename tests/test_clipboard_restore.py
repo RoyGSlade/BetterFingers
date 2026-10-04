@@ -8,10 +8,10 @@ nothing new was copied in the meantime.
 import unittest
 from unittest.mock import patch
 
-import clipboard_capture as cc
-import injector as injector_mod
+from backend.output import clipboard_capture as cc
+from backend.output import injector as injector_mod
 import utils
-from injector import InputInjector
+from backend.output.injector import InputInjector
 
 
 class _ImmediateThread:

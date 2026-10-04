@@ -6,7 +6,7 @@ import threading
 import time
 from ctypes import POINTER, cast
 
-import platform_capabilities
+from backend.platform import platform_capabilities
 
 IS_WINDOWS = platform_capabilities.IS_WINDOWS
 

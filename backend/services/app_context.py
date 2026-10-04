@@ -141,12 +141,12 @@ def detect_foreground_identifier() -> str:
     "" on Wayland, on a headless session, and when the platform tool is
     missing. Callers must treat that as unknown, never as "no application".
     """
-    import platform_capabilities
+    from backend.platform import platform_capabilities
 
     if platform_capabilities.IS_WINDOWS:
         # The Windows detector returns a PROCESS name, not a window title, so
         # it is already class-only in the sense that matters here.
-        from injection_pacing import _detect_windows_app
+        from backend.output.injection_pacing import _detect_windows_app
 
         return _detect_windows_app()
     return _detect_x11_window_class()
@@ -252,7 +252,7 @@ class ApplicationContextService:
     def normalize(self, raw) -> str:
         """Normalized app key, shared with injection pacing so one string means
         one application in both features."""
-        from injection_pacing import normalize_app
+        from backend.output.injection_pacing import normalize_app
 
         return normalize_app(raw)
 

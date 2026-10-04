@@ -5,7 +5,7 @@ import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
-import clipboard_capture
+from backend.output import clipboard_capture
 import server
 
 
@@ -23,14 +23,14 @@ def _supported_test_backend():
 
 
 class ClipboardCaptureTests(unittest.TestCase):
-    @patch("clipboard_capture._schedule_delayed_clipboard_restore")
-    @patch("clipboard_capture._restore_clipboard_snapshot_windows", return_value=False)
-    @patch("clipboard_capture._capture_clipboard_snapshot_windows", return_value=[])
-    @patch("clipboard_capture.time.sleep", return_value=None)
-    @patch("clipboard_capture.keyboard.press_and_release")
-    @patch("clipboard_capture._clipboard_set_text", return_value=True)
-    @patch("clipboard_capture._clipboard_get_text")
-    @patch("clipboard_capture.uuid.uuid4", return_value=_FixedUUID())
+    @patch("backend.output.clipboard_capture._schedule_delayed_clipboard_restore")
+    @patch("backend.output.clipboard_capture._restore_clipboard_snapshot_windows", return_value=False)
+    @patch("backend.output.clipboard_capture._capture_clipboard_snapshot_windows", return_value=[])
+    @patch("backend.output.clipboard_capture.time.sleep", return_value=None)
+    @patch("backend.output.clipboard_capture.keyboard.press_and_release")
+    @patch("backend.output.clipboard_capture._clipboard_set_text", return_value=True)
+    @patch("backend.output.clipboard_capture._clipboard_get_text")
+    @patch("backend.output.clipboard_capture.uuid.uuid4", return_value=_FixedUUID())
     def test_capture_selection_and_restore(
         self,
         _uuid4,
@@ -55,14 +55,14 @@ class ClipboardCaptureTests(unittest.TestCase):
         self.assertEqual(set_text.call_args_list[0].args[0], sentinel)
         self.assertEqual(set_text.call_args_list[-1].args[0], "https://example.com")
 
-    @patch("clipboard_capture._schedule_delayed_clipboard_restore")
-    @patch("clipboard_capture._restore_clipboard_snapshot_windows", return_value=False)
-    @patch("clipboard_capture._capture_clipboard_snapshot_windows", return_value=[])
-    @patch("clipboard_capture.time.sleep", return_value=None)
-    @patch("clipboard_capture.keyboard.press_and_release")
-    @patch("clipboard_capture._clipboard_set_text", return_value=True)
-    @patch("clipboard_capture._clipboard_get_text")
-    @patch("clipboard_capture.uuid.uuid4", return_value=_FixedUUID())
+    @patch("backend.output.clipboard_capture._schedule_delayed_clipboard_restore")
+    @patch("backend.output.clipboard_capture._restore_clipboard_snapshot_windows", return_value=False)
+    @patch("backend.output.clipboard_capture._capture_clipboard_snapshot_windows", return_value=[])
+    @patch("backend.output.clipboard_capture.time.sleep", return_value=None)
+    @patch("backend.output.clipboard_capture.keyboard.press_and_release")
+    @patch("backend.output.clipboard_capture._clipboard_set_text", return_value=True)
+    @patch("backend.output.clipboard_capture._clipboard_get_text")
+    @patch("backend.output.clipboard_capture.uuid.uuid4", return_value=_FixedUUID())
     def test_successful_trigger_with_unchanged_clipboard_fails_closed(
         self,
         _uuid4,
@@ -87,14 +87,14 @@ class ClipboardCaptureTests(unittest.TestCase):
         self.assertEqual(result["capture_status"], "empty")
         self.assertEqual(_set_text.call_args_list[-1].args[0], original)
 
-    @patch("clipboard_capture._schedule_delayed_clipboard_restore")
-    @patch("clipboard_capture._restore_clipboard_snapshot_windows", return_value=False)
-    @patch("clipboard_capture._capture_clipboard_snapshot_windows", return_value=[])
-    @patch("clipboard_capture.time.sleep", return_value=None)
-    @patch("clipboard_capture.keyboard.press_and_release")
-    @patch("clipboard_capture._clipboard_set_text", return_value=True)
-    @patch("clipboard_capture._clipboard_get_text")
-    @patch("clipboard_capture.uuid.uuid4", return_value=_FixedUUID())
+    @patch("backend.output.clipboard_capture._schedule_delayed_clipboard_restore")
+    @patch("backend.output.clipboard_capture._restore_clipboard_snapshot_windows", return_value=False)
+    @patch("backend.output.clipboard_capture._capture_clipboard_snapshot_windows", return_value=[])
+    @patch("backend.output.clipboard_capture.time.sleep", return_value=None)
+    @patch("backend.output.clipboard_capture.keyboard.press_and_release")
+    @patch("backend.output.clipboard_capture._clipboard_set_text", return_value=True)
+    @patch("backend.output.clipboard_capture._clipboard_get_text")
+    @patch("backend.output.clipboard_capture.uuid.uuid4", return_value=_FixedUUID())
     def test_url_only_fallback_is_rejected(
         self,
         _uuid4,
@@ -116,14 +116,14 @@ class ClipboardCaptureTests(unittest.TestCase):
         self.assertEqual(result["text"], "")
         self.assertEqual(result["capture_status"], "empty")
 
-    @patch("clipboard_capture._schedule_delayed_clipboard_restore")
-    @patch("clipboard_capture._restore_clipboard_snapshot_windows", return_value=False)
-    @patch("clipboard_capture._capture_clipboard_snapshot_windows", return_value=[])
-    @patch("clipboard_capture.time.sleep", return_value=None)
-    @patch("clipboard_capture.keyboard.press_and_release", side_effect=RuntimeError("copy failed"))
-    @patch("clipboard_capture._clipboard_set_text", return_value=True)
-    @patch("clipboard_capture._clipboard_get_text")
-    @patch("clipboard_capture.uuid.uuid4", return_value=_FixedUUID())
+    @patch("backend.output.clipboard_capture._schedule_delayed_clipboard_restore")
+    @patch("backend.output.clipboard_capture._restore_clipboard_snapshot_windows", return_value=False)
+    @patch("backend.output.clipboard_capture._capture_clipboard_snapshot_windows", return_value=[])
+    @patch("backend.output.clipboard_capture.time.sleep", return_value=None)
+    @patch("backend.output.clipboard_capture.keyboard.press_and_release", side_effect=RuntimeError("copy failed"))
+    @patch("backend.output.clipboard_capture._clipboard_set_text", return_value=True)
+    @patch("backend.output.clipboard_capture._clipboard_get_text")
+    @patch("backend.output.clipboard_capture.uuid.uuid4", return_value=_FixedUUID())
     def test_restore_happens_even_on_copy_error(
         self,
         _uuid4,
@@ -231,7 +231,7 @@ class ClipboardCaptureTests(unittest.TestCase):
                 "faulthandler",
                 "-c",
                 (
-                    "import clipboard_capture; "
+                    "from backend.output import clipboard_capture; "
                     "clipboard_capture._capture_clipboard_snapshot_windows(); "
                     "print('snapshot-complete')"
                 ),
@@ -247,7 +247,7 @@ class ClipboardCaptureTests(unittest.TestCase):
         self.assertIn("snapshot-complete", completed.stdout)
         self.assertNotIn("access violation", combined)
 
-    @patch("clipboard_capture.shutil.which", return_value=None)
+    @patch("backend.output.clipboard_capture.shutil.which", return_value=None)
     def test_missing_x11_clipboard_tool_is_explicit_and_actionable(self, which):
         with patch.object(clipboard_capture, "IS_WINDOWS", False), patch.object(
             clipboard_capture.platform_capabilities, "is_macos", False
@@ -263,7 +263,7 @@ class ClipboardCaptureTests(unittest.TestCase):
         which.assert_any_call("xclip")
         which.assert_any_call("xsel")
 
-    @patch("clipboard_capture.shutil.which")
+    @patch("backend.output.clipboard_capture.shutil.which")
     def test_clipboard_tool_detection_is_live_per_capture_attempt(self, which):
         which.side_effect = [None, None, None, "/usr/bin/xclip", None, "/usr/bin/xdotool"]
         with patch.object(clipboard_capture, "IS_WINDOWS", False), patch.object(
@@ -281,8 +281,8 @@ class ClipboardCaptureTests(unittest.TestCase):
         self.assertEqual(second["clipboard_backend"]["name"], "xclip")
         self.assertEqual(second["copy_trigger_backend"]["name"], "xdotool")
 
-    @patch("clipboard_capture.subprocess.run")
-    @patch("clipboard_capture.shutil.which", return_value="/usr/bin/xclip")
+    @patch("backend.output.clipboard_capture.subprocess.run")
+    @patch("backend.output.clipboard_capture.shutil.which", return_value="/usr/bin/xclip")
     def test_live_xclip_read_bypasses_cached_pyperclip_backend(self, _which, run):
         run.return_value = type("Completed", (), {"returncode": 0, "stdout": b"selected text"})()
         with patch.object(clipboard_capture, "IS_WINDOWS", False), patch.object(
@@ -299,7 +299,7 @@ class ClipboardCaptureTests(unittest.TestCase):
             ["xclip", "-selection", "clipboard", "-o"], check=False, capture_output=True, timeout=5
         )
 
-    @patch("clipboard_capture.subprocess.run")
+    @patch("backend.output.clipboard_capture.subprocess.run")
     def test_linux_clipboard_writer_detaches_child_output_pipes(self, run):
         run.return_value = type("Completed", (), {"returncode": 0})()
 
@@ -316,7 +316,7 @@ class ClipboardCaptureTests(unittest.TestCase):
         self.assertNotIn("capture_output", run.call_args.kwargs)
         self.assertNotIn("shell", run.call_args.kwargs)
 
-    @patch("clipboard_capture.subprocess.run")
+    @patch("backend.output.clipboard_capture.subprocess.run")
     def test_linux_clipboard_writer_fails_closed_on_missing_or_failed_writer(self, run):
         self.assertFalse(clipboard_capture._linux_clipboard_set_text("missing", "probe text"))
         run.assert_not_called()
@@ -327,7 +327,7 @@ class ClipboardCaptureTests(unittest.TestCase):
         run.side_effect = subprocess.TimeoutExpired(["wl-copy"], 5)
         self.assertFalse(clipboard_capture._linux_clipboard_set_text("wl-clipboard", "probe text"))
 
-    @patch("clipboard_capture.subprocess.run")
+    @patch("backend.output.clipboard_capture.subprocess.run")
     def test_x11_copy_trigger_uses_argv_and_bounded_timeout(self, run):
         run.return_value = type("Completed", (), {"returncode": 0})()
 
@@ -342,7 +342,7 @@ class ClipboardCaptureTests(unittest.TestCase):
         )
         self.assertNotIn("shell", run.call_args.kwargs)
 
-    @patch("clipboard_capture.subprocess.run")
+    @patch("backend.output.clipboard_capture.subprocess.run")
     def test_wayland_copy_triggers_use_explicit_argv(self, run):
         run.return_value = type("Completed", (), {"returncode": 0})()
 
@@ -356,7 +356,7 @@ class ClipboardCaptureTests(unittest.TestCase):
                 self.assertEqual(run.call_args.args[0], argv)
                 self.assertEqual(run.call_args.kwargs["timeout"], 2)
 
-    @patch("clipboard_capture.shutil.which")
+    @patch("backend.output.clipboard_capture.shutil.which")
     def test_x11_support_requires_clipboard_and_copy_trigger(self, which):
         which.side_effect = lambda name: "/usr/bin/" + name if name in {"xclip", "xdotool"} else None
         with patch.object(clipboard_capture, "IS_WINDOWS", False), patch.object(
@@ -370,7 +370,7 @@ class ClipboardCaptureTests(unittest.TestCase):
         self.assertEqual(result["clipboard_backend"]["name"], "xclip")
         self.assertEqual(result["copy_trigger_backend"]["name"], "xdotool")
 
-    @patch("clipboard_capture.shutil.which", side_effect=lambda name: "/usr/bin/" + name)
+    @patch("backend.output.clipboard_capture.shutil.which", side_effect=lambda name: "/usr/bin/" + name)
     def test_wayland_requires_live_display_even_when_tools_exist(self, _which):
         with patch.object(clipboard_capture, "IS_WINDOWS", False), patch.object(
             clipboard_capture.platform_capabilities, "is_macos", False
@@ -384,7 +384,7 @@ class ClipboardCaptureTests(unittest.TestCase):
         self.assertEqual(result["clipboard_backend"]["required"], ["WAYLAND_DISPLAY"])
         self.assertIn("WAYLAND_DISPLAY is not set", clipboard_capture._unsupported_capture_result(result)["message"])
 
-    @patch("clipboard_capture.shutil.which", side_effect=lambda name: "/usr/bin/" + name)
+    @patch("backend.output.clipboard_capture.shutil.which", side_effect=lambda name: "/usr/bin/" + name)
     def test_x11_requires_live_display_even_when_tools_exist(self, _which):
         with patch.object(clipboard_capture, "IS_WINDOWS", False), patch.object(
             clipboard_capture.platform_capabilities, "is_macos", False
@@ -398,7 +398,7 @@ class ClipboardCaptureTests(unittest.TestCase):
         self.assertEqual(result["clipboard_backend"]["required"], ["DISPLAY"])
         self.assertIn("DISPLAY is not set", clipboard_capture._unsupported_capture_result(result)["message"])
 
-    @patch("clipboard_capture.shutil.which", return_value=None)
+    @patch("backend.output.clipboard_capture.shutil.which", return_value=None)
     def test_wayland_without_copy_trigger_is_actionable(self, _which):
         with patch.object(clipboard_capture, "IS_WINDOWS", False), patch.object(
             clipboard_capture.platform_capabilities, "is_macos", False

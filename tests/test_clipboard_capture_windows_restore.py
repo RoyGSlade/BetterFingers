@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-import clipboard_capture
+from backend.output import clipboard_capture
 
 
 class _FixedUUID:
@@ -55,16 +55,16 @@ class ClipboardCaptureWindowsRestoreTests(unittest.TestCase):
     # clipboard when either backend is absent. These tests fake the clipboard
     # end to end and exercise the Windows restore path, so they state both
     # preconditions explicitly.
-    @patch("clipboard_capture._selection_capture_support",
+    @patch("backend.output.clipboard_capture._selection_capture_support",
            return_value={"supported": True, "tool": "native", "copy_trigger_backend": {"name": "native-keyboard", "available": True, "required": []}})
-    @patch("clipboard_capture._schedule_delayed_clipboard_restore")
-    @patch("clipboard_capture._restore_clipboard_snapshot_windows", return_value=True)
-    @patch("clipboard_capture._capture_clipboard_snapshot_windows")
-    @patch("clipboard_capture.time.sleep", return_value=None)
-    @patch("clipboard_capture.keyboard.press_and_release")
-    @patch("clipboard_capture._clipboard_set_text", return_value=True)
-    @patch("clipboard_capture._clipboard_get_text")
-    @patch("clipboard_capture.uuid.uuid4", return_value=_FixedUUID())
+    @patch("backend.output.clipboard_capture._schedule_delayed_clipboard_restore")
+    @patch("backend.output.clipboard_capture._restore_clipboard_snapshot_windows", return_value=True)
+    @patch("backend.output.clipboard_capture._capture_clipboard_snapshot_windows")
+    @patch("backend.output.clipboard_capture.time.sleep", return_value=None)
+    @patch("backend.output.clipboard_capture.keyboard.press_and_release")
+    @patch("backend.output.clipboard_capture._clipboard_set_text", return_value=True)
+    @patch("backend.output.clipboard_capture._clipboard_get_text")
+    @patch("backend.output.clipboard_capture.uuid.uuid4", return_value=_FixedUUID())
     def test_windows_snapshot_restore_used_when_available(
         self,
         _uuid4,
@@ -108,16 +108,16 @@ class ClipboardCaptureWindowsRestoreTests(unittest.TestCase):
         self.assertEqual(capture_snapshot.call_count, 2)
         self.assertEqual(set_text.call_args_list[0].args[0], "__betterfingers_clipboard_probe_fixed__")
 
-    @patch("clipboard_capture._selection_capture_support",
+    @patch("backend.output.clipboard_capture._selection_capture_support",
            return_value={"supported": True, "tool": "native", "copy_trigger_backend": {"name": "native-keyboard", "available": True, "required": []}})
-    @patch("clipboard_capture._schedule_delayed_clipboard_restore")
-    @patch("clipboard_capture._restore_clipboard_snapshot_windows", return_value=False)
-    @patch("clipboard_capture._capture_clipboard_snapshot_windows")
-    @patch("clipboard_capture.time.sleep", return_value=None)
-    @patch("clipboard_capture.keyboard.press_and_release")
-    @patch("clipboard_capture._clipboard_set_text", return_value=True)
-    @patch("clipboard_capture._clipboard_get_text")
-    @patch("clipboard_capture.uuid.uuid4", return_value=_FixedUUID())
+    @patch("backend.output.clipboard_capture._schedule_delayed_clipboard_restore")
+    @patch("backend.output.clipboard_capture._restore_clipboard_snapshot_windows", return_value=False)
+    @patch("backend.output.clipboard_capture._capture_clipboard_snapshot_windows")
+    @patch("backend.output.clipboard_capture.time.sleep", return_value=None)
+    @patch("backend.output.clipboard_capture.keyboard.press_and_release")
+    @patch("backend.output.clipboard_capture._clipboard_set_text", return_value=True)
+    @patch("backend.output.clipboard_capture._clipboard_get_text")
+    @patch("backend.output.clipboard_capture.uuid.uuid4", return_value=_FixedUUID())
     def test_windows_restore_preserves_empty_capture_when_snapshot_restore_fails(
         self,
         _uuid4,

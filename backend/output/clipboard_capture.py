@@ -12,7 +12,7 @@ import ctypes
 import keyboard
 import pyperclip
 
-import platform_capabilities
+from backend.platform import platform_capabilities
 from backend.privacy.log_redaction import redact_exc
 
 

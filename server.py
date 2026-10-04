@@ -27,12 +27,12 @@ from store_migration import get_degraded_events
 import version
 from backend.stt.transcriber import Transcriber
 from backend.stt.streaming_transcriber import BatchCutter, StreamingTranscriptionSession
-from hotkey_manager import HotkeyManager
+from backend.input.hotkey_manager import HotkeyManager
 from backend.audio.audio_gate import should_block_for_no_audio
 from backend.stores.user_profile_manager import profile_manager
 from backend.dev.intent_engine import intent_engine, IntentState
 from backend.dev.project_generator import project_generator
-from platform_capabilities import get_capabilities, get_injection_status
+from backend.platform.platform_capabilities import get_capabilities, get_injection_status
 from backend.models.hardware_report import get_hardware_report, assess_model_fit, get_hardware_tier
 from platform_paths import ensure_app_dirs, get_app_data_dir, get_config_dir
 from backend.stores import recordings
@@ -1320,7 +1320,7 @@ def perform_output_action(text, action="copy_only", open_chat=False):
         # singleton's construction.
         with _output_injector_lock:
             if output_injector is None:
-                from injector import InputInjector
+                from backend.output.injector import InputInjector
 
                 output_injector = InputInjector(profile_name=get_last_active_profile())
             else:
@@ -1573,7 +1573,7 @@ def handle_review_tts_shortcut():
             return {"ok": True, "text": text, "message": "Review text read aloud."}
 
     try:
-        from clipboard_capture import capture_selection_text_with_restore
+        from backend.output.clipboard_capture import capture_selection_text_with_restore
         result = capture_selection_text_with_restore(timeout_ms=350, poll_ms=25)
     except Exception as exc:
         logging.exception("Review TTS shortcut selection capture failed")
@@ -1670,7 +1670,7 @@ def handle_selection_rewrite_shortcut():
             is_processing_draft = True
         try:
             try:
-                from clipboard_capture import capture_selection_text_with_restore
+                from backend.output.clipboard_capture import capture_selection_text_with_restore
 
                 captured = capture_selection_text_with_restore(timeout_ms=350, poll_ms=25)
             except Exception as exc:
@@ -1871,7 +1871,7 @@ def handle_primary_action():
         return send_draft_by_id(draft_id, action="paste", open_chat=False)
 
     try:
-        from clipboard_capture import capture_selection_text_with_restore
+        from backend.output.clipboard_capture import capture_selection_text_with_restore
 
         result = capture_selection_text_with_restore(timeout_ms=350, poll_ms=25)
     except Exception as exc:

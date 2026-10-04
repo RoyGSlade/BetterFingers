@@ -143,7 +143,7 @@ def _detect_windows_app():
 def detect_active_app_key():
     """Best-effort normalized key for the focused application. "" when it can't
     be determined (Wayland, missing tools) — callers fall back to the default."""
-    import platform_capabilities
+    from backend.platform import platform_capabilities
 
     raw = _detect_windows_app() if platform_capabilities.IS_WINDOWS else _detect_x11_app()
     return normalize_app(raw)

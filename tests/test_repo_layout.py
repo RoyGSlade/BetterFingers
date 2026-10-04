@@ -17,12 +17,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 ROOT_MODULES = frozenset({
     "app_paths.py",
-    "clipboard_capture.py",
-    "hotkey_manager.py",
-    "injection_pacing.py",
-    "injector.py",
-    "input_binding.py",
-    "platform_capabilities.py",
     "platform_paths.py",
     "routes_foundry.py",
     "routes_models_resources.py",

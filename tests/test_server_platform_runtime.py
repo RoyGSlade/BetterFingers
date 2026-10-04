@@ -7,7 +7,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import app_paths
-import platform_capabilities
+from backend.platform import platform_capabilities
 import server
 
 
@@ -266,7 +266,7 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
         ), patch.object(platform_capabilities, "is_wayland", True
         ), patch.object(platform_capabilities, "is_x11", False), patch.object(
             platform_capabilities, "session_type", "wayland"
-        ), patch("platform_capabilities.shutil.which", return_value=None):
+        ), patch("backend.platform.platform_capabilities.shutil.which", return_value=None):
             with TestClient(server.app) as client:
                 response = client.get("/doctor")
 
@@ -306,7 +306,7 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
         ), patch.object(platform_capabilities, "is_wayland", True
         ), patch.object(platform_capabilities, "is_x11", False), patch.object(
             platform_capabilities, "session_type", "wayland"
-        ), patch("platform_capabilities.shutil.which", return_value=None):
+        ), patch("backend.platform.platform_capabilities.shutil.which", return_value=None):
             with TestClient(server.app) as client:
                 response = client.get("/doctor")
 
@@ -335,7 +335,7 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
         ), patch.object(platform_capabilities, "is_windows", False), patch.object(
             platform_capabilities, "is_wayland", True
         ), patch.object(platform_capabilities, "is_x11", False), patch(
-            "platform_capabilities.shutil.which", side_effect=lambda name: "/usr/bin/wtype" if name == "wtype" else None
+            "backend.platform.platform_capabilities.shutil.which", side_effect=lambda name: "/usr/bin/wtype" if name == "wtype" else None
         ), patch.dict(
             os.environ, {"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ""}, clear=False
         ):

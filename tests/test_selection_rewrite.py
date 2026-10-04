@@ -60,7 +60,7 @@ def test_success_uses_selected_persona_and_preserves_source_output(monkeypatch):
     monkeypatch.setattr(server, "get_selected_llm_engine", lambda: engine)
     monkeypatch.setattr(server, "broadcast_status_threadsafe", lambda status, data=None: statuses.append((status, data or {})))
     monkeypatch.setattr(
-        "clipboard_capture.capture_selection_text_with_restore",
+        "backend.output.clipboard_capture.capture_selection_text_with_restore",
         lambda **_kwargs: _capture("source text"),
     )
 
@@ -121,7 +121,7 @@ def test_empty_or_unsupported_capture_fails_without_model_or_draft(
     monkeypatch.setattr(server, "get_selected_llm_engine", lambda: engine)
     monkeypatch.setattr(server, "broadcast_status_threadsafe", broadcaster)
     monkeypatch.setattr(
-        "clipboard_capture.capture_selection_text_with_restore",
+        "backend.output.clipboard_capture.capture_selection_text_with_restore",
         lambda **_kwargs: capture_result,
     )
 
@@ -157,7 +157,7 @@ def test_existing_clipboard_fallback_is_never_rewritten_as_a_selection(monkeypat
         lambda status, data=None: statuses.append((status, data or {})),
     )
     monkeypatch.setattr(
-        "clipboard_capture.capture_selection_text_with_restore",
+        "backend.output.clipboard_capture.capture_selection_text_with_restore",
         lambda **_kwargs: {
             "ok": True,
             "text": "stale private clipboard text",
@@ -198,7 +198,7 @@ def test_wayland_missing_wl_copy_preserves_actionable_install_message(monkeypatc
         "message": "helper-specific wl-copy message",
     }
     monkeypatch.setattr(
-        "clipboard_capture.capture_selection_text_with_restore",
+        "backend.output.clipboard_capture.capture_selection_text_with_restore",
         lambda **_kwargs: capture_result,
     )
     monkeypatch.setattr(server, "broadcast_status_threadsafe", lambda *_args, **_kwargs: None)
@@ -218,7 +218,7 @@ def test_missing_display_preserves_capture_helper_message(monkeypatch):
         "message": "helper-specific missing-display message",
     }
     monkeypatch.setattr(
-        "clipboard_capture.capture_selection_text_with_restore",
+        "backend.output.clipboard_capture.capture_selection_text_with_restore",
         lambda **_kwargs: capture_result,
     )
     monkeypatch.setattr(server, "broadcast_status_threadsafe", lambda *_args, **_kwargs: None)
@@ -237,7 +237,7 @@ def test_unsupported_capture_constructs_message_when_helper_message_absent(monke
         "missing_tool": "wl-copy",
     }
     monkeypatch.setattr(
-        "clipboard_capture.capture_selection_text_with_restore",
+        "backend.output.clipboard_capture.capture_selection_text_with_restore",
         lambda **_kwargs: capture_result,
     )
     monkeypatch.setattr(server, "broadcast_status_threadsafe", lambda *_args, **_kwargs: None)
@@ -261,7 +261,7 @@ def test_unsupported_capture_constructs_message_when_helper_message_absent(monke
 )
 def test_busy_recording_processing_and_wipe_fail_closed(monkeypatch, setup, reason):
     capture = Mock(return_value=_capture())
-    monkeypatch.setattr("clipboard_capture.capture_selection_text_with_restore", capture)
+    monkeypatch.setattr("backend.output.clipboard_capture.capture_selection_text_with_restore", capture)
     monkeypatch.setattr(server, "broadcast_status_threadsafe", Mock())
     if setup == "recording":
         server.hotkey_manager = SimpleNamespace(is_recording=True)
@@ -288,7 +288,7 @@ def test_model_exception_creates_no_draft_and_does_not_leak_source(monkeypatch):
     monkeypatch.setattr(server, "get_selected_llm_engine", lambda: engine)
     monkeypatch.setattr(server, "broadcast_status_threadsafe", lambda status, data=None: statuses.append((status, data or {})))
     monkeypatch.setattr(
-        "clipboard_capture.capture_selection_text_with_restore",
+        "backend.output.clipboard_capture.capture_selection_text_with_restore",
         lambda **_kwargs: _capture(secret),
     )
 
@@ -318,7 +318,7 @@ def test_recording_started_during_model_work_fails_closed_without_draft(monkeypa
     monkeypatch.setattr(server, "get_selected_llm_engine", lambda: engine)
     monkeypatch.setattr(server, "broadcast_status_threadsafe", lambda status, data=None: statuses.append((status, data or {})))
     monkeypatch.setattr(
-        "clipboard_capture.capture_selection_text_with_restore",
+        "backend.output.clipboard_capture.capture_selection_text_with_restore",
         lambda **_kwargs: _capture("source text"),
     )
 
@@ -343,7 +343,7 @@ def test_malformed_profile_chunk_size_is_normalized_before_model_call(monkeypatc
     )
     monkeypatch.setattr(server, "get_selected_llm_engine", lambda: engine)
     monkeypatch.setattr(
-        "clipboard_capture.capture_selection_text_with_restore",
+        "backend.output.clipboard_capture.capture_selection_text_with_restore",
         lambda **_kwargs: _capture("source text"),
     )
 

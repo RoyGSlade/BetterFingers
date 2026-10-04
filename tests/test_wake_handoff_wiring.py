@@ -355,7 +355,7 @@ class HotkeyManagerThreadingTests(unittest.TestCase):
     """The reason and the pre-roll have to survive the trip to the recorder."""
 
     def _manager(self):
-        import hotkey_manager
+        from backend.input import hotkey_manager
 
         manager = hotkey_manager.HotkeyManager.__new__(hotkey_manager.HotkeyManager)
         manager.recorder = mock.Mock()

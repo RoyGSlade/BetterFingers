@@ -10,9 +10,9 @@ import keyboard
 import pyperclip
 
 from backend.audio import audio_schema
-import clipboard_capture
-import injection_pacing
-import platform_capabilities
+from backend.output import clipboard_capture
+from backend.output import injection_pacing
+from backend.platform import platform_capabilities
 
 IS_WINDOWS = platform_capabilities.IS_WINDOWS
 

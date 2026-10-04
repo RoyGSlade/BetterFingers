@@ -48,7 +48,7 @@ from backend.domain.input_actions import (
     normalize_action_id,
     normalize_param,
 )
-from input_binding import InputBinding
+from backend.input.input_binding import InputBinding
 from store_migration import load_versioned_store, write_atomic
 
 # Schema history:

@@ -2,7 +2,7 @@ import logging
 import threading
 import time
 
-from input_binding import InputBinding
+from backend.input.input_binding import InputBinding
 from utils import load_profile
 
 try:

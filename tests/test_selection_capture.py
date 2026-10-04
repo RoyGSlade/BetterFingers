@@ -60,7 +60,7 @@ def test_unsupported_platform_short_circuits_before_capture():
 
 
 def test_default_supported_fn_requires_clipboard_and_copy_trigger(monkeypatch):
-    import clipboard_capture as cc
+    from backend.output import clipboard_capture as cc
 
     monkeypatch.setattr(cc, "_selection_capture_support", lambda: {
         "supported": False,
@@ -75,7 +75,7 @@ def test_default_capture_fn_restores_clipboard_via_existing_adapter(monkeypatch)
     """No capture_fn override: exercises the real clipboard_capture path, but with
     the clipboard itself faked out (same technique as test_clipboard_capture.py),
     so restoration-on-success is verified without touching a real clipboard."""
-    import clipboard_capture as cc
+    from backend.output import clipboard_capture as cc
 
     box = {"value": "PRIOR_CLIPBOARD"}
 
@@ -117,7 +117,7 @@ def test_default_capture_fn_restores_clipboard_via_existing_adapter(monkeypatch)
 
 
 def test_default_capture_fn_restores_clipboard_on_empty_capture(monkeypatch):
-    import clipboard_capture as cc
+    from backend.output import clipboard_capture as cc
 
     box = {"value": "PRIOR_CLIPBOARD"}
 
