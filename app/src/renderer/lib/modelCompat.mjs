@@ -12,66 +12,68 @@ const STATIC_KOKORO_VOICE_IDS = Object.freeze([
 ]);
 
 // The three ONNX artifact names are selected explicitly by the loader.
-// backend/tts/tts_engine.py:876-882. The voice IDs are only the server's static offerings
-// (server.py:5418-5428); the ONNX voice pack is checked dynamically by
-// backend/tts/tts_engine.py:1124-1139 but is not exposed to this renderer. They are marked
+// backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_onnx_backend.
+// The voice IDs are only the server's static offerings (server.py::list_voices);
+// the ONNX voice pack is checked dynamically by
+// backend/tts/tts_engine.py::ReviewTTSEngine._onnx_voice_exists. They are marked
 // assumptions below rather than being presented as runtime proof.
 export const TTS_MODEL_COMPATIBILITY = Object.freeze([
-  // DERIVED: backend/tts/tts_engine.py:876-882 selects this exact artifact for fp32;
-  // backend/tts/tts_engine.py:884-902 downloads it for the ONNX runtime.
+  // DERIVED: backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_onnx_backend
+  // selects this exact artifact for fp32 and downloads it for the ONNX runtime.
   {
     runtime: 'onnx',
     model: 'kokoro-v1.0.onnx',
     compatible: true,
     supportedVoiceIds: STATIC_KOKORO_VOICE_IDS,
     voiceSupport: 'assumption',
-    evidence: 'backend/tts/tts_engine.py:876-902; server.py:5418-5428',
+    evidence: 'backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_onnx_backend; server.py::list_voices',
   },
-  // DERIVED: backend/tts/tts_engine.py:876-882 selects this exact artifact for fp16;
-  // backend/tts/tts_engine.py:884-902 downloads it for the ONNX runtime.
+  // DERIVED: backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_onnx_backend
+  // selects this exact artifact for fp16 and downloads it for the ONNX runtime.
   {
     runtime: 'onnx',
     model: 'kokoro-v1.0.fp16.onnx',
     compatible: true,
     supportedVoiceIds: STATIC_KOKORO_VOICE_IDS,
     voiceSupport: 'assumption',
-    evidence: 'backend/tts/tts_engine.py:876-902; server.py:5418-5428',
+    evidence: 'backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_onnx_backend; server.py::list_voices',
   },
-  // DERIVED: backend/tts/tts_engine.py:876-882 selects this exact artifact for int8;
-  // backend/tts/tts_engine.py:884-902 downloads it for the ONNX runtime.
+  // DERIVED: backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_onnx_backend
+  // selects this exact artifact for int8 and downloads it for the ONNX runtime.
   {
     runtime: 'onnx',
     model: 'kokoro-v1.0.int8.onnx',
     compatible: true,
     supportedVoiceIds: STATIC_KOKORO_VOICE_IDS,
     voiceSupport: 'assumption',
-    evidence: 'backend/tts/tts_engine.py:876-902; server.py:5418-5428',
+    evidence: 'backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_onnx_backend; server.py::list_voices',
   },
   // DERIVED KNOWN-BAD: the native path constructs KPipeline
-  // (backend/tts/tts_engine.py:827-852), while ONNX artifacts are loaded only by
-  // _load_kokoro_onnx_backend (backend/tts/tts_engine.py:861-935).
+  // (backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_backend), while ONNX
+  // artifacts use backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_onnx_backend.
   {
     runtime: 'native',
     model: 'kokoro-v1.0.onnx',
     compatible: false,
-    evidence: 'backend/tts/tts_engine.py:827-852,861-935',
+    evidence: 'backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_backend; backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_onnx_backend',
   },
   // DERIVED KNOWN-BAD: same native-vs-ONNX loader boundary as above.
   {
     runtime: 'native',
     model: 'kokoro-v1.0.fp16.onnx',
     compatible: false,
-    evidence: 'backend/tts/tts_engine.py:827-852,861-935',
+    evidence: 'backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_backend; backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_onnx_backend',
   },
   // DERIVED KNOWN-BAD: same native-vs-ONNX loader boundary as above.
   {
     runtime: 'native',
     model: 'kokoro-v1.0.int8.onnx',
     compatible: false,
-    evidence: 'backend/tts/tts_engine.py:827-852,861-935',
+    evidence: 'backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_backend; backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_onnx_backend',
   },
   // DERIVED KNOWN-BAD: blending is explicitly gated to ONNX by
-  // backend/tts/tts_engine.py:1057-1067; keep this capability row separate from model
+  // backend/tts/tts_engine.py::ReviewTTSEngine._resolve_voice_spec;
+  // keep this capability row separate from model
   // rows so a missing model identifier cannot turn a known runtime limitation
   // into an unknown/quiet state.
   {
@@ -79,7 +81,7 @@ export const TTS_MODEL_COMPATIBILITY = Object.freeze([
     model: '*',
     capability: 'blend',
     compatible: false,
-    evidence: 'backend/tts/tts_engine.py:1057-1067',
+    evidence: 'backend/tts/tts_engine.py::ReviewTTSEngine._resolve_voice_spec',
   },
 ]);
 
@@ -87,14 +89,15 @@ export const TTS_MODEL_COMPATIBILITY = Object.freeze([
 // records: the loader exposes fp32, fp16, and int8 variants, and int8 is the
 // lowest declared quantization. The repo does not record artifact byte sizes,
 // so this must not be described as a measured smallest-file claim.
-// DERIVED: backend/tts/tts_engine.py:876-882; default quantization is surfaced at
-// server.py:1015-1017 and applied at server.py:1320-1341.
+// DERIVED: backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_onnx_backend;
+// default quantization is surfaced at server.py::get_profile_output_settings
+// and applied at server.py::speak_text_aloud.
 export const SMALLEST_SUPPORTED_TTS_MODEL = Object.freeze({
   id: 'kokoro-v1.0.int8.onnx',
   runtime: 'onnx',
   quantization: 'int8',
   basis: 'lowest declared Kokoro quantization variant; artifact byte size is not recorded in this repo',
-  evidence: 'backend/tts/tts_engine.py:876-882; server.py:1015-1017,1320-1341',
+  evidence: 'backend/tts/tts_engine.py::ReviewTTSEngine._load_kokoro_onnx_backend; server.py::get_profile_output_settings; server.py::speak_text_aloud',
 });
 
 function normalizeRuntime(runtime) {
