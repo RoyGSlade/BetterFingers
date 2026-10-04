@@ -110,14 +110,14 @@ frozen backend afterwards. The release workflow sets the download switch for
 both installers. This inventory file is itself added to the frozen backend
 (`_internal/LICENSES-MODELS.md`) as the provenance record.
 
-**UNVERIFIED release obligations:** preserve the original OpenAI Whisper and
-SYSTRAN conversion MIT copyright and permission notices with the redistributed
-weights. The four manifest files carry no license file, and the notice text has
-not been retrieved from upstream or added to the installer; this inventory entry
-and the hashes do not replace that, and do not prove inference readiness. Next
-checks: retrieve the complete applicable upstream notice text, retain it in the
-installer, then compare the signed installer's actual file manifest. No signed
-installer has been built or inventoried.
+**Notices:** the four manifest files carry no license file, so the OpenAI
+Whisper (`Copyright (c) 2022 OpenAI`) and SYSTRAN faster-whisper
+(`Copyright (c) 2023 SYSTRAN`) MIT copyright and permission notices were copied
+verbatim from the upstream LICENSE files on 2026-10-04 into
+`licenses/bundled-base.en-NOTICE.txt`, which the build ships as required data
+(`_internal/bundled-base.en-NOTICE.txt`, next to this inventory; the build fails
+without it). **UNVERIFIED:** the signed installer's actual file manifest has not
+been inventoried yet, and none of this proves inference readiness.
 
 ### Bundled speech runtime
 

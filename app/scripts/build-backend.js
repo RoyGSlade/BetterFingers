@@ -30,14 +30,18 @@ const dataSources = [
   ['backend/stt/bundled_manifest.json', 'backend/stt'],
   // Model/runtime license inventory (MIT notice trail for the bundled weights).
   ['LICENSES-MODELS.md', '.'],
+  // The verbatim OpenAI Whisper + SYSTRAN MIT notices MIT requires us to ship
+  // with the bundled base.en weights.
+  ['licenses/bundled-base.en-NOTICE.txt', '.'],
 ];
 
-// These two are not optional the way the other data files are treated: a build
-// that warned and skipped them would still "succeed" and ship a backend that
-// cannot verify its bundled model, or an installer without its license trail.
+// These are not optional the way the other data files are treated: a build that
+// warned and skipped them would still "succeed" and ship a backend that cannot
+// verify its bundled model, or an installer without its license notices.
 const requiredDataSources = [
   'backend/stt/bundled_manifest.json',
   'LICENSES-MODELS.md',
+  'licenses/bundled-base.en-NOTICE.txt',
 ];
 
 // The installer ships the pinned Systran faster-whisper base.en model so the

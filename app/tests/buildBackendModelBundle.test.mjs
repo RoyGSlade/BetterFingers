@@ -334,17 +334,24 @@ test('the model rides in the existing backend resource; no second 148 MB payload
   assert.ok(extraResources.some((entry) => entry.from === 'resources/backend' && entry.to === 'backend'));
 });
 
-test('the manifest and license inventory are shipped and are required, not warn-and-skip', () => {
+test('the manifest, license inventory and model notices are shipped and are required, not warn-and-skip', () => {
   const manifest = ['backend/stt/bundled_manifest.json', 'backend/stt'];
   const licenses = ['LICENSES-MODELS.md', '.'];
+  const notices = ['licenses/bundled-base.en-NOTICE.txt', '.'];
   assert.deepEqual(dataSources.find(([source]) => source === manifest[0]), manifest);
   assert.deepEqual(dataSources.find(([source]) => source === licenses[0]), licenses);
-  assert.deepEqual([...requiredDataSources].sort(), [manifest[0], licenses[0]].sort());
+  assert.deepEqual(dataSources.find(([source]) => source === notices[0]), notices);
+  assert.deepEqual([...requiredDataSources].sort(), [manifest[0], licenses[0], notices[0]].sort());
   for (const source of requiredDataSources) {
     assert.equal(fs.existsSync(path.join(repoRoot, source)), true, `${source} must exist in the repo`);
   }
+  // MIT: both upstream copyright lines must travel with the weights.
+  const noticeText = fs.readFileSync(path.join(repoRoot, notices[0]), 'utf8');
+  assert.match(noticeText, /Copyright \(c\) 2022 OpenAI/);
+  assert.match(noticeText, /Copyright \(c\) 2023 SYSTRAN/);
+  assert.match(noticeText, /3d3d5dee26484f91867d81cb899cfcf72b96be6c/);
   const args = buildPyinstallerArgs({ modelStageDir: null });
-  for (const [source, target] of [manifest, licenses]) {
+  for (const [source, target] of [manifest, licenses, notices]) {
     assert.ok(
       args.includes(`${path.join(repoRoot, source)}${dataSeparator}${target}`),
       `PyInstaller must add ${source} -> ${target}`,
