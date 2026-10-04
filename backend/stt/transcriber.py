@@ -14,6 +14,7 @@ from huggingface_hub.constants import HF_HUB_CACHE
 from backend.domain.contracts import TimedSegment, TranscriptionResult
 from backend.privacy.log_redaction import redact_user_text
 from backend.stt.text_formatter import TextFormatter
+from backend.stt.cuda_runtime import ensure_cuda_libraries_on_path
 from backend.config.utils import load_profile
 
 try:
@@ -581,6 +582,10 @@ class Transcriber:
             logging.info("Skipping CUDA for Whisper: it already failed in this process (%s).", fallback_reason)
         elif self.prefer_gpu:
             model = None
+            # Make an installed cuBLAS/cuDNN runtime reachable before CTranslate2
+            # loads it by name; without one, the load-time probe below fails
+            # and we fall back to CPU exactly as before.
+            ensure_cuda_libraries_on_path()
             try:
                 device = "cuda"
                 compute_type = "float16"

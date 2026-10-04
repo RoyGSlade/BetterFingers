@@ -64,6 +64,23 @@ npm run test:unit
 
 The conftest refuses any test that would resolve a data root outside a temp directory, and stops server tests from preloading real models. Keep both guards intact.
 
+## GPU speech-to-text (optional, NVIDIA)
+
+faster-whisper needs NVIDIA's cuBLAS and cuDNN for CUDA. They are not in the lock files (about 1.26 GB); install them into the dev venv when you want GPU dictation:
+
+```bash
+.venv/Scripts/python.exe -m pip install --no-deps --require-hashes -r gpu-requirements.txt
+```
+
+with `gpu-requirements.txt` containing:
+
+```text
+nvidia-cublas-cu12==12.8.4.1 --hash=sha256:47e9b82132fa8d2b4944e708049229601448aaad7e6f296f630f2d1a32de35af
+nvidia-cudnn-cu12==9.10.2.21 --hash=sha256:c6288de7d63e6cf62988f0923f96dc339cea362decb1bf5b3141883392a7d65e
+```
+
+`backend/stt/cuda_runtime.py` finds them (or a folder named by `BETTERFINGERS_CUDA_RUNTIME_DIR`) and puts them on the process PATH before the first CUDA load; without them the load-time probe falls back to CPU. The first CUDA use on a machine compiles kernels once (about 20 s on an RTX 5070, cached afterwards). The packaged app does not ship this runtime yet.
+
 ## Building
 
 `npm run dist:win` builds the renderer, freezes the backend with PyInstaller (`app/scripts/build-backend.js`) and packages the installer. Note that `build-backend.js` empties `app/resources/backend` first. To check what the backend bundle contains without touching that folder, run PyInstaller with the same arguments and `--distpath/--workpath/--specpath` pointed at a temp directory. Signing is documented in [docs/release/WINDOWS_SIGNING.md](release/WINDOWS_SIGNING.md).
