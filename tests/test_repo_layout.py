@@ -22,8 +22,6 @@ ROOT_MODULES = frozenset({
     "injection_pacing.py",
     "injector.py",
     "input_binding.py",
-    "llm_engine.py",
-    "persona_traits.py",
     "platform_capabilities.py",
     "platform_paths.py",
     "routes_foundry.py",

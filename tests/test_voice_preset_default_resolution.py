@@ -99,7 +99,7 @@ class ResolveVoiceDefaultPresetLayerTests(unittest.TestCase):
             )
         self.assertEqual(voice_id, server.normalize_tts_voice_id("am_puck"))
 
-    @patch("llm_engine.get_persona")
+    @patch("backend.llm.llm_engine.get_persona")
     def test_persona_with_voice_identity_beats_default_preset(self, mock_get_persona):
         mock_get_persona.return_value = {
             "voice": {"base": "bf_emma", "preset": "", "speed": 1.0, "pitch": 0.0,

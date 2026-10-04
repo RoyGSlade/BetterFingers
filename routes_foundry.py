@@ -60,7 +60,7 @@ class FoundryStressTestRequest(BaseModel):
 
 @router.post("/personas/interview/start")
 async def start_foundry_interview():
-    from llm_engine import foundry_new_session, foundry_next_prompt
+    from backend.llm.llm_engine import foundry_new_session, foundry_next_prompt
     _foundry_evict_if_full()
     session = foundry_new_session()
     session["created"] = time.monotonic()
@@ -71,7 +71,7 @@ async def start_foundry_interview():
 
 @router.post("/personas/interview/answer")
 async def answer_foundry_interview(request: FoundryAnswerRequest):
-    from llm_engine import foundry_next_prompt, foundry_submit_answer
+    from backend.llm.llm_engine import foundry_next_prompt, foundry_submit_answer
     session = _foundry_get_session(request.session_id)
     result = foundry_submit_answer(session, request.answer)
     return {
@@ -101,7 +101,7 @@ async def compile_foundry_persona_route(request: FoundrySessionRequest):
 async def run_foundry_stress_suite_route(request: FoundryStressTestRequest):
     import server
 
-    from llm_engine import normalize_persona
+    from backend.llm.llm_engine import normalize_persona
     # Validate the request BEFORE resolving the engine: get_selected_llm_engine()
     # lazily boots the real LLM sidecar (llama-server spawn + model load), so
     # touching it first meant even a malformed request paid a multi-second model

@@ -4,7 +4,7 @@ import unittest
 
 import yaml
 
-import llm_engine
+from backend.llm import llm_engine
 
 
 class NormalizePersonaTests(unittest.TestCase):

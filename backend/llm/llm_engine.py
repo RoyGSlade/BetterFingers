@@ -18,7 +18,7 @@ import re
 import tempfile
 import yaml
 
-from persona_traits import (
+from backend.llm.persona_traits import (
     neutral_traits,
     normalize_traits,
     render_traits_block,

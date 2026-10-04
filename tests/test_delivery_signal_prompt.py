@@ -79,7 +79,7 @@ class TestPromptInjection:
         Importing llm_engine pulls in the whole runtime; this asserts on the
         contract of the appended text, which is what the rules constrain.
         """
-        import llm_engine
+        from backend.llm import llm_engine
         import inspect
 
         source = inspect.getsource(llm_engine.LLMEngine.process_fast_lane)
@@ -88,7 +88,7 @@ class TestPromptInjection:
 
     def test_process_fast_lane_accepts_the_kwarg(self):
         import inspect
-        import llm_engine
+        from backend.llm import llm_engine
 
         sig = inspect.signature(llm_engine.LLMEngine.process_fast_lane)
         assert "delivery_summary" in sig.parameters
@@ -130,13 +130,13 @@ class TestPreservationClause:
     def _source():
         import inspect
 
-        import llm_engine
+        from backend.llm import llm_engine
 
         return inspect.getsource(llm_engine.LLMEngine.process_fast_lane)
 
     @staticmethod
     def _clause():
-        import llm_engine
+        from backend.llm import llm_engine
 
         return llm_engine.PRESERVATION_CLAUSE
 

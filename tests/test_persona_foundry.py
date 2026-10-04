@@ -1,8 +1,8 @@
 import unittest
 from unittest.mock import patch
 
-import llm_engine
-from llm_engine import LLMEngine
+from backend.llm import llm_engine
+from backend.llm.llm_engine import LLMEngine
 
 
 def _answer_text(session, qid, text):

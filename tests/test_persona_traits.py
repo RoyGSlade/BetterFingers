@@ -10,8 +10,8 @@ invite invention, and that a trait never comes from anywhere but a slider.
 
 import pytest
 
-import llm_engine
-from persona_traits import (
+from backend.llm import llm_engine
+from backend.llm.persona_traits import (
     BAND_HIGH,
     BAND_LOW,
     BAND_NEUTRAL,

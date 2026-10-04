@@ -44,7 +44,7 @@ def _build_process_fn():
     engine serves both axes.
     """
     try:
-        import llm_engine
+        from backend.llm import llm_engine
     except Exception as exc:  # noqa: BLE001
         return None, f"llm_engine import failed: {type(exc).__name__}"
 

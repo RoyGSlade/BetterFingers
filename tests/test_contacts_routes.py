@@ -355,7 +355,7 @@ class ContactGeneratorResolutionTests(unittest.TestCase):
                 raise AssertionError("compile must not boot the model by default")
 
         with patch.object(server, "get_selected_llm_engine", return_value=_Engine()), \
-                patch("llm_engine.is_server_running", return_value=False):
+                patch("backend.llm.llm_engine.is_server_running", return_value=False):
             self.assertIsNone(contacts_routes._resolve_generator(False))
 
     def test_wait_for_model_boots_it(self):

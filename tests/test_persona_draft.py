@@ -14,7 +14,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import server
-from llm_engine import (
+from backend.llm.llm_engine import (
     LLMEngine,
     PERSONA_SECURITY_RULE,
     parse_persona_draft_response,

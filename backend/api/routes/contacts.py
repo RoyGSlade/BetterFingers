@@ -235,7 +235,7 @@ def _resolve_generator(wait_for_model: bool):
         # load the model -- a multi-second hang to write two sentences.
         ready = bool(getattr(engine, "_ready", False))
         if not ready:
-            from llm_engine import is_server_running
+            from backend.llm.llm_engine import is_server_running
             ready = is_server_running() and bool(engine.ensure_ready())
 
     if not ready:

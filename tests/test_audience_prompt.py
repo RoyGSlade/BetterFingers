@@ -24,7 +24,7 @@ from backend.services.contacts import audience_block
 
 
 def _process_fast_lane_source():
-    import llm_engine
+    from backend.llm import llm_engine
 
     return inspect.getsource(llm_engine.LLMEngine.process_fast_lane)
 
@@ -67,7 +67,7 @@ class TestAudienceBlock:
 
 class TestPromptContract:
     def test_process_fast_lane_accepts_the_kwarg(self):
-        import llm_engine
+        from backend.llm import llm_engine
 
         sig = inspect.signature(llm_engine.LLMEngine.process_fast_lane)
         assert "audience_summary" in sig.parameters

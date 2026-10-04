@@ -6,7 +6,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import server
-import llm_engine
+from backend.llm import llm_engine
 
 
 class DummyTranscriber:

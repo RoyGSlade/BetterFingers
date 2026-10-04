@@ -750,7 +750,7 @@ class ServerDraftTests(unittest.TestCase):
 
     def test_tts_speak_uses_persona_voice_when_persona_has_identity(self):
         self._isolate_user_data()
-        import llm_engine
+        from backend.llm import llm_engine
         llm_engine.upsert_persona("Narrator", {
             "prompt": "Read it clearly.",
             "voice": {"base": "bm_george", "pitch": -1.0, "energy": 0.8},
@@ -770,7 +770,7 @@ class ServerDraftTests(unittest.TestCase):
 
     def test_tts_speak_persona_without_voice_identity_falls_through_to_profile(self):
         self._isolate_user_data()
-        import llm_engine
+        from backend.llm import llm_engine
         # A persona whose voice was never configured (all defaults) must not
         # override the profile default with its inert base="" / energy=0.5 etc.
         llm_engine.upsert_persona("Plain", {"prompt": "Just rewrite it."})
@@ -787,7 +787,7 @@ class ServerDraftTests(unittest.TestCase):
 
     def test_tts_speak_persona_preset_used_when_persona_base_unset(self):
         self._isolate_user_data()
-        import llm_engine
+        from backend.llm import llm_engine
         from backend.stores import voice_presets
         voice_presets.save_preset("Presentation Voice", base="am_michael", speed=1.05)
         llm_engine.upsert_persona("Presenter", {
@@ -807,7 +807,7 @@ class ServerDraftTests(unittest.TestCase):
 
     def test_tts_speak_explicit_field_overrides_persona(self):
         self._isolate_user_data()
-        import llm_engine
+        from backend.llm import llm_engine
         llm_engine.upsert_persona("Narrator", {
             "prompt": "Read it.", "voice": {"base": "bm_george"},
         })
@@ -826,7 +826,7 @@ class ServerDraftTests(unittest.TestCase):
 
     def test_tts_speak_request_preset_wins_over_persona(self):
         self._isolate_user_data()
-        import llm_engine
+        from backend.llm import llm_engine
         from backend.stores import voice_presets
         voice_presets.save_preset("Explicit Preset", base="af_sarah")
         llm_engine.upsert_persona("Narrator", {"prompt": "Read it.", "voice": {"base": "bm_george"}})

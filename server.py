@@ -21,7 +21,7 @@ from fastapi import Depends, FastAPI, UploadFile, File, Form, HTTPException, Web
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
-from llm_engine import LLMEngine, get_engine, get_engine_if_initialized, resolve_dictation_preset
+from backend.llm.llm_engine import LLMEngine, get_engine, get_engine_if_initialized, resolve_dictation_preset
 from backend.privacy.log_redaction import redact_exc, redact_user_text
 from store_migration import get_degraded_events
 import version
@@ -3832,7 +3832,7 @@ def _unload_model_component_locked(component: str):
                         logging.debug(f"LLM {method}() failed: {exc}")
             # Drop the module-level singleton so the wrapper can be collected.
             try:
-                import llm_engine
+                from backend.llm import llm_engine
 
                 llm_engine._engine_instance = None
             except Exception as exc:
@@ -5233,7 +5233,7 @@ def _resolve_voice_and_modulation(request, config):
 
     persona_name = str(getattr(request, "persona", "") or "").strip()
     if persona_name:
-        from llm_engine import get_persona
+        from backend.llm.llm_engine import get_persona
         persona = get_persona(persona_name)
         persona_voice = (persona or {}).get("voice", {}) or {}
         has_voice_identity = bool(str(persona_voice.get("base", "") or "").strip()) or bool(

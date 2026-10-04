@@ -10,32 +10,32 @@ from typing import Any, Optional
 
 
 def list_personas() -> dict:
-    from llm_engine import load_personas
+    from backend.llm.llm_engine import load_personas
     return load_personas(force_reload=True)
 
 
 def list_builtin_persona_names() -> list:
-    from llm_engine import get_builtin_persona_names
+    from backend.llm.llm_engine import get_builtin_persona_names
     return get_builtin_persona_names()
 
 
 def get_persona(name: str) -> Optional[dict]:
-    from llm_engine import get_persona as _get_persona
+    from backend.llm.llm_engine import get_persona as _get_persona
     return _get_persona(name)
 
 
 def save_persona(name: str, payload: dict) -> tuple:
-    from llm_engine import upsert_persona
+    from backend.llm.llm_engine import upsert_persona
     return upsert_persona(name, payload)
 
 
 def lint_persona(payload: dict) -> list:
-    from llm_engine import lint_persona as _lint_persona
+    from backend.llm.llm_engine import lint_persona as _lint_persona
     return _lint_persona(payload)
 
 
 def delete_persona(name: str) -> tuple:
-    from llm_engine import delete_persona as _delete_persona
+    from backend.llm.llm_engine import delete_persona as _delete_persona
     return _delete_persona(name)
 
 
