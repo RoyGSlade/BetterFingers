@@ -68,6 +68,16 @@ function triggerBackendAction(endpoint) {
   });
 
   request.setHeader('Authorization', `Bearer ${authToken}`);
+  if (endpoint === EP_PRIMARY) {
+    // Snapshot at the physical key press. A queued newer draft is not evidence
+    // that its renderer has displayed it yet; hidden/unknown overlays pass null.
+    // A visible overlay without an acknowledgment is reported so the backend
+    // refuses to guess; a hidden one lets F9 fall back to read-aloud.
+    const { getDisplayedReviewDraft, isReviewWindowVisible } = require('./windows');
+    const visible = typeof isReviewWindowVisible === 'function' && isReviewWindowVisible();
+    request.setHeader('Content-Type', 'application/json');
+    request.write(JSON.stringify(getDisplayedReviewDraft() || (visible ? { review_visible: true } : {})));
+  }
 
   request.on('response', (response) => {
     if (response.statusCode !== 200) {

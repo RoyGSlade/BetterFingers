@@ -96,13 +96,13 @@ class GamingDeliveryTests(unittest.TestCase):
                 self.assertEqual(_RecordingInjector.typed, [])
                 self.assertEqual(self.copied, ["hello from the lobby"])
 
-    def test_detection_failure_falls_back_to_the_cached_snapshot(self):
+    def test_detection_failure_copies_instead_of_trusting_stale_non_game_snapshot(self):
         service = _StaleThenGameService(poll_error=OSError("foreground query failed"))
         payload = self._deliver(service, "paste")
         self.assertEqual(service.poll_calls, 1)
-        # Cached snapshot (not a game) decides, exactly as before this change.
-        self.assertNotEqual(payload["requested_action"], "copy_only")
-        self.assertEqual(self.copied, [])
+        self.assertEqual(payload["requested_action"], "copy_only")
+        self.assertEqual(_RecordingInjector.typed, [])
+        self.assertEqual(self.copied, ["hello from the lobby"])
 
 
 if __name__ == "__main__":

@@ -43,7 +43,7 @@ Send Mode
 "Choose your Send Mode. Review First shows you a preview before sending so you can approve or edit. Auto Send types directly into the active window without confirmation."
 
 Primary Action Hotkey
-"This is your Primary Action Hotkey. By default it is F9. In Review mode, pressing it accepts and sends your draft. When no draft is pending, it reads highlighted text aloud using TTS."
+"This is your Primary Action Hotkey. By default it is F9. In Review mode, pressing it accepts and places the draft shown in the review overlay. When no draft is shown, it reads highlighted text aloud using TTS."
 
 Review TTS Voice
 "Select your Review TTS Voice here. This is the voice that reads your drafts aloud during review. You can preview different voices using the play button."

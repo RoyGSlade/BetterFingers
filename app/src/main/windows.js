@@ -372,6 +372,9 @@ function focusMainWindow(window = mainWindow) {
 
 let overlayWindow = null;
 let reviewWindow = null;
+let reviewPresentation = 0;
+let expectedReviewDraftId = null;
+let displayedReviewDraft = null;
 
 function createOverlayWindow() {
   loadOverlayAppearance();
@@ -481,8 +484,13 @@ function createReviewWindow() {
   hardenWindowNavigation(reviewWindow);
 
   reviewWindow.on('closed', () => {
+    displayedReviewDraft = null;
+    expectedReviewDraftId = null;
     reviewWindow = null;
   });
+  reviewWindow.on('hide', () => { displayedReviewDraft = null; });
+  reviewWindow.webContents.on('did-start-loading', () => { displayedReviewDraft = null; });
+  reviewWindow.webContents.on('render-process-gone', () => { displayedReviewDraft = null; });
 
   loadReviewOverlay(reviewWindow).catch((error) => {
     console.error('Failed to load Electron review overlay:', error);
@@ -493,9 +501,12 @@ function createReviewWindow() {
 
 function showReviewWindow(draft) {
   const window = createReviewWindow();
+  const presentation = ++reviewPresentation;
+  expectedReviewDraftId = draft?.id ?? null;
+  displayedReviewDraft = null;
   const sendDraft = () => {
-    if (!window.isDestroyed()) {
-      window.webContents.send('review:draft', draft ?? null);
+    if (!window.isDestroyed() && presentation === reviewPresentation) {
+      window.webContents.send('review:draft', draft ? { ...draft, reviewPresentation: presentation } : null);
     }
   };
 
@@ -510,6 +521,7 @@ function showReviewWindow(draft) {
 }
 
 function hideReviewWindow() {
+  displayedReviewDraft = null;
   if (reviewWindow && !reviewWindow.isDestroyed() && reviewWindow.isVisible()) {
     reviewWindow.hide();
   }
@@ -517,6 +529,26 @@ function hideReviewWindow() {
 
 function getReviewWindow() {
   return reviewWindow;
+}
+
+function acknowledgeReviewDraft(sender, payload) {
+  if (!reviewWindow || reviewWindow.isDestroyed() || sender !== reviewWindow.webContents) return false;
+  // A stale/invalid renderer update is uncertainty, not permission to keep
+  // using an earlier acknowledgment (for example after an async edit race).
+  displayedReviewDraft = null;
+  if (payload?.presentation !== reviewPresentation || payload?.id !== expectedReviewDraftId
+      || !Number.isSafeInteger(payload?.id) || payload.id <= 0 || typeof payload?.finalText !== 'string') return false;
+  displayedReviewDraft = { displayed_draft_id: payload.id, displayed_final_text: payload.finalText };
+  return true;
+}
+
+function getDisplayedReviewDraft() {
+  if (!reviewWindow || reviewWindow.isDestroyed() || !reviewWindow.isVisible()) return null;
+  return displayedReviewDraft ? { ...displayedReviewDraft } : null;
+}
+
+function isReviewWindowVisible() {
+  return Boolean(reviewWindow && !reviewWindow.isDestroyed() && reviewWindow.isVisible());
 }
 
 module.exports = {
@@ -534,4 +566,7 @@ module.exports = {
   showReviewWindow,
   hideReviewWindow,
   getReviewWindow,
+  acknowledgeReviewDraft,
+  getDisplayedReviewDraft,
+  isReviewWindowVisible,
 };

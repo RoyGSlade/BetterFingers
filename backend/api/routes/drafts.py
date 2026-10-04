@@ -113,6 +113,9 @@ async def accept_draft(draft_id: int):
     with s.draft_lock:
         for draft in s.draft_queue:
             if draft["id"] == draft_id:
+                if draft.get("status") in {"sending", "sent"}:
+                    # Accept racing F9 must not reopen a reserved/completed send.
+                    return dict(draft)
                 draft["status"] = "accepted"
                 s.mark_draft_pending_send(draft)
                 response = dict(draft)

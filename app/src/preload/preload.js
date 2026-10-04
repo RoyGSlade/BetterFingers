@@ -130,6 +130,7 @@ contextBridge.exposeInMainWorld('betterFingersSplash', {
 });
 
 contextBridge.exposeInMainWorld('betterFingersReview', {
+  displayed: (payload) => ipcRenderer.send('review:displayed', payload),
   hide: () => ipcRenderer.invoke('review:hide'),
   onDraft: (callback) => ipcRenderer.on('review:draft', (_event, draft) => callback(draft)),
   onStatus: (callback) => ipcRenderer.on('review:status', (_event, status) => callback(status)),

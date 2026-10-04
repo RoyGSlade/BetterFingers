@@ -1275,17 +1275,19 @@ def perform_output_action(text, action="copy_only", open_chat=False):
         # snapshot is refreshed only by the dashboard's 4 s poll (throttled when
         # hidden), so alt-tabbing into a game and dictating used to decide
         # against the previous window. poll() is one local foreground query;
-        # if it fails, fall back to the cached snapshot as before.
+        # if it fails, synthetic input cannot be authorized by a stale cache.
         _service = get_service()
         try:
             _ctx = _service.poll()
         except Exception:
-            _ctx = _service.current()
+            _ctx = {"gaming_policy": {"active": True}}
         requested_action = resolve_send_action(
-            requested_action, active=bool((_ctx.get("gaming_policy") or {}).get("active")),
+            requested_action, active=(_ctx.get("gaming_policy") or {}).get("active") is not False,
         )
-    except Exception:  # best-effort; a context failure must not block delivery
-        pass
+    except Exception:
+        # Unknown foreground policy cannot authorize synthetic input. Still
+        # deliver safely via clipboard when both live/cached observation fail.
+        requested_action = "copy_only"
 
     capabilities = get_capabilities()
     payload = {
@@ -1409,7 +1411,7 @@ def mark_draft_pending_send(draft):
         pending_manual_send_ids.append(draft["id"])
 
 
-def send_draft_by_id(draft_id, action=None, open_chat=False, allow_resend=False):
+def send_draft_by_id(draft_id, action=None, open_chat=False, allow_resend=False, reviewed_text=None):
     # A wipe is draining/deleting user data — do not inject (which could reopen
     # or re-clipboard content the user is trying to erase).
     wiping = _reject_if_wiping("draft send")
@@ -1428,12 +1430,12 @@ def send_draft_by_id(draft_id, action=None, open_chat=False, allow_resend=False)
         }
         return {"id": draft_id, **wiping}
     try:
-        return _send_draft_by_id_locked(draft_id, action, open_chat, allow_resend)
+        return _send_draft_by_id_locked(draft_id, action, open_chat, allow_resend, reviewed_text)
     finally:
         output_coordinator.end_send(send_op_id)
 
 
-def _send_draft_by_id_locked(draft_id, action, open_chat, allow_resend):
+def _send_draft_by_id_locked(draft_id, action, open_chat, allow_resend, reviewed_text=None):
     # Atomic state transition (compare-and-set to "sending" under the lock)
     # so two simultaneous requests cannot both inject the same text. A request
     # that loses the race gets the existing outcome instead of re-injecting.
@@ -1454,6 +1456,18 @@ def _send_draft_by_id_locked(draft_id, action, open_chat, allow_resend):
             response.update({"ok": False, "error": "already_sent",
                              "message": "This draft was already sent; pass allow_resend to send again."})
             return response
+        if reviewed_text is not None:
+            # The renderer supplies evidence of what was visible, never new
+            # content. Compare and reserve the backend-owned text atomically.
+            if draft.get("final_text", "") != reviewed_text:
+                return {"ok": False, "error": "displayed_draft_changed",
+                        "message": "Draft changed; review the current text before placing it."}
+            if status not in {"pending", "accepted"}:
+                return {"ok": False, "error": "draft_not_reviewable",
+                        "message": "This draft is not awaiting review."}
+            draft["status"] = "accepted"
+            mark_draft_pending_send(draft)
+            status = "accepted"
         prior_status = status
         # Stamp this send with an operation id + this process's token, and record
         # that a send is in flight. Persisted below *before* injection so a crash
@@ -1881,7 +1895,39 @@ def handle_selection_rewrite_shortcut():
                 is_processing_draft = False
 
 
-def handle_primary_action():
+_primary_action_lock = threading.Lock()
+_primary_action_selection_guard_until = 0.0
+_primary_action_selection_guard_draft_id = None
+
+
+def handle_primary_action(displayed_draft_id=None, displayed_final_text=None, review_visible=False):
+    global _primary_action_selection_guard_until
+    global _primary_action_selection_guard_draft_id
+    # A repeated F9 cannot fall through to selection capture while its first
+    # placement is still running. Emergency stop never takes this lock.
+    if not _primary_action_lock.acquire(blocking=False):
+        return {"ok": False, "error": "primary_action_in_progress",
+                "message": "Primary action is already in progress."}
+    try:
+        with draft_lock:
+            just_placed = get_draft_by_id(_primary_action_selection_guard_draft_id)
+        if displayed_draft_id is None and not pending_manual_send_ids \
+                and just_placed and just_placed.get("status") == "sent" \
+                and time.monotonic() < _primary_action_selection_guard_until:
+            return {"ok": False, "error": "primary_action_repeat",
+                    "message": "Ignored repeated primary action after placement."}
+        result = _handle_primary_action(displayed_draft_id, displayed_final_text, review_visible)
+        if result.get("status") == "sent":
+            # The overlay hides after placement, so a quick second press loses
+            # its display ID. Do not reinterpret that double press as read-aloud.
+            _primary_action_selection_guard_until = time.monotonic() + 0.4
+            _primary_action_selection_guard_draft_id = result.get("id")
+        return result
+    finally:
+        _primary_action_lock.release()
+
+
+def _handle_primary_action(displayed_draft_id, displayed_final_text, review_visible=False):
     if hotkey_manager is not None and bool(getattr(hotkey_manager, "is_recording", False)):
         logging.info("Ignored primary action while recording is active.")
         return {"ok": False, "message": "Recording is active; primary action ignored."}
@@ -1889,11 +1935,33 @@ def handle_primary_action():
         logging.info("Ignored primary action while draft processing is active.")
         return {"ok": False, "message": "Draft processing is active; primary action ignored."}
 
-    while pending_manual_send_ids:
-        draft_id = pending_manual_send_ids.pop(0)
-        draft = get_draft_by_id(draft_id)
-        if not draft or not draft.get("pending_send"):
-            continue
+    if displayed_draft_id is not None:
+        if not isinstance(displayed_final_text, str):
+            return {"ok": False, "error": "displayed_draft_unknown"}
+        # Never substitute another draft (including an older accepted draft).
+        return send_draft_by_id(displayed_draft_id, action="paste", open_chat=False,
+                                reviewed_text=displayed_final_text)
+
+    with draft_lock:
+        draft_id = None
+        while pending_manual_send_ids:
+            candidate = pending_manual_send_ids.pop(0)
+            draft = get_draft_by_id(candidate)
+            if draft and draft.get("pending_send"):
+                draft_id = candidate
+                break
+        if draft_id is None and any(d.get("status") == "sending" for d in draft_queue):
+            # Selection capture uses the clipboard; never race an in-flight paste.
+            return {"ok": False, "error": "send_in_progress",
+                    "message": "A draft is being placed; try again in a moment."}
+        if draft_id is None and review_visible and any(d.get("status") == "pending" for d in draft_queue):
+            # The overlay is showing but has not confirmed which draft it
+            # painted: do not guess a draft, and do not read the selection.
+            # A HIDDEN overlay (Escape keeps the draft pending) falls through
+            # to read-aloud as before, so one ignored draft cannot disable F9.
+            return {"ok": False, "error": "displayed_draft_unknown",
+                    "message": "The review overlay is still showing the draft; press again."}
+    if draft_id is not None:
         return send_draft_by_id(draft_id, action="paste", open_chat=False)
 
     try:

@@ -69,6 +69,7 @@
             placeholder="Cleaned output will appear here."
           ></textarea>
           <div id="draftSummary" class="draft-summary" aria-live="polite"></div>
+          <p class="sd-review-hint">Your Primary Action key (F9 by default) accepts and places the shown draft. Save edits with Accept first. Games receive a clipboard copy only.</p>
         </div>
 
         <div id="rawSection" class="sd-review-raw-section">
@@ -228,6 +229,7 @@
       const closeButton = document.getElementById('closeButton');
 
       let currentDraft = null;
+      let currentReviewPresentation = null;
       let outputSettings = null;
       let currentState = 'pending';
 
@@ -412,10 +414,12 @@
 
       function renderDraft(draft) {
         currentDraft = draft;
+        if (Number.isSafeInteger(draft?.reviewPresentation)) currentReviewPresentation = draft.reviewPresentation;
         const status = draft?.status || 'pending';
         statusEl.textContent = draft?.id ? `Draft #${draft.id}` : 'Waiting for draft';
         rawTextEl.textContent = draft?.raw_text || 'No transcript yet.';
         finalTextEl.value = draft?.final_text || '';
+        requestAnimationFrame(() => requestAnimationFrame(reportDisplayedDraft));
         updateDraftSummary();
         renderMetaStrip(draft);
 
@@ -432,6 +436,17 @@
         }
       }
 
+      function reportDisplayedDraft() {
+        window.betterFingersReview?.displayed?.({
+          id: currentDraft?.id,
+          presentation: currentReviewPresentation,
+          finalText: finalTextEl.value,
+        });
+      }
+      // Unsaved edits are evidence too: the backend rejects a content mismatch
+      // instead of placing words different from those the user can see.
+      finalTextEl.addEventListener('input', reportDisplayedDraft);
+
       async function saveEdit() {
         if (!currentDraft?.id) return currentDraft;
         const nextText = finalTextEl.value || '';
@@ -439,6 +454,7 @@
           return currentDraft;
         }
         currentDraft = await postJson(`${BACKEND_ORIGIN}/drafts/${currentDraft.id}/edit`, { final_text: nextText }, 10000);
+        reportDisplayedDraft();
         return currentDraft;
       }
 

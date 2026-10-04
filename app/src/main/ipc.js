@@ -487,6 +487,12 @@ function registerIpc({
     return true;
   });
 
+  onTrusted('review:displayed', (event, payload) => {
+    if (event.senderFrame !== event.sender?.mainFrame) return;
+    const { acknowledgeReviewDraft } = require('./windows');
+    acknowledgeReviewDraft(event.sender, payload);
+  });
+
   handleTrusted('overlay:set-ignore-mouse-events', (_event, ignore) => {
     const { getOverlayWindow } = require('./windows');
     const overlay = getOverlayWindow();

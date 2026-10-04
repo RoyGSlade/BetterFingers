@@ -50,7 +50,7 @@ from typing import Optional
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StrictBool, StrictInt, StrictStr
 
 from backend.api.routes import drafts as routes_drafts
 
@@ -204,11 +204,24 @@ async def execute_voice_command(request: VoiceCommandExecuteRequest):
         return {"ok": False, "reason": "error", "action": intent.action, "error": str(exc)}
 
 
+class PrimaryActionRequest(BaseModel):
+    displayed_draft_id: StrictInt | None = Field(default=None, gt=0)
+    displayed_final_text: StrictStr | None = None
+    # True when the review overlay is visible but has not acknowledged which
+    # draft it painted (Electron main knows; the backend cannot).
+    review_visible: StrictBool = False
+
+
 @router.post("/runtime/primary-action")
-async def runtime_primary_action():
+async def runtime_primary_action(request: PrimaryActionRequest | None = None):
     import server as s
 
-    return s.handle_primary_action()
+    if request is None:
+        return await run_in_threadpool(s.handle_primary_action)
+    return await run_in_threadpool(s.handle_primary_action,
+                                  displayed_draft_id=request.displayed_draft_id,
+                                  displayed_final_text=request.displayed_final_text,
+                                  review_visible=request.review_visible)
 
 
 @router.post("/runtime/emergency-stop")
