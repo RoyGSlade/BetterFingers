@@ -3,7 +3,7 @@ import os
 import tempfile
 import unittest
 
-import dictionary
+from backend.stores import dictionary
 
 
 class _TempAppdataMixin:

@@ -10,8 +10,8 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-import dictionary
-import macros
+from backend.stores import dictionary
+from backend.stores import macros
 import voice_presets
 
 router = APIRouter()

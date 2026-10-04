@@ -261,7 +261,7 @@ class WorkflowStore:
         conservative-parser rule from ``voice_commands.py`` applies with more
         force to something that opens applications.
         """
-        from voice_commands import normalize_workflow_phrase
+        from backend.commands.voice_commands import normalize_workflow_phrase
 
         needle = normalize_workflow_phrase(phrase)
         if not needle:

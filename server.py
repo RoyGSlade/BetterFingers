@@ -30,16 +30,16 @@ from streaming_transcriber import BatchCutter, StreamingTranscriptionSession
 from hotkey_manager import HotkeyManager
 from audio_gate import should_block_for_no_audio
 from user_profile_manager import profile_manager
-from intent_engine import intent_engine, IntentState
-from project_generator import project_generator
+from backend.dev.intent_engine import intent_engine, IntentState
+from backend.dev.project_generator import project_generator
 from platform_capabilities import get_capabilities, get_injection_status
 from hardware_report import get_hardware_report, assess_model_fit, get_hardware_tier
 from platform_paths import ensure_app_dirs, get_app_data_dir, get_config_dir
 import recordings
 import upload_safety
-import dictionary
-import dictation_commands
-import macros
+from backend.stores import dictionary
+from backend.commands import dictation_commands
+from backend.stores import macros
 import voice_presets
 import voice_clone_qa
 import history_store
@@ -50,7 +50,7 @@ import wake_setup_registry
 import data_registry
 import data_categories
 import data_lifecycle
-import mcp_client
+from backend.dev import mcp_client
 from job_manager import JOBS, JobState
 from backend.runtime.dependencies import JobManagerCancellationBridge, PipelineDependencies
 from backend.services.dictation_pipeline import DictationPipeline, FunctionStage
@@ -58,8 +58,8 @@ from backend.services.speech_signals import compute_speech_signals, summarize_si
 from backend.services.audio_energy import rms_windows
 from backend.domain.contracts import to_dict as _contract_to_dict
 from output_coordinator import OutputCoordinator
-import voice_commands
-import voice_edit_commands
+from backend.commands import voice_commands
+from backend.commands import voice_edit_commands
 from utterance_history import Utterance, utterance_history
 from model_manager import (
     DEFAULT_MODEL,

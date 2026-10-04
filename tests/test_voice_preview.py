@@ -1,6 +1,6 @@
 import unittest
 
-from voice_preview import preview
+from backend.commands.voice_preview import preview
 
 OVERLAY_CTX = {"review_overlay_open": True}
 

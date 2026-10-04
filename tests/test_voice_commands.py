@@ -1,6 +1,6 @@
 import unittest
 
-from voice_commands import parse_command
+from backend.commands.voice_commands import parse_command
 
 OVERLAY_CTX = {"review_overlay_open": True}
 WAKE_CTX = {"post_wake_word": True}
@@ -129,7 +129,7 @@ class ParseCommandFuzzyMatchTests(unittest.TestCase):
 # assertions are the ones about `unknown_command`: it must explain itself, offer
 # the builder, and never be executable, no matter how command-shaped it sounded.
 
-from voice_commands import (  # noqa: E402  (grouped with the Wave 9 tests on purpose)
+from backend.commands.voice_commands import (  # noqa: E402  (grouped with the Wave 9 tests on purpose)
     CATEGORIES,
     CATEGORY_BETTERFINGERS_CONTROL,
     CATEGORY_DIRECTED_DICTATION,

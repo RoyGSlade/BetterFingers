@@ -3,7 +3,7 @@ import os
 import pytest
 from fastapi import HTTPException
 
-from project_generator import ProjectGenerator, ProjectPathRefused, resolve_target_dir
+from backend.dev.project_generator import ProjectGenerator, ProjectPathRefused, resolve_target_dir
 
 _PLAN = {"title": "Demo", "phases": []}
 

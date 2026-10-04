@@ -3,8 +3,8 @@ the Voice Control settings test panel (DESIGN.md §8 (voice control)):
 run text through both the app-command and editing-command parsers and report
 back what would happen, without executing anything.
 """
-from voice_commands import parse_command
-from voice_edit_commands import parse_edit_command
+from backend.commands.voice_commands import parse_command
+from backend.commands.voice_edit_commands import parse_edit_command
 
 
 def preview(text, context=None):

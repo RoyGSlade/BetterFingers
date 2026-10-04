@@ -6,7 +6,7 @@ import textwrap
 import unittest
 from unittest.mock import patch
 
-import mcp_client
+from backend.dev import mcp_client
 
 
 def _write_config(base_dir, payload):
@@ -23,7 +23,7 @@ class McpConfigTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        patcher = patch("mcp_client.get_user_data_path", return_value=self.tmp.name)
+        patcher = patch("backend.dev.mcp_client.get_user_data_path", return_value=self.tmp.name)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -93,7 +93,7 @@ class McpLiveStdioTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        patcher = patch("mcp_client.get_user_data_path", return_value=self.tmp.name)
+        patcher = patch("backend.dev.mcp_client.get_user_data_path", return_value=self.tmp.name)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -141,7 +141,7 @@ class McpEndpointTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        patcher = patch("mcp_client.get_user_data_path", return_value=self.tmp.name)
+        patcher = patch("backend.dev.mcp_client.get_user_data_path", return_value=self.tmp.name)
         patcher.start()
         self.addCleanup(patcher.stop)
 

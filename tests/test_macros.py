@@ -2,8 +2,8 @@ import os
 import tempfile
 import unittest
 
-import macros
-from macros import apply_macros
+from backend.stores import macros
+from backend.stores.macros import apply_macros
 
 
 class ApplyMacrosTests(unittest.TestCase):
