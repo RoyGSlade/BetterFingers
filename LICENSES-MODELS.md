@@ -211,7 +211,7 @@ inclusion also needs confirmation: it is lazy-imported, not explicitly
 `collect-all`. Windows SAPI uses already-installed OS/user voices; this code
 does not bundle/download them and their terms follow their suppliers.
 
-## Wake word (wake_models.py)
+## Wake word (backend/wake/wake_models.py)
 
 ### Catalog backbones — Apache-2.0
 
