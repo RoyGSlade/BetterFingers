@@ -9,7 +9,7 @@ import sys
 import keyboard
 import pyperclip
 
-import audio_schema
+from backend.audio import audio_schema
 import clipboard_capture
 import injection_pacing
 import platform_capabilities

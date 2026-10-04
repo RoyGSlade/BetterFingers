@@ -10,10 +10,10 @@ through a broker built for each test rather than the shared singleton.
 import unittest
 from unittest.mock import patch
 
-import audio_input_broker
-import recorder
+from backend.audio import audio_input_broker
+from backend.audio import recorder
 import utils
-from recorder import AudioRecorder
+from backend.audio.recorder import AudioRecorder
 
 
 class _FakeStream:
@@ -210,7 +210,7 @@ class RefreshFingerprintOnSaveTests(unittest.TestCase):
 
     def test_unchanged_selection_keeps_existing_fingerprint(self):
         payload = {"input_device_index": 5, "input_device_fingerprint": dict(self.FP)}
-        with patch("audio_device_resolver.build_input_device_fingerprint") as build:
+        with patch("backend.audio.audio_device_resolver.build_input_device_fingerprint") as build:
             utils._refresh_input_device_fingerprint(payload)
             build.assert_not_called()
         self.assertEqual(payload["input_device_fingerprint"], self.FP)
@@ -218,13 +218,13 @@ class RefreshFingerprintOnSaveTests(unittest.TestCase):
     def test_changed_selection_recaptures_fingerprint(self):
         new_fp = dict(self.FP, name="Webcam Mic", last_known_index=2)
         payload = {"input_device_index": 2, "input_device_fingerprint": dict(self.FP)}
-        with patch("audio_device_resolver.build_input_device_fingerprint", return_value=new_fp):
+        with patch("backend.audio.audio_device_resolver.build_input_device_fingerprint", return_value=new_fp):
             utils._refresh_input_device_fingerprint(payload)
         self.assertEqual(payload["input_device_fingerprint"], new_fp)
 
     def test_capture_failure_on_changed_selection_clears_stale_fingerprint(self):
         payload = {"input_device_index": 2, "input_device_fingerprint": dict(self.FP)}
-        with patch("audio_device_resolver.build_input_device_fingerprint", return_value=None):
+        with patch("backend.audio.audio_device_resolver.build_input_device_fingerprint", return_value=None):
             utils._refresh_input_device_fingerprint(payload)
         self.assertEqual(payload["input_device_fingerprint"], {})
 

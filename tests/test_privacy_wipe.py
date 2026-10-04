@@ -540,7 +540,7 @@ class HotkeyManagerWipeGateTests(unittest.TestCase):
             def start(self):
                 pass
 
-        with patch("recorder.AudioRecorder", _DummyRecorder), \
+        with patch("backend.audio.recorder.AudioRecorder", _DummyRecorder), \
              patch.object(server, "HotkeyManager", _DummyHotkeyManager), \
              patch.object(server, "get_last_active_profile", return_value={}):
             server.start_hotkey_manager()

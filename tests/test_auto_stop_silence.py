@@ -11,9 +11,9 @@ from unittest.mock import patch
 
 import numpy as np
 
-import recorder as recorder_mod
+from backend.audio import recorder as recorder_mod
 import utils
-from audio_gate import TrailingSilenceDetector
+from backend.audio.audio_gate import TrailingSilenceDetector
 from hotkey_manager import HotkeyManager
 
 SPEECH = (0.2, 0.5)   # (rms, peak) — above thresholds

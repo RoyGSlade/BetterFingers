@@ -1,6 +1,6 @@
 import unittest
 
-from audio_ducker import AudioDucker
+from backend.audio.audio_ducker import AudioDucker
 
 
 class AudioDuckerTests(unittest.TestCase):

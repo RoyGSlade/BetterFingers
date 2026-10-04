@@ -278,7 +278,7 @@ class WakeListener:
         # in-memory, and it is the ring's owner that wipes it.
         self.chunk_observer = None
 
-        from audio_gate import TrailingSilenceDetector
+        from backend.audio.audio_gate import TrailingSilenceDetector
 
         _gate_defaults = TrailingSilenceDetector()
         self._rms_threshold = _gate_defaults.rms_threshold
@@ -290,7 +290,7 @@ class WakeListener:
 
     def _get_broker(self):
         if self._broker is None:
-            import audio_input_broker
+            from backend.audio import audio_input_broker
 
             self._broker = audio_input_broker.get_broker()
         return self._broker

@@ -286,7 +286,7 @@ class WakeListenerTests(unittest.TestCase):
     stream underneath."""
 
     def setUp(self):
-        import audio_input_broker
+        from backend.audio import audio_input_broker
 
         _StubInputStream.instances = []
         self.broker = audio_input_broker.AudioInputBroker()

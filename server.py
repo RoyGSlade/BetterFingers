@@ -28,7 +28,7 @@ import version
 from transcriber import Transcriber
 from streaming_transcriber import BatchCutter, StreamingTranscriptionSession
 from hotkey_manager import HotkeyManager
-from audio_gate import should_block_for_no_audio
+from backend.audio.audio_gate import should_block_for_no_audio
 from backend.stores.user_profile_manager import profile_manager
 from backend.dev.intent_engine import intent_engine, IntentState
 from backend.dev.project_generator import project_generator
@@ -1011,7 +1011,7 @@ def start_hotkey_manager():
         except Exception as exc:
             logging.warning(f"Hotkey Manager stop before restart failed: {exc}")
 
-    from recorder import AudioRecorder
+    from backend.audio.recorder import AudioRecorder
 
     recorder = AudioRecorder()
     recorder.set_chunk_callback(_on_recorder_chunk)
@@ -1927,7 +1927,7 @@ def emergency_stop_runtime():
     # Quiesce the shared capture stream: emergency stop must leave no live
     # audio consumer regardless of who held the broker.
     try:
-        import audio_input_broker
+        from backend.audio import audio_input_broker
         audio_input_broker.get_broker().stop_all()
     except Exception as exc:
         logging.warning(f"Emergency broker stop failed: {exc}")
@@ -3515,7 +3515,7 @@ async def settings_export_profile(profile_name: str):
 
 @app.get("/capabilities")
 async def capabilities():
-    import audio_status
+    from backend.audio import audio_status
     import routes_wake
 
     payload = get_capabilities()
@@ -3537,8 +3537,8 @@ async def capabilities():
 
 @app.get("/audio/status")
 async def audio_runtime_status():
-    import audio_input_broker
-    import audio_status
+    from backend.audio import audio_input_broker
+    from backend.audio import audio_status
     import routes_wake
 
     from backend.platform.audio_privacy import lease as privacy_lease
@@ -4443,7 +4443,7 @@ def _perform_privacy_wipe(wipe_voices: bool, mode: str = data_registry.WIPE_MODE
         cleared["wake_pretrigger_wiped"] = bool(routes_wake.wipe_wake_pretrigger())
         # Quiesce the shared capture stream unconditionally: "no live capture"
         # must hold without knowing who was holding the broker.
-        import audio_input_broker
+        from backend.audio import audio_input_broker
         audio_input_broker.get_broker().stop_all()
         # And release voice privacy: a wipe must not leave another
         # application's capture stream muted by a lease nothing will release.
@@ -4832,7 +4832,7 @@ async def retranscribe_recording(rec_id: str):
     if not recordings.is_valid_rec_id(rec_id):
         raise HTTPException(status_code=400, detail="Invalid recording id.")
     import numpy as np
-    from recorder import RecordingResult
+    from backend.audio.recorder import RecordingResult
 
     audio, sample_rate = recordings.load_recording_audio(rec_id)
     if audio is None:

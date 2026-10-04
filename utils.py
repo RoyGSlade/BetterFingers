@@ -8,7 +8,7 @@ import re
 import math
 import yaml
 
-import audio_schema
+from backend.audio import audio_schema
 
 from store_migration import load_versioned_store, write_atomic
 
@@ -1220,7 +1220,7 @@ def _refresh_input_device_fingerprint(payload):
     if isinstance(current, dict) and current.get("name") and current.get("last_known_index") == index:
         return
     try:
-        from audio_device_resolver import build_input_device_fingerprint
+        from backend.audio.audio_device_resolver import build_input_device_fingerprint
 
         fingerprint = build_input_device_fingerprint(index)
     except Exception as exc:

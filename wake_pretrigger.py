@@ -185,7 +185,7 @@ def build_command_capture_detector(config=None, **overrides):
     "silence" to tune. Only the timing defaults differ, and any of them can be
     overridden per call.
     """
-    from audio_gate import TrailingSilenceDetector
+    from backend.audio.audio_gate import TrailingSilenceDetector
 
     config = config if isinstance(config, dict) else {}
     settings = {

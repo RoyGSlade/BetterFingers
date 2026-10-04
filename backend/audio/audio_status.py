@@ -32,7 +32,7 @@ renderer keys copy off it), ``detail`` is a short human string, and
 Pure stdlib; depends only on :mod:`audio_schema`.
 """
 
-import audio_schema
+from backend.audio import audio_schema
 
 # --- vocabularies -------------------------------------------------------
 

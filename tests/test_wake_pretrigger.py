@@ -207,7 +207,7 @@ class HandoffTests(unittest.TestCase):
 
 class CommandCaptureDetectorTests(unittest.TestCase):
     def test_it_is_the_existing_trailing_silence_detector(self):
-        from audio_gate import TrailingSilenceDetector
+        from backend.audio.audio_gate import TrailingSilenceDetector
 
         self.assertIsInstance(build_command_capture_detector(), TrailingSilenceDetector)
 

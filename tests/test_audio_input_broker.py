@@ -8,8 +8,8 @@ import sys
 import threading
 import unittest
 
-import audio_input_broker
-from audio_input_broker import AudioInputBroker
+from backend.audio import audio_input_broker
+from backend.audio.audio_input_broker import AudioInputBroker
 
 
 class FakeBuffer(list):

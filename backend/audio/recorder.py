@@ -7,11 +7,11 @@ from typing import Callable, Optional
 
 import numpy as np
 
-import audio_input_broker
-import audio_schema
-from audio_device_resolver import resolve_input_device
-from audio_ducker import AudioDucker
-from audio_gate import TrailingSilenceDetector
+from backend.audio import audio_input_broker
+from backend.audio import audio_schema
+from backend.audio.audio_device_resolver import resolve_input_device
+from backend.audio.audio_ducker import AudioDucker
+from backend.audio.audio_gate import TrailingSilenceDetector
 from utils import load_profile
 
 # Recording reasons that mean "the user is not holding anything down". A wake

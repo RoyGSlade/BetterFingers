@@ -17,12 +17,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 ROOT_MODULES = frozenset({
     "app_paths.py",
-    "audio_device_resolver.py",
-    "audio_ducker.py",
-    "audio_gate.py",
-    "audio_input_broker.py",
-    "audio_schema.py",
-    "audio_status.py",
     "clipboard_capture.py",
     "hardware_report.py",
     "history_store.py",
@@ -36,7 +30,6 @@ ROOT_MODULES = frozenset({
     "persona_traits.py",
     "platform_capabilities.py",
     "platform_paths.py",
-    "recorder.py",
     "recordings.py",
     "routes_foundry.py",
     "routes_models_resources.py",
