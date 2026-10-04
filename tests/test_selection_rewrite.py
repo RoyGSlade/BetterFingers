@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 import server
+from backend.api.routes import runtime as routes_runtime
 
 
 @pytest.fixture(autouse=True)
@@ -357,8 +358,8 @@ def test_malformed_profile_chunk_size_is_normalized_before_model_call(monkeypatc
 def test_route_delegates_helper_to_threadpool():
     expected = {"ok": True, "draft": {"id": 7}}
     delegated = AsyncMock(return_value=expected)
-    with patch.object(server, "run_in_threadpool", delegated):
-        result = asyncio.run(server.runtime_rewrite_selection())
+    with patch.object(routes_runtime, "run_in_threadpool", delegated):
+        result = asyncio.run(routes_runtime.runtime_rewrite_selection())
 
     assert result == expected
     delegated.assert_awaited_once_with(server.handle_selection_rewrite_shortcut)

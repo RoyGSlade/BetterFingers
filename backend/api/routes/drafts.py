@@ -26,7 +26,7 @@ Shared helpers stay in server.py and are reached as ``s.<helper>``:
 ``save_draft_history``.
 
 The five request models are used only by these routes (and ``DraftRewriteRequest``
-by ``execute_voice_command`` in server.py, which now reaches it, and the
+by ``execute_voice_command`` in runtime.py, which reaches it, and the
 ``decline_draft`` / ``rewrite_draft`` / ``retry_draft`` handlers it awaits,
 through ``routes_drafts``).
 

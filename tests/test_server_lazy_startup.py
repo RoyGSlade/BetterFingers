@@ -6,6 +6,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import server
+from backend.api.routes import runtime as routes_runtime
 from backend.llm import llm_engine
 
 
@@ -315,8 +316,8 @@ class ServerLazyStartupTests(unittest.TestCase):
         server.transcriber = probe
 
         result = asyncio.run(
-            server.runtime_warmup(
-                server.RuntimeWarmupRequest(stt=True, llm=False, hotkeys=False)
+            routes_runtime.runtime_warmup(
+                routes_runtime.RuntimeWarmupRequest(stt=True, llm=False, hotkeys=False)
             )
         )
 
