@@ -19,7 +19,8 @@ const backendProxy = require('./backendProxy');
 const { restoreActiveHotkeys, unregisterAllHotkeys, triggerBackendAction } = require('./hotkeys');
 const { BACKEND_HOST, BACKEND_PORT, BACKEND_ORIGIN } = require('./config');
 const { derivePhase, deriveServices, describeHardware } = require('./bootPhases');
-const { createUpdateController } = require('./updateController');
+const { createUpdateController, createUpdateCheckScheduler } = require('./updateController');
+const onboardingStore = require('./onboardingStore');
 
 // Adopt an inherited token when the backend is managed by something else (the
 // Linux launcher starts it before us, so sidecar.js finds it already listening
@@ -41,8 +42,7 @@ let shutdownMode = null;
 let runtimeStopPromise = null;
 let runtimeActivityStatus = 'idle';
 let updateController = null;
-let updateCheckTimer = null;
-let updateCheckScheduled = false;
+let updateCheckScheduler = null;
 
 // The hidden overlay window keeps Electron alive after the dashboard is
 // closed, so `mainWindow` can be destroyed (null via windows.js) while the
@@ -191,17 +191,9 @@ function broadcastUpdateState(state) {
 }
 
 function scheduleInitialUpdateCheck(win) {
-  if (updateCheckScheduled || !updateController?.isSupported?.()) return;
-  updateCheckScheduled = true;
-  const startDelay = () => {
-    if (updateCheckTimer || isQuitting) return;
-    updateCheckTimer = setTimeout(() => {
-      updateCheckTimer = null;
-      if (!isQuitting) updateController.check().catch(() => {});
-    }, 15000);
-  };
-  if (win?.webContents?.isLoading?.()) win.webContents.once('did-finish-load', startDelay);
-  else startDelay();
+  const ready = () => updateCheckScheduler?.ready();
+  if (win?.webContents?.isLoading?.()) win.webContents.once('did-finish-load', ready);
+  else ready();
 }
 
 // Runs once at cold boot, and again from the splash's Retry action
@@ -372,6 +364,10 @@ function bootstrapApp() {
   updateController = createUpdateController({
     app,
     updater: autoUpdater,
+    consentGuard: () => !onboardingStore.needsConsent(onboardingStore.readState()),
+    automaticUpdatesGuard: () => onboardingStore.readState().automatic_updates === true,
+    saveAutomaticUpdates: (enabled) => onboardingStore.recordAutomaticUpdates(enabled),
+    onAutomaticUpdatesChanged: () => updateCheckScheduler?.refresh(),
     // Renderer status is only a provisional UI hint. Installation always
     // rechecks the authenticated backend through this main-process guard.
     activityGuard: () => runtimeActivityStatus,
@@ -380,6 +376,7 @@ function bootstrapApp() {
     recoverFromFailedInstall: recoverFromFailedUpdateInstall,
   });
   updateController.subscribe(broadcastUpdateState);
+  updateCheckScheduler = createUpdateCheckScheduler({ controller: updateController, isQuitting: () => isQuitting });
 
   registerIpc({
     getMainWindow: () => getMainWindow(),
@@ -395,6 +392,10 @@ function bootstrapApp() {
     onSplashRetry: retryBackendBoot,
     getSplashBootState: () => currentBootSnapshot(),
     updateController,
+    onConsentChanged: () => {
+      updateController.refreshConsent();
+      updateCheckScheduler.refresh();
+    },
     onRuntimeStatus: (status) => {
       runtimeActivityStatus = String(status || 'idle').toLowerCase();
       updateController?.refreshInstallEligibility?.();
@@ -434,10 +435,7 @@ function bootstrapApp() {
 function stopRuntimeServices() {
   if (runtimeStopPromise) return runtimeStopPromise;
   runtimeStopPromise = (async () => {
-    if (updateCheckTimer) {
-      clearTimeout(updateCheckTimer);
-      updateCheckTimer = null;
-    }
+    updateCheckScheduler?.cancel();
     stopBootTimers();
     bootGeneration += 1;
     try {

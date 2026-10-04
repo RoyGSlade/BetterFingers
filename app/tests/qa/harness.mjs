@@ -577,6 +577,7 @@ export function seededAcceptedRecord({ now = () => new Date() } = {}) {
     consent_version: 1,
     accepted: true,
     accepted_at: now().toISOString(),
+    automatic_updates: false,
     completed_steps: [],
   };
 }

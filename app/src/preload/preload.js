@@ -58,6 +58,7 @@ const api = {
   updates: {
     getState: () => ipcRenderer.invoke('updates:get-state'),
     check: () => ipcRenderer.invoke('updates:check'),
+    setAutomatic: (enabled) => ipcRenderer.invoke('updates:set-automatic', enabled),
     download: () => ipcRenderer.invoke('updates:download'),
     install: () => ipcRenderer.invoke('updates:install'),
     onState: (callback) => {

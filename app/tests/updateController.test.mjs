@@ -19,6 +19,7 @@ function harness({ version = '1.1.0-alpha.3', busy = false } = {}) {
     authoritative: { recording: busy, processing: false },
   };
   const controller = createUpdateController({
+    consentGuard: () => true,
     platform: 'win32', isPackaged: true, currentVersion: version, updater,
     activityGuard: () => activity.busy,
     authoritativeActivityGuard: async () => activity.authoritative,
@@ -33,7 +34,8 @@ test('development and non-Windows builds stay unsupported', async () => {
     { platform: 'win32', isPackaged: false },
     { platform: 'linux', isPackaged: true },
   ]) {
-    const controller = createUpdateController({ ...options, updater: x.updater, currentVersion: '1.0.0' });
+    const controller = createUpdateController({
+    consentGuard: () => true, ...options, updater: x.updater, currentVersion: '1.0.0' });
     assert.equal(controller.getState().status, 'unsupported');
     await controller.check();
   }
@@ -168,6 +170,7 @@ test('unavailable or malformed authoritative state fails closed and remains retr
 test('authoritative guard errors fail closed before shutdown', async () => {
   const x = harness({ busy: false });
   const controller = createUpdateController({
+    consentGuard: () => true,
     platform: 'win32', isPackaged: true, currentVersion: '1.1.0-alpha.3', updater: x.updater,
     activityGuard: () => false,
     authoritativeActivityGuard: async () => { throw new Error('backend token rejected at C:\\private'); },
@@ -185,6 +188,7 @@ test('authoritative guard errors fail closed before shutdown', async () => {
 test('a missing authoritative guard fails closed even when renderer activity says idle', async () => {
   const x = harness({ busy: false });
   const controller = createUpdateController({
+    consentGuard: () => true,
     platform: 'win32', isPackaged: true, currentVersion: '1.1.0-alpha.3', updater: x.updater,
     activityGuard: () => false,
     prepareQuit: async () => x.calls.push('prepare'),
@@ -203,6 +207,7 @@ test('concurrent install requests are single-flight before the authoritative che
   let releaseAuthority;
   const authority = new Promise((resolve) => { releaseAuthority = resolve; });
   const controller = createUpdateController({
+    consentGuard: () => true,
     platform: 'win32', isPackaged: true, currentVersion: '1.1.0-alpha.3', updater: x.updater,
     activityGuard: () => false,
     authoritativeActivityGuard: () => authority,
@@ -245,6 +250,7 @@ test('install revalidates ready state after the authoritative check resolves', a
   let releaseAuthority;
   const authority = new Promise((resolve) => { releaseAuthority = resolve; });
   const controller = createUpdateController({
+    consentGuard: () => true,
     platform: 'win32', isPackaged: true, currentVersion: '1.1.0-alpha.3', updater: x.updater,
     activityGuard: () => false,
     authoritativeActivityGuard: () => authority,
@@ -285,6 +291,7 @@ test('a synchronous installer launch failure invokes recovery and leaves a safe 
   let recovered = 0;
   x.updater.quitAndInstall = () => { throw new Error('installer failed at C:\\private\\update.exe'); };
   const controller = createUpdateController({
+    consentGuard: () => true,
     platform: 'win32', isPackaged: true, currentVersion: '1.1.0-alpha.3', updater: x.updater,
     authoritativeActivityGuard: async () => ({ recording: false, processing: false }),
     prepareQuit: async () => x.calls.push('prepare'),

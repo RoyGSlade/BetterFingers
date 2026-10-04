@@ -38,6 +38,7 @@ test('seededAcceptedRecord has the exact shape a real accepted profile has', () 
     consent_version: 1,
     accepted: true,
     accepted_at: '2026-03-01T00:00:00.000Z',
+    automatic_updates: false,
     completed_steps: [],
   });
 });

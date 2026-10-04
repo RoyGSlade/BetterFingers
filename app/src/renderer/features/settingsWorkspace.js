@@ -670,6 +670,8 @@ export function normalizeUpdateState(value = {}) {
   };
   return {
     status,
+    consentGranted: value?.consentGranted === true,
+    automaticUpdates: value?.automaticUpdates === true,
     currentVersion: String(value?.currentVersion || 'Unknown'),
     availableVersion: value?.availableVersion ? String(value.availableVersion) : null,
     channel: value?.channel === 'alpha' ? 'alpha' : value?.channel === 'latest' ? 'latest' : null,
@@ -711,7 +713,7 @@ export function buildUpdateViewModel(input, { deferred = false } = {}) {
 
   switch (state.status) {
     case 'idle':
-      return { ...base, headline: 'Updates are checked automatically.', detail: 'You can also check whenever you want.', primaryAction: 'check', primaryLabel: 'Check again' };
+      return { ...base, headline: state.automaticUpdates ? 'Automatic update checks are on.' : 'Automatic update checks are off.', detail: 'Check GitHub releases for a newer BetterFingers version. Nothing downloads during a check.', primaryAction: 'check', primaryLabel: 'Check for updates', primaryDisabled: !state.consentGranted };
     case 'checking':
       return { ...base, headline: 'Checking for updates…', detail: 'Nothing downloads during this check.', primaryAction: 'check', primaryLabel: 'Checking…', primaryDisabled: true };
     case 'up_to_date':
@@ -790,6 +792,8 @@ export const SETTINGS_ELEMENT_IDS = {
   profileMessage: 'sdSetProfileMessage',
 
   updateCard: 'sdSetUpdateCard',
+  updateAutomatic: 'sdSetUpdateAutomatic',
+  updatePreferenceMessage: 'sdSetUpdatePreferenceMessage',
   updateCurrentVersion: 'sdSetUpdateCurrentVersion',
   updateChannel: 'sdSetUpdateChannel',
   updateStatus: 'sdSetUpdateStatus',
@@ -2183,6 +2187,14 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
     const view = buildUpdateViewModel(updateState, { deferred: updateDeferred });
     updatePrimaryAction = view.primaryAction;
 
+    if (!view.consentGranted && view.primaryAction) view.primaryDisabled = true;
+    if (els.updateAutomatic) {
+      els.updateAutomatic.checked = view.automaticUpdates;
+      els.updateAutomatic.disabled = !view.consentGranted || view.status === 'unsupported';
+    }
+    if (els.updatePreferenceMessage) els.updatePreferenceMessage.textContent =
+      view.errorCode === 'PREFERENCE_SAVE_FAILED' ? 'Could not save your update preference. Try again.'
+      : !view.consentGranted ? 'Accept the privacy consent screen before checking for updates.' : '';
     if (els.updateCard?.dataset) els.updateCard.dataset.status = view.status;
     if (els.updateCurrentVersion) els.updateCurrentVersion.textContent = `Version ${view.currentVersion}`;
     if (els.updateChannel) els.updateChannel.textContent = view.channelLabel;
@@ -2208,7 +2220,7 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
     }
     if (els.updateLaterButton) els.updateLaterButton.hidden = !view.showLater;
     if (els.updateResumeButton) els.updateResumeButton.hidden = !view.showResume;
-    if (els.updateManualLink) els.updateManualLink.hidden = !view.showManual;
+    if (els.updateManualLink) els.updateManualLink.hidden = !view.showManual || !view.consentGranted;
     return view;
   }
 
@@ -2244,6 +2256,17 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
   }
 
   function bindUpdateCard() {
+    els.updateAutomatic?.addEventListener?.('change', async () => {
+      if (typeof updatesApi?.setAutomatic !== 'function') return renderUpdateState(updateState);
+      const enabled = els.updateAutomatic.checked === true;
+      els.updateAutomatic.disabled = true;
+      try {
+        const nextState = await updatesApi.setAutomatic(enabled);
+        if (!destroyed) renderUpdateState(nextState);
+      } catch {
+        if (!destroyed) renderUpdateState({ ...updateState, errorCode: 'PREFERENCE_SAVE_FAILED' });
+      }
+    });
     els.updatePrimaryButton?.addEventListener?.('click', () => {
       if (!els.updatePrimaryButton.disabled && updatePrimaryAction) runUpdateAction(updatePrimaryAction);
     });

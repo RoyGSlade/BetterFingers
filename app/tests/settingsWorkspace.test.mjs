@@ -968,7 +968,7 @@ test('with no inspect hook the link still goes somewhere real', () => {
 test('update view models cover every updater state with honest actions', () => {
   const cases = [
     ['unsupported', null, '', true],
-    ['idle', 'check', 'Check again', false],
+    ['idle', 'check', 'Check for updates', false],
     ['checking', 'check', 'Checking…', false],
     ['up_to_date', 'check', 'Check again', false],
     ['available', 'download', 'Download update', false],
@@ -1060,18 +1060,20 @@ function updateElement() {
 }
 
 function updateCardHarness(initialState) {
+  initialState = { consentGranted: true, ...initialState };
   const elements = { fields: {}, fieldErrors: {}, disclosedToggles: {} };
   for (const key of [
     'updateCard', 'updateCurrentVersion', 'updateChannel', 'updateStatus', 'updateDetail',
     'updateRelease', 'updateReleaseMeta', 'updateReleaseNotes', 'updateProgress',
     'updateProgressText', 'updatePrimaryButton', 'updateLaterButton', 'updateResumeButton',
-    'updateManualLink',
+    'updateManualLink', 'updateAutomatic', 'updatePreferenceMessage',
   ]) elements[key] = updateElement();
   const calls = [];
   let pushed = null;
   let unsubscribed = false;
   const updatesApi = {
     getState: async () => initialState,
+    setAutomatic: async (enabled) => { calls.push(['automatic', enabled]); return { ...initialState, automaticUpdates: enabled }; },
     check: async () => { calls.push('check'); return { ...initialState, status: 'checking' }; },
     download: async () => { calls.push('download'); return { ...initialState, status: 'downloading' }; },
     install: async () => { calls.push('install'); return { ...initialState, status: 'installing' }; },
@@ -1126,4 +1128,31 @@ test('malformed update payloads normalize to unsupported finite state', () => {
   assert.equal(state.status, 'unsupported');
   assert.equal(state.percent, 0);
   assert.equal(state.bytesTotal, 0);
+});
+
+
+test('update card exposes durable opt-in and waits for main confirmation', async () => {
+  const h = updateCardHarness({ status: 'idle', automaticUpdates: false });
+  await h.feature.refreshUpdateState();
+  assert.equal(h.elements.updateAutomatic.checked, false);
+  assert.equal(h.elements.updateAutomatic.disabled, false);
+  assert.equal(h.elements.updatePrimaryButton.textContent, 'Check for updates');
+  h.elements.updateAutomatic.checked = true;
+  h.elements.updateAutomatic.fire('change');
+  await Promise.resolve();
+  assert.deepEqual(h.calls, [['automatic', true]]);
+  assert.equal(h.elements.updateAutomatic.checked, true);
+  h.elements.updatePrimaryButton.fire('click'); await Promise.resolve();
+  assert.deepEqual(h.calls, [['automatic', true], 'check']);
+  h.feature.destroy();
+});
+
+test('update card blocks actions before consent and keeps GitHub purpose visible in source', async () => {
+  const h = updateCardHarness({ status: 'idle', consentGranted: false });
+  await h.feature.refreshUpdateState();
+  assert.equal(h.elements.updateAutomatic.disabled, true);
+  assert.equal(h.elements.updatePrimaryButton.disabled, true);
+  h.elements.updatePrimaryButton.fire('click');
+  assert.deepEqual(h.calls, []);
+  h.feature.destroy();
 });

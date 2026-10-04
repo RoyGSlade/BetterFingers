@@ -83,7 +83,7 @@ function isAllowedOpenTarget(targetPath) {
 
 function registerIpc({
   getMainWindow, getSidecarStatus, getSidecarLogs, getAuthToken, getBackendOrigin, onQuit, onShow,
-  onSplashRetry, getSplashBootState, updateController, onRuntimeStatus,
+  onSplashRetry, getSplashBootState, updateController, onRuntimeStatus, onConsentChanged,
 } = {}) {
   const backendProxy = require('./backendProxy');
   const { createBugReportController } = require('./bugReportController');
@@ -123,9 +123,11 @@ function registerIpc({
   // Wave 6: the factory-reset executor. Its own channel rather than a mode on
   // the wipe above, because it takes a different gate (an exact phrase, not a
   // boolean) and erases settings and the consent record too.
-  handleTrusted('backend:factory-reset', (_event, req) => {
+  handleTrusted('backend:factory-reset', async (_event, req) => {
     const { confirm, deleteDownloadedModels, timeoutMs } = req || {};
-    return backendProxy.factoryReset({ confirm, deleteDownloadedModels, timeoutMs });
+    const result = await backendProxy.factoryReset({ confirm, deleteDownloadedModels, timeoutMs });
+    onConsentChanged?.();
+    return result;
   });
 
   handleTrusted('backend:clear-persona-learning', (_event, req) => {
@@ -211,24 +213,29 @@ function registerIpc({
   });
 
   // Durable onboarding consent record (unified data root, not Electron
-  // userData). consentVersion is sanitized to a finite number — the renderer
-  // must never write an arbitrary value into the consent record.
+  // userData). Acceptance uses the main process current version; a renderer
+  // cannot invent a future consent version.
   const onboardingStore = require('./onboardingStore');
   handleTrusted('onboarding:get-state', () => onboardingStore.readState());
-  handleTrusted('onboarding:accept', (_event, req) => onboardingStore.recordAcceptance({
-    consentVersion: Number.isFinite(req?.consentVersion) ? req.consentVersion : undefined,
-  }));
+  handleTrusted('onboarding:accept', () => {
+    const result = onboardingStore.recordAcceptance();
+    if (result.ok) onConsentChanged?.();
+    return result;
+  });
   handleTrusted('onboarding:complete-step', (_event, req) =>
     onboardingStore.recordStepComplete(String(req?.stepId || '')));
-  handleTrusted('onboarding:migrate-legacy', (_event, req) =>
-    onboardingStore.migrateLegacyCompletion({ legacyComplete: Boolean(req?.legacyComplete) }));
+  handleTrusted('onboarding:migrate-legacy', (_event, req) => {
+    const result = onboardingStore.migrateLegacyCompletion({ legacyComplete: Boolean(req?.legacyComplete) });
+    if (result.migrated && result.ok) onConsentChanged?.();
+    return result;
+  });
 
   handleTrusted('app:get-version', () => {
     const { APP_VERSION } = require('./config');
     return APP_VERSION;
   });
 
-  // The renderer can request one of four fixed actions; it cannot provide a
+  // The renderer can request fixed update actions and a boolean preference; it cannot provide a
   // feed URL, channel, executable, path, or updater options. All transition
   // checks and the recording/processing gate live in the main controller.
   const unavailableUpdateState = () => ({
@@ -244,6 +251,7 @@ function registerIpc({
     errorCode: null,
   });
   handleTrusted('updates:get-state', () => updateController?.getState?.() || unavailableUpdateState());
+  handleTrusted('updates:set-automatic', (_event, enabled) => updateController?.setAutomaticUpdates?.(enabled) || unavailableUpdateState());
   handleTrusted('updates:check', () => updateController?.check?.() || unavailableUpdateState());
   handleTrusted('updates:download', () => updateController?.download?.() || unavailableUpdateState());
   handleTrusted('updates:install', () => updateController?.install?.() || unavailableUpdateState());

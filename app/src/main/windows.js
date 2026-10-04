@@ -2,6 +2,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { BrowserWindow, app, shell } = require('electron');
 const { isTrustedRendererUrl } = require('./senderValidation');
+const onboardingStore = require('./onboardingStore');
 
 let mainWindow = null;
 const MANUAL_UPDATE_URL = 'https://github.com/RoyGSlade/BetterFingers/releases';
@@ -180,7 +181,9 @@ function hardenWindowNavigation(window) {
   const devOrigin = process.env.ELECTRON_RENDERER_URL;
   const rendererRoot = rendererDir();
   window.webContents.setWindowOpenHandler(({ url }) => {
-    if (url === MANUAL_UPDATE_URL) shell.openExternal(MANUAL_UPDATE_URL).catch(() => {});
+    if (url === MANUAL_UPDATE_URL && !onboardingStore.needsConsent(onboardingStore.readState())) {
+      shell.openExternal(MANUAL_UPDATE_URL).catch(() => {});
+    }
     return { action: 'deny' };
   });
   window.webContents.on('will-navigate', (event, url) => {

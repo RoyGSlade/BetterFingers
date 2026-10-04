@@ -5,6 +5,7 @@ const STATUSES = Object.freeze([
   'downloading', 'ready', 'installing', 'error',
 ]);
 const ALLOWED_CHECK = new Set(['idle', 'up_to_date', 'error']);
+const PREFERENCE_ERRORS = new Set(['CONSENT_REQUIRED', 'INVALID_PREFERENCE', 'PREFERENCE_SAVE_FAILED']);
 const ACTIVE_STATUSES = new Set([
   'recording_started', 'recording', 'transcribing', 'rewriting', 'processing',
   'long_recording_detected', 'chunking_started', 'chunking_progress', 'chunking_stitching',
@@ -115,7 +116,30 @@ function createUpdateController(options = {}) {
     bytesTotal: 0, errorCode: null,
   };
 
-  function snapshot() { return Object.freeze({ ...state }); }
+  function consentGranted() {
+    try { return options.consentGuard?.() === true; } catch { return false; }
+  }
+  function automaticEnabled() {
+    try { return consentGranted() && options.automaticUpdatesGuard?.() === true; } catch { return false; }
+  }
+  function snapshot() {
+    return Object.freeze({ ...state, consentGranted: consentGranted(), automaticUpdates: automaticEnabled() });
+  }
+  function refreshConsent() { return emit(); }
+  // A lifecycle error (e.g. ACTIVE_DICTATION on a ready update) gates
+  // "Restart and install"; a preference result must never replace or clear it.
+  function setPreferenceResult(errorCode) {
+    if (state.errorCode && !PREFERENCE_ERRORS.has(state.errorCode)) return emit();
+    return set({ errorCode });
+  }
+  function setAutomaticUpdates(enabled) {
+    if (!consentGranted()) return setPreferenceResult('CONSENT_REQUIRED');
+    if (typeof enabled !== 'boolean') return setPreferenceResult('INVALID_PREFERENCE');
+    const result = options.saveAutomaticUpdates?.(enabled);
+    if (!result?.ok) return setPreferenceResult('PREFERENCE_SAVE_FAILED');
+    options.onAutomaticUpdatesChanged?.();
+    return setPreferenceResult(null);
+  }
   function emit() {
     const value = snapshot();
     for (const listener of listeners) {
@@ -218,6 +242,7 @@ function createUpdateController(options = {}) {
   }
 
   async function check() {
+    if (!consentGranted()) return set({ errorCode: 'CONSENT_REQUIRED' });
     if (!supported || !ALLOWED_CHECK.has(state.status)) return snapshot();
     configure();
     set({ status: 'checking', errorCode: null });
@@ -226,6 +251,7 @@ function createUpdateController(options = {}) {
   }
 
   async function download() {
+    if (!consentGranted()) return set({ errorCode: 'CONSENT_REQUIRED' });
     if (!supported || state.status !== 'available') return snapshot();
     configure();
     set({ status: 'downloading', percent: 0, bytesTransferred: 0, bytesTotal: 0, errorCode: null });
@@ -284,9 +310,36 @@ function createUpdateController(options = {}) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    check, download, install, configure, refreshInstallEligibility,
+    check, download, install, configure, refreshInstallEligibility, refreshConsent, setAutomaticUpdates,
+    canCheckAutomatically: () => supported && automaticEnabled(),
     isSupported: () => supported, statuses: STATUSES,
   });
 }
 
-module.exports = { ACTIVE_STATUSES, STATUSES, compareSemver, createUpdateController, safeError, safeNotes };
+// Only schedule after durable consent AND an automatic-check preference.
+// Re-read both at dispatch time: consent/reset may change during the delay.
+function createUpdateCheckScheduler({ controller, setTimer = setTimeout, clearTimer = clearTimeout, isQuitting = () => false }) {
+  let timer = null;
+  let ready = false;
+  let completed = false;
+  function cancel() {
+    if (timer !== null) clearTimer(timer);
+    timer = null;
+  }
+  function refresh() {
+    if (!ready || completed || isQuitting() || !controller.canCheckAutomatically()) {
+      cancel();
+      return;
+    }
+    if (timer !== null) return;
+    timer = setTimer(() => {
+      timer = null;
+      if (isQuitting() || !controller.canCheckAutomatically()) return;
+      completed = true;
+      controller.check().catch(() => {});
+    }, 15000);
+  }
+  return Object.freeze({ ready() { ready = true; refresh(); }, refresh, cancel });
+}
+
+module.exports = { ACTIVE_STATUSES, STATUSES, compareSemver, createUpdateController, createUpdateCheckScheduler, safeError, safeNotes };

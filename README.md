@@ -84,7 +84,11 @@ estimates are guidance, not a guarantee; bigger models remain opt-in.
 
 ## Privacy model
 
-Speech processing runs on-device. Network requests are limited to update checks,
+Speech processing runs on-device. No update checks run before durable privacy consent.
+Fresh installs leave automatic checks off; Settings lets you opt in or manually check
+GitHub releases for newer versions. Existing accepted v1 onboarding records without an
+update preference retain automatic checks; explicit preferences are preserved, and
+unreadable/future records fail closed. Network requests are limited to these checks,
 user-initiated model/runtime downloads, and an explicitly confirmed bug report when an
 operator-configured relay exists. No accounts, analytics, or cloud inference. The
 Privacy dashboard

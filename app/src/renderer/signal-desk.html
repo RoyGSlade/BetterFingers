@@ -2628,6 +2628,9 @@
               </div>
             </div>
             <p class="sd-set-update__detail" id="sdSetUpdateDetail" aria-live="polite" aria-atomic="true">Nothing downloads or restarts without your permission.</p>
+            <p class="sd-set-update__detail">Update checks contact GitHub releases to find a newer BetterFingers version. Downloads start only when you choose them.</p>
+            <label class="sd-set-update__detail"><input type="checkbox" id="sdSetUpdateAutomatic" disabled> Check for updates automatically</label>
+            <p class="sd-set-update__detail" id="sdSetUpdatePreferenceMessage" role="status" aria-live="polite"></p>
             <div class="sd-set-update__release" id="sdSetUpdateRelease" hidden>
               <span class="sd-set-update__meta" id="sdSetUpdateReleaseMeta"></span>
               <p class="sd-set-update__notes" id="sdSetUpdateReleaseNotes"></p>
@@ -2640,7 +2643,7 @@
               <button type="button" class="sd-btn sd-btn--primary" id="sdSetUpdatePrimaryButton" hidden>Check again</button>
               <button type="button" class="sd-btn" id="sdSetUpdateLaterButton" hidden>Later</button>
               <button type="button" class="sd-btn" id="sdSetUpdateResumeButton" hidden>Show update options</button>
-              <a class="sd-set-update__manual" id="sdSetUpdateManualLink" href="https://github.com/RoyGSlade/BetterFingers/releases" target="_blank" rel="noreferrer" hidden>Download manually</a>
+              <a class="sd-set-update__manual" id="sdSetUpdateManualLink" href="https://github.com/RoyGSlade/BetterFingers/releases" target="_blank" rel="noreferrer" hidden>Open GitHub releases to download manually</a>
             </div>
           </article>
 
