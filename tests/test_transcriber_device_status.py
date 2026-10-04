@@ -20,8 +20,8 @@ class _DummySegment:
 
 
 class _DummyWhisperModel:
-    def transcribe(self, _audio, beam_size=5, hotwords=None):
-        del beam_size, hotwords
+    def transcribe(self, _audio, beam_size=5, hotwords=None, without_timestamps=False):
+        del beam_size, hotwords, without_timestamps
         return [_DummySegment("hello world", start=0.0, end=0.5)], None
 
 

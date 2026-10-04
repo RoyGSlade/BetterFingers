@@ -15,6 +15,11 @@ from log_redaction import redact_user_text
 from text_formatter import TextFormatter
 from utils import load_profile
 
+try:
+    import psutil
+except Exception:  # pragma: no cover - psutil is a hard dependency in practice
+    psutil = None
+
 # --- Hallucination Guard ---
 # Whisper sometimes "hallucinates" repeated short phrases during silence or
 # noise.  The patterns below catch the most common ones.
@@ -58,6 +63,67 @@ def classify_cuda_runtime_error(exc):
     if _CUDA_RUNTIME_LIBRARY_RE.search(text) and _CUDA_RUNTIME_LOAD_RE.search(text):
         return CUDA_RUNTIME_MISSING_CODE
     return None
+
+
+# Measured on a 12-core Zen 5 (Ryzen AI 9 HX 370), CPU int8: 8 threads is the knee; 16+ regress.
+STT_CPU_THREAD_CAP = 8
+_STT_CPU_THREADS_ENV = "BETTERFINGERS_STT_CPU_THREADS"
+
+
+def _detect_physical_cores():
+    """Physical core count; falls back to half the logical count if psutil can't say."""
+    try:
+        count = psutil.cpu_count(logical=False) if psutil is not None else None
+    except Exception:
+        count = None
+    return int(count or max(1, (os.cpu_count() or 4) // 2))
+
+
+def _sample_cpu_load_percent():
+    """Short system-wide CPU load sample; any psutil failure counts as idle (0)."""
+    if psutil is None:
+        return 0.0
+    try:
+        return float(psutil.cpu_percent(interval=0.1))
+    except Exception:
+        return 0.0
+
+
+def choose_stt_cpu_threads(physical_cores=None, cpu_load_percent=None, env=None):
+    """Pick the CTranslate2 CPU thread count for a Whisper model about to be built.
+
+    faster-whisper's ``cpu_threads=0`` means "4"; the app never set it. CTranslate2 fixes
+    the count at construction, so this is evaluated on every CPU model construction. Never
+    above the physical core count or STT_CPU_THREAD_CAP, shrinks by the cores that are
+    already busy, and keeps at least 2 threads when there are 2 or more cores.
+    ``BETTERFINGERS_STT_CPU_THREADS`` (int > 0) is a diagnostics override with no UI.
+    """
+    env = os.environ if env is None else env
+    try:
+        override = int(str(env.get(_STT_CPU_THREADS_ENV, "")).strip())
+    except (TypeError, ValueError):
+        override = 0
+    if override > 0:
+        return override
+
+    physical = max(1, int(physical_cores or _detect_physical_cores()))
+    load = _sample_cpu_load_percent() if cpu_load_percent is None else cpu_load_percent
+    try:
+        load = float(load)
+    except (TypeError, ValueError):
+        load = 0.0
+    load = min(100.0, max(0.0, load))
+    busy = round(physical * load / 100)
+    return max(min(2, physical), min(STT_CPU_THREAD_CAP, physical - busy))
+
+
+def _select_cpu_threads():
+    """Run the thread policy for one CPU model load and log it once."""
+    physical = _detect_physical_cores()
+    load = _sample_cpu_load_percent()
+    threads = choose_stt_cpu_threads(physical_cores=physical, cpu_load_percent=load)
+    logging.info("Whisper CPU threads: %d (physical=%d, load=%.0f%%)", threads, physical, load)
+    return threads
 
 
 def _estimate_whisper_runtime_mb(model_size):
@@ -346,6 +412,7 @@ class Transcriber:
         # user's preference. None while unloaded.
         self.active_device = None          # "cuda" | "cpu" | None
         self.active_compute_type = None    # "float16" | "int8" | None
+        self.active_cpu_threads = None     # int on a CPU load, None on CUDA / unloaded
         self.device_fallback_reason = None  # short string, or None if no fallback happened
         self.device_fallback_code = None   # stable privacy-safe code, if fallback happened
         self.download_root = HF_HUB_CACHE
@@ -363,6 +430,9 @@ class Transcriber:
         self._last_error_state = None
         self._probe_passed = False
         self._inference_ready = False
+        # Set by _load_model() when a load-time CUDA inference probe passed; consumed
+        # (and cleared) by ensure_loaded() to seed _inference_ready for that model.
+        self._load_inference_verified = False
         self._decode_fallback_attempted = False
 
         self.reload_profile(profile_name=profile_name, preload=preload)
@@ -397,6 +467,7 @@ class Transcriber:
             "fallback": bool(fallback),
             "active_device": self.active_device,
             "active_compute_type": self.active_compute_type,
+            "active_cpu_threads": self.active_cpu_threads,
             "device_fallback_reason": self.device_fallback_reason,
             "device_fallback_code": getattr(self, "device_fallback_code", None),
         }
@@ -417,6 +488,7 @@ class Transcriber:
                 "error_state": self._last_error_state,
                 "active_device": self.active_device,
                 "active_compute_type": self.active_compute_type,
+                "active_cpu_threads": self.active_cpu_threads,
                 "device_fallback_reason": self.device_fallback_reason,
                 "device_fallback_code": getattr(self, "device_fallback_code", None),
             }
@@ -456,6 +528,7 @@ class Transcriber:
                 # ensure_loaded() actually reloads the model.
                 self.active_device = None
                 self.active_compute_type = None
+                self.active_cpu_threads = None
                 self.device_fallback_reason = None
                 self.device_fallback_code = None
                 self._probe_passed = False
@@ -483,8 +556,10 @@ class Transcriber:
         # when CUDA loads successfully.
         fallback_reason = None
         fallback_code = None
+        self._load_inference_verified = False
 
         if self.prefer_gpu:
+            model = None
             try:
                 device = "cuda"
                 compute_type = "float16"
@@ -499,11 +574,6 @@ class Transcriber:
                     **base_kwargs,
                 )
                 logging.info("Whisper model loaded successfully on CUDA.")
-                self.active_device = device
-                self.active_compute_type = compute_type
-                self.device_fallback_reason = None
-                self.device_fallback_code = None
-                return model
             except Exception as exc:
                 if local_files_only:
                     # Cache may be partial/corrupt; retry once with network allowed.
@@ -519,21 +589,47 @@ class Transcriber:
                             local_files_only=False,
                         )
                         logging.info("Whisper model loaded successfully on CUDA after cache refresh.")
-                        self.active_device = device
-                        self.active_compute_type = compute_type
-                        self.device_fallback_reason = None
-                        self.device_fallback_code = None
-                        return model
                     except Exception as retry_exc:
                         exc = retry_exc
-                fallback_code = classify_cuda_runtime_error(exc)
-                if fallback_code is None:
-                    raise
-                fallback_reason = "CUDA initialization failed"
-                logging.warning("CUDA initialization failed; falling back to CPU.")
+                if model is None:
+                    fallback_code = classify_cuda_runtime_error(exc)
+                    if fallback_code is None:
+                        raise
+                    fallback_reason = "CUDA initialization failed"
+                    logging.warning("CUDA initialization failed; falling back to CPU.")
+
+            if model is not None:
+                # A CUDA constructor can succeed while the first transcribe() fails
+                # (e.g. cublas64_12.dll missing). Prove inference now, at load time,
+                # instead of during the user's first dictation. Runs once for whichever
+                # construction above succeeded; a probe failure is not a cache problem,
+                # so it never triggers the remote-fetch retry.
+                probe_exc = self._probe_cuda_inference(model)
+                if probe_exc is None:
+                    self.active_device = device
+                    self.active_compute_type = compute_type
+                    self.active_cpu_threads = None
+                    self.device_fallback_reason = None
+                    self.device_fallback_code = None
+                    self._load_inference_verified = True
+                    return model
+                fallback_code = classify_cuda_runtime_error(probe_exc)
+                if fallback_code is not None:
+                    fallback_reason = "CUDA inference probe failed"
+                else:
+                    # Unrecognized failure: still leave the broken GPU model behind, but
+                    # keep the code None (the UI only knows cuda_runtime_missing) and
+                    # record just the exception class, never its payload.
+                    fallback_reason = f"CUDA inference probe failed ({type(probe_exc).__name__})"
+                logging.warning("%s; falling back to CPU.", fallback_reason)
+                # Drop the unusable CUDA model, then continue into the CPU path below.
+                probe_exc = None
+                model = None
+                gc.collect()
 
         device = "cpu"
         compute_type = "int8"
+        cpu_threads = _select_cpu_threads()
         logging.info(
             f"Loading Whisper model '{model_size}' on {device} ({compute_type}) "
             f"(cache='{self.download_root}', local_only={local_files_only})..."
@@ -543,6 +639,7 @@ class Transcriber:
                 model_size,
                 device=device,
                 compute_type=compute_type,
+                cpu_threads=cpu_threads,
                 **base_kwargs,
             )
         except Exception as exc:
@@ -552,6 +649,7 @@ class Transcriber:
                     model_size,
                     device=device,
                     compute_type=compute_type,
+                    cpu_threads=cpu_threads,
                     download_root=self.download_root,
                     local_files_only=False,
                 )
@@ -560,9 +658,26 @@ class Transcriber:
         logging.info("Whisper model loaded successfully on CPU.")
         self.active_device = device
         self.active_compute_type = compute_type
+        self.active_cpu_threads = cpu_threads
         self.device_fallback_reason = fallback_reason
         self.device_fallback_code = fallback_code if fallback_reason else None
         return model
+
+    @staticmethod
+    def _probe_cuda_inference(model):
+        """Run one minimal real inference; return None on success, else the exception."""
+        try:
+            segments, _info = model.transcribe(
+                np.zeros(16000, dtype=np.float32),
+                beam_size=1,
+                without_timestamps=True,
+            )
+            list(segments)
+            return None
+        except Exception as exc:
+            # Strip the traceback: its frames reference the model, which the
+            # caller is about to drop and must be able to free.
+            return exc.with_traceback(None)
 
     def _is_model_cached(self, model_size):
         local_path = (model_size or "").strip()
@@ -645,11 +760,13 @@ class Transcriber:
                 # successful load misreport status as still-accelerated.
                 self.active_device = None
                 self.active_compute_type = None
+                self.active_cpu_threads = None
                 self.device_fallback_reason = None
                 self.device_fallback_code = None
                 self._last_error = str(exc)
                 self._probe_passed = False
                 self._inference_ready = False
+                self._load_inference_verified = False
                 self._emit_runtime_error("stt_model_load_failed", "construction_failed")
                 if will_download:
                     _set_whisper_download_state(self.model_size, {
@@ -671,8 +788,12 @@ class Transcriber:
                 else:
                     self._last_error_code = None
                     self._last_error_state = None
+                # runtime_probe() owns _probe_passed. _inference_ready starts True only
+                # when _load_model() already ran a real CUDA decode (load-time probe);
+                # a CPU model has not decoded anything yet.
                 self._probe_passed = False
-                self._inference_ready = False
+                self._inference_ready = bool(self._load_inference_verified)
+                self._load_inference_verified = False
                 if will_download:
                     _set_whisper_download_state(self.model_size, {
                         "model_size": self.model_size,
@@ -692,10 +813,12 @@ class Transcriber:
             self.model = None
             self.active_device = None
             self.active_compute_type = None
+            self.active_cpu_threads = None
             self.device_fallback_reason = None
             self.device_fallback_code = None
             self._probe_passed = False
             self._inference_ready = False
+            self._load_inference_verified = False
             self._last_error_code = None
             self._last_error_state = None
         logging.info("Whisper model unloaded.")
@@ -708,15 +831,18 @@ class Transcriber:
         """Construct exactly one CPU/int8 model for a lazy CUDA recovery."""
         model_size = self.model_size
         local_files_only = self._is_model_cached(model_size)
+        cpu_threads = _select_cpu_threads()
         model = WhisperModel(
             model_size,
             device="cpu",
             compute_type="int8",
+            cpu_threads=cpu_threads,
             download_root=self.download_root,
             local_files_only=local_files_only,
         )
         self.active_device = "cpu"
         self.active_compute_type = "int8"
+        self.active_cpu_threads = cpu_threads
         self.device_fallback_reason = "CUDA inference initialization failed"
         self.device_fallback_code = CUDA_RUNTIME_MISSING_CODE
         return model
@@ -767,6 +893,7 @@ class Transcriber:
                     self.model = None
                     self.active_device = None
                     self.active_compute_type = None
+                    self.active_cpu_threads = None
                     self._probe_passed = False
                     self._inference_ready = False
                     self._emit_runtime_error(code, "fallback_load_failed", fallback=True)

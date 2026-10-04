@@ -28,15 +28,21 @@ class _LazySegment:
 
 
 class _LazyWhisperModel:
-    def __init__(self, device, error=None):
+    def __init__(self, device, error=None, healthy_calls=0):
         self.device = device
         self.error = error
+        # Load-time CUDA probe (the first transcribe call) must pass so these
+        # tests keep exercising the *lazy* recovery backstop after load.
+        self.healthy_calls = healthy_calls
+        self.calls = 0
 
-    def transcribe(self, _audio, beam_size=1):
-        del beam_size
+    def transcribe(self, _audio, beam_size=1, without_timestamps=False):
+        del beam_size, without_timestamps
+        self.calls += 1
+        healthy = self.calls <= self.healthy_calls
 
         def iterator():
-            if self.error is not None:
+            if self.error is not None and not healthy:
                 raise self.error
             yield _LazySegment()
 
@@ -138,7 +144,11 @@ class TranscriberLazyProbeRecoveryTests(unittest.TestCase):
         def factory(*_args, **kwargs):
             device = kwargs["device"]
             calls.append(device)
-            return _LazyWhisperModel(device, cuda_error if device == "cuda" else cpu_error)
+            return _LazyWhisperModel(
+                device,
+                cuda_error if device == "cuda" else cpu_error,
+                healthy_calls=1 if device == "cuda" else 0,
+            )
 
         patches = [
             patch("transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": True}),
