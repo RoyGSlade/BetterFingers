@@ -229,19 +229,35 @@ class HotkeyManager:
         self._stop_recording(reason="watchdog_timeout")
 
     def _stop_recording(self, reason="manual"):
+        from backend.runtime import latency
+        stop_tick = latency.stop_request_tick()
         with self.state_lock:
             if not self.is_recording:
                 return
             self.is_recording = False
             self.last_stop_reason = reason
+        timing = latency.begin(stop_tick=stop_tick, boundary=stop_tick is not None)
         self._cancel_watchdog()
 
         duration = max(0.0, time.time() - self.recording_start_time)
         logging.info(f"Recording STOP ({reason}) duration={duration:.2f}s")
 
-        result = self.recorder.stop_recording(stop_reason=reason)
+        try:
+            result = self.recorder.stop_recording(stop_reason=reason)
+        except Exception:
+            latency.safe(timing, "end", "stop_to_finalize", "failed")
+            latency.safe(timing, "finish", "failed", "capture_error")
+            raise
+        latency.safe(timing, "end", "stop_to_finalize")
+        latency.attach(result, timing)
         if self.on_complete:
-            self.on_complete(result)
+            try:
+                self.on_complete(result)
+            except Exception:
+                latency.safe(timing, "finish", "failed", "dispatch_error")
+                raise
+        else:
+            latency.safe(timing, "finish", "incomplete", "missing_boundary")
 
     def request_start(self, reason="manual", prepend_audio=None):
         self._start_recording(reason=reason, prepend_audio=prepend_audio)

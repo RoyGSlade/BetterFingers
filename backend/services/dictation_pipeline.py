@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Protocol, runtime_checkable
 
 from backend.runtime.dependencies import PipelineDependencies
+from backend.runtime import latency
 
 
 class PipelineStatus:
@@ -43,6 +44,7 @@ class PipelineContext:
     final_text: str = ""
     draft: Any = None
     extra: dict = field(default_factory=dict)
+    latency_context: Any = None
 
 
 @dataclass
@@ -130,6 +132,7 @@ class DictationPipeline:
         *,
         metadata: Optional[dict] = None,
         job: Any = None,
+        latency_context: Any = None,
     ) -> PipelineOutcome:
         """Run every stage in order over a fresh context.
 
@@ -149,7 +152,8 @@ class DictationPipeline:
         ``job_manager.complete`` — the recovery reference and "what this job
         produced" are different things once real stages produce a result.
         """
-        ctx = PipelineContext(recording_result=recording_result, metadata=dict(metadata or {}))
+        ctx = PipelineContext(recording_result=recording_result, metadata=dict(metadata or {}),
+                              latency_context=latency_context)
         if job is not None:
             job_id = getattr(job, "id", None)
         else:
@@ -159,12 +163,22 @@ class DictationPipeline:
         # Persist the raw recording up front so it survives a crash, an
         # error, or a cancellation partway through — mirrors the existing
         # recovery-first behavior in server.process_recording_result.
-        recovery_ref = self._deps.recovery_sink.save(recording_result, reason="pre-pipeline")
+        try:
+            timed_save = getattr(self._deps.recovery_sink, "save_with_latency", None)
+            if callable(timed_save):
+                recovery_ref = timed_save(recording_result, reason="pre-pipeline", timing=latency_context)
+            else:
+                with latency.span(latency_context, "recovery_save"):
+                    recovery_ref = self._deps.recovery_sink.save(recording_result, reason="pre-pipeline")
+        except Exception:
+            latency.safe(latency_context, "finish", "failed", "stage_error")
+            raise
 
         stage_reached: Optional[str] = None
         for stage in self._stages:
             stage_reached = stage.name
             if self._deps.job_manager.is_cancel_requested(job_id):
+                latency.safe(latency_context, "finish", "cancelled", "cancel_requested")
                 self._deps.job_manager.mark_cancelled(job_id)
                 return PipelineOutcome(
                     status=PipelineStatus.CANCELLED,
@@ -178,6 +192,7 @@ class DictationPipeline:
             try:
                 stage.run(ctx, self._deps)
             except InterruptedError as exc:
+                latency.safe(latency_context, "finish", "cancelled", "cancel_requested")
                 self._deps.job_manager.mark_cancelled(job_id)
                 return PipelineOutcome(
                     status=PipelineStatus.CANCELLED,
@@ -189,6 +204,7 @@ class DictationPipeline:
                     exception=exc,
                 )
             except Exception as exc:
+                latency.safe(latency_context, "finish", "failed", "stage_error")
                 self._deps.job_manager.fail(job_id, str(exc))
                 return PipelineOutcome(
                     status=PipelineStatus.FAILED,

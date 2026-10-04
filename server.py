@@ -2109,6 +2109,7 @@ def _percentile(values, pct):
 
 def get_pipeline_metrics_summary():
     """Summary stats over the recent latency samples for the HUD."""
+    from backend.runtime import latency
     with pipeline_metrics_lock:
         samples = list(pipeline_metrics)
 
@@ -2131,6 +2132,7 @@ def get_pipeline_metrics_summary():
         "llm": stage_stats("llm_ms"),
         "total": stage_stats("total_ms"),
         "recent": samples[-10:],
+        "latency": latency.snapshot(),
     }
 
 
@@ -2185,7 +2187,12 @@ class _RecordingsRecoverySink:
     persist-audio call exactly (same metadata shape, same swallow-and-log
     error handling so a disk failure never breaks dictation)."""
 
-    def save(self, recording_result, *, reason):
+    def save_with_latency(self, recording_result, *, reason, timing):
+        return self.save(recording_result, reason=reason, timing=timing)
+
+    def save(self, recording_result, *, reason, timing=None):
+        from backend.runtime import latency
+        latency.safe(timing, "start", "recovery_save")
         try:
             recordings.save_recording(
                 recording_result,
@@ -2193,7 +2200,10 @@ class _RecordingsRecoverySink:
                 metadata={"stop_reason": getattr(recording_result, "stop_reason", "manual")},
             )
         except Exception as exc:
+            latency.safe(timing, "end", "recovery_save", "failed")
             logging.debug(f"Could not persist recording: {exc}")
+        else:
+            latency.safe(timing, "end", "recovery_save")
         return None
 
 
@@ -2215,11 +2225,18 @@ def process_recording_result(
     block until the running pipeline finishes instead of rejecting, so
     back-to-back recordings are processed in order rather than bounced.
     """
+    from backend.runtime import latency
+    # Only a live stop-origin capture owns a latency context. Direct callers
+    # (draft retry, recording re-transcription) carry none, or an already
+    # terminal one, and record nothing instead of polluting the bounded ring.
+    timing = latency.live_context(recording_result)
+    latency.safe(timing, "start", "pipeline_wait")
     global is_processing_draft, _active_dictation_job_id
     # A privacy wipe must operate on a quiescent system: never start (or
     # recover-save) a recording while one is running, or it would regrow data
     # the wipe is trying to erase.
     if _reject_if_wiping("recording drop"):
+        latency.safe(timing, "finish", "cancelled", "privacy_wipe")
         broadcast_status_threadsafe(
             "dictation_busy",
             {"message": "A privacy wipe is in progress; this recording was discarded."},
@@ -2236,12 +2253,14 @@ def process_recording_result(
         if wait_for_gate
         else dictation_coordinator.try_begin()
     )
+    latency.safe(timing, "end", "pipeline_wait")
     if not admitted:
         logging.warning("Dictation pipeline busy; rejecting competing invocation.")
         # Re-check the wipe flag: it may have been set after the top guard.
         # A rejected recording must not seed the recovery bin during a wipe.
         if not _reject_if_wiping("rejected-recording recovery save"):
             try:
+                latency.safe(timing, "start", "recovery_save")
                 recordings.save_recording(
                     recording_result,
                     rec_id=recordings.new_rec_id(),
@@ -2251,7 +2270,11 @@ def process_recording_result(
                     },
                 )
             except Exception as exc:
+                latency.safe(timing, "end", "recovery_save", "failed")
                 logging.debug(f"Could not persist rejected recording: {exc}")
+            else:
+                latency.safe(timing, "end", "recovery_save")
+        latency.safe(timing, "finish", "incomplete", "pipeline_busy")
         broadcast_status_threadsafe(
             "dictation_busy",
             {"message": "A dictation is already processing; recording saved to recovery."},
@@ -2261,6 +2284,7 @@ def process_recording_result(
     # caller was blocked in begin() (or between try_begin and here). Running
     # the pipeline now would save/create data behind the wipe's back.
     if _reject_if_wiping("recording drop (post-admission)"):
+        latency.safe(timing, "finish", "cancelled", "privacy_wipe")
         dictation_coordinator.finish()
         logging.info("Dropping recording: a privacy wipe began while awaiting the pipeline gate.")
         broadcast_status_threadsafe(
@@ -2283,6 +2307,7 @@ def process_recording_result(
         dictation_coordinator.set_active_job(job.id)
         JOBS.transition(job.id, JobState.TRANSCRIBING)
     except Exception as exc:
+        latency.safe(timing, "finish", "failed", "stage_error")
         logging.error(f"Failed to start dictation job: {exc}")
         with draft_lock:
             is_processing_draft = False
@@ -2315,6 +2340,29 @@ def process_recording_result(
     # cancelled/failed handling below sees the same state the old inline
     # except-blocks did.
 
+    def _commit_draft(ctx, *args, **kwargs):
+        with latency.span(timing, "draft_commit"):
+            draft = create_draft(*args, **kwargs)
+            ctx.draft = draft
+        latency.safe(timing, "committed")
+        return draft
+
+    def _publish_draft(*args, **kwargs):
+        with latency.span(timing, "preview_publish"):
+            return broadcast_status_threadsafe(*args, **kwargs)
+
+    def _timed_stage(func, stage):
+        def run(ctx, deps):
+            if stage == "cleanup" and not bool(profile_config.get("llm_enabled", False)):
+                latency.safe(timing, "configure", cleanup="skipped")
+                latency.safe(timing, "skip", "cleanup")
+                return func(ctx, deps)
+            if stage == "cleanup":
+                latency.safe(timing, "configure", cleanup="enabled")
+            with latency.span(timing, stage):
+                return func(ctx, deps)
+        return run
+
     def _stage_transcribe(ctx, deps):
         nonlocal raw_text, confidence, stt_ms, dict_terms
         broadcast_status_threadsafe("transcribing")
@@ -2327,47 +2375,66 @@ def process_recording_result(
             # The transcript was already built batch-by-batch while the user
             # was still talking; the only STT cost paid here was draining the
             # tail (streamed_stt_ms, measured by the dispatcher).
+            latency.safe(timing, "skip", "stt_decode")
             raw_text = str(streamed_text)
             if isinstance(streamed_confidence, dict) and streamed_confidence:
                 confidence = streamed_confidence
             stt_ms = streamed_stt_ms
         else:
-            trans = ensure_transcriber_initialized(preload=False)
-            hotwords = dictionary.hotwords_string(dict_terms)
-            if hasattr(audio_data, "size") and audio_data.size <= 0:
-                raw_text = ""
-            elif audio_data is None:
-                raw_text = ""
-            else:
-                # STT read lease: a Whisper reload/unload cannot free the model
-                # mid-transcription (it will 409 or wait for this to finish).
-                with model_runtime.read_lease("stt"):
-                    if hasattr(trans, "transcribe_with_structured"):
-                        # Single decode covers both the legacy confidence dict and
-                        # the structured segments (I3.1) — transcribe_with_confidence
-                        # + transcribe_structured would each decode independently.
-                        raw_text, confidence, structured = trans.transcribe_with_structured(audio_data, hotwords=hotwords)
-                        ctx.extra["transcription_result"] = structured
-                        try:
-                            # Without energy_windows the energy half of `arousal`
-                            # is always 0.0, leaving it a rescaled pace metric.
-                            # audio_data is the same mono float32 buffer just
-                            # transcribed -- no extra capture, nothing leaves the
-                            # device, and the helper returns loudness numbers only.
-                            ctx.extra["speech_signals"] = compute_speech_signals(
-                                structured.segments,
-                                audio_duration_s=structured.audio_duration_s,
-                                energy_windows=rms_windows(
-                                    audio_data,
-                                    sample_rate=getattr(recording_result, "sample_rate", 16000) or 16000,
-                                ),
-                            )
-                        except Exception as exc:
-                            logging.debug(f"speech signal computation failed: {exc}")
-                    elif hasattr(trans, "transcribe_with_confidence"):
-                        raw_text, confidence = trans.transcribe_with_confidence(audio_data, hotwords=hotwords)
-                    else:
-                        raw_text = trans.transcribe(audio_data)
+            structured = None
+            has_structured = False
+            with latency.span(timing, "stt_decode"):
+                trans = ensure_transcriber_initialized(preload=False)
+                observed = {
+                    "engine": "whisper", "model": getattr(trans, "model_size", "unknown"),
+                    "temperature": "warm" if getattr(trans, "model", None) is not None else "cold",
+                }
+                for key, value in observed.items():
+                    if type(value) is str and value in latency.ENUMS[key]:
+                        latency.safe(timing, "configure", **{key: value})
+                hotwords = dictionary.hotwords_string(dict_terms)
+                if hasattr(audio_data, "size") and audio_data.size <= 0:
+                    raw_text = ""
+                elif audio_data is None:
+                    raw_text = ""
+                else:
+                    # STT read lease: a Whisper reload/unload cannot free the model
+                    # mid-transcription (it will 409 or wait for this to finish).
+                    with model_runtime.read_lease("stt"):
+                        if hasattr(trans, "transcribe_with_structured"):
+                            # Single decode covers both the legacy confidence dict and
+                            # the structured segments (I3.1) — transcribe_with_confidence
+                            # + transcribe_structured would each decode independently.
+                            raw_text, confidence, structured = trans.transcribe_with_structured(audio_data, hotwords=hotwords)
+                            has_structured = True
+                            ctx.extra["transcription_result"] = structured
+                        elif hasattr(trans, "transcribe_with_confidence"):
+                            raw_text, confidence = trans.transcribe_with_confidence(audio_data, hotwords=hotwords)
+                        else:
+                            raw_text = trans.transcribe(audio_data)
+            if has_structured:
+                # Outside the stt_decode span on purpose: this is loudness math
+                # on the finished transcript, not part of the transcriber call.
+                try:
+                    # Without energy_windows the energy half of `arousal`
+                    # is always 0.0, leaving it a rescaled pace metric.
+                    # audio_data is the same mono float32 buffer just
+                    # transcribed -- no extra capture, nothing leaves the
+                    # device, and the helper returns loudness numbers only.
+                    ctx.extra["speech_signals"] = compute_speech_signals(
+                        structured.segments,
+                        audio_duration_s=structured.audio_duration_s,
+                        energy_windows=rms_windows(
+                            audio_data,
+                            sample_rate=getattr(recording_result, "sample_rate", 16000) or 16000,
+                        ),
+                    )
+                except Exception as exc:
+                    logging.debug(f"speech signal computation failed: {exc}")
+            for key, attr in (("device", "active_device"), ("compute_type", "active_compute_type")):
+                value = getattr(trans, attr, "unknown")
+                if type(value) is str and value in latency.ENUMS[key]:
+                    latency.safe(timing, "configure", **{key: value})
             # Inside the else-branch on purpose: the streamed path already set
             # stt_ms to the dispatcher-measured tail-drain time.
             stt_ms = (time.perf_counter() - _stt_start) * 1000.0
@@ -2384,6 +2451,9 @@ def process_recording_result(
         # Each load_profile() call is disk I/O + YAML parse, so the hot path
         # loads once and shares the dict.
         profile_config = get_active_recording_config()
+        mode = profile_config.get("use_mode")  # no modes are wired yet: stays "unknown"
+        if type(mode) is str and mode in latency.ENUMS["mode"]:
+            latency.safe(timing, "configure", mode=mode)
         pipeline_flags = get_pipeline_flags(profile_config)
         # Honour the user's selected persona for cleanup. resolve_dictation_preset
         # falls back to True Janitor when the selection is empty or names a persona
@@ -2396,7 +2466,8 @@ def process_recording_result(
             edit_cmd = voice_edit_commands.parse_edit_command(raw_text)
             if edit_cmd and edit_cmd.action == "scratch_that":
                 popped = utterance_history.pop_last()
-                draft = create_draft(
+                draft = _commit_draft(
+                    ctx,
                     raw_text,
                     "",
                     preset=preset,
@@ -2404,7 +2475,7 @@ def process_recording_result(
                     metadata=metadata,
                     recording_result=recording_result,
                 )
-                broadcast_status_threadsafe(
+                _publish_draft(
                     "scratch_last",
                     {
                         "draft_id": draft["id"],
@@ -2434,7 +2505,9 @@ def process_recording_result(
             profile_config,
         )
         if blocked:
-            draft = create_draft(
+            ctx.extra["_latency_no_audio"] = True
+            draft = _commit_draft(
+                ctx,
                 raw_text,
                 "",
                 preset=preset,
@@ -2446,7 +2519,7 @@ def process_recording_result(
                 transcription_result=_serialize_optional_contract(ctx.extra.get("transcription_result")),
                 speech_signals=_serialize_optional_contract(ctx.extra.get("speech_signals")),
             )
-            broadcast_status_threadsafe(
+            _publish_draft(
                 "draft_blocked",
                 {
                     "draft_id": draft["id"],
@@ -2563,7 +2636,8 @@ def process_recording_result(
         ctx.final_text = final_text
 
     def _stage_finalize(ctx, deps):
-        draft = create_draft(
+        draft = _commit_draft(
+            ctx,
             raw_text,
             final_text,
             preset=preset,
@@ -2599,7 +2673,7 @@ def process_recording_result(
             audio_seconds=float(getattr(recording_result, "duration_seconds", 0.0) or 0.0),
             chars=len(final_text or ""),
         )
-        broadcast_status_threadsafe(
+        _publish_draft(
             "preview_ready",
             {
                 "draft_id": draft["id"],
@@ -2619,9 +2693,9 @@ def process_recording_result(
 
     stages = [
         FunctionStage(name="transcribe", func=_stage_transcribe),
-        FunctionStage(name="post_process", func=_stage_post_process),
+        FunctionStage(name="post_process", func=_timed_stage(_stage_post_process, "post_process")),
         FunctionStage(name="no_audio_gate", func=_stage_no_audio_gate),
-        FunctionStage(name="rewrite", func=_stage_rewrite, job_state=JobState.REFINING),
+        FunctionStage(name="rewrite", func=_timed_stage(_stage_rewrite, "cleanup"), job_state=JobState.REFINING),
         FunctionStage(name="finalize", func=_stage_finalize, job_state=JobState.REVIEW_READY),
     ]
     deps = PipelineDependencies(
@@ -2630,9 +2704,15 @@ def process_recording_result(
     )
     pipeline = DictationPipeline(stages, deps, kind="dictation", label="Dictation")
 
+    pipeline_returned = False
     try:
-        outcome = pipeline.run(recording_result, metadata=metadata, job=job)
+        outcome = pipeline.run(recording_result, metadata=metadata, job=job, latency_context=timing)
+        pipeline_returned = True
         if outcome.completed:
+            if outcome.context.extra.get("_latency_no_audio"):
+                latency.safe(timing, "finish", "incomplete", "no_audio")
+            else:
+                latency.safe(timing, "finish")
             return outcome.context.draft
         if outcome.cancelled:
             logging.info("Recording processing was cancelled by the user.")
@@ -2689,6 +2769,14 @@ def process_recording_result(
         broadcast_status_threadsafe("error", {"message": outcome.error, "draft_id": draft["id"]})
         return draft
     finally:
+        # Every normal pipeline return already issued its own terminal finish,
+        # which is non-blocking and may have been dropped under collector lock
+        # contention. Retry it without relabelling a successful or cancelled
+        # dictation as a stage error; a no-op when the record already closed.
+        if pipeline_returned:
+            latency.safe(timing, "finish", "incomplete", "collector_failure")
+        else:
+            latency.safe(timing, "finish", "failed", "stage_error")
         with draft_lock:
             is_processing_draft = False
         # Guarantee the job reaches a terminal state even on an unexpected exit.
@@ -2739,6 +2827,12 @@ def _ensure_recording_dispatcher():
 
 def _enqueue_recording(recording_result, stream_session=None):
     """Hold a finished recording for in-order processing (never reject)."""
+    from backend.runtime import latency
+    timing = latency.context(recording_result)
+    if timing is None:
+        timing = latency.begin(boundary=False)
+        latency.attach(recording_result, timing)
+    latency.safe(timing, "configure", streaming=stream_session is not None)
     _ensure_recording_dispatcher()
     depth = _pending_recordings.qsize()
     if depth >= MAX_PENDING_RECORDINGS:
@@ -2748,6 +2842,7 @@ def _enqueue_recording(recording_result, stream_session=None):
             stream_session.abort()
         if not _reject_if_wiping("overflow recording recovery save"):
             try:
+                latency.safe(timing, "start", "recovery_save")
                 recordings.save_recording(
                     recording_result,
                     rec_id=recordings.new_rec_id(),
@@ -2757,12 +2852,17 @@ def _enqueue_recording(recording_result, stream_session=None):
                     },
                 )
             except Exception as exc:
+                latency.safe(timing, "end", "recovery_save", "failed")
                 logging.debug(f"Could not persist overflow recording: {exc}")
+            else:
+                latency.safe(timing, "end", "recovery_save")
+        latency.safe(timing, "finish", "incomplete", "queue_full")
         broadcast_status_threadsafe(
             "dictation_busy",
             {"message": "Too many recordings are waiting; this one was saved to recovery."},
         )
         return
+    latency.safe(timing, "start", "dispatch_wait")
     _pending_recordings.put((recording_result, stream_session, _pending_drop_generation))
     if depth > 0 or dictation_coordinator.is_busy():
         broadcast_status_threadsafe("dictation_queued", {"position": depth + 1})
@@ -2771,6 +2871,8 @@ def _enqueue_recording(recording_result, stream_session=None):
 def _drop_pending_recordings():
     """Privacy wipe: discard every held recording and poison items already
     dequeued but not yet processed (generation bump). Returns the drop count."""
+    from backend.runtime import latency
+    latency.reset()
     global _pending_drop_generation
     _pending_drop_generation += 1
     dropped = 0
@@ -2792,16 +2894,20 @@ def _drop_pending_recordings():
 
 
 def _recording_dispatcher_loop():
+    from backend.runtime import latency
     while True:
         item = _pending_recordings.get()
         if item is None:
             continue
         recording_result, session, generation = item
+        timing = latency.context(recording_result)
+        latency.safe(timing, "end", "dispatch_wait")
         try:
             if generation != _pending_drop_generation or _reject_if_wiping("held recording dispatch"):
                 # Invalidated by a privacy wipe after being queued/dequeued.
                 if session is not None:
                     session.abort()
+                latency.safe(timing, "finish", "cancelled", "privacy_wipe")
                 logging.info("Dropping held recording: invalidated by privacy wipe.")
                 continue
             streamed_text = None
@@ -2809,7 +2915,13 @@ def _recording_dispatcher_loop():
             streamed_stt_ms = None
             if session is not None:
                 _drain_start = time.perf_counter()
-                fin = session.finalize()
+                latency.safe(timing, "start", "stream_tail")
+                try:
+                    fin = session.finalize()
+                except Exception:
+                    latency.safe(timing, "end", "stream_tail", "failed")
+                    raise
+                latency.safe(timing, "end", "stream_tail", "completed" if fin.get("ok") else "failed")
                 if fin.get("ok") and str(fin.get("text") or "").strip():
                     streamed_text = fin["text"]
                     streamed_conf = fin.get("confidence")
@@ -2820,6 +2932,8 @@ def _recording_dispatcher_loop():
                         f"Streaming STT covered {fin.get('batches', 0)} batches; "
                         f"drain took {streamed_stt_ms:.0f}ms."
                     )
+            else:
+                latency.safe(timing, "skip", "stream_tail")
             process_recording_result(
                 recording_result,
                 streamed_text=streamed_text,
@@ -2828,9 +2942,12 @@ def _recording_dispatcher_loop():
                 wait_for_gate=True,
             )
         except Exception as exc:
+            latency.safe(timing, "finish", "failed", "dispatch_error")
             logging.error(f"Recording dispatcher failed: {redact_exc(exc)}")
 
 async def startup_event():
+    from backend.runtime import latency
+    latency.reset()
     global loop, _warmup_thread
     # Auth gate first: covers `uvicorn server:app` as well as `python
     # server.py`, and fails startup in production if no token is configured.
@@ -2913,6 +3030,8 @@ async def startup_event():
 
 
 def shutdown_event():
+    from backend.runtime import latency
+    latency.reset(block_new=True)
     stop_hotkey_manager()
     # Safety net in case /wake/disable was never called before shutdown --
     # idempotent, safe even if wake word was never enabled this run.
