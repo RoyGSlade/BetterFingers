@@ -4625,78 +4625,15 @@ async def privacy_factory_reset_verify():
     return await run_in_threadpool(data_lifecycle.verify_factory_reset, registry)
 
 
-@app.get("/recordings")
-async def list_recordings_endpoint():
-    return {"ok": True, "recordings": recordings.list_recordings()}
-
-
-@app.post("/recordings/{rec_id}/retranscribe")
-async def retranscribe_recording(rec_id: str):
-    # A recording id becomes a filename; reject anything path-shaped (§10).
-    if not recordings.is_valid_rec_id(rec_id):
-        raise HTTPException(status_code=400, detail="Invalid recording id.")
-    import numpy as np
-    from backend.audio.recorder import RecordingResult
-
-    audio, sample_rate = recordings.load_recording_audio(rec_id)
-    if audio is None:
-        raise HTTPException(status_code=404, detail="Recording not found.")
-
-    audio = np.asarray(audio, dtype=np.float32)
-    rr = RecordingResult(
-        audio_data=audio,
-        sample_rate=int(sample_rate or 16000),
-        duration_seconds=len(audio) / float(sample_rate or 16000),
-        frame_count=0,
-        sample_count=int(audio.size),
-        max_amplitude=float(np.max(np.abs(audio))) if audio.size else 0.0,
-        rms_amplitude=float(np.sqrt(np.mean(np.square(audio)))) if audio.size else 0.0,
-        stop_reason="recovery",
-    )
-    draft = await run_in_threadpool(process_recording_result, rr)
-    if draft is None:
-        raise HTTPException(status_code=409, detail="A dictation is already processing; try again shortly.")
-    return {"ok": True, "draft": draft}
-
-
-@app.delete("/recordings/{rec_id}")
-async def delete_recording_endpoint(rec_id: str):
-    if not recordings.is_valid_rec_id(rec_id):
-        raise HTTPException(status_code=400, detail="Invalid recording id.")
-    removed = recordings.delete_recording(rec_id)
-    return {"ok": True, "removed": removed}
-
-
-@app.delete("/recordings")
-async def clear_recordings_endpoint():
-    count = recordings.clear_recordings()
-    return {"ok": True, "cleared": count}
+# Recordings (/recordings: list, retranscribe, delete one, delete all) and
+# searchable-history (/history, /history/search) routes are their own slice in
+# backend/api/routes/history.py (R4); registered via app.include_router at the
+# end of this file. The `recordings` and `history_store` modules and
+# process_recording_result stay here and are read by the router as s.<name>.
 
 
 # Dictionary / macros / voice-preset routes are their own slice in
 # routes_user_config.py (M6); registered via app.include_router at the end.
-
-
-@app.get("/history/search")
-async def history_search(q: str = "", limit: int = 50):
-    limit = max(1, min(200, int(limit or 50)))
-    results = history_store.search(q, limit=limit)
-    return {"ok": True, "query": q, "count": len(results), "results": results}
-
-
-@app.get("/history")
-async def history_recent(limit: int = 50):
-    limit = max(1, min(200, int(limit or 50)))
-    results = history_store.recent(limit=limit)
-    return {"ok": True, "count": len(results), "total": history_store.count(), "results": results}
-
-
-@app.delete("/history")
-async def history_clear():
-    ok = history_store.clear()
-    if not ok:
-        raise HTTPException(status_code=500, detail="Could not clear history.")
-    return {"ok": ok, "message": "Searchable history cleared." if ok else "Could not clear history."}
 
 
 @app.get("/diagnostics/logs")
@@ -5911,6 +5848,7 @@ from backend.api.routes import app_context as routes_app_context  # noqa: E402
 from backend.api.routes import actions as routes_actions  # noqa: E402
 from backend.api.routes import dev as routes_dev  # noqa: E402
 from backend.api.routes import settings as routes_settings  # noqa: E402
+from backend.api.routes import history as routes_history  # noqa: E402
 
 app.include_router(routes_foundry.router)
 app.include_router(routes_user_config.router)
@@ -5924,6 +5862,7 @@ app.include_router(routes_app_context.router)
 app.include_router(routes_actions.router)
 app.include_router(routes_dev.router)
 app.include_router(routes_settings.router)
+app.include_router(routes_history.router)
 from backend.api.routes import input_devices as input_devices_routes  # noqa: E402
 app.include_router(input_devices_routes.router)
 _foundry_sessions = routes_foundry._foundry_sessions
