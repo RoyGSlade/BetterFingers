@@ -10,7 +10,7 @@ from unittest.mock import patch
 import numpy as np
 
 import server
-import utils
+from backend.config import utils
 from backend.stt.transcriber import Transcriber
 
 

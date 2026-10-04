@@ -26,8 +26,8 @@ import os
 import threading
 import time
 
-from store_migration import load_versioned_store, write_atomic
-from utils import get_user_data_path
+from backend.config.store_migration import load_versioned_store, write_atomic
+from backend.config.utils import get_user_data_path
 
 _lock = threading.RLock()
 

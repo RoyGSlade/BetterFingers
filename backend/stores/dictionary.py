@@ -18,7 +18,7 @@ import re
 import threading
 import time
 
-from utils import get_user_data_path
+from backend.config.utils import get_user_data_path
 
 _lock = threading.RLock()
 

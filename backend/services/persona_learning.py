@@ -39,7 +39,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Optional
 
-from store_migration import load_versioned_store, write_atomic
+from backend.config.store_migration import load_versioned_store, write_atomic
 
 # Schema history:
 #   v1 (legacy/pre-service): {"personas": {name: [{"raw": .., "out": ..}, ...]}}
@@ -152,7 +152,7 @@ class PersonaLearningStore:
     @property
     def path(self) -> str:
         if self._path is None:
-            from utils import get_user_data_path
+            from backend.config.utils import get_user_data_path
             import os
             self._path = os.path.join(get_user_data_path(), "persona_learning.json")
         return self._path

@@ -35,7 +35,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from store_migration import load_versioned_store, write_atomic
+from backend.config.store_migration import load_versioned_store, write_atomic
 
 # Schema history:
 #   v1 (current): {"schema_version": 1, "contacts": {id: {...}}}
@@ -216,7 +216,7 @@ class ContactStore:
     def path(self) -> str:
         if self._path is None:
             import os
-            from utils import get_user_data_path
+            from backend.config.utils import get_user_data_path
             self._path = os.path.join(get_user_data_path(), "contacts.json")
         return self._path
 

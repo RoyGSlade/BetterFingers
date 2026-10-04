@@ -29,7 +29,7 @@ else:
         press=lambda key: None,
     )
 
-from utils import load_profile
+from backend.config.utils import load_profile
 
 
 def _run_type_tool(argv, text=None) -> bool:

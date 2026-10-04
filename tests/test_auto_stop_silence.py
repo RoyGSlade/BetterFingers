@@ -12,7 +12,7 @@ from unittest.mock import patch
 import numpy as np
 
 from backend.audio import recorder as recorder_mod
-import utils
+from backend.config import utils
 from backend.audio.audio_gate import TrailingSilenceDetector
 from backend.input.hotkey_manager import HotkeyManager
 

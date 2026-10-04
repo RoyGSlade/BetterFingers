@@ -14,7 +14,7 @@ import uuid
 import numpy as np
 from scipy.io import wavfile
 
-from utils import get_user_data_path
+from backend.config.utils import get_user_data_path
 
 # Keep at most this many recordings on disk (oldest pruned first).
 MAX_RECORDINGS = 50

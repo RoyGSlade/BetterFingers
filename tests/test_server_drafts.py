@@ -260,7 +260,7 @@ class ServerDraftTests(unittest.TestCase):
         self.assertEqual(draft["metadata"]["stop_reason"], "manual")
 
     def test_process_recording_result_bypasses_llm_when_ai_cleanup_is_disabled(self):
-        import utils
+        from backend.config import utils
 
         statuses = []
         profile = utils._profile_defaults()
@@ -379,7 +379,7 @@ class ServerDraftTests(unittest.TestCase):
     def test_long_recording_emits_progress_statuses(self):
         import os
         import tempfile
-        import utils
+        from backend.config import utils
 
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -423,7 +423,7 @@ class ServerDraftTests(unittest.TestCase):
     def test_stitch_pass_disabled_skips_stitching(self):
         import os
         import tempfile
-        import utils
+        from backend.config import utils
 
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)

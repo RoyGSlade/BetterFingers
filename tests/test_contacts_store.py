@@ -22,7 +22,7 @@ from backend.services.contacts import (
     new_contact_id,
     sanitize_contact,
 )
-from store_migration import write_atomic
+from backend.config.store_migration import write_atomic
 
 
 @pytest.fixture

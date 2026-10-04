@@ -14,7 +14,7 @@ from huggingface_hub.constants import HF_HUB_CACHE
 from backend.domain.contracts import TimedSegment, TranscriptionResult
 from backend.privacy.log_redaction import redact_user_text
 from backend.stt.text_formatter import TextFormatter
-from utils import load_profile
+from backend.config.utils import load_profile
 
 try:
     import psutil

@@ -173,7 +173,7 @@ class ContactRoutesTests(unittest.TestCase):
         """save_profile REPLACES the profile with what it is given, which is
         exactly why this is a route rather than a one-key write from the
         renderer: doing it client-side would reset every other setting."""
-        from utils import get_last_active_profile, load_profile, save_profile
+        from backend.config.utils import get_last_active_profile, load_profile, save_profile
 
         lazy, transcriber = self._ctx()
         with lazy, transcriber, self._client() as client:

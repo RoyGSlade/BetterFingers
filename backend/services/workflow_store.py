@@ -56,7 +56,7 @@ from backend.services.action_validator import (
     STATUS_FAILED,
     STEP_STATUS_CODES,
 )
-from store_migration import load_versioned_store, write_atomic
+from backend.config.store_migration import load_versioned_store, write_atomic
 
 # Schema history:
 #   v1 (current): {"schema_version": 1, "workflows": {id: <record>},
@@ -216,7 +216,7 @@ class WorkflowStore:
     def path(self) -> str:
         if self._path is None:
             import os
-            from utils import get_user_data_path
+            from backend.config.utils import get_user_data_path
             self._path = os.path.join(get_user_data_path(), "launcher_workflows.json")
         return self._path
 

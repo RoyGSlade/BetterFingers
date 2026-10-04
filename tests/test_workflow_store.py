@@ -243,7 +243,7 @@ class DurabilityTests(StoreTestCase):
         previous = os.environ.get("BETTERFINGERS_DATA_DIR")
         os.environ["BETTERFINGERS_DATA_DIR"] = self.tmp
         try:
-            import app_paths
+            from backend.config import app_paths
             app_paths.resolve_base.cache_clear() if hasattr(app_paths.resolve_base, "cache_clear") else None
             store = WorkflowStore()
             self.assertTrue(store.path.endswith("launcher_workflows.json"))

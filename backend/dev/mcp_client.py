@@ -25,7 +25,7 @@ import logging
 import os
 import threading
 
-from utils import get_user_data_path
+from backend.config.utils import get_user_data_path
 
 DEFAULT_TIMEOUT_SECONDS = 15.0
 

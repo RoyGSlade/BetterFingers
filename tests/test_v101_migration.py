@@ -15,8 +15,8 @@ from unittest.mock import patch
 
 import yaml
 
-import store_migration
-import utils
+from backend.config import store_migration
+from backend.config import utils
 
 
 class V101MigrationTests(unittest.TestCase):

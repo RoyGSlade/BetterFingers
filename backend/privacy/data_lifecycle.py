@@ -28,7 +28,7 @@ import shutil
 from pathlib import Path
 from typing import Callable, Iterable
 
-import app_paths
+from backend.config import app_paths
 from backend.privacy import data_paths
 from backend.privacy.data_registry import (
     DataCategory,

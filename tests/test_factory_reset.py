@@ -43,8 +43,8 @@ class _ResetRootMixin(unittest.TestCase):
         self.electron_root = pathlib.Path(self._electron.name) / "BetterFingers"
         self.electron_root.mkdir(parents=True, exist_ok=True)
         patchers = [
-            patch("app_paths.resolve_base", return_value=self.root),
-            patch("utils.get_user_data_path", return_value=str(self.root)),
+            patch("backend.config.app_paths.resolve_base", return_value=self.root),
+            patch("backend.config.utils.get_user_data_path", return_value=str(self.root)),
             patch("backend.stores.history_store.get_user_data_path", return_value=str(self.root)),
             patch("backend.stores.recordings.get_user_data_path", return_value=str(self.root)),
             patch("server.get_user_data_path", return_value=str(self.root)),

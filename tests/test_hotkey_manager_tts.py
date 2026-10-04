@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from backend.input.hotkey_manager import HotkeyManager
-from utils import validate_profile_settings
+from backend.config.utils import validate_profile_settings
 
 
 class _DummyRecorder:

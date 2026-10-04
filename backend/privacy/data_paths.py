@@ -34,7 +34,7 @@ import os
 import sys
 from pathlib import Path
 
-import app_paths
+from backend.config import app_paths
 
 
 def base() -> Path:

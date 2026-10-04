@@ -34,7 +34,7 @@ from backend.models.model_manager import (
 )
 from backend.models.hardware_report import _estimate_runtime_mb
 from backend.privacy.log_redaction import redact_stderr_lines
-from store_migration import load_versioned_store
+from backend.config.store_migration import load_versioned_store
 from backend.services.persona_schema import (
     compile_persona_instruction,
     normalize_structured_persona,
@@ -244,7 +244,7 @@ _context_rules_yaml_error_logged = False
 
 def _get_personas_path():
     """Get the path to the personas.yaml file."""
-    from utils import get_user_data_path
+    from backend.config.utils import get_user_data_path
     return os.path.join(get_user_data_path(), "personas.yaml")
 
 

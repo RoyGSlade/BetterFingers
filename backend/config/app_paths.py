@@ -35,7 +35,7 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import platform_paths
+from backend.config import platform_paths
 
 APP_NAME = "BetterFingers"
 

@@ -10,7 +10,7 @@ import yaml
 
 from backend.audio import audio_schema
 
-from store_migration import load_versioned_store, write_atomic
+from backend.config.store_migration import load_versioned_store, write_atomic
 
 def get_app_path():
     """
@@ -34,8 +34,10 @@ def get_app_path():
             
         return base_path
         
-    # Standard script execution
-    return os.path.dirname(os.path.abspath(__file__))
+    # Standard script execution. This file is <repo>/backend/config/utils.py, so
+    # the repo root is three levels up (it was dirname(__file__) while this
+    # module sat at the repo root). The frozen branches above never reach here.
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 def get_user_data_path():
     """
@@ -48,7 +50,7 @@ def get_user_data_path():
     old split between ~/BetterFingers and the XDG voices/graph location.
     Ensures the directory exists before returning.
     """
-    import app_paths
+    from backend.config import app_paths
 
     path = str(app_paths.resolve_base())
 

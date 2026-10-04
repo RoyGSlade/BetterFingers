@@ -3,7 +3,7 @@ import threading
 import time
 
 from backend.input.input_binding import InputBinding
-from utils import load_profile
+from backend.config.utils import load_profile
 
 try:
     import pygame

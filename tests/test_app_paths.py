@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import app_paths
+from backend.config import app_paths
 
 
 class ResolveBaseTests(unittest.TestCase):

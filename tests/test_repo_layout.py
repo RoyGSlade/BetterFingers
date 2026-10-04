@@ -16,14 +16,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 ROOT_MODULES = frozenset({
-    "app_paths.py",
-    "platform_paths.py",
     "routes_foundry.py",
     "routes_models_resources.py",
     "routes_user_config.py",
     "server.py",
-    "store_migration.py",
-    "utils.py",
     "version.py",
 })
 

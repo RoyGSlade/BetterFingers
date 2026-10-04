@@ -21,7 +21,7 @@ except Exception:  # pragma: no cover - Windows
 
 import requests
 
-from utils import get_user_data_path
+from backend.config.utils import get_user_data_path
 
 # --- Constants ---
 #

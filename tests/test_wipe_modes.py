@@ -31,8 +31,8 @@ class _PopulatedRootMixin(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.root = pathlib.Path(self._tmp.name)
         patchers = [
-            patch("app_paths.resolve_base", return_value=self.root),
-            patch("utils.get_user_data_path", return_value=str(self.root)),
+            patch("backend.config.app_paths.resolve_base", return_value=self.root),
+            patch("backend.config.utils.get_user_data_path", return_value=str(self.root)),
             patch("backend.stores.history_store.get_user_data_path", return_value=str(self.root)),
             patch("backend.stores.recordings.get_user_data_path", return_value=str(self.root)),
             patch("server.get_user_data_path", return_value=str(self.root)),

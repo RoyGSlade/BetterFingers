@@ -23,7 +23,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from backend.llm.llm_engine import LLMEngine, get_engine, get_engine_if_initialized, resolve_dictation_preset
 from backend.privacy.log_redaction import redact_exc, redact_user_text
-from store_migration import get_degraded_events
+from backend.config.store_migration import get_degraded_events
 import version
 from backend.stt.transcriber import Transcriber
 from backend.stt.streaming_transcriber import BatchCutter, StreamingTranscriptionSession
@@ -34,7 +34,7 @@ from backend.dev.intent_engine import intent_engine, IntentState
 from backend.dev.project_generator import project_generator
 from backend.platform.platform_capabilities import get_capabilities, get_injection_status
 from backend.models.hardware_report import get_hardware_report, assess_model_fit, get_hardware_tier
-from platform_paths import ensure_app_dirs, get_app_data_dir, get_config_dir
+from backend.config.platform_paths import ensure_app_dirs, get_app_data_dir, get_config_dir
 from backend.stores import recordings
 from backend.privacy import upload_safety
 from backend.stores import dictionary
@@ -85,7 +85,7 @@ from backend.stt.transcriber import (
     list_cached_models,
     remove_cached_model,
 )
-from utils import (
+from backend.config.utils import (
     get_app_path,
     get_last_active_profile,
     get_profiles_dir,
@@ -2745,7 +2745,7 @@ async def startup_event():
     # Guarded from the test suite so running tests never moves real user data.
     if not _is_test_env():
         try:
-            import app_paths
+            from backend.config import app_paths
             report = app_paths.migrate_legacy_data()
             if report.get("moved"):
                 logging.info("Migrated legacy data into %s: %s", report["target"], report["moved"])
@@ -4200,7 +4200,7 @@ def get_privacy_report():
         {"name": "Models", "path": str(get_models_dir()), "bytes": _path_size_bytes(str(get_models_dir()))},
     ]
 
-    import app_paths
+    from backend.config import app_paths
     from backend.api.routes import wake as routes_wake
 
     # Wave 6 (Gate 6): the authoritative store table, generated from the data

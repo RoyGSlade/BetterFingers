@@ -174,7 +174,7 @@ class TestPreservationClause:
 
 class TestDefaultOff:
     def test_profile_default_is_off(self):
-        from utils import _profile_defaults
+        from backend.config.utils import _profile_defaults
 
         assert _profile_defaults()["use_delivery_signals"] is False, (
             "delivery signals must stay opt-in until the preservation eval is "
@@ -182,7 +182,7 @@ class TestDefaultOff:
         )
 
     def test_setting_survives_a_round_trip_and_coerces(self):
-        from utils import _sanitize_profile_values, _profile_defaults
+        from backend.config.utils import _sanitize_profile_values, _profile_defaults
 
         defaults = _profile_defaults()
         cfg = _sanitize_profile_values({"use_delivery_signals": "true"}, defaults)

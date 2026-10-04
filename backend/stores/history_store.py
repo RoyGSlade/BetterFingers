@@ -11,7 +11,7 @@ import os
 import sqlite3
 import threading
 
-from utils import get_user_data_path
+from backend.config.utils import get_user_data_path
 
 _lock = threading.Lock()
 _initialized_path = None

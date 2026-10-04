@@ -155,7 +155,7 @@ def _forbid_real_data_root(monkeypatch):
     that reaches a real root now fails with a message naming the path, instead
     of quietly destroying it.
     """
-    import app_paths
+    from backend.config import app_paths
 
     real_resolve = app_paths.resolve_base
 

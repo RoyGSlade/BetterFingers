@@ -15,7 +15,7 @@ import sounddevice as sd
 from backend.runtime.job_manager import JOBS, JobState
 from backend.privacy.log_redaction import redact_user_text
 from backend.runtime.model_runtime_coordinator import RuntimeBusyError
-from utils import get_user_data_path
+from backend.config.utils import get_user_data_path
 from backend.tts import voice_clone_engine
 from backend.tts.tts_text import apply_pause_style, normalize_for_speech
 from backend.tts import voice_blend

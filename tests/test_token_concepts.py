@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import yaml
 
-import utils
+from backend.config import utils
 import server
 
 

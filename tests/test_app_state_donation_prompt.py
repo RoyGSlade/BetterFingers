@@ -2,7 +2,7 @@ import os
 import tempfile
 import unittest
 
-import utils
+from backend.config import utils
 
 
 class AppStateDonationPromptTests(unittest.TestCase):

@@ -151,7 +151,7 @@ class ActiveContactRequest(BaseModel):
 
 @router.get("/contacts/active")
 async def get_active_contact_route():
-    from utils import get_last_active_profile, load_profile
+    from backend.config.utils import get_last_active_profile, load_profile
 
     profile = load_profile(get_last_active_profile()) or {}
     contact_id = profile.get("active_contact_id") or None
@@ -172,7 +172,7 @@ async def set_active_contact_route(request: ActiveContactRequest):
     should not require round-tripping the whole profile, and it should not be
     possible to lose someone's settings by forgetting to.
     """
-    from utils import get_last_active_profile, load_profile, save_profile
+    from backend.config.utils import get_last_active_profile, load_profile, save_profile
 
     contact_id = (request.contact_id or "").strip() or None
     if contact_id and _store().get(contact_id) is None:

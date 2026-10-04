@@ -25,7 +25,7 @@ import os
 import shutil
 import time
 
-from utils import get_user_data_path
+from backend.config.utils import get_user_data_path
 
 WAKE_BACKBONE_RELEASE = "v0.5.1"
 _BACKBONE_BASE_URL = f"https://github.com/dscripka/openWakeWord/releases/download/{WAKE_BACKBONE_RELEASE}"

@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from backend.output import clipboard_capture as cc
 from backend.output import injector as injector_mod
-import utils
+from backend.config import utils
 from backend.output.injector import InputInjector
 
 

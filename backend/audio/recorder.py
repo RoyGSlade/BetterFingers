@@ -12,7 +12,7 @@ from backend.audio import audio_schema
 from backend.audio.audio_device_resolver import resolve_input_device
 from backend.audio.audio_ducker import AudioDucker
 from backend.audio.audio_gate import TrailingSilenceDetector
-from utils import load_profile
+from backend.config.utils import load_profile
 
 # Recording reasons that mean "the user is not holding anything down". A wake
 # word has no key release to end the command, so the trailing-silence detector

@@ -9,8 +9,8 @@ import threading
 import time
 from typing import Any
 
-from store_migration import load_versioned_store, write_atomic
-from utils import get_user_data_path
+from backend.config.store_migration import load_versioned_store, write_atomic
+from backend.config.utils import get_user_data_path
 
 
 SCHEMA_VERSION = 1

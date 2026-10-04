@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from backend.audio import audio_input_broker
 from backend.audio import recorder
-import utils
+from backend.config import utils
 from backend.audio.recorder import AudioRecorder
 
 

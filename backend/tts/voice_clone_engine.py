@@ -54,7 +54,7 @@ import wave
 
 import numpy as np
 
-import app_paths
+from backend.config import app_paths
 
 # The cloned-voice id namespace ("cloned_<name>"), as written by POST /tts/clone.
 CLONED_PREFIX = "cloned_"

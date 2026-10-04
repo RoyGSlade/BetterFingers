@@ -118,7 +118,7 @@ def _download_job_active(job):
 
 
 def _profile_config():
-    from utils import get_last_active_profile, load_profile
+    from backend.config.utils import get_last_active_profile, load_profile
 
     return load_profile(get_last_active_profile())
 
@@ -128,7 +128,7 @@ def _persist_profile_fields(fields: dict):
     already-started/stopped listener -- caller state changes first, this
     just tries to make the UI's next load reflect it."""
     try:
-        from utils import get_last_active_profile, load_profile, save_profile
+        from backend.config.utils import get_last_active_profile, load_profile, save_profile
 
         profile_name = get_last_active_profile()
         cfg = load_profile(profile_name)

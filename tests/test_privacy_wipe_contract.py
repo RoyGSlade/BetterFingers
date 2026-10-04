@@ -111,7 +111,7 @@ class WipeRouteIntegrationTests(unittest.TestCase):
             patch("server.get_user_data_path", return_value=self._tmp.name),
             # PersonaLearningStore resolves its path via utils.get_user_data_path
             # directly, not a server.py-bound copy -- see test_privacy_wipe_verified.py.
-            patch("utils.get_user_data_path", return_value=self._tmp.name),
+            patch("backend.config.utils.get_user_data_path", return_value=self._tmp.name),
             patch.object(server, "save_draft_history"),
             patch.object(server, "broadcast_status_threadsafe"),
         ]

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import platform_paths
+from backend.config import platform_paths
 
 
 class PlatformPathsTests(unittest.TestCase):

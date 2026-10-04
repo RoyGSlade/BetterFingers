@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-import app_paths
+from backend.config import app_paths
 from backend.platform import platform_capabilities
 import server
 
@@ -239,7 +239,7 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
         self.assertIn("store_warnings", data)
 
     def test_doctor_surfaces_store_degraded_events(self):
-        import store_migration
+        from backend.config import store_migration
 
         store_migration.clear_degraded_events()
         self.addCleanup(store_migration.clear_degraded_events)

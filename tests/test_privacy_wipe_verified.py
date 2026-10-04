@@ -68,7 +68,7 @@ class TempDataDirMixin(unittest.TestCase):
             # directly (not a server.py-bound copy) -- patch it too so the wipe's
             # PersonaLearningStore().clear_all() call stays inside this test's
             # throwaway dir instead of the session-wide conftest isolation dir.
-            patch("utils.get_user_data_path", return_value=self._tmp.name),
+            patch("backend.config.utils.get_user_data_path", return_value=self._tmp.name),
             # Wave 6: redirect the ROOT as well, not only the four
             # get_user_data_path callers.
             #
@@ -82,7 +82,7 @@ class TempDataDirMixin(unittest.TestCase):
             # vacuously, and these tests passed without exercising the sweep they
             # claim to. Pinning the root keeps both resolvers on one directory,
             # which is the production arrangement.
-            patch("app_paths.resolve_base", return_value=pathlib.Path(self._tmp.name)),
+            patch("backend.config.app_paths.resolve_base", return_value=pathlib.Path(self._tmp.name)),
         ]
         for p in patchers:
             p.start()

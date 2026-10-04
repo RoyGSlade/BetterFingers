@@ -4,7 +4,7 @@ import unittest
 
 import yaml
 
-import utils
+from backend.config import utils
 
 
 class ProfileMigrationTests(unittest.TestCase):
