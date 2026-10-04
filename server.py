@@ -38,7 +38,7 @@ from backend.stt.transcriber import Transcriber
 from backend.stt.streaming_transcriber import BatchCutter, StreamingTranscriptionSession
 from backend.input.hotkey_manager import HotkeyManager
 from backend.audio.audio_gate import should_block_for_no_audio
-from backend.stores.user_profile_manager import profile_manager
+from backend.stores.user_profile_manager import profile_manager  # noqa: F401  (read as s.profile_manager by backend/api/routes/settings.py)
 from backend.dev.intent_engine import intent_engine, IntentState
 from backend.dev.project_generator import project_generator
 from backend.platform.platform_capabilities import get_capabilities, get_injection_status
@@ -3322,202 +3322,10 @@ async def runtime_output_settings():
     return settings
 
 
-class ProfileSaveRequest(BaseModel):
-    settings: dict
-
-
-class ProfileCreateRequest(BaseModel):
-    name: str
-    settings: dict = {}
-
-
-class ProfileRenameRequest(BaseModel):
-    new_name: str
-
-
-class ProfileDuplicateRequest(BaseModel):
-    new_name: str
-
-
-class ProfileImportRequest(BaseModel):
-    kind: str = "betterfingers_profile"
-    schema_version: int = 1
-    name: str
-    settings: dict
-
-
-@app.post("/settings/profiles/import")
-async def settings_import_profile(request: ProfileImportRequest):
-    if request.kind != "betterfingers_profile":
-        raise HTTPException(status_code=400, detail="Invalid profile format: missing 'betterfingers_profile' kind.")
-    if request.schema_version != 1:
-        raise HTTPException(status_code=400, detail=f"Unsupported profile schema version: {request.schema_version}")
-
-    safe_name = sanitize_profile_name(request.name)
-    if safe_name in list_profiles():
-        raise HTTPException(status_code=409, detail="Profile name already exists")
-    
-    try:
-        save_runtime_profile(safe_name, request.settings)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Import failed: {e}")
-        
-    return get_active_profile_payload()
-
-
-@app.get("/settings/profiles")
-async def settings_profiles():
-    return get_active_profile_payload()
-
-
-@app.get("/settings/profiles/{profile_name}")
-async def settings_profile(profile_name: str):
-    safe_name = sanitize_profile_name(profile_name)
-    return {
-        "profile": safe_name,
-        "active": safe_name == get_last_active_profile(),
-        "settings": load_profile(safe_name),
-    }
-
-
-@app.post("/settings/profiles/{profile_name}")
-async def settings_save_profile(profile_name: str, request: ProfileSaveRequest):
-    safe_name = sanitize_profile_name(profile_name)
-    try:
-        save_runtime_profile(safe_name, request.settings)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Save failed: {e}")
-    residency = None
-    if safe_name == get_last_active_profile():
-        residency = apply_active_profile_runtime(safe_name).get("residency")
-    response = {
-        "profile": safe_name,
-        "active": safe_name == get_last_active_profile(),
-        "settings": load_profile(safe_name),
-    }
-    if residency is not None:
-        response["residency"] = residency
-    return response
-
-
-@app.post("/settings/profiles")
-async def settings_create_profile(request: ProfileCreateRequest):
-    safe_name = sanitize_profile_name(request.name)
-    if safe_name in list_profiles():
-        raise HTTPException(status_code=409, detail="Profile already exists")
-    base = load_profile(get_last_active_profile())
-    base.update(request.settings or {})
-    try:
-        save_runtime_profile(safe_name, base)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Create failed: {e}")
-    return {"profile": safe_name, "settings": load_profile(safe_name), "profiles": list_profiles()}
-
-
-@app.post("/settings/profiles/{profile_name}/activate")
-async def settings_activate_profile(profile_name: str):
-    safe_name = sanitize_profile_name(profile_name)
-    if safe_name not in list_profiles():
-        raise HTTPException(status_code=404, detail="Profile not found")
-    # Re-selecting the already-active profile is a no-op: skip the runtime
-    # cascade (transcriber reload, hotkey rebind, injector + LLM reconfigure),
-    # which costs 100-500 ms. Content edits to the active profile arrive via
-    # settings_save_profile, which always re-applies — so this guard can only
-    # suppress genuinely redundant switches, never a real settings change.
-    if safe_name == get_last_active_profile():
-        return get_active_profile_payload()
-    return apply_active_profile_runtime(safe_name)
-
-
-@app.delete("/settings/profiles/{profile_name}")
-async def settings_delete_profile(profile_name: str):
-    safe_name = sanitize_profile_name(profile_name)
-    if safe_name == "Default":
-        raise HTTPException(status_code=400, detail="Default profile cannot be deleted")
-    profile_path = Path(get_profiles_dir()) / f"{safe_name}.yaml"
-    if not profile_path.exists():
-        raise HTTPException(status_code=404, detail="Profile not found")
-    
-    # Check active status before unlinking the file
-    was_active = (get_last_active_profile() == safe_name)
-    profile_path.unlink()
-    
-    if was_active:
-        apply_active_profile_runtime("Default")
-    return get_active_profile_payload()
-
-
-@app.post("/settings/profiles/{profile_name}/rename")
-async def settings_rename_profile(profile_name: str, request: ProfileRenameRequest):
-    safe_old = sanitize_profile_name(profile_name)
-    safe_new = sanitize_profile_name(request.new_name)
-    if safe_old == "Default":
-        raise HTTPException(status_code=400, detail="Default profile cannot be renamed")
-    if safe_new in list_profiles():
-        raise HTTPException(status_code=409, detail="Profile already exists")
-    
-    old_path = Path(get_profiles_dir()) / f"{safe_old}.yaml"
-    if not old_path.exists():
-        raise HTTPException(status_code=404, detail="Profile not found")
-        
-    # Load and save under new name
-    data = load_profile(safe_old)
-    try:
-        save_runtime_profile(safe_new, data)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Rename failed during save: {e}")
-        
-    # Check active status before unlinking the file
-    was_active = (get_last_active_profile() == safe_old)
-    old_path.unlink()
-    
-    # If old was active, activate new
-    if was_active:
-        apply_active_profile_runtime(safe_new)
-        
-    return get_active_profile_payload()
-
-
-@app.post("/settings/profiles/{profile_name}/duplicate")
-async def settings_duplicate_profile(profile_name: str, request: ProfileDuplicateRequest):
-    safe_old = sanitize_profile_name(profile_name)
-    safe_new = sanitize_profile_name(request.new_name)
-    if safe_new in list_profiles():
-        raise HTTPException(status_code=409, detail="Profile already exists")
-        
-    if safe_old not in list_profiles():
-        raise HTTPException(status_code=404, detail="Source profile not found")
-        
-    data = load_profile(safe_old)
-    try:
-        save_runtime_profile(safe_new, data)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Duplication failed: {e}")
-        
-    return get_active_profile_payload()
-
-
-@app.get("/settings/profiles/{profile_name}/export")
-async def settings_export_profile(profile_name: str):
-    safe_name = sanitize_profile_name(profile_name)
-    if safe_name not in list_profiles():
-        raise HTTPException(status_code=404, detail="Profile not found")
-    return {
-        "kind": "betterfingers_profile",
-        "schema_version": 1,
-        "name": safe_name,
-        "settings": load_profile(safe_name),
-    }
+# Settings-profile routes (/settings/profiles/..., list/get/save/create/activate/
+# delete/rename/duplicate/export/import) and the two legacy /profile routes are
+# their own slice in backend/api/routes/settings.py (R3); its router is
+# registered at the end of this file. Their request models live there too.
 
 
 # Persona Foundry (guided interview -> compile -> stress-test) is its own vertical
@@ -6088,16 +5896,6 @@ def _get_downloads_dir():
     return home
 
 
-@app.get("/profile")
-async def get_profile():
-    return profile_manager.get_profile()
-
-@app.post("/profile")
-async def save_profile(data: dict):
-    success = profile_manager.save_profile(data)
-    return {"status": "success" if success else "error"}
-
-
 # --- Extracted route modules (M6). Registered after every server-level name is
 # defined, so the routers' `import server` resolves fully. _foundry_sessions is
 # re-bound so server._foundry_sessions stays the shared store existing tests use.
@@ -6112,6 +5910,7 @@ from backend.api.routes import library as routes_library  # noqa: E402
 from backend.api.routes import app_context as routes_app_context  # noqa: E402
 from backend.api.routes import actions as routes_actions  # noqa: E402
 from backend.api.routes import dev as routes_dev  # noqa: E402
+from backend.api.routes import settings as routes_settings  # noqa: E402
 
 app.include_router(routes_foundry.router)
 app.include_router(routes_user_config.router)
@@ -6124,6 +5923,7 @@ app.include_router(routes_library.router)
 app.include_router(routes_app_context.router)
 app.include_router(routes_actions.router)
 app.include_router(routes_dev.router)
+app.include_router(routes_settings.router)
 from backend.api.routes import input_devices as input_devices_routes  # noqa: E402
 app.include_router(input_devices_routes.router)
 _foundry_sessions = routes_foundry._foundry_sessions
