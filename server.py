@@ -3432,7 +3432,7 @@ def _persona_learning_disclosure():
         "controls": {
             "inspect": "GET /personas/{name}/examples",
             "delete_one": "DELETE /personas/{name}/examples/{example_id}",
-            "clear_persona": "DELETE /personas/{name}/examples",
+            "clear_persona": "DELETE /personas/{name}/examples?confirm=true",
             # Deliberately in the privacy namespace, not /personas/examples:
             # that path is shadowed by the existing DELETE /personas/{name}
             # (both are two segments), so a clear-all registered there would

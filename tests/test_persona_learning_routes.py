@@ -127,7 +127,7 @@ class PersonaLearningRoutesTests(unittest.TestCase):
                     "/personas/Coach/examples",
                     json={"raw": "two", "out": "Two.", "consent": True},
                 )
-                cleared = client.delete("/personas/Coach/examples")
+                cleared = client.delete("/personas/Coach/examples?confirm=true")
                 self.assertEqual(cleared.status_code, 200, cleared.text)
                 self.assertTrue(cleared.json()["cleared"])
 
@@ -144,7 +144,7 @@ class PersonaLearningRoutesTests(unittest.TestCase):
     def test_clear_unknown_persona_is_noop_not_error(self):
         with self._lazy(), patch.object(server, "Transcriber", DummyTranscriber):
             with self._client() as client:
-                resp = client.delete("/personas/NoSuchPersona/examples")
+                resp = client.delete("/personas/NoSuchPersona/examples?confirm=true")
                 self.assertEqual(resp.status_code, 200, resp.text)
                 self.assertFalse(resp.json()["cleared"])
 

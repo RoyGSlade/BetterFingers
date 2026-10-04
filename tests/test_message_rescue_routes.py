@@ -103,7 +103,7 @@ class ContextRoutesTests(unittest.TestCase):
             status = client.get("/message-rescue/context").json()
             self.assertTrue(status["active"])
 
-            cleared = client.delete("/message-rescue/context")
+            cleared = client.delete("/message-rescue/context?confirm=true")
             self.assertEqual(cleared.status_code, 200)
             status_after = client.get("/message-rescue/context").json()
             self.assertFalse(status_after["active"])

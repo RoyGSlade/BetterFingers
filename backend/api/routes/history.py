@@ -73,7 +73,9 @@ async def delete_recording_endpoint(rec_id: str):
 
 
 @router.delete("/recordings")
-async def clear_recordings_endpoint():
+async def clear_recordings_endpoint(confirm: bool = False):
+    if not confirm:
+        raise HTTPException(status_code=400, detail="Explicit collection delete confirmation required.")
     import server as s
 
     count = s.recordings.clear_recordings()
@@ -99,7 +101,9 @@ async def history_recent(limit: int = 50):
 
 
 @router.delete("/history")
-async def history_clear():
+async def history_clear(confirm: bool = False):
+    if not confirm:
+        raise HTTPException(status_code=400, detail="Explicit collection delete confirmation required.")
     import server as s
 
     ok = s.history_store.clear()

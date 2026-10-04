@@ -275,7 +275,7 @@ async function cancelJob(jobId, timeoutMs = 5000) {
 }
 
 async function clearRecordings(timeoutMs = 10000) {
-  return deleteJson(`${BACKEND_ORIGIN}/recordings`, timeoutMs);
+  return deleteJson(`${BACKEND_ORIGIN}/recordings?confirm=true`, timeoutMs);
 }
 
 async function fetchDictionary(timeoutMs = 2500) {
@@ -304,7 +304,7 @@ async function fetchHistoryRecent(limit = 50, timeoutMs = 5000) {
 }
 
 async function clearHistory(timeoutMs = 10000) {
-  return deleteJson(`${BACKEND_ORIGIN}/history`, timeoutMs);
+  return deleteJson(`${BACKEND_ORIGIN}/history?confirm=true`, timeoutMs);
 }
 
 async function fetchModelRecommendation(timeoutMs = 5000) {
@@ -466,7 +466,7 @@ async function captureSelectionMessageRescueContext(timeoutMs = 5000) {
 }
 
 async function clearMessageRescueContext(timeoutMs = 5000) {
-  return deleteJson(`${MESSAGE_RESCUE_URL}/context`, timeoutMs);
+  return deleteJson(`${MESSAGE_RESCUE_URL}/context?confirm=true`, timeoutMs);
 }
 
 // `signals` is optional and only meaningful for a real dictation (F2.1
@@ -510,7 +510,7 @@ async function declineDraft(id, timeoutMs = 2500) {
 }
 
 async function clearDrafts(timeoutMs = 2500) {
-  return deleteJson(DRAFTS_URL, timeoutMs);
+  return deleteJson(`${DRAFTS_URL}?confirm=true`, timeoutMs);
 }
 
 async function retryDraft(id, timeoutMs = 120000) {
@@ -756,7 +756,7 @@ async function deletePersonaExample(name, exampleId, timeoutMs = 10000) {
 async function clearPersonaExamples(name, timeoutMs = 10000) {
   return proxyRequest(
     'DELETE',
-    `${PERSONAS_URL}/${encodeURIComponent(name)}/examples`,
+    `${PERSONAS_URL}/${encodeURIComponent(name)}/examples?confirm=true`,
     undefined,
     timeoutMs,
   );

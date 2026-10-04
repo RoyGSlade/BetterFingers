@@ -66,7 +66,9 @@ async def latest_draft():
 
 
 @router.delete("/drafts")
-def clear_draft_history():
+def clear_draft_history(confirm: bool = False):
+    if not confirm:
+        raise HTTPException(status_code=400, detail="Explicit collection delete confirmation required.")
     import server as s
 
     with s.draft_lock:

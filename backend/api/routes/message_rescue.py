@@ -156,7 +156,9 @@ def create_message_rescue_router(
         return context_session.status() or _empty_context_status()
 
     @router.delete("/message-rescue/context")
-    async def clear_context_route():
+    async def clear_context_route(confirm: bool = False):
+        if not confirm:
+            raise HTTPException(status_code=400, detail="Explicit collection delete confirmation required.")
         context_session.clear()
         return {"ok": True}
 

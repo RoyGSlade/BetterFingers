@@ -434,10 +434,12 @@ async def delete_persona_example_route(name: str, example_id: str):
 
 
 @router.delete("/personas/{name}/examples")
-async def clear_persona_examples_route(name: str):
+async def clear_persona_examples_route(name: str, confirm: bool = False):
     """Privacy clear: delete every learned example for one persona. The
     persona key is dropped, not blacklisted -- a later learn (with fresh
     consent) recreates it."""
+    if not confirm:
+        raise HTTPException(status_code=400, detail="Explicit collection delete confirmation required.")
     result = await run_in_threadpool(_learning_store().clear_persona, name)
     if not result["ok"]:
         status = _LEARNING_ERROR_STATUS.get(result["error"], 500)

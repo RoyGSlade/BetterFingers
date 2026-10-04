@@ -11,7 +11,7 @@ from backend.api.routes import history as routes_history
 def test_history_clear_failure_is_http_failure():
     with patch.object(server.history_store, "clear", return_value=False):
         try:
-            server_result = __import__("asyncio").run(routes_history.history_clear())
+            server_result = __import__("asyncio").run(routes_history.history_clear(confirm=True))
         except HTTPException as exc:
             assert exc.status_code >= 400
             assert "clear history" in exc.detail.lower()

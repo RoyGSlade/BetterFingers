@@ -955,7 +955,7 @@ class ServerDraftTests(unittest.TestCase):
 
         with patch.object(server, "save_draft_history"), patch.object(server, "broadcast_status_threadsafe") as broadcast:
             with TestClient(server.app) as client:
-                response = client.delete("/drafts")
+                response = client.delete("/drafts?confirm=true")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"ok": True, "message": "Draft history cleared."})

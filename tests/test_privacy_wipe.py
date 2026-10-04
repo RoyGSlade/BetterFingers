@@ -232,8 +232,8 @@ class PrivacyWipeTests(unittest.TestCase):
                     for secret in (secret_context, "48213", "call me back", "Please call me back today"):
                         self.assertNotIn(secret, raw_text)
                 finally:
-                    client.delete("/message-rescue/context")
-                    client.delete("/personas/PrivacyReportTestPersona/examples")
+                    client.delete("/message-rescue/context?confirm=true")
+                    client.delete("/personas/PrivacyReportTestPersona/examples?confirm=true")
 
     def test_wipe_clears_message_rescue_context_results_and_persona_examples(self):
         with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
