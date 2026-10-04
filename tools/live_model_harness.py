@@ -31,7 +31,7 @@ import sys
 # Allow running as `python3 tools/live_model_harness.py` from the repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import live_model_harness as harness
+from tools.lib import live_model_harness as harness
 from backend.services.rescue_llm_adapter import build_llm_call_fn
 from llm_engine import SIDECAR_PORT, is_server_running
 from model_manager import DEFAULT_MODEL, get_model_file_status

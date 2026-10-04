@@ -18,7 +18,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import injection_matrix as im
+from tools.lib import injection_matrix as im
 
 
 def _platform_string():

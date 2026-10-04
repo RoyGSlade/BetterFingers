@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import reliability_benchmark as rb
+from tools.lib import reliability_benchmark as rb
 
 
 class RunRepeatedTests(unittest.TestCase):

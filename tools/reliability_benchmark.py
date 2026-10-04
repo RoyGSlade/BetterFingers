@@ -24,7 +24,7 @@ import sys
 # Allow running as `python3 tools/reliability_benchmark.py` from the repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import reliability_benchmark as rb
+from tools.lib import reliability_benchmark as rb
 
 
 def _http_call(base_url, token):

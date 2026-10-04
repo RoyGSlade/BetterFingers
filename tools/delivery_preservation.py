@@ -29,7 +29,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from delivery_preservation import (  # noqa: E402
+from tools.lib.delivery_preservation import (  # noqa: E402
     run_audience_preservation_suite,
     run_delivery_preservation_suite,
 )

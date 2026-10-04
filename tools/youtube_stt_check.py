@@ -29,7 +29,7 @@ import time
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import wer
+from tools.lib import wer
 
 _TS = re.compile(r"(\d\d):(\d\d):(\d\d)[.,](\d+)\s*-->")
 _TAG = re.compile(r"<[^>]+>")

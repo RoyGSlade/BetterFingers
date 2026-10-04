@@ -9,7 +9,7 @@ send.
 
 import pytest
 
-from delivery_preservation import (
+from tools.lib.delivery_preservation import (
     AGITATED_SUMMARY,
     CALM_SUMMARY,
     MAX_LENGTH_RATIO,
@@ -247,7 +247,7 @@ class TestFailureAttribution:
 # brother must not license casualising it. Plus one failure mode delivery
 # signals cannot cause -- inventing a greeting or a sign-off.
 
-from delivery_preservation import (  # noqa: E402
+from tools.lib.delivery_preservation import (  # noqa: E402
     CLOSE_AUDIENCE,
     FORMAL_AUDIENCE,
     addressing_invented,
@@ -400,7 +400,7 @@ class TestAudienceSuite:
 # slider moves -- but the RENDERING still needs the same evidence: "a slider the
 # user set" is no protection against the model over-applying it.
 
-from delivery_preservation import (  # noqa: E402
+from tools.lib.delivery_preservation import (  # noqa: E402
     BLUNT_TRAITS,
     WARM_TRAITS,
     run_traits_preservation_suite,
