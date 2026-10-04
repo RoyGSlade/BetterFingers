@@ -23,11 +23,12 @@ summarizes the Codex-relevant parts of.
   `.claude/skills/collab/SKILL.md`, "never work around the block by shelling
   out"). Shell commands are for reading, running tests/builds, and other
   non-mutating or generated-artifact work — not for writing tracked source.
-- **No agent manages Git.** Do not run `git add`, `git commit`, `git switch`,
-  `git checkout`, `git rebase`, `git merge`, `git reset`, `git stash`,
-  `git clean`, or tag/release commands. Only the coordinator does this
-  (ACCOMPLISH.md §5). Leave your work uncommitted for the coordinator to
-  review and stage.
+- **The root Codex director may run Git and GitHub release operations only when
+the user explicitly authorizes them. Before committing or publishing, it must
+inspect the staged scope, run required release gates, and stop on any failure.
+
+Spawned workers and subagents may not commit, tag, push, merge, publish, or
+manage releases.
 - **Stay inside your claimed files.** Claim narrowly (the files you'll
   actually touch), work only inside that claim, and release as soon as you're
   done editing.
@@ -149,3 +150,19 @@ Whisper/TTS models (~6.5 GB) and two concurrent runs have caused OOM kills.
 Default to the cheap subset for iteration:
 `python3 -m pytest -q -k "not transcriber and not tts_engine"`. Same pattern
 for `__llama-server__`, `__port-8000__`, and other shared singletons.
+
+<!-- BEGIN LUNA ORCHESTRATOR -->
+## Luna Orchestrator workflow
+
+When an objective is suitable for delegation, the root Codex session acts as the Sol director and uses the `luna_orchestrator` MCP.
+
+1. Retain the exact `actor_id` injected by the SessionStart/UserPromptSubmit hook.
+2. Create one durable objective with measurable success criteria and bounded time/attempt limits.
+3. Decompose the plan into small tasks with exact writable files, explicit dependencies, and allowlisted verification. Concurrent tasks may not overlap paths.
+4. Keep `risk = high` work with Sol. Use Luna only for narrow implementation, tests, documentation, searches, and repetitive code changes.
+5. Prefer `luna_dispatch(mode="detached")` for concurrent editing because it provides per-worker process identity and hard path enforcement. Native subagents provide better conversational visibility but should be serialized when editing.
+6. Monitor with `luna_wait`, `luna_tick`, and `luna_board`. Answer board questions and resolve blocked tasks.
+7. Sol must inspect the actual diff and test evidence, then call `luna_review`. Worker self-report is never acceptance.
+8. Do not stop while a keepalive objective is planning or active. The Stop hook is deliberately bounded and will move a stalled objective to `blocked` rather than loop forever.
+9. Do not use dangerous/full-access sandboxes. Do not let workers mutate Git.
+<!-- END LUNA ORCHESTRATOR -->

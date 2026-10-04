@@ -24,7 +24,7 @@ from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 import upload_safety
 
@@ -179,8 +179,31 @@ class WakeTestRequest(BaseModel):
     duration_s: float = 10.0
 
 
+class WakePhrasePreflightRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    phrase: str = Field(min_length=1, max_length=80)
+    command_vocabulary: list[str] = Field(default_factory=list, max_length=64)
+    common_vocabulary: list[str] = Field(default_factory=list, max_length=64)
+
+    @field_validator("command_vocabulary", "common_vocabulary")
+    @classmethod
+    def _bounded_vocabulary(cls, values):
+        normalized = []
+        for value in values:
+            item = str(value or "").strip()
+            if not item:
+                continue
+            if len(item) > 80:
+                raise ValueError("vocabulary entries must be 80 characters or fewer")
+            normalized.append(item)
+        return normalized
+
+
 class WakeTrainRequest(BaseModel):
-    phrase: str
+    model_config = ConfigDict(extra="forbid")
+
+    phrase: str = Field(min_length=1, max_length=80)
     voices: Optional[list] = None
     # The user's own recordings of the phrase (positive) and of other speech
     # (negative), as base64-encoded 16-bit PCM WAV. These are the anchor of a
@@ -195,6 +218,135 @@ class WakeTrainRequest(BaseModel):
 # One training run at a time; the UI polls GET /wake/train/status.
 _training_lock = threading.Lock()
 _training_state = {"status": "idle", "percent": 0, "message": "", "result": None}
+
+
+@router.post("/wake/phrase/preflight")
+async def wake_phrase_preflight(request: WakePhrasePreflightRequest):
+    """Cheap, deterministic text gate before recordings, downloads, or TTS.
+
+    This endpoint cannot touch the microphone or generate audio.  Its result is
+    deliberately a suitability screen rather than a promise that the phrase
+    will work in the user's room; real enrollment tests remain mandatory.
+    """
+    import wake_phrase_fitness
+    import wake_setup_registry
+    import server
+
+    wiping = server._reject_if_wiping("wake phrase setup")
+    if wiping:
+        raise HTTPException(status_code=409, detail=wiping)
+
+    report = await run_in_threadpool(
+        wake_phrase_fitness.evaluate_wake_phrase,
+        request.phrase,
+        command_vocabulary=request.command_vocabulary,
+        common_vocabulary=request.common_vocabulary,
+    )
+    response = dict(report)
+    if report.get("verdict") in {"good", "workable"}:
+        try:
+            setup = wake_setup_registry.WAKE_SETUP_REGISTRY.issue(
+                report["normalized_phrase"],
+                report,
+            )
+        except wake_setup_registry.WakeSetupIssuanceSuspended as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "ok": False,
+                    "error": "privacy_wipe_in_progress",
+                    "message": "A privacy wipe is in progress; try again in a moment.",
+                },
+            ) from exc
+        response["phrase_id"] = setup.phrase_id
+        response["expires_in_seconds"] = int(wake_setup_registry.DEFAULT_TTL_SECONDS)
+    return response
+
+
+def _collect_qwen_hardware_snapshot():
+    """Collect local-only facts for the Qwen candidate gate.
+
+    The renderer never supplies these values.  In particular, CUDA readiness
+    comes from the installed PyTorch runtime rather than from the mere presence
+    of ``nvidia-smi``.  Every optional probe fails closed to ``None``/False;
+    this function never downloads or loads Qwen.
+    """
+    import sys
+
+    import hardware_report
+    import wake_qwen_capability
+
+    report = hardware_report.get_hardware_report()
+    gpu = report.get("gpu") or {}
+    memory = report.get("memory") or {}
+    disk = report.get("disk") or {}
+
+    cuda_available = False
+    cuda_runtime_version = None
+    compute_capability = None
+    free_vram_mib = None
+    runtime_total_vram_mib = None
+    try:
+        import torch
+
+        cuda_available = bool(torch.cuda.is_available())
+        cuda_runtime_version = str(torch.version.cuda).strip() if torch.version.cuda else None
+        if cuda_available:
+            device_index = int(torch.cuda.current_device())
+            major, minor = torch.cuda.get_device_capability(device_index)
+            compute_capability = f"{major}.{minor}"
+            free_bytes, total_bytes = torch.cuda.mem_get_info(device_index)
+            free_vram_mib = int(free_bytes // (1024 * 1024))
+            runtime_total_vram_mib = int(total_bytes // (1024 * 1024))
+    except Exception:
+        # A broken/missing torch CUDA runtime is an ordinary unsupported state,
+        # not an endpoint crash and never a reason to fall back to CPU/cloud.
+        cuda_available = False
+
+    total_vram_mib = runtime_total_vram_mib or gpu.get("vram_mb")
+    if total_vram_mib is not None:
+        total_vram_mib = int(total_vram_mib)
+    if free_vram_mib is not None and total_vram_mib is not None:
+        free_vram_mib = min(free_vram_mib, total_vram_mib)
+
+    on_ac_power = None
+    try:
+        import psutil
+
+        battery = psutil.sensors_battery()
+        if battery is not None:
+            on_ac_power = bool(battery.power_plugged)
+    except Exception:
+        pass
+
+    gpu_name = gpu.get("name")
+    is_nvidia = gpu.get("kind") == "cuda" or "nvidia" in str(gpu_name or "").lower()
+    return wake_qwen_capability.HardwareSnapshot(
+        platform=sys.platform,
+        gpu_name=str(gpu_name).strip() if gpu_name else None,
+        gpu_vendor="NVIDIA" if is_nvidia else None,
+        compute_backend="cuda" if cuda_available else (gpu.get("backend") or None),
+        cuda_available=cuda_available,
+        total_vram_mib=total_vram_mib,
+        free_disk_mib=int(disk["free_mb"]) if disk.get("free_mb") is not None else None,
+        on_ac_power=on_ac_power,
+        total_ram_mib=int(memory["total_mb"]) if memory.get("total_mb") is not None else None,
+        available_ram_mib=(
+            int(memory["available_mb"]) if memory.get("available_mb") is not None else None
+        ),
+        free_vram_mib=free_vram_mib,
+        cuda_runtime_version=cuda_runtime_version,
+        compute_capability=compute_capability,
+    )
+
+
+@router.get("/wake/qwen/capability")
+async def wake_qwen_capability_status():
+    """Return the backend-owned precheck; never starts/downloads Qwen."""
+    import wake_qwen_capability
+
+    snapshot = await run_in_threadpool(_collect_qwen_hardware_snapshot)
+    return wake_qwen_capability.evaluate_precheck(snapshot).to_dict()
 
 
 @router.get("/wake/status")
@@ -512,11 +664,26 @@ async def wake_train(request: WakeTrainRequest):
     thread spends up to a minute synthesizing audio that would otherwise fail
     with a generic empty-class error."""
     import server
+    import wake_phrase_fitness
     import wake_training_service
 
-    phrase = (request.phrase or "").strip()
-    if not phrase:
+    supplied_phrase = (request.phrase or "").strip()
+    if not supplied_phrase:
         raise HTTPException(status_code=400, detail="Enter a wake phrase to train.")
+
+    phrase_report = await run_in_threadpool(
+        wake_phrase_fitness.evaluate_wake_phrase,
+        supplied_phrase,
+    )
+    if phrase_report["verdict"] == "reject":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Wake phrase rejected before training.",
+                "preflight": phrase_report,
+            },
+        )
+    phrase = phrase_report["normalized_phrase"]
 
     # Cheap guard first: don't load Kokoro just to reject a concurrent run.
     with _training_lock:

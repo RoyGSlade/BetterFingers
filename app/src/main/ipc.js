@@ -1,7 +1,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-const { app, clipboard, ipcMain, shell } = require('electron');
+const { app, clipboard, dialog, ipcMain, shell } = require('electron');
 const { isTrustedRendererUrl } = require('./senderValidation');
 
 let overlayHideTimer = null;
@@ -86,6 +86,13 @@ function registerIpc({
   onSplashRetry, getSplashBootState, updateController, onRuntimeStatus,
 } = {}) {
   const backendProxy = require('./backendProxy');
+  const { createBugReportController } = require('./bugReportController');
+  const bugReportController = createBugReportController({
+    backendProxy,
+    dialog,
+    shell,
+    clipboard,
+  });
 
   // Phase 3c: the token is never exposed to the renderer. All backend HTTP
   // goes through this validated proxy (origin-locked, method/path allowlisted,
@@ -164,6 +171,22 @@ function registerIpc({
   handleTrusted('backend:voice-status:stop', () => {
     backendProxy.stopVoiceStatus();
     return { ok: true };
+  });
+
+  // Bug reports are privileged for two reasons: main collects the diagnostic
+  // projection itself (the renderer cannot attach arbitrary logs), and only
+  // main can show the final native confirmation or contact the configured
+  // HTTPS relay. Destructure every renderer payload to the fixed schema.
+  handleTrusted('bug-report:get-config', () => bugReportController.getConfig());
+
+  handleTrusted('bug-report:prepare', (_event, payload) => {
+    const { summary, steps, expected, actual, contact } = payload || {};
+    return bugReportController.prepare({ summary, steps, expected, actual, contact });
+  });
+
+  handleTrusted('bug-report:submit', (_event, payload) => {
+    const { previewId, destination } = payload || {};
+    return bugReportController.submit({ previewId, destination });
   });
 
   // OR-02: the startup splash's own channel. splash:get-state backs a pull for

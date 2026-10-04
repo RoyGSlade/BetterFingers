@@ -953,6 +953,23 @@ async function testWake(durationS = 10.0, timeoutMs = 15000) {
   return postJson(`${WAKE_URL}/test`, { duration_s: durationS }, Math.max(timeoutMs, durationS * 1000 + 5000));
 }
 
+async function preflightWakePhrase(
+  phrase,
+  commandVocabulary = [],
+  commonVocabulary = [],
+  timeoutMs = 5000,
+) {
+  return postJson(`${WAKE_URL}/phrase/preflight`, {
+    phrase,
+    command_vocabulary: commandVocabulary,
+    common_vocabulary: commonVocabulary,
+  }, timeoutMs);
+}
+
+async function fetchWakeQwenCapability(timeoutMs = 2500) {
+  return fetchJson(`${WAKE_URL}/qwen/capability`, timeoutMs);
+}
+
 async function trainWakePhrase(phrase, timeoutMs = 5000) {
   return postJson(`${WAKE_URL}/train`, { phrase }, timeoutMs);
 }
@@ -1234,6 +1251,8 @@ export {
   fetchWakeModelDownloadState,
   deleteWakeModel,
   testWake,
+  preflightWakePhrase,
+  fetchWakeQwenCapability,
   trainWakePhrase,
   fetchWakeTrainStatus,
   importWakeModel,

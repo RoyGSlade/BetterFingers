@@ -564,7 +564,8 @@ def _find_runtime_target(runtime_dir, link_name, preferred_target):
     return preferred_target
 
 
-def _safe_symlink(runtime_dir, link_name, target_name, replace=False, require_target=True):
+def _safe_symlink(runtime_dir, link_name, target_name, replace=False, require_target=True,
+                  allow_copy_fallback=False):
     link_path = os.path.join(runtime_dir, link_name)
     target_path = os.path.join(runtime_dir, target_name)
 
@@ -580,7 +581,21 @@ def _safe_symlink(runtime_dir, link_name, target_name, replace=False, require_ta
     if require_target and not os.path.exists(target_path):
         return f"{link_name} target missing: {target_name}"
 
-    os.symlink(target_name, link_path)
+    try:
+        os.symlink(target_name, link_path)
+    except OSError as exc:
+        # Windows may deny symlink creation when Developer Mode or the
+        # SeCreateSymbolicLinkPrivilege is unavailable.  Archive extraction
+        # may opt into a narrow, already-validated regular-file fallback.
+        if (
+            not allow_copy_fallback
+            or os.name != "nt"
+            or getattr(exc, "winerror", None) != 1314
+        ):
+            raise
+        if not os.path.isfile(target_path):
+            return f"{link_name} target unavailable for copy fallback: {target_name}"
+        shutil.copyfile(target_path, link_path)
     return None
 
 
@@ -1051,7 +1066,42 @@ def _safe_symlink_basename(link_name, link_target, staging_root):
     return os.path.basename(target)
 
 
+def _materialize_staged_links(staging_dir, links):
+    """Create validated archive links after regular members exist.
+
+    Archive order is not a dependency declaration: a soname link may precede
+    its target, and links may form a short chain. Retrying only unresolved
+    targets preserves normal Unix symlinks and lets the Windows privilege
+    fallback copy an already-materialized internal file.
+    """
+    pending = list(links)
+    while pending:
+        unresolved = []
+        errors = []
+        for link_name, target_name in pending:
+            error = _safe_symlink(
+                staging_dir,
+                link_name,
+                target_name,
+                replace=True,
+                require_target=True,
+                allow_copy_fallback=True,
+            )
+            if error:
+                unresolved.append((link_name, target_name))
+                errors.append(error)
+        if not unresolved:
+            return
+        if len(unresolved) == len(pending):
+            raise ArchiveValidationError(
+                "runtime archive has unresolved internal link(s): "
+                + "; ".join(errors)
+            )
+        pending = unresolved
+
+
 def _stage_zip(archive_path, staging_dir):
+    links = []
     with zipfile.ZipFile(archive_path, "r") as archive:
         for member in archive.infolist():
             mode = (member.external_attr >> 16) & 0o170000
@@ -1061,17 +1111,19 @@ def _stage_zip(archive_path, staging_dir):
             if mode == 0o120000:  # symlink stored in a zip (unix)
                 link_target = archive.read(member).decode("utf-8", "replace")
                 target_base = _safe_symlink_basename(base, link_target, staging_dir)
-                _safe_symlink(staging_dir, base, target_base, replace=True, require_target=False)
+                links.append((base, target_base))
                 continue
             if member.filename.endswith("/"):
                 continue
             with archive.open(member) as src, open(os.path.join(staging_dir, base), "wb") as dst:
                 shutil.copyfileobj(src, dst)
+    _materialize_staged_links(staging_dir, links)
 
 
 def _stage_tar(archive_path, staging_dir):
     import tarfile
 
+    links = []
     with tarfile.open(archive_path, "r:gz") as archive:
         for member in archive.getmembers():
             base = _safe_member_basename(member.name)
@@ -1079,7 +1131,7 @@ def _stage_tar(archive_path, staging_dir):
                 continue
             if member.issym() or member.islnk():
                 target_base = _safe_symlink_basename(base, member.linkname, staging_dir)
-                _safe_symlink(staging_dir, base, target_base, replace=True, require_target=False)
+                links.append((base, target_base))
                 continue
             if not member.isfile():
                 continue
@@ -1088,6 +1140,7 @@ def _stage_tar(archive_path, staging_dir):
                 continue
             with src, open(os.path.join(staging_dir, base), "wb") as dst:
                 shutil.copyfileobj(src, dst)
+    _materialize_staged_links(staging_dir, links)
 
 
 def safe_extract_runtime_archive(archive_path, dest_dir, archive_name, required_members=()):

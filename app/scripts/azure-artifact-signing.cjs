@@ -36,6 +36,7 @@ module.exports = async function azureArtifactSigning(configuration) {
     '-Path',
     configuration.path,
   ];
+  args.push('-PreserveValidSignatures');
 
   appendValue(args, '-SignToolPath', process.env.BETTERFINGERS_SIGNTOOL_PATH);
   appendValue(args, '-DlibPath', process.env.BETTERFINGERS_ARTIFACT_SIGNING_DLIB_PATH);

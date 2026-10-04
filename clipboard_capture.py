@@ -21,6 +21,34 @@ _MAX_TTS_CHARS = 6000
 
 IS_WINDOWS = platform_capabilities.IS_WINDOWS
 _COPY_TRIGGER_TIMEOUT_SECONDS = 2
+_MAX_CLIPBOARD_SNAPSHOT_BYTES = 20 * 1024 * 1024
+
+# GetClipboardData does not always return an HGLOBAL.  In particular,
+# CF_BITMAP/CF_PALETTE/CF_ENHMETAFILE return GDI handles, and passing those
+# handles to GlobalSize/GlobalLock can trigger a native access violation on
+# Windows.  These formats are documented as self-contained HGLOBAL payloads.
+# Registered formats (HTML Format, Rich Text Format, and application-specific
+# formats) also use HGLOBAL with the Win32 clipboard API.
+_HGLOBAL_CLIPBOARD_FORMATS = frozenset(
+    {
+        0x0001,  # CF_TEXT
+        0x0004,  # CF_SYLK
+        0x0005,  # CF_DIF
+        0x0006,  # CF_TIFF
+        0x0007,  # CF_OEMTEXT
+        0x0008,  # CF_DIB
+        0x000A,  # CF_PENDATA
+        0x000B,  # CF_RIFF
+        0x000C,  # CF_WAVE
+        0x000D,  # CF_UNICODETEXT
+        0x000F,  # CF_HDROP
+        0x0010,  # CF_LOCALE
+        0x0011,  # CF_DIBV5
+        0x0081,  # CF_DSPTEXT
+    }
+)
+_REGISTERED_CLIPBOARD_FORMAT_FIRST = 0xC000
+_REGISTERED_CLIPBOARD_FORMAT_LAST = 0xFFFF
 
 
 def _backend(name: str, available: bool, required: list[str]) -> dict:
@@ -329,82 +357,149 @@ def is_readable_tts_text(text: str) -> bool:
     return True
 
 
+def _is_hglobal_clipboard_format(fmt: int) -> bool:
+    value = int(fmt)
+    return value in _HGLOBAL_CLIPBOARD_FORMATS or (
+        _REGISTERED_CLIPBOARD_FORMAT_FIRST
+        <= value
+        <= _REGISTERED_CLIPBOARD_FORMAT_LAST
+    )
+
+
+def _windows_clipboard_apis():
+    """Return pointer-width-correct Win32 clipboard functions.
+
+    ctypes otherwise assumes C ``int`` arguments and return values.  That
+    truncates clipboard/global-memory handles in 64-bit Python even for formats
+    which really are HGLOBAL-backed.
+    """
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    user32.OpenClipboard.argtypes = [ctypes.c_void_p]
+    user32.OpenClipboard.restype = ctypes.c_int
+    user32.CloseClipboard.argtypes = []
+    user32.CloseClipboard.restype = ctypes.c_int
+    user32.EnumClipboardFormats.argtypes = [ctypes.c_uint]
+    user32.EnumClipboardFormats.restype = ctypes.c_uint
+    user32.GetClipboardData.argtypes = [ctypes.c_uint]
+    user32.GetClipboardData.restype = ctypes.c_void_p
+    user32.EmptyClipboard.argtypes = []
+    user32.EmptyClipboard.restype = ctypes.c_int
+    user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+    user32.SetClipboardData.restype = ctypes.c_void_p
+
+    kernel32.GlobalSize.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalSize.restype = ctypes.c_size_t
+    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalUnlock.restype = ctypes.c_int
+    kernel32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+    kernel32.GlobalAlloc.restype = ctypes.c_void_p
+    kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalFree.restype = ctypes.c_void_p
+    return user32, kernel32
+
+
 def _capture_clipboard_snapshot_windows():
     if not IS_WINDOWS:
         return None
 
     try:
-        user32 = ctypes.windll.user32
-        kernel32 = ctypes.windll.kernel32
+        user32, kernel32 = _windows_clipboard_apis()
     except Exception:
         return None
 
     snapshot = []
+    opened = False
     try:
         if not user32.OpenClipboard(None):
             return None
+        opened = True
         fmt = 0
         while True:
-            fmt = user32.EnumClipboardFormats(fmt)
+            fmt = int(user32.EnumClipboardFormats(fmt) or 0)
             if fmt == 0:
                 break
+
+            # A partial snapshot is not safe: restoring it would clear and
+            # silently discard every unsupported format.  Abort before the
+            # caller mutates the clipboard instead.
+            if not _is_hglobal_clipboard_format(fmt):
+                logging.debug(
+                    "Clipboard format %s cannot be safely duplicated as HGLOBAL; "
+                    "selection capture will fail closed.",
+                    fmt,
+                )
+                return None
+
             handle = user32.GetClipboardData(fmt)
             if not handle:
-                continue
+                return None
             size = int(kernel32.GlobalSize(handle) or 0)
-            if size <= 0:
-                continue
-            if size > 20 * 1024 * 1024:  # Skip if > 20MB to prevent freeze
-                logging.warning(f"Skipping clipboard format {fmt} (size={size}) - too large.")
-                continue
+            if size <= 0 or size > _MAX_CLIPBOARD_SNAPSHOT_BYTES:
+                logging.debug(
+                    "Clipboard format %s has an unsafe snapshot size (%s bytes).",
+                    fmt,
+                    size,
+                )
+                return None
             ptr = kernel32.GlobalLock(handle)
             if not ptr:
-                continue
+                return None
             try:
                 payload = ctypes.string_at(ptr, size)
             finally:
                 kernel32.GlobalUnlock(handle)
-            snapshot.append((int(fmt), bytes(payload)))
+            snapshot.append((fmt, bytes(payload)))
     except Exception as exc:
         logging.debug("Failed to snapshot Windows clipboard: %s", exc)
-        snapshot = None
+        return None
     finally:
-        try:
-            user32.CloseClipboard()
-        except Exception:
-            pass
+        if opened:
+            try:
+                user32.CloseClipboard()
+            except Exception:
+                pass
 
     return snapshot
 
 
 def _restore_clipboard_snapshot_windows(snapshot):
-    if not IS_WINDOWS:
-        return False
-    if not snapshot:
+    if not IS_WINDOWS or not snapshot:
         return False
 
+    normalized = []
+    for fmt, payload in snapshot:
+        value = int(fmt)
+        data = bytes(payload or b"")
+        if not _is_hglobal_clipboard_format(value):
+            return False
+        if len(data) > _MAX_CLIPBOARD_SNAPSHOT_BYTES:
+            return False
+        normalized.append((value, data))
+
     try:
-        user32 = ctypes.windll.user32
-        kernel32 = ctypes.windll.kernel32
+        user32, kernel32 = _windows_clipboard_apis()
     except Exception:
         return False
 
-    GMEM_MOVEABLE = 0x0002
-    restored_any = False
+    gmem_moveable = 0x0002
+    allocations = []
+    opened = False
     try:
-        if not user32.OpenClipboard(None):
-            return False
-        user32.EmptyClipboard()
-        for fmt, payload in snapshot:
-            data = bytes(payload or b"")
+        # Allocate every replacement before EmptyClipboard.  A local memory
+        # failure must not leave the clipboard partially erased.
+        for fmt, data in normalized:
             size = max(1, len(data))
-            hglobal = kernel32.GlobalAlloc(GMEM_MOVEABLE, size)
+            hglobal = kernel32.GlobalAlloc(gmem_moveable, size)
             if not hglobal:
-                continue
+                return False
+            allocations.append({"fmt": fmt, "handle": hglobal, "owned": True})
             ptr = kernel32.GlobalLock(hglobal)
             if not ptr:
-                kernel32.GlobalFree(hglobal)
-                continue
+                return False
             try:
                 if data:
                     ctypes.memmove(ptr, data, len(data))
@@ -412,20 +507,36 @@ def _restore_clipboard_snapshot_windows(snapshot):
                     ctypes.memset(ptr, 0, size)
             finally:
                 kernel32.GlobalUnlock(hglobal)
-            if not user32.SetClipboardData(int(fmt), hglobal):
-                kernel32.GlobalFree(hglobal)
-                continue
-            restored_any = True
+
+        if not user32.OpenClipboard(None):
+            return False
+        opened = True
+        if not user32.EmptyClipboard():
+            return False
+
+        for allocation in allocations:
+            if not user32.SetClipboardData(
+                allocation["fmt"], allocation["handle"]
+            ):
+                return False
+            # SetClipboardData transfers ownership to the system.
+            allocation["owned"] = False
+        return True
     except Exception as exc:
         logging.debug("Failed to restore Windows clipboard snapshot: %s", exc)
         return False
     finally:
-        try:
-            user32.CloseClipboard()
-        except Exception:
-            pass
-
-    return restored_any
+        if opened:
+            try:
+                user32.CloseClipboard()
+            except Exception:
+                pass
+        for allocation in allocations:
+            if allocation["owned"]:
+                try:
+                    kernel32.GlobalFree(allocation["handle"])
+                except Exception:
+                    pass
 
 
 def _snapshot_signature(snapshot):
@@ -472,6 +583,17 @@ def capture_selection_text_with_restore(timeout_ms=350, poll_ms=25) -> dict:
 
     original_text = _clipboard_get_text()
     original_snapshot = _capture_clipboard_snapshot_windows()
+    if IS_WINDOWS and original_snapshot is None:
+        return {
+            "ok": False,
+            "text": "",
+            "used_fallback": False,
+            "capture_status": "clipboard_preservation_unsupported",
+            "message": (
+                "Can't read selected text without risking clipboard data. "
+                "Copy plain text once, then try again."
+            ),
+        }
     sentinel = f"__betterfingers_clipboard_probe_{uuid.uuid4().hex}__"
     captured_text = ""
     owned_snapshot = None

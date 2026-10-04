@@ -11,6 +11,7 @@ param(
     # Azure Artifact Signing must prove the exact certificate identity, not
     # merely that Windows trusts whichever certificate signed the file.
     [string]$ExpectedSignerSubject = "",
+    [string]$NativePayloadReportPath = "",
     [switch]$ExerciseCleanupCategories
 )
 
@@ -170,7 +171,8 @@ function Assert-AuthenticodeStatus {
         [string]$Path,
         [string]$Expected,
         [string]$Label,
-        [string]$ExpectedSubject = ""
+        [string]$ExpectedSubject = "",
+        [switch]$RequireTimestamp
     )
 
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -189,6 +191,90 @@ function Assert-AuthenticodeStatus {
             throw "$Label signer subject was '$actualSubject'; expected exactly '$ExpectedSubject'."
         }
     }
+    if ($RequireTimestamp -and $null -eq $signature.TimeStamperCertificate) {
+        throw "$Label lacked an RFC 3161 timestamp certificate."
+    }
+}
+
+function Assert-NativePayloadSignatures {
+    param(
+        [string]$RootPath,
+        [string]$ProductExecutablePath,
+        [ValidateSet("NotSigned", "Valid")]
+        [string]$ExpectedPublisherStatus,
+        [string]$ExpectedPublisherSubject = ""
+    )
+
+    if (-not (Test-Path -LiteralPath $RootPath -PathType Container)) {
+        throw "Installed application tree not found: $RootPath"
+    }
+    if (-not (Test-Path -LiteralPath $ProductExecutablePath -PathType Leaf)) {
+        throw "Installed backend executable not found: $ProductExecutablePath"
+    }
+
+    $payloadFiles = @(Get-ChildItem -LiteralPath $RootPath -File -Recurse |
+        Where-Object { @(".exe", ".dll", ".pyd") -contains $_.Extension.ToLowerInvariant() } |
+        Sort-Object FullName)
+    if ($payloadFiles.Count -eq 0) {
+        throw "Installed application tree contained no EXE, DLL, or PYD payload files: $RootPath"
+    }
+
+    $resolvedProductPath = (Resolve-Path -LiteralPath $ProductExecutablePath).Path
+    $sawProductExecutable = $false
+    $records = New-Object System.Collections.Generic.List[object]
+    foreach ($payloadFile in $payloadFiles) {
+        $resolvedPayloadPath = $payloadFile.FullName
+        $isProductExecutable = $resolvedPayloadPath.Equals(
+            $resolvedProductPath,
+            [StringComparison]::OrdinalIgnoreCase
+        )
+        if ($isProductExecutable) {
+            $sawProductExecutable = $true
+            Assert-AuthenticodeStatus `
+                -Path $resolvedPayloadPath `
+                -Expected $ExpectedPublisherStatus `
+                -Label "Installed backend executable" `
+                -ExpectedSubject $ExpectedPublisherSubject `
+                -RequireTimestamp:($ExpectedPublisherStatus -eq "Valid")
+        } elseif ($ExpectedPublisherStatus -eq "Valid") {
+            Assert-AuthenticodeStatus `
+                -Path $resolvedPayloadPath `
+                -Expected "Valid" `
+                -Label "Installed application native payload"
+        } else {
+            # Unsigned manual qualification builds may still contain valid
+            # Microsoft/vendor binaries. Accept Valid or NotSigned here, but
+            # reject every broken/untrusted status instead of pretending the
+            # unsigned build has passed the production WDAC gate.
+            $signature = Get-AuthenticodeSignature -FilePath $resolvedPayloadPath
+            $actual = $signature.Status.ToString()
+            Write-Host "Installed application native payload Authenticode status: $actual ($resolvedPayloadPath)"
+            if ($actual -notin @("Valid", "NotSigned")) {
+                throw "Installed application native payload '$resolvedPayloadPath' had invalid Authenticode status $actual."
+            }
+        }
+
+        $verifiedSignature = Get-AuthenticodeSignature -FilePath $resolvedPayloadPath
+        if ($verifiedSignature.Status -eq "Valid" -and
+            $null -eq $verifiedSignature.SignerCertificate) {
+            throw "Installed application native payload '$resolvedPayloadPath' lacked a signer certificate."
+        }
+        $records.Add([ordered]@{
+            path = $resolvedPayloadPath
+            sha256 = (Get-FileHash -LiteralPath $resolvedPayloadPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            signatureStatus = $verifiedSignature.Status.ToString()
+            signerSubject = if ($null -eq $verifiedSignature.SignerCertificate) { "" } else { [string]$verifiedSignature.SignerCertificate.Subject }
+            signerThumbprint = if ($null -eq $verifiedSignature.SignerCertificate) { "" } else { [string]$verifiedSignature.SignerCertificate.Thumbprint }
+            timestampSubject = if ($null -eq $verifiedSignature.TimeStamperCertificate) { "" } else { [string]$verifiedSignature.TimeStamperCertificate.Subject }
+            timestampThumbprint = if ($null -eq $verifiedSignature.TimeStamperCertificate) { "" } else { [string]$verifiedSignature.TimeStamperCertificate.Thumbprint }
+        })
+    }
+
+    if (-not $sawProductExecutable) {
+        throw "Recursive installed-tree verification omitted the BetterFingers backend executable: $resolvedProductPath"
+    }
+    Write-Host "Verified $($payloadFiles.Count) installed-tree EXE/DLL/PYD signature(s)."
+    return $records.ToArray()
 }
 
 function Get-InstalledMetadata {
@@ -226,7 +312,12 @@ try {
         throw "Port 8000 was already in use before installer QA; refusing to test against an unowned backend."
     }
 
-    Assert-AuthenticodeStatus -Path $InstallerPath -Expected $ExpectedSignatureStatus -Label "Installer" -ExpectedSubject $ExpectedSignerSubject
+    Assert-AuthenticodeStatus `
+        -Path $InstallerPath `
+        -Expected $ExpectedSignatureStatus `
+        -Label "Installer" `
+        -ExpectedSubject $ExpectedSignerSubject `
+        -RequireTimestamp:($ExpectedSignatureStatus -eq "Valid")
 
     # This token is generated per run and inherited by Electron and its backend
     # through the environment. It is intentionally never printed or put in an
@@ -280,9 +371,42 @@ try {
         throw "Installed executable not found: $exePath"
     }
 
-    $backendExePath = Join-Path $installDir "resources\backend\betterfingers-backend.exe"
-    Assert-AuthenticodeStatus -Path $exePath -Expected $ExpectedSignatureStatus -Label "Installed application" -ExpectedSubject $ExpectedSignerSubject
-    Assert-AuthenticodeStatus -Path $backendExePath -Expected $ExpectedSignatureStatus -Label "Installed backend" -ExpectedSubject $ExpectedSignerSubject
+    $backendBundlePath = Join-Path $installDir "resources\backend\betterfingers-backend"
+    $backendExePath = Join-Path $backendBundlePath "betterfingers-backend.exe"
+    Assert-AuthenticodeStatus `
+        -Path $exePath `
+        -Expected $ExpectedSignatureStatus `
+        -Label "Installed application" `
+        -ExpectedSubject $ExpectedSignerSubject `
+        -RequireTimestamp:($ExpectedSignatureStatus -eq "Valid")
+    $installedNativePayloadRecords = @(Assert-NativePayloadSignatures `
+        -RootPath $installDir `
+        -ProductExecutablePath $backendExePath `
+        -ExpectedPublisherStatus $ExpectedSignatureStatus `
+        -ExpectedPublisherSubject $ExpectedSignerSubject)
+    if ([string]::IsNullOrWhiteSpace($NativePayloadReportPath)) {
+        $NativePayloadReportPath = "$([IO.Path]::GetFullPath($InstallerPath)).installed-native-verification.json"
+    }
+    $nativePayloadReportFullPath = [IO.Path]::GetFullPath($NativePayloadReportPath)
+    $nativePayloadReportDirectory = Split-Path -Parent $nativePayloadReportFullPath
+    if (-not (Test-Path -LiteralPath $nativePayloadReportDirectory -PathType Container)) {
+        New-Item -ItemType Directory -Path $nativePayloadReportDirectory -Force | Out-Null
+    }
+    $nativePayloadReport = [ordered]@{
+        schemaVersion = 1
+        installerPath = (Resolve-Path -LiteralPath $InstallerPath).Path
+        installRoot = (Resolve-Path -LiteralPath $installDir).Path
+        expectedPublisherStatus = $ExpectedSignatureStatus
+        expectedPublisherSubject = $ExpectedSignerSubject
+        verifiedAtUtc = [DateTime]::UtcNow.ToString("o")
+        artifacts = $installedNativePayloadRecords
+    }
+    [IO.File]::WriteAllText(
+        $nativePayloadReportFullPath,
+        ($nativePayloadReport | ConvertTo-Json -Depth 6),
+        (New-Object Text.UTF8Encoding($false))
+    )
+    Write-Host "Installed native-payload verification report: $nativePayloadReportFullPath"
 
     $installedMetadata = Get-InstalledMetadata
     $uninstallRegPath = $installedMetadata.PSPath
@@ -426,7 +550,12 @@ try {
         throw "Uninstaller not found in ${installDir} (looked for Uninstall*.exe)"
     }
     $uninstallerPath = $uninstaller.FullName
-    Assert-AuthenticodeStatus -Path $uninstallerPath -Expected $ExpectedSignatureStatus -Label "Uninstaller" -ExpectedSubject $ExpectedSignerSubject
+    Assert-AuthenticodeStatus `
+        -Path $uninstallerPath `
+        -Expected $ExpectedSignatureStatus `
+        -Label "Uninstaller" `
+        -ExpectedSubject $ExpectedSignerSubject `
+        -RequireTimestamp:($ExpectedSignatureStatus -eq "Valid")
 
     Write-Host "Running silent uninstall smoke test: $uninstallerPath"
     $uninstallerProcess = Start-Process -FilePath $uninstallerPath -ArgumentList "/S" -Wait -NoNewWindow -PassThru

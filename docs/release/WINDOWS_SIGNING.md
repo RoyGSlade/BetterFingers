@@ -18,24 +18,37 @@ unique temporary directory, and is deleted even when signing fails.
 The current electron-builder target is Windows x64 NSIS. The BetterFingers
 publisher signs and re-verifies these product-owned final outputs:
 
-- `app/resources/backend/betterfingers-backend.exe`, copied into the packaged
-  application as `resources/backend/betterfingers-backend.exe`;
+- the PyInstaller onedir entry point at
+  `app/resources/backend/betterfingers-backend/betterfingers-backend.exe`,
+  copied into the packaged application at the same path beneath
+  `resources/backend/`;
 - the packaged `BetterFingers.exe` Electron application;
 - electron-builder's generated NSIS uninstaller executable;
 - the final `BetterFingers-Setup-<version>-x64.exe` NSIS installer.
 
-Electron and Chromium also ship Microsoft- or vendor-signed DLLs. The builder
-preserves those upstream signatures instead of appending the BetterFingers
-publisher identity. The combined report records build-time signer subjects and
-separately identifies any vendor-presigned artifact encountered by the signing
-hook; only the BetterFingers-owned final outputs above are required to share the
-issued BetterFingers signer subject.
+PyInstaller onedir keeps native dependencies visible instead of extracting
+unsigned modules into `%TEMP%\_MEI*` at launch. Before electron-builder runs,
+the release wrapper recursively inventories every `.exe`, `.dll`, and `.pyd`
+in the backend bundle. Unsigned or invalid files are signed with the
+BetterFingers profile; already-valid Microsoft or vendor signatures are
+preserved. During electron-builder packaging, `.dll` is included in the
+pre-installer signing pass. The custom hook preserves every already-valid
+upstream signature and signs unsigned or invalid Electron runtime DLLs with the
+BetterFingers profile before NSIS assembles the installer. The preverified
+backend payload is preserved by the same rule rather than re-signed.
+
+After packaging, the wrapper verifies every `.exe`, `.dll`, and `.pyd` under
+`win-unpacked`, then compares the backend bundle to its pre-package report by
+relative path, SHA-256, signer subject/thumbprint, and timestamp
+subject/thumbprint. A missing, added, changed, or re-signed backend file aborts
+the build. The combined report records the mixed signer set and separately
+identifies valid vendor-presigned artifacts; only BetterFingers-owned entry
+points are required to share the issued BetterFingers signer subject.
 
 The project does not currently produce MSI or MSIX packages. The reusable
-signer recognizes EXE, DLL, MSI, and MSIX inputs, but the release wrapper
-explicitly verifies the current product-owned NSIS outputs rather than claiming
-that every third-party binary in `win-unpacked` belongs to the BetterFingers
-publisher.
+signer recognizes EXE, DLL, PYD, MSI, and MSIX inputs. The release wrapper
+requires every native file in `win-unpacked` to have a valid signature without
+pretending that third-party binaries belong to the BetterFingers publisher.
 
 ## Signing-machine prerequisites
 
@@ -72,10 +85,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\build_and_sign_w
 ```
 
 The command installs the locked npm tree, runs the app unit tests, builds the
-renderer and PyInstaller backend, signs payload files during electron-builder
-packaging, produces the NSIS installer, and performs a second recursive
-verification of the final output. Success ends with `SIGNED BUILD COMPLETE` and
-prints these two release paths:
+renderer and PyInstaller onedir backend, signs or preserves every native
+backend payload before electron-builder packaging, then signs or preserves
+Electron runtime DLLs before producing the NSIS installer. The final recursive
+pass verifies the complete unpacked native tree without changing it and proves
+that the backend payload did not change during packaging. Success ends with
+`SIGNED BUILD COMPLETE` and prints these two release paths:
 
 - `app/release/BetterFingers-Setup-<version>-x64.exe`
 - `app/release/BetterFingers-Windows-signing-report.json`
@@ -90,4 +105,9 @@ with `-ExpectedSignerSubject '<subject from the report>'`.
 Do not publish merely because the package command completed. Retain the JSON
 verification report, run the installed-app smoke test on the signed installer,
 and compare its SHA-256 hash with the release sidecar before approving a public
-release.
+release. The smoke test recursively verifies the complete installed native
+tree and writes `<installer>.installed-native-verification.json`, then launches
+the installed app and requires authenticated `/health` success. Enterprise
+WDAC compatibility is release-qualified only after that installed smoke passes
+under the actual target WDAC policy; a clean static or unsigned build is not
+that proof.

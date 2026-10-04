@@ -52,6 +52,9 @@ const ROUTE_ALLOWLIST = {
     '/drafts', '/drafts/latest',
     '/wake/status', '/wake/models', '/wake/models/:id/download-state',
     '/wake/train/status',
+    // Wake Enrollment Wave 0: read-only local hardware/runtime inspection.
+    // No model download, generation, or arbitrary TTS route is exposed.
+    '/wake/qwen/capability',
     '/message-rescue/context', '/message-rescue/generate/:id',
     // Contacts (Stage 11). User-authored records of how to speak to someone --
     // no addresses, no handles, nothing to reach anyone with.
@@ -102,6 +105,9 @@ const ROUTE_ALLOWLIST = {
     '/personas/:name/examples',
     '/voice-presets', '/voice-presets/:name/make-default',
     '/wake/enable', '/wake/disable', '/wake/test', '/wake/train',
+    // Pure text preflight only. The route receives the proposed phrase and
+    // vocabularies; it cannot record audio, download Qwen, or generate speech.
+    '/wake/phrase/preflight',
     '/wake/models/:id/download',
     '/message-rescue/context/selection', '/message-rescue/context/manual',
     '/message-rescue/generate', '/message-rescue/generate/:id/cancel',

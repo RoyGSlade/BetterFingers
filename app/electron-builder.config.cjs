@@ -28,11 +28,11 @@ if (signingMode === 'azure-cli') {
   ).trim();
 
   packageBuild.forceCodeSigning = true;
-  // Electron ships Microsoft-signed DLLs (for example d3dcompiler_47.dll).
-  // Preserve those vendor signatures instead of appending our publisher
-  // identity to binaries we do not own. Electron-builder signs EXEs and
-  // installer targets by default; the negative pattern only excludes DLLs.
-  packageBuild.win.signExts = ['!.dll'];
+  // Electron ships a mixture of unsigned runtime DLLs and Microsoft/vendor-
+  // signed DLLs. Include every DLL in electron-builder's pre-installer signing
+  // pass; the custom hook preserves valid upstream signatures and signs only
+  // unsigned or invalid files with the BetterFingers publisher.
+  packageBuild.win.signExts = ['.dll'];
   packageBuild.win.signtoolOptions = {
     sign: require('./scripts/azure-artifact-signing.cjs'),
     signingHashAlgorithms: ['sha256'],

@@ -1,7 +1,7 @@
 """Architecture smoke gate for the ``backend`` package (Build Week A1.4).
 
 Three checks, each deterministic and fast (no models, no network, no full
-onefile PyInstaller build):
+onedir PyInstaller build):
 
 * the ``backend`` package imports cleanly in an isolated subprocess and pulls
   in none of the app's heavy runtime deps (fastapi/torch/faster_whisper/...);

@@ -31,8 +31,10 @@ def real_make_scorer():
     tell the user to download it first."""
     mel = wake_models.build_onnx_session(wake_models.get_wake_model_path("melspectrogram"))
     emb = wake_models.build_onnx_session(wake_models.get_wake_model_path("embedding_model"))
-    from wake_word import WakeScorer  # local import: wake_word imports wake_models
-    return WakeScorer(mel, emb)
+    # WakeScorer is implemented by wake_models.  Importing it from wake_word
+    # happened to survive the stubbed unit tests, but fails on every real
+    # training run because wake_word does not re-export the class.
+    return wake_models.WakeScorer(mel, emb)
 
 
 def _resample_to_16k(audio, sample_rate):

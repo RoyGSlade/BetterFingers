@@ -29,6 +29,14 @@ const api = {
     ipcRenderer.invoke('backend:upload-voice-sample', payload),
   uploadWakeModel: (payload) =>
     ipcRenderer.invoke('backend:upload-wake-model', payload),
+  // Bug-report diagnostics never cross this bridge from the renderer. Main
+  // gathers and curates them, returns an immutable preview, then accepts only
+  // that preview id plus a fixed destination for the final confirmed action.
+  getBugReportConfig: () => ipcRenderer.invoke('bug-report:get-config'),
+  prepareBugReport: ({ summary, steps, expected, actual, contact } = {}) =>
+    ipcRenderer.invoke('bug-report:prepare', { summary, steps, expected, actual, contact }),
+  submitBugReport: ({ previewId, destination } = {}) =>
+    ipcRenderer.invoke('bug-report:submit', { previewId, destination }),
   voiceStatus: {
     start: () => ipcRenderer.invoke('backend:voice-status:start'),
     stop: () => ipcRenderer.invoke('backend:voice-status:stop'),

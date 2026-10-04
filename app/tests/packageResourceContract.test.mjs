@@ -4,7 +4,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-import { dataSources } from '../scripts/build-backend.js';
+import {
+  backendBundleDir,
+  backendBundleName,
+  backendExecutableName,
+  backendExecutablePath,
+  backendOutputDir,
+  dataSources,
+} from '../scripts/build-backend.js';
 
 const appRoot = path.resolve(import.meta.dirname, '..');
 const packageJson = JSON.parse(fs.readFileSync(path.join(appRoot, 'package.json'), 'utf8'));
@@ -28,6 +35,29 @@ test('packaged tray resources include only the four indicator assets', () => {
 
 test('backend sidecar data excludes root assets and images', () => {
   assert.equal(dataSources.some(([source]) => source === 'assets' || source === 'images'), false);
+});
+
+test('backend packaging pins a recursive PyInstaller onedir resource contract', () => {
+  const buildBackendSource = fs.readFileSync(path.join(appRoot, 'scripts', 'build-backend.js'), 'utf8');
+  assert.match(buildBackendSource, /'--onedir'/);
+  assert.match(buildBackendSource, /'--contents-directory',\s*'_internal'/);
+  assert.doesNotMatch(buildBackendSource, /'--onefile'/);
+
+  assert.equal(backendBundleName, 'betterfingers-backend');
+  assert.equal(backendOutputDir, path.join(appRoot, 'resources', 'backend'));
+  assert.equal(backendBundleDir, path.join(backendOutputDir, backendBundleName));
+  assert.ok(
+    ['betterfingers-backend', 'betterfingers-backend.exe'].includes(backendExecutableName),
+    `unexpected backend executable name: ${backendExecutableName}`,
+  );
+  assert.equal(backendExecutablePath, path.join(backendBundleDir, backendExecutableName));
+
+  const backendResource = packageJson.build.extraResources.find(({ from }) => from === 'resources/backend');
+  assert.deepEqual(backendResource, {
+    from: 'resources/backend',
+    to: 'backend',
+    filter: ['**/*', '!.gitkeep'],
+  });
 });
 
 test('Linux package identity aligns Electron and desktop-entry names', () => {
@@ -140,8 +170,8 @@ test('Azure Artifact Signing config is exact and only enabled explicitly', () =>
   assert.equal(cliConfig.forceCodeSigning, true);
   assert.deepEqual(
     cliConfig.win.signExts,
-    ['!.dll'],
-    'preserve vendor DLL signatures while default EXE/installer signing remains enabled',
+    ['.dll'],
+    'Electron-builder includes DLLs; the custom hook preserves already-valid vendor signatures and signs only missing or invalid signatures',
   );
   assert.deepEqual(cliConfig.win.signtoolOptions, {
     signingHashAlgorithms: ['sha256'],

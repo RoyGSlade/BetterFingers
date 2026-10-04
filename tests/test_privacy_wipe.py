@@ -14,6 +14,7 @@ import recordings
 import routes_wake
 import server
 import voice_clone_engine
+import wake_setup_registry
 
 
 class DummyTranscriber:
@@ -30,6 +31,8 @@ class PrivacyWipeTests(unittest.TestCase):
         os.environ["APPDATA"] = self._tmp.name
         server.transcriber = None
         history_store._initialized_path = None
+        wake_setup_registry.WAKE_SETUP_REGISTRY.resume_issuance()
+        wake_setup_registry.WAKE_SETUP_REGISTRY.clear()
         # Keep the startup warmup thread from loading (and on a fresh data
         # dir, DOWNLOADING) real models: an in-flight .gguf.part download
         # holds an open handle that breaks TemporaryDirectory cleanup on
@@ -50,6 +53,8 @@ class PrivacyWipeTests(unittest.TestCase):
         self._tmp.cleanup()
         server.transcriber = None
         history_store._initialized_path = None
+        wake_setup_registry.WAKE_SETUP_REGISTRY.resume_issuance()
+        wake_setup_registry.WAKE_SETUP_REGISTRY.clear()
 
     def _client(self):
         return TestClient(server.app)
@@ -113,6 +118,35 @@ class PrivacyWipeTests(unittest.TestCase):
             cleared = payload["cleared"]
             self.assertTrue(cleared["history_db_wiped"]["ok"])
             self.assertEqual(cleared["recordings_files_removed"], 0)
+            self.assertEqual(cleared["wake_setup_candidates_cleared"], 0)
+
+    def test_wipe_clears_pending_wake_setup_candidates_and_reports_count(self):
+        first = wake_setup_registry.WAKE_SETUP_REGISTRY.issue(
+            "hey betterfinger", {"verdict": "good"}
+        )
+        second = wake_setup_registry.WAKE_SETUP_REGISTRY.issue(
+            "quiet purple lantern", {"verdict": "workable"}
+        )
+
+        with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
+            server, "Transcriber", DummyTranscriber
+        ):
+            with self._client() as client:
+                resp = client.post("/privacy/wipe", json={})
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        payload = resp.json()
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["cleared"]["wake_setup_candidates_cleared"], 2)
+        self.assertTrue(payload["postconditions"]["wake_setup_candidates_empty"])
+        self.assertIsNone(wake_setup_registry.WAKE_SETUP_REGISTRY.resolve(first.phrase_id))
+        self.assertIsNone(wake_setup_registry.WAKE_SETUP_REGISTRY.resolve(second.phrase_id))
+        replacement = wake_setup_registry.WAKE_SETUP_REGISTRY.issue(
+            "fresh private helper", {"verdict": "good"}
+        )
+        self.assertIsNotNone(
+            wake_setup_registry.WAKE_SETUP_REGISTRY.resolve(replacement.phrase_id)
+        )
 
     def test_privacy_report_lists_history_db_and_recordings(self):
         with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(

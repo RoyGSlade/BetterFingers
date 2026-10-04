@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SIGNER = ROOT / "tools" / "sign_windows_artifacts.ps1"
 BUILD = ROOT / "tools" / "build_and_sign_windows.ps1"
+BACKEND_BUILD = ROOT / "app" / "scripts" / "build-backend.js"
 HOOK = ROOT / "app" / "scripts" / "azure-artifact-signing.cjs"
 CONFIG = ROOT / "app" / "electron-builder.config.cjs"
 DOC = ROOT / "docs" / "release" / "WINDOWS_SIGNING.md"
@@ -23,7 +24,7 @@ def test_signing_identity_endpoint_timestamp_and_formats_are_pinned():
         '[string]$CertificateProfileName = "better-fingers"',
         '[string]$Endpoint = "https://wus2.codesigning.azure.net"',
         '[string]$TimestampUrl = "http://timestamp.acs.microsoft.com/"',
-        '$eligibleExtensions = @(".exe", ".dll", ".msi", ".msix")',
+        '$eligibleExtensions = @(".exe", ".dll", ".pyd", ".msi", ".msix")',
         '[Version]"10.0.2261.755"',
     ):
         assert required in signer
@@ -67,21 +68,51 @@ def test_only_azure_cli_credential_is_left_enabled_and_metadata_is_ephemeral():
     assert "Remove-Item -LiteralPath $metadataRoot -Recurse -Force" in signer
 
 
-def test_electron_builder_signs_payload_before_packaging_and_fails_closed():
+def test_electron_builder_signs_runtime_dlls_before_packaging_and_fails_closed():
     config = _read(CONFIG)
     hook = _read(HOOK)
     for required in (
         "signingMode === 'azure-cli'",
         "packageBuild.forceCodeSigning = true",
-        "['!.dll']",
+        "packageBuild.win.signExts = ['.dll']",
         "signingHashAlgorithms: ['sha256']",
         "require('./scripts/azure-artifact-signing.cjs')",
     ):
         assert required in config
+    assert "['!.dll']" not in config
     assert "configuration.path" in hook
     assert "sign_windows_artifacts.ps1" in hook
+    assert "args.push('-PreserveValidSignatures')" in hook
     assert "BETTERFINGERS_SIGNING_HOOK_REPORT_DIR" in hook
     assert "result.status !== 0" in hook
+
+
+def test_backend_payload_contract_is_onedir_recursive_and_signature_aware():
+    build = _read(BUILD)
+    backend_build = _read(BACKEND_BUILD)
+    signer = _read(SIGNER)
+    for required in ("'--onedir'", "'--contents-directory'", "'_internal'"):
+        assert required in backend_build
+    assert "'--onefile'" not in backend_build
+    for required in (
+        '$backendBuildBundlePath = Join-Path $appRoot "resources\\backend\\betterfingers-backend"',
+        '$backendBuildNativePayloadPaths = @(Get-NativePayloadPaths',
+        'PreserveValidSignatures = $true',
+        '$packagedNativePayloadPaths = @(Get-NativePayloadPaths',
+        'Assert-IdenticalArtifactMaps',
+        'packagedNativePayloadVerifications = $packagedNativePayloadArtifacts',
+    ):
+        assert required in build
+    for required in (
+        '".pyd"',
+        '$PreserveValidSignatures',
+        'function Test-IsBackendBundlePayload',
+        '\\resources\\backend\\betterfingers-backend\\',
+        'automaticBackendPreservation',
+        'classificationComplete = $classificationComplete',
+        'verifiedArtifacts = $verifiedArtifacts',
+    ):
+        assert required in signer
 
 
 def test_wrapper_rechecks_product_owned_final_outputs_in_process_and_reports_vendor_signers():
@@ -90,7 +121,8 @@ def test_wrapper_rechecks_product_owned_final_outputs_in_process_and_reports_ven
         '$env:BETTERFINGERS_SIGNING_MODE = "azure-cli"',
         '"electron-builder", "--config", "electron-builder.config.cjs", "--win", "--x64"',
         '$applicationPath = Join-Path $unpackedPath "BetterFingers.exe"',
-        '$backendPath = Join-Path $unpackedPath "resources\\backend\\betterfingers-backend.exe"',
+        '$packagedBackendBundlePath = Join-Path $unpackedPath "resources\\backend\\betterfingers-backend"',
+        '$backendPath = Join-Path $packagedBackendBundlePath "betterfingers-backend.exe"',
         '$finalOutputPaths = @($installerPath, $applicationPath, $backendPath)',
         'Path = $finalOutputPaths',
         'VerifyOnly = $true',
@@ -99,11 +131,22 @@ def test_wrapper_rechecks_product_owned_final_outputs_in_process_and_reports_ven
         '$subjects.Count -ne 1',
         'buildTimeSignerSubjects = $buildTimeSignerSubjects',
         'vendorPresignedArtifacts = $vendorPresignedArtifacts',
+        'Get-NativePayloadPaths',
+        'packaged-native-payload-verification.json',
         'profileType = "Public Trust"',
         'BetterFingers-Windows-signing-report.json',
     ):
         assert required in build
     assert '"-Path", $unpackedPath, $installerPath' not in build
+
+    packaged_verification = build.split(
+        "$packagedVerifyParameters = @{", 1
+    )[1].split("    }", 1)[0]
+    assert "VerifyOnly = $true" in packaged_verification
+    assert "PreserveValidSignatures = $true" in packaged_verification
+    assert build.index('"electron-builder", "--config"') < build.index(
+        "$packagedVerifyParameters = @{"
+    )
 
 
 def test_new_production_signing_files_contain_no_secret_auth_contract():
@@ -135,6 +178,17 @@ def test_signtool_version_detection_does_not_depend_on_branding_fileversion_only
     assert "$versionInfo.ProductVersion" in script
     assert "(?<!\\d)(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)(?!\\d)" in script
     assert "Unable to read a valid SignTool SDK version" in script
+
+
+def test_artifact_signing_install_root_registry_properties_are_optional_under_strict_mode():
+    script = _read(SIGNING_SCRIPT)
+    install_roots = script.split(
+        "function Get-ArtifactSigningInstallRoots", 1
+    )[1].split("function Resolve-ArtifactSigningDlib", 1)[0]
+
+    for property_name in ("DisplayName", "InstallLocation", "DisplayIcon"):
+        assert f'PSObject.Properties["{property_name}"]' in install_roots
+        assert f"$_.{property_name}" not in install_roots
 
 
 def test_single_signing_target_remains_an_array_under_strict_mode():

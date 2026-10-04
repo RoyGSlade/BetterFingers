@@ -46,6 +46,26 @@ def synthetic_windows(phrases, voices, synthesize_fn, make_scorer, *,
     """Render every (phrase x voice x speed) with ``synthesize_fn`` and return
     the stacked ``(M, 16, 96)`` feature windows. ``synthesize_fn(text, voice,
     speed) -> float32 mono 16 kHz`` (or None/empty to skip a combo)."""
+    collected = _synthetic_window_groups(
+        phrases,
+        voices,
+        synthesize_fn,
+        make_scorer,
+        speeds=speeds,
+        stride=stride,
+    )
+    return _concat(collected)
+
+
+def _synthetic_window_groups(phrases, voices, synthesize_fn, make_scorer, *,
+                             speeds=DEFAULT_SPEEDS, stride=1):
+    """Return one feature-window array per independently rendered utterance.
+
+    Keeping the utterance boundary lets :func:`build_training_set` hold out
+    entire renders.  Randomly splitting their heavily-overlapping windows made
+    calibration see near-copies of training examples and report fantasy-grade
+    reliability.
+    """
     collected = []
     for phrase in phrases:
         for voice in voices:
@@ -62,14 +82,17 @@ def synthetic_windows(phrases, voices, synthesize_fn, make_scorer, *,
                 w = _windows_from_audio(audio, make_scorer, stride)
                 if w.shape[0] > 0:
                     collected.append(w)
-    if not collected:
-        return np.zeros((0, wake_trainer.EMBED_WINDOW, wake_trainer.EMBED_DIM), dtype=np.float32)
-    return np.concatenate(collected, axis=0)
+    return collected
 
 
 def windows_from_clips(clips, make_scorer, *, stride=1):
     """Feature windows for a list of already-16 kHz-mono float32 clips (the
     user's own recordings)."""
+    return _concat(_clip_window_groups(clips, make_scorer, stride=stride))
+
+
+def _clip_window_groups(clips, make_scorer, *, stride=1):
+    """Return one feature-window array per recorded clip."""
     collected = []
     for clip in clips or ():
         clip = np.asarray(clip, dtype=np.float32).reshape(-1)
@@ -78,9 +101,7 @@ def windows_from_clips(clips, make_scorer, *, stride=1):
         w = _windows_from_audio(clip, make_scorer, stride)
         if w.shape[0] > 0:
             collected.append(w)
-    if not collected:
-        return np.zeros((0, wake_trainer.EMBED_WINDOW, wake_trainer.EMBED_DIM), dtype=np.float32)
-    return np.concatenate(collected, axis=0)
+    return collected
 
 
 def build_training_set(
@@ -104,23 +125,25 @@ def build_training_set(
     self-graded on training data). Raises ``ValueError`` when a class ends up
     empty, so the caller can tell the user exactly what's missing.
     """
-    pos = [
-        windows_from_clips(user_positive_clips, make_scorer),
-        synthetic_windows([phrase], voices, synthesize_fn, make_scorer, speeds=speeds),
+    pos_groups = [
+        *_clip_window_groups(user_positive_clips, make_scorer),
+        *_synthetic_window_groups(
+            [phrase], voices, synthesize_fn, make_scorer, speeds=speeds
+        ),
     ]
-    neg = [
-        windows_from_clips(user_negative_clips, make_scorer),
-        synthetic_windows(list(negative_phrases), voices, synthesize_fn, make_scorer, speeds=speeds),
+    neg_groups = [
+        *_clip_window_groups(user_negative_clips, make_scorer),
+        *_synthetic_window_groups(
+            list(negative_phrases), voices, synthesize_fn, make_scorer, speeds=speeds
+        ),
     ]
-    pos_windows = _concat(pos)
-    neg_windows = _concat(neg)
-    if pos_windows.shape[0] == 0:
+    if not pos_groups:
         raise ValueError("no positive windows — record the phrase or check TTS voices")
-    if neg_windows.shape[0] == 0:
+    if not neg_groups:
         raise ValueError("no negative windows — check TTS voices / decoy phrases")
 
-    train_pos, eval_pos = _split(pos_windows, eval_fraction, seed)
-    train_neg, eval_neg = _split(neg_windows, eval_fraction, seed + 1)
+    train_pos, eval_pos = _split_groups(pos_groups, eval_fraction, seed, "positive")
+    train_neg, eval_neg = _split_groups(neg_groups, eval_fraction, seed + 1, "negative")
     return train_pos, train_neg, eval_pos, eval_neg
 
 
@@ -131,16 +154,27 @@ def _concat(parts):
     return np.concatenate(parts, axis=0)
 
 
-def _split(windows, eval_fraction, seed):
-    """Shuffle then split into (train, eval). Guarantees at least one eval
-    sample when there are >=2 windows, so calibration always has held-out data."""
-    n = windows.shape[0]
+def _split_groups(groups, eval_fraction, seed, label):
+    """Split whole utterance groups, then concatenate each side.
+
+    At least two independently captured/rendered utterances are required for a
+    leakage-free held-out set.  We fail honestly instead of quietly grading a
+    model on overlapping windows from the same clip.
+    """
+    normalized = []
+    for group in groups:
+        group = np.asarray(group, dtype=np.float32)
+        if group.shape[0] > 0:
+            normalized.append(group)
+    groups = normalized
+    if len(groups) < 2:
+        raise ValueError(
+            f"need at least two independent {label} utterances for leakage-free evaluation"
+        )
     rng = np.random.default_rng(seed)
-    idx = rng.permutation(n)
-    n_eval = int(round(n * eval_fraction))
-    if n >= 2:
-        n_eval = min(max(1, n_eval), n - 1)
-    else:
-        n_eval = 0
-    eval_idx, train_idx = idx[:n_eval], idx[n_eval:]
-    return windows[train_idx], windows[eval_idx]
+    order = rng.permutation(len(groups))
+    n_eval = int(round(len(groups) * eval_fraction))
+    n_eval = min(max(1, n_eval), len(groups) - 1)
+    eval_ids = order[:n_eval]
+    train_ids = order[n_eval:]
+    return _concat([groups[i] for i in train_ids]), _concat([groups[i] for i in eval_ids])

@@ -253,6 +253,11 @@ test('deriveNextPersonaCopyName: first free "(copy)"/"(copy N)" slot', () => {
 // --- deriveVoiceBlendCards / normalizeStudioBlend (blend-weight normalization) ---
 
 test('deriveVoiceBlendCards: base card is always first and marked selected, percents sum to ~100', () => {
+  assert.equal(
+    STUDIO_ELEMENT_IDS.blendCards,
+    'sdVoiceBlendCards',
+    '#sdVoiceBlendCards must remain the collected shipping blend-card container',
+  );
   const cards = deriveVoiceBlendCards('Clarity Core', [
     { voiceId: 'warmth_air', weight: 0.3 },
     { voiceId: 'presence_boost', weight: 0.15 },

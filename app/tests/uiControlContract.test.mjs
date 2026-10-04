@@ -270,13 +270,20 @@ test('--sd-label-color (39x .sd-field__label + first-run labels) no longer hardc
   }
 });
 
+test('--sd-text-muted clears WCAG AA against every dark surface token', () => {
+  const muted = tokenHex('sd-text-muted');
+  for (const name of ['sd-surface-raised', 'sd-surface', 'sd-surface-inset', 'sd-bg-base']) {
+    const ratio = contrastRatio(muted, tokenHex(name));
+    assert.ok(ratio >= 4.5, `--sd-text-muted on --${name} is ${ratio.toFixed(2)}:1, below 4.5:1`);
+  }
+});
+
 test('the per-selector label blocks this wave touched no longer use --sd-text-muted', () => {
-  // --sd-text-muted itself computes to 3.20-3.54:1 against every surface
-  // token in this palette -- below AA for the normal-size uppercase label
-  // text these selectors render. Fixed to --sd-text-secondary (6.82-7.53:1
-  // against the same surfaces). This guards the specific selectors fixed;
-  // it is not a blanket ban on --sd-text-muted (still valid for decorative
-  // glyphs/chevrons/dots, which WCAG 1.4.3 does not cover).
+  // The old #5B6B7C muted token computed to 3.20-3.54:1 against these
+  // surfaces. These small uppercase labels intentionally use the still
+  // stronger --sd-text-secondary token even though the corrected muted token
+  // now clears AA. This guards the specific selectors fixed; it is not a
+  // blanket ban on --sd-text-muted.
   const mutedTextSecondaryTarget = tokenHex('sd-text-secondary');
   const surfaceRaised = tokenHex('sd-surface-raised');
   const secondaryRatio = contrastRatio(mutedTextSecondaryTarget, surfaceRaised);

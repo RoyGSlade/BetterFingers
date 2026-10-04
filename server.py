@@ -43,6 +43,7 @@ import macros
 import voice_presets
 import voice_clone_qa
 import history_store
+import wake_setup_registry
 # Wave 6: the privacy report, every wipe mode, and the factory reset are all
 # generated from one declared inventory, so the screen cannot describe a store
 # the wipe misses (or miss one the screen describes).
@@ -4420,6 +4421,10 @@ def _perform_privacy_wipe(wipe_voices: bool, mode: str = data_registry.WIPE_MODE
         return {"ok": False, "error": "wipe_already_running",
                 "message": "A privacy wipe is already in progress."}
     privacy_wipe_in_progress.set()
+    # Close setup issuance before any slow quiescence work. A preflight that
+    # began just before the wipe can finish evaluating, but its atomic issue()
+    # step will fail rather than repopulating the registry behind the wipe.
+    wake_setup_registry.WAKE_SETUP_REGISTRY.suspend_issuance()
     cleared = {}
     postconditions = {}
     gate_held = False
@@ -4520,6 +4525,12 @@ def _perform_privacy_wipe(wipe_voices: bool, mode: str = data_registry.WIPE_MODE
             draft_queue.clear()
             draft_recordings.clear()
             pending_manual_send_ids.clear()
+        # Phrase setup candidates contain the user's chosen wake phrase. They
+        # are process-local rather than part of the on-disk data registry, so
+        # wipe the server-owned registry explicitly and report the exact count.
+        cleared["wake_setup_candidates_cleared"] = (
+            wake_setup_registry.WAKE_SETUP_REGISTRY.clear()
+        )
         save_draft_history()
 
         # 5. Delete on-disk stores (final sweep — callbacks/workers are drained).
@@ -4628,6 +4639,9 @@ def _perform_privacy_wipe(wipe_voices: bool, mode: str = data_registry.WIPE_MODE
             "tts_playback_stopped": cleared["tts_playback_stopped"],
             "voice_clone_conversion_idle": cleared["voice_clone_conversion_idle"],
             "voice_cache_cleared": cleared["voice_cache_cleared"],
+            "wake_setup_candidates_empty": (
+                len(wake_setup_registry.WAKE_SETUP_REGISTRY) == 0
+            ),
             "message_rescue_context_cleared": cleared["message_rescue_context_cleared"],
             "persona_examples_cleared": cleared["persona_examples_cleared"],
             # A postcondition, not just a report line: `ok` below is computed
@@ -4643,6 +4657,7 @@ def _perform_privacy_wipe(wipe_voices: bool, mode: str = data_registry.WIPE_MODE
         if gate_held:
             dictation_coordinator.finish()
         privacy_wipe_in_progress.clear()
+        wake_setup_registry.WAKE_SETUP_REGISTRY.resume_issuance()
 
     ok = all(v for k, v in postconditions.items() if k != "leftover_recordings")
     broadcast_status_threadsafe("draft_history_cleared")
@@ -4875,6 +4890,8 @@ async def history_recent(limit: int = 50):
 @app.delete("/history")
 async def history_clear():
     ok = history_store.clear()
+    if not ok:
+        raise HTTPException(status_code=500, detail="Could not clear history.")
     return {"ok": ok, "message": "Searchable history cleared." if ok else "Could not clear history."}
 
 

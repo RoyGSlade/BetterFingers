@@ -88,7 +88,7 @@ def test_default_capture_fn_restores_clipboard_via_existing_adapter(monkeypatch)
 
     monkeypatch.setattr(cc, "_clipboard_get_text", fake_get)
     monkeypatch.setattr(cc, "_clipboard_set_text", fake_set)
-    monkeypatch.setattr(cc, "_capture_clipboard_snapshot_windows", lambda: None)
+    monkeypatch.setattr(cc, "_capture_clipboard_snapshot_windows", lambda: [])
     monkeypatch.setattr(cc, "_restore_clipboard_snapshot_windows", lambda snap: False)
     monkeypatch.setattr(cc.time, "sleep", lambda *_a, **_k: None)
 
@@ -123,7 +123,7 @@ def test_default_capture_fn_restores_clipboard_on_empty_capture(monkeypatch):
 
     monkeypatch.setattr(cc, "_clipboard_get_text", lambda: box["value"])
     monkeypatch.setattr(cc, "_clipboard_set_text", lambda v: (box.__setitem__("value", v or ""), True)[1])
-    monkeypatch.setattr(cc, "_capture_clipboard_snapshot_windows", lambda: None)
+    monkeypatch.setattr(cc, "_capture_clipboard_snapshot_windows", lambda: [])
     monkeypatch.setattr(cc, "_restore_clipboard_snapshot_windows", lambda snap: False)
     monkeypatch.setattr(cc.time, "sleep", lambda *_a, **_k: None)
     monkeypatch.setattr(cc.keyboard, "press_and_release", lambda _combo: None)

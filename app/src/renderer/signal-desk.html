@@ -77,6 +77,89 @@
 </div>
 
 <!--
+  Bug reporting is an explicit review-and-consent flow. The renderer supplies
+  only the five fields below; Electron main collects a separate coarse
+  diagnostic projection and owns the final native confirmation. No transcript,
+  draft, audio, screenshot, clipboard content, raw log, path, exact model id,
+  or exact hardware identifier is included automatically.
+-->
+<div id="sdBugReportDialog" class="sd-flow sd-bug-report" role="dialog" aria-modal="true"
+     aria-labelledby="sdBugReportTitle" aria-describedby="sdBugReportPrivacy" hidden>
+  <div class="sd-flow__card sd-bug-report__card">
+    <header class="sd-flow__header">
+      <h2 class="sd-flow__title" id="sdBugReportTitle" tabindex="-1">Report a bug</h2>
+      <button type="button" class="sd-btn" id="sdBugReportClose" aria-label="Close bug report">&times;</button>
+    </header>
+
+    <div class="sd-flow__body sd-bug-report__body">
+      <div class="sd-flow__policy" id="sdBugReportPrivacy">
+        <p><strong>You see the exact report before anything leaves this computer.</strong></p>
+        <p>Automatic diagnostics are deliberately coarse: app/runtime versions, platform family,
+        hardware tier, readiness flags, stable error codes, and error counts. BetterFingers does
+        not automatically include transcripts, drafts, audio, screenshots, clipboard contents,
+        raw logs, file paths, exact model identifiers, or exact hardware names.</p>
+      </div>
+
+      <div class="sd-bug-report__fields">
+        <label class="sd-field">
+          <span class="sd-field__label">Short summary <span aria-hidden="true">*</span></span>
+          <input class="sd-input" id="sdBugReportSummary" type="text" maxlength="160" required
+                 autocomplete="off" placeholder="What broke?" />
+        </label>
+        <label class="sd-field">
+          <span class="sd-field__label">Steps to reproduce</span>
+          <textarea class="sd-input sd-input--area" id="sdBugReportSteps" maxlength="4000"
+                    placeholder="1. Open…&#10;2. Click…&#10;3. See…"></textarea>
+        </label>
+        <div class="sd-bug-report__two-column">
+          <label class="sd-field">
+            <span class="sd-field__label">Expected behavior</span>
+            <textarea class="sd-input sd-input--area" id="sdBugReportExpected" maxlength="4000"></textarea>
+          </label>
+          <label class="sd-field">
+            <span class="sd-field__label">Actual behavior <span aria-hidden="true">*</span></span>
+            <textarea class="sd-input sd-input--area" id="sdBugReportActual" maxlength="4000" required></textarea>
+          </label>
+        </div>
+        <label class="sd-field">
+          <span class="sd-field__label">Contact for follow-up (optional)</span>
+          <input class="sd-input" id="sdBugReportContact" type="text" maxlength="254"
+                 autocomplete="email" placeholder="Email address or Discord handle" />
+        </label>
+      </div>
+
+      <div class="sd-bug-report__prepare-row">
+        <button type="button" class="sd-btn" id="sdBugReportPreviewButton">Prepare private preview</button>
+        <span>Previews expire after 10 minutes and are never saved to disk.</span>
+      </div>
+
+      <pre class="sd-bug-report__preview" id="sdBugReportPreview" tabindex="0"
+           aria-label="Exact bug report preview" hidden></pre>
+
+      <label class="sd-flow__consent sd-bug-report__consent">
+        <input type="checkbox" id="sdBugReportConsent" />
+        <span>I reviewed every line above and consent to hand off this exact report.</span>
+      </label>
+
+      <label class="sd-field">
+        <span class="sd-field__label">Destination</span>
+        <select class="sd-input" id="sdBugReportDestination">
+          <option value="email">Loading destinations…</option>
+        </select>
+      </label>
+      <p class="sd-flow__note">If automatic delivery is not configured, BetterFingers copies the
+      report and opens your email client or Discord. That is a handoff, not a completed submission.</p>
+      <p class="sd-bug-report__status" id="sdBugReportStatus" role="status" aria-live="polite"></p>
+    </div>
+
+    <footer class="sd-flow__footer">
+      <span class="sd-flow__spacer"></span>
+      <button type="button" class="sd-btn sd-btn--primary" id="sdBugReportSubmit" disabled>Continue to confirmation</button>
+    </footer>
+  </div>
+</div>
+
+<!--
   First-run onboarding (stage 13, docs/ui/SIGNAL_DESK_GUIDED_FLOWS.md 4a) on the
   shared guided-flow shell. Step bodies are markup here rather than template
   strings so no backend text is ever parsed as HTML.
@@ -118,9 +201,11 @@
           <p>BetterFingers runs a local speech-to-text, rewrite, and text-to-speech
           pipeline on your own machine. Audio you record is transcribed locally and is
           not sent to any external server.</p>
-          <p>The only network activity is downloading the AI models you choose to
-          install. You can delete recordings, drafts, and models at any time from the
-          app.</p>
+          <p>Network activity is limited to model/runtime downloads you initiate and a
+          bug report you explicitly prepare, review, approve in a system dialog, and send
+          through a configured support relay. Manual bug-report options only copy the
+          reviewed report and open your email client or Discord. You can delete recordings,
+          drafts, and models at any time from the app.</p>
           <p>By continuing you confirm you will use BetterFingers lawfully and only to
           capture speech you are authorized to capture.</p>
         </div>
@@ -672,7 +757,7 @@
         <span class="sd-nav__kicker">Signal Desk</span>
       </div>
 
-      <div class="sd-nav__primary" role="tablist" aria-label="Workspaces">
+      <div class="sd-nav__primary" aria-label="Workspaces">
         <button type="button" class="sd-nav__button is-active" data-nav="talk" aria-current="page" data-tour-target="talk">
           <span class="sd-nav__button-icon" aria-hidden="true">
             <!-- waveform-bars -->
@@ -916,14 +1001,14 @@
         <div class="sd-signal-core-status" style="color: var(--sd-green);">
           <span class="sd-signal-core-status__dot" aria-hidden="true"></span>
           <span>
-            <span class="sd-signal-core-status__label" id="sdSignalCoreStatusLabel">Listening</span>
-            <span class="sd-signal-core-status__detail" id="sdSignalCoreStatusDetail">Voice input detected</span>
+            <span class="sd-signal-core-status__label" id="sdSignalCoreStatusLabel">Idle</span>
+            <span class="sd-signal-core-status__detail" id="sdSignalCoreStatusDetail">Waiting for input</span>
           </span>
         </div>
 
         <div class="sd-signal-core-meter">
-          <span id="sdSignalCoreMeterValue">&minus;18 dB</span>
-          <span class="sd-signal-core-meter__bar" id="sdSignalCoreMeterBar" aria-hidden="true">
+          <span id="sdSignalCoreMeterValue">—</span>
+          <span class="sd-signal-core-meter__bar" id="sdSignalCoreMeterBar" style="--sd-meter-level: 0%;" aria-hidden="true">
             <span class="sd-signal-core-meter__level" id="sdSignalCoreMeterLevel"></span>
           </span>
         </div>
@@ -1892,7 +1977,7 @@
          placement map and completeness gate. -->
     <section class="sd-workspace" id="workspace-utilities" data-workspace="utilities" hidden>
       <div class="sd-util-shell">
-        <nav class="sd-util-nav" aria-label="Utilities sections" role="tablist">
+        <nav class="sd-util-nav" aria-label="Utilities sections">
           <button type="button" class="sd-util-nav__item is-active" id="sdUtilNavModels" data-util-nav="models" aria-current="page">Models</button>
           <button type="button" class="sd-util-nav__item" id="sdUtilNavSpeech" data-util-nav="speech" aria-current="false">Speech Input</button>
           <button type="button" class="sd-util-nav__item" id="sdUtilNavText" data-util-nav="text" aria-current="false">Text Tools</button>
@@ -2327,6 +2412,7 @@
               <div class="sd-util-group__header">
                 <span class="sd-util-group__title">Runtime Diagnostics</span>
                 <div class="sd-actions-row">
+                  <button type="button" class="sd-btn sd-btn--primary" id="sdBugReportOpen">Report a Bug</button>
                   <button type="button" class="sd-btn" id="sdUtilCopySupportReportButton">Copy Support Report</button>
                   <button type="button" class="sd-btn" id="sdUtilRefreshDiagnosticsButton">Refresh Diagnostics</button>
                 </div>
@@ -2521,7 +2607,7 @@
       <p class="sd-set-empty-state hidden" id="sdSetEmptyState">No settings match your search.</p>
 
       <div class="sd-set-shell">
-        <nav class="sd-set-nav" aria-label="Settings sections" role="tablist">
+        <nav class="sd-set-nav" aria-label="Settings sections">
           <button type="button" class="sd-set-nav__item is-active" id="sdSetNavProfile" data-set-nav="profile" aria-current="page">Profile</button>
           <button type="button" class="sd-set-nav__item" id="sdSetNavRecording" data-set-nav="recording" aria-current="false">Recording</button>
           <button type="button" class="sd-set-nav__item" id="sdSetNavReview" data-set-nav="review" aria-current="false">Review &amp; Drafts</button>
@@ -3869,7 +3955,7 @@
     </div>
 
     <div class="sd-statusbar__cell">
-      <button type="button" class="sd-statusbar__overflow-btn" aria-label="More status details">&#8942;</button>
+      <button type="button" class="sd-statusbar__overflow-btn" aria-label="More status details" data-shell-nav="utilities" data-util-nav="diagnostics">&#8942;</button>
     </div>
   </footer>
 

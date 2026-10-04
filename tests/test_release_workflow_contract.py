@@ -7,6 +7,8 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/build-installer.yml"
 CI_WORKFLOW = ROOT / ".github/workflows/ci.yml"
 INSTALLER_SMOKE = ROOT / "tools/smoke_installer.ps1"
+SIGNING_WRAPPER = ROOT / "tools/build_and_sign_windows.ps1"
+SIGNING_HELPER = ROOT / "tools/sign_windows_artifacts.ps1"
 
 
 def _workflow_text():
@@ -232,9 +234,11 @@ def test_installed_app_smoke_proves_no_llm_and_a_real_verified_download():
         'wake/models/melspectrogram/download-state',
         '1087958',
         'ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f',
-        'Assert-AuthenticodeStatus -Path $exePath',
-        'Assert-AuthenticodeStatus -Path $backendExePath',
-        'Assert-AuthenticodeStatus -Path $uninstallerPath',
+        '-Path $exePath',
+        '-ProductExecutablePath $backendExePath',
+        'Get-ChildItem -LiteralPath $RootPath -File -Recurse',
+        '-Path $uninstallerPath',
+        'installed-native-verification.json',
         'ExpectedSignerSubject',
         'SignerCertificate.Subject',
         'DisplayVersion',
@@ -282,7 +286,37 @@ def test_azure_signer_subject_is_enforced_on_artifact_and_installed_payloads():
     assert "$signerSubject -cne $env:AZURE_EXPECTED_PUBLISHER" in workflow
     assert '$args += @("-ExpectedSignerSubject", $env:AZURE_EXPECTED_PUBLISHER)' in workflow
     assert '$actualSubject -cne $ExpectedSubject' in smoke
-    assert smoke.count('-ExpectedSubject $ExpectedSignerSubject') == 4
+    assert smoke.count('-ExpectedSubject $ExpectedSignerSubject') == 3
+    assert smoke.count('-ExpectedPublisherSubject $ExpectedSignerSubject') == 1
+    assert '-ExpectedSubject $ExpectedPublisherSubject' in smoke
+
+
+def test_windows_payload_contract_covers_nested_backend_and_mixed_signers():
+    wrapper = SIGNING_WRAPPER.read_text(encoding="utf-8")
+    signer = SIGNING_HELPER.read_text(encoding="utf-8")
+    smoke = INSTALLER_SMOKE.read_text(encoding="utf-8")
+    for required in (
+        '$packagedBackendBundlePath = Join-Path $unpackedPath "resources\\backend\\betterfingers-backend"',
+        '$backendPath = Join-Path $packagedBackendBundlePath "betterfingers-backend.exe"',
+        '$packagedNativePayloadPaths = @(Get-NativePayloadPaths',
+        'Assert-IdenticalArtifactMaps',
+        'packagedNativePayloadVerifications = $packagedNativePayloadArtifacts',
+    ):
+        assert required in wrapper
+    for required in (
+        'function Test-IsBackendBundlePayload',
+        '$backendBundleMarker = "\\resources\\backend\\betterfingers-backend\\"',
+        'automaticBackendPreservation',
+        'classificationComplete = $classificationComplete',
+    ):
+        assert required in signer
+    for required in (
+        '-RootPath $installDir',
+        '-ProductExecutablePath $backendExePath',
+        'Get-ChildItem -LiteralPath $RootPath -File -Recurse',
+        'Installed native-payload verification report',
+    ):
+        assert required in smoke
 
 
 def test_windows_python_suites_isolate_chunks_and_files_to_release_memory():

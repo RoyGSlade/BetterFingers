@@ -18,12 +18,11 @@ const MAX_AUTO_RESTARTS = 3; // give up (and tell the user) after this many
 const RESTART_COUNTER_RESET_MS = 5 * 60 * 1000; // a clean 5min resets the count
 
 // A dev backend is a python process already resident on disk. A packaged
-// backend is a PyInstaller --onefile binary that must self-extract to a temp
-// dir before Python even starts — on a cold, RAM-constrained, CPU-only Linux
-// box that extraction + interpreter startup + FastAPI import can plausibly
-// exceed 30s on its own, before the app has done any real work. Give the
-// packaged path more room; keep dev tight since a hang there usually means a
-// real bug, not I/O.
+// backend is a PyInstaller onedir bundle whose interpreter and native modules
+// still have to load from the application resources tree. On a cold,
+// RAM-constrained, CPU-only Linux box that startup can plausibly exceed 30s
+// before the app has done any real work. Give the packaged path more room;
+// keep dev tight since a hang there usually means a real bug, not I/O.
 const DEV_HEALTH_TIMEOUT_MS = 30000;
 const PACKAGED_HEALTH_TIMEOUT_MS = 90000;
 const POSIX_STOP_GRACE_MS = 5000;
@@ -222,9 +221,12 @@ async function tryReadHealth(url, headers = {}) {
   }
 }
 
-// build-backend.js runs PyInstaller with --onefile --name betterfingers-backend,
-// so the packaged artifact is a single executable by that name; the other
-// preferred names are legacy/alternate build fallbacks, not the normal case.
+// build-backend.js runs PyInstaller with --onedir --name
+// betterfingers-backend, so the normal packaged artifact is nested at
+// backend/betterfingers-backend/betterfingers-backend(.exe). Keeping native
+// modules visible in that bundle lets the Windows release gate sign and verify
+// every loadable PE before packaging instead of extracting opaque contents to
+// %TEMP% at runtime. Top-level names remain legacy/alternate build fallbacks.
 // electron-builder's extraResources ("from": "resources/backend", "to":
 // "backend" in app/package.json's build block) copies build:backend's output
 // into <packaged-resources>/backend, and process.resourcesPath is exactly
@@ -246,12 +248,20 @@ function isExecutableFile(candidatePath) {
 
 function resolveBackendExecutable() {
   const backendDir = path.join(process.resourcesPath, 'backend');
-  const preferredNames = [
-    'betterfingers-backend.exe',
-    'betterfingers-backend',
+  const bundleName = 'betterfingers-backend';
+  const platformExecutableName = process.platform === 'win32'
+    ? `${bundleName}.exe`
+    : bundleName;
+  const preferredRelativePaths = [
+    path.join(bundleName, platformExecutableName),
+    path.join(bundleName, `${bundleName}.exe`),
+    path.join(bundleName, bundleName),
+    `${bundleName}.exe`,
+    bundleName,
     'server.exe',
     'server',
   ];
+  const uniquePreferredRelativePaths = [...new Set(preferredRelativePaths)];
 
   if (!fs.existsSync(backendDir)) {
     throw new Error(
@@ -261,8 +271,8 @@ function resolveBackendExecutable() {
     );
   }
 
-  for (const candidate of preferredNames) {
-    const candidatePath = path.join(backendDir, candidate);
+  for (const relativePath of uniquePreferredRelativePaths) {
+    const candidatePath = path.join(backendDir, relativePath);
     if (fs.existsSync(candidatePath)) {
       if (!isExecutableFile(candidatePath)) {
         throw new Error(
@@ -284,7 +294,7 @@ function resolveBackendExecutable() {
   if (!fallback) {
     throw new Error(
       `No executable backend found in ${backendDir}. Expected one of: ` +
-      `${preferredNames.join(', ')} (built via \`npm run build:backend\`), or at least one ` +
+      `${uniquePreferredRelativePaths.join(', ')} (built via \`npm run build:backend\`), or at least one ` +
       'executable file in that directory.',
     );
   }

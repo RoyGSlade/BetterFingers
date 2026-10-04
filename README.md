@@ -2,15 +2,14 @@
 
 **A private desktop speech editor.** Speak messy thoughts, watch them get refined by a
 local LLM, review the result, and place clean text into a focused target when the
-configured platform/backend supports it — all running 100% on your own machine. No
-cloud, no account, no subscription, no telemetry.
+configured platform/backend supports it. Core speech processing runs on your machine:
+no cloud inference, account, subscription, or telemetry.
 
 > A [Donaven Crenshaw](#about) project · MIT licensed · Windows + Linux
-> ⚠️ **Status: pre-release (alpha in progress).** The core dictation loop is under
-> qualification; see
-> [Project status](#project-status) for what is and isn't ready.
-
-<!-- TODO(M0): 15-second demo GIF here — voice → clean text landing in a real app. -->
+> **Status: public alpha.** [v1.1.0-alpha.3](https://github.com/RoyGSlade/BetterFingers/releases/tag/v1.1.0-alpha.3)
+> includes an Authenticode-signed Windows x64 installer and an experimental Linux
+> AppImage. It is still alpha software; see [Project status](#project-status) for the
+> honest boundaries.
 
 ---
 
@@ -25,24 +24,25 @@ Hold a hotkey (or a game-controller button), talk, and BetterFingers:
    aloud (Kokoro TTS) before anything lands.
 4. **Injects** final text into the focused target when the configured injection path
    supports it, and restores your clipboard.
-5. **Never loses audio** — every utterance's raw recording is kept so a failed run is
-   recoverable, not gone.
+5. **Keeps captured audio for recovery** — when recording succeeds, the raw utterance is
+   retained so a later transcription or refinement failure can be retried.
 
 The whole product is built around one loop:
-**activate → speak → transcribe → refine → review → inject → recover when anything fails.**
+**activate → speak → transcribe → refine → review → inject → recover from later-stage failures.**
 
 ## Why it's different
 
-- **Private by design.** STT, LLM, and TTS all run locally; the only outbound network
-  traffic is model downloads. A built-in privacy dashboard enumerates every touchpoint
-  and wipes your data on demand.
+- **Private by design.** STT, LLM, and TTS run locally. Network access is limited to
+  update checks, user-initiated model/runtime downloads, and an explicitly reviewed bug
+  report when a relay has been configured; it is never used for cloud inference. A
+  built-in privacy dashboard enumerates data locations and wipes your data on demand.
 - **Smart, not literal.** LLM personas (Formal, Polished, Unhinged, and your own) rewrite
   what you say. Build new ones with a guided interview (**Persona Foundry**).
 - **Cross-app when supported.** Hotkeys, selection capture, and injection depend on the
   desktop/platform path; Wayland is best-effort with honest capability reporting.
 - **Respects your hardware.** The recommender reports model tiers from detected hardware;
   hardware compatibility remains subject to operator qualification.
-- **Free forever.** MIT-licensed and donation-supported. No paywall waiting to appear.
+- **MIT licensed.** No account, subscription, or paywall.
 
 ## Feature highlights
 
@@ -59,17 +59,17 @@ The whole product is built around one loop:
 ## Project status
 
 BetterFingers is a real local-first application with automated tests and a deep feature
-set. It is **not yet a tagged public release.** Remaining gates include operator QA,
-release reproducibility/package qualification, a signing decision, core-loop reliability
-evidence, injection compatibility, audio/hardware qualification, and platform-specific
-selection evidence. Current release truth lives in the
-[release board](docs/release/RELEASE_BOARD.md) and
-[prerelease rehearsal](docs/release/PRERELEASE_REHEARSAL.md), not the historical
-execution plan.
+set. **v1.1.0-alpha.3 is a public prerelease with a signed Windows x64 installer and a
+Linux AppImage.** It is not a stable release: hardware/model compatibility, desktop
+injection paths, microphone behavior, and platform-specific selection still need broader
+outside testing. The release page and its CI-built assets are the public source of truth.
+Changes in an uncommitted development checkout are not part of Alpha 3 until a later tag
+is built, qualified, and published.
 
-**Platforms:** Windows and Linux are intended targets. The source `Ctrl+Alt+R`
-selection-rewrite workflow is qualified on X11 only; selected-text TTS, general
-hotkeys/injection, Wayland, and Windows remain unqualified. **macOS is not supported yet.**
+**Platforms:** Windows is the primary packaged target. The Linux AppImage has an automated
+launch smoke on its release runner, while distribution and desktop-session compatibility
+remain experimental. The source `Ctrl+Alt+R` selection-rewrite workflow is qualified on
+X11; Wayland paths remain compositor-dependent and best-effort. **macOS is not supported.**
 
 ## Hardware tiers
 
@@ -79,25 +79,41 @@ hotkeys/injection, Wayland, and Windows remain unqualified. **macOS is not suppo
 | Recommended | 8c/16t | 32 GB | RTX 3060 12 GB class | Gemma 4B Q6/Q8, Whisper `small`/`medium.en` |
 | High-perf | 12c+ | 64 GB | RTX 4080/4090 class | Gemma 12B, Whisper `large-v3` |
 
-The in-app recommender detects your tier and never suggests a model that won't fit your
-RAM. Bigger models are always opt-in.
+The in-app recommender uses detected hardware to estimate a suitable tier. Those fit
+estimates are guidance, not a guarantee; bigger models remain opt-in.
 
 ## Privacy model
 
-Everything runs on-device. The **only** outbound requests are model/runtime downloads you
-initiate. No accounts, no analytics, no cloud inference. The Privacy dashboard
+Speech processing runs on-device. Network requests are limited to update checks,
+user-initiated model/runtime downloads, and an explicitly confirmed bug report when an
+operator-configured relay exists. No accounts, analytics, or cloud inference. The
+Privacy dashboard
 (`GET /privacy`) lists every data location on disk with sizes and retention, and
 `POST /privacy/wipe` verifiably clears drafts, the searchable-history database, and raw
 recordings. See [DESIGN.md §9](DESIGN.md) for the full data-lifecycle model (a unified
 `DataRegistry` and optional at-rest encryption are on the roadmap).
 
+Bug reports are review-first: the app shows the bounded diagnostic payload before asking
+permission to send it. The relay code can deliver to Discord and/or email without placing
+provider secrets in the desktop app, but **no relay endpoint is deployed or enabled by
+this checkout**. Public Alpha 3 users should use the reporting links below.
+
 ## Install
 
-> CI can build Windows NSIS and Linux AppImage artifacts on release tags, but no public
-> release package is currently qualified or shipped. A local AppImage build is not
-> clean-machine/install/signing evidence; for now, run from source.
+### Windows
 
-## Run from source (Linux)
+Download the installer from the
+**[v1.1.0-alpha.3 release](https://github.com/RoyGSlade/BetterFingers/releases/tag/v1.1.0-alpha.3)**.
+The published Windows installer is Authenticode-signed. Windows SmartScreen can still
+warn on a new, low-reputation alpha; verify the signature and release URL instead of
+downloading copies from third-party mirrors.
+
+### Linux
+
+The same release contains an experimental AppImage with a SHA-256 sidecar. Its automated
+runner launch smoke is useful package evidence, not a promise that every distribution,
+Wayland compositor, audio stack, or injection tool works. You can also run from source:
+
 
 ```bash
 # Hardware-aware bootstrap: creates ./.venv and installs the torch build that
@@ -138,10 +154,10 @@ Overrides: `BETTERFINGERS_LLAMA_SERVER=/path/to/llama-server`,
 - **End-to-end:** `cd app && npx playwright test` (needs a local LLM + `llama-server` on
   disk for the review-overlay spec; close any running instance first).
 - **JS syntax check:** `node --check app/src/renderer/main.js`.
-- Release status and qualification gates live in the
-  **[release board](docs/release/RELEASE_BOARD.md)** and
-  [prerelease rehearsal](docs/release/PRERELEASE_REHEARSAL.md);
-  [DESIGN.md](DESIGN.md) is long-horizon product design.
+- Platform boundaries are documented in
+  [SUPPORTED_PLATFORMS.md](docs/release/SUPPORTED_PLATFORMS.md); Windows release signing
+  lives in [WINDOWS_SIGNING.md](docs/release/WINDOWS_SIGNING.md), and
+  [DESIGN.md](DESIGN.md) remains the product/architecture reference.
 
 ## Architecture
 
@@ -164,22 +180,37 @@ recordings, history, privacy). The boundary is an inspectable, version-gated RES
 ## Known limitations
 
 - No macOS build.
-- No signed installer / auto-update channel yet.
+- The signed Windows installer is still an alpha and may trigger SmartScreen reputation
+  warnings.
 - On X11, selection/copy and typing paths require `DISPLAY`, `xclip` (or `xsel`), and
   `xdotool` where those paths are used. Wayland best-effort paths use `WAYLAND_DISPLAY`,
   `wl-copy`/`wl-paste` from `wl-clipboard`, and `wtype` or `ydotool` where the
   compositor permits them; tool presence alone is not qualification.
 - Wayland global hotkeys and text injection are best-effort (OS limitation, not a bug),
   and Wayland is not qualified on the current host.
-- Selected-text TTS (OR-13), general injection/PTT, Windows, package installation,
-  audio, hardware, and reliability remain unqualified.
+- Selected-text TTS, injection/PTT, audio devices, and model performance still vary by
+  desktop, hardware, and target application.
 - A local LLM has a real resource footprint on weak hardware — use the tier recommender.
-- Voice cloning ships a consent + QA gate but **no synthesis engine is bundled yet**.
+- Voice-cloning synthesis is implemented through an optional, pinned runtime; that large
+  runtime is not bundled and remains hardware/performance dependent.
+- Production-grade at-rest encryption is not included. Raw recordings are retained for
+  recovery until the user deletes or wipes them.
+- The Discord/email relay is code-complete but not a live service until its operator
+  deploys the endpoint and server-side credentials.
+
+## Report a bug
+
+For the public Alpha 3 build, use
+[GitHub Issues](https://github.com/RoyGSlade/BetterFingers/issues) or the
+[BetterFingers Discord](https://discord.gg/m3HH45CFwz). The development build also has a
+review-first in-app report flow; delivery remains disabled until a private relay is
+deployed and configured. Security vulnerabilities belong in the private process in
+[SECURITY.md](SECURITY.md), not a public issue or Discord post.
 
 ## Contributing & security
 
-Found a bug or a security issue? See [SECURITY.md](SECURITY.md) for how to report
-vulnerabilities privately. Roadmap and design rationale: [DESIGN.md](DESIGN.md).
+See [SECURITY.md](SECURITY.md) for private vulnerability reporting. Roadmap and design
+rationale: [DESIGN.md](DESIGN.md).
 
 ## About
 

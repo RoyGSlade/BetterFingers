@@ -111,6 +111,25 @@ class TrainPhraseModelTests(unittest.TestCase):
         )
         self.assertFalse(result["ok"])
 
+    def test_real_make_scorer_uses_wake_models_implementation(self):
+        mel = object()
+        embedding = object()
+        scorer = object()
+        with patch.object(
+            wake_models,
+            "build_onnx_session",
+            side_effect=[mel, embedding],
+        ) as build_session, patch.object(
+            wake_models,
+            "WakeScorer",
+            return_value=scorer,
+        ) as scorer_type:
+            result = wts.real_make_scorer()
+
+        self.assertIs(result, scorer)
+        self.assertEqual(build_session.call_count, 2)
+        scorer_type.assert_called_once_with(mel, embedding)
+
 
 class _FakeEngine:
     """Minimal ReviewTTSEngine stand-in: ensure_loaded returns a canned status,

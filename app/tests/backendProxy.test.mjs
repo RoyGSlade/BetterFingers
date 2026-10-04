@@ -4,6 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 
 const require = createRequire(import.meta.url);
 const proxy = require('../src/main/backendProxy.js');
@@ -17,12 +18,14 @@ test('accepts known backend routes with the right method', () => {
     ['GET', '/settings/profiles/My%20Profile'],
     ['GET', '/tts/voices'],
     ['GET', '/models/llm/qwen2.5-3b/download-state'],
+    ['GET', '/wake/qwen/capability'],
     ['POST', '/drafts/1/accept'],
     ['POST', '/models/llm/select'],
     ['POST', '/personas/lint'],
     ['POST', '/personas/refine'],
     ['POST', '/personas/draft'],
     ['POST', '/recordings/abc/retranscribe'],
+    ['POST', '/wake/phrase/preflight'],
     ['DELETE', '/recordings/abc'],
     ['DELETE', '/macros/hello'],
     ['GET', '/message-rescue/context'],
@@ -70,6 +73,69 @@ test('route match requires a path boundary, not a prefix', () => {
   assert.notEqual(proxy._validateRequest('GET', '/privacyX'), null);
   assert.notEqual(proxy._validateRequest('GET', '/healthcheck'), null);
   assert.notEqual(proxy._validateRequest('DELETE', '/recordings/a/b'), null);
+});
+
+test('wake enrollment transport exposes preflight and capability only', () => {
+  assert.equal(proxy._validateRequest('POST', '/wake/phrase/preflight'), null);
+  assert.equal(proxy._validateRequest('GET', '/wake/qwen/capability'), null);
+
+  assert.notEqual(proxy._validateRequest('GET', '/wake/phrase/preflight'), null);
+  assert.notEqual(proxy._validateRequest('POST', '/wake/qwen/capability'), null);
+  for (const path of [
+    '/wake/phrase/preflight/extra',
+    '/wake/qwen/capability/extra',
+    '/wake/qwen/download',
+    '/wake/qwen/generate',
+    '/wake/qwen/tts',
+  ]) {
+    assert.notEqual(proxy._validateRequest('GET', path), null, `GET ${path} should be refused`);
+    assert.notEqual(proxy._validateRequest('POST', path), null, `POST ${path} should be refused`);
+  }
+
+  assert.deepEqual(
+    proxy.ROUTE_ALLOWLIST.GET.filter((path) => path.startsWith('/wake/qwen/')),
+    ['/wake/qwen/capability'],
+  );
+  assert.deepEqual(
+    proxy.ROUTE_ALLOWLIST.POST.filter((path) => path.startsWith('/wake/phrase/')),
+    ['/wake/phrase/preflight'],
+  );
+});
+
+test('renderer wake helpers send the exact bounded request shapes', async (t) => {
+  const source = readFileSync(new URL('../src/renderer/api/backend.js', import.meta.url), 'utf8');
+  const api = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+  const calls = [];
+  globalThis.window = {
+    betterFingers: {
+      backendRequest: async (...args) => {
+        calls.push(args);
+        return { ok: true, status: 200, body: { accepted: true } };
+      },
+    },
+  };
+  t.after(() => { delete globalThis.window; });
+
+  await api.preflightWakePhrase(
+    'hey betterfingers',
+    ['launch rocket league'],
+    ['better features'],
+  );
+  await api.fetchWakeQwenCapability();
+
+  assert.deepEqual(calls, [
+    [
+      'POST',
+      '/wake/phrase/preflight',
+      {
+        phrase: 'hey betterfingers',
+        command_vocabulary: ['launch rocket league'],
+        common_vocabulary: ['better features'],
+      },
+      5000,
+    ],
+    ['GET', '/wake/qwen/capability', undefined, 2500],
+  ]);
 });
 
 test('destructive routes are refused on the generic channel', () => {

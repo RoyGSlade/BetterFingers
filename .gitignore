@@ -50,3 +50,6 @@ app/artifacts/
 
 # multi-session collab runtime state
 .claude/collab/
+
+# Luna Orchestrator private runtime state
+.codex/luna-state/

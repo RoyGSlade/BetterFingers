@@ -7,6 +7,12 @@ const repoRoot = path.resolve(appRoot, '..');
 const backendSource = path.join(repoRoot, 'server.py');
 const backendOutputDir = path.join(appRoot, 'resources', 'backend');
 const backendBuildDir = path.join(appRoot, '.electron-backend-build');
+const backendBundleName = 'betterfingers-backend';
+const backendBundleDir = path.join(backendOutputDir, backendBundleName);
+const backendExecutableName = process.platform === 'win32'
+  ? `${backendBundleName}.exe`
+  : backendBundleName;
+const backendExecutablePath = path.join(backendBundleDir, backendExecutableName);
 
 const dataSeparator = process.platform === 'win32' ? ';' : ':';
 const dataSources = [
@@ -148,9 +154,11 @@ async function main() {
     'PyInstaller',
     '--noconfirm',
     '--clean',
-    '--onefile',
+    '--onedir',
+    '--contents-directory',
+    '_internal',
     '--name',
-    'betterfingers-backend',
+    backendBundleName,
     '--distpath',
     backendOutputDir,
     '--workpath',
@@ -175,9 +183,15 @@ async function main() {
 
   const python = resolvePython();
   await verifyPythonEnvironment(python);
-  console.log(`[build-backend] Building sidecar with ${python} (PyInstaller onefile)…`);
+  console.log(`[build-backend] Building sidecar with ${python} (PyInstaller onedir)…`);
   await run(python, pyinstallerArgs, { cwd: repoRoot });
-  console.log(`[build-backend] Backend written to ${backendOutputDir}`);
+  if (!fs.existsSync(backendExecutablePath)) {
+    throw new Error(
+      `[build-backend] PyInstaller completed without the expected onedir executable: ` +
+      `${backendExecutablePath}`,
+    );
+  }
+  console.log(`[build-backend] Backend bundle written to ${backendBundleDir}`);
 }
 
 if (require.main === module) {
@@ -188,6 +202,11 @@ if (require.main === module) {
 }
 
 module.exports = {
+  backendBundleDir,
+  backendBundleName,
+  backendExecutableName,
+  backendExecutablePath,
+  backendOutputDir,
   dataSources,
   repoRoot,
   repoVenvPython,

@@ -262,8 +262,49 @@ class SafeExtractionTests(unittest.TestCase):
                                                      required_members=["llama-server"])
             self.assertTrue(result["ok"])
             link = os.path.join(dest, "libggml.so.0")
-            self.assertTrue(os.path.islink(link))
-            self.assertEqual(os.readlink(link), "libggml.so.0.9.5")
+            if os.name == "nt" and not os.path.islink(link):
+                self.assertTrue(os.path.isfile(link))
+                with open(link, "rb") as fh:
+                    self.assertEqual(fh.read(), b"lib")
+            else:
+                self.assertTrue(os.path.islink(link))
+                self.assertEqual(os.readlink(link), "libggml.so.0.9.5")
+
+    def test_internal_soname_symlink_before_target_allowed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = os.path.join(tmp, "runtime.tar.gz")
+            dest = os.path.join(tmp, "dest")
+            os.makedirs(dest)
+            self._tar_gz(archive, [
+                ("bin/libggml.so.0", None, "libggml.so.0.9.5"),
+                ("bin/libggml.so.0.9.5", b"lib", None),
+                ("bin/llama-server", b"#!/bin/sh\n", None),
+            ])
+
+            result = mm.safe_extract_runtime_archive(
+                archive, dest, "runtime.tar.gz", required_members=["llama-server"]
+            )
+
+            self.assertTrue(result["ok"])
+            link = os.path.join(dest, "libggml.so.0")
+            self.assertEqual(os.path.isfile(link), True)
+            with open(link, "rb") as fh:
+                self.assertEqual(fh.read(), b"lib")
+
+    def test_copy_fallback_does_not_mask_unrelated_symlink_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "libggml.so.0.9.5")
+            with open(target, "wb") as fh:
+                fh.write(b"lib")
+
+            with patch("model_manager.os.symlink", side_effect=OSError("disk failure")):
+                with self.assertRaisesRegex(OSError, "disk failure"):
+                    mm._safe_symlink(
+                        tmp,
+                        "libggml.so.0",
+                        "libggml.so.0.9.5",
+                        allow_copy_fallback=True,
+                    )
 
     def test_expected_member_allowlist_enforced(self):
         with tempfile.TemporaryDirectory() as tmp:

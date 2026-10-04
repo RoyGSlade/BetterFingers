@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 import routes_wake
 import server
+import wake_setup_registry
 import wake_word
 
 
@@ -47,6 +48,8 @@ class _StubDetector(wake_word.WakeDetector):
 class WakeRoutesTests(unittest.TestCase):
     def setUp(self):
         routes_wake.stop_wake_listener()
+        wake_setup_registry.WAKE_SETUP_REGISTRY.resume_issuance()
+        wake_setup_registry.WAKE_SETUP_REGISTRY.clear()
         _StubInputStream.instances = []
         server.transcriber = None
         routes_wake._training_state.update(
@@ -55,6 +58,8 @@ class WakeRoutesTests(unittest.TestCase):
 
     def tearDown(self):
         routes_wake.stop_wake_listener()
+        wake_setup_registry.WAKE_SETUP_REGISTRY.resume_issuance()
+        wake_setup_registry.WAKE_SETUP_REGISTRY.clear()
         server.transcriber = None
 
     def _client(self):
@@ -303,6 +308,119 @@ class WakeRoutesTests(unittest.TestCase):
         self.assertEqual(body["result"]["model_id"], "trained_123")
         # The phrase reached the trainer (via the background thread).
         self.assertEqual(train.call_args.args[0], "hey fingers")
+
+    def test_phrase_preflight_is_offline_and_returns_confusers(self):
+        with self._client() as client:
+            result = client.post(
+                "/wake/phrase/preflight",
+                json={"phrase": "Hey, BetterFingers!"},
+            )
+
+        self.assertEqual(result.status_code, 200)
+        body = result.json()
+        self.assertEqual(body["normalized_phrase"], "hey betterfingers")
+        self.assertIn(body["verdict"], {"good", "workable"})
+        self.assertTrue(body["acoustic_test_required"])
+        self.assertIn("hey better fingers", body["near_confusers"])
+        self.assertEqual(body["expires_in_seconds"], 30 * 60)
+        phrase_id = body["phrase_id"]
+        self.assertNotIn("betterfingers", phrase_id.lower())
+        setup = wake_setup_registry.WAKE_SETUP_REGISTRY.resolve(phrase_id)
+        self.assertIsNotNone(setup)
+        self.assertEqual(setup.normalized_phrase, "hey betterfingers")
+        self.assertEqual(setup.fitness_report["verdict"], body["verdict"])
+
+    def test_rejected_phrase_preflight_issues_no_setup_authority(self):
+        with self._client() as client:
+            result = client.post(
+                "/wake/phrase/preflight",
+                json={"phrase": "computer"},
+            )
+
+        self.assertEqual(result.status_code, 200)
+        body = result.json()
+        self.assertEqual(body["verdict"], "reject")
+        self.assertNotIn("phrase_id", body)
+        self.assertNotIn("expires_in_seconds", body)
+        self.assertEqual(len(wake_setup_registry.WAKE_SETUP_REGISTRY), 0)
+
+    def test_phrase_preflight_cannot_issue_during_privacy_wipe(self):
+        wake_setup_registry.WAKE_SETUP_REGISTRY.suspend_issuance()
+        with self._client() as client:
+            result = client.post(
+                "/wake/phrase/preflight",
+                json={"phrase": "hey betterfingers"},
+            )
+
+        self.assertEqual(result.status_code, 409)
+        self.assertEqual(result.json()["detail"]["error"], "privacy_wipe_in_progress")
+        self.assertEqual(len(wake_setup_registry.WAKE_SETUP_REGISTRY), 0)
+
+    def test_phrase_preflight_rejects_unrelated_clone_or_path_fields(self):
+        with self._client() as client:
+            result = client.post(
+                "/wake/phrase/preflight",
+                json={
+                    "phrase": "hey betterfingers",
+                    "ref_audio": "C:/someone-else.wav",
+                    "text": "say arbitrary words",
+                },
+            )
+
+        self.assertEqual(result.status_code, 422)
+
+    def test_qwen_capability_uses_backend_owned_hardware_snapshot(self):
+        import wake_qwen_capability
+
+        snapshot = wake_qwen_capability.HardwareSnapshot(
+            platform="win32",
+            gpu_name="NVIDIA GeForce RTX test GPU",
+            gpu_vendor="NVIDIA",
+            compute_backend="cuda",
+            cuda_available=True,
+            total_vram_mib=8192,
+            free_disk_mib=40_000,
+            on_ac_power=True,
+            total_ram_mib=32_768,
+            available_ram_mib=20_000,
+            free_vram_mib=7_000,
+            cuda_runtime_version="12.8",
+            compute_capability="12.0",
+        )
+        with patch.object(routes_wake, "_collect_qwen_hardware_snapshot", return_value=snapshot) as collect:
+            with self._client() as client:
+                result = client.get("/wake/qwen/capability")
+
+        self.assertEqual(result.status_code, 200)
+        body = result.json()
+        self.assertEqual(body["status"], "benchmark_required")
+        self.assertTrue(body["benchmark_allowed"])
+        self.assertEqual(body["snapshot"]["compute_capability"], "12.0")
+        self.assertTrue(any("not a proven" in warning for warning in body["warnings"]))
+        collect.assert_called_once_with()
+
+    def test_qwen_capability_has_no_renderer_supplied_post_surface(self):
+        with self._client() as client:
+            result = client.post(
+                "/wake/qwen/capability",
+                json={"total_vram_mib": 999_999, "cuda_available": True},
+            )
+
+        self.assertEqual(result.status_code, 405)
+
+    def test_rejected_phrase_never_loads_tts_or_starts_training(self):
+        with patch.object(server, "ensure_tts_initialized") as load_tts, patch(
+            "wake_training_service.train_phrase_model"
+        ) as train:
+            with self._client() as client:
+                result = client.post("/wake/train", json={"phrase": "hello"})
+
+        self.assertEqual(result.status_code, 400)
+        detail = result.json()["detail"]
+        self.assertEqual(detail["message"], "Wake phrase rejected before training.")
+        self.assertEqual(detail["preflight"]["verdict"], "reject")
+        load_tts.assert_not_called()
+        train.assert_not_called()
 
     def test_train_preflight_failure_returns_reason_without_starting(self):
         # A failed preflight returns the exact reason immediately and never

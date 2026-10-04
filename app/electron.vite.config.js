@@ -17,6 +17,7 @@ module.exports = defineConfig({
           hotkeys: resolve(__dirname, 'src/main/hotkeys.js'),
           senderValidation: resolve(__dirname, 'src/main/senderValidation.js'),
           backendProxy: resolve(__dirname, 'src/main/backendProxy.js'),
+          bugReportController: resolve(__dirname, 'src/main/bugReportController.js'),
           userDataRoot: resolve(__dirname, 'src/main/userDataRoot.js'),
           onboardingStore: resolve(__dirname, 'src/main/onboardingStore.js'),
           // OR-02 startup splash phase derivation (main.js requires it for

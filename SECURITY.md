@@ -41,7 +41,10 @@ Out of scope:
 
 ## Data & network posture
 
-BetterFingers runs inference locally. The only intended outbound network traffic is
-model/runtime downloads the user initiates. If you observe any other outbound connection,
-that is a reportable issue. See [DESIGN.md §9](DESIGN.md) for the data-lifecycle and
-supply-chain model.
+BetterFingers runs inference locally. Intended outbound traffic is limited to model/runtime
+downloads the user initiates and a bug report the user explicitly prepares, reviews, consents
+to, and confirms through a configured HTTPS support relay. Without that relay, bug reporting
+only copies the reviewed report and opens the user's email client or Discord; the app does not
+claim delivery. Any other outbound connection is a reportable issue. See [DESIGN.md §9](DESIGN.md)
+for the data-lifecycle and supply-chain model, and [docs/BUG_REPORTING.md](docs/BUG_REPORTING.md)
+for the bug-report privacy boundary and relay contract.
