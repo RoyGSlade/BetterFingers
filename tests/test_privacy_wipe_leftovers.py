@@ -49,11 +49,14 @@ from backend.privacy import data_paths
 from backend.privacy import data_registry as dr
 from backend.services.contacts import ContactStore
 from backend.services.persona_learning import PersonaLearningStore
+from backend.stores import history_store
+from backend.stores.drafts import DraftStore
 import server
 
 
 PERSONA_SENTINEL = "zebra-persona-sentinel"
 CONTACT_SENTINEL = "okapi-contact-sentinel"
+DRAFT_SENTINEL = "narwhal-draft-sentinel"
 STAMP = "20261004T120000Z"
 CONFIRM = "DELETE EVERYTHING"
 
@@ -452,12 +455,130 @@ class FactoryResetLeftoverTests(_LeftoverRoot):
         self.assertEqual(sorted(p.name for p in self.root.iterdir()), [])
 
 
+class DraftsMigratedCopyTests(_LeftoverRoot):
+    """``draft_history.json.migrated`` is the full pre-SQLite draft file.
+
+    ``DraftStore.load_history`` renames the legacy JSON to ``.migrated`` once it
+    has been copied into history.db, so after an upgrade the ONLY copy of the old
+    drafts' text is that file. It was not a declared artifact of the drafts
+    category: a conversations wipe never removed it and its verification (which
+    re-reads the declared paths) passed over it.
+    """
+
+    def seed_migrated_drafts(self):
+        """Seed through the real DraftStore migration, not by hand-naming the file."""
+        live = self.root / "draft_history.json"
+        live.write_text(json.dumps([{"id": 1, "raw_text": DRAFT_SENTINEL,
+                                     "final_text": DRAFT_SENTINEL, "status": "pending"}]),
+                        encoding="utf-8")
+        with patch.object(history_store, "_initialized_path", None):
+            DraftStore(lambda: str(self.root), history_store, "fake-process").load_history()
+        migrated = live.with_name(live.name + ".migrated")
+        self.assertTrue(migrated.exists(), "the real migration did not leave a .migrated copy")
+        self.assertIn(DRAFT_SENTINEL, migrated.read_text(encoding="utf-8"))
+        return migrated
+
+    def sentinel_files(self):
+        return sorted(str(p) for p in self.root.rglob("*")
+                      if p.is_file() and DRAFT_SENTINEL.encode() in p.read_bytes())
+
+    def test_migrated_copy_is_a_declared_drafts_artifact(self):
+        migrated = self.seed_migrated_drafts()
+        self.assertIn(migrated, data_paths.drafts())
+        # The registry's category reads the same declaration, so the wipe and the
+        # verification both see it.
+        self.assertIn(migrated, self.registry.get("drafts").paths())
+
+    def test_drafts_wipe_removes_migrated_copy_and_verifies(self):
+        migrated = self.seed_migrated_drafts()
+        category = self.registry.get("drafts")
+
+        wipe = category.wipe()
+        verification = category.verify()
+
+        self.assertTrue(wipe.ok, wipe)
+        self.assertTrue(verification.ok, verification)
+        self.assertFalse(migrated.exists(), "draft_history.json.migrated survived the drafts wipe")
+
+    def test_verification_reports_a_migrated_copy_that_is_still_on_disk(self):
+        """The verification must not be a rubber stamp over the old drafts."""
+        migrated = self.seed_migrated_drafts()
+        real_remove = dl._remove
+
+        def _remove(path):
+            if path.name == migrated.name:
+                raise OSError("device is busy")
+            return real_remove(path)
+
+        category = self.registry.get("drafts")
+        with patch("backend.privacy.data_lifecycle._remove", _remove):
+            wipe = category.wipe()
+        verification = category.verify()
+
+        self.assertFalse(wipe.ok)
+        self.assertFalse(verification.ok)
+        self.assertEqual(verification.remaining, [str(migrated)])
+        self.assertTrue(migrated.exists())
+
+    def test_verification_flags_a_migrated_copy_nothing_has_wiped(self):
+        migrated = self.seed_migrated_drafts()
+        verification = self.registry.get("drafts").verify()
+        self.assertFalse(verification.ok)
+        self.assertEqual(verification.remaining, [str(migrated)])
+
+    def test_clear_conversations_over_http_removes_the_migrated_copy(self):
+        migrated = self.seed_migrated_drafts()
+        neighbour = self.root / "draft_history.json.notes"
+        neighbour.write_text("hand-written, not a store artifact", encoding="utf-8")
+        with TestClient(server.app) as client:
+            self.assertTrue(migrated.exists(), "startup disturbed the .migrated copy")
+            resp = client.post("/privacy/wipe", json={"mode": dr.WIPE_MODE_CONVERSATIONS})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        body = resp.json()
+        self.assertTrue(body["ok"], body)
+        self.assertTrue(body["cleared"]["categories"]["drafts"]["verified"])
+        self.assertTrue(body["cleared"]["history_file_removed"])
+        self.assertFalse(migrated.exists(), "draft_history.json.migrated survived the wipe")
+        self.assertEqual(self.sentinel_files(), [], "the old draft text survived the wipe")
+        self.assertEqual(neighbour.read_text(encoding="utf-8"), "hand-written, not a store artifact")
+
+    def test_factory_reset_leaves_no_migrated_copy(self):
+        migrated = self.seed_migrated_drafts()
+        result = dl.factory_reset(self.registry)
+        self.assertFalse(migrated.exists(), "draft_history.json.migrated survived the factory reset")
+        self.assertNotIn(str(migrated), result["residual_files"])
+        self.assertEqual(self.sentinel_files(), [], "the old draft text survived the reset")
+
+    def test_only_the_exact_migrated_name_is_declared(self):
+        live = self.root / "draft_history.json"
+        live.write_text("[]", encoding="utf-8")
+        declared = ["draft_history.json.migrated"]
+        undeclared = ["draft_history.json.migrated.txt", "draft_history.json.migrated-old",
+                      "draft_history.json.premigrated", "draft_history.jsonl.migrated",
+                      "draft_history.json.notes"]
+        for name in declared + undeclared:
+            (self.root / name).write_text("[]", encoding="utf-8")
+        names = {p.name for p in data_paths.drafts()}
+        for name in declared:
+            self.assertIn(name, names)
+        for name in undeclared:
+            self.assertNotIn(name, names)
+
+
 class DeclarationCoversWhatTheCodeWritesTests(_LeftoverRoot):
     """The declaration (data_paths) and the generators (the stores and
     store_migration) are two definitions of the same fact. This pins them
     together so a quarantine or backup name the code produces cannot go
     undeclared again -- which would leave it invisible to the report, outside
     every wipe, and flagged as an unknown file by a factory reset."""
+
+    def test_draft_store_migration_copy_name_is_declared(self):
+        live = self.root / "draft_history.json"
+        live.write_text(json.dumps([{"id": 1, "raw_text": "x", "final_text": "x",
+                                     "status": "pending"}]), encoding="utf-8")
+        with patch.object(history_store, "_initialized_path", None):
+            DraftStore(lambda: str(self.root), history_store, "fake-process").load_history()
+        self._assert_all_siblings_declared(live, data_paths.drafts)
 
     def _assert_all_siblings_declared(self, live, declared_fn):
         written = sorted(p for p in live.parent.glob(live.name + ".*"))

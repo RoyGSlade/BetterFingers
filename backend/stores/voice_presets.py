@@ -26,7 +26,7 @@ import os
 import threading
 import time
 
-from backend.config.store_migration import load_versioned_store, write_atomic
+from backend.config.store_migration import load_versioned_store, refresh_migration_backups, write_atomic
 from backend.config.utils import get_user_data_path
 
 _lock = threading.RLock()
@@ -243,16 +243,17 @@ def get_presets():
     return presets
 
 
+def _store_text(presets, default):
+    return json.dumps(
+        {"presets": presets, "schema_version": _SCHEMA_VERSION, "default": default},
+        indent=2,
+    )
+
+
 def _save(presets, default):
     with _lock:
         try:
-            write_atomic(
-                _presets_path(),
-                json.dumps(
-                    {"presets": presets, "schema_version": _SCHEMA_VERSION, "default": default},
-                    indent=2,
-                ),
-            )
+            write_atomic(_presets_path(), _store_text(presets, default))
         except OSError as exc:
             logging.warning(f"Failed to save voice presets: {exc}")
 
@@ -308,12 +309,21 @@ def delete_preset(name):
     dangling pointer would otherwise resolve invisibly to "no default" via
     get_default_preset()'s validation, without ever telling the user their
     choice was quietly unset.
+
+    Recovery copies (``voice_presets.json.bak-v<N>``, written by the v1->v2
+    migration) hold the deleted preset too, so they are rewritten from the
+    survivors BEFORE the live write. An unreadable/future copy, or a failed
+    rewrite, raises OSError and leaves the live store untouched (retryable).
     """
     key = str(name or "").strip().lower()
     with _lock:
+        # Validate first: loading a v1 file itself writes .bak-v1 and must not
+        # replace a future/unreadable recovery copy.
+        refresh_migration_backups(_presets_path(), None, _SCHEMA_VERSION)
         presets, raw_default = _load_data()
         remaining = [p for p in presets if p["name"].lower() != key]
         new_default = None if (raw_default and raw_default.lower() == key) else raw_default
+        refresh_migration_backups(_presets_path(), _store_text(remaining, new_default), _SCHEMA_VERSION)
         _save(remaining, new_default)
         return remaining
 

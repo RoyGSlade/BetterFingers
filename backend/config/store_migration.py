@@ -149,7 +149,7 @@ def backup_before_migration(path, from_version):
         return ""
 
 
-def refresh_migration_backups(path, text, current_version):
+def refresh_migration_backups(path, text, current_version, parse=None):
     """Replace exact version backups with a current survivor recovery snapshot.
 
     Called BEFORE the final per-item live write, so backup failure leaves the
@@ -157,7 +157,13 @@ def refresh_migration_backups(path, text, current_version):
     unrelated files/quarantines are untouched. Unknown/future/symlink artifacts
     fail rather than destroying data this version cannot understand. text=None
     validates without writes before a loader can produce migration backups.
+
+    ``parse`` is the store's own text parser (default ``json.loads``; the YAML
+    persona store passes a ``yaml.safe_load`` wrapper). It must raise
+    ``ValueError`` for unparseable text and return the top-level dict/list.
+    ``text`` is written verbatim, so it must be in the same format.
     """
+    parse = parse or json.loads
     path = Path(_reject_traversal(path))
     candidates = [p for p in path.parent.glob(path.name + ".bak-v*")
                   if re.fullmatch(re.escape(path.name) + r"\.bak-v[0-9]+", p.name)]
@@ -167,7 +173,7 @@ def refresh_migration_backups(path, text, current_version):
         if candidate.is_symlink() or not candidate.is_file():
             raise OSError("Unsafe recovery snapshot")
         try:
-            data = json.loads(candidate.read_text(encoding="utf-8"))
+            data = parse(candidate.read_text(encoding="utf-8"))
             version = data.get("schema_version", 1) if isinstance(data, dict) else 1
             if (not isinstance(data, (dict, list)) or type(version) is not int
                     or version > current_version

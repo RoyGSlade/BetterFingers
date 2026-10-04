@@ -34,7 +34,7 @@ from backend.models.model_manager import (
 )
 from backend.models.hardware_report import _estimate_runtime_mb
 from backend.privacy.log_redaction import redact_stderr_lines
-from backend.config.store_migration import load_versioned_store
+from backend.config.store_migration import load_versioned_store, refresh_migration_backups
 from backend.services.persona_schema import (
     compile_persona_instruction,
     normalize_structured_persona,
@@ -248,13 +248,27 @@ def _get_personas_path():
     return os.path.join(get_user_data_path(), "personas.yaml")
 
 
+def _yaml_text(payload):
+    return yaml.safe_dump(payload, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+
+def _parse_personas_yaml(text):
+    """``yaml.safe_load`` for ``refresh_migration_backups``: unparseable text is
+    a ValueError and an empty file is an empty store, like ``_read_personas_v2``."""
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise ValueError(str(exc)) from exc
+    return {} if data is None else data
+
+
 def _atomic_write_yaml(path, payload):
     directory = os.path.dirname(path)
     os.makedirs(directory, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(prefix="personas_", suffix=".tmp", dir=directory)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            yaml.safe_dump(payload, handle, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            handle.write(_yaml_text(payload))
         os.replace(tmp_path, path)
     except Exception:
         try:
@@ -1677,12 +1691,23 @@ def delete_persona(name, allow_builtin=False):
     ensure_default_personas()
     try:
         with _personas_lock:
+            # Recovery copies (personas.yaml.bak-v<N>) hold the deleted prompt too.
+            # Validate them BEFORE reading: loading a v1 file itself writes .bak-v1
+            # and must not replace a future/unreadable copy.
+            refresh_migration_backups(path, None, PERSONA_SCHEMA_VERSION, parse=_parse_personas_yaml)
             personas = _read_personas_v2(path)
-            if persona_name not in personas:
+            found = persona_name in personas
+            if found:
+                personas.pop(persona_name, None)
+                if not personas:
+                    personas = {n: normalize_persona(p) for n, p in _DEFAULT_PERSONAS.items()}
+            # Rewrite them from the survivors before the live write, so a failure
+            # here leaves the live persona in place and the delete retryable.
+            refresh_migration_backups(
+                path, _yaml_text({"schema_version": PERSONA_SCHEMA_VERSION, "personas": personas}),
+                PERSONA_SCHEMA_VERSION, parse=_parse_personas_yaml)
+            if not found:
                 return False, f"Persona '{persona_name}' was not found."
-            personas.pop(persona_name, None)
-            if not personas:
-                personas = {n: normalize_persona(p) for n, p in _DEFAULT_PERSONAS.items()}
             _write_personas_v2(path, personas)
             _personas_v2_cache = personas
             _personas_cache = {n: e["prompt"] for n, e in personas.items()}

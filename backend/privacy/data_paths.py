@@ -116,10 +116,13 @@ def _with_migration_siblings(*candidates: Path) -> list[Path]:
 
     Every store that loads through ``load_versioned_store`` can produce two
     kinds of sibling, and both are byte-for-byte copies of the store's previous
-    contents:
+    contents (plus one store-specific copy, ``.migrated``, below):
 
     * ``<path>.bak-v<N>`` — written *before* each migration step, so a v1 store
       that migrates to v2 leaves a complete v1 copy on disk.
+    * ``<path>.migrated`` — ``DraftStore.load_history`` renames the legacy
+      ``draft_history.json`` to this once its rows are in history.db, so it is
+      the full pre-SQLite draft text. Matched by exact name only.
     * a quarantined file that would not parse. The shapes the code really
       writes are ``<path>.corrupt`` and, when that name is already taken,
       ``<path>.<unix-ts>.corrupt`` (``store_migration``, ``dictionary`` and
@@ -151,7 +154,7 @@ def _with_migration_siblings(*candidates: Path) -> list[Path]:
             for sibling in parent.glob(f"{candidate.name}.*"):
                 name = sibling.name[len(candidate.name) + 1:]
                 if (name.startswith("bak-v") or name.startswith("corrupt")
-                        or _TIMESTAMPED_QUARANTINE.fullmatch(name)):
+                        or name == "migrated" or _TIMESTAMPED_QUARANTINE.fullmatch(name)):
                     out.append(sibling)
         except OSError:
             continue
