@@ -121,3 +121,154 @@ def test_only_known_completed_updater_staging_roots_are_always_removed():
     assert "Assert-NoReparse $target" in updater_program
     assert "ReparsePoint" in updater_program
     assert "-EncodedCommand ${BF_UPDATER_CLEANUP_PS}" in installer
+
+
+# --- recovery siblings -------------------------------------------------------
+#
+# ``store_migration`` and the stores leave ``<store>.bak-v<N>``, ``<store>.corrupt``,
+# ``<store>.<ts>.corrupt`` and ``draft_history.json.migrated`` beside the live
+# file; they hold the same private text. ``data_paths._with_migration_siblings``
+# is the authority for those shapes. The uninstaller's PowerShell must delete
+# exactly the shapes declared there. test_installer_cleanup_sandbox.py runs the
+# program for real; the tests below keep it in step with data_paths.
+
+# Shapes data_paths documents and the backend writes (plus the documented but
+# never-written ``.corrupt-<tag>`` spelling).
+DECLARED_SIBLING_SUFFIXES = (
+    ".bak-v1", ".bak-v12", ".corrupt", ".1760000000.corrupt",
+    ".corrupt-20261004T120000Z", ".migrated",
+)
+# data_paths matches with ``startswith("bak-v")`` / ``startswith("corrupt")``,
+# which is looser than anything it documents or the backend writes. The
+# uninstaller deliberately stays exact and leaves these alone.
+DATA_PATHS_LOOSER_THAN_DECLARED = (
+    ".bak-vX", ".bak-v", ".bak-v1.notes", ".corruptx", ".corrupt.notes",
+)
+# Neither data_paths nor the uninstaller may claim these.
+NEIGHBOURS = (
+    ".notes", ".bak", ".backup", ".old", ".orig", "x", ".migrated.notes", ".1.corrupt.bak",
+    ".x1.corrupt", "..corrupt", ".1.corrupt.notes",
+)
+# The literals _with_migration_siblings is built from (drift guard below).
+EXPECTED_DATA_PATHS_SIBLING_LITERALS = {".*", "bak-v", "corrupt", "migrated"}
+
+
+def _uninstaller_sibling_shape():
+    program = _decoded_program("BF_CANONICAL_CLEANUP_PS")
+    match = re.search(r"^\$shapes='([^']+)'$", program, re.M)
+    assert match, "the cleanup program must declare its sibling shapes in one $shapes literal"
+    return re.compile(match.group(1))
+
+
+def _allowlisted_names():
+    return set(re.findall(r'!insertmacro BfSafeDeleteCanonical "([^"]+)"', _installer_text()))
+
+
+def test_cleanup_deletes_declared_sibling_shapes_by_exact_name_only():
+    program = _decoded_program("BF_CANONICAL_CLEANUP_PS")
+    # One anchored, escaped pattern built from the literal file name.
+    assert "[regex]::Escape([IO.Path]::GetFileName($target))" in program
+    assert r"$pattern='^'+" in program and r"+')$'" in program
+    assert "$entry.Name -match $pattern" in program
+    # Same directory only, no wildcard or recursive enumeration, no globbing.
+    assert "Get-ChildItem -LiteralPath $parent -Force" in program
+    for forbidden in ("-Filter", "-Include", "-Exclude", "-like", "*"):
+        assert forbidden not in program, forbidden
+    assert program.count("-Recurse") == 1, "only the existing target removal may recurse"
+    # Every sibling gets the same root and reparse checks, all before any delete.
+    assert "$entry.FullName.StartsWith($root.TrimEnd('\\')+'\\',[StringComparison]::OrdinalIgnoreCase)" in program
+    assert "Assert-NoReparse $entry.FullName" in program
+    first_delete = program.index("Remove-Item")
+    for check in ("Assert-NoReparse $entry.FullName", "Assert-NoReparse $root"):
+        assert program.index(check) < first_delete, f"{check} must run before anything is deleted"
+    assert "Remove-Item -LiteralPath $sibling -Force" in program
+    assert "Remove-Item -LiteralPath $target -Recurse -Force" in program
+    # A directory that merely has a sibling-shaped name is not a store file.
+    assert "if(-not $entry.PSIsContainer){$siblings+=$entry.FullName}" in program
+    # An empty or root-equal target must never reach Remove-Item -Recurse.
+    assert "if($target.TrimEnd('\\') -eq $root.TrimEnd('\\')){exit 20}" in program
+    # Siblings are not skipped when the live file is already gone
+    # (draft_history.json is renamed to .migrated once its rows are in history.db).
+    assert "if(-not(Test-Path -LiteralPath $target) -and $siblings.Count -eq 0){exit 0}" in program
+
+
+def test_uninstaller_sibling_shapes_cover_every_shape_data_paths_declares(tmp_path):
+    from backend.privacy import data_paths
+
+    shape = _uninstaller_sibling_shape()
+    live = tmp_path / "store.json"
+    live.write_text("{}", encoding="utf-8")
+
+    def claimed_by_data_paths(suffix):
+        sibling = tmp_path / ("store.json" + suffix)
+        sibling.write_text("x", encoding="utf-8")
+        try:
+            return sibling in data_paths._with_migration_siblings(live)
+        finally:
+            sibling.unlink()
+
+    for suffix in DECLARED_SIBLING_SUFFIXES:
+        assert claimed_by_data_paths(suffix), f"data_paths no longer declares {suffix}; update this contract"
+        assert shape.fullmatch(suffix[1:]), f"the uninstaller does not delete the declared sibling shape {suffix}"
+    for suffix in DATA_PATHS_LOOSER_THAN_DECLARED:
+        assert claimed_by_data_paths(suffix), (
+            f"data_paths tightened and no longer claims {suffix}; drop it from DATA_PATHS_LOOSER_THAN_DECLARED"
+        )
+        assert not shape.fullmatch(suffix[1:]), f"the uninstaller must stay exact and leave {suffix} alone"
+    for suffix in NEIGHBOURS:
+        suffix = suffix if suffix.startswith(".") else "." + suffix
+        assert not claimed_by_data_paths(suffix), f"data_paths now claims {suffix}; the uninstaller must handle it"
+        assert not shape.fullmatch(suffix[1:]), f"the uninstaller claims {suffix}, which data_paths does not declare"
+
+
+def test_a_new_data_paths_sibling_shape_fails_until_the_uninstaller_learns_it():
+    """Drift guard. Probing known suffixes cannot notice a shape nobody thought
+    to probe, so pin the literals ``_with_migration_siblings`` is made of. Add a
+    shape there and this fails: teach ``$shapes`` in BF_CANONICAL_CLEANUP_PS
+    (re-encode it into installer.nsh), extend DECLARED_SIBLING_SUFFIXES and the
+    sandbox test, then update EXPECTED_DATA_PATHS_SIBLING_LITERALS."""
+    import ast
+    from backend.privacy import data_paths
+
+    tree = ast.parse(Path(data_paths.__file__).read_text(encoding="utf-8"))
+    function = next(
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_with_migration_siblings"
+    )
+    assert isinstance(function.body[0], ast.Expr) and isinstance(function.body[0].value, ast.Constant)
+    literals, constants = set(), set()
+    for statement in function.body[1:]:
+        for node in ast.walk(statement):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                literals.add(node.value)
+            elif isinstance(node, ast.Name) and node.id.startswith("_") and node.id.isupper():
+                constants.add(node.id)
+    assert literals == EXPECTED_DATA_PATHS_SIBLING_LITERALS, (
+        f"data_paths._with_migration_siblings changed its sibling shapes: {sorted(literals)}"
+    )
+    assert constants == {"_TIMESTAMPED_QUARANTINE"}
+    assert data_paths._TIMESTAMPED_QUARANTINE.pattern == r"[0-9]+\.corrupt"
+
+
+def test_every_store_data_paths_declares_siblings_for_is_an_uninstaller_target():
+    """A sibling is only swept with its live file's macro call, so a store that
+    data_paths gives siblings but the allowlist omits would keep its backups."""
+    from backend.privacy import data_paths
+
+    source = Path(data_paths.__file__).read_text(encoding="utf-8")
+    stores = set(re.findall(r'_with_migration_siblings\(\s*base\(\)\s*/\s*"([^"]+)"', source))
+    assert len(stores) >= 14, stores
+    missing = stores - _allowlisted_names()
+    assert not missing, f"stores with declared siblings but no uninstaller target: {sorted(missing)}"
+
+
+def test_encoded_cleanup_command_fits_the_nsis_string_limit():
+    """electron-builder's makensis (v3.04) is built with NSIS_MAX_STRLEN=8192
+    (read from ``makensis /HDRINFO``). The whole nsExec command line is one NSIS
+    string, so the program must stay well inside it."""
+    command = (
+        r'"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" '
+        r"-NoLogo -NoProfile -NonInteractive -EncodedCommand "
+    )
+    blob = re.search(r'^!define BF_CANONICAL_CLEANUP_PS "([A-Za-z0-9+/=]+)"$', _installer_text(), re.M).group(1)
+    assert len(command) + len(blob) < 6000, len(command) + len(blob)
