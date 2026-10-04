@@ -48,7 +48,7 @@ Source check: [alphaCapabilities.js](../app/src/renderer/config/alphaCapabilitie
 | `deprecatedVoiceDeliveryCards`, `deprecatedPersonaActions` | false | Deliberate retired surfaces; do not restore merely to improve a parity count. |
 | `structuredPersonaEditor`, `customVoiceWorkflow`, `scribeLongInputBatching` | true | Enabled flags; live behavior still needs its own qualification. |
 
-The [production QA report](../app/tests/qa/out/signal-desk-prod/qa-report.md) explicitly skips scenarios for hidden capabilities. The [parity ledger](release/PARITY_INVENTORY.md) records **409 wired / 29 intentional cuts / 0 blocked / 438 total**. That is source/test anchoring, not 409 enabled features, individual accessibility certification, or a completion percentage.
+The [production QA report](../app/tests/qa/out/signal-desk-prod/qa-report.md) explicitly skips scenarios for hidden capabilities. The [parity ledger](release/PARITY_INVENTORY.md) records **404 wired / 34 intentional cuts / 0 blocked / 438 total**. That is source/test anchoring, not 404 enabled features, individual accessibility certification, or a completion percentage.
 
 ### 1.3 Feature navigation
 
@@ -573,7 +573,7 @@ Electron main owns windows, tray, privileged IPC, hotkeys and desktop interactio
 ### F40 — Shell, overlays, appearance, and accessibility
 
 - **Purpose and contract:** provide a coherent Talk/Scribe/Studio/Utilities/Settings experience with truthful Signal Core state, usable overlays and accessible controls.
-- **Status and evidence:** Signal Desk production composition and parity implemented; old three-space mockup navigation is not current authority. Accessibility/contrast fixes recorded locally; no individual audit of all 409 wired items. [UI spec](ui/SIGNAL_DESK_SPEC.md), [parity definitions](release/PARITY_INVENTORY.md).
+- **Status and evidence:** Signal Desk production composition and parity implemented; old three-space mockup navigation is not current authority. Accessibility/contrast fixes recorded locally; no individual audit of all 404 wired items. [UI spec](ui/SIGNAL_DESK_SPEC.md), [parity definitions](release/PARITY_INVENTORY.md).
 - **Failure points:** keyboard traps/escape leaks, focus theft, high-DPI clipping, offscreen overlays, unreadable muted text, fake waveform/status data, duplicated initialization and hidden controls still accepting input.
 - **Work remaining — NOW:** manual keyboard/high-contrast/reduced-motion/high-DPI pass across enabled features. NEXT curate deliberate visual baselines and PR image diffs rather than treating per-run screenshots as baselines.
 - **Testing needed:** production navigation, overlays across multiple monitors/resolution changes, text-entry-safe shortcuts, focus return, screen-reader labels and hidden/inert capability behavior.

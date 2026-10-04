@@ -395,7 +395,7 @@ HANDLE_ANCHORS: dict[str, dict[str, str]] = {
     },
     'settingEls': {
         'anchor': 'SETTINGS_ELEMENT_IDS',
-        'why': 'The legacy main.js element map the row refers to; features/settingsWorkspace.js declares SETTINGS_ELEMENT_IDS and collects it through collectSettingsElements(). `draft_history_limit` IS present in it, which is the wiring gap this row asks about',
+        'why': 'The legacy main.js element map the row refers to; features/settingsWorkspace.js declares SETTINGS_ELEMENT_IDS and collects it through collectSettingsElements(). The unused history-limit writer is intentionally cut at UI-07-043; the remaining profile fields still collect/save normally',
     },
     'InsufficientDiskSpaceError': {
         'anchor': 'isDiskSpaceMessage',
@@ -893,6 +893,13 @@ ROW_ANCHORS: dict[str, dict] = {
 # `intentional_cut` by parity_ledger_build.py.
 
 CUTS: dict[str, str] = {
+    # BF-G5 settings collapse slice 1: ineffective writers, preserved profile data.
+    'UI-07-043': 'Intentional cut: BF-G5: remove the unused draft_history_limit control and renderer writer. The backend retains MAX_DRAFT_HISTORY=100; Settings now states that actual cap. Existing profile values remain readable/writable for compatibility; no retention behavior changes.',
+    'UI-07-048': 'Intentional cut: BF-G5: remove the unused whisper_chunk_size control and renderer writer. No STT runtime consumes this profile key. Actual streaming policy is unchanged; saved legacy values remain in profiles.',
+    'UI-07-148': 'Intentional cut: BF-G5: remove the unused status_indicator_enabled toggle and renderer writer. No runtime consumes this profile key; this control had no capability to replace. Existing saved values remain in profiles and effective Appearance controls remain.',
+    'UI-07-149': 'Intentional cut: BF-G5: remove the unused notification_overlay_enabled toggle and renderer writer. No runtime consumes this profile key; this control had no capability to replace. Existing saved values remain in profiles and effective Appearance controls remain.',
+    'UI-07-150': 'Intentional cut: BF-G5: remove the unused preview_overlay_enabled toggle and renderer writer. No runtime consumes this profile key; this control had no capability to replace. Existing saved values remain in profiles and effective Appearance controls remain.',
+
     'UI-06-075': (
         'Intentional cut: the alpha Scribe comparison previously exposed four choices '
         '(Raw / Faithful / Clearer / Alternate). The approved alpha contract exposes exactly '

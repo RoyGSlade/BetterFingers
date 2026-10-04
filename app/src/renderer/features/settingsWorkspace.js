@@ -69,16 +69,8 @@
 //   review.autoSubmit               auto_submit                              -> profile field                          [wired]
 //   review.instantTyping            instant_typing                           -> profile field                          [wired]
 //   review.restoreClipboard         restore_clipboard_after_paste (default ON) -> profile field                       [wired]
-//   review.draftHistoryLimit        draft_history_limit (10-500)             -> profile field  **WIRING FIX: see below** [wired]
 //
-//   *** draft_history_limit FIX (CURRENT_UI_INVENTORY.md §7.4/§13): today's
-//   `#settingDraftHistoryLimit` exists in index.html but is absent from
-//   main.js's `settingEls` map, so it is never collected on Save nor
-//   restored on profile load — edits to it are silently discarded. This
-//   adapter includes `draft_history_limit` in SETTINGS_FIELD_KEYS/
-//   SETTINGS_FIELD_TYPES (type: number) and SETTINGS_VALIDATION_RULES
-//   (10-500, matching the HTML's own min/max attributes), so it round-trips
-//   through collect/restore/save exactly like every other numeric field. ***
+//   BF-G5 removes the unused history-limit writer; the backend cap is 100.
 //
 // --- AI CLEANUP section (inventory §7.5, numeric knobs only — the persona
 //     wizard/Foundry themselves are Studio's, per the work packet) ---------
@@ -86,13 +78,10 @@
 //   aicleanup.maxCompletionTokens    max_completion_tokens (512-4096)        -> profile field                          [wired]
 //   aicleanup.longDraftWarningWords  long_draft_warning_words (300-10000)    -> profile field                          [wired]
 //   aicleanup.llmChunkSize           llm_chunk_size (50-5000)                -> profile field                          [wired]
-//   aicleanup.whisperChunkSize       whisper_chunk_size (50-5000)            -> profile field                          [wired]
 //   aicleanup.stitchPass             long_recording_stitch_pass_enabled      -> profile field                          [wired]
 //
 // --- NOTIFICATIONS & STATUS section (inventory §7.10) ----------------------
-//   notifications.statusIndicator    status_indicator_enabled                -> profile field                          [wired]
-//   notifications.notificationOverlay notification_overlay_enabled          -> profile field                          [wired]
-//   notifications.previewOverlay     preview_overlay_enabled                 -> profile field                          [wired]
+//   Unused overlay toggles removed by BF-G5; saved values remain in profiles.
 //
 // --- APPEARANCE section (inventory §7.11) -----------------------------------
 //   appearance.theme/accent/density/fontSize/highContrast  client-localStorage, applied live -> computeAppearanceClasses() (pure) [wired]
@@ -213,7 +202,7 @@ export const SETTINGS_SECTION_META = {
   recording: { label: 'Recording', description: 'Recording mode, auto-stop on silence, voice commands, and the no-audio gate.' },
   review: { label: 'Review & Drafts', description: 'How drafts are sent, confidence gating, auto-submit, and clipboard/draft history behavior.' },
   aicleanup: { label: 'AI Cleanup', description: 'Active persona and the numeric tuning knobs for LLM cleanup and chunking.' },
-  notifications: { label: 'Notifications', description: 'Status indicator, notification overlay, and preview overlay toggles.' },
+  notifications: { label: 'Notifications', description: 'Overlay and indicator preferences now live in Appearance.' },
   appearance: { label: 'Appearance', description: 'Theme, accent, density, font size, high contrast, and the floating overlay look.' },
   privacy: { label: 'Privacy', description: 'What touches the network, what is stored on this device, and wiping your data.' },
 };
@@ -368,20 +357,14 @@ export const INVENTORY_PLACEMENT_MAP = {
   'review.autoSubmit': { section: 'review', control: 'Auto submit toggle', wired: true },
   'review.instantTyping': { section: 'review', control: 'Instant typing toggle', wired: true },
   'review.restoreClipboard': { section: 'review', control: 'Restore clipboard after paste toggle', wired: true },
-  'review.draftHistoryLimit': { section: 'review', control: 'Draft history limit (10-500)', wired: true, note: 'wiring fix: was declared but never collected/restored' },
 
   'aicleanup.currentPreset': { section: 'aicleanup', control: 'Active persona/preset select', wired: true },
   'aicleanup.maxCompletionTokens': { section: 'aicleanup', control: 'Max completion tokens (512-4096)', wired: true },
   'aicleanup.longDraftWarningWords': { section: 'aicleanup', control: 'Long draft warning words (300-10000)', wired: true },
   'aicleanup.llmChunkSize': { section: 'aicleanup', control: 'LLM chunk size (50-5000)', wired: true },
-  'aicleanup.whisperChunkSize': { section: 'aicleanup', control: 'Whisper chunk size (50-5000)', wired: true },
   'aicleanup.stitchPass': { section: 'aicleanup', control: 'Long-recording stitch pass toggle', wired: true },
   'aicleanup.deliverySignals': { section: 'aicleanup', control: 'Use speech delivery signals (disclosed toggle, default off)', wired: true },
   'aicleanup.audienceContext': { section: 'aicleanup', control: 'Use selected contact/audience context (disclosed toggle, default off)', wired: false, note: 'D-0005: the control, its disclosure and its gate status are built and rendered, but enabling it is a release gate decision that has not been made. `use_audience_context` is deliberately excluded from SETTINGS_FIELD_KEYS so no save path can set it.' },
-
-  'notifications.statusIndicator': { section: 'notifications', control: 'Status indicator overlay toggle', wired: true },
-  'notifications.notificationOverlay': { section: 'notifications', control: 'Notification overlay toggle', wired: true },
-  'notifications.previewOverlay': { section: 'notifications', control: 'Preview overlay toggle', wired: true },
 
   'appearance.themeGroup': { section: 'appearance', control: 'Theme/accent/density/font-size/high-contrast (client localStorage, applied live)', wired: true },
   'appearance.overlayGroup': { section: 'appearance', control: 'Floating Overlay size/placement/opacity/vibrancy/labelPos/alwaysOn', wired: true },
@@ -478,13 +461,11 @@ export function validateProfileName(name) {
 // Every field Settings owns that has a documented numeric range
 // (CURRENT_UI_INVENTORY.md §7.0/§7.2/§7.4/§7.5/§13). Ranges/messages mirror
 // main.js's runValidation() verbatim for the fields that already had
-// validation there; draft_history_limit's rule is NEW (see file header
-// "draft_history_limit FIX").
+// validation there; unused profile controls are intentionally absent.
 export const SETTINGS_VALIDATION_RULES = {
   max_completion_tokens: { min: 512, max: 4096, parse: 'int', message: 'Max completion tokens must be between 512 and 4096.' },
   long_draft_warning_words: { min: 300, max: 10000, parse: 'int', message: 'Long draft warning must be between 300 and 10000 words.' },
   llm_chunk_size: { min: 50, max: 5000, parse: 'int', message: 'LLM chunk size must be between 50 and 5000.' },
-  whisper_chunk_size: { min: 50, max: 5000, parse: 'int', message: 'Whisper chunk size must be between 50 and 5000.' },
   confidence_force_review_below: { min: 0, max: 1, parse: 'float', message: 'Confidence thresholds must be between 0.0 and 1.0.' },
   confidence_auto_send_above: { min: 0, max: 1, parse: 'float', message: 'Confidence thresholds must be between 0.0 and 1.0.' },
   auto_stop_silence_ms: { min: 250, max: 5000, parse: 'int', message: 'Auto-stop silence must be between 250 and 5000 ms.' },
@@ -492,7 +473,6 @@ export const SETTINGS_VALIDATION_RULES = {
   no_audio_min_duration_sec: { min: 0, max: 30, parse: 'float', message: 'Min duration must be between 0.0 and 30.0s.' },
   no_audio_min_rms: { min: 0, max: 1, parse: 'float', message: 'Min RMS must be between 0.0 and 1.0.' },
   no_audio_min_peak: { min: 0, max: 1, parse: 'float', message: 'Min Peak must be between 0.0 and 1.0.' },
-  draft_history_limit: { min: 10, max: 500, parse: 'int', message: 'Draft history limit must be between 10 and 500.' },
 };
 
 /** Validates one field's raw (string) value against SETTINGS_VALIDATION_RULES. Returns an error message, or null if valid/unruled. */
@@ -545,16 +525,11 @@ export const SETTINGS_FIELD_KEYS = [
   'auto_submit',
   'instant_typing',
   'restore_clipboard_after_paste',
-  'draft_history_limit',
   'current_preset',
   'max_completion_tokens',
   'long_draft_warning_words',
   'llm_chunk_size',
-  'whisper_chunk_size',
   'long_recording_stitch_pass_enabled',
-  'status_indicator_enabled',
-  'notification_overlay_enabled',
-  'preview_overlay_enabled',
   // D-0005 disclosed toggle. `use_audience_context` is deliberately NOT here:
   // a key that is never collected cannot be turned on by any save path,
   // including a future one written by someone who did not read D-0005.
@@ -578,16 +553,11 @@ export const SETTINGS_FIELD_TYPES = {
   auto_submit: 'checkbox',
   instant_typing: 'checkbox',
   restore_clipboard_after_paste: 'checkbox',
-  draft_history_limit: 'number',
   current_preset: 'select',
   max_completion_tokens: 'number',
   long_draft_warning_words: 'number',
   llm_chunk_size: 'number',
-  whisper_chunk_size: 'number',
   long_recording_stitch_pass_enabled: 'checkbox',
-  status_indicator_enabled: 'checkbox',
-  notification_overlay_enabled: 'checkbox',
-  preview_overlay_enabled: 'checkbox',
   use_delivery_signals: 'checkbox',
 };
 
@@ -901,16 +871,11 @@ export const SETTINGS_ELEMENT_IDS = {
     auto_submit: 'sdSetAutoSubmit',
     instant_typing: 'sdSetInstantTyping',
     restore_clipboard_after_paste: 'sdSetRestoreClipboard',
-    draft_history_limit: 'sdSetDraftHistoryLimit',
     current_preset: 'sdSetCurrentPreset',
     max_completion_tokens: 'sdSetMaxCompletionTokens',
     long_draft_warning_words: 'sdSetLongDraftWarningWords',
     llm_chunk_size: 'sdSetLlmChunkSize',
-    whisper_chunk_size: 'sdSetWhisperChunkSize',
     long_recording_stitch_pass_enabled: 'sdSetStitchPass',
-    status_indicator_enabled: 'sdSetStatusIndicator',
-    notification_overlay_enabled: 'sdSetNotificationOverlay',
-    preview_overlay_enabled: 'sdSetPreviewOverlay',
     use_delivery_signals: 'sdSetUseDeliverySignals',
   },
 
@@ -944,7 +909,6 @@ export const SETTINGS_ELEMENT_IDS = {
     max_completion_tokens: 'sdSetMaxCompletionTokensError',
     long_draft_warning_words: 'sdSetLongDraftWarningWordsError',
     llm_chunk_size: 'sdSetLlmChunkSizeError',
-    whisper_chunk_size: 'sdSetWhisperChunkSizeError',
     confidence_force_review_below: 'sdSetConfidenceForceReviewBelowError',
     confidence_auto_send_above: 'sdSetConfidenceAutoSendAboveError',
     auto_stop_silence_ms: 'sdSetAutoStopSilenceMsError',
@@ -952,7 +916,6 @@ export const SETTINGS_ELEMENT_IDS = {
     no_audio_min_duration_sec: 'sdSetNoAudioDurationError',
     no_audio_min_rms: 'sdSetNoAudioRmsError',
     no_audio_min_peak: 'sdSetNoAudioPeakError',
-    draft_history_limit: 'sdSetDraftHistoryLimitError',
   },
 };
 

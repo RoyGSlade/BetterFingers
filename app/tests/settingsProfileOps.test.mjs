@@ -59,7 +59,6 @@ const PROFILE_IDS = {
 const FIELD_IDS = {
   recording_mode: 'sdSetRecordingMode',
   current_preset: 'sdSetCurrentPreset',
-  draft_history_limit: 'sdSetDraftHistoryLimit',
   max_completion_tokens: 'sdSetMaxCompletionTokens',
   // The Long Recording Stitch Pass toggle (inventory §15 orphan UI-15-023): a
   // quiet cleanup-quality switch that is easy to lose as "just another
@@ -68,7 +67,6 @@ const FIELD_IDS = {
 };
 
 const FIELD_ERROR_IDS = {
-  draft_history_limit: 'sdSetDraftHistoryLimitError',
   max_completion_tokens: 'sdSetMaxCompletionTokensError',
 };
 
@@ -90,7 +88,7 @@ test('the ids this file drives are the ids the Settings module ships', () => {
 // field is genuinely invalid -- so a test that renders `{}` starts with the
 // save button correctly disabled. Tests that are not about validation render
 // this stored profile instead, which is valid.
-const STORED_SETTINGS = { recording_mode: 'toggle', draft_history_limit: 100, max_completion_tokens: 2048 };
+const STORED_SETTINGS = { recording_mode: 'toggle', draft_history_limit: 42, whisper_chunk_size: 875, status_indicator_enabled: false, notification_overlay_enabled: true, preview_overlay_enabled: false, future_key: { nested: 'keep' }, max_completion_tokens: 2048 };
 
 const PROFILES_PAYLOAD = {
   profiles: ['Default', 'Work'],
@@ -127,7 +125,6 @@ function mount({ routes = defaultRoutes(), hotkeyCapabilities, confirmFn } = {})
     sdSetImportProfileFile: { tagName: 'input', type: 'file' },
     sdSetRecordingMode: { tagName: 'select', value: 'toggle' },
     sdSetCurrentPreset: { tagName: 'select', value: 'Direct' },
-    sdSetDraftHistoryLimit: { tagName: 'input', type: 'number', value: '100' },
     sdSetMaxCompletionTokens: { tagName: 'input', type: 'number', value: '2048' },
     sdSetStitchPass: { tagName: 'input', type: 'checkbox' },
   });
@@ -212,6 +209,9 @@ test('#sdSetSaveButton POSTs the collected profile to the active profile route',
   assert.deepEqual(ctx.bridge.signatures(), ['POST /settings/profiles/Work']);
   assert.equal(saved.length, 1);
   assert.equal(saved[0].settings.recording_mode, 'ptt', 'the DOM value must be what gets saved');
+  for (const key of ['draft_history_limit', 'whisper_chunk_size', 'status_indicator_enabled', 'notification_overlay_enabled', 'preview_overlay_enabled', 'future_key']) {
+    assert.deepEqual(saved[0].settings[key], STORED_SETTINGS[key], `${key} must remain untouched by Save`);
+  }
   assert.equal(ctx.el('sdSetProfileMessage').textContent, 'Saved Work.');
   assert.equal(ctx.el('sdSetSaveBar').classList.contains('hidden'), true, 'a successful save clears the bar');
 });
@@ -262,7 +262,7 @@ test('#sdSetSaveButton refuses to save while a validation error stands, and says
   ctx.feature.init();
   ctx.feature.renderSettings({});
   ctx.el('sdSetProfileSelect').value = 'Work';
-  ctx.el('sdSetDraftHistoryLimit').value = '2';
+  ctx.el('sdSetMaxCompletionTokens').value = '2';
 
   await ctx.feature.handleSave();
 

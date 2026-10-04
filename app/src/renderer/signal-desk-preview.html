@@ -2472,16 +2472,7 @@
                 </div>
               </div>
 
-              <div class="sd-set-row" data-search-row data-search-label="draft history limit">
-                <div class="sd-set-row__label">
-                  <span class="sd-set-row__label-text">Draft history limit</span>
-                  <span class="sd-set-row__label-hint">How many past drafts Library keeps around.</span>
-                </div>
-                <div class="sd-set-row__control">
-                  <input type="number" class="sd-set-input sd-set-input--number" id="sdSetDraftHistoryLimit" min="10" max="500" />
-                </div>
-              </div>
-              <span class="sd-set-field-error" id="sdSetDraftHistoryLimitError"></span>
+              <p class="sd-set-section__intro">Draft history keeps your 100 most recent drafts.</p>
             </div>
           </section>
 
@@ -2529,14 +2520,6 @@
               </div>
               <span class="sd-set-field-error" id="sdSetLlmChunkSizeError"></span>
 
-              <div class="sd-set-row" data-search-row data-search-label="whisper chunk size">
-                <div class="sd-set-row__label"><span class="sd-set-row__label-text">Whisper chunk size</span></div>
-                <div class="sd-set-row__control">
-                  <input type="number" class="sd-set-input sd-set-input--number" id="sdSetWhisperChunkSize" min="50" max="5000" />
-                </div>
-              </div>
-              <span class="sd-set-field-error" id="sdSetWhisperChunkSizeError"></span>
-
               <div class="sd-set-row" data-search-row data-search-label="long recording stitch pass">
                 <div class="sd-set-row__label">
                   <span class="sd-set-row__label-text">Long-recording stitch pass</span>
@@ -2551,35 +2534,8 @@
 
           <!-- ============================== NOTIFICATIONS & STATUS (inventory §7.10) ============================== -->
           <section class="sd-set-section" id="sdSetSectionNotifications" data-search-section hidden>
-            <p class="sd-set-section__intro">Status indicator, notification overlay, and preview overlay toggles.</p>
+            <p class="sd-set-section__intro">Overlay appearance controls are in Appearance.</p>
 
-            <div class="sd-set-group" data-search-group>
-              <div class="sd-set-group__header"><span class="sd-set-group__title">Status &amp; Overlays</span></div>
-
-              <div class="sd-set-row" data-search-row data-search-label="status indicator overlay">
-                <div class="sd-set-row__label">
-                  <span class="sd-set-row__label-text">Status indicator</span>
-                  <span class="sd-set-row__label-hint">Floating recording/processing orb overlay.</span>
-                </div>
-                <div class="sd-set-row__control">
-                  <input type="checkbox" class="sd-set-checkbox" id="sdSetStatusIndicator" />
-                </div>
-              </div>
-
-              <div class="sd-set-row" data-search-row data-search-label="notification overlay">
-                <div class="sd-set-row__label"><span class="sd-set-row__label-text">Notification overlay</span></div>
-                <div class="sd-set-row__control">
-                  <input type="checkbox" class="sd-set-checkbox" id="sdSetNotificationOverlay" />
-                </div>
-              </div>
-
-              <div class="sd-set-row" data-search-row data-search-label="preview overlay">
-                <div class="sd-set-row__label"><span class="sd-set-row__label-text">Preview overlay</span></div>
-                <div class="sd-set-row__control">
-                  <input type="checkbox" class="sd-set-checkbox" id="sdSetPreviewOverlay" />
-                </div>
-              </div>
-            </div>
           </section>
 
           <!-- ============================== APPEARANCE (inventory §7.11) ============================== -->

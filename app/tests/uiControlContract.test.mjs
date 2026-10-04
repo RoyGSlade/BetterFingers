@@ -443,3 +443,12 @@ test('the theme row explains what is available rather than leaving a dead contro
     'the note must not use --sd-text-muted, which fails AA contrast on these surfaces',
   );
 });
+
+test('ineffective settings controls are absent from shipping, preview and legacy pages', () => {
+  const ids = ['sdSetDraftHistoryLimit', 'sdSetWhisperChunkSize', 'sdSetStatusIndicator', 'sdSetNotificationOverlay', 'sdSetPreviewOverlay', 'settingDraftHistoryLimit', 'settingWhisperChunkSize', 'settingStatusIndicator', 'settingNotificationOverlay', 'settingPreviewOverlay'];
+  for (const page of ['signal-desk.html', 'signal-desk-preview.html', 'index.html']) {
+    const source = readFileSync(join(RENDERER, page), 'utf8');
+    for (const id of ids) assert.doesNotMatch(source, new RegExp(`id="${id}(?:Error)?"`), `${page} exposes ${id}`);
+    assert.match(source, /Draft history keeps your 100 most recent drafts/);
+  }
+});

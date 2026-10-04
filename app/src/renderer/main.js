@@ -359,7 +359,6 @@ const settingEls = {
   long_draft_warning_words: document.getElementById('settingLongDraftWarningWords'),
   long_recording_stitch_pass_enabled: document.getElementById('settingStitchPass'),
   llm_chunk_size: document.getElementById('settingLlmChunkSize'),
-  whisper_chunk_size: document.getElementById('settingWhisperChunkSize'),
   review_tts_voice_hint: document.getElementById('settingReviewTtsVoiceHint'),
   review_tts_speed: document.getElementById('settingReviewTtsSpeed'),
   no_audio_min_duration_sec: document.getElementById('settingNoAudioDuration'),
@@ -372,9 +371,6 @@ const settingEls = {
   macros_enabled: document.getElementById('settingMacrosEnabled'),
   input_device_index: document.getElementById('settingInputDevice'),
   audio_ducking: document.getElementById('settingAudioDucking'),
-  status_indicator_enabled: document.getElementById('settingStatusIndicator'),
-  notification_overlay_enabled: document.getElementById('settingNotificationOverlay'),
-  preview_overlay_enabled: document.getElementById('settingPreviewOverlay'),
   model_keep_llm_loaded: document.getElementById('settingKeepLlm'),
   model_keep_stt_loaded: document.getElementById('settingKeepStt'),
   model_keep_tts_loaded: document.getElementById('settingKeepTts'),
@@ -2243,17 +2239,6 @@ function runValidation() {
       setValidationError('llm_chunk_size', 'LLM chunk size must be between 50 and 5000.');
     } else {
       clearValidationError('llm_chunk_size');
-    }
-  }
-
-  // 3. Whisper Chunk Size (50 - 5000)
-  const whisperChunkEl = settingEls.whisper_chunk_size;
-  if (whisperChunkEl) {
-    const val = parseInt(whisperChunkEl.value, 10);
-    if (isNaN(val) || val < 50 || val > 5000) {
-      setValidationError('whisper_chunk_size', 'Whisper chunk size must be between 50 and 5000.');
-    } else {
-      clearValidationError('whisper_chunk_size');
     }
   }
 
