@@ -175,7 +175,7 @@ def is_backbone_model_downloaded(model_id):
 def download_wake_model(model_id, progress_callback=None):
     """Download and verify one catalog entry. Reuses model_manager's proven
     download+checksum implementation rather than re-deriving it."""
-    import model_manager
+    from backend.models import model_manager
 
     info = AVAILABLE_WAKE_MODELS.get(model_id)
     if not info:

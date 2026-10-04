@@ -18,7 +18,7 @@ try:
 except Exception:  # pragma: no cover - psutil is a hard dependency in practice
     psutil = None
 
-from model_manager import (
+from backend.models.model_manager import (
     AVAILABLE_MODELS,
     DEFAULT_MODEL,
     get_models_dir,

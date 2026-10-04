@@ -406,7 +406,7 @@ class ModelRuntimeCoordinator:
             suggested_model_id = None
             if name == "llm" and model_id:
                 try:
-                    from hardware_report import _suggest_lighter_model
+                    from backend.models.hardware_report import _suggest_lighter_model
                     suggested_model_id = _suggest_lighter_model(model_id, max(0, available + self_credit))
                 except Exception as exc:
                     logging.debug("suggest_lighter_model failed: %s", exc)

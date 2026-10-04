@@ -273,7 +273,7 @@ def _collect_qwen_hardware_snapshot():
     """
     import sys
 
-    import hardware_report
+    from backend.models import hardware_report
     import wake_qwen_capability
 
     report = hardware_report.get_hardware_report()

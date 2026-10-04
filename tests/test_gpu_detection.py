@@ -1,6 +1,6 @@
 import unittest
 
-from hardware_report import _parse_vulkan_devices
+from backend.models.hardware_report import _parse_vulkan_devices
 
 
 class ParseVulkanDevicesTests(unittest.TestCase):

@@ -178,7 +178,7 @@ class ProvisionClientRuntimeTests(unittest.TestCase):
     def test_unpublished_artifact_refuses_cleanly_without_downloading(self):
         with patch("backend.tts.voice_clone_engine._clone_runtime_platform_key", return_value="linux-x86_64"), \
              patch("backend.tts.voice_clone_engine.CLONE_RUNTIME_CATALOG", self._fake_catalog(published=False)), \
-             patch("model_manager.download_file") as download_mock:
+             patch("backend.models.model_manager.download_file") as download_mock:
             result = vce.provision_clone_runtime()
         self.assertFalse(result["ok"])
         self.assertIn("not been published", result["message"])
@@ -186,7 +186,7 @@ class ProvisionClientRuntimeTests(unittest.TestCase):
 
     def test_already_provisioned_short_circuits(self):
         with patch("backend.tts.voice_clone_engine.is_clone_runtime_provisioned", return_value=True), \
-             patch("model_manager.download_file") as download_mock:
+             patch("backend.models.model_manager.download_file") as download_mock:
             result = vce.provision_clone_runtime()
         self.assertTrue(result["ok"])
         self.assertTrue(result["already_provisioned"])
@@ -195,7 +195,7 @@ class ProvisionClientRuntimeTests(unittest.TestCase):
     def test_download_failure_surfaces_cleanly(self):
         with patch("backend.tts.voice_clone_engine._clone_runtime_platform_key", return_value="linux-x86_64"), \
              patch("backend.tts.voice_clone_engine.CLONE_RUNTIME_CATALOG", self._fake_catalog()), \
-             patch("model_manager.download_file", side_effect=IOError("checksum mismatch")):
+             patch("backend.models.model_manager.download_file", side_effect=IOError("checksum mismatch")):
             result = vce.provision_clone_runtime()
         self.assertFalse(result["ok"])
         self.assertIn("Download failed", result["message"])
@@ -216,7 +216,7 @@ class ProvisionClientRuntimeTests(unittest.TestCase):
                  "sha256": "a" * 64,
                  "cache_relpath": os.path.join("hub", "checkpoints", "wavlm_base_plus.pth"),
              }), \
-             patch("model_manager.download_file", side_effect=fake_download):
+             patch("backend.models.model_manager.download_file", side_effect=fake_download):
             result = vce.provision_clone_runtime()
 
         self.assertTrue(result["ok"])
@@ -243,7 +243,7 @@ class ProvisionClientRuntimeTests(unittest.TestCase):
         with patch("backend.tts.voice_clone_engine._clone_runtime_platform_key", return_value="linux-x86_64"), \
              patch("backend.tts.voice_clone_engine.CLONE_RUNTIME_CATALOG", self._fake_catalog()), \
              patch("backend.tts.voice_clone_engine.CLONE_WAVLM_PIN", {"url": None, "sha256": None, "cache_relpath": "x"}), \
-             patch("model_manager.download_file", side_effect=fake_download):
+             patch("backend.models.model_manager.download_file", side_effect=fake_download):
             result = vce.provision_clone_runtime()
 
         self.assertFalse(result["ok"])

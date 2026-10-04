@@ -1,7 +1,7 @@
 import unittest
 
-import model_recommender as r
-from model_manager import AVAILABLE_MODELS
+from backend.models import model_recommender as r
+from backend.models.model_manager import AVAILABLE_MODELS
 
 
 class RecommenderTests(unittest.TestCase):

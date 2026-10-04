@@ -24,7 +24,7 @@ from persona_traits import (
     render_traits_block,
     trait_lint_warnings,
 )
-from model_manager import (
+from backend.models.model_manager import (
     AVAILABLE_MODELS,
     check_and_download_resources,
     get_llama_runtime_env,
@@ -32,7 +32,7 @@ from model_manager import (
     get_model_server_args,
     get_server_path,
 )
-from hardware_report import _estimate_runtime_mb
+from backend.models.hardware_report import _estimate_runtime_mb
 from backend.privacy.log_redaction import redact_stderr_lines
 from store_migration import load_versioned_store
 from backend.services.persona_schema import (

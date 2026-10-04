@@ -24,7 +24,7 @@ content-never-logged convention.
 from backend.services.rescue_llm_adapter import build_llm_call_fn
 from tools.lib.live_model_harness import DEFAULT_CONTEXT_TEXT, run_harness
 from llm_engine import SIDECAR_PORT, is_server_running
-from model_manager import DEFAULT_MODEL, get_model_file_status
+from backend.models.model_manager import DEFAULT_MODEL, get_model_file_status
 
 import pytest
 

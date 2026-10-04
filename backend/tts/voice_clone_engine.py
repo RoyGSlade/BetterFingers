@@ -353,7 +353,7 @@ def _clone_runtime_platform_key():
 
 
 def clone_runtime_dir():
-    from model_manager import get_models_dir
+    from backend.models.model_manager import get_models_dir
     return os.path.join(get_models_dir(), "clone-runtime")
 
 
@@ -447,7 +447,7 @@ def _provision_wavlm_pin(dest_dir, progress_callback=None):
         return {"ok": False, "message": "The pinned WavLM artifact has not been configured yet."}
     dest = os.path.join(dest_dir, "torch-home", CLONE_WAVLM_PIN["cache_relpath"])
     os.makedirs(os.path.dirname(dest), exist_ok=True)
-    from model_manager import download_file
+    from backend.models.model_manager import download_file
 
     try:
         download_file(
@@ -480,7 +480,7 @@ def provision_clone_runtime(progress_callback=None):
     os.makedirs(dest_dir, exist_ok=True)
     archive_path = os.path.join(dest_dir, entry["archive_name"])
 
-    from model_manager import download_file
+    from backend.models.model_manager import download_file
 
     try:
         download_file(

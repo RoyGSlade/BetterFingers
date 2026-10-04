@@ -7,9 +7,9 @@ unit-testable without any specific hardware.
 """
 import re
 
-from model_manager import AVAILABLE_MODELS, DEFAULT_MODEL
+from backend.models.model_manager import AVAILABLE_MODELS, DEFAULT_MODEL
 from transcriber import SUPPORTED_MODEL_SIZES
-from hardware_report import _estimate_runtime_mb
+from backend.models.hardware_report import _estimate_runtime_mb
 
 # The largest LLM (billions of params) worth *recommending* per tier. Bigger
 # models may still run, but slowly, so they are offered with a caveat, not chosen.

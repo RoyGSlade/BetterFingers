@@ -22,7 +22,7 @@ import unittest
 import zipfile
 from unittest.mock import patch, MagicMock
 
-import model_manager as mm
+from backend.models import model_manager as mm
 
 
 def _sha(data: bytes) -> str:
@@ -42,7 +42,7 @@ class InstalledModelVerificationTests(unittest.TestCase):
         self._env = patch.dict(os.environ, {}, clear=True)
         self._env.start()
         self.addCleanup(self._env.stop)
-        self._md = patch("model_manager.get_models_dir", return_value=self.models_dir)
+        self._md = patch("backend.models.model_manager.get_models_dir", return_value=self.models_dir)
         self._md.start()
         self.addCleanup(self._md.stop)
 
@@ -61,7 +61,7 @@ class InstalledModelVerificationTests(unittest.TestCase):
         payload = b"A" * 4096
         self._write_model(payload)
         with self._patch_catalog(_sha(b"the real model" * 300), len(payload)), patch(
-            "model_manager.get_model_path", return_value=self.path
+            "backend.models.model_manager.get_model_path", return_value=self.path
         ):
             self.assertFalse(mm.is_model_file_complete(self.model_id))
             result = mm.verify_installed_model(self.model_id, quarantine=False)
@@ -72,7 +72,7 @@ class InstalledModelVerificationTests(unittest.TestCase):
         payload = b"good model bytes " * 300
         self._write_model(payload)
         with self._patch_catalog(_sha(payload), len(payload)), patch(
-            "model_manager.get_model_path", return_value=self.path
+            "backend.models.model_manager.get_model_path", return_value=self.path
         ):
             self.assertTrue(mm.is_model_file_complete(self.model_id))
             self.assertTrue(mm.verify_installed_model(self.model_id)["ok"])
@@ -81,10 +81,10 @@ class InstalledModelVerificationTests(unittest.TestCase):
         payload = b"cacheable model " * 500
         self._write_model(payload)
         with self._patch_catalog(_sha(payload), len(payload)), patch(
-            "model_manager.get_model_path", return_value=self.path
+            "backend.models.model_manager.get_model_path", return_value=self.path
         ):
             real_sha = mm.sha256_file
-            with patch("model_manager.sha256_file", side_effect=real_sha) as spy:
+            with patch("backend.models.model_manager.sha256_file", side_effect=real_sha) as spy:
                 first = mm.verify_installed_model(self.model_id)
                 second = mm.verify_installed_model(self.model_id)
         self.assertTrue(first["ok"] and second["ok"])
@@ -96,7 +96,7 @@ class InstalledModelVerificationTests(unittest.TestCase):
         payload = b"first bytes " * 500
         self._write_model(payload)
         with self._patch_catalog(_sha(payload), len(payload)), patch(
-            "model_manager.get_model_path", return_value=self.path
+            "backend.models.model_manager.get_model_path", return_value=self.path
         ):
             self.assertTrue(mm.verify_installed_model(self.model_id)["ok"])
         # Same length, different content, newer mtime -> cache must not be trusted.
@@ -105,7 +105,7 @@ class InstalledModelVerificationTests(unittest.TestCase):
         self._write_model(tampered)
         os.utime(self.path, (0, 0))  # force a distinct mtime
         with self._patch_catalog(_sha(payload), len(payload)), patch(
-            "model_manager.get_model_path", return_value=self.path
+            "backend.models.model_manager.get_model_path", return_value=self.path
         ):
             result = mm.verify_installed_model(self.model_id, quarantine=False)
         self.assertFalse(result["ok"])
@@ -114,7 +114,7 @@ class InstalledModelVerificationTests(unittest.TestCase):
         payload = b"B" * 8192
         self._write_model(payload)
         with self._patch_catalog(_sha(b"expected"), len(payload)), patch(
-            "model_manager.get_model_path", return_value=self.path
+            "backend.models.model_manager.get_model_path", return_value=self.path
         ):
             result = mm.verify_installed_model(self.model_id, quarantine=True)
         self.assertFalse(result["ok"])
@@ -133,9 +133,9 @@ class DeleteModelCleansSidecarTests(unittest.TestCase):
             with open(path + ".sha256", "w", encoding="utf-8") as handle:
                 handle.write(f"{_sha(payload)}  model.gguf\n")
 
-            with patch("model_manager.get_models_dir", return_value=tmp), patch(
-                "model_manager.get_model_path", return_value=path
-            ), patch("model_manager.get_partial_model_path", return_value=path + ".part"):
+            with patch("backend.models.model_manager.get_models_dir", return_value=tmp), patch(
+                "backend.models.model_manager.get_model_path", return_value=path
+            ), patch("backend.models.model_manager.get_partial_model_path", return_value=path + ".part"):
                 # Seed a cache entry for this path.
                 mm._cached_digest_ok(path, _sha(payload))
                 self.assertIn(os.path.abspath(path), mm._load_verify_cache())
@@ -155,7 +155,7 @@ class RuntimeBinaryVerificationTests(unittest.TestCase):
             with open(server_path, "wb") as handle:
                 handle.write(b"#!/bin/sh\necho 'version: 9548'\n")
 
-            with patch("model_manager.get_models_dir", return_value=tmp):
+            with patch("backend.models.model_manager.get_models_dir", return_value=tmp):
                 mm.record_runtime_digest(server_path)
                 self.assertTrue(os.path.exists(server_path + ".sha256"))
                 self.assertTrue(mm.verify_installed_runtime(server_path)["ok"])
@@ -179,15 +179,15 @@ class RuntimeBinaryVerificationTests(unittest.TestCase):
                 handle.write("#!/bin/sh\necho 'version: 9548'\n")
             os.chmod(server_path, 0o755)
 
-            with patch("model_manager.get_models_dir", return_value=tmp), patch(
-                "model_manager.sys.platform", "linux"
+            with patch("backend.models.model_manager.get_models_dir", return_value=tmp), patch(
+                "backend.models.model_manager.sys.platform", "linux"
             ):
                 mm.record_runtime_digest(server_path)
                 with open(server_path, "w", encoding="utf-8") as handle:
                     handle.write("#!/bin/sh\necho 'version: 9548'\ntouch pwned\n")
                 os.utime(server_path, (0, 0))
 
-                with patch("model_manager.subprocess.run") as run:
+                with patch("backend.models.model_manager.subprocess.run") as run:
                     result = mm.validate_llama_server_runtime(server_path)
 
             self.assertFalse(result["ok"])
@@ -297,7 +297,7 @@ class SafeExtractionTests(unittest.TestCase):
             with open(target, "wb") as fh:
                 fh.write(b"lib")
 
-            with patch("model_manager.os.symlink", side_effect=OSError("disk failure")):
+            with patch("backend.models.model_manager.os.symlink", side_effect=OSError("disk failure")):
                 with self.assertRaisesRegex(OSError, "disk failure"):
                     mm._safe_symlink(
                         tmp,

@@ -6,8 +6,8 @@ import unittest
 from io import BytesIO
 from unittest.mock import patch
 
-import model_manager
-from model_manager import check_and_download_resources, get_model_server_args
+from backend.models import model_manager
+from backend.models.model_manager import check_and_download_resources, get_model_server_args
 
 # Synthetic catalog entry with no family (and therefore no minimum llama-server
 # build requirement). The shipping catalog is gemma-4-only, so tests that need
@@ -78,8 +78,8 @@ class ModelManagerStatusTests(unittest.TestCase):
                 stdout="version: 9548",
                 stderr="",
             )
-            with patch("model_manager.subprocess.run", return_value=completed) as run, patch(
-                "model_manager.time.monotonic", side_effect=[100.0, 120.5]
+            with patch("backend.models.model_manager.subprocess.run", return_value=completed) as run, patch(
+                "backend.models.model_manager.time.monotonic", side_effect=[100.0, 120.5]
             ):
                 result = model_manager.validate_llama_server_runtime(server_path)
 
@@ -102,8 +102,8 @@ class ModelManagerStatusTests(unittest.TestCase):
                 [server_path, "--version"],
                 model_manager.LLAMA_RUNTIME_VALIDATION_TIMEOUT_S,
             )
-            with patch("model_manager.subprocess.run", side_effect=timeout), patch(
-                "model_manager.time.monotonic", side_effect=[50.0, 80.0]
+            with patch("backend.models.model_manager.subprocess.run", side_effect=timeout), patch(
+                "backend.models.model_manager.time.monotonic", side_effect=[50.0, 80.0]
             ):
                 result = model_manager.validate_llama_server_runtime(server_path)
 
@@ -151,7 +151,7 @@ class ModelManagerStatusTests(unittest.TestCase):
             with open(f"{dest}.part", "wb") as handle:
                 handle.write(b"abcde")
 
-            with patch("model_manager.requests.get", return_value=FakeResponse()) as get:
+            with patch("backend.models.model_manager.requests.get", return_value=FakeResponse()) as get:
                 model_manager.download_file("https://example.test/model", dest, "Model", progress_callback=progress.append)
 
             self.assertTrue(os.path.exists(dest))
@@ -181,7 +181,7 @@ class ModelManagerStatusTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             dest = os.path.join(tmp, "model.gguf")
-            with patch("model_manager.requests.get", return_value=BrokenResponse()):
+            with patch("backend.models.model_manager.requests.get", return_value=BrokenResponse()):
                 with self.assertRaises(RuntimeError):
                     model_manager.download_file("https://example.test/model", dest, "Model")
 
@@ -210,7 +210,7 @@ class ModelManagerStatusTests(unittest.TestCase):
             with open(f"{dest}.part", "wb") as handle:
                 handle.write(b"oversized-corrupt-partial")
 
-            with patch("model_manager.requests.get", return_value=FakeResponse()) as get:
+            with patch("backend.models.model_manager.requests.get", return_value=FakeResponse()) as get:
                 model_manager.download_file(
                     "https://example.test/model",
                     dest,
@@ -241,7 +241,7 @@ class ModelManagerStatusTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             dest = os.path.join(tmp, "model.gguf")
-            with patch("model_manager.requests.get", return_value=FakeResponse()):
+            with patch("backend.models.model_manager.requests.get", return_value=FakeResponse()):
                 with self.assertRaisesRegex(IOError, "download size mismatch"):
                     model_manager.download_file(
                         "https://example.test/model",
@@ -260,9 +260,9 @@ class ModelManagerStatusTests(unittest.TestCase):
             with open(model_path, "wb") as handle:
                 handle.write(b"partial")
 
-            with patch("model_manager.get_model_path", return_value=model_path), patch(
-                "model_manager.get_partial_model_path", return_value=part_path
-            ), patch("model_manager.is_model_file_complete", return_value=False):
+            with patch("backend.models.model_manager.get_model_path", return_value=model_path), patch(
+                "backend.models.model_manager.get_partial_model_path", return_value=part_path
+            ), patch("backend.models.model_manager.is_model_file_complete", return_value=False):
                 moved = model_manager._prepare_incomplete_model_for_resume("gemma-4-e4b-q4")
 
             self.assertEqual(moved, len(b"partial"))
@@ -288,7 +288,7 @@ class ModelManagerStatusTests(unittest.TestCase):
                         symlink.linkname = target_name
                         archive.addfile(symlink)
 
-            with patch("model_manager.sys.platform", "linux"):
+            with patch("backend.models.model_manager.sys.platform", "linux"):
                 model_manager._extract_tar_flat(archive_path, extract_dir)
                 self.assertTrue(os.path.islink(os.path.join(extract_dir, "libmtmd.so.0")))
 
@@ -357,8 +357,8 @@ class ModelManagerStatusTests(unittest.TestCase):
                 handle.write("exit 127\n")
             os.chmod(server_path, 0o755)
 
-            with patch("model_manager.sys.platform", "linux"), patch(
-                "model_manager.repair_linux_runtime_links", return_value={"ok": True, "repaired": [], "missing": [], "errors": []}
+            with patch("backend.models.model_manager.sys.platform", "linux"), patch(
+                "backend.models.model_manager.repair_linux_runtime_links", return_value={"ok": True, "repaired": [], "missing": [], "errors": []}
             ):
                 result = model_manager.validate_llama_server_runtime(server_path)
 
@@ -385,12 +385,12 @@ class ModelManagerStatusTests(unittest.TestCase):
                     archive.addfile(info, BytesIO(data))
 
             with patch.dict(os.environ, {"BETTERFINGERS_ALLOW_TINY_MODELS": "1"}, clear=True), patch(
-                "model_manager.sys.platform", "linux"
-            ), patch("model_manager.get_models_dir", return_value=tmp), patch(
-                "model_manager.get_repo_root", return_value=tmp
+                "backend.models.model_manager.sys.platform", "linux"
+            ), patch("backend.models.model_manager.get_models_dir", return_value=tmp), patch(
+                "backend.models.model_manager.get_repo_root", return_value=tmp
             ), patch(
-                "model_manager.get_model_path", return_value=model_path
-            ), patch("model_manager.download_file", side_effect=fake_download) as download_file:
+                "backend.models.model_manager.get_model_path", return_value=model_path
+            ), patch("backend.models.model_manager.download_file", side_effect=fake_download) as download_file:
                 result = check_and_download_resources(model_id="gemma-4-12b-q4")
 
             self.assertTrue(result["ok"])
@@ -409,9 +409,9 @@ class ModelManagerStatusTests(unittest.TestCase):
                 handle.write("#!/bin/sh\necho 'version: 7870'\n")
             os.chmod(server_path, 0o755)
 
-            with patch("model_manager.sys.platform", "linux"), patch(
-                "model_manager.get_model_path", return_value=model_path
-            ), patch("model_manager.get_server_path", return_value=server_path), patch.dict(
+            with patch("backend.models.model_manager.sys.platform", "linux"), patch(
+                "backend.models.model_manager.get_model_path", return_value=model_path
+            ), patch("backend.models.model_manager.get_server_path", return_value=server_path), patch.dict(
                 model_manager.AVAILABLE_MODELS, {"legacy-test-model": _LEGACY_TEST_MODEL}
             ):
                 self.assertFalse(model_manager.is_ready("gemma-4-12b-q4"))
@@ -423,10 +423,10 @@ class ModelManagerStatusTests(unittest.TestCase):
             model_path = os.path.join(tmp, "missing.gguf")
             server_path = os.path.join(tmp, "llama-server.exe")
 
-            with patch("model_manager.get_models_dir", return_value=tmp), patch(
-                "model_manager.get_model_path", return_value=model_path
-            ), patch("model_manager.get_server_path", return_value=server_path), patch(
-                "model_manager.download_file", side_effect=RuntimeError("offline")
+            with patch("backend.models.model_manager.get_models_dir", return_value=tmp), patch(
+                "backend.models.model_manager.get_model_path", return_value=model_path
+            ), patch("backend.models.model_manager.get_server_path", return_value=server_path), patch(
+                "backend.models.model_manager.download_file", side_effect=RuntimeError("offline")
             ) as download_file, patch.dict(
                 model_manager.AVAILABLE_MODELS, {"legacy-test-model": _LEGACY_TEST_MODEL}
             ):
@@ -445,7 +445,7 @@ class ModelManagerStatusTests(unittest.TestCase):
             os.chmod(model_path, 0o444)
 
             try:
-                with patch("model_manager.get_model_path", return_value=model_path):
+                with patch("backend.models.model_manager.get_model_path", return_value=model_path):
                     status = model_manager.get_model_file_status("gemma-4-12b-q4")
             finally:
                 os.chmod(model_path, 0o644)
@@ -463,7 +463,7 @@ class ModelManagerStatusTests(unittest.TestCase):
             os.chmod(model_path, 0)
 
             try:
-                with patch("model_manager.get_model_path", return_value=model_path):
+                with patch("backend.models.model_manager.get_model_path", return_value=model_path):
                     status = model_manager.get_model_file_status("gemma-4-12b-q4")
                     complete = model_manager.is_model_file_complete("gemma-4-12b-q4")
                     readable = os.access(model_path, os.R_OK)
@@ -490,11 +490,11 @@ class ModelManagerStatusTests(unittest.TestCase):
                     archive.addfile(info, BytesIO(data))
 
             with patch.dict(os.environ, {"BETTERFINGERS_MODEL_PATH": model_path, "BETTERFINGERS_ALLOW_TINY_MODELS": "1"}, clear=True), patch(
-                "model_manager.sys.platform", "linux"
-            ), patch("model_manager.get_models_dir", return_value=tmp), patch(
-                "model_manager.get_repo_root", return_value=tmp
+                "backend.models.model_manager.sys.platform", "linux"
+            ), patch("backend.models.model_manager.get_models_dir", return_value=tmp), patch(
+                "backend.models.model_manager.get_repo_root", return_value=tmp
             ), patch(
-                "model_manager.download_file", side_effect=fake_download
+                "backend.models.model_manager.download_file", side_effect=fake_download
             ) as download_file, patch.dict(
                 model_manager.AVAILABLE_MODELS, {"legacy-test-model": _LEGACY_TEST_MODEL}
             ):
@@ -520,10 +520,10 @@ class ModelManagerStatusTests(unittest.TestCase):
             os.chmod(server_path, 0o755)
 
             with patch.dict(os.environ, {"BETTERFINGERS_MODEL_PATH": model_path, "BETTERFINGERS_ALLOW_TINY_MODELS": "1"}, clear=True), patch(
-                "model_manager.sys.platform", "linux"
-            ), patch("model_manager.get_repo_root", return_value=tmp), patch(
-                "model_manager.get_models_dir", return_value=os.path.join(tmp, "models")
-            ), patch("model_manager.download_file") as download_file, patch.dict(
+                "backend.models.model_manager.sys.platform", "linux"
+            ), patch("backend.models.model_manager.get_repo_root", return_value=tmp), patch(
+                "backend.models.model_manager.get_models_dir", return_value=os.path.join(tmp, "models")
+            ), patch("backend.models.model_manager.download_file") as download_file, patch.dict(
                 model_manager.AVAILABLE_MODELS, {"legacy-test-model": _LEGACY_TEST_MODEL}
             ):
                 self.assertEqual(model_manager.get_server_path(), server_path)
@@ -539,7 +539,7 @@ class ModelManagerStatusTests(unittest.TestCase):
                 handle.write("#!/bin/sh\n")
 
             with patch.dict(os.environ, {"BETTERFINGERS_LLAMA_SERVER": server_path}, clear=True), patch(
-                "model_manager.sys.platform", "linux"
+                "backend.models.model_manager.sys.platform", "linux"
             ):
                 self.assertEqual(model_manager.get_server_path(), server_path)
 

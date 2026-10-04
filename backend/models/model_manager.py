@@ -323,7 +323,10 @@ def get_models_dir():
 
 
 def get_repo_root():
-    return os.path.dirname(os.path.abspath(__file__))
+    # This file is <repo>/backend/models/model_manager.py, so the repo root is three
+    # levels up. Frozen (PyInstaller) builds report __file__ as
+    # <sys._MEIPASS>/backend/models/model_manager.py, so this lands on _MEIPASS too.
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def get_model_path(model_id=None):

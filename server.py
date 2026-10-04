@@ -33,7 +33,7 @@ from backend.stores.user_profile_manager import profile_manager
 from backend.dev.intent_engine import intent_engine, IntentState
 from backend.dev.project_generator import project_generator
 from platform_capabilities import get_capabilities, get_injection_status
-from hardware_report import get_hardware_report, assess_model_fit, get_hardware_tier
+from backend.models.hardware_report import get_hardware_report, assess_model_fit, get_hardware_tier
 from platform_paths import ensure_app_dirs, get_app_data_dir, get_config_dir
 from backend.stores import recordings
 from backend.privacy import upload_safety
@@ -61,7 +61,7 @@ from backend.runtime.output_coordinator import OutputCoordinator
 from backend.commands import voice_commands
 from backend.commands import voice_edit_commands
 from backend.runtime.utterance_history import Utterance, utterance_history
-from model_manager import (
+from backend.models.model_manager import (
     DEFAULT_MODEL,
     AVAILABLE_MODELS,
     check_and_download_resources,
@@ -3229,7 +3229,7 @@ async def hardware_tier():
 
 @app.get("/models/recommend")
 async def models_recommend():
-    import model_recommender
+    from backend.models import model_recommender
 
     report = get_hardware_report()
     tier_info = get_hardware_tier(report=report)

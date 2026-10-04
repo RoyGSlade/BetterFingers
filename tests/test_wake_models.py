@@ -50,7 +50,7 @@ class _IsolatedWakeModelsDirMixin:
 class DownloadWakeModelTests(_IsolatedWakeModelsDirMixin, unittest.TestCase):
     def test_download_delegates_to_model_manager_with_pinned_digest(self):
         info = wm.AVAILABLE_WAKE_MODELS["melspectrogram"]
-        with patch("model_manager.download_file") as mock_download:
+        with patch("backend.models.model_manager.download_file") as mock_download:
             dest = wm.download_wake_model("melspectrogram")
         mock_download.assert_called_once()
         args, kwargs = mock_download.call_args
