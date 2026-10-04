@@ -16,10 +16,10 @@ from backend.runtime.job_manager import JOBS, JobState
 from backend.privacy.log_redaction import redact_user_text
 from backend.runtime.model_runtime_coordinator import RuntimeBusyError
 from utils import get_user_data_path
-import voice_clone_engine
-from tts_text import apply_pause_style, normalize_for_speech
-import voice_blend
-import voice_modulation
+from backend.tts import voice_clone_engine
+from backend.tts.tts_text import apply_pause_style, normalize_for_speech
+from backend.tts import voice_blend
+from backend.tts import voice_modulation
 
 # Regex-based pronunciation fixes
 _PRONUNCIATION_MAP = {

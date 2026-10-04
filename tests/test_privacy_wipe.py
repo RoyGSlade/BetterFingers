@@ -13,7 +13,7 @@ from backend.stores import history_store
 from backend.stores import recordings
 import routes_wake
 import server
-import voice_clone_engine
+from backend.tts import voice_clone_engine
 import wake_setup_registry
 
 

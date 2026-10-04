@@ -5,8 +5,8 @@ import wave
 
 import numpy as np
 
-import voice_clone_qa
-from voice_clone_qa import (
+from backend.tts import voice_clone_qa
+from backend.tts.voice_clone_qa import (
     check_clipping,
     check_duration,
     check_file,

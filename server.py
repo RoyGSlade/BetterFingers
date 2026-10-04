@@ -41,7 +41,7 @@ from backend.stores import dictionary
 from backend.commands import dictation_commands
 from backend.stores import macros
 from backend.stores import voice_presets
-import voice_clone_qa
+from backend.tts import voice_clone_qa
 from backend.stores import history_store
 import wake_setup_registry
 # Wave 6: the privacy report, every wipe mode, and the factory reset are all
@@ -2910,7 +2910,7 @@ def ensure_tts_initialized():
     global tts_engine
     if tts_engine is None:
         try:
-            from tts_engine import ReviewTTSEngine
+            from backend.tts.tts_engine import ReviewTTSEngine
             tts_engine = ReviewTTSEngine()
             if hasattr(tts_engine, "set_admission_fn"):
                 tts_engine.set_admission_fn(lambda est, mid=None: model_runtime.request_admission("tts", est, mid))
@@ -4350,7 +4350,7 @@ def _drain_tts_and_clone(timeout=TTS_DRAIN_TIMEOUT_SECONDS):
     deleting — a live synthesis or conversion could still hold user
     text/audio.
     """
-    import voice_clone_engine
+    from backend.tts import voice_clone_engine
 
     results = {
         "tts_playback_stopped": True,
@@ -6031,7 +6031,7 @@ async def list_voices():
         {"id": "standard_male", "name": "Standard Male (Kokoro Puck)"},
     ]
     
-    import voice_clone_engine
+    from backend.tts import voice_clone_engine
     return {"defaults": defaults, "cloned": cloned,
             "cloning": voice_clone_engine.availability()}
 
@@ -6045,7 +6045,7 @@ async def get_voice_clone_status():
     availability-probing route here — it runs in a threadpool rather than
     blocking the event loop.
     """
-    import voice_clone_engine
+    from backend.tts import voice_clone_engine
     status = await run_in_threadpool(voice_clone_engine.availability)
     return {
         "ok": True,
@@ -6067,7 +6067,7 @@ async def provision_voice_cloning():
     provision_clone_runtime() refuses cleanly (ok=False + message) when the
     platform has no catalog entry or the artifact isn't published yet, so this
     route never raises for the not-ready case."""
-    import voice_clone_engine
+    from backend.tts import voice_clone_engine
     result = await run_in_threadpool(voice_clone_engine.provision_clone_runtime)
     return {**result, "cloning": voice_clone_engine.availability()}
 
