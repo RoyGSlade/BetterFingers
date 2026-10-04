@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from transcriber import Transcriber, get_whisper_download_state, list_cached_models, _repo_id_for_model
+from backend.stt.transcriber import Transcriber, get_whisper_download_state, list_cached_models, _repo_id_for_model
 
 
 class _DummySegment:
@@ -82,8 +82,8 @@ class TranscriberLifecycleTests(unittest.TestCase):
             transcriber.download_root = cache_root
             self.assertTrue(transcriber._is_model_cached("distil-medium.en"))
 
-    @patch("transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
-    @patch("transcriber.WhisperModel", return_value=_DummyWhisperModel())
+    @patch("backend.stt.transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
+    @patch("backend.stt.transcriber.WhisperModel", return_value=_DummyWhisperModel())
     def test_unload_then_transcribe_reloads_model(self, whisper_model, _load_profile):
         transcriber = Transcriber(profile_name="Default", preload=False)
         self.assertIsNone(transcriber.model)
@@ -105,8 +105,8 @@ class TranscriberAdmissionTests(unittest.TestCase):
     """Load-site seam for model_runtime_coordinator (DESIGN.md M6): ensure_loaded
     consults the injected admission_fn before constructing WhisperModel."""
 
-    @patch("transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
-    @patch("transcriber.WhisperModel", return_value=_DummyWhisperModel())
+    @patch("backend.stt.transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
+    @patch("backend.stt.transcriber.WhisperModel", return_value=_DummyWhisperModel())
     def test_refused_admission_blocks_load_without_crashing(self, whisper_model, _load_profile):
         transcriber = Transcriber(profile_name="Default", preload=False)
         transcriber.set_admission_fn(lambda est, size: {
@@ -122,8 +122,8 @@ class TranscriberAdmissionTests(unittest.TestCase):
         whisper_model.assert_not_called()
         self.assertIn("Not enough RAM", transcriber._last_error)
 
-    @patch("transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
-    @patch("transcriber.WhisperModel", return_value=_DummyWhisperModel())
+    @patch("backend.stt.transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
+    @patch("backend.stt.transcriber.WhisperModel", return_value=_DummyWhisperModel())
     def test_allowed_admission_loads_and_reports(self, whisper_model, _load_profile):
         transcriber = Transcriber(profile_name="Default", preload=False)
         transcriber.set_admission_fn(lambda est, size: {"allowed": True, "refusal": None})
@@ -151,8 +151,8 @@ class TranscriberLazyProbeRecoveryTests(unittest.TestCase):
             )
 
         patches = [
-            patch("transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": True}),
-            patch("transcriber.WhisperModel", side_effect=factory),
+            patch("backend.stt.transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": True}),
+            patch("backend.stt.transcriber.WhisperModel", side_effect=factory),
             patch.object(Transcriber, "_is_model_cached", return_value=True),
         ]
         for item in patches:
@@ -232,8 +232,8 @@ class TranscriberLazyProbeRecoveryTests(unittest.TestCase):
         self.assertTrue(status["inference_ready"])
         self.assertEqual(calls, ["cuda"])
 
-    @patch("transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
-    @patch("transcriber.WhisperModel", return_value=_DummyWhisperModel())
+    @patch("backend.stt.transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
+    @patch("backend.stt.transcriber.WhisperModel", return_value=_DummyWhisperModel())
     def test_no_admission_fn_is_a_noop(self, whisper_model, _load_profile):
         transcriber = Transcriber(profile_name="Default", preload=False)
         ok = transcriber.ensure_loaded()
@@ -249,9 +249,9 @@ class TranscriberOnDemandDownloadStateTests(unittest.TestCase):
     'downloading' capture state) can observe real progress instead of the
     load just blocking silently."""
 
-    @patch("transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
-    @patch("transcriber.Transcriber._is_model_cached", return_value=False)
-    @patch("transcriber.WhisperModel", return_value=_DummyWhisperModel())
+    @patch("backend.stt.transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
+    @patch("backend.stt.transcriber.Transcriber._is_model_cached", return_value=False)
+    @patch("backend.stt.transcriber.WhisperModel", return_value=_DummyWhisperModel())
     def test_uncached_load_reports_downloading_then_complete(self, whisper_model, _is_cached, _load_profile):
         del whisper_model
         transcriber = Transcriber(profile_name="Default", preload=False)
@@ -263,24 +263,24 @@ class TranscriberOnDemandDownloadStateTests(unittest.TestCase):
         self.assertEqual(final_state["status"], "complete")
         self.assertEqual(final_state["percent"], 100.0)
 
-    @patch("transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
-    @patch("transcriber.Transcriber._is_model_cached", return_value=False)
-    @patch("transcriber.WhisperModel", return_value=_DummyWhisperModel())
+    @patch("backend.stt.transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
+    @patch("backend.stt.transcriber.Transcriber._is_model_cached", return_value=False)
+    @patch("backend.stt.transcriber.WhisperModel", return_value=_DummyWhisperModel())
     def test_uncached_load_passes_through_starting_and_downloading(self, whisper_model, _is_cached, _load_profile):
         del whisper_model
         transcriber = Transcriber(profile_name="Default", preload=False)
 
-        with patch("transcriber._set_whisper_download_state") as setter:
+        with patch("backend.stt.transcriber._set_whisper_download_state") as setter:
             transcriber.ensure_loaded()
 
         statuses = [call.args[1]["status"] for call in setter.call_args_list]
         self.assertEqual(statuses, ["starting", "downloading", "complete"])
 
-    @patch("transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
-    @patch("transcriber.Transcriber._is_model_cached", return_value=False)
+    @patch("backend.stt.transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
+    @patch("backend.stt.transcriber.Transcriber._is_model_cached", return_value=False)
     def test_uncached_load_failure_reports_error_state(self, _is_cached, _load_profile):
         transcriber = Transcriber(profile_name="Default", preload=False)
-        with patch("transcriber.WhisperModel", side_effect=RuntimeError("network unreachable")):
+        with patch("backend.stt.transcriber.WhisperModel", side_effect=RuntimeError("network unreachable")):
             ok = transcriber.ensure_loaded()
 
         self.assertFalse(ok)
@@ -288,13 +288,13 @@ class TranscriberOnDemandDownloadStateTests(unittest.TestCase):
         self.assertEqual(final_state["status"], "error")
         self.assertIn("network unreachable", final_state["message"])
 
-    @patch("transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
-    @patch("transcriber.Transcriber._is_model_cached", return_value=True)
-    @patch("transcriber.WhisperModel", return_value=_DummyWhisperModel())
+    @patch("backend.stt.transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False})
+    @patch("backend.stt.transcriber.Transcriber._is_model_cached", return_value=True)
+    @patch("backend.stt.transcriber.WhisperModel", return_value=_DummyWhisperModel())
     def test_cached_load_never_touches_download_state(self, whisper_model, _is_cached, _load_profile):
         del whisper_model
         transcriber = Transcriber(profile_name="Default", preload=False)
-        with patch("transcriber._set_whisper_download_state") as setter:
+        with patch("backend.stt.transcriber._set_whisper_download_state") as setter:
             ok = transcriber.ensure_loaded()
 
         self.assertTrue(ok)

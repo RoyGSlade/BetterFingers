@@ -11,7 +11,7 @@ import numpy as np
 
 import server
 import utils
-from transcriber import Transcriber
+from backend.stt.transcriber import Transcriber
 
 
 class _Segment:

@@ -1,7 +1,7 @@
 """Tests for the Whisper hallucination guard in transcriber.py."""
 import unittest
 
-from transcriber import _is_hallucination
+from backend.stt.transcriber import _is_hallucination
 
 
 class HallucinationGuardTests(unittest.TestCase):

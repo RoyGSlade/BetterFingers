@@ -2,7 +2,7 @@ import unittest
 
 from backend.models import model_recommender as r
 from backend.models.model_manager import AVAILABLE_MODELS
-from transcriber import SUPPORTED_MODEL_SIZES
+from backend.stt.transcriber import SUPPORTED_MODEL_SIZES
 
 
 class AlternativesCatalogTests(unittest.TestCase):

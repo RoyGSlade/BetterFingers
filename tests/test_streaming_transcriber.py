@@ -12,7 +12,7 @@ import unittest
 
 import numpy as np
 
-from streaming_transcriber import (
+from backend.stt.streaming_transcriber import (
     BatchCutter,
     StreamingTranscriptionSession,
     aggregate_confidence,

@@ -25,8 +25,8 @@ from llm_engine import LLMEngine, get_engine, get_engine_if_initialized, resolve
 from backend.privacy.log_redaction import redact_exc, redact_user_text
 from store_migration import get_degraded_events
 import version
-from transcriber import Transcriber
-from streaming_transcriber import BatchCutter, StreamingTranscriptionSession
+from backend.stt.transcriber import Transcriber
+from backend.stt.streaming_transcriber import BatchCutter, StreamingTranscriptionSession
 from hotkey_manager import HotkeyManager
 from backend.audio.audio_gate import should_block_for_no_audio
 from backend.stores.user_profile_manager import profile_manager
@@ -78,7 +78,7 @@ from backend.models.model_manager import (
     validate_llama_server_runtime,
 )
 # Configure Logging
-from transcriber import (
+from backend.stt.transcriber import (
     SUPPORTED_MODEL_SIZES,
     download_whisper_model,
     get_whisper_download_state,

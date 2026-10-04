@@ -7,7 +7,7 @@ import time
 import numpy as np
 
 from llm_engine import get_engine
-from transcriber import Transcriber
+from backend.stt.transcriber import Transcriber
 from backend.tts.tts_engine import ReviewTTSEngine
 
 

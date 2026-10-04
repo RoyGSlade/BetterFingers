@@ -12,8 +12,8 @@ from unittest.mock import patch
 
 import numpy as np
 
-import transcriber as stt
-from transcriber import (
+from backend.stt import transcriber as stt
+from backend.stt.transcriber import (
     STT_CPU_THREAD_CAP,
     Transcriber,
     choose_stt_cpu_threads,
@@ -182,19 +182,19 @@ class ChooseThreadsPolicyTests(unittest.TestCase):
 
     def test_physical_cores_fall_back_to_half_of_logical_when_psutil_cannot_say(self):
         with patch.object(stt, "psutil", make_fake_psutil(count_error=OSError("nope"))), \
-             patch("transcriber.os.cpu_count", return_value=8):
+             patch("backend.stt.transcriber.os.cpu_count", return_value=8):
             self.assertEqual(choose_stt_cpu_threads(cpu_load_percent=0, env={}), 4)
 
 
 class _LoadTestCase(unittest.TestCase):
     def _transcriber(self, fake, *, prefer_gpu, model_size="base.en", cached=True):
         self.load_profile = patch(
-            "transcriber.load_profile",
+            "backend.stt.transcriber.load_profile",
             return_value={"model_size": model_size, "use_gpu": prefer_gpu},
         ).start()
         self.addCleanup(patch.stopall)
         patch.object(Transcriber, "_is_model_cached", return_value=cached).start()
-        patch("transcriber.WhisperModel", new=fake).start()
+        patch("backend.stt.transcriber.WhisperModel", new=fake).start()
         return Transcriber(profile_name="Default", preload=False)
 
     @staticmethod
@@ -207,7 +207,7 @@ class CpuLoadThreadsTests(_LoadTestCase):
         fake = make_fake_whisper()
         t = self._transcriber(fake, prefer_gpu=False)
 
-        with patch("transcriber.choose_stt_cpu_threads", return_value=5) as choose:
+        with patch("backend.stt.transcriber.choose_stt_cpu_threads", return_value=5) as choose:
             self.assertTrue(t.ensure_loaded())
 
         choose.assert_called_once()
@@ -223,8 +223,8 @@ class CpuLoadThreadsTests(_LoadTestCase):
         env = {k: v for k, v in os.environ.items() if k != ENV_KEY}
 
         with patch.dict(os.environ, env, clear=True), \
-             patch("transcriber._detect_physical_cores", return_value=12), \
-             patch("transcriber._sample_cpu_load_percent", return_value=50.0), \
+             patch("backend.stt.transcriber._detect_physical_cores", return_value=12), \
+             patch("backend.stt.transcriber._sample_cpu_load_percent", return_value=50.0), \
              self.assertLogs(level="INFO") as logs:
             self.assertTrue(t.ensure_loaded())
 
@@ -250,7 +250,7 @@ class CpuLoadThreadsTests(_LoadTestCase):
         fake.__init__ = flaky_init
         t = self._transcriber(fake, prefer_gpu=False)
 
-        with patch("transcriber.choose_stt_cpu_threads", return_value=4) as choose:
+        with patch("backend.stt.transcriber.choose_stt_cpu_threads", return_value=4) as choose:
             self.assertTrue(t.ensure_loaded())
 
         choose.assert_called_once()  # one policy decision (and one log line) per load
@@ -264,7 +264,7 @@ class CpuLoadThreadsTests(_LoadTestCase):
         fake = make_fake_whisper()
         t = self._transcriber(fake, prefer_gpu=True)
 
-        with patch("transcriber.choose_stt_cpu_threads", return_value=3):
+        with patch("backend.stt.transcriber.choose_stt_cpu_threads", return_value=3):
             model = t._load_cpu_fallback_model()
 
         self.assertEqual(model.kwargs["device"], "cpu")
@@ -277,7 +277,7 @@ class CpuLoadThreadsTests(_LoadTestCase):
         t = self._transcriber(fake, prefer_gpu=False)
         self.assertIsNone(t.active_cpu_threads)  # initialised while unloaded
 
-        with patch("transcriber.choose_stt_cpu_threads", return_value=5):
+        with patch("backend.stt.transcriber.choose_stt_cpu_threads", return_value=5):
             t.ensure_loaded()
         self.assertEqual(t.active_cpu_threads, 5)
 
@@ -285,7 +285,7 @@ class CpuLoadThreadsTests(_LoadTestCase):
         self.assertIsNone(t.active_device)
         self.assertIsNone(t.active_cpu_threads)
 
-        with patch("transcriber.choose_stt_cpu_threads", return_value=5):
+        with patch("backend.stt.transcriber.choose_stt_cpu_threads", return_value=5):
             t.ensure_loaded()
         self.assertEqual(t.active_cpu_threads, 5)
 
@@ -310,7 +310,7 @@ class CudaLoadProbeTests(_LoadTestCase):
                 events = []
                 t.set_error_reporter(events.append)
 
-                with patch("transcriber.choose_stt_cpu_threads", return_value=5):
+                with patch("backend.stt.transcriber.choose_stt_cpu_threads", return_value=5):
                     self.assertTrue(t.ensure_loaded())
 
                 self.assertEqual(self._devices(fake), ["cuda", "cpu"])
@@ -450,7 +450,7 @@ class CudaLoadProbeTests(_LoadTestCase):
         fake = make_fake_whisper(cuda_error=RuntimeError(CUBLAS_MSG), healthy_cuda_calls=1)
         t = self._transcriber(fake, prefer_gpu=True)
 
-        with patch("transcriber.choose_stt_cpu_threads", return_value=4):
+        with patch("backend.stt.transcriber.choose_stt_cpu_threads", return_value=4):
             result = t.transcribe(np.zeros(1600, dtype=np.float32))
 
         self.assertEqual(result, "load policy test phrase")
