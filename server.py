@@ -35,14 +35,14 @@ from backend.dev.project_generator import project_generator
 from platform_capabilities import get_capabilities, get_injection_status
 from hardware_report import get_hardware_report, assess_model_fit, get_hardware_tier
 from platform_paths import ensure_app_dirs, get_app_data_dir, get_config_dir
-import recordings
+from backend.stores import recordings
 from backend.privacy import upload_safety
 from backend.stores import dictionary
 from backend.commands import dictation_commands
 from backend.stores import macros
-import voice_presets
+from backend.stores import voice_presets
 import voice_clone_qa
-import history_store
+from backend.stores import history_store
 import wake_setup_registry
 # Wave 6: the privacy report, every wipe mode, and the factory reset are all
 # generated from one declared inventory, so the screen cannot describe a store

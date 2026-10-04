@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import history_store
+from backend.stores import history_store
 
 
 class _TempAppdataMixin:
@@ -77,13 +77,13 @@ class PruneHistoryTests(_TempAppdataMixin, unittest.TestCase):
             history_store._PRUNE_EVERY_N_WRITES = 100
 
     def test_init_calls_prune_on_first_run_for_a_data_path(self):
-        with patch("history_store.prune_history") as mock_prune:
+        with patch("backend.stores.history_store.prune_history") as mock_prune:
             history_store.init()
             mock_prune.assert_called_once_with()
 
     def test_init_does_not_reprune_once_already_initialized(self):
         history_store.init()
-        with patch("history_store.prune_history") as mock_prune:
+        with patch("backend.stores.history_store.prune_history") as mock_prune:
             history_store.init()  # same path — should be a no-op
             mock_prune.assert_not_called()
 

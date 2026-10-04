@@ -9,8 +9,8 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 from fastapi.testclient import TestClient
 
-import history_store
-import recordings
+from backend.stores import history_store
+from backend.stores import recordings
 import routes_wake
 import server
 import voice_clone_engine

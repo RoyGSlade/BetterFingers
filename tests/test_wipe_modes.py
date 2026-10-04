@@ -33,8 +33,8 @@ class _PopulatedRootMixin(unittest.TestCase):
         patchers = [
             patch("app_paths.resolve_base", return_value=self.root),
             patch("utils.get_user_data_path", return_value=str(self.root)),
-            patch("history_store.get_user_data_path", return_value=str(self.root)),
-            patch("recordings.get_user_data_path", return_value=str(self.root)),
+            patch("backend.stores.history_store.get_user_data_path", return_value=str(self.root)),
+            patch("backend.stores.recordings.get_user_data_path", return_value=str(self.root)),
             patch("server.get_user_data_path", return_value=str(self.root)),
         ]
         for p in patchers:

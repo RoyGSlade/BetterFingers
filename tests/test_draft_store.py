@@ -204,7 +204,7 @@ class DraftStoreRealHistoryStoreRoundTripTests(unittest.TestCase):
     JSON+SQLite persistence path, not just the fake's dict copy semantics."""
 
     def setUp(self):
-        import history_store as real_history_store
+        from backend.stores import history_store as real_history_store
         from unittest.mock import patch
 
         self._tmp = tempfile.TemporaryDirectory()

@@ -110,7 +110,7 @@ def _wipe_history_db() -> WipeResult:
     companions* and then recreates an empty schema. Deleting the file alone
     would leave the app with a schemaless database on next write; deleting it
     without the WAL would leave committed transcription text recoverable."""
-    import history_store
+    from backend.stores import history_store
     result = history_store.wipe_database()
     removed = [str(Path(history_store.get_db_path()).parent / name)
                for name in result.get("removed", [])]
@@ -143,7 +143,7 @@ def _verify_history_db() -> VerificationResult:
                 ok=False, remaining=companions,
                 detail=f"history database is gone but companions remain: {companions}")
         return VerificationResult(ok=True, detail="no history database on disk")
-    import history_store
+    from backend.stores import history_store
     try:
         rows = history_store.count()
     except Exception as exc:  # noqa: BLE001 - an unreadable DB is a real failure
@@ -165,7 +165,7 @@ def _wipe_raw_recordings() -> WipeResult:
     left behind, and it is the same call the shipped wipe already made. The
     registry existing does not make the module that owns a store wrong.
     """
-    import recordings
+    from backend.stores import recordings
     # Snapshot the real filenames before deleting so `removed` is the list of
     # things that actually went, not a directory name standing in for them.
     # The caller reports a count from this, and a count derived from a

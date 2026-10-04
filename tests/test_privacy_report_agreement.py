@@ -47,8 +47,8 @@ class _TempRootMixin(unittest.TestCase):
         patchers = [
             patch("app_paths.resolve_base", return_value=self.root),
             patch("utils.get_user_data_path", return_value=str(self.root)),
-            patch("history_store.get_user_data_path", return_value=str(self.root)),
-            patch("recordings.get_user_data_path", return_value=str(self.root)),
+            patch("backend.stores.history_store.get_user_data_path", return_value=str(self.root)),
+            patch("backend.stores.recordings.get_user_data_path", return_value=str(self.root)),
             patch("server.get_user_data_path", return_value=str(self.root)),
         ]
         for p in patchers:
@@ -166,13 +166,13 @@ class DeclaredPathMatchesStoreTests(_TempRootMixin):
                          [p for p in dc.data_paths.persona_learning()])
 
     def test_history_db(self):
-        import history_store
+        from backend.stores import history_store
         history_store.init()
         declared = {str(p) for p in dc.data_paths.history_db()}
         self.assertIn(history_store.get_db_path(), declared)
 
     def test_raw_recordings(self):
-        import recordings
+        from backend.stores import recordings
         directory = recordings.get_recordings_dir()
         self.assertEqual([pathlib.Path(directory)], dc.data_paths.raw_recordings())
 

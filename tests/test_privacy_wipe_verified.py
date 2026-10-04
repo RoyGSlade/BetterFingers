@@ -15,8 +15,8 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-import history_store
-import recordings
+from backend.stores import history_store
+from backend.stores import recordings
 import server
 
 
@@ -61,8 +61,8 @@ class TempDataDirMixin(unittest.TestCase):
         super().setUp()
         self._tmp = tempfile.TemporaryDirectory()
         patchers = [
-            patch("recordings.get_user_data_path", return_value=self._tmp.name),
-            patch("history_store.get_user_data_path", return_value=self._tmp.name),
+            patch("backend.stores.recordings.get_user_data_path", return_value=self._tmp.name),
+            patch("backend.stores.history_store.get_user_data_path", return_value=self._tmp.name),
             patch("server.get_user_data_path", return_value=self._tmp.name),
             # PersonaLearningStore resolves its path via utils.get_user_data_path
             # directly (not a server.py-bound copy) -- patch it too so the wipe's
@@ -109,7 +109,7 @@ class OrphanSweepTests(TempDataDirMixin):
             duration_seconds = 0.01
             stop_reason = "manual"
 
-        with patch("recordings.wavfile.write", side_effect=OSError("disk full")):
+        with patch("backend.stores.recordings.wavfile.write", side_effect=OSError("disk full")):
             self.assertIsNone(recordings.save_recording(Rec(), rec_id="123"))
         self.assertEqual(recordings.list_leftover_files(), [])
 

@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from backend.stores import dictionary
 from backend.stores import macros
-import voice_presets
+from backend.stores import voice_presets
 
 router = APIRouter()
 

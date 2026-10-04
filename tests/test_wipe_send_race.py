@@ -36,7 +36,7 @@ class WipeSendRaceMixin(unittest.TestCase):
         # failure that has nothing to do with the race it is exercising —
         # tests/test_server_drafts.py leaves exactly one. Clearing here fixes
         # the dependency at its source rather than weakening the assertion.
-        import history_store
+        from backend.stores import history_store
         history_store.wipe_database()
         self.addCleanup(server.draft_queue.clear)
         self.addCleanup(server.draft_recordings.clear)

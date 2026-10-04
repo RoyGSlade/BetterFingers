@@ -14,7 +14,7 @@ import sqlite3
 import tempfile
 import unittest
 
-import history_store
+from backend.stores import history_store
 from backend.stores.drafts import DraftStore
 
 

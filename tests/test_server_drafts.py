@@ -663,7 +663,7 @@ class ServerDraftTests(unittest.TestCase):
 
     def test_tts_speak_uses_preset_when_no_explicit_fields(self):
         self._isolate_user_data()
-        import voice_presets
+        from backend.stores import voice_presets
         voice_presets.save_preset(
             "Warm Assistant", base="af_bella", blend={"am_adam": 0.2}, speed=1.1, pitch=1.0,
         )
@@ -686,7 +686,7 @@ class ServerDraftTests(unittest.TestCase):
 
     def test_tts_speak_explicit_fields_override_preset(self):
         self._isolate_user_data()
-        import voice_presets
+        from backend.stores import voice_presets
         voice_presets.save_preset("Warm Assistant", base="af_bella", speed=1.1)
         tts = DummyTTSEngine()
 
@@ -788,7 +788,7 @@ class ServerDraftTests(unittest.TestCase):
     def test_tts_speak_persona_preset_used_when_persona_base_unset(self):
         self._isolate_user_data()
         import llm_engine
-        import voice_presets
+        from backend.stores import voice_presets
         voice_presets.save_preset("Presentation Voice", base="am_michael", speed=1.05)
         llm_engine.upsert_persona("Presenter", {
             "prompt": "Present it.", "voice": {"preset": "Presentation Voice"},
@@ -827,7 +827,7 @@ class ServerDraftTests(unittest.TestCase):
     def test_tts_speak_request_preset_wins_over_persona(self):
         self._isolate_user_data()
         import llm_engine
-        import voice_presets
+        from backend.stores import voice_presets
         voice_presets.save_preset("Explicit Preset", base="af_sarah")
         llm_engine.upsert_persona("Narrator", {"prompt": "Read it.", "voice": {"base": "bm_george"}})
         tts = DummyTTSEngine()

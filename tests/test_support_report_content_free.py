@@ -41,8 +41,8 @@ class SupportReportContentFreeTests(unittest.TestCase):
         patchers = [
             patch("app_paths.resolve_base", return_value=self.root),
             patch("utils.get_user_data_path", return_value=str(self.root)),
-            patch("history_store.get_user_data_path", return_value=str(self.root)),
-            patch("recordings.get_user_data_path", return_value=str(self.root)),
+            patch("backend.stores.history_store.get_user_data_path", return_value=str(self.root)),
+            patch("backend.stores.recordings.get_user_data_path", return_value=str(self.root)),
             patch("server.get_user_data_path", return_value=str(self.root)),
             patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False),
         ]
@@ -71,7 +71,7 @@ class SupportReportContentFreeTests(unittest.TestCase):
             f"{MARKER}-persona", f"{MARKER}-raw", f"{MARKER}-final", consent=True)
         written.append("persona_learning")
 
-        import history_store
+        from backend.stores import history_store
         history_store.init()
         # No try/except here on purpose: an insert that silently fails would
         # make this suite report "no leak" about a store it never populated,
