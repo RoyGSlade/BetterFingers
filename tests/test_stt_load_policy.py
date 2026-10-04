@@ -461,5 +461,52 @@ class CudaLoadProbeTests(_LoadTestCase):
         self.assertEqual(t.device_fallback_code, "cuda_runtime_missing")
 
 
+class CudaFailureMemoTests(_LoadTestCase):
+    """Once CUDA failed in this process, later loads must not touch CUDA again.
+
+    A second CUDA decode after a failed cuBLAS load hung inside CTranslate2 on a
+    real RTX 5070 laptop (while holding the model lock), so retrying is unsafe.
+    """
+
+    def test_reload_after_probe_failure_skips_cuda(self):
+        error = RuntimeError(CUBLAS_MSG)
+        fake = make_fake_whisper(cuda_error=error)
+        t = self._transcriber(fake, prefer_gpu=True)
+        self.assertTrue(t.ensure_loaded())
+        self.assertEqual(self._devices(fake), ["cuda", "cpu"])
+
+        t.unload()
+        self.assertTrue(t.ensure_loaded())
+
+        self.assertEqual(self._devices(fake), ["cuda", "cpu", "cpu"])
+        self.assertEqual(t.active_device, "cpu")
+        self.assertEqual(t.device_fallback_code, classify_cuda_runtime_error(error))
+        self.assertEqual(t.device_fallback_reason, "CUDA inference probe failed")
+
+    def test_lazy_decode_failure_is_remembered_too(self):
+        fake = make_fake_whisper(cuda_error=RuntimeError(CUBLAS_MSG), healthy_cuda_calls=1)
+        t = self._transcriber(fake, prefer_gpu=True)
+        self.assertTrue(t.ensure_loaded())  # the load-time probe passes
+        t.transcribe(np.zeros(1600, dtype=np.float32))  # the real decode fails -> CPU
+        self.assertEqual(self._devices(fake), ["cuda", "cpu"])
+
+        t.unload()
+        self.assertTrue(t.ensure_loaded())
+
+        self.assertEqual(self._devices(fake), ["cuda", "cpu", "cpu"])
+
+    def test_memo_is_per_whisper_backend(self):
+        failing = make_fake_whisper(cuda_error=RuntimeError(CUBLAS_MSG))
+        self.assertTrue(self._transcriber(failing, prefer_gpu=True).ensure_loaded())
+        patch.stopall()
+
+        healthy = make_fake_whisper()
+        t = self._transcriber(healthy, prefer_gpu=True)
+        self.assertTrue(t.ensure_loaded())
+
+        self.assertEqual(self._devices(healthy), ["cuda"])
+        self.assertEqual(t.active_device, "cuda")
+
+
 if __name__ == "__main__":
     unittest.main()

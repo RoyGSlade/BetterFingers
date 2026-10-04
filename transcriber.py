@@ -4,6 +4,7 @@ import os
 import re
 import threading
 import time
+import weakref
 
 import numpy as np
 from faster_whisper import WhisperModel
@@ -68,6 +69,22 @@ def classify_cuda_runtime_error(exc):
 # Measured on a 12-core Zen 5 (Ryzen AI 9 HX 370), CPU int8: 8 threads is the knee; 16+ regress.
 STT_CPU_THREAD_CAP = 8
 _STT_CPU_THREADS_ENV = "BETTERFINGERS_STT_CPU_THREADS"
+
+# Process-wide memo: once a CUDA decode has failed in this process, never try CUDA
+# again until restart. A second CUDA decode after a failed cuBLAS load can hang
+# inside CTranslate2 (observed on an RTX 5070 laptop without cublas64_12.dll, while
+# holding the model lock), and every retry costs a wasted model construction.
+# Keyed by the WhisperModel class (weakly): one entry per process in production,
+# while each test's fake class starts clean. Value: (fallback_reason, fallback_code).
+_cuda_unavailable = weakref.WeakKeyDictionary()
+
+
+def _known_cuda_failure():
+    return _cuda_unavailable.get(WhisperModel)
+
+
+def _remember_cuda_unavailable(reason, code):
+    _cuda_unavailable.setdefault(WhisperModel, (reason, code))
 
 
 def _detect_physical_cores():
@@ -558,7 +575,11 @@ class Transcriber:
         fallback_code = None
         self._load_inference_verified = False
 
-        if self.prefer_gpu:
+        known_cuda_failure = _known_cuda_failure() if self.prefer_gpu else None
+        if known_cuda_failure is not None:
+            fallback_reason, fallback_code = known_cuda_failure
+            logging.info("Skipping CUDA for Whisper: it already failed in this process (%s).", fallback_reason)
+        elif self.prefer_gpu:
             model = None
             try:
                 device = "cuda"
@@ -622,6 +643,7 @@ class Transcriber:
                     # record just the exception class, never its payload.
                     fallback_reason = f"CUDA inference probe failed ({type(probe_exc).__name__})"
                 logging.warning("%s; falling back to CPU.", fallback_reason)
+                _remember_cuda_unavailable(fallback_reason, fallback_code)
                 # Drop the unusable CUDA model, then continue into the CPU path below.
                 probe_exc = None
                 model = None
@@ -887,6 +909,7 @@ class Transcriber:
                 # this decode. The marker is diagnostic and reset only after a
                 # successful probe/normal call boundary.
                 self._decode_fallback_attempted = True
+                _remember_cuda_unavailable("CUDA inference initialization failed", code)
                 try:
                     cpu_model = self._load_cpu_fallback_model()
                 except Exception:
