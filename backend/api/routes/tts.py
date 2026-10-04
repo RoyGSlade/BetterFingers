@@ -120,7 +120,7 @@ async def stop_tts_route():
 async def get_tts_status():
     import server as s
 
-    engine = await run_in_threadpool(s.ensure_tts_initialized)
+    engine = s.tts_engine
 
     import platform
     is_linux = (platform.system().lower() == "linux")
@@ -147,8 +147,16 @@ async def get_tts_status():
             "libsndfile_error": libsndfile_error
         }
 
-    status = await run_in_threadpool(engine.ensure_loaded)
-    backend_val = engine.backend()
+    getter = getattr(engine, "get_status_snapshot", None)
+    if callable(getter):
+        status = getter()
+        capabilities = status["capabilities"]
+    else:
+        # Legacy adapters only; real engines never touch a model lock here.
+        status = await run_in_threadpool(s._snapshot_tts_status, engine)
+        get_capabilities = getattr(engine, "get_capabilities", None)
+        capabilities = await run_in_threadpool(get_capabilities) if callable(get_capabilities) else None
+    backend_val = status["backend"]
 
     backend_name = "unavailable"
     if backend_val == "kokoro":
@@ -158,25 +166,16 @@ async def get_tts_status():
     elif backend_val == "sapi":
         backend_name = "SAPI fallback"
 
-    msg = engine._status_message
+    msg = status["status_message"]
     if libsndfile_missing:
         msg = f"Linux system package dependency failure: libsndfile1 is missing ({libsndfile_error}). Run 'sudo apt-get install libsndfile1' to resolve."
         backend_name = "unavailable"
 
-    # get_capabilities() is a newer, optional addition to ReviewTTSEngine
-    # (backend/runtime/blend_capable snapshot for the UI to gate blend
-    # controls on). Guard with getattr rather than assuming it exists so
-    # this route works the same whether or not that method has landed yet.
-    capabilities = None
-    get_capabilities = getattr(engine, "get_capabilities", None)
-    if callable(get_capabilities):
-        capabilities = get_capabilities()
-
     return {
-        "ok": engine.is_loaded() and not libsndfile_missing,
+        "ok": status["loaded"] and not libsndfile_missing,
         "backend": backend_name,
         "raw_backend": backend_val,
-        "fallback": engine._fallback,
+        "fallback": status["fallback"],
         "message": msg,
         "libsndfile_missing": libsndfile_missing,
         "libsndfile_error": libsndfile_error if libsndfile_missing else None,

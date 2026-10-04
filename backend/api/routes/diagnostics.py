@@ -8,9 +8,8 @@ Behaviour is moved, not changed. In particular:
 * ``/health`` keeps its exact path, method and body. The auth middleware in
   server.py matches by PATH (only ``/ws/`` is exempt), so ``/health`` still
   requires the sidecar token whenever one is set, exactly as before.
-* ``/doctor`` and ``/runtime/status`` keep their ``async def`` signatures and
-  their calls into the model-lock-holding helpers unchanged (the first-run
-  stall is tracked separately and is deliberately NOT touched here).
+* Status reads observe separately published engine snapshots, independently
+  of model loading. Heavy doctor probes run on worker threads.
 * ``/runtime/version`` needs no server state, so it reads ``version`` directly
   (a top-level import of the root ``version.py``, same module object server.py
   uses) instead of ``s.version``. tests/test_version_source.py regex-checks the
@@ -86,8 +85,8 @@ async def run_doctor(refresh_audio: bool = False):
     stt_fallback_reason = stt_status.get("device_fallback_reason")
     stt_info = {
         "initialized": s.transcriber is not None,
-        "loaded": bool(getattr(s.transcriber, "model", None)) if s.transcriber else False,
-        "model_size": getattr(s.transcriber, "model_size", None) if s.transcriber else None,
+        "loaded": stt_status.get("constructed", False),
+        "model_size": stt_status.get("model_size", getattr(s.transcriber, "model_size", None)),
         "constructed": stt_status.get("constructed", False),
         "probe_passed": stt_status.get("probe_passed", False),
         "inference_ready": stt_status.get("inference_ready", False),

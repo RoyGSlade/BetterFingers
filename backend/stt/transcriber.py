@@ -437,6 +437,11 @@ class Transcriber:
         os.makedirs(self.download_root, exist_ok=True)
 
         self._model_lock = threading.RLock()
+        # Never hold this short publication lock during model/cache/engine work.
+        self._status_lock = threading.Lock()
+        self._status_snapshot = None
+        self._status_generation = 0
+        self._runtime_state = "unloaded"
         # Admission-control DI (model_runtime_coordinator), same pattern as
         # llm_engine.set_admission_fn / tts_engine.set_runtime_lease_factory.
         # None-safe: unset means "no admission control".
@@ -452,6 +457,7 @@ class Transcriber:
         # (and cleared) by ensure_loaded() to seed _inference_ready for that model.
         self._load_inference_verified = False
         self._decode_fallback_attempted = False
+        self._publish_runtime_status()
 
         self.reload_profile(profile_name=profile_name, preload=preload)
 
@@ -464,17 +470,27 @@ class Transcriber:
     def set_error_reporter(self, fn):
         """Inject an owner-level reporter without importing the server."""
         self._error_reporter = fn
-        if callable(fn) and self.device_fallback_code:
-            self._emit_runtime_error(
-                self.device_fallback_code,
-                "fallback_active",
-                fallback=True,
-            )
+        with self._model_lock:
+            if callable(fn) and self.device_fallback_code:
+                self._emit_runtime_error(
+                    self.device_fallback_code,
+                    "fallback_active",
+                    fallback=True,
+                )
 
     def _emit_runtime_error(self, code, state, *, severity="recoverable", fallback=False):
         """Send only fixed vocabulary/device state to the server reporter."""
         self._last_error_code = code
         self._last_error_state = state
+        if state == "fallback_active":
+            # A working CPU fallback is not a failure: keep the lifecycle state
+            # (loading during a load, ready once constructed) and let the
+            # caller that finishes the transition publish it.
+            self._publish_runtime_status()
+        else:
+            self._publish_runtime_status(
+                "ready" if self._inference_ready else "failed"
+            )
         reporter = self._error_reporter
         if not callable(reporter):
             return
@@ -495,21 +511,45 @@ class Transcriber:
             # Diagnostics must never break transcription or model lifecycle.
             logging.debug("STT runtime error reporter failed.")
 
+    def _publish_runtime_status(self, state=None):
+        """Publish scalars while the lifecycle owner holds the model lock.
+
+        The independent lock only swaps an immutable record. Readers never
+        acquire a model lock or inspect partially constructed engine state.
+        No byte-progress callback exists in WhisperModel: progress is unknown
+        during construction, rather than inventing a download percentage.
+        """
+        from types import MappingProxyType
+
+        if state is not None:
+            self._runtime_state = state
+        snapshot = {
+            "constructed": self.model is not None,
+            "probe_passed": bool(self._probe_passed),
+            "inference_ready": bool(self._inference_ready),
+            "error_code": self._last_error_code,
+            "error_state": self._last_error_state,
+            "active_device": self.active_device,
+            "active_compute_type": self.active_compute_type,
+            "active_cpu_threads": self.active_cpu_threads,
+            "device_fallback_reason": self.device_fallback_reason,
+            "device_fallback_code": getattr(self, "device_fallback_code", None),
+            "state": self._runtime_state,
+            "model_size": self.model_size,
+            "loading": self._runtime_state in {"loading", "downloading"},
+            "downloading": self._runtime_state == "downloading",
+            "progress": None,
+        }
+        with self._status_lock:
+            self._status_generation += 1
+            snapshot["generation"] = self._status_generation
+            self._status_snapshot = MappingProxyType(snapshot)
+
     def get_runtime_status(self):
-        """Return observation-only, privacy-safe model/probe state."""
-        with self._model_lock:
-            return {
-                "constructed": self.model is not None,
-                "probe_passed": bool(self._probe_passed),
-                "inference_ready": bool(self._inference_ready),
-                "error_code": self._last_error_code,
-                "error_state": self._last_error_state,
-                "active_device": self.active_device,
-                "active_compute_type": self.active_compute_type,
-                "active_cpu_threads": self.active_cpu_threads,
-                "device_fallback_reason": self.device_fallback_reason,
-                "device_fallback_code": getattr(self, "device_fallback_code", None),
-            }
+        """Return the latest observation without waiting for model work."""
+        with self._status_lock:
+            snapshot = self._status_snapshot
+        return dict(snapshot)
 
     def _load_runtime_config(self, profile_name):
         try:
@@ -535,6 +575,11 @@ class Transcriber:
             size_changed = new_size != self.model_size
             gpu_pref_changed = new_prefer_gpu != self.prefer_gpu
 
+            if size_changed or gpu_pref_changed:
+                self._inference_ready = False
+                self._probe_passed = False
+                self._publish_runtime_status("unloading")
+
             self.profile_name = profile_name
             self.config = cfg
             self.model_size = new_size
@@ -553,6 +598,7 @@ class Transcriber:
                 self._inference_ready = False
                 self._last_error_code = None
                 self._last_error_state = None
+            self._publish_runtime_status("unloaded" if self.model is None else None)
 
         if preload is None:
             preload = self.model is not None
@@ -743,6 +789,10 @@ class Transcriber:
             if self.model is not None:
                 return True
 
+            self._inference_ready = False
+            self._probe_passed = False
+            self._publish_runtime_status("loading")
+
             if self._admission_fn is not None:
                 estimated_mb = _estimate_whisper_runtime_mb(self.model_size)
                 admission = self._admission_fn(estimated_mb, self.model_size)
@@ -752,6 +802,7 @@ class Transcriber:
                         "message", "Not enough RAM to load the speech model."
                     )
                     logging.error(self._last_error)
+                    self._publish_runtime_status("failed")
                     return False
 
             # QA-FR-002: an uncached model means _load_model() below is about
@@ -764,6 +815,7 @@ class Transcriber:
             # instead of this call just blocking silently.
             will_download = not self._is_model_cached(self.model_size)
             if will_download:
+                self._publish_runtime_status("downloading")
                 _set_whisper_download_state(self.model_size, {
                     "model_size": self.model_size,
                     "status": "starting",
@@ -821,6 +873,7 @@ class Transcriber:
                 self._probe_passed = False
                 self._inference_ready = bool(self._load_inference_verified)
                 self._load_inference_verified = False
+                self._publish_runtime_status("ready")
                 if will_download:
                     _set_whisper_download_state(self.model_size, {
                         "model_size": self.model_size,
@@ -833,10 +886,15 @@ class Transcriber:
                         self._load_reporter(self.model_size, _estimate_whisper_runtime_mb(self.model_size))
                     except Exception:
                         logging.debug("Whisper load reporter failed.")
+            else:
+                self._publish_runtime_status("failed")
             return self.model is not None
 
     def unload(self):
         with self._model_lock:
+            self._inference_ready = False
+            self._probe_passed = False
+            self._publish_runtime_status("unloading")
             self.model = None
             self.active_device = None
             self.active_compute_type = None
@@ -848,6 +906,7 @@ class Transcriber:
             self._load_inference_verified = False
             self._last_error_code = None
             self._last_error_state = None
+            self._publish_runtime_status("unloaded")
         logging.info("Whisper model unloaded.")
 
     def transcribe(self, audio_array, hotwords=None):
@@ -891,6 +950,7 @@ class Transcriber:
             model = self.model
             if model is None:
                 self._inference_ready = False
+                self._publish_runtime_status("unloaded")
                 return None, "stt_model_not_loaded"
 
             def consume(active_model):
@@ -902,6 +962,7 @@ class Transcriber:
             try:
                 segments = consume(model)
                 self._inference_ready = True
+                self._publish_runtime_status("ready")
                 return segments, None
             except Exception as exc:
                 code = classify_cuda_runtime_error(exc)
@@ -915,6 +976,9 @@ class Transcriber:
                 # successful probe/normal call boundary.
                 self._decode_fallback_attempted = True
                 _remember_cuda_unavailable("CUDA inference initialization failed", code)
+                self._inference_ready = False
+                self._probe_passed = False
+                self._publish_runtime_status("loading")
                 try:
                     cpu_model = self._load_cpu_fallback_model()
                 except Exception:
@@ -941,6 +1005,7 @@ class Transcriber:
 
                 self._inference_ready = True
                 self._emit_runtime_error(code, "fallback_active", fallback=True)
+                self._publish_runtime_status("ready")
                 return segments, None
 
     def runtime_probe(self):
@@ -955,8 +1020,9 @@ class Transcriber:
                     self._emit_runtime_error("stt_model_load_failed", "construction_failed")
                 return self.get_runtime_status()
 
-        _segments, error_code = self._decode_segments_with_recovery(silence)
-        with self._model_lock:
+            # Keep lifecycle ownership through decode and final publication:
+            # unload/reload must not invalidate the model between these steps.
+            _segments, error_code = self._decode_segments_with_recovery(silence)
             self._probe_passed = error_code is None
             if self._probe_passed and error_code is None and self._last_error_state not in {
                 "fallback_active",
@@ -965,6 +1031,7 @@ class Transcriber:
                 self._last_error_state = None
             elif error_code is not None and self._last_error_code is None:
                 self._emit_runtime_error(error_code, "probe_failed")
+            self._publish_runtime_status("ready" if error_code is None else "failed")
             return self.get_runtime_status()
 
     @staticmethod

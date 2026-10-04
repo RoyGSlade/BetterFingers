@@ -97,6 +97,8 @@ class ReviewTTSEngine:
 
     def __init__(self):
         self._lock = threading.RLock()
+        self._status_lock = threading.Lock()
+        self._status_generation = 0
         self._queue = queue.Queue(maxsize=1)
         self._worker: Optional[threading.Thread] = None
         self._worker_running = False
@@ -150,6 +152,38 @@ class ReviewTTSEngine:
         # unload()/reload cycle is the only reset (matches how _backend
         # itself only resets on unload).
         self._onnx_upgrade_failed = False
+        self._publish_status("unloaded")
+
+    def _publish_status(self, state):
+        """Lifecycle-owner publication; never hold status lock for engine work."""
+        from types import MappingProxyType
+
+        capabilities = self._capabilities_locked()
+        capabilities["supported_voice_ids"] = tuple(capabilities["supported_voice_ids"])
+        snapshot = {
+            "loaded": self._loaded,
+            "backend": self._backend,
+            "fallback": self._fallback,
+            "status_message": self._status_message,
+            "state": state,
+            "loading": state == "loading",
+            "capabilities": MappingProxyType(capabilities),
+        }
+        with self._status_lock:
+            self._status_generation += 1
+            snapshot["generation"] = self._status_generation
+            self._status_snapshot = MappingProxyType(snapshot)
+
+    def get_status_snapshot(self):
+        """Observation only: independent of the model/synthesis lock."""
+        with self._status_lock:
+            snapshot = self._status_snapshot
+        result = dict(snapshot)
+        result["capabilities"] = dict(snapshot["capabilities"])
+        result["capabilities"]["supported_voice_ids"] = list(
+            snapshot["capabilities"]["supported_voice_ids"]
+        )
+        return result
 
     def set_runtime_lease_factory(self, factory):
         """Install the runtime-lease context-manager factory (see __init__)."""
@@ -271,6 +305,7 @@ class ReviewTTSEngine:
     def _release_backend_resources(self, message="TTS auto-unloaded after playback."):
         self._cancel_idle_unload_timer()
         with self._lock:
+            self._publish_status("unloading")
             self._kokoro_pipeline = None
             self._kokoro_onnx = None
             self._kokoro_runtime = None
@@ -280,6 +315,7 @@ class ReviewTTSEngine:
             self._backend = "none"
             self._fallback = False
             self._status_message = message
+            self._publish_status("unloaded")
         # The clone models ride along with the TTS backend's lifecycle.
         try:
             voice_clone_engine.unload()
@@ -297,6 +333,7 @@ class ReviewTTSEngine:
                 }
 
             quantization = getattr(self, "_kokoro_quantization", "fp32")
+            self._publish_status("loading")
             kokoro_ok, kokoro_msg = True, ""
             if self._admission_fn is not None:
                 admission = self._admission_fn(_KOKORO_RUNTIME_MB_ESTIMATE, f"kokoro:{quantization}")
@@ -317,6 +354,7 @@ class ReviewTTSEngine:
                 self._backend = "kokoro_onnx" if self._kokoro_runtime == "onnx" else "kokoro"
                 self._fallback = False
                 self._status_message = kokoro_msg
+                self._publish_status("ready")
                 if self._load_reporter is not None:
                     try:
                         self._load_reporter(f"kokoro:{quantization}", _KOKORO_RUNTIME_MB_ESTIMATE)
@@ -335,6 +373,7 @@ class ReviewTTSEngine:
                 self._backend = "sapi"
                 self._fallback = True
                 self._status_message = f"{kokoro_msg} Using Windows SAPI fallback."
+                self._publish_status("ready")
                 logging.warning(self._status_message)
                 return {
                     "ok": True,
@@ -347,6 +386,7 @@ class ReviewTTSEngine:
             self._backend = "none"
             self._fallback = False
             self._status_message = f"{kokoro_msg} {sapi_msg}".strip()
+            self._publish_status("failed")
             logging.error(self._status_message)
             return {
                 "ok": False,
@@ -381,6 +421,7 @@ class ReviewTTSEngine:
             # doomed network/import work forever.
             return
 
+        self._publish_status("loading")
         ok, msg = self._load_kokoro_onnx_backend(
             voice_hint=voice_hint,
             prefer_gpu=self._prefer_gpu,
@@ -400,6 +441,7 @@ class ReviewTTSEngine:
                 "Hot-upgraded TTS backend from native Kokoro to kokoro-onnx to honor a voice blend request: %s",
                 msg,
             )
+
         else:
             # _load_kokoro_onnx_backend's failure path only clears
             # self._kokoro_onnx; it never touches self._kokoro_pipeline or
@@ -413,6 +455,7 @@ class ReviewTTSEngine:
                 "continuing on the native backend with the blend dropped, and will not retry the upgrade again this session.",
                 msg,
             )
+        self._publish_status("ready")
 
     def speak(
         self,

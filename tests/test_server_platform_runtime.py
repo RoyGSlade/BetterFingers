@@ -102,7 +102,9 @@ class ServerPlatformRuntimeTests(unittest.TestCase):
         self.assertIn("supports_tts", data)
 
     def test_tts_status_preserves_loaded_runtime_model_and_voice_capabilities(self):
-        with patch.object(server, "ensure_tts_initialized", return_value=CapabilityTTS()):
+        with patch.object(server, "tts_engine", CapabilityTTS()), patch.object(
+            server, "ensure_tts_initialized", side_effect=AssertionError("status must not initialize TTS")
+        ):
             with TestClient(server.app) as client:
                 response = client.get("/runtime/tts-status")
 

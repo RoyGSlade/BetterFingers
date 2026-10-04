@@ -831,7 +831,7 @@ def get_runtime_status_snapshot():
             bool(getattr(hotkey_manager, "is_recording", False)) if hotkey_manager else False
         ),
         "processing_active": bool(is_processing_draft),
-        "transcriber_loaded": bool(getattr(transcriber, "model", None)),
+        "transcriber_loaded": stt_status["constructed"],
         "stt": stt_status,
         "llm_ready": engine_ready,
         "llm_enabled": llm_enabled,
@@ -891,6 +891,14 @@ def _transcriber_status_snapshot(stt, status_override=None):
                     "active_compute_type": raw.get("active_compute_type") if raw.get("active_compute_type") in {None, "float16", "int8"} else None,
                     "device_fallback_reason": reason,
                     "device_fallback_code": fallback_code,
+                    **({
+                        "state": raw.get("state") if raw.get("state") in {"unloaded", "unloading", "loading", "downloading", "ready", "failed"} else "unloaded",
+                        "model_size": raw.get("model_size") if raw.get("model_size") in SUPPORTED_MODEL_SIZES else None,
+                        "loading": bool(raw.get("loading", False)),
+                        "downloading": bool(raw.get("downloading", False)),
+                        "progress": None,
+                        "generation": raw.get("generation") if type(raw.get("generation")) is int else 0,
+                    } if "state" in raw else {}),
                 }
         except Exception:
             pass
@@ -2919,8 +2927,8 @@ def ensure_tts_initialized():
 def _snapshot_tts_status(engine):
     """Read an existing TTS engine without creating or loading one.
 
-    ``is_loaded()`` and ``backend()`` take the engine lock, so callers on the
-    async request path must run this synchronous snapshot in a worker thread.
+    Real engines publish a separate snapshot; legacy test adapters retain
+    their methods and async callers keep offloading that compatibility path.
     """
     if engine is None:
         return {
@@ -2929,6 +2937,16 @@ def _snapshot_tts_status(engine):
             "backend": "none",
             "status_message": "TTS is not initialized.",
             "fallback": False,
+        }
+    getter = getattr(engine, "get_status_snapshot", None)
+    if callable(getter):
+        status = getter()
+        return {
+            "initialized": True,
+            "loaded": bool(status["loaded"]),
+            "backend": status["backend"],
+            "status_message": status["status_message"],
+            "fallback": bool(status["fallback"]),
         }
     return {
         "initialized": True,
@@ -3975,8 +3993,8 @@ def gather_support_report():
     stt_status = _transcriber_status_snapshot(stt)
     stt_info = {
         "initialized": stt is not None,
-        "loaded": bool(getattr(stt, "model", None)) if stt is not None else False,
-        "model_size": getattr(stt, "model_size", None) if stt is not None else None,
+        "loaded": stt_status.get("constructed", False),
+        "model_size": stt_status.get("model_size", getattr(stt, "model_size", None)),
         "constructed": stt_status.get("constructed", False),
         "probe_passed": stt_status.get("probe_passed", False),
         "inference_ready": stt_status.get("inference_ready", False),
@@ -3989,11 +4007,8 @@ def gather_support_report():
     }
 
     tts = tts_engine
-    tts_info = {
-        "initialized": tts is not None,
-        "loaded": bool(tts.is_loaded()) if (tts is not None and hasattr(tts, "is_loaded")) else False,
-        "backend": tts.backend() if (tts is not None and hasattr(tts, "backend")) else "none",
-    }
+    tts_snapshot = _snapshot_tts_status(tts)
+    tts_info = {key: tts_snapshot[key] for key in ("initialized", "loaded", "backend")}
 
     runtime = {
         "llm": {
