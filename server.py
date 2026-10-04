@@ -4210,128 +4210,13 @@ def gather_support_report():
     }
 
 
-@app.get("/drafts")
-async def list_drafts():
-    with draft_lock:
-        return {"drafts": [dict(draft) for draft in draft_queue]}
-
-
-@app.get("/drafts/latest")
-async def latest_draft():
-    with draft_lock:
-        if not draft_queue:
-            return {"draft": None}
-        return {"draft": dict(draft_queue[-1])}
-
-
-@app.delete("/drafts")
-def clear_draft_history():
-    with draft_lock:
-        draft_queue.clear()
-        draft_recordings.clear()
-        pending_manual_send_ids.clear()
-    save_draft_history()
-    broadcast_status_threadsafe("draft_history_cleared")
-    return {"ok": True, "message": "Draft history cleared."}
-
-
-@app.post("/drafts/test-mock")
-def create_mock_draft(status: str = "pending", raw: str = "Mock raw transcript text.", final: str = "Mock cleaned and polished output."):
-    if os.getenv("BETTERFINGERS_ENV", "development") == "production":
-        raise HTTPException(status_code=403, detail="Mock endpoints are disabled in production.")
-    
-    metadata = {
-        "duration_seconds": 3.45,
-        "sample_rate": 16000,
-        "sample_count": 55200,
-        "max_amplitude": 0.35,
-        "rms_amplitude": 0.08,
-        "stop_reason": "manual"
-    }
-    draft = create_draft(raw, final, preset="True Janitor", status=status, metadata=metadata)
-    broadcast_status_threadsafe("preview_ready", {
-        "draft_id": draft["id"],
-        "raw_text": draft["raw_text"],
-        "final_text": draft["final_text"],
-        "token_count": draft["token_count"],
-        "token_limit": draft["token_limit"],
-        "long_text": draft["long_text"],
-    })
-    return draft
-
-
-
-@app.post("/drafts/{draft_id}/accept")
-async def accept_draft(draft_id: int):
-    with draft_lock:
-        for draft in draft_queue:
-            if draft["id"] == draft_id:
-                draft["status"] = "accepted"
-                mark_draft_pending_send(draft)
-                response = dict(draft)
-                break
-        else:
-            raise HTTPException(status_code=404, detail="Draft not found")
-    save_draft_history(changed_draft_id=draft_id)
-    broadcast_status_threadsafe("draft_accepted", {"draft_id": draft_id, "pending_send": True})
-    return response
-
-
-@app.post("/drafts/{draft_id}/decline")
-async def decline_draft(draft_id: int):
-    with draft_lock:
-        for draft in draft_queue:
-            if draft["id"] == draft_id:
-                draft["status"] = "declined"
-                draft["pending_send"] = False
-                while draft_id in pending_manual_send_ids:
-                    pending_manual_send_ids.remove(draft_id)
-                response = dict(draft)
-                break
-        else:
-            raise HTTPException(status_code=404, detail="Draft not found")
-    save_draft_history(changed_draft_id=draft_id)
-    broadcast_status_threadsafe("draft_declined", {"draft_id": draft_id})
-    return response
-
-
-@app.post("/drafts/{draft_id}/retry")
-async def retry_draft(draft_id: int):
-    with draft_lock:
-        recording_result = draft_recordings.get(draft_id)
-
-    if recording_result is None:
-        raise HTTPException(status_code=409, detail="No recording data is available for this draft")
-
-    # Blocking model pipeline must not run on the event loop (it would starve
-    # /health and trip Electron's restart watchdog).
-    draft = await run_in_threadpool(process_recording_result, recording_result)
-    if draft is None:
-        raise HTTPException(status_code=409, detail="A dictation is already processing; try again shortly.")
-    return draft
-
-
-class DraftEditRequest(BaseModel):
-    final_text: str
-
-
-class DraftRewriteRequest(BaseModel):
-    action: str = "clearer"
-    custom_instruction: str = ""
-
-
-class DraftTtsRequest(BaseModel):
-    text: str = ""
-    voice_id: Optional[str] = None
-    speed: Optional[float] = None
-    pitch: Optional[float] = None
-    blend: Optional[dict] = None
-    energy: Optional[float] = None
-    warmth: Optional[float] = None
-    brightness: Optional[float] = None
-    pause_style: Optional[str] = None
-    preset_name: Optional[str] = None
-    persona: Optional[str] = None
+# Draft routes (/drafts, /drafts/latest, /drafts/test-mock, /drafts/{id}/accept|
+# decline|retry|edit|contact|rewrite|tts|send) are their own slice in
+# backend/api/routes/drafts.py (R8); registered via app.include_router at the end
+# of this file. Draft state (draft_queue, draft_lock, pending_manual_send_ids,
+# next_draft_id, ...) and the helpers that rebind it under `global` stay here and
+# are read by the router as s.<name>. execute_voice_command below reaches the
+# decline/rewrite/retry handlers and DraftRewriteRequest through routes_drafts.
 
 
 def _find_voice_preset(name, presets=None):
@@ -4497,197 +4382,6 @@ def rewrite_draft_text(text, action, custom_instruction=""):
     return engine.process_fast_lane(prompt, "True Janitor", chunk_size=llm_chunk_size) or clean_text
 
 
-@app.post("/drafts/{draft_id}/edit")
-async def edit_draft(draft_id: int, request: DraftEditRequest):
-    with draft_lock:
-        draft = get_draft_by_id(draft_id)
-        if draft is None:
-            raise HTTPException(status_code=404, detail="Draft not found")
-
-        draft["final_text"] = request.final_text or ""
-        if draft.get("status") in {"accepted", "declined", "sent", "send_error"}:
-            draft["status"] = "pending"
-            draft["pending_send"] = False
-            while draft_id in pending_manual_send_ids:
-                pending_manual_send_ids.remove(draft_id)
-        else:
-            draft["status"] = draft.get("status", "pending")
-        draft["error"] = ""
-        draft["updated_at"] = datetime.now(timezone.utc).isoformat()
-        update_draft_review_fields(draft)
-        response = dict(draft)
-
-    save_draft_history(changed_draft_id=draft_id)
-    broadcast_status_threadsafe(
-        "draft_updated",
-        {
-            "draft_id": response["id"],
-            "final_text": response["final_text"],
-            "token_count": response["token_count"],
-            "token_limit": response["token_limit"],
-            "long_text": response["long_text"],
-        },
-    )
-    return response
-
-
-class DraftContactRequest(BaseModel):
-    contact_id: str = ""
-
-
-@app.post("/drafts/{draft_id}/contact")
-async def set_draft_contact(draft_id: int, request: DraftContactRequest):
-    """Apply (or clear) a contact on an existing draft.
-
-    Recording the audience after the fact is the same act as recording it at
-    dictation time -- it is metadata about who the message is for, and it is
-    what lets Library resolve a name on the card. It does NOT re-run cleanup:
-    the draft text was produced without that context and rewriting it here
-    would change the user's words behind their back.
-
-    An empty contact_id clears the field. A non-empty one must name a contact
-    that exists, so a deleted contact cannot be re-attached by id.
-    """
-    contact_id = (request.contact_id or "").strip()
-    if contact_id:
-        from backend.services.contacts import ContactStore
-        if ContactStore().get(contact_id) is None:
-            raise HTTPException(status_code=404, detail=f"Contact '{contact_id}' not found.")
-
-    with draft_lock:
-        draft = get_draft_by_id(draft_id)
-        if draft is None:
-            raise HTTPException(status_code=404, detail="Draft not found")
-        draft["contact_id"] = contact_id or None
-        draft["updated_at"] = datetime.now(timezone.utc).isoformat()
-        response = dict(draft)
-
-    save_draft_history(changed_draft_id=draft_id)
-    return response
-
-
-@app.post("/drafts/{draft_id}/rewrite")
-async def rewrite_draft(draft_id: int, request: DraftRewriteRequest):
-    with draft_lock:
-        draft = get_draft_by_id(draft_id)
-        if draft is None:
-            raise HTTPException(status_code=404, detail="Draft not found")
-        source_text = draft.get("final_text") or draft.get("raw_text") or ""
-
-    action_key, _instruction = get_rewrite_instruction(request.action, request.custom_instruction)
-    try:
-        broadcast_status_threadsafe("draft_rewriting", {"draft_id": draft_id, "action": action_key})
-        rewritten = str(rewrite_draft_text(source_text, action_key, request.custom_instruction) or source_text).strip()
-        with draft_lock:
-            draft = get_draft_by_id(draft_id)
-            if draft is None:
-                raise HTTPException(status_code=404, detail="Draft not found")
-            draft["final_text"] = rewritten
-            draft["status"] = "pending"
-            draft["error"] = ""
-            draft["rewrite_action"] = action_key
-            draft["updated_at"] = datetime.now(timezone.utc).isoformat()
-            update_draft_review_fields(draft)
-            response = dict(draft)
-        save_draft_history(changed_draft_id=draft_id)
-        broadcast_status_threadsafe(
-            "draft_rewritten",
-            {
-                "draft_id": response["id"],
-                "action": action_key,
-                "final_text": response["final_text"],
-                "token_count": response["token_count"],
-                "token_limit": response["token_limit"],
-                "long_text": response["long_text"],
-            },
-        )
-        return response
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logging.error(f"Draft rewrite failed: {redact_exc(exc)}")
-        record_runtime_error("review", str(exc), {"action": "rewrite", "draft_id": draft_id})
-        broadcast_status_threadsafe("draft_rewrite_error", {"draft_id": draft_id, "action": action_key, "error": str(exc)})
-        return {
-            "ok": False,
-            "draft_id": draft_id,
-            "action": action_key,
-            "error": str(exc),
-            "draft": dict(get_draft_by_id(draft_id) or {}),
-        }
-
-
-@app.post("/drafts/{draft_id}/tts")
-async def speak_draft(draft_id: int, request: DraftTtsRequest):
-    wiping = _reject_if_wiping("draft TTS")
-    if wiping:
-        return {"draft_id": draft_id, **wiping}
-    with draft_lock:
-        draft = get_draft_by_id(draft_id)
-        if draft is None:
-            raise HTTPException(status_code=404, detail="Draft not found")
-        text = (request.text or draft.get("final_text") or draft.get("raw_text") or "").strip()
-
-    if not text:
-        return {"ok": False, "draft_id": draft_id, "message": "No draft text is available to read aloud.", "error": "empty_text"}
-
-    profile_name = get_last_active_profile()
-    try:
-        config = load_profile(profile_name)
-    except Exception:
-        config = {}
-
-    voice_id, speed, blend, modulation = _resolve_voice_and_modulation(request, config)
-    logging.info(f"Draft TTS Request: draft={draft_id} {redact_user_text(text)} | Voice: {voice_id} | Speed: {speed}x")
-
-    engine = await run_in_threadpool(ensure_tts_initialized)
-    if engine is None:
-        result = {
-            "ok": False,
-            "status": "error",
-            "draft_id": draft_id,
-            "message": "TTS engine is not available.",
-            "error": "tts_unavailable",
-            "text_length": len(text),
-        }
-        record_runtime_error("tts", result["message"], {"action": "draft_tts", "draft_id": draft_id})
-        return result
-
-    try:
-        with model_runtime.read_lease("tts"):
-            result = await run_in_threadpool(
-                engine.speak, text, speed=speed, voice_hint=voice_id, blend=blend, modulation=modulation
-            )
-    except RuntimeBusyError:
-        return {"ok": False, "status": "error", "draft_id": draft_id,
-                "error": "tts_reconfiguring", "message": "TTS runtime is being reconfigured; retry shortly."}
-    result.update(
-        {
-            "status": "success" if result.get("ok") else "error",
-            "draft_id": draft_id,
-            "text_length": len(text),
-        }
-    )
-    broadcast_status_threadsafe("draft_tts_requested", {"draft_id": draft_id, "text_length": len(text)})
-    return result
-
-
-class DraftSendRequest(BaseModel):
-    action: str = "copy_only"
-    open_chat: bool = False
-    allow_resend: bool = False
-
-
-@app.post("/drafts/{draft_id}/send")
-async def send_draft(draft_id: int, request: DraftSendRequest = DraftSendRequest()):
-    return send_draft_by_id(
-        draft_id,
-        action=request.action,
-        open_chat=request.open_chat,
-        allow_resend=request.allow_resend,
-    )
-
-
 class VoiceCommandExecuteRequest(BaseModel):
     text: str
     draft_id: Optional[int] = None
@@ -4743,7 +4437,7 @@ async def execute_voice_command(request: VoiceCommandExecuteRequest):
             return {"ok": False, "reason": "no_draft", "action": intent.action}
 
         if intent.action == "cancel":
-            result = await decline_draft(draft_id)
+            result = await routes_drafts.decline_draft(draft_id)
         elif intent.action == "send":
             result = send_draft_by_id(draft_id)
         elif intent.action == "copy":
@@ -4759,9 +4453,9 @@ async def execute_voice_command(request: VoiceCommandExecuteRequest):
             speak_text_aloud(draft.get("final_text", ""))
             result = {"draft_id": draft_id}
         elif intent.action in _REWRITE_ACTION_FOR:
-            result = await rewrite_draft(draft_id, DraftRewriteRequest(action=_REWRITE_ACTION_FOR[intent.action]))
+            result = await routes_drafts.rewrite_draft(draft_id, routes_drafts.DraftRewriteRequest(action=_REWRITE_ACTION_FOR[intent.action]))
         else:  # intent.action == "retry"
-            result = await retry_draft(draft_id)
+            result = await routes_drafts.retry_draft(draft_id)
         return {"ok": True, "action": intent.action, "result": result}
     except HTTPException:
         raise
@@ -4968,6 +4662,7 @@ from backend.api.routes import history as routes_history  # noqa: E402
 from backend.api.routes import diagnostics as routes_diagnostics  # noqa: E402
 from backend.api.routes import models as routes_models  # noqa: E402
 from backend.api.routes import tts as routes_tts  # noqa: E402
+from backend.api.routes import drafts as routes_drafts  # noqa: E402
 
 app.include_router(routes_foundry.router)
 app.include_router(routes_user_config.router)
@@ -4985,6 +4680,7 @@ app.include_router(routes_history.router)
 app.include_router(routes_diagnostics.router)
 app.include_router(routes_models.router)
 app.include_router(routes_tts.router)
+app.include_router(routes_drafts.router)
 from backend.api.routes import input_devices as input_devices_routes  # noqa: E402
 app.include_router(input_devices_routes.router)
 _foundry_sessions = routes_foundry._foundry_sessions

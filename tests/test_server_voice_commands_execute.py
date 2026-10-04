@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 
 import server
+from backend.api.routes import drafts as routes_drafts
 
 OVERLAY_CTX = {"review_overlay_open": True}
 
@@ -110,7 +111,7 @@ class ExecuteVoiceCommandTests(unittest.TestCase):
 
     def test_rewrite_shorter_maps_to_rewrite_draft_with_shorter_action(self):
         draft = server.create_draft("raw", "final")
-        with patch.object(server, "rewrite_draft", new_callable=AsyncMock, return_value={"ok": True}) as rewrite_mock, patch.object(
+        with patch.object(routes_drafts, "rewrite_draft", new_callable=AsyncMock, return_value={"ok": True}) as rewrite_mock, patch.object(
             server, "broadcast_status_threadsafe",
         ):
             with TestClient(server.app) as client:
@@ -121,7 +122,7 @@ class ExecuteVoiceCommandTests(unittest.TestCase):
 
     def test_retry_calls_retry_draft(self):
         draft = server.create_draft("raw", "final")
-        with patch.object(server, "retry_draft", new_callable=AsyncMock, return_value={"ok": True}) as retry_mock, patch.object(
+        with patch.object(routes_drafts, "retry_draft", new_callable=AsyncMock, return_value={"ok": True}) as retry_mock, patch.object(
             server, "broadcast_status_threadsafe",
         ):
             with TestClient(server.app) as client:
