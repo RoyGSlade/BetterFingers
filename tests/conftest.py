@@ -14,6 +14,7 @@ eager startup for the whole suite if ever needed.
 import os
 import sys
 import tempfile
+import threading
 
 import pytest
 
@@ -240,6 +241,14 @@ def _no_warm_start_model_loads(request, monkeypatch):
 
     test_server_lazy_startup exercises warm-start on purpose (with its own
     mocks of the inner loaders), so it is excluded.
+
+    Speech-to-text preloads by a second route: the lifespan's
+    "betterfingers-warmup" thread calls ensure_transcriber_initialized(
+    preload=<model_keep_stt_loaded>, default True), which loaded the REAL
+    Whisper model from the user's Hugging Face cache and ran a CUDA probe
+    inside unit tests (seen 2026-10-04: a second CUDA probe in one process
+    hung forever). Only that thread's preload is dropped; tests that call
+    ensure_transcriber_initialized themselves are unaffected.
     """
     if request.module.__name__ == "test_server_lazy_startup":
         yield
@@ -248,5 +257,15 @@ def _no_warm_start_model_loads(request, monkeypatch):
     if server_mod is not None and hasattr(server_mod, "warm_start_resident_models"):
         monkeypatch.setattr(
             server_mod, "warm_start_resident_models", lambda settings=None: {}
+        )
+    original_ensure = getattr(server_mod, "ensure_transcriber_initialized", None)
+    if original_ensure is not None:
+        def _ensure_without_warmup_preload(preload=False):
+            if threading.current_thread().name == "betterfingers-warmup":
+                preload = False
+            return original_ensure(preload=preload)
+
+        monkeypatch.setattr(
+            server_mod, "ensure_transcriber_initialized", _ensure_without_warmup_preload
         )
     yield
