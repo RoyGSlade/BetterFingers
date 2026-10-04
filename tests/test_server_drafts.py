@@ -922,12 +922,15 @@ class ServerDraftTests(unittest.TestCase):
     def test_primary_action_captures_selection_when_no_pending_draft(self):
         capture_result = {"ok": True, "text": "selected text", "message": "Captured selected text."}
 
+        # speak_text_aloud is mocked: unmocked it initializes the real Kokoro TTS
+        # engine and speaks, which cost ~158 s per run (and could play audio).
         with patch("clipboard_capture.capture_selection_text_with_restore", return_value=capture_result), patch.object(
             server, "broadcast_status_threadsafe"
-        ) as broadcast:
+        ) as broadcast, patch.object(server, "speak_text_aloud") as speak:
             result = server.handle_primary_action()
 
         self.assertEqual(result, capture_result)
+        speak.assert_called_once_with("selected text")
         broadcast.assert_called_with("selection_captured", capture_result)
 
     def test_emergency_stop_stops_recording_typing_and_pending_sends(self):
