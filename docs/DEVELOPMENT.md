@@ -6,10 +6,10 @@ A map of the repository and the rules that keep it easy to work in. Product desi
 
 | Path | What lives there |
 |---|---|
-| `server.py` | FastAPI app, process-wide runtime state, startup/shutdown, and routes not yet extracted. Entry point for dev (`python server.py`) and for the PyInstaller backend bundle. |
+| `server.py` | FastAPI app, auth middleware, process-wide runtime state and helpers, startup/shutdown, router registration. It serves no routes itself. Entry point for dev (`python server.py`) and for the PyInstaller backend bundle; when run as a script it registers itself as the `server` module so routers' lazy `import server` reach the live state. |
 | `version.py` + `VERSION` | The single version source. |
 | `config.yaml`, `context_rules.yaml`, `Tutorial_Script.txt` | Data files bundled into the backend from the repo root. |
-| `backend/api/routes/` | FastAPI routers, one per domain. `security.py` holds sidecar auth. |
+| `backend/api/routes/` | All HTTP routes and the voice-status WebSocket handler, one router per domain. Handlers reach shared state through a lazy `import server as s` and `s.<name>`; anything that rebinds a server global stays in a `server.py` helper. `backend/api/security.py` holds sidecar auth. |
 | `backend/audio/` | Microphone capture: input broker, recorder, device resolution, gating, ducking, status. |
 | `backend/stt/` | Speech-to-text: `transcriber` (faster-whisper, CPU thread policy, CUDA probe), streaming, text formatting. |
 | `backend/llm/` | Local LLM cleanup engine (llama-server) and persona traits. |
