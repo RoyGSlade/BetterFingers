@@ -28,9 +28,9 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-import data_categories as dc
-import data_lifecycle as dl
-import data_registry as dr
+from backend.privacy import data_categories as dc
+from backend.privacy import data_lifecycle as dl
+from backend.privacy import data_registry as dr
 import server
 
 
@@ -52,7 +52,7 @@ class _ResetRootMixin(unittest.TestCase):
             # ours on every platform, so it is pinned separately rather than
             # folded into the unified root — otherwise the cross-boundary claim
             # would be tested against a setup that has no boundary in it.
-            patch("data_paths.electron_user_data_candidates",
+            patch("backend.privacy.data_paths.electron_user_data_candidates",
                   return_value=[self.electron_root]),
         ]
         for p in patchers:

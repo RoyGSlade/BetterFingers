@@ -4,7 +4,7 @@ import logging
 
 from fastapi import HTTPException
 
-from log_redaction import redact_user_text
+from backend.privacy.log_redaction import redact_user_text
 
 
 class ProjectPathRefused(Exception):

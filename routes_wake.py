@@ -26,7 +26,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-import upload_safety
+from backend.privacy import upload_safety
 
 router = APIRouter()
 

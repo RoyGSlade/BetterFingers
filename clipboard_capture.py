@@ -13,7 +13,7 @@ import keyboard
 import pyperclip
 
 import platform_capabilities
-from log_redaction import redact_exc
+from backend.privacy.log_redaction import redact_exc
 
 
 _URL_ONLY_RE = re.compile(r"^(https?://|www\.)\S+$", re.IGNORECASE)

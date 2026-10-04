@@ -20,7 +20,7 @@ import time
 
 import numpy as np
 
-from log_redaction import redact_exc
+from backend.privacy.log_redaction import redact_exc
 
 # A cut is only forced mid-speech once the pending buffer hits the max batch
 # length; the cut point is then the quietest chunk in this trailing fraction of

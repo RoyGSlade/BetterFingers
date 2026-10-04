@@ -9,7 +9,7 @@ import re
 import unittest
 from unittest.mock import patch
 
-import log_redaction as lr
+from backend.privacy import log_redaction as lr
 
 
 class RedactUserTextTests(unittest.TestCase):

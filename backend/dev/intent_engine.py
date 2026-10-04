@@ -2,7 +2,7 @@ import difflib
 import logging
 from enum import Enum
 
-from log_redaction import redact_user_text
+from backend.privacy.log_redaction import redact_user_text
 
 class IntentState(Enum):
     IDLE = "idle"

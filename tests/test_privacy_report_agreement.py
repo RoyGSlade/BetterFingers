@@ -27,8 +27,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import data_categories as dc
-import data_lifecycle as dl
+from backend.privacy import data_categories as dc
+from backend.privacy import data_lifecycle as dl
 
 
 class _TempRootMixin(unittest.TestCase):
@@ -94,7 +94,7 @@ class UnmappedFileTests(_TempRootMixin):
         # Create the file the category's own module names, by asking for the
         # declared path list after touching each candidate the module exposes.
         # For single-file JSON stores this is exactly one path.
-        import data_paths
+        from backend.privacy import data_paths
         fn = getattr(data_paths, category.id, None)
         if fn is None:
             return []

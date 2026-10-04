@@ -29,8 +29,8 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 import app_paths
-import data_paths
-from data_registry import (
+from backend.privacy import data_paths
+from backend.privacy.data_registry import (
     DataCategory,
     VerificationResult,
     WipeResult,

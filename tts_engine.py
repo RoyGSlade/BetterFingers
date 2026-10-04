@@ -13,7 +13,7 @@ from typing import Dict, Optional, Tuple, Union
 import numpy as np
 import sounddevice as sd
 from backend.runtime.job_manager import JOBS, JobState
-from log_redaction import redact_user_text
+from backend.privacy.log_redaction import redact_user_text
 from backend.runtime.model_runtime_coordinator import RuntimeBusyError
 from utils import get_user_data_path
 import voice_clone_engine

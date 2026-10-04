@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from llm_engine import LLMEngine, get_engine, get_engine_if_initialized, resolve_dictation_preset
-from log_redaction import redact_exc, redact_user_text
+from backend.privacy.log_redaction import redact_exc, redact_user_text
 from store_migration import get_degraded_events
 import version
 from transcriber import Transcriber
@@ -36,7 +36,7 @@ from platform_capabilities import get_capabilities, get_injection_status
 from hardware_report import get_hardware_report, assess_model_fit, get_hardware_tier
 from platform_paths import ensure_app_dirs, get_app_data_dir, get_config_dir
 import recordings
-import upload_safety
+from backend.privacy import upload_safety
 from backend.stores import dictionary
 from backend.commands import dictation_commands
 from backend.stores import macros
@@ -47,9 +47,9 @@ import wake_setup_registry
 # Wave 6: the privacy report, every wipe mode, and the factory reset are all
 # generated from one declared inventory, so the screen cannot describe a store
 # the wipe misses (or miss one the screen describes).
-import data_registry
-import data_categories
-import data_lifecycle
+from backend.privacy import data_registry
+from backend.privacy import data_categories
+from backend.privacy import data_lifecycle
 from backend.dev import mcp_client
 from backend.runtime.job_manager import JOBS, JobState
 from backend.runtime.dependencies import JobManagerCancellationBridge, PipelineDependencies

@@ -33,7 +33,7 @@ from model_manager import (
     get_server_path,
 )
 from hardware_report import _estimate_runtime_mb
-from log_redaction import redact_stderr_lines
+from backend.privacy.log_redaction import redact_stderr_lines
 from store_migration import load_versioned_store
 from backend.services.persona_schema import (
     compile_persona_instruction,

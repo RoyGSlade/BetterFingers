@@ -25,7 +25,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-import data_categories as dc
+from backend.privacy import data_categories as dc
 import server
 
 
@@ -110,7 +110,7 @@ class SupportReportContentFreeTests(unittest.TestCase):
                       "would not have tested the field that makes it user text")
         written.append("stream_deck_config")
 
-        import data_paths
+        from backend.privacy import data_paths
         for name in ("draft_history.json", "macros.json", "dictionary.json",
                      "graph.json", "mcp_servers.json", "app_profiles.json",
                      "launcher_workflows.json", "application_registry.json",

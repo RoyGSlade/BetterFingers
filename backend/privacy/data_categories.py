@@ -43,9 +43,9 @@ import shutil
 from pathlib import Path
 from typing import Callable, Optional
 
-import data_lifecycle
-import data_paths
-from data_registry import (
+from backend.privacy import data_lifecycle
+from backend.privacy import data_paths
+from backend.privacy.data_registry import (
     DataCategory,
     DataRegistry,
     VerificationResult,
@@ -507,7 +507,7 @@ def get_registry() -> DataRegistry:
     ``data_registry.REGISTRY`` is the declared home for it; populating it lazily
     here keeps ``data_registry`` free of any dependency on the inventory.
     """
-    from data_registry import REGISTRY
+    from backend.privacy.data_registry import REGISTRY
     if not len(REGISTRY):
         for category in CATEGORIES:
             REGISTRY.register(category)

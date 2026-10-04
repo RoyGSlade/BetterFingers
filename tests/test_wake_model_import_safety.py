@@ -16,7 +16,7 @@ import unittest
 from fastapi.testclient import TestClient
 
 import server
-import upload_safety as us
+from backend.privacy import upload_safety as us
 import wake_models
 
 
