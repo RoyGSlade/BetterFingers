@@ -12,6 +12,7 @@ import sqlite3
 import threading
 
 from backend.config.utils import get_user_data_path
+from backend.stores.draft_artifacts import snapshot_lock, remove_draft_from_snapshots
 
 _lock = threading.Lock()
 _initialized_path = None
@@ -35,6 +36,9 @@ def _db_path():
 def _connect():
     conn = sqlite3.connect(_db_path(), timeout=5.0)
     conn.row_factory = sqlite3.Row
+    # Overwrite freed pages so a deleted dictation's text does not linger in
+    # history.db after the row is gone.
+    conn.execute("PRAGMA secure_delete=ON")
     return conn
 
 
@@ -458,13 +462,24 @@ def set_pinned(draft_id, pinned, pinned_at):
             return False
 
 
+def scrub_draft_artifacts(draft_id):
+    """Repair JSON copies even when the canonical archive row is already absent."""
+    try:
+        remove_draft_from_snapshots(os.path.join(os.path.dirname(_db_path()), "draft_history.json"), draft_id)
+        return True
+    except OSError:
+        logging.warning("Could not scrub draft recovery snapshots.")
+        return False
+
+
 def delete_draft(draft_id):
     """Delete one archive row by exact id. The existing drafts_ad trigger
     keeps FTS in sync. Idempotent: returns False (not an error) when the row
     is already absent."""
     init()
-    with _lock:
+    with snapshot_lock, _lock:
         try:
+            remove_draft_from_snapshots(os.path.join(os.path.dirname(_db_path()), "draft_history.json"), draft_id)
             conn = _connect()
             try:
                 cur = conn.execute("DELETE FROM drafts WHERE id = ?", (int(draft_id),))

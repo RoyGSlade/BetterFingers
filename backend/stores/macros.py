@@ -12,6 +12,7 @@ import threading
 import time
 
 from backend.config.utils import get_user_data_path
+from backend.config.store_migration import refresh_migration_backups, write_atomic
 
 _lock = threading.RLock()
 
@@ -93,8 +94,11 @@ def add_macro(trigger, expansion):
 
 def remove_macro(trigger):
     trigger = str(trigger or "").strip().lower()
-    macros = [m for m in get_macros() if m["trigger"].lower() != trigger]
-    _save(macros)
+    with _lock:
+        macros = [m for m in get_macros() if m["trigger"].lower() != trigger]
+        text = json.dumps({"macros": macros}, indent=2)
+        refresh_migration_backups(_macros_path(), text, 1)
+        write_atomic(_macros_path(), text)
     return macros
 
 

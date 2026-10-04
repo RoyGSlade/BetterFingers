@@ -28,6 +28,8 @@ Pure stdlib; unit-tested in tests/test_store_migration.py.
 import json
 import logging
 import os
+from pathlib import Path
+import re
 import threading
 import time
 import uuid
@@ -145,6 +147,37 @@ def backup_before_migration(path, from_version):
     except OSError as exc:
         logging.warning("Failed to back up %s before v%s migration: %s", path, from_version, exc)
         return ""
+
+
+def refresh_migration_backups(path, text, current_version):
+    """Replace exact version backups with a current survivor recovery snapshot.
+
+    Called BEFORE the final per-item live write, so backup failure leaves the
+    original live item retryable. Only .bak-v<digits> belongs to this operation;
+    unrelated files/quarantines are untouched. Unknown/future/symlink artifacts
+    fail rather than destroying data this version cannot understand. text=None
+    validates without writes before a loader can produce migration backups.
+    """
+    path = Path(_reject_traversal(path))
+    candidates = [p for p in path.parent.glob(path.name + ".bak-v*")
+                  if re.fullmatch(re.escape(path.name) + r"\.bak-v[0-9]+", p.name)]
+    if candidates and not path.exists():
+        raise OSError("Cannot refresh recovery snapshots without a live store")
+    for candidate in ([path] if path.exists() else []) + candidates:
+        if candidate.is_symlink() or not candidate.is_file():
+            raise OSError("Unsafe recovery snapshot")
+        try:
+            data = json.loads(candidate.read_text(encoding="utf-8"))
+            version = data.get("schema_version", 1) if isinstance(data, dict) else 1
+            if (not isinstance(data, (dict, list)) or type(version) is not int
+                    or version > current_version
+                    or (candidate != path and int(candidate.name.rsplit("bak-v", 1)[1]) > current_version)):
+                raise ValueError("Unsupported recovery schema")
+        except (ValueError, UnicodeError) as exc:
+            raise OSError("Unsupported recovery snapshot") from exc
+    if text is not None:
+        for candidate in candidates:
+            write_atomic(candidate, text)
 
 
 def load_versioned_store(path, current_version, migrations, *, default_factory, parse=None, backup=True):

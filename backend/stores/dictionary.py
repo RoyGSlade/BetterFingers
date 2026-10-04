@@ -19,6 +19,7 @@ import threading
 import time
 
 from backend.config.utils import get_user_data_path
+from backend.config.store_migration import refresh_migration_backups, write_atomic
 
 _lock = threading.RLock()
 
@@ -96,8 +97,11 @@ def add_term(term):
 
 def remove_term(term):
     term = str(term or "").strip().lower()
-    terms = [t for t in get_terms() if t.lower() != term]
-    _save_terms(terms)
+    with _lock:
+        terms = [t for t in get_terms() if t.lower() != term]
+        text = json.dumps({"terms": terms}, indent=2)
+        refresh_migration_backups(_dictionary_path(), text, 1)
+        write_atomic(_dictionary_path(), text)
     return terms
 
 

@@ -39,7 +39,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Optional
 
-from backend.config.store_migration import load_versioned_store, write_atomic
+from backend.config.store_migration import load_versioned_store, write_atomic, refresh_migration_backups
 
 # Schema history:
 #   v1 (legacy/pre-service): {"personas": {name: [{"raw": .., "out": ..}, ...]}}
@@ -215,19 +215,23 @@ class PersonaLearningStore:
         """Delete a single learned example by id."""
         name = self._key(persona_name)
         with self._lock:
-            data = self._load()
-            entry = data["personas"].get(name)
-            if not entry:
-                return {"ok": True, "deleted": False}
-            before = len(entry["examples"])
-            entry["examples"] = [e for e in entry["examples"] if e["id"] != example_id]
-            if len(entry["examples"]) == before:
-                return {"ok": True, "deleted": False}
             try:
-                self._save(data)
+                # Loading a legacy schema itself writes .bak-v1; validate old
+                # backups first so migration cannot overwrite a future copy.
+                refresh_migration_backups(self.path, None, SCHEMA_VERSION)
+                data = self._load()
+                entry = data["personas"].get(name)
+                existed = False
+                if entry:
+                    before = len(entry["examples"])
+                    entry["examples"] = [e for e in entry["examples"] if e["id"] != example_id]
+                    existed = len(entry["examples"]) != before
+                refresh_migration_backups(self.path, json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False), SCHEMA_VERSION)
+                if existed:
+                    self._save(data)
             except OSError as exc:
                 return {"ok": False, "error": "write_failed", "message": str(exc)}
-            return {"ok": True, "deleted": True}
+            return {"ok": True, "deleted": existed}
 
     def clear_persona(self, persona_name) -> dict:
         """Privacy clear: delete every learned example for one persona. The
@@ -235,10 +239,14 @@ class PersonaLearningStore:
         with fresh consent recreates it, so this clear is reversible."""
         name = self._key(persona_name)
         with self._lock:
-            data = self._load()
-            existed = bool(data["personas"].get(name, {}).get("examples"))
-            data["personas"].pop(name, None)
             try:
+                # Same contract as delete_example: the cleared examples must not
+                # survive in a .bak-v<N> recovery copy.
+                refresh_migration_backups(self.path, None, SCHEMA_VERSION)
+                data = self._load()
+                existed = bool(data["personas"].get(name, {}).get("examples"))
+                data["personas"].pop(name, None)
+                refresh_migration_backups(self.path, json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False), SCHEMA_VERSION)
                 self._save(data)
             except OSError as exc:
                 return {"ok": False, "error": "write_failed", "message": str(exc)}
