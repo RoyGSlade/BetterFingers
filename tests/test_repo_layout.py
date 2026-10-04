@@ -1,12 +1,13 @@
-"""Repository layout guardrails for the backend reorganization.
+"""Repository layout guardrails (the backend reorganization is complete).
 
-Python modules are moving out of the repository root into the `backend/`
-package (one batch per commit). Two layout rules must hold throughout:
+Every Python module has moved out of the repository root into the `backend/`
+package (one batch per commit). Two layout rules hold from here on:
 
-1. The root may only shrink. A new root-level `.py` file fails this test; new
-   code belongs under `backend/`. When a batch moves a module, its old root file
-   becomes a compatibility alias (see tests/test_module_aliases.py) and stays on
-   this list until the alias is deleted -- then remove it here too.
+1. The root is closed. Exactly two root-level `.py` files exist: `server.py`
+   (the PyInstaller and dev entry point) and `version.py` (reads the root
+   `VERSION` file). A new root-level `.py` file fails this test outright; new
+   code belongs under `backend/`. No compatibility aliases remain (see
+   tests/test_module_aliases.py), so nothing else belongs on this list.
 2. Tests stay flat. Windows CI enumerates `tests/test_*.py` non-recursively
    (`.github/workflows/ci.yml`), so a test file moved into a subfolder would
    silently stop running there.
@@ -16,9 +17,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 ROOT_MODULES = frozenset({
-    "routes_foundry.py",
-    "routes_models_resources.py",
-    "routes_user_config.py",
     "server.py",
     "version.py",
 })

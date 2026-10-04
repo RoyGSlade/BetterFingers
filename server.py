@@ -6312,9 +6312,9 @@ async def generate_project(data: dict):
 # --- Extracted route modules (M6). Registered after every server-level name is
 # defined, so the routers' `import server` resolves fully. _foundry_sessions is
 # re-bound so server._foundry_sessions stays the shared store existing tests use.
-import routes_foundry  # noqa: E402
-import routes_user_config  # noqa: E402
-import routes_models_resources  # noqa: E402
+from backend.api.routes import foundry as routes_foundry  # noqa: E402
+from backend.api.routes import user_config as routes_user_config  # noqa: E402
+from backend.api.routes import models_resources as routes_models_resources  # noqa: E402
 from backend.api.routes import wake as routes_wake  # noqa: E402
 from backend.api.routes import personas as routes_personas  # noqa: E402
 from backend.api.routes import message_rescue as routes_message_rescue  # noqa: E402
