@@ -57,9 +57,11 @@ subsection). The other six are **downloaded at runtime**, including
 tokenizer/configuration files. The runtime downloader and model loader supply
 no Hugging Face commit or artifact digest pin: source IDs are exact, downloaded
 revisions are not. Only the installer's copy of `base.en` is pinned and
-hash-verified, and that happens at build time; at this commit the runtime
-loader does not yet prefer the bundled copy (a separate change), so a runtime
-`base.en` download remains unpinned until it does.
+hash-verified, at build time and again at load: the runtime loader
+(`Transcriber._resolve_model_source`) prefers a verified bundle for `base.en`
+and loads it local-only, so an installed build never downloads `base.en`. Other
+sizes, and development runs without a bundle, load from the local Hub cache only;
+only the explicit Download route can fetch, and that download remains unpinned.
 
 | Model | Exact source repo / revision used | License / primary source |
 |---|---|---|

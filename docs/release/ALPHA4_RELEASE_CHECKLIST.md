@@ -1,7 +1,7 @@
 # BetterFingers v1.1.0-alpha.4 owner release checklist
 
 Prepared 2026-10-07 on branch `codex/i2-release-prep` (worktree
-`BetterFingers-wt/i2-release-prep`), fast-forwarded to `arc/assistant` at `13c4e09`, plus
+`BetterFingers-wt/i2-release-prep`), fast-forwarded to `arc/assistant` at `3a9afc5` (the commit that carries the first version of this prep), plus
 the uncommitted release-prep edits listed at the end. **Nothing has been committed,
 pushed, tagged, built by CI, signed, published or deployed.** Modeled on how Alpha 3
 shipped (`ALPHA3_RELEASE_HANDOFF.md`, local-only, and `.github/workflows/build-installer.yml`).
@@ -20,23 +20,40 @@ their machine.
 
 ## 0. Pending before tag (do not tag until every row is closed)
 
-These were still open when this checklist was written. The notes, README and website copy
-deliberately do **not** claim them. The director refreshes this file when each lands.
+Still open when this checklist was last refreshed. The notes, README and website copy
+deliberately do **not** claim anything below as verified.
 
-| # | What is still open | Why it blocks the tag | What closes it | Copy to refresh when it lands |
-|---|---|---|---|---|
-| P1 | ~~BF-H2 local-only loads + offline bundled `base.en`~~ **CLOSED** by `e2536a1` (director, 2026-10-07): verified bundle loads local-only, corrupt bundle is `verification_failed` with no network, a real offline load/transcription had zero socket attempts. Follow-ups done in the refresh commit: release-notes headline bullet, `SUPPORTED_PLATFORMS.md` Whisper row, the workflow's draft release body, and `tools/smoke_installer.ps1` now asserts the bundled model files, their MIT notices and `GET /models/whisper` reporting base.en installed+bundled. Still open: `website/page.md` setup wording (held out of the first merge with the rest of `website/**`). | | | |
-| P2 | Director refresh **done** after P1 (2026-10-07). Re-run the section 2 gates on the final tip, and delete the DRAFT block and "Commit trace" from the notes when pasting the release body. | | | |
-| P3 | **Packaged zero-network probe for update checks.** `344fdc6` says it is "still owed" (**V**). The unit tests prove the controller refuses; they do not prove the installed app is silent before consent. | The notes and README say nothing contacts the update server before consent. | Section 5, item 3. | none if it passes |
+| # | What is still open | Why it blocks the tag | What closes it |
+|---|---|---|---|
+| P1 | **Owner signing setup** (BF-F2 is done in code, `13c4e09`). A tag fails closed until the `release-signing` environment, federated credential, 3 secrets and 2 variables exist (section 3.1; **U**: no signed run has happened). | Without it the tag build fails by design. | Section 3.1 and the OIDC-signed qualification run (3.4). |
+| P2 | **Packaged QA pass**, running in a separate worktree; results will be in `docs/release/ALPHA4_QA.md` (absent when this was refreshed). Until it reports, these claims have been tested only outside a packaged install (**V**: unit tests and one dev-environment offline check in `e2536a1`'s message): offline first dictation from the bundled `base.en`, F9 placement, no update traffic before consent (`344fdc6` says the packaged zero-network probe is "still owed"), delete hygiene and the "remove my data" uninstall (`bdf5cc2`), the Kokoro first-use download, the installed-tree inventory (4.4). | The notes, README and website state these as behavior. | Section 5 passes on the signed installer, and `ALPHA4_QA.md` agrees. |
+| P3 | **Final director refresh:** re-run the section 2 gates on the final tip, delete the DRAFT block and "Commit trace" from the notes, and hand the website commit over (section 1.5). | Counts and the DRAFT banner go stale the moment anything lands. | The re-run, then the cuts. |
 
-**BF-F2 (Windows signing) is no longer pending in code**: `13c4e09` is on `arc/assistant`.
-It does, however, change what a tag needs from you: **the owner signing setup in section
-3.1 must be finished before you tag, or the tag build fails by design.**
+**Closed since this file was first drafted** (do not move back to pending):
+
+- **BF-H2 and the bundled-model hook**, `e2536a1` (director, 2026-10-07): the verified bundle loads
+  local-only, a corrupt bundle is `verification_failed` with no network, every automatic model
+  load is local-only, and a missing or corrupt model opens the app with a "Download it in Models"
+  message instead of hanging the splash. The commit's own offline check: bundled `base.en`
+  loads in 0.58 s and first-transcribes a 10.7 s clip in 0.61 s, zero socket attempts, on one
+  laptop (Ryzen AI 9 HX 370, CPU), from a bundled copy rather than a signed installer. The
+  director's refresh commit updated the notes headline, the `SUPPORTED_PLATFORMS.md` Whisper row,
+  the workflow's draft release body, and `tools/smoke_installer.ps1`, which now asserts the
+  bundled model files, their MIT notices and `GET /models/whisper` reporting `base.en` installed
+  and bundled. Still held out with the rest of `website/**`: `website/page.md` setup wording
+  (already updated in the held copy).
+- **BF-F2 signing**, `13c4e09` (code and contract tests only; see P1).
+
+No automated test proves first dictation offline on a packaged install; section 5, item 9 does
+it by hand.
+
+**Reading note:** `README.md`, the notes and `LICENSES-MODELS.md` carry the same bundled-model
+facts; if the loader behavior changes, update all four together.
 
 ## 1. Facts to know before you start
 
-1.1 **Scope.** Alpha 4 = everything on `arc/assistant` since `v1.1.0-alpha.3` (71
-non-merge commits including `13c4e09`; `git log --no-merges v1.1.0-alpha.3..arc/assistant`)
+1.1 **Scope.** Alpha 4 = everything on `arc/assistant` since `v1.1.0-alpha.3` (72
+non-merge commits including `13c4e09` and `e2536a1`; `git log --no-merges v1.1.0-alpha.3..arc/assistant`)
 **except** the optional Natural Voices / TTS pack, modes, the first-run mic meter, and
 end-user GPU acceleration. It includes the stabilization work captured by snapshot
 `7d92006`, which was never in Alpha 3 (**V**: Alpha 3 shipped from tag `7e03d09`, the
@@ -118,7 +135,7 @@ cites lands after this, regenerate again.
 | 3.2 | Commit the prep edits (version bump, docs, notes, this file, regenerated parity ledger) on `codex/i2-release-prep`; commit `website/**` **separately** (see 1.5). | **[OWNER]** |
 | 3.3 | Open a pull request (or fast-forward) `arc/assistant` + prep into `main`, **without** the website commit. Required CI on a PR (`ci.yml`): `python-tests (ubuntu-latest / py3.12)`, `python-tests (windows-latest / py3.13)`, `node`, `electron-smoke`, `qa (production board)`, `electron-smoke-crossplatform`, `bandit (medium/high required)`, `npm audit (required)`; CodeQL; `lock-freshness` if requirements changed. `ruff` is report-only. Branch protection is **U** (not inspected). All required jobs green before merging. | push/PR/merge: **[OWNER]** |
 | 3.4 | **Qualification run (strongly recommended, and required by 3.1):** run `build-installer` with `workflow_dispatch` on the merged `main`; the `windows-installer` job waits on `release-signing` approval if reviewers are set. Before the environment values exist it builds **unsigned** (allowed for manual runs only) and never publishes (the draft and publish jobs require a tag); once they exist the same dispatch is the **signed** run. It is the **first end-to-end run** of the bundled-model download path (`BETTERFINGERS_ALLOW_MODEL_DOWNLOAD=1`; `090e6e6` says it "has not run end to end yet"), of the 2500 MB payload-size budget, and of the new signing path. If the first dispatch is unsigned, run a second after provisioning. Retain the `BetterFingers-Windows-signing-evidence` artifact (signing report and installed-native verification). | start CI + approve environment: **[OWNER]** |
-| 3.5 | Confirm P1 to P3 are closed (section 0), 3.1 is complete, and the DRAFT banner is gone from the notes. | **[CHECK]** |
+| 3.5 | Confirm P1 to P3 are closed (section 0), `ALPHA4_QA.md` has no open failure, and the DRAFT banner is gone from the notes. | **[CHECK]** |
 | 3.6 | Create the **annotated** tag `v1.1.0-alpha.4` on the exact merge commit and push it. Do not upload any local build by hand. | tag + push: **[OWNER]** |
 
 ## 4. Tag workflow, then inspect the private draft
@@ -178,7 +195,7 @@ Installing, running and uninstalling are **[OWNER]** actions on your machine. Th
    saving, F9 refuses; overlay closed, F9 reads a selection aloud; a game or gaming
    profile gets a clipboard copy only. Not yet exercised against any real application
    (**V**, `697b259`).
-3. **Update consent (P3).** Fresh profile, firewall or capture running: no update traffic
+3. **Update consent (P2).** Fresh profile, firewall or capture running: no update traffic
    before accepting the privacy notice; after consent, automatic check stays off until
    ticked; **Check for updates** works by hand; an upgraded Alpha 3 profile that was
    already checking keeps checking.
@@ -195,6 +212,11 @@ Installing, running and uninstalling are **[OWNER]** actions on your machine. Th
    optional voice pack after Alpha 4); the notes list it under Known limitations.
 8. Clipboard with an image on it: reading a selection leaves the clipboard intact and does
    not crash (`7d92006`).
+9. **Offline first dictation.** Fresh profile, network disabled or blocked for the app: the app
+   opens (no splash hang), first dictation works with `base.en`, nothing is downloaded, and
+   `GET /models/whisper` (or Models) lists `base.en` as installed and refuses to remove it. Also
+   select a model that is not installed: you should get "Download it in Models", not a
+   download (`e2536a1`).
 
 Do **not** publish if any of these fail; fix forward as `alpha.5`, never re-tag.
 
@@ -233,17 +255,17 @@ Do **not** publish if any of these fail; fix forward as `alpha.5`, never re-tag.
 ## 8. Measured at prep time (not a substitute for re-running on the final tip)
 
 Windows 11 laptop (Ryzen AI 9 HX 370, RTX 5070), main checkout's repo venv, 2026-10-07,
-worktree at `13c4e09` plus the uncommitted prep edits; other agents were running tests on the
+worktree at `e2536a1` plus the prep edits; other agents were running tests on the
 same machine, so timings are indicative only.
 
 | Gate | Result |
 |---|---|
-| Fast loop (`-n 8 --dist loadfile -m "not slow" -k "not transcriber and not tts_engine"`) | 4928 passed, 17 skipped (32.7 s) |
-| `pytest -m smoke` | 178 passed, 8 skipped (4892 deselected) |
-| `tests/test_parity*.py` (5 files, slow regeneration included) | 34 passed (66.6 s), after regenerating the stale ledger |
-| `test_version_source`, `test_release_workflow_contract`, `test_azure_artifact_signing_contract`, `test_supply_chain_existing_verify`, `test_installer_cleanup_contract` | 74 passed (of which `test_version_source.py`: 8) |
-| Full Node suite (`npm run test:unit`) | 1958 tests: 1951 passed, 0 failed, 7 skipped (6 Windows/POSIX-permission skips and 1 "no repo-local .venv" skip that only applies to a worktree without its own venv) |
-| `versionSource`, `packageResourceContract`, `bugReportIntegration`, `updateIpcContract` (Node) | 30 passed |
+| Fast loop (`-n 8 --dist loadfile -m "not slow" -k "not transcriber and not tts_engine"`) | 4986 passed, 17 skipped (35.5 s) |
+| `pytest -m smoke` | 178 passed, 8 skipped (4952 deselected) |
+| `tests/test_parity*.py` (5 files, slow regeneration included) | 34 passed (80.9 s), after regenerating the stale ledger |
+| `test_version_source`, `test_release_workflow_contract`, `test_azure_artifact_signing_contract`, `test_supply_chain_existing_verify`, `test_installer_cleanup_contract` | 74 passed |
+| Full Node suite (`npm run test:unit`) | 1966 tests: 1959 passed, 0 failed, 7 skipped (6 Windows/POSIX-permission skips and 1 "no repo-local .venv" skip that only applies to a worktree without its own venv; with a repo `.venv` that test runs, which is why a run in the main checkout reports one more pass) |
+| `tests/test_version_source.py`; Node `versionSource` + `packageResourceContract` + `bugReportIntegration` + `updateIpcContract` | 8 passed; 30 passed (also inside the suites above) |
 
 **Not run in the prep session:** the STT/TTS suites the fast loop excludes, Playwright
 end-to-end, any CI workflow, any signed or unsigned installer build, any packaged-app run.
@@ -263,7 +285,8 @@ Do not publish if any of these is true:
 - Any required draft asset is missing, duplicated, or changed between qualification and
   promotion; a sidecar hash or `alpha.yml` size/SHA-512 does not match.
 - The installer smoke (install, upgrade over Alpha 3, health, uninstall, cleanup matrix)
-  failed, or the installed tree lacks the bundled model files and notice (once P1 lands).
+  failed, or the installed tree lacks the bundled `base.en` files and the notice, or first
+  dictation on a fresh install needs the network.
 - `draft-release` or `publish-release` is red. A release with uploaded assets and a failed
   workflow is a failed release.
 - `website/project.json` or `website/page.md` reached `main` before the release is public.

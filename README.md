@@ -78,7 +78,7 @@ X11; Wayland paths remain compositor-dependent and best-effort. **macOS is not s
 
 | Tier | CPU | RAM | GPU | Suggested models |
 |---|---|---|---|---|
-| Minimum | 6c/12t | 16 GB | none (CPU-only OK) | Gemma 4B Q4, Whisper `base.en` |
+| Minimum | 6c/12t | 16 GB | none (CPU-only OK) | Gemma 4B Q4, Whisper `base.en` (bundled in the installer) |
 | Recommended | 8c/16t | 32 GB | RTX 3060 12 GB class | Gemma 4B Q6/Q8, Whisper `small`/`medium.en` |
 | High-perf | 12c+ | 64 GB | RTX 4080/4090 class | Gemma 12B, Whisper `large-v3` |
 
@@ -87,7 +87,9 @@ estimates are guidance, not a guarantee; bigger models remain opt-in.
 
 ## Privacy model
 
-Speech processing runs on-device. No update checks run before durable privacy consent.
+Speech processing runs on-device, and BetterFingers never downloads a speech-to-text
+model on its own: the installer includes `base.en`, and any other model downloads only
+when you click Download. No update checks run before durable privacy consent.
 Fresh installs leave automatic checks off; Settings lets you opt in or manually check
 GitHub releases for newer versions. Existing accepted v1 onboarding records without an
 update preference retain automatic checks; explicit preferences are preserved, and
@@ -120,7 +122,8 @@ The published Windows installer is Authenticode-signed. Windows SmartScreen can 
 warn on a new, low-reputation alpha; verify the signature and release URL instead of
 downloading copies from third-party mirrors. You can install
 Alpha 4 over an existing Alpha 3 copy; your data is kept unless you choose to remove it
-at uninstall.
+at uninstall. The installer includes the Whisper `base.en` speech model, so first dictation
+works offline right after install; larger models are optional downloads.
 
 ### Linux
 
