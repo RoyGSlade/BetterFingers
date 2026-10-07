@@ -419,6 +419,44 @@ def record_runtime_error(component, message, severity="recoverable", details=Non
         return dict(row)
 
 
+# Fixed vocabulary for "the speech model is on CPU although a GPU was preferred":
+# the loader's own phrases (transcriber._load_model / _load_cpu_fallback_model) and
+# the two stable codes it publishes. Nothing outside this set reaches a status
+# surface, /doctor or /runtime/errors.
+_STT_FALLBACK_REASONS = frozenset({
+    "CUDA initialization failed",
+    "CUDA inference initialization failed",
+    "CUDA inference probe failed",
+})
+_STT_FALLBACK_CODES = frozenset({"cuda_runtime_missing", "cuda_init_failed"})
+
+
+def _sanitize_stt_fallback_reason(reason):
+    """Map a loader fallback reason onto the fixed vocabulary, else None.
+
+    For an unclassified probe failure the loader appends the exception CLASS name
+    ("CUDA inference probe failed (ValueError)"); keep the phrase, drop the suffix.
+    """
+    if not isinstance(reason, str):
+        return None
+    if reason in _STT_FALLBACK_REASONS:
+        return reason
+    if reason.startswith("CUDA inference probe failed ("):
+        return "CUDA inference probe failed"
+    return None
+
+
+def _stt_using_cpu_fallback(active_device, reason, code):
+    """True exactly when the model is running on CPU because CUDA fell back.
+
+    Derived only from already-published, sanitized status fields, so it can never
+    disagree with the ``device_fallback_*`` / ``error_state`` fields next to it and
+    never needs the model lock. CPU chosen on purpose publishes no reason or code;
+    a failed fallback attempt publishes no active device.
+    """
+    return active_device == "cpu" and (reason is not None or code is not None)
+
+
 def _record_transcriber_runtime_event(event):
     """Bridge Transcriber diagnostics without importing server from STT.
 
@@ -458,11 +496,9 @@ def _record_transcriber_runtime_event(event):
     active_compute_type = event.get("active_compute_type")
     if active_compute_type not in {None, "float16", "int8"}:
         active_compute_type = None
-    fallback_reason = event.get("device_fallback_reason")
-    if fallback_reason not in {None, "CUDA initialization failed", "CUDA inference initialization failed"}:
-        fallback_reason = None
+    fallback_reason = _sanitize_stt_fallback_reason(event.get("device_fallback_reason"))
     fallback_code = event.get("device_fallback_code")
-    if fallback_code not in {"cuda_runtime_missing", "cuda_init_failed"}:
+    if fallback_code not in _STT_FALLBACK_CODES:
         fallback_code = None
     details = {
         "code": code,
@@ -864,6 +900,7 @@ def _transcriber_status_snapshot(stt, status_override=None):
             "active_compute_type": None,
             "device_fallback_reason": None,
             "device_fallback_code": None,
+            "using_cpu_fallback": False,
         }
     getter = getattr(stt, "get_runtime_status", None)
     if isinstance(status_override, dict) or callable(getter):
@@ -893,22 +930,22 @@ def _transcriber_status_snapshot(stt, status_override=None):
                     "probe_failed",
                     "unknown",
                 }
-                reason = raw.get("device_fallback_reason")
-                if reason not in {None, "CUDA initialization failed", "CUDA inference initialization failed"}:
-                    reason = None
+                reason = _sanitize_stt_fallback_reason(raw.get("device_fallback_reason"))
                 fallback_code = raw.get("device_fallback_code")
-                if fallback_code not in {"cuda_runtime_missing", "cuda_init_failed"}:
+                if fallback_code not in _STT_FALLBACK_CODES:
                     fallback_code = None
+                active_device = raw.get("active_device") if raw.get("active_device") in {None, "cuda", "cpu"} else None
                 return {
                     "constructed": bool(raw.get("constructed", False)),
                     "probe_passed": bool(raw.get("probe_passed", False)),
                     "inference_ready": bool(raw.get("inference_ready", False)),
                     "error_code": raw.get("error_code") if raw.get("error_code") in allowed_codes else None,
                     "error_state": raw.get("error_state") if raw.get("error_state") in allowed_states else None,
-                    "active_device": raw.get("active_device") if raw.get("active_device") in {None, "cuda", "cpu"} else None,
+                    "active_device": active_device,
                     "active_compute_type": raw.get("active_compute_type") if raw.get("active_compute_type") in {None, "float16", "int8"} else None,
                     "device_fallback_reason": reason,
                     "device_fallback_code": fallback_code,
+                    "using_cpu_fallback": _stt_using_cpu_fallback(active_device, reason, fallback_code),
                     **({
                         "state": raw.get("state") if raw.get("state") in {"unloaded", "unloading", "loading", "downloading", "ready", "failed"} else "unloaded",
                         "model_size": raw.get("model_size") if raw.get("model_size") in SUPPORTED_MODEL_SIZES else None,
@@ -920,17 +957,37 @@ def _transcriber_status_snapshot(stt, status_override=None):
                 }
         except Exception:
             pass
+    reason = _sanitize_stt_fallback_reason(getattr(stt, "device_fallback_reason", None))
+    fallback_code = getattr(stt, "device_fallback_code", None)
+    if fallback_code not in _STT_FALLBACK_CODES:
+        fallback_code = None
+    active_device = getattr(stt, "active_device", None)
     return {
         "constructed": bool(getattr(stt, "model", None)),
         "probe_passed": False,
         "inference_ready": False,
         "error_code": None,
         "error_state": None,
-        "active_device": getattr(stt, "active_device", None),
+        "active_device": active_device,
         "active_compute_type": getattr(stt, "active_compute_type", None),
-        "device_fallback_reason": getattr(stt, "device_fallback_reason", None),
-        "device_fallback_code": getattr(stt, "device_fallback_code", None),
+        "device_fallback_reason": reason,
+        "device_fallback_code": fallback_code,
+        "using_cpu_fallback": _stt_using_cpu_fallback(active_device, reason, fallback_code),
     }
+
+
+def _stt_unavailable_code(stt):
+    """The typed local-only load failure keeping speech-to-text from running, or None.
+
+    ``model_missing`` / ``verification_failed`` from the published status snapshot
+    (lock-free). A constructed model never counts: whatever code is left over from
+    an earlier failed load, a model that is loaded was able to listen.
+    """
+    status = _transcriber_status_snapshot(stt)
+    code = status.get("error_code")
+    if code in _STT_UNAVAILABLE_MESSAGES and not status.get("constructed"):
+        return code
+    return None
 
 
 _last_amplitude_broadcast = 0.0
@@ -4217,6 +4274,7 @@ def gather_support_report():
         "compute_type": stt_status.get("active_compute_type"),
         "device_fallback_reason": stt_status.get("device_fallback_reason"),
         "device_fallback_code": stt_status.get("device_fallback_code"),
+        "using_cpu_fallback": bool(stt_status.get("using_cpu_fallback", False)),
     }
 
     tts = tts_engine

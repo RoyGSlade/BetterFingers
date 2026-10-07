@@ -370,6 +370,21 @@ async def transcribe_audio(file: UploadFile = File(...)):
         # freeing the Whisper model out from under this transcription.
         with s.model_runtime.read_lease("stt"):
             text = await run_in_threadpool(s.transcriber.transcribe, temp_filename)
+        if not str(text or "").strip():
+            # The transcriber answers "" both for silence and for a model that
+            # could not load. Only silence from a loaded model is a 200: never
+            # tell a caller nothing was said when the speech model is missing
+            # or failed verification (503, same status as "not initialized").
+            unavailable = s._stt_unavailable_code(s.transcriber)
+            if unavailable:
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "ok": False,
+                        "error": unavailable,
+                        "message": s._STT_UNAVAILABLE_MESSAGES[unavailable],
+                    },
+                )
         return {"text": text}
     except HTTPException:
         raise

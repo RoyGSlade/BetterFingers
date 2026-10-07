@@ -86,6 +86,21 @@ test('an unrelated stt error_code does not masquerade as a missing model', () =>
   assert.equal(deriveServices(doctor).find((s) => s.key === 'stt').status, 'starting');
 });
 
+// The backend derives stt.using_cpu_fallback from its published status snapshot
+// (QA D6: it used to stay false while error_state was fallback_active). The row
+// says "CPU" only when the backend reports a real CUDA -> CPU fallback.
+test('a loaded speech model that fell back from CUDA says it is running on CPU', () => {
+  const doctor = { stt: { initialized: true, loaded: true, device: 'cpu', using_cpu_fallback: true } };
+  const row = deriveServices(doctor).find((s) => s.key === 'stt');
+  assert.equal(row.status, 'online');
+  assert.match(row.message, /CPU/);
+});
+
+test('a loaded speech model on CPU by choice does not claim a GPU fallback', () => {
+  const doctor = { stt: { initialized: true, loaded: true, device: 'cpu', using_cpu_fallback: false } };
+  assert.equal(deriveServices(doctor).find((s) => s.key === 'stt').message, '');
+});
+
 test('ready is trusted when sidecar is healthy and doctor has nothing further to add', () => {
   const phase = derivePhase({ elapsedMs: 500, doctor: null, sidecarOutcome: 'ready' });
   assert.equal(phase, 'ready');

@@ -82,7 +82,6 @@ async def run_doctor(refresh_audio: bool = False):
     # prefer_gpu setting -- e.g. on Windows without cuDNN, CUDA init fails and
     # this honestly reports device="cpu" instead of implying GPU acceleration.
     stt_status = s._transcriber_status_snapshot(s.transcriber)
-    stt_fallback_reason = stt_status.get("device_fallback_reason")
     stt_info = {
         "initialized": s.transcriber is not None,
         "loaded": stt_status.get("constructed", False),
@@ -94,9 +93,11 @@ async def run_doctor(refresh_audio: bool = False):
         "error_state": stt_status.get("error_state"),
         "device": stt_status.get("active_device"),
         "compute_type": stt_status.get("active_compute_type"),
-        "device_fallback_reason": stt_fallback_reason,
+        "device_fallback_reason": stt_status.get("device_fallback_reason"),
         "device_fallback_code": stt_status.get("device_fallback_code"),
-        "using_cpu_fallback": bool(stt_fallback_reason),
+        # Derived from the same published snapshot as the fields above (G3), so
+        # Doctor and status can never disagree about a CUDA -> CPU fallback.
+        "using_cpu_fallback": bool(stt_status.get("using_cpu_fallback", False)),
     }
 
     # LLM details. Diagnostics remain observation-only when AI cleanup is off;
