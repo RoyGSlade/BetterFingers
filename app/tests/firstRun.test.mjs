@@ -97,7 +97,7 @@ test('summarizeWhisperState: none installed', () => {
   assert.equal(state.installedCount, 0);
 });
 
-test('summarizeWhisperState: a different model is installed than the selected one -- still counts as ready material', () => {
+test('summarizeWhisperState: a different model is installed than the selected one -- reported, but it does not make the selected one ready', () => {
   const state = summarizeWhisperState({
     models: [
       { model_size: 'base.en', installed: false },
@@ -204,6 +204,73 @@ test('computeFirstRunStatus: no Whisper model installed', () => {
   });
   assert.equal(status.ready, false);
   assert.ok(status.missing.some((m) => m.key === 'whisper'));
+});
+
+// Speech loads are local-only: dictation only ever loads the SELECTED model
+// and never downloads a substitute, so an installed *other* model must not
+// make setup look finished.
+test('computeFirstRunStatus: another Whisper model is installed but the selected one is not -- not ready', () => {
+  const status = computeFirstRunStatus({
+    health: { status: 'active' },
+    runtime: { llm_enabled: false },
+    llmModels: { models: [], selected_model_id: null, llama_server_exists: false },
+    whisperModels: {
+      models: [
+        { model_size: 'base.en', installed: false },
+        { model_size: 'small.en', installed: true },
+      ],
+      selected_model_size: 'base.en',
+    },
+  });
+  assert.equal(status.ready, false);
+  assert.equal(status.whisper.ready, false);
+  const missing = status.missing.find((m) => m.key === 'whisper');
+  assert.ok(missing, 'the selected speech model is reported missing');
+  assert.match(missing.label, /base\.en/);
+});
+
+test('computeFirstRunStatus: the selected Whisper model installed is ready regardless of how many others are', () => {
+  const status = computeFirstRunStatus({
+    health: { status: 'active' },
+    runtime: { llm_enabled: false },
+    llmModels: { models: [], selected_model_id: null, llama_server_exists: false },
+    whisperModels: {
+      models: [
+        { model_size: 'base.en', installed: true },
+        { model_size: 'small.en', installed: false },
+      ],
+      selected_model_size: 'base.en',
+    },
+  });
+  assert.equal(status.ready, true);
+  assert.deepEqual(status.missing, []);
+});
+
+test('init(): selected Whisper model missing while another is installed -- Missing badge, Download enabled, cannot Continue', async () => {
+  const elements = makeElements();
+  const { ui } = makeUi();
+  const api = makeApiStub({
+    fetchRuntimeStatus: async () => ({ llm_enabled: false, llm_ready: false }),
+    fetchLlmModels: async () => ({ models: [], selected_model_id: null, llama_server_exists: false }),
+    fetchWhisperModels: async () => ({
+      models: [
+        { model_size: 'base.en', installed: false },
+        { model_size: 'small.en', installed: true },
+      ],
+      selected_model_size: 'base.en',
+    }),
+  });
+  const feature = createFirstRunFeature({ elements, ui, hooks: {}, api, storage: makeFakeStorage() });
+
+  const status = await feature.init();
+
+  assert.equal(status.ready, false);
+  assert.equal(elements.panelEl.hidden, false);
+  assert.equal(elements.whisperBadgeEl.textContent, 'Missing');
+  assert.match(elements.whisperDetailEl.textContent, /base\.en/);
+  assert.equal(elements.continueButton.disabled, true);
+  assert.equal(elements.downloadWhisperButton.disabled, false);
+  assert.equal(elements.downloadWhisperButton.textContent, 'Download speech model');
 });
 
 // --- formatDownloadOutcomeMessage / isDiskSpaceMessage --------------------------

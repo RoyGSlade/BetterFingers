@@ -28,6 +28,14 @@ const LLM_FAILURE_STATUSES = new Set([
   'startup_failure',
 ]);
 
+// Typed, privacy-safe STT load failures the backend reports in doctor.stt.error_code
+// (transcriber.ensure_loaded). Both are terminal until the user acts. A null or
+// any other code is not in this table, so an in-flight load stays 'starting'.
+const STT_UNAVAILABLE_MESSAGES = new Map([
+  ['model_missing', 'Speech model is not installed. Download it in Models.'],
+  ['verification_failed', 'Speech model could not be loaded. Re-download it in Models.'],
+]);
+
 // Only ever reads what /doctor actually reported; a subsystem doctor didn't
 // mention gets no row at all (a row a timer invented is the same lie the
 // operator's prototype shipped, just in smaller type).
@@ -38,14 +46,20 @@ function deriveServices(doctor) {
   if (doctor.stt) {
     const stt = doctor.stt;
     let status = 'pending';
-    if (stt.loaded) status = 'online';
-    else if (stt.initialized) status = 'starting';
-    services.push({
-      key: 'stt',
-      name: 'Speech recognition',
-      status,
-      message: stt.using_cpu_fallback ? 'Running on CPU (GPU unavailable for this model).' : '',
-    });
+    let message = stt.using_cpu_fallback ? 'Running on CPU (GPU unavailable for this model).' : '';
+    if (stt.loaded) {
+      status = 'online';
+    } else if (STT_UNAVAILABLE_MESSAGES.has(stt.error_code)) {
+      // Speech loads are local-only (BF-H2): a profile whose model is absent or
+      // fails verification never reaches `loaded`, and it will not become
+      // `starting` -> `online` by waiting. Resolve it as a named failure so the
+      // app opens and offers the explicit Download; a timer must not guess this.
+      status = 'failed';
+      message = STT_UNAVAILABLE_MESSAGES.get(stt.error_code);
+    } else if (stt.initialized) {
+      status = 'starting';
+    }
+    services.push({ key: 'stt', name: 'Speech recognition', status, message });
   }
 
   if (doctor.llm && doctor.llm.enabled !== false) {

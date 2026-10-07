@@ -1524,9 +1524,9 @@ def _prepare_incomplete_model_for_resume(model_id):
     return existing
 
 
-def check_and_download_resources(model_id=None, progress_callback=None):
+def check_and_download_resources(model_id=None, progress_callback=None, *, allow_download: bool = False):
     """
-    Ensures model and server (bin + cuda libs) are present.
+    Ensures model and server are present; only explicit acquisition may fetch.
     """
     models_dir = get_models_dir()
 
@@ -1541,6 +1541,10 @@ def check_and_download_resources(model_id=None, progress_callback=None):
         _emit_progress(progress_callback, body)
 
     if not is_model_file_complete(target_model_id):
+        if not allow_download:
+            code = "verification_failed" if os.path.exists(model_path) else "model_missing"
+            return {"ok": False, "model_id": target_model_id, "code": code,
+                    "message": "LLM model is unavailable locally. Use the explicit model download action."}
         logging.info("Model %s not found.", target_model_id)
         try:
             _prepare_incomplete_model_for_resume(target_model_id)
@@ -1625,28 +1629,30 @@ def check_and_download_resources(model_id=None, progress_callback=None):
         managed_server = is_managed_server_path(server_path)
         if not existing_validation.get("ok", False) and managed_server:
             server_needs_install = True
-            report(
-                {
-                    "key": f"{target_model_id}:server",
-                    "status": "starting",
-                    "percent": 0.0,
-                    "message": "Repairing llama-server runtime.",
-                }
-            )
-        elif required_build and (existing_build is None or existing_build < required_build):
-            if managed_server:
-                server_needs_install = True
+            if allow_download:
                 report(
                     {
                         "key": f"{target_model_id}:server",
                         "status": "starting",
                         "percent": 0.0,
-                        "message": (
-                            f"Updating llama-server runtime for {model_info['name']} "
-                            f"(found build {existing_build or 'unknown'}, need {required_build}+)."
-                        ),
+                        "message": "Repairing llama-server runtime.",
                     }
                 )
+        elif required_build and (existing_build is None or existing_build < required_build):
+            if managed_server:
+                server_needs_install = True
+                if allow_download:
+                    report(
+                        {
+                            "key": f"{target_model_id}:server",
+                            "status": "starting",
+                            "percent": 0.0,
+                            "message": (
+                                f"Updating llama-server runtime for {model_info['name']} "
+                                f"(found build {existing_build or 'unknown'}, need {required_build}+)."
+                            ),
+                        }
+                    )
             else:
                 message = (
                     f"{model_info['name']} requires llama.cpp build {required_build}+; "
@@ -1667,6 +1673,10 @@ def check_and_download_resources(model_id=None, progress_callback=None):
         return {"ok": False, "model_id": target_model_id, "message": message}
 
     if server_needs_install:
+        if not allow_download:
+            code = "verification_failed" if os.path.exists(server_path) else "model_missing"
+            return {"ok": False, "model_id": target_model_id, "code": code,
+                    "message": "LLM runtime is unavailable or invalid locally. Use the explicit model download action."}
         # Pick CUDA vs Vulkan (vendor-neutral / CPU fallback) for THIS machine —
         # an AMD/Intel Windows PC must not get the CUDA-only build (§ item 2).
         spec = resolve_runtime_spec()

@@ -382,5 +382,44 @@ class ServerLazyStartupTests(unittest.TestCase):
             server.tts_engine = None
 
 
+def test_fresh_startup_residency_and_manual_warmup_never_download(monkeypatch, tmp_path):
+    """Use the actual loader on an empty fake cache, even with STT pinned."""
+    from unittest.mock import Mock
+    import huggingface_hub
+    import requests
+    from backend.stt import transcriber as stt
+
+    profile = {"model_keep_stt_loaded": True, "model_keep_llm_loaded": False,
+               "model_keep_tts_loaded": False, "model_size": "base.en", "use_gpu": False}
+    network = Mock(side_effect=AssertionError("Startup must never contact model providers"))
+    constructor = Mock(side_effect=AssertionError("Missing model must not construct"))
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", network)
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", network)
+    monkeypatch.setattr(requests.sessions.Session, "request", network)
+    monkeypatch.setattr(stt, "HF_HUB_CACHE", str(tmp_path / "empty-hub"))
+    monkeypatch.setattr(stt, "WhisperModel", constructor)
+    monkeypatch.setattr(stt, "load_profile", lambda name: profile)
+    monkeypatch.setattr(server, "load_profile", lambda name: profile)
+    monkeypatch.setattr(server, "Transcriber", stt.Transcriber)
+    monkeypatch.setattr(server, "transcriber", None)
+    monkeypatch.setattr(server, "_is_test_env", lambda: True)
+    monkeypatch.setattr(server, "load_draft_history", lambda: None)
+    monkeypatch.setattr(server, "recover_interrupted_sends", lambda: None)
+    monkeypatch.setattr(server.model_runtime, "request_admission", lambda *args: {"allowed": True})
+    monkeypatch.setenv("BETTERFINGERS_LAZY_STARTUP", "1")
+
+    asyncio.run(server.startup_event())
+    server._warmup_thread.join(timeout=5)
+    assert not server._warmup_thread.is_alive()
+    assert server.transcriber.get_runtime_status()["error_code"] == "model_missing"
+    assert server.transcriber.model is None
+    result = asyncio.run(routes_runtime.runtime_warmup(
+        routes_runtime.RuntimeWarmupRequest(stt=True, llm=False, hotkeys=False)))
+    assert result["stt"]["ok"] is False
+    assert result["stt"]["error_code"] == "model_missing"
+    constructor.assert_not_called()
+    network.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

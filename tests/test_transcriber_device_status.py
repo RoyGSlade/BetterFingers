@@ -8,8 +8,15 @@ self.active_compute_type and self.device_fallback_reason must reflect what
 actually loaded, so the /doctor status surface can be honest about it."""
 import unittest
 from unittest.mock import patch
+import pytest
 
 from backend.stt.transcriber import Transcriber
+
+
+@pytest.fixture(autouse=True)
+def installed_fake_model(monkeypatch):
+    # Device tests use fake constructors and assume an installed speech model.
+    monkeypatch.setattr(Transcriber, "_is_model_cached", lambda self, size: True)
 
 
 class _DummySegment:
@@ -28,7 +35,7 @@ class _DummyWhisperModel:
 def _cuda_fails_cpu_succeeds(*_args, **kwargs):
     """Stand-in for WhisperModel(...): raises for device='cuda' (simulating a
     missing/broken CUDA runtime, e.g. no cuDNN on Windows), succeeds for
-    device='cpu' -- regardless of local_files_only retry branch taken."""
+    device='cpu', with both attempts restricted to local files."""
     if kwargs.get("device") == "cuda":
         raise RuntimeError("Unable to load libcudnn / CUDA driver init failed")
     return _DummyWhisperModel()
@@ -68,8 +75,8 @@ class TranscriberCudaFallbackTests(unittest.TestCase):
         self.assertEqual(events[-1]["code"], "cuda_runtime_missing")
         self.assertEqual(events[-1]["state"], "fallback_active")
         self.assertTrue(events[-1]["fallback"])
-        # Every constructor call attempted CUDA before the successful CPU one.
-        whisper_model.assert_called()
+        self.assertEqual([call.kwargs["device"] for call in whisper_model.call_args_list], ["cuda", "cpu"])
+        self.assertTrue(all(call.kwargs["local_files_only"] for call in whisper_model.call_args_list))
 
     @patch("backend.stt.transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": True})
     @patch("backend.stt.transcriber.WhisperModel", side_effect=_cuda_fails_cpu_succeeds)

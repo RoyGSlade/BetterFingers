@@ -155,7 +155,7 @@ def download_llm_model(model_id: str):
 
         def run_download():
             try:
-                s.check_and_download_resources(model_id)
+                s.check_and_download_resources(model_id, allow_download=True)
             except Exception as exc:
                 logging.error("Background LLM download failed for %s: %s", model_id, exc)
             finally:
@@ -231,6 +231,15 @@ def download_whisper(request: WhisperModelRequest):
     import server as s
 
     result = s.download_whisper_model(request.model_size, prefer_gpu=request.prefer_gpu)
+    if isinstance(result, dict) and result.get("ok"):
+        # The download probed with a throwaway Transcriber; let the live one that
+        # already failed local-only (model_missing) re-check, still local-only.
+        refresh = getattr(s.transcriber, "refresh_after_download", None)
+        if callable(refresh):
+            try:
+                refresh(request.model_size)
+            except Exception:
+                logging.warning("Live speech status refresh after download failed.")
     return result
 
 
@@ -239,7 +248,14 @@ async def delete_whisper(model_size: str):
     import server as s
 
     result = s.remove_cached_model(model_size)
-    if s.transcriber is not None and getattr(s.transcriber, "model_size", "") == model_size:
+    # Unload only after a real removal: a refused one (the bundled base.en cannot
+    # be removed) must leave the live model alone.
+    if (
+        isinstance(result, dict)
+        and result.get("ok")
+        and s.transcriber is not None
+        and getattr(s.transcriber, "model_size", "") == model_size
+    ):
         s.transcriber.unload()
     return result
 

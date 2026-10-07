@@ -18,10 +18,10 @@ def stt():
         yield Transcriber(preload=False)
 
 
-def start_blocked_load(stt, *, cached=True):
+def start_blocked_load(stt, *, cached=True, allow_download=False):
     entered, release = threading.Event(), threading.Event()
 
-    def load():
+    def load(**_kwargs):
         entered.set()
         assert release.wait(5), "test did not release fake load"
         stt.active_device = "cpu"
@@ -32,15 +32,15 @@ def start_blocked_load(stt, *, cached=True):
     patches = [patch.object(stt, "_is_model_cached", return_value=cached), patch.object(stt, "_load_model", side_effect=load)]
     for item in patches:
         item.start()
-    worker = threading.Thread(target=stt.ensure_loaded)
+    worker = threading.Thread(target=lambda: stt.ensure_loaded(allow_download=allow_download))
     worker.start()
     assert entered.wait(5)
     return worker, release, patches
 
 
-@pytest.mark.parametrize("cached,state", [(True, "loading"), (False, "downloading")])
-def test_loading_snapshot_is_immediate_and_independent(stt, cached, state):
-    worker, release, patches = start_blocked_load(stt, cached=cached)
+@pytest.mark.parametrize("cached,state,allow", [(True, "loading", False), (False, "downloading", True)])
+def test_loading_snapshot_is_immediate_and_independent(stt, cached, state, allow):
+    worker, release, patches = start_blocked_load(stt, cached=cached, allow_download=allow)
     try:
         started = time.monotonic()
         snapshot = stt.get_runtime_status()
@@ -57,6 +57,28 @@ def test_loading_snapshot_is_immediate_and_independent(stt, cached, state):
             item.stop()
     assert not worker.is_alive()
     assert stt.get_runtime_status()["state"] == "ready"
+
+
+@pytest.mark.parametrize("cached,code", [(False, "model_missing"), (True, "verification_failed")])
+def test_local_only_miss_never_publishes_downloading(stt, cached, code):
+    """A local-only load that cannot be satisfied publishes loading -> failed (typed), never downloading."""
+    published = []
+    real_publish = stt._publish_runtime_status
+
+    def spy(state=None):
+        published.append(state)
+        return real_publish(state)
+
+    with patch.object(stt, "_publish_runtime_status", side_effect=spy), \
+            patch.object(stt, "_is_model_cached", return_value=cached), \
+            patch.object(stt, "_load_model", side_effect=RuntimeError("private path")):
+        assert not stt.ensure_loaded()
+    assert "downloading" not in published
+    assert "loading" in published
+    failed = stt.get_runtime_status()
+    assert failed["state"] == "failed" and failed["error_code"] == code
+    assert not failed["downloading"]
+    assert "private path" not in str(failed)
 
 
 def test_published_lifecycle_and_reload_generations(stt):
@@ -78,7 +100,7 @@ def test_published_lifecycle_and_reload_generations(stt):
     with patch.object(stt, "_is_model_cached", return_value=True), patch.object(stt, "_load_model", side_effect=RuntimeError("private path")):
         assert not stt.ensure_loaded()
     failed = stt.get_runtime_status()
-    assert failed["state"] == "failed" and failed["error_code"] == "stt_model_load_failed"
+    assert failed["state"] == "failed" and failed["error_code"] == "verification_failed"
     assert "private path" not in str(failed)
     assert failed["generation"] > unloaded["generation"]
 

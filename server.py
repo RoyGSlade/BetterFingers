@@ -430,6 +430,9 @@ def _record_transcriber_runtime_event(event):
     code = str(event.get("code") or "stt_runtime_error")
     allowed_codes = {
         "cuda_runtime_missing",
+        "cuda_init_failed",
+        "model_missing",
+        "verification_failed",
         "stt_model_load_failed",
         "stt_model_not_loaded",
         "stt_inference_failed",
@@ -438,6 +441,8 @@ def _record_transcriber_runtime_event(event):
         code = "stt_runtime_error"
     state = str(event.get("state") or "unknown")
     if state not in {
+        "model_missing",
+        "verification_failed",
         "construction_failed",
         "inference_failed",
         "fallback_active",
@@ -457,7 +462,7 @@ def _record_transcriber_runtime_event(event):
     if fallback_reason not in {None, "CUDA initialization failed", "CUDA inference initialization failed"}:
         fallback_reason = None
     fallback_code = event.get("device_fallback_code")
-    if fallback_code != "cuda_runtime_missing":
+    if fallback_code not in {"cuda_runtime_missing", "cuda_init_failed"}:
         fallback_code = None
     details = {
         "code": code,
@@ -838,6 +843,14 @@ def get_runtime_status_snapshot():
     }
 
 
+# Typed local-only STT load failures (BF-H2) and the one actionable sentence for
+# each. Fixed strings only: nothing from an exception ever reaches the user copy.
+_STT_UNAVAILABLE_MESSAGES = {
+    "model_missing": "The speech model is not installed. Download it in Models, then try again.",
+    "verification_failed": "The speech model could not be loaded. Re-download it in Models, then try again.",
+}
+
+
 def _transcriber_status_snapshot(stt, status_override=None):
     """Return a safe status snapshot without constructing/probing STT."""
     if stt is None:
@@ -861,12 +874,17 @@ def _transcriber_status_snapshot(stt, status_override=None):
                 allowed_codes = {
                     None,
                     "cuda_runtime_missing",
+                    "cuda_init_failed",
+                    "model_missing",
+                    "verification_failed",
                     "stt_model_load_failed",
                     "stt_model_not_loaded",
                     "stt_inference_failed",
                 }
                 allowed_states = {
                     None,
+                    "model_missing",
+                    "verification_failed",
                     "construction_failed",
                     "inference_failed",
                     "fallback_active",
@@ -879,7 +897,7 @@ def _transcriber_status_snapshot(stt, status_override=None):
                 if reason not in {None, "CUDA initialization failed", "CUDA inference initialization failed"}:
                     reason = None
                 fallback_code = raw.get("device_fallback_code")
-                if fallback_code != "cuda_runtime_missing":
+                if fallback_code not in {"cuda_runtime_missing", "cuda_init_failed"}:
                     fallback_code = None
                 return {
                     "constructed": bool(raw.get("constructed", False)),
@@ -2505,6 +2523,14 @@ def process_recording_result(
             profile_config,
         )
         if blocked:
+            blocked_error = "No usable audio was recorded."
+            # Local-only STT never downloads: with no usable model the transcript is
+            # empty whatever was recorded. Name the real cause and the way out
+            # (the Models page) instead of sending the user to their microphone.
+            stt_code = _transcriber_status_snapshot(transcriber).get("error_code")
+            if stt_code in _STT_UNAVAILABLE_MESSAGES and not str(raw_text or "").strip():
+                blocked_error = _STT_UNAVAILABLE_MESSAGES[stt_code]
+                reasons = [*reasons, stt_code]
             ctx.extra["_latency_no_audio"] = True
             draft = _commit_draft(
                 ctx,
@@ -2513,7 +2539,7 @@ def process_recording_result(
                 preset=preset,
                 status="blocked",
                 metadata=metadata,
-                error="No usable audio was recorded.",
+                error=blocked_error,
                 gate_reasons=reasons,
                 recording_result=recording_result,
                 transcription_result=_serialize_optional_contract(ctx.extra.get("transcription_result")),

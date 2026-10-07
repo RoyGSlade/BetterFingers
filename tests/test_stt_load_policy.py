@@ -234,31 +234,21 @@ class CpuLoadThreadsTests(_LoadTestCase):
         self.assertEqual(len(thread_lines), 1)
         self.assertIn("Whisper CPU threads: 6 (physical=12, load=50%)", thread_lines[0])
 
-    def test_cpu_cache_retry_construction_passes_threads_too(self):
-        # First CPU construction (local cache) fails, the remote-fetch retry succeeds.
+    def test_corrupt_cpu_cache_does_not_retry_or_download(self):
         fake = make_fake_whisper()
-        real_init = fake.__init__
-        failures = {"left": 1}
-
-        def flaky_init(self, model_size, **kwargs):
-            if kwargs.get("device") == "cpu" and failures["left"] > 0:
-                failures["left"] -= 1
-                fake.state.attempts.append(dict(kwargs))
-                raise RuntimeError("local cache is corrupt")
-            real_init(self, model_size, **kwargs)
-
-        fake.__init__ = flaky_init
+        def failing_init(self, model_size, **kwargs):
+            fake.state.attempts.append(dict(kwargs))
+            raise RuntimeError("local cache is corrupt")
+        fake.__init__ = failing_init
         t = self._transcriber(fake, prefer_gpu=False)
-
         with patch("backend.stt.transcriber.choose_stt_cpu_threads", return_value=4) as choose:
-            self.assertTrue(t.ensure_loaded())
-
-        choose.assert_called_once()  # one policy decision (and one log line) per load
-        self.assertEqual(len(fake.state.attempts), 2)
-        self.assertEqual([a["cpu_threads"] for a in fake.state.attempts], [4, 4])
+            self.assertFalse(t.ensure_loaded())
+        choose.assert_called_once()
+        self.assertEqual(len(fake.state.attempts), 1)
+        self.assertEqual(fake.state.attempts[0]["cpu_threads"], 4)
         self.assertTrue(fake.state.attempts[0]["local_files_only"])
-        self.assertFalse(fake.state.attempts[1]["local_files_only"])
-        self.assertEqual(t.active_cpu_threads, 4)
+        self.assertEqual(t.get_runtime_status()["error_code"], "verification_failed")
+        self.assertIsNone(t.active_cpu_threads)
 
     def test_cpu_fallback_model_passes_threads(self):
         fake = make_fake_whisper()
@@ -393,34 +383,25 @@ class CudaLoadProbeTests(_LoadTestCase):
         t.unload()
         self.assertFalse(t.get_runtime_status()["inference_ready"])
 
-    def test_cache_refresh_retry_is_probed_too(self):
-        fake = make_fake_whisper(
-            cuda_error=RuntimeError(CUBLAS_MSG),
-            cuda_construct_failures=1,
-        )
-        t = self._transcriber(fake, prefer_gpu=True, cached=True)
-
-        self.assertTrue(t.ensure_loaded())
-
-        # cuda (local cache, constructor fails) -> cuda (remote retry, constructs) -> probe fails -> cpu
-        self.assertEqual(self._devices(fake), ["cuda", "cuda", "cpu"])
-        self.assertTrue(fake.state.attempts[0]["local_files_only"])
-        self.assertFalse(fake.state.attempts[1]["local_files_only"])
-        self.assertEqual(len(fake.state.log), 1)
-        self.assertEqual(t.active_device, "cpu")
-        self.assertEqual(t.device_fallback_code, classify_cuda_runtime_error(RuntimeError(CUBLAS_MSG)))
-        self.assertEqual(t.device_fallback_reason, "CUDA inference probe failed")
-
-    def test_cache_refresh_retry_that_passes_its_probe_stays_on_cuda(self):
+    def test_cuda_constructor_failure_falls_back_without_cache_refresh(self):
         fake = make_fake_whisper(cuda_construct_failures=1)
         t = self._transcriber(fake, prefer_gpu=True, cached=True)
-
         self.assertTrue(t.ensure_loaded())
+        self.assertEqual(self._devices(fake), ["cuda", "cpu"])
+        self.assertTrue(all(a["local_files_only"] for a in fake.state.attempts))
+        self.assertEqual(len(fake.state.log), 0)
+        self.assertEqual(t.active_device, "cpu")
+        self.assertEqual(t.device_fallback_code, "cuda_init_failed")
 
-        self.assertEqual(self._devices(fake), ["cuda", "cuda"])
-        self.assertEqual(t.active_device, "cuda")
-        self.assertIsNone(t.active_cpu_threads)
-        self.assertEqual(len(fake.state.log), 1)
+    def test_cuda_constructor_failure_is_memoized_across_reload(self):
+        fake = make_fake_whisper(cuda_construct_failures=1, cuda_construct_error=RuntimeError("weird"))
+        t = self._transcriber(fake, prefer_gpu=True, cached=True)
+        self.assertTrue(t.ensure_loaded())
+        t.unload()
+        self.assertTrue(t.ensure_loaded())
+        self.assertEqual(self._devices(fake), ["cuda", "cpu", "cpu"])
+        self.assertEqual(t.device_fallback_code, "cuda_init_failed")
+        self.assertTrue(all(a["local_files_only"] for a in fake.state.attempts))
 
     def test_probe_failure_does_not_trigger_the_cache_refresh_retry(self):
         # The constructor worked from the local cache, so a probe failure is not a cache problem.
@@ -431,19 +412,13 @@ class CudaLoadProbeTests(_LoadTestCase):
 
         self.assertEqual(self._devices(fake), ["cuda", "cpu"])
 
-    def test_unclassifiable_cuda_construction_failure_still_fails_the_load(self):
-        fake = make_fake_whisper(
-            cuda_construct_failures=2,
-            cuda_construct_error=ValueError("not a CUDA runtime problem"),
-        )
+    def test_arbitrary_cuda_constructor_error_falls_back_once(self):
+        fake = make_fake_whisper(cuda_construct_failures=2, cuda_construct_error=RuntimeError("weird"))
         t = self._transcriber(fake, prefer_gpu=True, cached=True)
-
-        self.assertFalse(t.ensure_loaded())
-
-        self.assertEqual(self._devices(fake), ["cuda", "cuda"])  # no silent CPU build
-        self.assertIsNone(t.model)
-        self.assertIsNone(t.active_device)
-        self.assertIsNone(t.active_cpu_threads)
+        self.assertTrue(t.ensure_loaded())
+        self.assertEqual(self._devices(fake), ["cuda", "cpu"])
+        self.assertEqual(t.active_device, "cpu")
+        self.assertEqual(t.device_fallback_code, "cuda_init_failed")
 
     def test_lazy_recovery_backstop_still_works_after_a_passing_probe(self):
         # The load-time probe passes (call 1), then a later decode fails -> existing lazy recovery.

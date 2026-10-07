@@ -36,6 +36,7 @@ def _make_transcriber(segments):
     # the first transcribe() call, which happens after this helper would
     # otherwise have already returned and torn the patch down.
     with patch("backend.stt.transcriber.load_profile", return_value={"model_size": "base.en", "use_gpu": False}), \
+         patch.object(Transcriber, "_is_model_cached", return_value=True), \
          patch("backend.stt.transcriber.WhisperModel", return_value=_DummyWhisperModel(segments)):
         yield Transcriber(profile_name="Default", preload=False)
 

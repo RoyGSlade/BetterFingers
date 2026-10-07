@@ -391,7 +391,7 @@ class ModelManagerStatusTests(unittest.TestCase):
             ), patch(
                 "backend.models.model_manager.get_model_path", return_value=model_path
             ), patch("backend.models.model_manager.download_file", side_effect=fake_download) as download_file:
-                result = check_and_download_resources(model_id="gemma-4-12b-q4")
+                result = check_and_download_resources(model_id="gemma-4-12b-q4", allow_download=True)
 
             self.assertTrue(result["ok"])
             download_file.assert_called_once()
@@ -430,7 +430,7 @@ class ModelManagerStatusTests(unittest.TestCase):
             ) as download_file, patch.dict(
                 model_manager.AVAILABLE_MODELS, {"legacy-test-model": _LEGACY_TEST_MODEL}
             ):
-                result = check_and_download_resources(model_id="legacy-test-model")
+                result = check_and_download_resources(model_id="legacy-test-model", allow_download=True)
 
             self.assertFalse(bool(result.get("ok", True)))
             self.assertIn("unavailable", str(result.get("message", "")).lower())
@@ -498,7 +498,7 @@ class ModelManagerStatusTests(unittest.TestCase):
             ) as download_file, patch.dict(
                 model_manager.AVAILABLE_MODELS, {"legacy-test-model": _LEGACY_TEST_MODEL}
             ):
-                result = check_and_download_resources(model_id="legacy-test-model")
+                result = check_and_download_resources(model_id="legacy-test-model", allow_download=True)
                 server_path = model_manager.get_server_path()
 
             self.assertEqual(model_manager.get_server_filename(), "llama-server")
@@ -527,7 +527,7 @@ class ModelManagerStatusTests(unittest.TestCase):
                 model_manager.AVAILABLE_MODELS, {"legacy-test-model": _LEGACY_TEST_MODEL}
             ):
                 self.assertEqual(model_manager.get_server_path(), server_path)
-                result = check_and_download_resources(model_id="legacy-test-model")
+                result = check_and_download_resources(model_id="legacy-test-model", allow_download=True)
 
             self.assertTrue(bool(result.get("ok", False)))
             download_file.assert_not_called()

@@ -5,6 +5,7 @@ import re
 import threading
 import time
 import weakref
+from dataclasses import dataclass, field
 
 import numpy as np
 from faster_whisper import WhisperModel
@@ -13,6 +14,7 @@ from huggingface_hub.constants import HF_HUB_CACHE
 
 from backend.domain.contracts import TimedSegment, TranscriptionResult
 from backend.privacy.log_redaction import redact_user_text
+from backend.stt import bundled_models
 from backend.stt.text_formatter import TextFormatter
 from backend.stt.cuda_runtime import ensure_cuda_libraries_on_path
 from backend.config.utils import load_profile
@@ -57,6 +59,38 @@ _CUDA_RUNTIME_LOAD_RE = re.compile(
     r"(?:missing|not found|(?:unable\s+)?to\s+load|cannot\s+load|could not\s+load|failed\s+to\s+load|load(?:ing)?\s+failed|dll)",
     re.IGNORECASE,
 )
+
+
+# Typed local-only load failures: the model is absent / cannot be loaded from disk.
+# They clear only by a successful load, never by waiting.
+_ACQUISITION_FAILURE_CODES = frozenset({"model_missing", "verification_failed"})
+
+
+class ModelUnavailableError(FileNotFoundError):
+    """A local-only load cannot proceed.
+
+    ``code`` is fixed vocabulary (``model_missing`` / ``verification_failed``).
+    Messages never carry a filesystem path: the bundle lives under the user's
+    profile and its absolute path must not reach logs or status.
+    """
+
+    def __init__(self, message, code):
+        super().__init__(message)
+        self.code = code
+
+
+@dataclass(frozen=True)
+class _ModelSource:
+    """Where the next Whisper load comes from, decided once by ``_resolve_model_source``."""
+
+    # What WhisperModel receives: the model NAME, or a verified bundle DIRECTORY.
+    # repr=False keeps the absolute bundle path out of any accidental log of this record.
+    model: str = field(repr=False)
+    local_files_only: bool
+    cached: bool               # usable from disk right now (verified bundle, Hub cache or local dir)
+    will_download: bool        # an explicit download would really fetch bytes
+    bundled: bool = False
+    failure_code: str | None = None  # a bundle exists but may not be used; never falls back to the network
 
 
 def classify_cuda_runtime_error(exc):
@@ -229,6 +263,33 @@ def _repo_id_for_model(model_size):
     return f"Systran/faster-whisper-{size}"
 
 
+def _bundled_model_ready(model_size):
+    """True when an installer-bundled model for this size is present AND verifies.
+
+    Cheap after the first call (bundled_models caches hashes per process). A
+    bundle that fails verification is not "installed": it is never used.
+    """
+    try:
+        directory = bundled_models.bundled_model_dir(str(model_size or "").strip())
+        return directory is not None and bundled_models.verify_bundled_model(directory).ok
+    except Exception:
+        return False
+
+
+def _apply_bundled_inventory(rows):
+    """Count a verified bundled base.en as installed (it needs no Hub cache entry)."""
+    row = rows.get("base.en")
+    if row is None or not _bundled_model_ready("base.en"):
+        return
+    row["bundled"] = True
+    if not row["installed"]:
+        row["installed"] = True
+        try:
+            row["size_bytes"] = sum(int(entry["size"]) for entry in bundled_models.load_manifest()["files"])
+        except Exception:
+            row["size_bytes"] = 0
+
+
 def list_cached_models(download_root=None):
     cache_dir = str(download_root or HF_HUB_CACHE or "").strip() or HF_HUB_CACHE
     rows = {
@@ -237,6 +298,7 @@ def list_cached_models(download_root=None):
             "repo_id": _repo_id_for_model(name),
             "installed": False,
             "size_bytes": 0,
+            "bundled": False,
         }
         for name in SUPPORTED_MODEL_SIZES
     }
@@ -247,8 +309,10 @@ def list_cached_models(download_root=None):
         try:
             cache_info = scan_cache_dir()
         except Exception:
+            _apply_bundled_inventory(rows)
             return [rows[name] for name in SUPPORTED_MODEL_SIZES]
     except Exception:
+        _apply_bundled_inventory(rows)
         return [rows[name] for name in SUPPORTED_MODEL_SIZES]
 
     for repo in getattr(cache_info, "repos", []) or []:
@@ -269,11 +333,13 @@ def list_cached_models(download_root=None):
                 "repo_id": repo_id,
                 "installed": False,
                 "size_bytes": 0,
+                "bundled": False,
             }
         size_on_disk = int(getattr(repo, "size_on_disk", 0) or 0)
         rows[size_name]["installed"] = size_on_disk > 0
         rows[size_name]["size_bytes"] = size_on_disk
 
+    _apply_bundled_inventory(rows)
     ordered = [rows[name] for name in SUPPORTED_MODEL_SIZES]
     extras = sorted((name for name in rows.keys() if name not in SUPPORTED_MODEL_SIZES))
     ordered.extend(rows[name] for name in extras)
@@ -306,6 +372,12 @@ def remove_cached_model(model_size, download_root=None):
             target_repo = repo
             break
     if target_repo is None:
+        if _bundled_model_ready(selected):
+            return {
+                "ok": False,
+                "message": f"Whisper '{selected}' ships with BetterFingers and cannot be removed.",
+                "freed_bytes": 0,
+            }
         return {"ok": False, "message": f"Whisper '{selected}' is not installed.", "freed_bytes": 0}
 
     revisions = [str(getattr(rev, "commit_hash", "") or "").strip() for rev in (getattr(target_repo, "revisions", []) or [])]
@@ -331,6 +403,19 @@ def download_whisper_model(model_size, prefer_gpu=True, download_root=None, prog
     selected = str(model_size or "").strip()
     if selected not in SUPPORTED_MODEL_SIZES:
         return {"ok": False, "message": f"Unsupported Whisper model: {selected}", "model_size": selected}
+
+    if _bundled_model_ready(selected):
+        # The installer ships this model and it verifies: nothing to fetch, and a
+        # "download" must never touch the network for it.
+        payload = {
+            "model_size": selected,
+            "status": "already_installed",
+            "percent": 100.0,
+            "message": f"Whisper '{selected}' is already installed.",
+        }
+        _set_whisper_download_state(selected, payload)
+        _emit_download_progress(progress_callback, payload)
+        return {"ok": True, "message": payload["message"], "model_size": selected}
 
     if download_root:
         cache_rows = list_cached_models(download_root=download_root)
@@ -374,7 +459,7 @@ def download_whisper_model(model_size, prefer_gpu=True, download_root=None, prog
         _set_whisper_download_state(selected, payload)
         _emit_download_progress(progress_callback, payload)
 
-        ok = probe.ensure_loaded()
+        ok = probe.ensure_loaded(allow_download=True)
         elapsed = max(0.0, time.time() - started_at)
         if not ok:
             payload = {
@@ -605,9 +690,60 @@ class Transcriber:
         if preload:
             self.ensure_loaded()
 
-    def _load_model(self):
+    def _resolve_model_source(self, allow_download: bool = False) -> _ModelSource:
+        """Decide, in ONE place, where this model's bytes come from.
+
+        Used by every load site (``_load_model``, ``_load_cpu_fallback_model`` and
+        ``ensure_loaded``'s cached/will-download computation) so they cannot
+        disagree.
+
+        * ``base.en`` with an installer-bundled directory that verifies: load that
+          DIRECTORY, local-only, even when ``allow_download`` is True -- the
+          bundled model never touches the network.
+        * A bundled directory that fails verification: ``failure_code`` is set and
+          nothing else is tried; there is no Hub-cache or network fallback.
+        * No bundle (development, or any other model size): the H2 local-only
+          policy, unchanged. Only ``allow_download`` may fetch.
+
+        ``self.model_size`` is never touched: the status snapshot validates it
+        against SUPPORTED_MODEL_SIZES, and a path is not a model size.
+        """
+        size = self.model_size
+        bundle_dir = bundled_models.bundled_model_dir(size)
+        if bundle_dir is not None:
+            try:
+                verified = bundled_models.verify_bundled_model(bundle_dir).ok
+            except Exception:
+                verified = False
+            if verified:
+                return _ModelSource(
+                    model=str(bundle_dir), local_files_only=True, cached=True,
+                    will_download=False, bundled=True,
+                )
+            return _ModelSource(
+                model=size, local_files_only=True, cached=False, will_download=False,
+                bundled=True, failure_code="verification_failed",
+            )
+        cached = self._is_model_cached(size)
+        return _ModelSource(
+            model=size, local_files_only=not allow_download, cached=cached,
+            will_download=bool(allow_download) and not cached,
+        )
+
+    def _load_model(self, allow_download: bool = False):
+        source = self._resolve_model_source(allow_download)
+        if source.failure_code:
+            raise ModelUnavailableError("Bundled speech model failed verification.", source.failure_code)
+        if source.local_files_only and not source.cached:
+            raise ModelUnavailableError(
+                "Speech model is not available locally. Use the explicit model download action.",
+                "model_missing",
+            )
         model_size = self.model_size
-        local_files_only = self._is_model_cached(model_size)
+        model_arg = source.model
+        local_files_only = source.local_files_only
+        # Never log the bundle directory: it sits under the user's profile.
+        where = "bundled model" if source.bundled else f"cache='{self.download_root}'"
 
         # Use a stable app-owned cache path so model artifacts are shared across restarts.
         base_kwargs = {
@@ -621,6 +757,10 @@ class Transcriber:
         fallback_reason = None
         fallback_code = None
         self._load_inference_verified = False
+        # A CUDA *constructor* exception is only evidence against CUDA if the CPU
+        # construction below then succeeds. A cache/network/OOM failure breaks
+        # both, and must not disable CUDA for the rest of the process.
+        pending_cuda_memo = None
 
         known_cuda_failure = _known_cuda_failure() if self.prefer_gpu else None
         if known_cuda_failure is not None:
@@ -637,45 +777,27 @@ class Transcriber:
                 compute_type = "float16"
                 logging.info(
                     f"Attempting to load Whisper model '{model_size}' on {device} ({compute_type}) "
-                    f"(cache='{self.download_root}', local_only={local_files_only})..."
+                    f"({where}, local_only={local_files_only})..."
                 )
                 model = WhisperModel(
-                    model_size,
+                    model_arg,
                     device=device,
                     compute_type=compute_type,
                     **base_kwargs,
                 )
                 logging.info("Whisper model loaded successfully on CUDA.")
             except Exception as exc:
-                if local_files_only:
-                    # Cache may be partial/corrupt; retry once with network allowed.
-                    try:
-                        logging.warning("CUDA load from local cache failed; retrying with remote fetch enabled.")
-                        # Explicit GC before retry
-                        gc.collect()
-                        model = WhisperModel(
-                            model_size,
-                            device=device,
-                            compute_type=compute_type,
-                            download_root=self.download_root,
-                            local_files_only=False,
-                        )
-                        logging.info("Whisper model loaded successfully on CUDA after cache refresh.")
-                    except Exception as retry_exc:
-                        exc = retry_exc
-                if model is None:
-                    fallback_code = classify_cuda_runtime_error(exc)
-                    if fallback_code is None:
-                        raise
-                    fallback_reason = "CUDA initialization failed"
-                    logging.warning("CUDA initialization failed; falling back to CPU.")
+                fallback_code = classify_cuda_runtime_error(exc) or "cuda_init_failed"
+                fallback_reason = "CUDA initialization failed"
+                pending_cuda_memo = (fallback_reason, fallback_code)
+                logging.warning("CUDA initialization failed; falling back to CPU.")
 
             if model is not None:
                 # A CUDA constructor can succeed while the first transcribe() fails
                 # (e.g. cublas64_12.dll missing). Prove inference now, at load time,
                 # instead of during the user's first dictation. Runs once for whichever
-                # construction above succeeded; a probe failure is not a cache problem,
-                # so it never triggers the remote-fetch retry.
+                # construction above succeeded; recovery always stays local-only
+                # unless this is the explicit acquisition operation.
                 probe_exc = self._probe_cuda_inference(model)
                 if probe_exc is None:
                     self.active_device = device
@@ -705,30 +827,18 @@ class Transcriber:
         cpu_threads = _select_cpu_threads()
         logging.info(
             f"Loading Whisper model '{model_size}' on {device} ({compute_type}) "
-            f"(cache='{self.download_root}', local_only={local_files_only})..."
+            f"({where}, local_only={local_files_only})..."
         )
-        try:
-            model = WhisperModel(
-                model_size,
-                device=device,
-                compute_type=compute_type,
-                cpu_threads=cpu_threads,
-                **base_kwargs,
-            )
-        except Exception as exc:
-            if local_files_only:
-                logging.warning("CPU load from local cache failed; retrying with remote fetch enabled.")
-                model = WhisperModel(
-                    model_size,
-                    device=device,
-                    compute_type=compute_type,
-                    cpu_threads=cpu_threads,
-                    download_root=self.download_root,
-                    local_files_only=False,
-                )
-            else:
-                raise
+        model = WhisperModel(
+            model_arg,
+            device=device,
+            compute_type=compute_type,
+            cpu_threads=cpu_threads,
+            **base_kwargs,
+        )
         logging.info("Whisper model loaded successfully on CPU.")
+        if pending_cuda_memo is not None:
+            _remember_cuda_unavailable(*pending_cuda_memo)
         self.active_device = device
         self.active_compute_type = compute_type
         self.active_cpu_threads = cpu_threads
@@ -755,7 +865,8 @@ class Transcriber:
     def _is_model_cached(self, model_size):
         local_path = (model_size or "").strip()
         if local_path and os.path.isdir(local_path):
-            return os.path.exists(os.path.join(local_path, "model.bin"))
+            return all(os.path.isfile(os.path.join(local_path, name))
+                       for name in ("model.bin", "tokenizer.json"))
 
         repo_id = self._model_repo_id(model_size)
         if not repo_id:
@@ -784,7 +895,7 @@ class Transcriber:
     def _model_repo_id(model_size):
         return _repo_id_for_model(model_size)
 
-    def ensure_loaded(self):
+    def ensure_loaded(self, allow_download: bool = False):
         with self._model_lock:
             if self.model is not None:
                 return True
@@ -805,15 +916,11 @@ class Transcriber:
                     self._publish_runtime_status("failed")
                     return False
 
-            # QA-FR-002: an uncached model means _load_model() below is about
-            # to fetch it over the network (local_files_only becomes False),
-            # exactly like download_whisper_model() does explicitly for the
-            # Utilities Download button. Write into the SAME tracked state
-            # (_set_whisper_download_state / get_whisper_download_state,
-            # already polled by GET /models/whisper) so any caller -- Talk's
-            # on-demand load included -- can observe real download progress
-            # instead of this call just blocking silently.
-            will_download = not self._is_model_cached(self.model_size)
+            # Residency and dictation never grant acquisition permission.
+            # Only download_whisper_model's explicit action opts in.
+            source = self._resolve_model_source(allow_download)
+            cached = source.cached
+            will_download = source.will_download
             if will_download:
                 self._publish_runtime_status("downloading")
                 _set_whisper_download_state(self.model_size, {
@@ -831,7 +938,7 @@ class Transcriber:
                         "percent": 20.0,
                         "message": f"Downloading Whisper '{self.model_size}'. This can take a few minutes.",
                     })
-                self.model = self._load_model()
+                self.model = self._load_model(allow_download=allow_download)
             except Exception as exc:
                 logging.error("Failed to load Whisper model (stt_model_load_failed).")
                 self.model = None
@@ -846,7 +953,17 @@ class Transcriber:
                 self._probe_passed = False
                 self._inference_ready = False
                 self._load_inference_verified = False
-                self._emit_runtime_error("stt_model_load_failed", "construction_failed")
+                # A typed refusal (absent model, bundle that failed verification)
+                # keeps its own code even during an explicit download: a bad
+                # bundle is never "repaired" over the network. An ordinary
+                # constructor failure keeps the H2 mapping.
+                code = exc.code if isinstance(exc, ModelUnavailableError) else None
+                if code is None and not allow_download:
+                    code = "verification_failed" if cached else "model_missing"
+                if code is not None:
+                    self._emit_runtime_error(code, code)
+                else:
+                    self._emit_runtime_error("stt_model_load_failed", "construction_failed")
                 if will_download:
                     _set_whisper_download_state(self.model_size, {
                         "model_size": self.model_size,
@@ -890,6 +1007,26 @@ class Transcriber:
                 self._publish_runtime_status("failed")
             return self.model is not None
 
+    def refresh_after_download(self, model_size):
+        """Re-check this live instance after the explicit download of ITS model.
+
+        The download probes with a throwaway Transcriber, so a live instance that
+        already failed local-only keeps reporting ``model_missing`` /
+        ``verification_failed`` until something retries. Retry exactly once, still
+        local-only, and only for that stale acquisition failure: an instance that
+        never failed (e.g. residency off) is left unloaded, and a download of a
+        different model says nothing about this one. Returns True when the model
+        is now loaded.
+        """
+        with self._model_lock:
+            if self.model is not None:
+                return True
+            if (model_size or "").strip() != self.model_size:
+                return False
+            if self._last_error_code not in _ACQUISITION_FAILURE_CODES:
+                return False
+            return self.ensure_loaded()
+
     def unload(self):
         with self._model_lock:
             self._inference_ready = False
@@ -915,16 +1052,20 @@ class Transcriber:
 
     def _load_cpu_fallback_model(self):
         """Construct exactly one CPU/int8 model for a lazy CUDA recovery."""
-        model_size = self.model_size
-        local_files_only = self._is_model_cached(model_size)
+        source = self._resolve_model_source(False)
+        if source.failure_code:
+            raise ModelUnavailableError("Bundled speech model failed verification.", source.failure_code)
+        if not source.cached:
+            raise ModelUnavailableError(
+                "Speech model is not available locally for CPU recovery.", "model_missing")
         cpu_threads = _select_cpu_threads()
         model = WhisperModel(
-            model_size,
+            source.model,
             device="cpu",
             compute_type="int8",
             cpu_threads=cpu_threads,
             download_root=self.download_root,
-            local_files_only=local_files_only,
+            local_files_only=True,
         )
         self.active_device = "cpu"
         self.active_compute_type = "int8"

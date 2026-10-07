@@ -153,7 +153,7 @@ class CheckAndDownloadResourcesDiskGateTests(unittest.TestCase):
         with patch.object(mm.shutil, "disk_usage", return_value=_fake_disk_usage(1024, 0)), patch(
             "backend.models.model_manager.download_file"
         ) as download_file:
-            result = mm.check_and_download_resources(model_id=self.model_id)
+            result = mm.check_and_download_resources(model_id=self.model_id, allow_download=True)
 
         download_file.assert_not_called()
         self.assertFalse(result["ok"])
@@ -190,7 +190,7 @@ class CheckAndDownloadResourcesDiskGateTests(unittest.TestCase):
             "backend.models.model_manager.validate_llama_server_runtime",
             return_value={"ok": True, "build": 999999},
         ), patch("backend.models.model_manager.download_file", side_effect=fake_download_file) as download_file:
-            result = mm.check_and_download_resources(model_id=self.model_id)
+            result = mm.check_and_download_resources(model_id=self.model_id, allow_download=True)
 
         # Only the model is downloaded; the present+valid server skips runtime install.
         download_file.assert_called_once()
