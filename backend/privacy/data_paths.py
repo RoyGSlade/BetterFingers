@@ -193,8 +193,23 @@ def cloned_voices() -> list[Path]:
     return _existing(base() / "voices")
 
 
+def persona_drafts() -> list[Path]:
+    """``persona_drafts.json`` (``backend/services/persona_drafts.py``): the
+    unconfirmed persona edits, kept apart from the confirmed ones. They hold
+    the persona text the user is still writing, and the store loads through
+    ``load_versioned_store``, so it can leave the same ``.bak-v<N>`` /
+    ``.corrupt`` copies as any other store. Declared with the personas
+    category (see ``personas``), not as a category of its own."""
+    return _with_migration_siblings(base() / "persona_drafts.json")
+
+
 def personas() -> list[Path]:
-    return _with_migration_siblings(base() / "personas.yaml")
+    # A draft is a persona the user has not saved yet, so the Personas category
+    # (personal tier, in the export) owns both files: "clear personal data"
+    # that kept the drafts would leave the same text behind that it just
+    # removed from personas.yaml. D2 of the alpha.4 QA pass.
+    return _existing(*_with_migration_siblings(base() / "personas.yaml"),
+                     *persona_drafts())
 
 
 def dictionary() -> list[Path]:
@@ -287,7 +302,12 @@ def profiles() -> list[Path]:
 
 def app_state() -> list[Path]:
     root = base()
-    return _existing(root / "app_state.yaml", root / ".first_run_complete")
+    # utils.load_app_state reads app_state.yaml through load_versioned_store, so
+    # a corrupt or newer-schema file is quarantined beside it. That copy is the
+    # same launch count and last profile, and an undeclared sibling is exactly
+    # what stops a factory reset from verifying.
+    return _existing(*_with_migration_siblings(root / "app_state.yaml"),
+                     root / ".first_run_complete")
 
 
 def overlay_position() -> list[Path]:
@@ -322,4 +342,18 @@ def model_runtime_metadata() -> list[Path]:
 
 
 def downloaded_models() -> list[Path]:
-    return _existing(base() / "models")
+    """Everything the app downloads for itself, none of it the user's own data:
+    ``models/`` (speech and language models, llama-server, the cloned-voice
+    runtime), ``tts/`` (the Kokoro ONNX model and voice pack,
+    ``tts_engine.kokoro_onnx_dir()``) and ``runtimes/`` (the optional GPU
+    runtime pack ``stt/cuda_runtime.py`` looks for; nothing downloads one yet).
+
+    One category on purpose. The Kokoro "voices" are a downloaded model, not
+    the user's cloned voices (``voices/``): filing them under a personal tier
+    would let "clear personal data" delete 350 MB the user never asked to lose,
+    and filing them nowhere is what made a factory reset fail on D2. They share
+    the models' lifecycle: kept by every wipe, removed only by the explicit
+    "also delete downloaded models" choice (and, on uninstall, by the
+    "Downloaded models and runtimes" box)."""
+    root = base()
+    return _existing(root / "models", root / "tts", root / "runtimes")

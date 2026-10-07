@@ -379,14 +379,12 @@ def factory_reset(registry, *, include_models: bool = False) -> dict:
                   "remaining": [str(p) for p in registry.get("downloaded_models").paths()],
                   "message": "downloaded models retained (not requested)"}
 
-    # The models directory legitimately survives a reset that did not ask for
-    # it, so it is excluded from the residual sweep rather than counted as a
-    # store nobody declared.
+    # The download folders legitimately survive a reset that did not ask for
+    # them, so anything inside them is excluded from the residual sweep rather
+    # than counted as a store nobody declared.
     residual = [f for f in unmapped_files(registry)]
     if not include_models:
-        model_roots = [str(p) for p in registry.get("downloaded_models").paths()]
-        residual = [f for f in residual
-                    if not any(f.startswith(root) for root in model_roots)]
+        residual = _outside_downloads(registry, residual)
 
     result["residual_files"] = residual[:50]
     result["residual_count"] = len(residual)
@@ -403,14 +401,31 @@ def verify_factory_reset(registry) -> dict:
     must never be able to trigger a second *deletion*.
     """
     result = verify_mode(registry, WIPE_MODE_FACTORY_RESET)
-    residual = unmapped_files(registry)
-    model_roots = [str(p) for p in registry.get("downloaded_models").paths()]
-    residual = [f for f in residual
-                if not any(f.startswith(root) for root in model_roots)]
+    residual = _outside_downloads(registry, unmapped_files(registry))
     result["residual_files"] = residual[:50]
     result["residual_count"] = len(residual)
     result["ok"] = bool(result["ok"] and not residual)
     return result
+
+
+def _outside_downloads(registry, residual: list[str]) -> list[str]:
+    """``residual`` minus what sits inside a download folder the registry owns.
+
+    Compared by path component, not by string prefix. The prefix test this
+    replaces treated ``models.old`` or ``tts_cache.json`` as "inside" the
+    ``models`` / ``tts`` folders because the text starts the same, so an
+    undeclared file with such a name was invisible to the sweep and a reset
+    called itself clean with it on disk. Files really inside a declared
+    directory are never listed by ``unmapped_files`` to begin with; this only
+    has to not hide the look-alikes.
+    """
+    roots = []
+    for path in registry.get("downloaded_models").paths():
+        try:
+            roots.append(path.resolve())
+        except OSError:
+            continue
+    return [f for f in residual if not any(_is_under(Path(f), root) for root in roots)]
 
 
 def verify_mode(registry, mode: str) -> dict:

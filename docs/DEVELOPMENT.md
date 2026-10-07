@@ -39,6 +39,7 @@ A map of the repository and the rules that keep it easy to work in. Product desi
 4. **Never derive repo or data paths from `__file__`** in new code. Use `backend.config.app_paths` / `backend.privacy.data_paths`; they honour `BETTERFINGERS_DATA_DIR` and frozen builds.
 5. **Routes keep their order.** `tests/test_route_table_snapshot.py` pins the route set and the winner of every overlapping path pair. Regenerate (`BF_UPDATE_ROUTE_SNAPSHOT=1`) only for a deliberate API change.
 6. **No network before consent, no keystrokes into games.** Delivery decisions go through `backend.domain.gaming_policy` (allowlist) with the foreground app detected at send time.
+7. **Every file the app writes under the data root is declared.** A new store, backup shape or download folder goes in `backend/privacy/data_paths.py` (the category in `data_categories.py` decides which wipe removes it) and, if it is a new top-level name, in the uninstaller's `BfSafeDeleteCanonical` list in `app/build/installer.nsh` under the matching checkbox. `tests/test_privacy_inventory_completeness.py` scans the sources for names joined onto the data root and fails on one no category claims; `tests/test_installer_cleanup_contract.py` fails when the inventory and the uninstaller list disagree. An undeclared file also makes a factory reset report failure.
 
 ## Tests
 

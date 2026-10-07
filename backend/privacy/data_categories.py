@@ -406,6 +406,10 @@ CATEGORIES: list[DataCategory] = [
     _cat("cloned_voices", "Cloned voices & metadata", "python", "sensitive",
          "Kept until personal data is cleared.", _PERSONAL,
          paths=data_paths.cloned_voices),
+    # Owns persona_drafts.json as well as personas.yaml (data_paths.personas):
+    # a draft is persona text the user has not saved yet. It was missing from
+    # the inventory until the alpha.4 QA pass (D2), which made a factory reset
+    # unable to finish and left the text on disk after "clear personal data".
     _cat("personas", "Personas", "python", "personal",
          "Kept until personal data is cleared.", _PERSONAL,
          paths=data_paths.personas, in_export=True, user_text=True),
@@ -523,6 +527,10 @@ CATEGORIES: list[DataCategory] = [
          paths=data_paths.model_runtime_metadata),
 
     # Opt-in — never removed by a standard wipe (separate 'also delete models').
+    # Everything the app downloads for itself: models/, tts/ (the Kokoro model
+    # and voice pack -- public files, NOT the user's cloned voices in voices/)
+    # and runtimes/ (data_paths.downloaded_models). The Kokoro files used to be
+    # undeclared, so a reset that kept the models still failed on them (D2).
     _cat("downloaded_models", "Downloaded models", "python", "public",
          "Opt-in only; removed via a separate 'also delete downloaded models' choice.",
          _OPT_IN, paths=data_paths.downloaded_models,

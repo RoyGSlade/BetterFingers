@@ -62,8 +62,8 @@ _ROOT_NAME = "BetterFingers"
 # Names the uninstaller treats as directories (everything else in the allowlist
 # is a file); only used to seed realistic data.
 _DIRECTORY_TARGETS = {
-    "models", "wake_models", "recordings", "voices", "drafts", "exports",
-    "profiles", "tmp", "cache", "logs",
+    "models", "wake_models", "tts", "runtimes", "recordings", "voices", "drafts",
+    "exports", "profiles", "tmp", "cache", "logs",
 }
 # One of every shape the backend writes next to a store, plus the documented
 # ``.corrupt-<tag>`` spelling.

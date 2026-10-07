@@ -272,3 +272,149 @@ def test_encoded_cleanup_command_fits_the_nsis_string_limit():
     )
     blob = re.search(r'^!define BF_CANONICAL_CLEANUP_PS "([A-Za-z0-9+/=]+)"$', _installer_text(), re.M).group(1)
     assert len(command) + len(blob) < 6000, len(command) + len(blob)
+
+# --- inventory <-> uninstaller allowlist --------------------------------------
+#
+# "Remove my data" can only remove what BfSafeDeleteCanonical names, and the
+# in-app factory reset can only remove what the privacy inventory declares. When
+# the two lists drift the user gets two different answers to "what does this
+# app keep?", and the uninstaller's final non-recursive RMDir silently leaves
+# the data folder behind (D2: persona_drafts.json and tts/ were in neither).
+# These tests tie the lists together from the inventory's side; the writer-side
+# tie (everything the app can write is in both) is in
+# test_privacy_inventory_completeness.py.
+
+# Allowlisted names that no inventory category declares. They are reserved
+# names inherited from the alpha.3 allowlist (AppPaths.exports / AppPaths.logs
+# and an older ``drafts`` folder): the uninstaller still clears them if they
+# exist, but nothing in the backend or the Electron main process writes them
+# today. The set is compared EXACTLY, so a name cannot join or leave it silently:
+# if one of these gains a writer it must be declared in the inventory (and drop
+# out of here); if one is removed from the installer, drop it here too.
+UNINSTALLER_ONLY = {
+    "drafts": "older drafts folder; no current writer",
+    "exports": "AppPaths.exports; no current writer (/privacy/export returns JSON, it writes no file)",
+    "logs": "AppPaths.logs is the data root itself; nothing creates a logs folder",
+}
+
+
+def _inventory_top_level_names(tmp_path, monkeypatch):
+    """``{name directly under the data root: {category ids}}`` for every path the
+    inventory can declare, whether or not it exists.
+
+    Runs the real ``paths()`` callables with the existence filter switched off,
+    over a Windows-shaped tree (``%APPDATA%\\BetterFingers`` is both the unified
+    root and Electron's packaged ``userData``). The unpackaged Electron root
+    (``betterfingers-electron``) is skipped on purpose: the NSIS uninstaller only
+    ever manages ``$APPDATA\\BetterFingers``.
+    """
+    import pathlib
+    from backend.config import app_paths
+    from backend.privacy import data_categories, data_paths
+
+    appdata = tmp_path / "AppData"
+    root = appdata / "BetterFingers"
+    dev_root = appdata / "betterfingers-electron"
+    root.mkdir(parents=True)
+    monkeypatch.delenv("BETTERFINGERS_DATA_DIR", raising=False)
+    monkeypatch.setenv("APPDATA", str(appdata))
+    monkeypatch.setattr(app_paths, "resolve_base", lambda: root)
+    monkeypatch.setattr(data_paths, "electron_user_data_candidates", lambda: [root, dev_root])
+
+    def every_candidate(*candidates):
+        unique = []
+        for candidate in candidates:
+            if candidate not in unique:
+                unique.append(candidate)
+        return unique
+
+    monkeypatch.setattr(data_paths, "_existing", every_candidate)
+
+    names = {}
+    for category in data_categories.build_registry().all():
+        for path in category.paths():
+            path = pathlib.Path(path)
+            for base in (root, dev_root):
+                try:
+                    relative = path.relative_to(base)
+                except ValueError:
+                    continue
+                if base is root:
+                    names.setdefault(relative.parts[0], set()).add(category.id)
+                break
+            else:
+                raise AssertionError(
+                    f"{category.id} declares {path}, which is outside every root the uninstaller can reach"
+                )
+    return names
+
+
+def _allowlist_by_checkbox():
+    """``{relative name: the checkbox variable that guards it}``, from the macro."""
+    cleanup = _installer_text().split("!macro customUnInstall", 1)[1]
+    guarded = {}
+    for variable, body in re.findall(
+        r"\$\{If\} \$(BfDelete\w+) == \$\{BST_CHECKED\}\s*\n(.*?)\$\{EndIf\}", cleanup, re.S
+    ):
+        for name in re.findall(r'!insertmacro BfSafeDeleteCanonical "([^"]+)"', body):
+            assert name not in guarded, f"{name} is guarded by two checkboxes"
+            guarded[name] = variable
+    return guarded
+
+
+def test_the_inventory_extraction_sees_the_stores_this_contract_exists_for(tmp_path, monkeypatch):
+    declared = _inventory_top_level_names(tmp_path, monkeypatch)
+    assert len(declared) >= 35, sorted(declared)
+    assert {
+        "persona_drafts.json", "tts", "runtimes", "personas.yaml", "models", "voices",
+        "history.db", "onboarding.json", "overlay-position.json", "sidecar_backend_raw.log",
+        "user_profile.json", "audio_privacy_journal.json",
+    } <= set(declared)
+    assert declared["persona_drafts.json"] == {"personas"}
+    assert declared["tts"] == {"downloaded_models"}
+
+
+def test_every_top_level_name_the_inventory_declares_is_an_uninstaller_target(tmp_path, monkeypatch):
+    declared = _inventory_top_level_names(tmp_path, monkeypatch)
+    missing = {name: sorted(categories) for name, categories in declared.items()
+               if name not in _allowlisted_names()}
+    assert not missing, (
+        "declared by the privacy inventory but not removable by 'remove my data' (add a "
+        f"BfSafeDeleteCanonical line under the matching checkbox): {missing}"
+    )
+
+
+def test_uninstaller_only_names_are_exactly_the_documented_exceptions(tmp_path, monkeypatch):
+    declared = _inventory_top_level_names(tmp_path, monkeypatch)
+    extra = _allowlisted_names() - set(declared)
+    assert extra == set(UNINSTALLER_ONLY), (
+        f"allowlisted names the inventory does not declare: {sorted(extra)}; "
+        f"documented exceptions: {sorted(UNINSTALLER_ONLY)}. Declare the artifact in "
+        "backend/privacy/data_paths.py, or document why it is uninstaller-only."
+    )
+
+
+def test_a_category_is_never_split_across_uninstaller_checkboxes(tmp_path, monkeypatch):
+    """Two names of one category under different checkboxes means ticking the
+    box that matches the label leaves part of that data behind."""
+    declared = _inventory_top_level_names(tmp_path, monkeypatch)
+    guard = _allowlist_by_checkbox()
+    per_category = {}
+    for name, categories in declared.items():
+        for category in categories:
+            per_category.setdefault(category, {})[name] = guard.get(name)
+    split = {category: names for category, names in per_category.items()
+             if len(set(names.values())) > 1}
+    assert not split, f"categories split across uninstaller checkboxes: {split}"
+
+
+def test_downloaded_models_sit_under_the_models_checkbox_and_nothing_else_does(tmp_path, monkeypatch):
+    """The Kokoro voice files and any GPU runtime are opt-in downloads. They must
+    be removed by "Downloaded models and runtimes" and by nothing a user ticks
+    for logs or settings, or an innocent tick deletes hundreds of megabytes."""
+    declared = _inventory_top_level_names(tmp_path, monkeypatch)
+    guard = _allowlist_by_checkbox()
+    downloads = {name for name, categories in declared.items() if "downloaded_models" in categories}
+    assert downloads == {"models", "tts", "runtimes"}
+    assert {guard[name] for name in downloads} == {"BfDeleteModels"}
+    assert guard["persona_drafts.json"] == guard["personas.yaml"] == "BfDeleteSettings"

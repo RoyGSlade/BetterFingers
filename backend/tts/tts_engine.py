@@ -34,6 +34,21 @@ _KOKORO_ARTIFACT_PINS = {
     "kokoro-v1.0.int8.onnx": (92361271, None),
 }
 
+
+def kokoro_onnx_dir() -> str:
+    """Where the Kokoro model and voice pack are downloaded:
+    ``<user data root>/tts/kokoro_onnx``.
+
+    These are public model downloads, not the user's cloned voices (those live
+    in ``voices/``). ``backend.privacy.data_paths.downloaded_models`` declares
+    the ``tts`` folder with the other opt-in downloads, and the uninstaller's
+    "Downloaded models and runtimes" box removes it; move this and both lists
+    must move with it (tests/test_privacy_inventory_completeness.py checks the
+    declared location against this function).
+    """
+    return os.path.join(get_user_data_path(), "tts", "kokoro_onnx")
+
+
 # Regex-based pronunciation fixes
 _PRONUNCIATION_MAP = {
     r"\bSQL\b": "Sequel",
@@ -957,7 +972,7 @@ class ReviewTTSEngine:
         else:
             model_filename = "kokoro-v1.0.onnx"
 
-        base_dir = os.path.join(get_user_data_path(), "tts", "kokoro_onnx")
+        base_dir = kokoro_onnx_dir()
         os.makedirs(base_dir, exist_ok=True)
         model_path = os.path.join(base_dir, model_filename)
         voices_path = os.path.join(base_dir, "voices-v1.0.bin")

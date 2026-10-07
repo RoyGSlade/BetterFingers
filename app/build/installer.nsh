@@ -178,6 +178,8 @@ FunctionEnd
     ${If} $BfDeleteModels == ${BST_CHECKED}
       !insertmacro BfSafeDeleteCanonical "models"
       !insertmacro BfSafeDeleteCanonical "wake_models"
+      !insertmacro BfSafeDeleteCanonical "tts"
+      !insertmacro BfSafeDeleteCanonical "runtimes"
     ${EndIf}
     ${If} $BfDeleteRecordings == ${BST_CHECKED}
       !insertmacro BfSafeDeleteCanonical "recordings"
@@ -196,6 +198,7 @@ FunctionEnd
       !insertmacro BfSafeDeleteCanonical "profiles"
       !insertmacro BfSafeDeleteCanonical "config.yaml"
       !insertmacro BfSafeDeleteCanonical "personas.yaml"
+      !insertmacro BfSafeDeleteCanonical "persona_drafts.json"
       !insertmacro BfSafeDeleteCanonical "dictionary.json"
       !insertmacro BfSafeDeleteCanonical "macros.json"
       !insertmacro BfSafeDeleteCanonical "contacts.json"
@@ -220,6 +223,7 @@ FunctionEnd
       !insertmacro BfSafeDeleteCanonical "cache"
       !insertmacro BfSafeDeleteCanonical "logs"
       !insertmacro BfSafeDeleteCanonical "debug.log"
+      !insertmacro BfSafeDeleteCanonical "audio_privacy_journal.json"
       !insertmacro BfSafeDeleteCanonical "sidecar_backend_raw.log"
     ${EndIf}
 
