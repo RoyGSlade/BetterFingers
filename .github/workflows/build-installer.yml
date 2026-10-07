@@ -278,6 +278,27 @@ jobs:
             Select-Object -First 15 FullName, @{Name='SizeMB';Expression={[math]::Round($_.Length / 1MB, 2)}} |
             Format-Table -AutoSize
 
+      # The total budget above is loose on purpose (it covers the frozen backend
+      # and the bundled model). It cannot see an electron-builder `files`
+      # mistake: a platform list holding only negations packed all of app/
+      # (src/, tests/, a second backend copy) into app.asar, 684 MB, and still
+      # passed. The intended asar is a few MB (out/ plus the JS runtime
+      # dependencies), so this tight budget catches that class of bug.
+      - name: Enforce app.asar size budget
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $asarPath = "app\release\win-unpacked\resources\app.asar"
+          if (-not (Test-Path -LiteralPath $asarPath -PathType Leaf)) {
+            throw "app.asar not found at $asarPath"
+          }
+          $asarMb = [math]::Round((Get-Item -LiteralPath $asarPath).Length / 1MB, 2)
+          Write-Host "app.asar size: $asarMb MB"
+          $asarLimitMb = 50
+          if ($asarMb -gt $asarLimitMb) {
+            throw "app.asar is $asarMb MB, over the $asarLimitMb MB budget. electron-builder is packing more than out/ and the runtime dependencies; check the files patterns in app/electron-builder.config.cjs."
+          }
+
       - name: Locate installer artifact
         id: installer
         shell: powershell

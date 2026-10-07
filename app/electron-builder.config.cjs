@@ -26,7 +26,27 @@ packageBuild.generateUpdatesFilesForAllChannels = false;
 const publisherIdentity = 'CN=Donaven Crenshaw, O=Donaven Crenshaw, C=US';
 packageBuild.win.signtoolOptions = { publisherName: publisherIdentity };
 // This release is x64. Non-Windows .node files are not PE signing targets.
-packageBuild.win.files = ['!node_modules/uiohook-napi/prebuilds/{darwin-*,linux-*,win32-arm64}/**/*'];
+//
+// electron-builder normalizes the ROOT `files` list into a file set, but keeps a
+// platform `files` list as raw patterns that become the "default" matcher. A
+// default matcher holding only negations is treated as "everything except":
+// `**/*` is prepended, so all of app/ (src/, tests/, a second copy of
+// resources/backend, ...) lands in app.asar (684 MB, installer 3x too large).
+// The Windows list must therefore repeat the root positive patterns next to the
+// negation. It stays Windows-scoped because the Linux AppImage needs the
+// linux-* prebuilds.
+const rootFilePatterns = packageBuild.files;
+if (
+  !Array.isArray(rootFilePatterns) ||
+  !rootFilePatterns.every((pattern) => typeof pattern === 'string') ||
+  !rootFilePatterns.some((pattern) => !pattern.startsWith('!'))
+) {
+  throw new Error('package.json build.files must be an array of strings that includes a positive pattern; the Windows files list is derived from it.');
+}
+packageBuild.win.files = [
+  ...rootFilePatterns,
+  '!node_modules/uiohook-napi/prebuilds/{darwin-*,linux-*,win32-arm64}/**/*',
+];
 
 if (signingMode === 'azure-cli') {
   packageBuild.forceCodeSigning = true;

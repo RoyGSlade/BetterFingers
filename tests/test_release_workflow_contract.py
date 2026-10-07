@@ -399,3 +399,45 @@ def test_ci_preserves_required_windows_check_as_chunk_aggregator():
     assert "if: always()" in block
     assert "needs: python-tests-windows-chunk" in block
     assert 'run: test "$CHUNK_RESULT" = "success"' in block
+
+
+def test_windows_build_enforces_a_tight_app_asar_budget():
+    # Alpha 4 QA found app.asar at 684 MB (all of app/, including a second copy
+    # of the frozen backend) because a Windows-only `files` list held only a
+    # negation. The 2500 MB total budget could not see it; the intended asar is a
+    # few MB. This guard must run on both the signed and unsigned build paths.
+    import re
+
+    import yaml
+
+    steps = yaml.safe_load(_workflow_text())["jobs"]["windows-installer"]["steps"]
+    names = [step.get("name", "") for step in steps]
+
+    assert names.count("Enforce app.asar size budget") == 1
+    index = names.index("Enforce app.asar size budget")
+    guard = steps[index]
+    script = guard["run"]
+
+    assert "if" not in guard, "the asar budget must apply to signed and unsigned builds"
+    assert guard.get("shell") == "powershell"
+    assert r"app\release\win-unpacked\resources\app.asar" in script
+    # A missing asar fails the build instead of silently passing.
+    assert "Test-Path -LiteralPath $asarPath -PathType Leaf" in script
+    assert 'throw "app.asar not found' in script
+    assert "(Get-Item -LiteralPath $asarPath).Length" in script
+    limit = int(re.search(r"\$asarLimitMb = (\d+)", script).group(1))
+    assert 0 < limit <= 50, "keep the asar budget tight; the real asar is about 4 MB"
+    assert "if ($asarMb -gt $asarLimitMb)" in script
+    assert 'throw "app.asar is $asarMb MB' in script
+
+    # Both build paths precede it: the unsigned `npm run dist:win` step and the
+    # signed wrapper that consumes the prepared payload.
+    unsigned = names.index("Build unsigned installer for manual qualification")
+    wrapper = next(
+        i for i, step in enumerate(steps) if "build_and_sign_windows.ps1" in (step.get("run") or "")
+    )
+    assert unsigned < index
+    assert wrapper < index
+    # It sits beside the total budget and ahead of anything that uses the installer.
+    assert names.index("Enforce payload size budget") < index
+    assert index < names.index("Locate installer artifact")
