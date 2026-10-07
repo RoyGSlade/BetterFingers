@@ -1,5 +1,6 @@
 import collections
 import contextlib
+import hashlib
 import importlib
 import logging
 import os
@@ -20,6 +21,18 @@ from backend.tts import voice_clone_engine
 from backend.tts.tts_text import apply_pause_style, normalize_for_speech
 from backend.tts import voice_blend
 from backend.tts import voice_modulation
+
+# Kokoro voice files fetched on first read-aloud from the thewh1teagle/kokoro-onnx
+# GitHub release "model-files-v1.0": (size in bytes, SHA-256 or None). That
+# release publishes no digests, so the SHA-256s are trust-on-first-use from a copy
+# downloaded 2026-08-17 whose sizes match the release API; the quantized variants
+# are pinned by size only. A download that does not match is discarded.
+_KOKORO_ARTIFACT_PINS = {
+    "kokoro-v1.0.onnx": (325532387, "7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5"),
+    "voices-v1.0.bin": (28214398, "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d"),
+    "kokoro-v1.0.fp16.onnx": (177464787, None),
+    "kokoro-v1.0.int8.onnx": (92361271, None),
+}
 
 # Regex-based pronunciation fixes
 _PRONUNCIATION_MAP = {
@@ -1034,18 +1047,31 @@ class ReviewTTSEngine:
 
     @staticmethod
     def _ensure_artifact(path: str, url: str, label: str) -> Tuple[bool, str]:
+        expected_size, expected_sha256 = _KOKORO_ARTIFACT_PINS.get(os.path.basename(path), (None, None))
         if os.path.exists(path) and os.path.getsize(path) > 0:
-            return True, f"{label} ready."
+            # A truncated or replaced file is re-fetched instead of handed to
+            # onnxruntime. Existing files are size-checked only: hashing 300 MB on
+            # every engine load would cost about a second.
+            if expected_size is None or os.path.getsize(path) == expected_size:
+                return True, f"{label} ready."
 
         tmp_path = f"{path}.part"
         try:
             requests = importlib.import_module("requests")
+            digest = hashlib.sha256()
+            written = 0
             with requests.get(url, stream=True, timeout=60) as response:
                 response.raise_for_status()
                 with open(tmp_path, "wb") as handle:
                     for chunk in response.iter_content(chunk_size=1024 * 1024):
                         if chunk:
                             handle.write(chunk)
+                            digest.update(chunk)
+                            written += len(chunk)
+            if expected_size is not None and written != expected_size:
+                raise ValueError(f"size {written} != pinned {expected_size}")
+            if expected_sha256 is not None and digest.hexdigest() != expected_sha256:
+                raise ValueError("SHA-256 does not match the pinned value")
             os.replace(tmp_path, path)
             return True, f"{label} downloaded."
         except Exception as exc:
