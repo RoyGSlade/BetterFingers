@@ -11,7 +11,7 @@
 //     users; making the common moves one key is the point.
 //
 // These are IN-APP shortcuts: they need the window focused. They are distinct
-// from the user-configurable GLOBAL hotkeys (F8 record, F9 manual send,
+// from the user-configurable GLOBAL hotkeys (F8 record, F9 accept and place,
 // Ctrl+Shift+Space read-aloud) which fire system-wide from hotkeys.js. The map
 // below deliberately avoids all three, so a single press can never be handled
 // twice.

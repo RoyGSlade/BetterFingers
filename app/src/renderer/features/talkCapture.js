@@ -135,7 +135,7 @@ function defaultMessageForState(state) {
     case 'busy':
       return 'Processing…';
     case 'downloading':
-      return "Downloading the speech model (first use only, this can take a few minutes)…";
+      return "Downloading the speech model (this can take a few minutes)…";
     case 'error':
       return 'Needs attention.';
     case 'starting':
@@ -312,7 +312,7 @@ export function createTalkCaptureFeature({ elements, hooks } = {}) {
   function formatDownloadMessage(state) {
     if (state?.message) return state.message;
     const size = state?.model_size ? ` '${state.model_size}'` : '';
-    return `Downloading speech model${size} (first use only, this can take a few minutes)…`;
+    return `Downloading speech model${size} (this can take a few minutes)…`;
   }
 
   async function pollModelDownload() {
