@@ -1,6 +1,9 @@
 """Static fail-closed contract for the production Windows signing path."""
 
 from pathlib import Path
+import json
+import os
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,7 +27,7 @@ def test_signing_identity_endpoint_timestamp_and_formats_are_pinned():
         '[string]$CertificateProfileName = "better-fingers"',
         '[string]$Endpoint = "https://wus2.codesigning.azure.net"',
         '[string]$TimestampUrl = "http://timestamp.acs.microsoft.com/"',
-        '$eligibleExtensions = @(".exe", ".dll", ".pyd", ".msi", ".msix")',
+        '$eligibleExtensions = @(".exe", ".dll", ".pyd", ".node", ".msi", ".msix")',
         '[Version]"10.0.2261.755"',
     ):
         assert required in signer
@@ -74,7 +77,7 @@ def test_electron_builder_signs_runtime_dlls_before_packaging_and_fails_closed()
     for required in (
         "signingMode === 'azure-cli'",
         "packageBuild.forceCodeSigning = true",
-        "packageBuild.win.signExts = ['.dll']",
+        "packageBuild.win.signExts = ['.dll', '.pyd', '.node']",
         "signingHashAlgorithms: ['sha256']",
         "require('./scripts/azure-artifact-signing.cjs')",
     ):
@@ -150,7 +153,7 @@ def test_wrapper_rechecks_product_owned_final_outputs_in_process_and_reports_ven
 
 
 def test_new_production_signing_files_contain_no_secret_auth_contract():
-    combined = "\n".join(_read(path) for path in (SIGNER, BUILD, HOOK, DOC))
+    combined = "\n".join(_read(path) for path in (SIGNER, BUILD, HOOK))
     for forbidden in (
         "AZURE_CLIENT_SECRET",
         "AZURE_CLIENT_ID",
@@ -205,3 +208,35 @@ def test_signtool_console_output_does_not_pollute_verification_records():
         in script
     )
     assert "artifacts = $records.ToArray()" in script
+
+
+def test_every_config_carries_stable_updater_identity_even_without_signing():
+    identity = "CN=Donaven Crenshaw, O=Donaven Crenshaw, C=US"
+    for mode in ("", "unsigned", "azure-cli"):
+        result = subprocess.run(
+            ["node", "-e", "process.stdout.write(JSON.stringify(require('./app/electron-builder.config.cjs')))"],
+            cwd=ROOT, capture_output=True, text=True, check=True,
+            env={**os.environ, "BETTERFINGERS_SIGNING_MODE": mode,
+                 "BETTERFINGERS_EXPECTED_SIGNER_SUBJECT": "CN=untrusted override"},
+        )
+        config = json.loads(result.stdout)
+        assert config["win"]["signtoolOptions"]["publisherName"] == identity
+        assert "azureSignOptions" not in config["win"]
+        assert "!node_modules/uiohook-napi/prebuilds/{darwin-*,linux-*,win32-arm64}/**/*" in config["win"]["files"]
+        assert not any("prebuilds" in pattern for pattern in config["files"])
+        if mode == "azure-cli":
+            assert config["forceCodeSigning"] is True
+            assert config["win"]["signExts"] == [".dll", ".pyd", ".node"]
+    build = _read(BUILD)
+    assert "Packaged app-update.yml is missing the exact approved publisherName pin." in build
+    assert "$updaterConfig -notmatch $publisherPattern" in build
+
+
+def test_uninstaller_hook_evidence_and_native_modules_are_required():
+    build = _read(BUILD)
+    assert '"*.__uninstaller.exe"' in build
+    assert 'Missing signed, timestamped hook verification' in build
+    assert '[string]$_.verificationDisposition -eq "signed"' in build
+    assert '[string]$_.signerSubject -ceq $ExpectedSignerSubject' in build
+    for script in (build, _read(ROOT / "tools" / "smoke_installer.ps1")):
+        assert '@(".exe", ".dll", ".pyd", ".node")' in script

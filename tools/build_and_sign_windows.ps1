@@ -3,10 +3,11 @@ param(
     [string]$PythonPath = "",
     [string]$SignToolPath = "",
     [string]$DlibPath = "",
-    [string]$ExpectedSignerSubject = "",
+    [string]$ExpectedSignerSubject = "CN=Donaven Crenshaw, O=Donaven Crenshaw, L=Kingfisher, S=ok, C=US",
     [string]$CorrelationId = "",
     [switch]$SkipNodeInstall,
-    [switch]$SkipUnitTests
+    [switch]$SkipUnitTests,
+    [switch]$UsePreparedPayload
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,6 +15,9 @@ Set-StrictMode -Version Latest
 
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     throw "The signed BetterFingers Windows build must run on Windows."
+}
+if ([string]::IsNullOrWhiteSpace($ExpectedSignerSubject)) {
+    throw "ExpectedSignerSubject must name the exact verified certificate subject."
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -72,11 +76,11 @@ function Get-NativePayloadPaths {
         throw "$Label root was not found: $RootPath"
     }
     $paths = @(Get-ChildItem -LiteralPath $RootPath -File -Recurse |
-        Where-Object { @(".exe", ".dll", ".pyd") -contains $_.Extension.ToLowerInvariant() } |
+        Where-Object { @(".exe", ".dll", ".pyd", ".node") -contains $_.Extension.ToLowerInvariant() } |
         ForEach-Object { $_.FullName } |
         Sort-Object -Unique)
     if ($paths.Count -eq 0) {
-        throw "$Label contained no EXE, DLL, or PYD payload files: $RootPath"
+        throw "$Label contained no EXE, DLL, PYD, or NODE payload files: $RootPath"
     }
     return $paths
 }
@@ -210,14 +214,16 @@ try {
 
     Push-Location $appRoot
     try {
-        if (-not $SkipNodeInstall) {
+        if (-not $UsePreparedPayload -and -not $SkipNodeInstall) {
             Invoke-CheckedCommand -Command "npm" -Arguments @("ci") -FailureMessage "npm dependency installation failed"
         }
-        if (-not $SkipUnitTests) {
+        if (-not $UsePreparedPayload -and -not $SkipUnitTests) {
             Invoke-CheckedCommand -Command "npm" -Arguments @("run", "test:unit") -FailureMessage "app unit tests failed"
         }
-        Invoke-CheckedCommand -Command "npm" -Arguments @("run", "build") -FailureMessage "renderer/main build failed"
-        Invoke-CheckedCommand -Command "npm" -Arguments @("run", "build:backend") -FailureMessage "Windows backend build failed"
+        if (-not $UsePreparedPayload) {
+            Invoke-CheckedCommand -Command "npm" -Arguments @("run", "build") -FailureMessage "renderer/main build failed"
+            Invoke-CheckedCommand -Command "npm" -Arguments @("run", "build:backend") -FailureMessage "Windows backend build failed"
+        }
 
         $backendBuildBundlePath = Join-Path $appRoot "resources\backend\betterfingers-backend"
         $backendBuildExecutablePath = Join-Path $backendBuildBundlePath "betterfingers-backend.exe"
@@ -266,6 +272,13 @@ try {
     $releaseChannel = if ($packageVersion -match "-") { "alpha" } else { "latest" }
     $updateMetadataPath = Join-Path $releaseRoot "$releaseChannel.yml"
     $blockmapPath = "$installerPath.blockmap"
+    $updaterConfigPath = Join-Path $releaseRoot "win-unpacked\resources\app-update.yml"
+    $publisherIdentity = "CN=Donaven Crenshaw, O=Donaven Crenshaw, C=US"
+    $updaterConfig = Get-Content -Raw -LiteralPath $updaterConfigPath
+    $publisherPattern = '(?m)^publisherName:\s*\r?\n\s+-\s*[''"]?{0}[''"]?\s*$' -f [regex]::Escape($publisherIdentity)
+    if ($updaterConfig -notmatch $publisherPattern) {
+        throw "Packaged app-update.yml is missing the exact approved publisherName pin."
+    }
     $checksumPath = "$installerPath.sha256"
     $unpackedPath = Join-Path $releaseRoot "win-unpacked"
     if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
@@ -367,6 +380,17 @@ try {
     $backendBuildPayloadReport = Get-Content -Raw -LiteralPath $backendBuildPayloadReportPath | ConvertFrom-Json
     $packagedNativePayloadReport = Get-Content -Raw -LiteralPath $packagedNativePayloadReportPath | ConvertFrom-Json
     $hookArtifacts = @($hookReports | ForEach-Object { $_.artifacts } | ForEach-Object { $_ })
+    foreach ($requiredName in @("BetterFingers.exe", (Split-Path -Leaf $installerPath), "*.__uninstaller.exe")) {
+        $matchingHooks = @($hookArtifacts | Where-Object {
+            (Split-Path -Leaf ([string]$_.path)) -like $requiredName -and
+            [string]$_.verificationDisposition -eq "signed" -and
+            [string]$_.signerSubject -ceq $ExpectedSignerSubject -and
+            -not [string]::IsNullOrWhiteSpace([string]$_.timestampSubject)
+        })
+        if ($matchingHooks.Count -eq 0) {
+            throw "Missing signed, timestamped hook verification for '$requiredName'."
+        }
+    }
     $finalArtifacts = @($finalReport.artifacts)
     $backendBuildPayloadArtifacts = @($backendBuildPayloadReport.artifacts)
     $packagedNativePayloadArtifacts = @($packagedNativePayloadReport.artifacts)

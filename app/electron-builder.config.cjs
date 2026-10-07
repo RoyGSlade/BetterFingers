@@ -2,9 +2,8 @@
 
 // Keep package.json as the readable package contract, then add signing only
 // when a release path explicitly selects it. The production workstation path
-// uses Azure CLI through the Artifact Signing dlib/SignTool hook. The legacy
-// service-principal mode remains available to CI until its release workflow is
-// migrated, but neither mode stores credentials in this configuration.
+// uses Azure CLI through the Artifact Signing dlib/SignTool hook.
+// CI uses the same CLI hook after a protected-environment OIDC login.
 const packageMetadata = require('./package.json');
 const packageBuild = JSON.parse(JSON.stringify(packageMetadata.build));
 const signingMode = String(process.env.BETTERFINGERS_SIGNING_MODE || '').trim();
@@ -21,48 +20,30 @@ packageBuild.publish = [{
   channel: releaseChannel,
 }];
 packageBuild.generateUpdatesFilesForAllChannels = false;
+// Pin identity even in an unsigned qualification build: an omitted publisher
+// makes electron-updater skip publisher verification. Geography can change;
+// CN/O/C identify the publisher without tying upgrades to a street address.
+const publisherIdentity = 'CN=Donaven Crenshaw, O=Donaven Crenshaw, C=US';
+packageBuild.win.signtoolOptions = { publisherName: publisherIdentity };
+// This release is x64. Non-Windows .node files are not PE signing targets.
+packageBuild.win.files = ['!node_modules/uiohook-napi/prebuilds/{darwin-*,linux-*,win32-arm64}/**/*'];
 
 if (signingMode === 'azure-cli') {
-  const expectedSignerSubject = String(
-    process.env.BETTERFINGERS_EXPECTED_SIGNER_SUBJECT || '',
-  ).trim();
-
   packageBuild.forceCodeSigning = true;
   // Electron ships a mixture of unsigned runtime DLLs and Microsoft/vendor-
   // signed DLLs. Include every DLL in electron-builder's pre-installer signing
   // pass; the custom hook preserves valid upstream signatures and signs only
   // unsigned or invalid files with the BetterFingers publisher.
-  packageBuild.win.signExts = ['.dll'];
+  packageBuild.win.signExts = ['.dll', '.pyd', '.node'];
   packageBuild.win.signtoolOptions = {
     sign: require('./scripts/azure-artifact-signing.cjs'),
     signingHashAlgorithms: ['sha256'],
-    ...(expectedSignerSubject ? { publisherName: expectedSignerSubject } : {}),
+    publisherName: publisherIdentity,
   };
 }
 
 if (signingMode === 'azure') {
-  const certificateProfileName = String(
-    process.env.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE || '',
-  ).trim();
-  const publisherName = String(
-    process.env.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME || '',
-  ).trim();
-  if (!certificateProfileName || !publisherName) {
-    throw new Error(
-      'Azure signing requires AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE and '
-      + 'AZURE_TRUSTED_SIGNING_PUBLISHER_NAME (the exact issued certificate subject).',
-    );
-  }
-
-  packageBuild.win.azureSignOptions = {
-    endpoint: 'https://wus2.codesigning.azure.net/',
-    codeSigningAccountName: 'better-fingers',
-    certificateProfileName,
-    publisherName,
-    fileDigest: 'SHA256',
-    timestampDigest: 'SHA256',
-    timestampRfc3161: 'http://timestamp.acs.microsoft.com',
-  };
+  throw new Error('Legacy Azure signing is disabled; use the verified azure-cli wrapper.');
 }
 
 module.exports = packageBuild;

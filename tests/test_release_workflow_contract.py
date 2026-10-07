@@ -113,6 +113,26 @@ def test_both_installer_builds_provide_a_pinned_bundled_model_source():
         assert "BETTERFINGERS_BUNDLED_MODEL_SOURCE" not in env
     assert "BETTERFINGERS_SKIP_MODEL_BUNDLE" not in _workflow_text()
 
+    # The signed Windows path never runs `npm run dist:win`: the pre-login
+    # "Prepare" step compiles the backend and the signing wrapper runs with
+    # -UsePreparedPayload (so it does not call build:backend again). That
+    # prepare step is therefore the one that needs the pinned model source, and
+    # it must exist exactly once, run only on the signed path, and precede login.
+    steps = jobs["windows-installer"]["steps"]
+    prepare = [s for s in steps if "npm run build:backend" in (s.get("run") or "")]
+    assert len(prepare) == 1, "signed path must compile the backend in exactly one step"
+    prepare_env = prepare[0].get("env") or {}
+    assert prepare_env.get("BETTERFINGERS_ALLOW_MODEL_DOWNLOAD") == "1"
+    assert "BETTERFINGERS_SKIP_MODEL_BUNDLE" not in prepare_env
+    assert "BETTERFINGERS_BUNDLED_MODEL_SOURCE" not in prepare_env
+    assert prepare[0].get("if") == "steps.signing.outputs.configured == 'true'"
+    names = [s.get("name", "") for s in steps]
+    login = next(i for i, name in enumerate(names) if name.startswith("Azure login"))
+    assert names.index(prepare[0]["name"]) < login
+    wrapper = [s for s in steps if "build_and_sign_windows.ps1" in (s.get("run") or "")]
+    assert len(wrapper) == 1
+    assert "-UsePreparedPayload" in wrapper[0]["run"]
+
 
 def test_linux_release_repairs_a_missing_locked_electron_binary_before_tests():
     workflow = _workflow_text()
@@ -162,33 +182,34 @@ def test_release_identity_and_unsigned_policy_fail_closed():
     assert "Unsigned builds are allowed only for manual qualification runs." in workflow
 
 
-def test_azure_signing_account_is_wired_conditionally_and_partial_config_fails():
+def test_oidc_signing_uses_protected_environment_and_local_wrapper():
     workflow = _workflow_text()
+    block = workflow.split("\n  windows-installer:\n", 1)[1].split("\n  linux-appimage:\n", 1)[0]
     for required in (
-        'AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE',
-        'AZURE_TRUSTED_SIGNING_PUBLISHER_NAME',
-        'AZURE_TENANT_ID',
-        'AZURE_CLIENT_ID',
-        'AZURE_CLIENT_SECRET',
-        'BETTERFINGERS_SIGNING_MODE: ${{ steps.signing.outputs.mode }}',
-        'Azure signing is partially configured.',
-        'Azure and PFX signing are both configured',
-        'PFX signing is partially configured.',
-        'mode=azure',
-        'mode=pfx',
-        'mode=unsigned',
+        "environment: release-signing",
+        "id-token: write",
+        "azure/login@0949e32778441b2c442592b7a0e6313466dc8f29",
+        "subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+        "Install-Module -Name TrustedSigning -RequiredVersion 0.5.8",
+        "Get-EveryDependency",
+        "build_and_sign_windows.ps1 -PythonPath (Get-Command python).Source -UsePreparedPayload",
+        "Azure signing is partially configured.",
+        "mode=azure-cli",
+        "mode=unsigned",
+        "az logout --only-show-errors",
+        "app/release/BetterFingers-Windows-signing-report.json",
+        ".installed-native-verification.json",
     ):
-        assert required in workflow
-
-    configure = workflow.split("      - name: Configure Windows code signing\n", 1)[1].split(
-        "\n      # Runs electron-vite build", 1
-    )[0]
-    build = workflow.split("      - name: Build installer (electron-builder)\n", 1)[1].split(
-        "\n      - name: Clean up code-signing certificate", 1
-    )[0]
-    assert "GITHUB_ENV" not in configure
-    assert "AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}" in build
-    assert "CSC_LINK: ${{ steps.signing.outputs.cert_path }}" in build
+        assert required in block
+    for forbidden in ("AZURE_CLIENT_SECRET", "WIN_CERTIFICATE_BASE64", "CSC_KEY_PASSWORD", "mode=pfx", "MinimumVersion 0.5.0"):
+        assert forbidden not in workflow
+    assert block.index("run: npm ci") < block.index("name: Azure login")
+    assert block.index("run: npm run test:unit") < block.index("name: Azure login")
+    assert block.index("npm run build:backend") < block.index("name: Azure login")
+    assert block.index("Install-Module -Name TrustedSigning") < block.index("name: Azure login")
+    assert block.index("name: Azure login") < block.index("name: Build signed installer") < block.index("name: Clear Azure signing session")
+    assert "-UsePreparedPayload" in block
+    assert "mode=azure-cli" in block
 
 
 def test_installer_artifact_name_and_installed_smoke_contract_are_exact():
@@ -299,6 +320,18 @@ def test_installer_smoke_proves_upgrade_preservation_and_selective_cleanup():
         '$canonicalDataRootExistedBefore',
     ):
         assert required in smoke
+
+
+def test_signing_toolchain_binaries_must_be_microsoft_signed_before_use():
+    # TrustedSigning and its NuGet bootstrap are pinned by version only; the
+    # signtool/Dlib binaries that hold the Azure session are trusted only after
+    # an Authenticode check, inside the step that resolves them.
+    workflow = _workflow_text()
+    step = workflow.split("- name: Install pinned signing toolchain", 1)[1].split("- name:", 1)[0]
+    assert "Get-AuthenticodeSignature -LiteralPath $path" in step
+    assert '$toolSignature.Status -ne "Valid"' in step
+    assert 'O=Microsoft Corporation' in step
+    assert step.index("Get-AuthenticodeSignature") < step.index('"signtool=$signTool"')
 
 
 def test_azure_signer_subject_is_enforced_on_artifact_and_installed_payloads():

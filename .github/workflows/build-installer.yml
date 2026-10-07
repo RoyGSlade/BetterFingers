@@ -92,11 +92,12 @@ jobs:
   windows-installer:
     needs: windows-python-tests
     runs-on: windows-latest
+    environment: release-signing
     outputs:
       signing_mode: ${{ steps.signing.outputs.mode }}
     permissions:
       contents: read
-      id-token: write # actions/attest-build-provenance (OIDC)
+      id-token: write # environment-scoped Azure OIDC and provenance
       attestations: write # actions/attest-build-provenance
     steps:
       - name: Checkout
@@ -144,12 +145,8 @@ jobs:
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      # Prefer the provisioned Azure Artifact Signing account (called Azure
-      # Trusted Signing by this electron-builder integration). Manual
-      # qualification runs may remain explicitly unsigned, but every tag is
-      # required to be signed before it can reach publication. A legacy PFX
-      # remains a supported fallback; partial configuration of either mode
-      # fails instead of silently producing the wrong artifact.
+      # All builds use the identity pin. Signed builds use the local wrapper;
+      # dependency installation, tests and compilation precede OIDC login.
       - name: Configure Windows code signing
         id: signing
         shell: powershell
@@ -158,64 +155,108 @@ jobs:
           AZURE_PUBLISHER: ${{ vars.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
           AZURE_TENANT: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          CERT_B64: ${{ secrets.WIN_CERTIFICATE_BASE64 }}
-          CERT_PASSWORD: ${{ secrets.WIN_CERTIFICATE_PASSWORD }}
+          AZURE_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
-          $azureValues = @($env:AZURE_PROFILE, $env:AZURE_PUBLISHER, $env:AZURE_TENANT, $env:AZURE_CLIENT, $env:AZURE_SECRET)
+          $ErrorActionPreference = "Stop"
+          $azureValues = @($env:AZURE_PROFILE, $env:AZURE_PUBLISHER, $env:AZURE_TENANT, $env:AZURE_CLIENT, $env:AZURE_SUBSCRIPTION)
           $azureCount = @($azureValues | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
           if ($azureCount -gt 0 -and $azureCount -ne $azureValues.Count) {
-            throw "Azure signing is partially configured. Set the certificate profile, publisher subject, tenant ID, client ID, and client secret together."
+            throw "Azure signing is partially configured. Set all protected-environment OIDC identifiers, profile and publisher."
           }
-          $hasPfx = -not [string]::IsNullOrWhiteSpace($env:CERT_B64)
-          $hasPfxPassword = -not [string]::IsNullOrWhiteSpace($env:CERT_PASSWORD)
-          if ($hasPfx -ne $hasPfxPassword) {
-            throw "PFX signing is partially configured. Set WIN_CERTIFICATE_BASE64 and WIN_CERTIFICATE_PASSWORD together."
-          }
-
           if ($azureCount -eq $azureValues.Count) {
-            if ($hasPfx) {
-              throw "Azure and PFX signing are both configured; choose exactly one signing authority."
-            }
+            if ($env:AZURE_PROFILE -cne "better-fingers") { throw "Unexpected signing certificate profile." }
             "configured=true" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
-            "mode=azure" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
-            Write-Host "Azure Artifact Signing is configured for account better-fingers."
-          } elseif ($hasPfx) {
-            $certPath = Join-Path $env:RUNNER_TEMP "betterfingers-signing.pfx"
-            [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($env:CERT_B64))
-            "configured=true" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
-            "mode=pfx" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
-            "cert_path=$certPath" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
+            "mode=azure-cli" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
           } else {
-            Write-Host "No complete Azure or PFX signing configuration; building an explicitly unsigned alpha."
+            if ("${{ github.ref_type }}" -eq "tag") {
+              throw "Every Windows tag must be signed. Unsigned builds are allowed only for manual qualification runs."
+            }
             "configured=false" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
             "mode=unsigned" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
           }
 
-      # Runs electron-vite build + the PyInstaller backend bundle + electron-builder's
-      # NSIS packaging in one step. Output lands in app/release/ (see
-      # directories.output in app/package.json).
-      - name: Build installer (electron-builder)
+      # Signed path only: the unsigned qualification step below runs the whole
+      # `npm run dist:win` itself, so preparing here too would build twice.
+      - name: Prepare Windows payload without signing credentials
+        if: steps.signing.outputs.configured == 'true'
+        working-directory: app
+        shell: powershell
+        env:
+          # build:backend refuses to run without a bundled-model source, and it
+          # runs here (before OIDC login), not in the signed wrapper step. Same
+          # pinned, SHA-256-verified fetch as every other installer build.
+          BETTERFINGERS_ALLOW_MODEL_DOWNLOAD: "1"
+        run: |
+          $ErrorActionPreference = "Stop"
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build:backend
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Install pinned signing toolchain
+        if: steps.signing.outputs.configured == 'true'
+        id: signing_tools
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          Install-Module -Name TrustedSigning -RequiredVersion 0.5.8 -Force -Repository PSGallery -Scope CurrentUser
+          $module = Get-Module -ListAvailable TrustedSigning | Where-Object { $_.Version -eq [Version]"0.5.8" } | Select-Object -First 1
+          if ($null -eq $module) { throw "Pinned TrustedSigning module was not installed." }
+          # Use only the pinned module's dependency bootstrap, never its signing
+          # command. Our wrapper remains the single sign-and-verify authority.
+          $dependencyModule = Import-Module (Join-Path $module.ModuleBase "NugetInstall\NugetInstall.psm1") -PassThru -Force
+          $tools = & $dependencyModule { Get-EveryDependency }
+          $signTool = Join-Path $tools.SignToolFolderPath "signtool.exe"
+          $dlib = Join-Path $tools.DlibFolderPath "Azure.CodeSigning.Dlib.dll"
+          foreach ($path in @($signTool, $dlib)) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing pinned signing tool: $path" }
+            # The module and its NuGet bootstrap are pinned by version only, so
+            # the binaries that will hold the signing session must themselves be
+            # Microsoft-signed before they are trusted.
+            $toolSignature = Get-AuthenticodeSignature -LiteralPath $path
+            if ($toolSignature.Status -ne "Valid" -or [string]$toolSignature.SignerCertificate.Subject -notmatch "O=Microsoft Corporation") {
+              throw "Signing tool $path is not a valid Microsoft-signed binary ($($toolSignature.Status))."
+            }
+          }
+          "signtool=$signTool" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
+          "dlib=$dlib" | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_OUTPUT
+
+      - name: Azure login with environment-scoped OIDC
+        if: steps.signing.outputs.configured == 'true'
+        uses: azure/login@0949e32778441b2c442592b7a0e6313466dc8f29 # v3.0.2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build signed installer using local wrapper
+        if: steps.signing.outputs.configured == 'true'
+        shell: powershell
+        env:
+          EXPECTED_SIGNER: ${{ vars.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
+          SIGNTOOL: ${{ steps.signing_tools.outputs.signtool }}
+          SIGNING_DLIB: ${{ steps.signing_tools.outputs.dlib }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          & .\tools\build_and_sign_windows.ps1 -PythonPath (Get-Command python).Source -UsePreparedPayload -ExpectedSignerSubject $env:EXPECTED_SIGNER -SignToolPath $env:SIGNTOOL -DlibPath $env:SIGNING_DLIB
+
+      - name: Clear Azure signing session
+        if: always() && steps.signing.outputs.configured == 'true'
+        shell: powershell
+        run: |
+          az logout --only-show-errors
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build unsigned installer for manual qualification
+        if: steps.signing.outputs.configured != 'true'
         working-directory: app
         env:
-          BETTERFINGERS_SIGNING_MODE: ${{ steps.signing.outputs.mode }}
-          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
-          AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ vars.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          CSC_LINK: ${{ steps.signing.outputs.cert_path }}
-          CSC_KEY_PASSWORD: ${{ secrets.WIN_CERTIFICATE_PASSWORD }}
+          BETTERFINGERS_SIGNING_MODE: unsigned
           # The installer bundles Systran base.en. The fetch is pinned to one
           # revision and every file is SHA-256-verified against
           # backend/stt/bundled_manifest.json before it is packaged.
           BETTERFINGERS_ALLOW_MODEL_DOWNLOAD: "1"
         run: npm run dist:win
-
-      - name: Clean up code-signing certificate
-        if: always() && steps.signing.outputs.mode == 'pfx'
-        shell: powershell
-        run: Remove-Item -LiteralPath "${{ steps.signing.outputs.cert_path }}" -ErrorAction SilentlyContinue
 
       - name: Enforce payload size budget
         shell: powershell
@@ -264,7 +305,7 @@ jobs:
               throw "Signing was configured, but Authenticode verification returned $($signature.Status)."
             }
             $signerSubject = [string]$signature.SignerCertificate.Subject
-            if ("${{ steps.signing.outputs.mode }}" -eq "azure" -and $signerSubject -cne $env:AZURE_EXPECTED_PUBLISHER) {
+            if ("${{ steps.signing.outputs.mode }}" -eq "azure-cli" -and $signerSubject -cne $env:AZURE_EXPECTED_PUBLISHER) {
               throw "Azure signer subject was '$signerSubject'; expected exactly '$env:AZURE_EXPECTED_PUBLISHER'."
             }
             "signed via ${{ steps.signing.outputs.mode }}; authenticode_status=$($signature.Status); signer_subject=$signerSubject" | Out-File -Encoding ascii "$installer.signature.txt"
@@ -387,7 +428,7 @@ jobs:
           $args += @("-ExpectedVersion", ((Get-Content -Raw app/package.json | ConvertFrom-Json).version))
           $expectedSignature = if ("${{ steps.signing.outputs.configured }}" -eq "true") { "Valid" } else { "NotSigned" }
           $args += @("-ExpectedSignatureStatus", $expectedSignature)
-          if ("${{ steps.signing.outputs.mode }}" -eq "azure") {
+          if ("${{ steps.signing.outputs.mode }}" -eq "azure-cli") {
             $args += @("-ExpectedSignerSubject", $env:AZURE_EXPECTED_PUBLISHER)
           }
           if ("${{ steps.previous.outputs.path }}" -ne "") {
@@ -432,6 +473,16 @@ jobs:
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373  # v4.1.1
         with:
           subject-path: ${{ steps.installer.outputs.path }}
+
+      - name: Retain signed payload verification evidence
+        if: steps.signing.outputs.configured == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: BetterFingers-Windows-signing-evidence
+          path: |
+            app/release/BetterFingers-Windows-signing-report.json
+            ${{ steps.installer.outputs.path }}.installed-native-verification.json
+          if-no-files-found: error
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1

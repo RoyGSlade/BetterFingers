@@ -213,10 +213,10 @@ function Assert-NativePayloadSignatures {
     }
 
     $payloadFiles = @(Get-ChildItem -LiteralPath $RootPath -File -Recurse |
-        Where-Object { @(".exe", ".dll", ".pyd") -contains $_.Extension.ToLowerInvariant() } |
+        Where-Object { @(".exe", ".dll", ".pyd", ".node") -contains $_.Extension.ToLowerInvariant() } |
         Sort-Object FullName)
     if ($payloadFiles.Count -eq 0) {
-        throw "Installed application tree contained no EXE, DLL, or PYD payload files: $RootPath"
+        throw "Installed application tree contained no EXE, DLL, PYD, or NODE payload files: $RootPath"
     }
 
     $resolvedProductPath = (Resolve-Path -LiteralPath $ProductExecutablePath).Path

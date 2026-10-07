@@ -20,7 +20,7 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $minimumSignToolVersion = [Version]"10.0.2261.755"
-$eligibleExtensions = @(".exe", ".dll", ".pyd", ".msi", ".msix")
+$eligibleExtensions = @(".exe", ".dll", ".pyd", ".node", ".msi", ".msix")
 
 function Resolve-ExistingFile {
     param(
@@ -217,7 +217,7 @@ function Get-EligibleArtifacts {
             } else {
                 $extension = [IO.Path]::GetExtension($item.Path).ToLowerInvariant()
                 if ($eligibleExtensions -notcontains $extension) {
-                    throw "Artifact '$($item.Path)' is not an EXE, DLL, PYD, MSI, or MSIX file."
+                    throw "Artifact '$($item.Path)' is not an EXE, DLL, PYD, NODE, MSI, or MSIX file."
                 }
                 $targets.Add($item.Path)
             }
@@ -226,7 +226,7 @@ function Get-EligibleArtifacts {
 
     $uniqueTargets = @($targets | Sort-Object -Unique)
     if ($uniqueTargets.Count -eq 0) {
-        throw "No distributable EXE, DLL, PYD, MSI, or MSIX artifacts were found under the requested path(s)."
+        throw "No distributable EXE, DLL, PYD, NODE, MSI, or MSIX artifacts were found under the requested path(s)."
     }
     return $uniqueTargets
 }

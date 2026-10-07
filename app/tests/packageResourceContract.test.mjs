@@ -145,21 +145,46 @@ test('the intended Windows icon sources exist in the tracked package input direc
 
 test('Azure Artifact Signing config is exact and only enabled explicitly', () => {
   const configPath = path.join(appRoot, 'electron-builder.config.cjs');
+  const publisherName = 'CN=Donaven Crenshaw, O=Donaven Crenshaw, C=US';
   const loadConfig = (env = {}) => spawnSync(
     process.execPath,
     ['-e', `process.stdout.write(JSON.stringify(require(${JSON.stringify(configPath)})))`],
     { encoding: 'utf8', env: { ...process.env, ...env } },
   );
+  const loadHookType = (mode) => spawnSync(
+    process.execPath,
+    ['-e', `process.stdout.write(typeof require(${JSON.stringify(configPath)}).win.signtoolOptions.sign)`],
+    {
+      encoding: 'utf8',
+      env: { ...process.env, BETTERFINGERS_SIGNING_MODE: mode },
+    },
+  );
 
-  const unsigned = loadConfig({
-    BETTERFINGERS_SIGNING_MODE: '',
-    AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: '',
-    AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: '',
-  });
-  assert.equal(unsigned.status, 0, unsigned.stderr);
-  assert.equal('azureSignOptions' in JSON.parse(unsigned.stdout).win, false);
-  assert.equal('signtoolOptions' in JSON.parse(unsigned.stdout).win, false);
-  assert.equal(JSON.parse(unsigned.stdout).forceCodeSigning, undefined);
+  // '' is a plain `npm run dist:win`; 'unsigned' is what the CI qualification
+  // step sets explicitly. Both must pin the publisher without any signing hook.
+  for (const unsignedMode of ['', 'unsigned']) {
+    const unsigned = loadConfig({
+      BETTERFINGERS_SIGNING_MODE: unsignedMode,
+      AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: '',
+      AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: '',
+    });
+    assert.equal(unsigned.status, 0, unsigned.stderr);
+    const unsignedConfig = JSON.parse(unsigned.stdout);
+    assert.equal('azureSignOptions' in unsignedConfig.win, false);
+    assert.deepEqual(unsignedConfig.win.signtoolOptions, { publisherName });
+    assert.equal('sign' in unsignedConfig.win.signtoolOptions, false);
+    assert.equal('forceCodeSigning' in unsignedConfig, false);
+    // The x64-only Windows package drops every non-win32-x64 uiohook prebuild;
+    // the filter is Windows-scoped, so it must not leak into the shared files.
+    assert.deepEqual(unsignedConfig.win.files, [
+      '!node_modules/uiohook-napi/prebuilds/{darwin-*,linux-*,win32-arm64}/**/*',
+    ]);
+    assert.equal(unsignedConfig.files.some((pattern) => pattern.includes('prebuilds')), false);
+    // JSON drops functions, so inspect the live property as well.
+    const unsignedHookType = loadHookType(unsignedMode);
+    assert.equal(unsignedHookType.status, 0, unsignedHookType.stderr);
+    assert.equal(unsignedHookType.stdout, 'undefined');
+  }
 
   const cliSigned = loadConfig({
     BETTERFINGERS_SIGNING_MODE: 'azure-cli',
@@ -168,41 +193,27 @@ test('Azure Artifact Signing config is exact and only enabled explicitly', () =>
   assert.equal(cliSigned.status, 0, cliSigned.stderr);
   const cliConfig = JSON.parse(cliSigned.stdout);
   assert.equal(cliConfig.forceCodeSigning, true);
+  assert.equal('azureSignOptions' in cliConfig.win, false);
   assert.deepEqual(
     cliConfig.win.signExts,
-    ['.dll'],
-    'Electron-builder includes DLLs; the custom hook preserves already-valid vendor signatures and signs only missing or invalid signatures',
+    ['.dll', '.pyd', '.node'],
+    'Electron-builder includes all Windows native extensions; the custom hook preserves already-valid vendor signatures and signs only missing or invalid signatures',
   );
   assert.deepEqual(cliConfig.win.signtoolOptions, {
     signingHashAlgorithms: ['sha256'],
-    publisherName: 'CN=Donaven Crenshaw',
+    publisherName,
   });
-  const hookType = spawnSync(
-    process.execPath,
-    ['-e', `process.stdout.write(typeof require(${JSON.stringify(configPath)}).win.signtoolOptions.sign)`],
-    {
-      encoding: 'utf8',
-      env: { ...process.env, BETTERFINGERS_SIGNING_MODE: 'azure-cli' },
-    },
-  );
+  const hookType = loadHookType('azure-cli');
   assert.equal(hookType.status, 0, hookType.stderr);
   assert.equal(hookType.stdout, 'function');
 
-  const signed = loadConfig({
+  const legacy = loadConfig({
     BETTERFINGERS_SIGNING_MODE: 'azure',
     AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: 'better-fingers',
     AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: 'CN=Donaven Crenshaw',
   });
-  assert.equal(signed.status, 0, signed.stderr);
-  assert.deepEqual(JSON.parse(signed.stdout).win.azureSignOptions, {
-    endpoint: 'https://wus2.codesigning.azure.net/',
-    codeSigningAccountName: 'better-fingers',
-    certificateProfileName: 'better-fingers',
-    publisherName: 'CN=Donaven Crenshaw',
-    fileDigest: 'SHA256',
-    timestampDigest: 'SHA256',
-    timestampRfc3161: 'http://timestamp.acs.microsoft.com',
-  });
+  assert.notEqual(legacy.status, 0);
+  assert.match(legacy.stderr, /Legacy Azure signing is disabled/);
 
   const partial = loadConfig({
     BETTERFINGERS_SIGNING_MODE: 'azure',
@@ -210,7 +221,7 @@ test('Azure Artifact Signing config is exact and only enabled explicitly', () =>
     AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: 'CN=Donaven Crenshaw',
   });
   assert.notEqual(partial.status, 0);
-  assert.match(partial.stderr, /requires AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE/);
+  assert.match(partial.stderr, /Legacy Azure signing is disabled/);
 });
 
 test('the locked Electron version is allowed to install its platform binary', () => {
