@@ -1967,8 +1967,15 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
     try {
       const result = await factoryReset(phrase, { deleteDownloadedModels: alsoModels });
       if (result?.ok) {
+        // Main clears the window's own stored state (first-run flags, caches) and
+        // finishes deleting the browser engine's files at the next start; say so
+        // instead of claiming the folder is already empty.
+        const pending = result?.renderer_state?.pending_until_restart || [];
         setFactoryResetMessage('Done. This install was reset and re-checked: nothing remains. '
-          + 'Restart BetterFingers to begin from first run.');
+          + 'Restart BetterFingers to begin from first run.'
+          + (pending.length
+            ? ' Cached files of the app window are removed when it restarts.'
+            : ''));
       } else {
         // Never claim a clean reset that did not happen: name what is left.
         const residual = (result?.residual_files || []).slice(0, 3).join(', ');

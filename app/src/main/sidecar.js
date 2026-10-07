@@ -460,6 +460,19 @@ function createSidecar({
     }
   }
 
+  // The on-disk raw log (sidecar_backend_raw.log in Electron's userData) is a
+  // privacy-inventory category that a factory reset deletes. Left on, this module
+  // recreates it within the same second with the reset request's own access-log
+  // lines, so "Check what's left" would report it present right after a reset that
+  // verified. The factory-reset IPC handler therefore turns file logging off for
+  // the rest of the session (the in-memory buffer is untouched); a new launch
+  // starts with it on.
+  let rawLogEnabled = true;
+
+  function setRawLogEnabled(enabled) {
+    rawLogEnabled = enabled === true;
+  }
+
   function appendLog(streamName, data) {
     const text = String(data);
     const lines = text.split('\n');
@@ -483,6 +496,9 @@ function createSidecar({
     }
 
     try {
+      if (!rawLogEnabled) {
+        return;
+      }
       const logFilePath = userDataPath || (app?.getPath ? path.join(app.getPath('userData'), 'sidecar_backend_raw.log') : null);
       if (!logFilePath) {
         return;
@@ -510,7 +526,7 @@ function createSidecar({
 
       try {
         const logFilePath = userDataPath || (app?.getPath ? path.join(app.getPath('userData'), 'sidecar_backend_raw.log') : null);
-        if (logFilePath) {
+        if (logFilePath && rawLogEnabled) {
           // Preserve prior sessions for diagnostics: append a separator instead of
           // wiping, and trim from the front if the file grows past ~2 MB.
           const maxLogFileBytes = 2 * 1024 * 1024;
@@ -972,6 +988,8 @@ function createSidecar({
     isRunning,
     getStatus: () => ({ ...status, pid: childProcess?.pid ?? status.pid }),
     getLogs: () => [...logBuffer],
+    setRawLogEnabled,
+    isRawLogEnabled: () => rawLogEnabled,
     healthUrl,
   };
 }

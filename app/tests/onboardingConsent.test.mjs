@@ -407,3 +407,120 @@ test('decline falls back to hooks.quitApp in the legacy path (no consent supplie
   h.decline.fire('click');
   assert.deepEqual(quits, ['quit']);
 });
+
+// --- the legacy flag is consumed, so a factory reset can never re-mint consent --
+//
+// Reproduced in the packaged app (F1): an upgrader whose Local Storage still
+// carried bf_onboarding_complete=true was migrated into onboarding.json on first
+// launch, ran a factory reset (which deleted onboarding.json but not Local
+// Storage), and on the next launch the same flag migrated AGAIN -- consent and
+// automatic_updates:true re-granted with no prompt. The flag only exists to carry
+// a returning user into the durable store ONCE; after that it must be gone.
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import onboardingStore from '../src/main/onboardingStore.js';
+
+function removableStorage(initial = {}) {
+  const map = new Map(Object.entries(initial));
+  return {
+    getItem: (k) => (map.has(k) ? map.get(k) : null),
+    setItem: (k, v) => map.set(k, String(v)),
+    removeItem: (k) => map.delete(k),
+    has: (k) => map.has(k),
+  };
+}
+
+// The bridge as preload exposes it, backed by the REAL main-process store over a
+// throwaway root.
+function realStoreBridge(root) {
+  return {
+    async getState() { return onboardingStore.readState({ root }); },
+    async migrateLegacy({ legacyComplete }) {
+      return onboardingStore.migrateLegacyCompletion({ legacyComplete: Boolean(legacyComplete), root });
+    },
+    async accept({ consentVersion }) { return onboardingStore.recordAcceptance({ root, consentVersion }); },
+  };
+}
+
+test('a migrated legacy flag is consumed in the same launch', async () => {
+  const bridge = fakeBridge();
+  const storage = removableStorage({ [ONBOARDING_FLAG]: 'true' });
+  const gate = await resolveOnboardingGate({ bridge, storage, consentVersion: 1 });
+  assert.equal(gate.migrated, true);
+  assert.equal(storage.has(ONBOARDING_FLAG), false, 'the legacy flag must not outlive its migration');
+});
+
+test('an already-accepted durable record removes a stale legacy flag', async () => {
+  const bridge = fakeBridge();
+  bridge._setState({ schema_version: 1, consent_version: 1, accepted: true, accepted_at: 'now', completed_steps: [] });
+  const storage = removableStorage({ [ONBOARDING_FLAG]: 'true' });
+  const gate = await resolveOnboardingGate({ bridge, storage, consentVersion: 1 });
+  assert.equal(gate.show, false);
+  assert.equal(storage.has(ONBOARDING_FLAG), false);
+});
+
+test('a version bump on an accepted record also drops the flag (it can never satisfy the new version)', async () => {
+  const bridge = fakeBridge();
+  bridge._setState({ schema_version: 1, consent_version: 1, accepted: true, accepted_at: 'now', completed_steps: [] });
+  const storage = removableStorage({ [ONBOARDING_FLAG]: 'true' });
+  const gate = await resolveOnboardingGate({ bridge, storage, consentVersion: 2 });
+  assert.equal(gate.show, true);
+  assert.equal(storage.has(ONBOARDING_FLAG), false);
+});
+
+test('a durable file that exists but is not accepted consumes the flag (the store has taken over)', async () => {
+  const bridge = fakeBridge({
+    async migrateLegacy() { return { migrated: false, reason: 'already_present', ok: true }; },
+  });
+  const storage = removableStorage({ [ONBOARDING_FLAG]: 'true' });
+  const gate = await resolveOnboardingGate({ bridge, storage, consentVersion: 1 });
+  assert.equal(gate.show, true, 'an unaccepted record still asks for consent');
+  assert.equal(storage.has(ONBOARDING_FLAG), false);
+});
+
+test('a migration whose durable write FAILED keeps the flag so it can retry next launch', async () => {
+  const bridge = fakeBridge({
+    async migrateLegacy() { return { migrated: false, ok: false, error: 'EACCES' }; },
+  });
+  const storage = removableStorage({ [ONBOARDING_FLAG]: 'true' });
+  const gate = await resolveOnboardingGate({ bridge, storage, consentVersion: 1 });
+  assert.equal(gate.show, true);
+  assert.equal(storage.has(ONBOARDING_FLAG), true, 'nothing was migrated, so nothing is consumed');
+});
+
+test('a storage that cannot remove the flag still resolves the gate', async () => {
+  const bridge = fakeBridge();
+  const storage = {
+    getItem: (k) => (k === ONBOARDING_FLAG ? 'true' : null),
+    removeItem() { throw new Error('storage is read-only'); },
+  };
+  const gate = await resolveOnboardingGate({ bridge, storage, consentVersion: 1 });
+  assert.equal(gate.show, false);
+  assert.equal(gate.migrated, true);
+});
+
+test('END TO END: a factory reset cannot re-mint consent from the legacy flag', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bf-consent-e2e-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const bridge = realStoreBridge(root);
+  // The renderer's Local Storage survives across launches and across the reset.
+  const storage = removableStorage({ [ONBOARDING_FLAG]: 'true' });
+
+  const firstLaunch = await resolveOnboardingGate({ bridge, storage, consentVersion: 1 });
+  assert.equal(firstLaunch.show, false, 'the upgrader is carried over once');
+  assert.equal(onboardingStore.readState({ root }).accepted, true);
+
+  // Settings -> Factory reset removes the consent record (the Python sweep) ...
+  assert.equal(onboardingStore.clearForFactoryReset({ root }).cleared, true);
+  assert.equal(fs.existsSync(path.join(root, 'onboarding.json')), false);
+
+  // ... and Local Storage is NOT cleared here (worst case: the renderer-state
+  // clear failed or was skipped). The next launch must still ask.
+  const afterReset = await resolveOnboardingGate({ bridge, storage, consentVersion: 1 });
+  assert.equal(afterReset.show, true, 'consent must be asked again after a factory reset');
+  assert.equal(afterReset.migrated, false);
+  assert.equal(onboardingStore.readState({ root }).accepted, false);
+  assert.equal(fs.existsSync(path.join(root, 'onboarding.json')), false, 'no consent record may reappear');
+});

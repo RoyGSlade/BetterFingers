@@ -26,6 +26,14 @@ be the exact failure this wave closes:
   ``app.getPath('userData')``, which is deliberately NOT the unified root.
   ``electron_user_data_candidates()`` mirrors Electron's own resolution rule —
   see the warning on that function before changing it.
+
+Measured on the packaged app (F1): that folder is
+``%APPDATA%\\betterfingers-electron``. electron-builder's ``productName`` names
+the installer and the exe but never reaches ``app.asar/package.json``, so the
+runtime app name is the package ``name``. Chromium keeps its own files there
+(Local Storage, Session Storage, caches, ...) — see ``ELECTRON_RUNTIME_NAMES``
+for how they are declared, and ``app/src/main/rendererState.js`` for who clears
+them. Do not assume "productName BetterFingers" means the two folders coincide.
 """
 
 from __future__ import annotations
@@ -67,13 +75,15 @@ def _existing(*candidates: Path) -> list[Path]:
 # app.getPath('appData')/<app name> — a DIFFERENT directory from the unified
 # data root on every platform.
 #
-# The app name is genuinely ambiguous between builds: Electron uses the
-# top-level "productName" or "name" from app/package.json, which is
-# "betterfingers-electron" for an unpackaged dev run, while electron-builder
-# writes "BetterFingers" into the packaged app's package.json. Guessing one
-# would silently miss the other, so both are treated as candidate roots and
-# _existing() decides. That is honest in a way a guess is not: a factory reset
-# sweeps whichever directory is actually there.
+# Electron names the folder after the top-level "productName" or "name" in the
+# package.json INSIDE app.asar. That is "betterfingers-electron" for an
+# unpackaged run AND for the packaged app: electron-builder's own
+# build.productName names the installer and the exe but is not copied into the
+# asar's package.json (measured on alpha.3 and alpha.4 builds; an earlier version
+# of this comment claimed the opposite). "BetterFingers" is still treated as a
+# candidate, because adding a top-level productName is the obvious "fix" for the
+# lowercase folder and would make it the real one. Both are candidate roots and
+# _existing() decides, so a factory reset sweeps whichever directory is there.
 _ELECTRON_APP_NAMES = ("BetterFingers", "betterfingers-electron")
 
 
@@ -87,6 +97,12 @@ def electron_user_data_candidates() -> list[Path]:
 
     Returns candidate directories whether or not they exist — callers join a
     filename on and run the result through ``_existing()``.
+
+    Which of the two names is real: ``betterfingers-electron``, for the packaged
+    app and an unpackaged run alike (measured: the packaged asar's package.json
+    carries ``name`` and no ``productName``). ``BetterFingers`` stays a candidate
+    because it is what Electron would pick if a ``productName`` were ever added,
+    the case where userData and the unified root become the same folder.
     """
     home = Path.home()
     if sys.platform == "win32":
@@ -102,6 +118,80 @@ def electron_user_data_candidates() -> list[Path]:
 
 def _electron_files(filename: str) -> list[Path]:
     return _existing(*(root / filename for root in electron_user_data_candidates()))
+
+
+# --- Chromium's own files inside Electron's userData -------------------------------
+
+# Exact top-level names Chromium (not BetterFingers) creates in Electron's
+# userData folder; the ones a real packaged run produced (app/artifacts/f1
+# evidence) plus the other storage/cache siblings of the same engine. They are
+# DECLARED rather than swept:
+#
+# * Chromium holds most of them open while the app runs, so the backend can
+#   neither delete them nor verify their absence. The Electron main process
+#   clears what it can through its session API and removes the files at the next
+#   launch (``app/src/main/rendererState.js``); the uninstaller removes them
+#   (``app/build/installer.nsh``).
+# * On the packaged app they live in a different folder from the unified root, so
+#   the residual sweep never sees them. If Electron's userData ever IS the data
+#   root (add ``productName`` to package.json, or ``app.setPath``), they would
+#   all show up as "files no category claims" and a factory reset could never
+#   verify — measured: HTTP 500, 44 residual files. ``data_lifecycle.unmapped_files``
+#   therefore skips exactly these names, and only when the root it is sweeping is
+#   an Electron userData folder.
+#
+# The list is Chromium-only on purpose (a test fails if a BetterFingers store
+# name joins it, and the source scan in test_privacy_inventory_completeness
+# still fails on any undeclared name the sources write).
+ELECTRON_RESET_PENDING_MARKER = ".factory-reset-pending"
+
+# Renderer-written state: where the legacy consent flag and the first-run flags
+# live. "Settings" data for the uninstaller.
+ELECTRON_STATE_NAMES = (
+    "Local Storage", "Session Storage", "IndexedDB", "WebStorage", "SharedStorage",
+    "SharedStorage-wal", "SharedStorage-shm", "SharedStorage-journal",
+    "Service Worker", "File System", "databases", "blob_storage",
+)
+# Caches and engine bookkeeping. "Logs and temporary data" for the uninstaller.
+ELECTRON_CACHE_AND_PROFILE_NAMES = (
+    "Network", "Cache", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache",
+    "Shared Dictionary", "Preferences", "Local State", "DIPS", "DIPS-wal", "DIPS-shm",
+    "DIPS-journal", "InterestGroups", "InterestGroups-wal", "InterestGroups-shm",
+    "InterestGroups-journal", "PrivateAggregation", "PrivateAggregation-wal",
+    "PrivateAggregation-shm", "PrivateAggregation-journal",
+    "lockfile", "DevToolsActivePort", ELECTRON_RESET_PENDING_MARKER,
+)
+ELECTRON_RUNTIME_NAMES = frozenset(ELECTRON_STATE_NAMES + ELECTRON_CACHE_AND_PROFILE_NAMES)
+
+
+def _same_place(a: Path, b: Path) -> bool:
+    try:
+        return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+    except OSError:
+        return False
+
+
+def is_electron_user_data(root: Path) -> bool:
+    """True when ``root`` is one of the folders Electron's ``userData`` can be,
+    i.e. when Chromium's files may legitimately sit directly inside it."""
+    return any(_same_place(Path(root), candidate) for candidate in electron_user_data_candidates())
+
+
+def is_electron_runtime_name(name: str) -> bool:
+    """Case-insensitive on every platform: the names are Chromium's, and the
+    filesystem that matters most (NTFS) does not distinguish case."""
+    lowered = name.lower()
+    return any(lowered == known.lower() for known in ELECTRON_RUNTIME_NAMES)
+
+
+def electron_runtime_in(root: Path) -> list[str]:
+    """Top-level Chromium-owned names present directly inside ``root`` (only
+    meaningful when ``root`` is an Electron userData folder)."""
+    try:
+        return sorted(entry.name for entry in Path(root).iterdir()
+                      if is_electron_runtime_name(entry.name))
+    except OSError:
+        return []
 
 
 # --- Migration debris --------------------------------------------------------
@@ -183,7 +273,16 @@ def history_db() -> list[Path]:
 
 def temp_audio() -> list[Path]:
     root = base()
-    return _existing(root / "tmp", root / "cache")
+    # <root>/cache is AppPaths.cache, reserved: nothing in the backend writes there.
+    # When Electron's userData IS the data root, a folder of that name (NTFS ignores
+    # case) is Chromium's HTTP cache, which Chromium recreates the moment it is
+    # cleared. It is Electron's to clear (rendererState.js), not a temp-audio store
+    # to verify, or "check what's left" would fail on a folder the browser engine
+    # just rebuilt.
+    candidates = [root / "tmp"]
+    if not is_electron_user_data(root):
+        candidates.append(root / "cache")
+    return _existing(*candidates)
 
 
 # --- Personal data -----------------------------------------------------------

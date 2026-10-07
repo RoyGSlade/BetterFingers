@@ -22,6 +22,22 @@ const CURRENT_CONSENT_VERSION = 1;
 const LEGACY_FLAG = 'bf_onboarding_complete';
 
 /**
+ * Remove the legacy flag once the durable store has taken over. The flag exists
+ * only to carry a returning user into the durable record ONCE. Left in Local
+ * Storage it is a latent consent grant: a factory reset deletes onboarding.json
+ * but historically not Local Storage, so the next launch migrated the same flag
+ * a second time and silently re-granted consent (and automatic updates). It is
+ * best-effort -- a storage that refuses is not a reason to fail the gate.
+ */
+function consumeLegacyFlag(storage) {
+  try {
+    storage?.removeItem?.(LEGACY_FLAG);
+  } catch (_e) {
+    // Read-only or disabled storage: nothing more can be done here.
+  }
+}
+
+/**
  * True unless durable state records acceptance at >= consentVersion. A
  * missing/null/malformed state (or one whose consent_version doesn't parse
  * to a number) reads as needing consent -- NaN comparisons are false, so a
@@ -56,6 +72,11 @@ export async function resolveOnboardingGate({ bridge, storage, consentVersion = 
 
   const wasAccepted = state?.accepted === true;
 
+  // A durable acceptance is authoritative from here on, at this consent version
+  // or an older one: the legacy flag can no longer add anything and must not
+  // survive to re-grant consent after the record is deleted.
+  if (wasAccepted) consumeLegacyFlag(storage);
+
   if (wasAccepted && !needsConsent(state, consentVersion)) {
     return { show: false, state, migrated: false, reason: 'accepted' };
   }
@@ -73,6 +94,10 @@ export async function resolveOnboardingGate({ bridge, storage, consentVersion = 
 
     try {
       const result = await bridge.migrateLegacy?.({ legacyComplete });
+      // Consumed only when the durable store really has the record (migrated) or
+      // already owns the decision (a file exists, so migration is closed for
+      // good). A failed write migrated nothing, so the flag stays for a retry.
+      if (result?.migrated || result?.reason === 'already_present') consumeLegacyFlag(storage);
       if (result?.migrated) {
         const migratedState = result.state ?? null;
         return {

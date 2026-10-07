@@ -21,6 +21,7 @@ const { BACKEND_HOST, BACKEND_PORT, BACKEND_ORIGIN } = require('./config');
 const { derivePhase, deriveServices, describeHardware } = require('./bootPhases');
 const { createUpdateController, createUpdateCheckScheduler } = require('./updateController');
 const onboardingStore = require('./onboardingStore');
+const { purgePendingReset } = require('./rendererState');
 
 // Adopt an inherited token when the backend is managed by something else (the
 // Linux launcher starts it before us, so sidecar.js finds it already listening
@@ -396,6 +397,12 @@ function bootstrapApp() {
       updateController.refreshConsent();
       updateCheckScheduler.refresh();
     },
+    // A factory reset deletes the raw sidecar log; keep main from recreating it
+    // (see sidecar.setRawLogEnabled). Back on if the reset deleted nothing.
+    onFactoryResetStart: () => sidecar?.setRawLogEnabled?.(false),
+    onFactoryResetEnd: ({ deleted } = {}) => {
+      if (!deleted) sidecar?.setRawLogEnabled?.(true);
+    },
     onRuntimeStatus: (status) => {
       runtimeActivityStatus = String(status || 'idle').toLowerCase();
       updateController?.refreshInstallEligibility?.();
@@ -514,6 +521,15 @@ app.commandLine.appendSwitch('enable-features', [...chromiumFeatures].join(','))
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
+  // A factory reset leaves a marker because Chromium holds its storage files
+  // open while it runs. Finish that job now, before 'ready', while nothing has
+  // opened them (and only in the instance that owns the lock, so a second
+  // launch can never delete files out from under the first).
+  const purge = purgePendingReset({ userDataDir: app.getPath('userData') });
+  if (purge.pending) {
+    console.log(`[reset] purged ${purge.removed.length} renderer-state entr${purge.removed.length === 1 ? 'y' : 'ies'}`
+      + (purge.failed.length ? `; ${purge.failed.length} could not be removed and will be retried` : ''));
+  }
   app.whenReady().then(bootstrapApp);
 
   app.on('second-instance', () => {

@@ -20,6 +20,9 @@ module.exports = defineConfig({
           bugReportController: resolve(__dirname, 'src/main/bugReportController.js'),
           userDataRoot: resolve(__dirname, 'src/main/userDataRoot.js'),
           onboardingStore: resolve(__dirname, 'src/main/onboardingStore.js'),
+          // Chromium-owned renderer state: the factory reset's live clear and
+          // the next-launch purge (main.js and ipc.js both require it).
+          rendererState: resolve(__dirname, 'src/main/rendererState.js'),
           // OR-02 startup splash phase derivation (main.js requires it for
           // pushBootSnapshot()).
           bootPhases: resolve(__dirname, 'src/main/bootPhases.js'),

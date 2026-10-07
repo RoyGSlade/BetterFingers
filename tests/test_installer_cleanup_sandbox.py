@@ -64,6 +64,11 @@ _ROOT_NAME = "BetterFingers"
 _DIRECTORY_TARGETS = {
     "models", "wake_models", "tts", "runtimes", "recordings", "voices", "drafts",
     "exports", "profiles", "tmp", "cache", "logs",
+    # Chromium's folders (the rest of its names are files).
+    "Local Storage", "Session Storage", "IndexedDB", "WebStorage", "SharedStorage",
+    "Service Worker", "File System", "databases", "blob_storage", "Network", "Cache",
+    "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache", "Shared Dictionary",
+    "InterestGroups", "PrivateAggregation",
 }
 # One of every shape the backend writes next to a store, plus the documented
 # ``.corrupt-<tag>`` spelling.
@@ -77,9 +82,9 @@ def _installer_text():
     return INSTALLER_INCLUDE.read_text(encoding="utf-8")
 
 
-def _shipped_program():
-    match = re.search(r'^!define BF_CANONICAL_CLEANUP_PS "([A-Za-z0-9+/=]+)"$', _installer_text(), re.M)
-    assert match, "missing encoded cleanup program BF_CANONICAL_CLEANUP_PS"
+def _shipped_program(define="BF_CANONICAL_CLEANUP_PS"):
+    match = re.search(rf'^!define {define} "([A-Za-z0-9+/=]+)"$', _installer_text(), re.M)
+    assert match, f"missing encoded cleanup program {define}"
     return base64.b64decode(match.group(1)).decode("utf-16-le")
 
 
@@ -91,8 +96,8 @@ def _allowlisted_targets():
     return targets
 
 
-def _sandboxed_program():
-    program = _shipped_program()
+def _sandboxed_program(define="BF_CANONICAL_CLEANUP_PS"):
+    program = _shipped_program(define)
     assert program.count(_APPDATA_EXPRESSION) == 1, "the root expression moved; update the harness"
     sandboxed = program.replace(_APPDATA_EXPRESSION, "$env:BF_SANDBOX_APPDATA")
     assert "GetFolderPath" not in sandboxed
@@ -447,3 +452,153 @@ def test_missing_root_or_missing_target_is_a_clean_noop(appdata):
     result = run_cleanup(appdata, "personas.yaml")  # nothing named personas.yaml*
     assert result.returncode == 0, result.stderr
     assert _snapshot(root) == {"contacts.json"}
+
+
+# --- Electron's userData folder (%APPDATA%\betterfingers-electron) ---------------------
+#
+# The packaged app's Electron userData is NOT the canonical folder (measured). Same
+# program, one literal different; these run it for real against a sandbox with BOTH
+# folders present, and prove it can reach Chromium's state without ever being a way
+# into the canonical folder.
+
+_ELECTRON_DEFINE = "BF_ELECTRON_CLEANUP_PS"
+_ELECTRON_ROOT_NAME = "betterfingers-electron"
+
+
+def _electron_targets():
+    targets = re.findall(r'^\s*!insertmacro BfSafeDeleteElectron "([^"]+)"\s*$', _installer_text(), re.M)
+    assert len(targets) == len(set(targets)) >= 30, targets
+    assert {"Local Storage", "Cache", "Preferences", "sidecar_backend_raw.log"} <= set(targets)
+    return targets
+
+
+def run_electron_cleanup(appdata, relative):
+    return run_cleanup(appdata, relative, program=_sandboxed_program(_ELECTRON_DEFINE))
+
+
+def _electron_root(appdata):
+    root = appdata / _ELECTRON_ROOT_NAME
+    root.mkdir(exist_ok=True)
+    return root
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _electron_sandbox_root_gate():
+    """Gate: the Electron program, rewritten for the sandbox, resolves the sandbox's
+    betterfingers-electron folder and nothing real."""
+    with tempfile.TemporaryDirectory(prefix="bf-uninst-probe-") as probe:
+        program = _sandboxed_program(_ELECTRON_DEFINE)
+        head = "\n".join(program.splitlines()[:2]) + "\n[Console]::Out.Write($root)"
+        env = dict(os.environ, BF_SANDBOX_APPDATA=probe, APPDATA=probe)
+        result = subprocess.run(
+            [str(POWERSHELL), "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", _encode(head)],
+            capture_output=True, text=True, env=env, timeout=60,
+        )
+        assert result.returncode == 0, result.stderr
+        assert os.path.normcase(result.stdout.strip()) == os.path.normcase(os.path.join(probe, _ELECTRON_ROOT_NAME))
+        assert os.path.normcase(os.path.realpath(_REAL_APPDATA)) not in os.path.normcase(result.stdout)
+    yield
+
+
+def test_electron_cleanup_removes_chromium_state_and_leaves_the_canonical_folder_alone(appdata):
+    canonical = _root(appdata)
+    for name in ("onboarding.json", "personas.yaml", "history.db", "models/model.gguf"):
+        _write(canonical, name)
+    electron = _electron_root(appdata)
+    chromium = [
+        "Local Storage/leveldb/000003.log", "Local Storage/leveldb/CURRENT", "Session Storage/000003.log",
+        "Cache/Cache_Data/data_0", "Code Cache/js/index", "GPUCache/data_0", "Network/Trust Tokens",
+        "Preferences", "Local State", "lockfile", "DIPS", "DIPS-wal",
+    ]
+    ours = ["overlay-position.json", "overlay-appearance.json", "sidecar_backend_raw.log"]
+    unknown = "somebody_elses_file.txt"
+    for name in (*chromium, *ours, unknown):
+        _write(electron, name)
+    canonical_before = _snapshot(canonical)
+
+    for target in ("Local Storage", "Session Storage", "Cache", "Code Cache", "GPUCache", "Network",
+                   "Preferences", "Local State", "lockfile", "DIPS", "DIPS-wal", *ours):
+        result = run_electron_cleanup(appdata, target)
+        assert result.returncode == 0, (target, result.stdout, result.stderr)
+
+    assert _snapshot(electron) == {unknown}, sorted(_snapshot(electron))
+    assert _snapshot(canonical) == canonical_before, "the canonical folder must be untouched"
+    with pytest.raises(OSError):
+        os.rmdir(electron)  # an unknown file keeps Electron's folder alive, as it does for the canonical one
+
+
+def test_electron_cleanup_is_not_a_way_into_the_canonical_folder(appdata):
+    canonical = _root(appdata)
+    _write(canonical, "onboarding.json")
+    _write(canonical, "personas.yaml")
+    electron = _electron_root(appdata)
+    _write(electron, "Local Storage/leveldb/000003.log")
+    before = _snapshot(appdata)
+
+    for relative in (
+        r"..\BetterFingers\onboarding.json",
+        r"..\BetterFingers",
+        r"..\betterfingers-electron\..\BetterFingers\personas.yaml",
+        r"sub\..\..\BetterFingers\personas.yaml",
+        r"..", r".", r"", "\\", r"sub\..",
+    ):
+        result = run_electron_cleanup(appdata, relative)
+        assert result.returncode != 0, (relative, result.stdout, result.stderr)
+        assert _snapshot(appdata) == before, f"{relative!r} must not delete anything"
+
+    # And the converse: the canonical program cannot reach Electron's folder either.
+    for relative in (r"..\betterfingers-electron\Local Storage", r"..\betterfingers-electron"):
+        result = run_cleanup(appdata, relative)
+        assert result.returncode != 0, (relative, result.stdout, result.stderr)
+        assert _snapshot(appdata) == before
+
+
+def test_electron_cleanup_refuses_a_junction_inside_its_folder(appdata, make_junction):
+    electron = _electron_root(appdata)
+    outside = appdata / "outside"
+    _write(outside, "secret.txt", "must survive")
+    _write(electron, "Local Storage/leveldb/000003.log")
+    _write(electron, "Preferences")
+    make_junction(electron / "Cache", outside)
+    before = _snapshot(electron)
+
+    result = run_electron_cleanup(appdata, "Local Storage")
+
+    assert result.returncode != 0
+    assert "reparse point refused" in (result.stdout + result.stderr)
+    assert _snapshot(electron) == before, "fail closed: nothing at all is removed"
+    assert (outside / "secret.txt").read_text(encoding="utf-8") == "must survive"
+
+
+def test_electron_cleanup_with_no_folder_is_a_clean_noop(appdata):
+    result = run_electron_cleanup(appdata, "Local Storage")
+    assert result.returncode == 0, result.stderr
+    assert not (appdata / _ELECTRON_ROOT_NAME).exists(), "the cleanup must not create the folder"
+
+
+@pytest.mark.slow  # one PowerShell process per allowlisted name, like the macro
+def test_full_electron_uninstall_sequence_leaves_only_unknown_files(appdata):
+    """Every name the macro passes, as the file or folder Chromium really makes
+    it, plus a file the uninstaller must not own. The final non-recursive RMDir
+    can then only succeed once the unknown file is gone."""
+    electron = _electron_root(appdata)
+    unknown = ["mine.txt", "Preferences.notes"]
+    for target in _electron_targets():
+        if target in _DIRECTORY_TARGETS:
+            _write(electron, f"{target}/nested/content.bin")
+        else:
+            _write(electron, target)
+    for name in unknown:
+        _write(electron, name)
+    assert len(_snapshot(electron)) > 40
+
+    for target in _electron_targets():
+        result = run_electron_cleanup(appdata, target)
+        assert result.returncode == 0, (target, result.stdout, result.stderr)
+
+    assert _snapshot(electron) == set(unknown), sorted(_snapshot(electron) ^ set(unknown))
+    with pytest.raises(OSError):
+        os.rmdir(electron)
+    for name in unknown:
+        (electron / name).unlink()
+    os.rmdir(electron)

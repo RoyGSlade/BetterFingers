@@ -22,9 +22,12 @@ nothing made an incomplete inventory a test failure. This module does:
 * The writers' own path accessors are compared with the declared locations
   (the same discipline as ``test_privacy_report_agreement``).
 
-Electron's ``userData`` is the unified root on a packaged Windows install
-(productName "BetterFingers"), so these tests collapse the two into one
-directory; that is the topology the factory reset really runs against.
+These tests deliberately collapse Electron's ``userData`` onto the unified root.
+That is the harsher of the two possible layouts, not the shipped one: measured on
+the packaged app, ``userData`` is ``%APPDATA%\\betterfingers-electron`` (electron-builder's
+productName never reaches app.asar/package.json), a sibling of the data root. A
+reset that verifies with Chromium's files in the data root verifies a fortiori
+without them; test_electron_runtime_state.py covers both layouts explicitly.
 """
 
 import json
@@ -128,8 +131,8 @@ KEPT_BY_A_DEFAULT_RESET = set(OPT_IN_DOWNLOADS)
 
 @pytest.fixture
 def root(isolated_data_root, monkeypatch):
-    """The data root, with Electron's userData collapsed onto it (packaged
-    Windows: productName "BetterFingers" => %APPDATA%\\BetterFingers)."""
+    """The data root, with Electron's userData collapsed onto it: the harsher
+    layout (the shipped one keeps them in sibling folders)."""
     monkeypatch.setattr(data_paths, "electron_user_data_candidates",
                         lambda: [isolated_data_root])
     monkeypatch.setenv("BETTERFINGERS_LAZY_STARTUP", "1")
@@ -487,3 +490,32 @@ def test_every_name_the_sources_write_under_the_data_root_is_declared(root):
         "written under the data root but declared by no privacy category "
         f"(backend/privacy/data_paths.py), so a factory reset cannot finish: {undeclared}"
     )
+
+
+def test_no_name_the_sources_write_hides_behind_the_electron_runtime_allowlist():
+    """F1: ``data_paths.ELECTRON_RUNTIME_NAMES`` makes the residual sweep skip
+    Chromium's own entries when Electron's userData is the data root. That is only
+    safe while the list is Chromium-only: a name the backend or the Electron main
+    process really writes there must stay visible to the sweep, so this keeps the
+    source-scan guard above meaningful. ``cache`` is the one known overlap
+    (``temp_audio`` declares <root>/cache, and on NTFS that is Chromium's
+    ``Cache``); it is a declared category either way."""
+    clash = {name for name in _discovered_top_level_names()
+             if data_paths.is_electron_runtime_name(name)}
+    assert clash <= {"cache"}, (
+        f"written by BetterFingers but listed as Chromium-owned in data_paths: {sorted(clash)}")
+
+
+def test_chromium_owned_names_in_the_data_root_do_not_blind_the_undeclared_file_check(root):
+    """With Electron's userData collapsed onto the data root (this module's
+    fixture), Chromium's entries are skipped and a genuinely undeclared file is
+    still the one thing the sweep reports."""
+    _seed(root, WRITTEN_BY_THE_APP)
+    for chromium in ("Local Storage/leveldb/000003.log", "Preferences", "GPUCache/data_0"):
+        _write(root, chromium)
+    stray = _write(root, "undeclared_store.json")
+
+    result = dl.factory_reset(dc.build_registry())
+
+    assert result["residual_files"] == [str(stray.resolve())]
+    assert result["ok"] is False

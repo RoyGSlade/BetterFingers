@@ -303,10 +303,11 @@ def _inventory_top_level_names(tmp_path, monkeypatch):
     inventory can declare, whether or not it exists.
 
     Runs the real ``paths()`` callables with the existence filter switched off,
-    over a Windows-shaped tree (``%APPDATA%\\BetterFingers`` is both the unified
-    root and Electron's packaged ``userData``). The unpackaged Electron root
-    (``betterfingers-electron``) is skipped on purpose: the NSIS uninstaller only
-    ever manages ``$APPDATA\\BetterFingers``.
+    over a Windows-shaped tree. Electron's ``userData`` (``betterfingers-electron``,
+    a sibling of the unified root on the packaged app; measured) is skipped HERE
+    on purpose: the canonical allowlist only manages ``$APPDATA\\BetterFingers``.
+    Everything Electron keeps in its own folder has its own contract at the end of
+    this file (``BfSafeDeleteElectron``).
     """
     import pathlib
     from backend.config import app_paths
@@ -385,8 +386,13 @@ def test_every_top_level_name_the_inventory_declares_is_an_uninstaller_target(tm
 
 
 def test_uninstaller_only_names_are_exactly_the_documented_exceptions(tmp_path, monkeypatch):
+    from backend.privacy import data_paths
+
     declared = _inventory_top_level_names(tmp_path, monkeypatch)
-    extra = _allowlisted_names() - set(declared)
+    # Chromium's own entries are declared in data_paths.ELECTRON_RUNTIME_NAMES rather
+    # than as inventory categories; they have their own contract further down.
+    extra = {name for name in _allowlisted_names() - set(declared)
+             if not data_paths.is_electron_runtime_name(name)}
     assert extra == set(UNINSTALLER_ONLY), (
         f"allowlisted names the inventory does not declare: {sorted(extra)}; "
         f"documented exceptions: {sorted(UNINSTALLER_ONLY)}. Declare the artifact in "
@@ -418,3 +424,137 @@ def test_downloaded_models_sit_under_the_models_checkbox_and_nothing_else_does(t
     assert downloads == {"models", "tts", "runtimes"}
     assert {guard[name] for name in downloads} == {"BfDeleteModels"}
     assert guard["persona_drafts.json"] == guard["personas.yaml"] == "BfDeleteSettings"
+
+
+# --- Electron's own userData folder (F1) ---------------------------------------------
+#
+# Measured on the unpacked packaged app: electron-builder's productName never
+# reaches app.asar/package.json, so Electron's userData is
+# %APPDATA%\betterfingers-electron, a different folder from the canonical
+# %APPDATA%\BetterFingers. BF_CANONICAL_CLEANUP_PS is confined to the canonical
+# root, so before this the uninstaller could not reach Chromium's Local Storage
+# (which holds the legacy consent flag), the caches, overlay-*.json or the sidecar
+# log: "remove my data" left all of them, and the legacy flag let a reinstall
+# migrate itself straight back to consented. BF_ELECTRON_CLEANUP_PS is the same
+# program with one literal changed; the tests below keep it that way.
+
+ELECTRON_OWNED_FILES = {
+    "overlay-position.json": "BfDeleteSettings",
+    "overlay-appearance.json": "BfDeleteSettings",
+    "sidecar_backend_raw.log": "BfDeleteLogs",
+}
+
+# sha256 of the BF_CANONICAL_CLEANUP_PS blob as it was before F1. The task rule:
+# the encoded safe-delete PowerShell is not edited. A change to it must be a
+# deliberate decision with its own review, so it fails here until this is updated.
+CANONICAL_PROGRAM_SHA256 = "e98ed976aa4eb768b30352d9bd6588a081039c0d40583fd4ce33fe7be5f3330a"
+
+
+def _electron_allowlist_by_checkbox():
+    cleanup = _installer_text().split("!macro customUnInstall", 1)[1]
+    guarded = {}
+    for variable, body in re.findall(
+        r"\$\{If\} \$(BfDelete\w+) == \$\{BST_CHECKED\}\s*\n(.*?)\$\{EndIf\}", cleanup, re.S
+    ):
+        for name in re.findall(r'!insertmacro BfSafeDeleteElectron "([^"]+)"', body):
+            assert name not in guarded, f"{name} is guarded by two checkboxes"
+            guarded[name] = variable
+    return guarded
+
+
+def test_the_electron_program_is_the_canonical_program_with_exactly_one_literal_changed():
+    canonical = _decoded_program("BF_CANONICAL_CLEANUP_PS")
+    electron = _decoded_program("BF_ELECTRON_CLEANUP_PS")
+    assert canonical.count("'BetterFingers'") == 1
+    assert electron == canonical.replace("'BetterFingers'", "'betterfingers-electron'"), (
+        "BF_ELECTRON_CLEANUP_PS must stay the canonical safe-delete program with only the root "
+        "folder name changed; re-derive it from BF_CANONICAL_CLEANUP_PS instead of editing it"
+    )
+    # The properties the safety review relies on are therefore inherited, not re-argued.
+    for needed in ("StartsWith", "OrdinalIgnoreCase", "ReparsePoint", "Assert-NoReparse $root",
+                   "[Environment+SpecialFolder]::ApplicationData"):
+        assert needed in electron
+    assert "BETTERFINGERS_DATA_DIR" not in electron
+
+
+def test_the_canonical_program_itself_is_untouched():
+    import hashlib
+
+    blob = re.search(r'^!define BF_CANONICAL_CLEANUP_PS "([A-Za-z0-9+/=]+)"$', _installer_text(), re.M).group(1)
+    assert hashlib.sha256(blob.encode("ascii")).hexdigest() == CANONICAL_PROGRAM_SHA256
+
+
+def test_the_electron_macro_runs_only_its_own_program_and_only_literal_names():
+    installer = _installer_text()
+    macro = installer.split("!macro BfSafeDeleteElectron RelativePath", 1)[1].split("!macroend", 1)[0]
+    assert "-EncodedCommand ${BF_ELECTRON_CLEANUP_PS}" in macro
+    assert "BF_CANONICAL_CLEANUP_PS" not in macro
+    assert 'SetEnvironmentVariable(t, t)i ("BF_UNINSTALL_TARGET", "${RelativePath}")' in macro
+    assert '!insertmacro BfSafeDeleteElectron "$' not in installer
+    assert '!insertmacro BfSafeDeleteElectron ".."' not in installer
+    assert r'RMDir /r "$APPDATA\betterfingers-electron"' not in installer
+    assert r'RMDir "$APPDATA\betterfingers-electron"' in installer
+    assert r'RMDir "$APPDATA\BetterFingers"' in installer
+
+
+def test_the_second_encoded_command_also_fits_the_nsis_string_limit():
+    command = (
+        r'"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" '
+        r"-NoLogo -NoProfile -NonInteractive -EncodedCommand "
+    )
+    blob = re.search(r'^!define BF_ELECTRON_CLEANUP_PS "([A-Za-z0-9+/=]+)"$', _installer_text(), re.M).group(1)
+    assert len(command) + len(blob) < 6000, len(command) + len(blob)
+
+
+def test_every_chromium_owned_name_is_removed_from_both_possible_roots():
+    from backend.privacy import data_paths
+
+    electron = set(_electron_allowlist_by_checkbox())
+    canonical = {name.lower() for name in _allowlisted_names()}
+    missing_electron = sorted(data_paths.ELECTRON_RUNTIME_NAMES - electron)
+    assert not missing_electron, (
+        "Chromium writes these in %APPDATA%\\betterfingers-electron but 'remove my data' "
+        f"cannot remove them: {missing_electron}"
+    )
+    missing_canonical = sorted(n for n in data_paths.ELECTRON_RUNTIME_NAMES if n.lower() not in canonical)
+    assert not missing_canonical, (
+        "if Electron's userData were the canonical folder these would be left behind: "
+        f"{missing_canonical}"
+    )
+    # No stray Electron-only names the backend does not declare.
+    assert electron - data_paths.ELECTRON_RUNTIME_NAMES == set(ELECTRON_OWNED_FILES)
+
+
+def test_renderer_state_leaves_with_the_consent_record_and_caches_with_the_logs():
+    """The legacy consent flag is in Local Storage. If "Settings" removed
+    onboarding.json but left Local Storage, a reinstall would migrate the flag and
+    skip the consent screen: the two must sit under the same checkbox."""
+    from backend.privacy import data_paths
+
+    canonical_guard = _allowlist_by_checkbox()
+    electron_guard = _electron_allowlist_by_checkbox()
+    assert canonical_guard["onboarding.json"] == "BfDeleteSettings"
+    for name in data_paths.ELECTRON_STATE_NAMES:
+        assert electron_guard[name] == "BfDeleteSettings", name
+        assert canonical_guard[name] == "BfDeleteSettings", name
+    for name in data_paths.ELECTRON_CACHE_AND_PROFILE_NAMES:
+        assert electron_guard[name] == "BfDeleteLogs", name
+        if name.lower() != "cache":
+            assert canonical_guard[name] == "BfDeleteLogs", name
+    assert canonical_guard["cache"] == "BfDeleteLogs"
+
+
+def test_the_files_electron_itself_writes_are_removed_where_it_writes_them():
+    guard = _electron_allowlist_by_checkbox()
+    for name, checkbox in ELECTRON_OWNED_FILES.items():
+        assert guard[name] == checkbox, (name, guard.get(name))
+    # ...and, as before, from the canonical folder in case userData ever moves there.
+    canonical = _allowlist_by_checkbox()
+    for name, checkbox in ELECTRON_OWNED_FILES.items():
+        assert canonical[name] == checkbox
+
+
+def test_nothing_added_for_chromium_can_touch_an_opt_in_download_or_user_content():
+    electron = set(_electron_allowlist_by_checkbox())
+    assert not electron & {"models", "tts", "runtimes", "wake_models", "voices", "recordings",
+                           "history.db", "personas.yaml", "contacts.json", "onboarding.json"}

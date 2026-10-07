@@ -1,8 +1,9 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-const { app, clipboard, dialog, ipcMain, shell } = require('electron');
+const { app, clipboard, dialog, ipcMain, session, shell, webContents } = require('electron');
 const { isTrustedRendererUrl } = require('./senderValidation');
+const { deletionRan, finishFactoryReset } = require('./rendererState');
 
 let overlayHideTimer = null;
 
@@ -84,6 +85,7 @@ function isAllowedOpenTarget(targetPath) {
 function registerIpc({
   getMainWindow, getSidecarStatus, getSidecarLogs, getAuthToken, getBackendOrigin, onQuit, onShow,
   onSplashRetry, getSplashBootState, updateController, onRuntimeStatus, onConsentChanged,
+  onFactoryResetStart, onFactoryResetEnd,
 } = {}) {
   const backendProxy = require('./backendProxy');
   const { createBugReportController } = require('./bugReportController');
@@ -123,11 +125,34 @@ function registerIpc({
   // Wave 6: the factory-reset executor. Its own channel rather than a mode on
   // the wipe above, because it takes a different gate (an exact phrase, not a
   // boolean) and erases settings and the consent record too.
+  //
+  // The backend can only sweep the unified data root. What Chromium keeps for
+  // the renderer (Local Storage with the first-run flags and the legacy consent
+  // flag, Session Storage, caches) lives in Electron's own userData folder, so
+  // main finishes the job here and folds the outcome into the response -- a
+  // reset the renderer state survived is reported as failed, never as fresh.
+  // See rendererState.js for the live clear and the pending-until-restart purge.
   handleTrusted('backend:factory-reset', async (_event, req) => {
     const { confirm, deleteDownloadedModels, timeoutMs } = req || {};
-    const result = await backendProxy.factoryReset({ confirm, deleteDownloadedModels, timeoutMs });
-    onConsentChanged?.();
-    return result;
+    // The raw sidecar log is one of the files the reset deletes, and main would
+    // recreate it from the backend's own output within the second. Switch file
+    // logging off BEFORE the request (so nothing can race the deletion) and back
+    // on only if the reset turns out not to have deleted anything.
+    onFactoryResetStart?.();
+    let deleted = false;
+    try {
+      const result = await backendProxy.factoryReset({ confirm, deleteDownloadedModels, timeoutMs });
+      deleted = deletionRan(result);
+      const finished = await finishFactoryReset(result, {
+        session: session.defaultSession,
+        webContents,
+        userDataDir: app.getPath('userData'),
+      });
+      onConsentChanged?.();
+      return finished;
+    } finally {
+      onFactoryResetEnd?.({ deleted });
+    }
   });
 
   handleTrusted('backend:clear-persona-learning', (_event, req) => {

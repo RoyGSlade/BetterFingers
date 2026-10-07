@@ -390,7 +390,30 @@ def factory_reset(registry, *, include_models: bool = False) -> dict:
     result["residual_count"] = len(residual)
     result["models"] = models
     result["ok"] = bool(result["ok"] and not residual)
+    result["electron_runtime"] = _electron_runtime_report()
     return result
+
+
+def _electron_runtime_report() -> dict:
+    """What this reset deliberately leaves to the Electron process.
+
+    Chromium's own files (Local Storage, caches, ...) are not BetterFingers
+    stores: Chromium holds them open while the app runs, so the backend can
+    neither delete nor verify them. The Electron main process clears them through
+    its session API when it receives this response and removes the files at the
+    next launch (``app/src/main/rendererState.js``). ``in_data_root`` is non-empty
+    only when Electron's userData IS the data root; on the packaged app they live
+    in a sibling folder and this reports nothing here.
+    """
+    root = Path(app_paths.resolve_base())
+    present = data_paths.electron_runtime_in(root) if data_paths.is_electron_user_data(root) else []
+    return {
+        "owner": "electron",
+        "in_data_root": present,
+        "note": ("Chromium's own files are cleared by the Electron process; the rest are "
+                 "removed when BetterFingers restarts. They hold no BetterFingers data once "
+                 "its stored state has been cleared."),
+    }
 
 
 def verify_factory_reset(registry) -> dict:
@@ -506,9 +529,21 @@ def unmapped_files(registry, root: Path | None = None) -> list[str]:
             else:
                 declared_files.add(resolved)
 
+    # Chromium's own top-level entries are skipped, but ONLY when the folder being
+    # swept is an Electron userData folder. In the packaged app userData is a
+    # different directory (%APPDATA%\betterfingers-electron) and this never fires;
+    # if the two ever coincide, a reset must not report Chromium's runtime files as
+    # undeclared stores it cannot finish (measured: HTTP 500 / 44 residual files).
+    # A name that is not in data_paths.ELECTRON_RUNTIME_NAMES, or one nested below
+    # the top level, is still reported.
+    runtime_owned = data_paths.is_electron_user_data(root)
+    top = root.resolve()
+
     unmapped: list[str] = []
     for dirpath, dirnames, filenames in os.walk(root, onerror=lambda _e: None):
         here = Path(dirpath).resolve()
+        if runtime_owned and here == top:
+            dirnames[:] = [d for d in dirnames if not data_paths.is_electron_runtime_name(d)]
         # Do not descend into a directory a category already owns wholesale.
         if any(here == d or _is_under(here, d) for d in declared_dirs):
             dirnames[:] = []
@@ -518,6 +553,8 @@ def unmapped_files(registry, root: Path | None = None) -> list[str]:
             if candidate in declared_files:
                 continue
             if _is_transient(name):
+                continue
+            if runtime_owned and here == top and data_paths.is_electron_runtime_name(name):
                 continue
             unmapped.append(str(candidate))
     return sorted(unmapped)
