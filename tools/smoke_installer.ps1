@@ -42,6 +42,10 @@ $previousDataDir = $env:BETTERFINGERS_DATA_DIR
 $previousAuthToken = $env:BETTERFINGERS_AUTH_TOKEN
 $canonicalDataRoot = Join-Path $env:APPDATA "BetterFingers"
 $canonicalDataRootExistedBefore = Test-Path -LiteralPath $canonicalDataRoot
+# Electron/Chromium renderer state lives in its own folder (the packaged app's
+# userData), which "remove my data" must clean too.
+$electronDataRoot = Join-Path $env:APPDATA "betterfingers-electron"
+$electronDataRootExistedBefore = Test-Path -LiteralPath $electronDataRoot
 $seedSettingsPath = $null
 $seedModelPath = $null
 $seedSettingsHash = $null
@@ -626,18 +630,27 @@ try {
         if ($canonicalDataRootExistedBefore) {
             throw "Refusing category cleanup smoke because canonical data already existed before this run: $canonicalDataRoot"
         }
+        if ($electronDataRootExistedBefore) {
+            throw "Refusing category cleanup smoke because Electron data already existed before this run: $electronDataRoot"
+        }
         $categoryCases = @(
-            @{ Flag = "/BF_DELETE_MODELS"; Selected = @("models\smoke.bin", "wake_models\smoke.bin") },
-            @{ Flag = "/BF_DELETE_RECORDINGS"; Selected = @("recordings\smoke.wav", "voices\smoke.wav") },
-            @{ Flag = "/BF_DELETE_HISTORY"; Selected = @("draft_history.json", "history.db", "exports\smoke.txt") },
-            @{ Flag = "/BF_DELETE_SETTINGS"; Selected = @("profiles\smoke.yaml", "contacts.json", "launcher_workflows.json") },
-            @{ Flag = "/BF_DELETE_LOGS"; Selected = @("tmp\smoke.tmp", "logs\smoke.log", "debug.log") }
+            @{ Flag = "/BF_DELETE_MODELS"; Selected = @("models\smoke.bin", "wake_models\smoke.bin", "tts\kokoro_onnx\smoke.bin"); ElectronSelected = @() },
+            @{ Flag = "/BF_DELETE_RECORDINGS"; Selected = @("recordings\smoke.wav", "voices\smoke.wav"); ElectronSelected = @() },
+            @{ Flag = "/BF_DELETE_HISTORY"; Selected = @("draft_history.json", "history.db", "exports\smoke.txt"); ElectronSelected = @() },
+            @{ Flag = "/BF_DELETE_SETTINGS"; Selected = @("profiles\smoke.yaml", "contacts.json", "launcher_workflows.json", "persona_drafts.json"); ElectronSelected = @("Local Storage\leveldb\smoke.ldb", "overlay-position.json") },
+            @{ Flag = "/BF_DELETE_LOGS"; Selected = @("tmp\smoke.tmp", "logs\smoke.log", "debug.log", "audio_privacy_journal.json"); ElectronSelected = @("Cache\smoke.bin", "sidecar_backend_raw.log") }
         )
         $allCategoryPaths = @($categoryCases | ForEach-Object { $_.Selected } | ForEach-Object { $_ })
+        $allElectronPaths = @($categoryCases | ForEach-Object { $_.ElectronSelected } | ForEach-Object { $_ })
         foreach ($case in $categoryCases) {
             Install-Silently -Path $InstallerPath
             foreach ($relativePath in $allCategoryPaths) {
                 $target = Join-Path $canonicalDataRoot $relativePath
+                New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+                [IO.File]::WriteAllText($target, "owned installer cleanup smoke", [Text.Encoding]::UTF8)
+            }
+            foreach ($relativePath in $allElectronPaths) {
+                $target = Join-Path $electronDataRoot $relativePath
                 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
                 [IO.File]::WriteAllText($target, "owned installer cleanup smoke", [Text.Encoding]::UTF8)
             }
@@ -657,11 +670,19 @@ try {
                     throw "$($case.Flag) removed an unselected category path: $relativePath"
                 }
             }
+            foreach ($relativePath in $allElectronPaths) {
+                $exists = Test-Path -LiteralPath (Join-Path $electronDataRoot $relativePath)
+                if ($case.ElectronSelected -contains $relativePath) {
+                    if ($exists) { throw "$($case.Flag) left selected Electron data behind: $relativePath" }
+                } elseif (-not $exists) {
+                    throw "$($case.Flag) removed an unselected Electron path: $relativePath"
+                }
+            }
             if (Test-Path -LiteralPath $metadata.PSPath) {
                 throw "$($case.Flag) left an uninstall registry entry behind."
             }
         }
-        Write-Host "Every optional uninstall category removed only its selected canonical paths."
+        Write-Host "Every optional uninstall category removed only its selected canonical and Electron paths."
     }
 
     $legs = if ($PreviousInstallerPath -ne "") { "install + upgrade + uninstall" } else { "install + uninstall" }
@@ -681,6 +702,10 @@ try {
         # The test owned this previously-absent exact root. Never clean a root
         # that predated the run.
         Remove-Item -LiteralPath $canonicalDataRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (-not $electronDataRootExistedBefore -and (Test-Path -LiteralPath $electronDataRoot)) {
+        # Same rule for the Electron folder: only a root this run created.
+        Remove-Item -LiteralPath $electronDataRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
     if ($null -eq $previousDataDir) {
         Remove-Item Env:BETTERFINGERS_DATA_DIR -ErrorAction SilentlyContinue

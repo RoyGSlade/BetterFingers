@@ -318,6 +318,12 @@ def test_installer_smoke_proves_upgrade_preservation_and_selective_cleanup():
         '/BF_DELETE_LOGS',
         'removed an unselected category path',
         '$canonicalDataRootExistedBefore',
+        '$electronDataRootExistedBefore',
+        'Join-Path $env:APPDATA "betterfingers-electron"',
+        'removed an unselected Electron path',
+        r'Local Storage\leveldb\smoke.ldb',
+        'persona_drafts.json',
+        r'tts\kokoro_onnx\smoke.bin',
     ):
         assert required in smoke
 
