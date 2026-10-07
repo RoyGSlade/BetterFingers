@@ -771,7 +771,7 @@ jobs:
 
             The release contains a signed Windows NSIS installer, updater channel metadata and blockmap, Linux AppImage, SHA-256 checksum sidecars, the Windows Authenticode report, and a CycloneDX SBOM. The exact Windows signing mode for this tag is `${{ needs.windows-installer.outputs.signing_mode }}`. Verify the installer signature and SHA-256 sidecar before running it; do not disable Windows security controls.
 
-            Speech-to-text requires a local Whisper model downloaded during setup. The separate multi-gigabyte language model used for AI cleanup is optional and disabled on a fresh install. Model downloads require network access. Do not use this alpha for highly sensitive dictation because production-grade at-rest encryption is not included.
+            The base.en speech model ships inside the installer, so dictation works offline right after install and BetterFingers never downloads a speech model on its own; larger speech models download only when you choose them. The separate multi-gigabyte language model used for AI cleanup is optional and disabled on a fresh install. Optional model downloads require network access. Do not use this alpha for highly sensitive dictation because production-grade at-rest encryption is not included.
 
             The tag workflow verifies installation, launch, authenticated local-backend health, a real pinned model download, upgrade continuity when a prior installer exists, and uninstall behavior. Friend testing is intended to find the remaining hardware, audio, injection, clipboard, and usability problems before wider release qualification. Report reproducible problems at https://github.com/RoyGSlade/BetterFingers/issues.
           draft: true

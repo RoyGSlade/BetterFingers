@@ -5,7 +5,7 @@ param(
     # exercises upgrade-over-an-existing-install rather than only clean
     # install. When omitted, the upgrade leg is skipped.
     [string]$PreviousInstallerPath = "",
-    [string]$ExpectedVersion = "1.1.0-alpha.3",
+    [string]$ExpectedVersion = "1.1.0-alpha.4",
     [ValidateSet("NotSigned", "Valid")]
     [string]$ExpectedSignatureStatus = "NotSigned",
     # Azure Artifact Signing must prove the exact certificate identity, not
@@ -31,6 +31,7 @@ $uninstallRegPath = $null
 $healthUrl = "http://127.0.0.1:8000/health"
 $runtimeStatusUrl = "http://127.0.0.1:8000/runtime/status"
 $runtimeVersionUrl = "http://127.0.0.1:8000/runtime/version"
+$whisperModelsUrl = "http://127.0.0.1:8000/models/whisper"
 $wakeDownloadUrl = "http://127.0.0.1:8000/wake/models/melspectrogram/download"
 $wakeDownloadStateUrl = "http://127.0.0.1:8000/wake/models/melspectrogram/download-state"
 $packagedStartupBudgetSeconds = 90
@@ -509,6 +510,27 @@ try {
         throw "Fresh launch downloaded LLM/runtime files while AI cleanup was disabled: $($unexpectedLlmFiles.FullName -join ', ')"
     }
     Write-Host "Fresh installed launch passed without initializing or downloading an LLM."
+
+    # The installer ships the pinned base.en speech model and its MIT notices,
+    # so a fresh profile must report it installed (bundled) without any download.
+    $bundledModelDir = Join-Path $backendBundlePath "_internal\bundled_models\base.en"
+    foreach ($bundledFile in @("config.json", "model.bin", "tokenizer.json", "vocabulary.txt")) {
+        if (-not (Test-Path -LiteralPath (Join-Path $bundledModelDir $bundledFile) -PathType Leaf)) {
+            throw "Installed backend is missing the bundled speech model file $bundledFile."
+        }
+    }
+    $bundledNotice = Join-Path $backendBundlePath "_internal\bundled-base.en-NOTICE.txt"
+    if (-not (Test-Path -LiteralPath $bundledNotice -PathType Leaf) -or
+        -not (Select-String -LiteralPath $bundledNotice -SimpleMatch "Copyright (c) 2022 OpenAI" -Quiet) -or
+        -not (Select-String -LiteralPath $bundledNotice -SimpleMatch "Copyright (c) 2023 SYSTRAN" -Quiet)) {
+        throw "Installed backend is missing the bundled speech model's MIT notices."
+    }
+    $whisperModels = Invoke-AuthenticatedJson -Uri $whisperModelsUrl -Token $authToken
+    $bundledRow = @($whisperModels.models | Where-Object { $_.model_size -eq "base.en" -and $_.installed -eq $true -and $_.bundled -eq $true })
+    if ($bundledRow.Count -ne 1) {
+        throw "Fresh installed profile did not report the bundled base.en speech model as installed."
+    }
+    Write-Host "Installed app ships the bundled base.en speech model and its notices; fresh profile reports it installed."
 
     # Prove the packaged backend can perform a real outbound HTTPS download,
     # persist it into the isolated Windows data root, verify its pinned SHA,

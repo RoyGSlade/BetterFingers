@@ -6,7 +6,7 @@ configured platform/backend supports it. Core speech processing runs on your mac
 no cloud inference, account, subscription, or telemetry.
 
 > A [Donaven Crenshaw](#about) project · MIT licensed · Windows + Linux
-> **Status: public alpha.** [v1.1.0-alpha.3](https://github.com/RoyGSlade/BetterFingers/releases/tag/v1.1.0-alpha.3)
+> **Status: public alpha.** [v1.1.0-alpha.4](https://github.com/RoyGSlade/BetterFingers/releases/tag/v1.1.0-alpha.4)
 > includes an Authenticode-signed Windows x64 installer and an experimental Linux
 > AppImage. It is still alpha software; see [Project status](#project-status) for the
 > honest boundaries.
@@ -23,7 +23,8 @@ Hold a hotkey (or a game-controller button), talk, and BetterFingers:
 3. **Shows you the draft** in a review overlay you can edit, re-run, or have read back
    aloud (Kokoro TTS) before anything lands.
 4. **Injects** final text into the focused target when the configured injection path
-   supports it, and restores your clipboard.
+   supports it, and restores your clipboard. With the review overlay open, the Primary
+   Action key (F9 by default) accepts and places exactly the draft it is showing.
 5. **Keeps captured audio for recovery** — when recording succeeds, the raw utterance is
    retained so a later transcription or refinement failure can be retried.
 
@@ -33,7 +34,8 @@ The whole product is built around one loop:
 ## Why it's different
 
 - **Private by design.** STT, LLM, and TTS run locally. Network access is limited to
-  update checks, user-initiated model/runtime downloads, and an explicitly reviewed bug
+  update checks (none before you consent; automatic checks are opt-in on a fresh
+  install), user-initiated model/runtime downloads, and an explicitly reviewed bug
   report when a relay has been configured; it is never used for cloud inference. A
   built-in privacy dashboard enumerates data locations and wipes your data on demand.
 - **Smart, not literal.** LLM personas (Formal, Polished, Unhinged, and your own) rewrite
@@ -50,7 +52,7 @@ The whole product is built around one loop:
 |---|---|
 | Capture | Global push-to-talk (uiohook), controller trigger, long-recording chunking with progress |
 | Refinement | Local LLM personas (schema v2), personal dictionary, spoken formatting commands, text macros |
-| Review | Editable review overlay, TTS read-back, per-utterance confidence surfaced honestly |
+| Review | Editable review overlay, TTS read-back, F9 accepts and places the shown draft, per-utterance confidence surfaced honestly |
 | Recovery | Raw-audio retention + re-transcribe, recoverable error drafts |
 | Placement | Text injection through supported typing/paste backends; clipboard restore; qualification varies by desktop/platform path |
 | Recall | Full-text searchable history (SQLite FTS5) |
@@ -59,11 +61,12 @@ The whole product is built around one loop:
 ## Project status
 
 BetterFingers is a real local-first application with automated tests and a deep feature
-set. **v1.1.0-alpha.3 is a public prerelease with a signed Windows x64 installer and a
+set. **v1.1.0-alpha.4 is a public prerelease with a signed Windows x64 installer and a
 Linux AppImage.** It is not a stable release: hardware/model compatibility, desktop
 injection paths, microphone behavior, and platform-specific selection still need broader
-outside testing. The release page and its CI-built assets are the public source of truth.
-Changes in an uncommitted development checkout are not part of Alpha 3 until a later tag
+outside testing. The release page and its CI-built assets are the public source of truth,
+and its [release notes](docs/release/notes/1.1.0-alpha.4.md) list what changed since
+Alpha 3. Anything merged after the Alpha 4 tag is not part of Alpha 4 until a later tag
 is built, qualified, and published.
 
 **Platforms:** Windows is the primary packaged target. The Linux AppImage has an automated
@@ -94,23 +97,30 @@ operator-configured relay exists. No accounts, analytics, or cloud inference. Th
 Privacy dashboard
 (`GET /privacy`) lists every data location on disk with sizes and retention, and
 `POST /privacy/wipe` verifiably clears drafts, the searchable-history database, and raw
-recordings. See [DESIGN.md §9](DESIGN.md) for the full data-lifecycle model (a unified
+recordings, including the backup and quarantine copies the app keeps for recovery.
+Deleting a single item (a draft or history entry, a persona or persona example, a
+contact, a dictionary or macro entry, a voice preset) removes it from those recovery
+copies too, and the Windows uninstaller's "remove my data" option deletes them as well.
+See [DESIGN.md §9](DESIGN.md) for the full data-lifecycle model (a unified
 `DataRegistry` and optional at-rest encryption are on the roadmap).
 
 Bug reports are review-first: the app shows the bounded diagnostic payload before asking
 permission to send it. The relay code can deliver to Discord and/or email without placing
 provider secrets in the desktop app, but **no relay endpoint is deployed or enabled by
-this checkout**. Public Alpha 3 users should use the reporting links below.
+this release**; until one exists, the in-app flow copies the reviewed report and opens
+your email client or the Discord invite, and never claims it was delivered.
 
 ## Install
 
 ### Windows
 
 Download the installer from the
-**[v1.1.0-alpha.3 release](https://github.com/RoyGSlade/BetterFingers/releases/tag/v1.1.0-alpha.3)**.
+**[v1.1.0-alpha.4 release](https://github.com/RoyGSlade/BetterFingers/releases/tag/v1.1.0-alpha.4)**.
 The published Windows installer is Authenticode-signed. Windows SmartScreen can still
 warn on a new, low-reputation alpha; verify the signature and release URL instead of
-downloading copies from third-party mirrors.
+downloading copies from third-party mirrors. You can install
+Alpha 4 over an existing Alpha 3 copy; your data is kept unless you choose to remove it
+at uninstall.
 
 ### Linux
 
@@ -152,9 +162,9 @@ Overrides: `BETTERFINGERS_LLAMA_SERVER=/path/to/llama-server`,
 
 ## Development
 
-- **Tests:** `python3 -m pytest -q` (full suite loads real Whisper/TTS models and peaks
-  around 11 GB RAM — see the OOM note in [`tests/conftest.py`](tests/conftest.py); for
-  fast iteration use `python3 -m pytest -q -k "not transcriber and not tts_engine"`).
+- **Tests:** `python3 -m pytest -q` (the full suite loads real Whisper/TTS models and peaks
+  around 11 GB RAM — see the OOM note in [`tests/conftest.py`](tests/conftest.py)); for
+  fast iteration use the roughly 40-second loop in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 - **End-to-end:** `cd app && npx playwright test` (needs a local LLM + `llama-server` on
   disk for the review-overlay spec; close any running instance first).
 - **JS syntax check:** `node --check app/src/renderer/main.js`.
@@ -166,15 +176,15 @@ Overrides: `BETTERFINGERS_LLAMA_SERVER=/path/to/llama-server`,
 ## Architecture
 
 ```
-Electron (app/)                      Python sidecar (repo root)
-├─ main:    windows, tray,           ├─ server.py    FastAPI (~60 routes) + WebSocket
-│           overlays, global         ├─ transcriber  faster-whisper (+ confidence)
-│           hotkeys, injection       ├─ llm_engine   llama-server client, personas, chunking
-├─ preload: auth + origin bridge     ├─ tts_engine   Kokoro (+ blend / modulation)
-└─ renderer: dashboard, overlays     ├─ recorder / hotkey_manager / dictionary / macros
-                                     ├─ history_store (FTS5) / recordings / model_manager
-   REST + WebSocket boundary  <────> └─ hardware_report / model_recommender / privacy
-   (Bearer token, versioned)
+Electron (app/)                      Python sidecar (server.py + backend/)
+├─ main:    windows, tray,           ├─ server.py        FastAPI app, auth, startup (no routes)
+│           overlays, global         ├─ backend/api      one router per domain + WebSocket
+│           hotkeys, injection       ├─ backend/stt      faster-whisper (+ confidence)
+├─ preload: auth + origin bridge     ├─ backend/llm      llama-server client, personas, chunking
+└─ renderer: dashboard, overlays     ├─ backend/tts      Kokoro (+ blend / modulation)
+                                     ├─ backend/audio / input / commands / output
+   REST + WebSocket boundary  <────> ├─ backend/stores   history (FTS5), recordings, dictionary, macros
+   (Bearer token, versioned)         └─ backend/models / platform / privacy
 ```
 
 Electron owns the desktop surface (windows, tray, overlays, hotkeys, clipboard,
@@ -195,8 +205,14 @@ recordings, history, privacy). The boundary is an inspectable, version-gated RES
 - Selected-text TTS, injection/PTT, audio devices, and model performance still vary by
   desktop, hardware, and target application.
 - A local LLM has a real resource footprint on weak hardware — use the tier recommender.
+- Speech-to-text runs on the CPU in the installed app. NVIDIA GPU transcription needs
+  CUDA libraries the installer does not ship, so it is a developer-only option for now
+  (see [DEVELOPMENT.md](docs/DEVELOPMENT.md)); AMD/Intel GPU transcription is not offered.
 - Voice-cloning synthesis is implemented through an optional, pinned runtime; that large
   runtime is not bundled and remains hardware/performance dependent.
+- The Kokoro read-aloud runtime ships in the installer, but its voice files (about 354 MB)
+  download automatically the first time you use read-aloud, with no separate prompt in
+  this release. They are checked against a pinned size and SHA-256 before use.
 - Production-grade at-rest encryption is not included. Raw recordings are retained for
   recovery until the user deletes or wipes them.
 - The Discord/email relay is code-complete but not a live service until its operator
@@ -204,12 +220,14 @@ recordings, history, privacy). The boundary is an inspectable, version-gated RES
 
 ## Report a bug
 
-For the public Alpha 3 build, use
+Use **Utilities → Diagnostics → Report a Bug** in the app (review-first: you see exactly
+what would be shared and must confirm), or open
 [GitHub Issues](https://github.com/RoyGSlade/BetterFingers/issues) or the
-[BetterFingers Discord](https://discord.gg/m3HH45CFwz). The development build also has a
-review-first in-app report flow; delivery remains disabled until a private relay is
-deployed and configured. Security vulnerabilities belong in the private process in
-[SECURITY.md](SECURITY.md), not a public issue or Discord post.
+[BetterFingers Discord](https://discord.gg/m3HH45CFwz) yourself. Automatic delivery stays
+disabled until a private relay is deployed and configured, so the in-app flow hands the
+reviewed report to your email client or Discord rather than sending it. Security
+vulnerabilities belong in the private process in [SECURITY.md](SECURITY.md), not a public
+issue or Discord post.
 
 ## Contributing & security
 

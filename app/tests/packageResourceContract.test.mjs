@@ -61,7 +61,7 @@ test('backend packaging pins a recursive PyInstaller onedir resource contract', 
 });
 
 test('Linux package identity aligns Electron and desktop-entry names', () => {
-  assert.equal(packageJson.version, '1.1.0-alpha.3');
+  assert.equal(packageJson.version, '1.1.0-alpha.4');
   assert.equal(packageJson.author, 'Donaven Crenshaw');
   assert.equal(packageJson.desktopName, 'BetterFingers');
   assert.equal(packageJson.build.appId, 'com.betterfingers.desktop');
@@ -120,7 +120,7 @@ test('effective builder config emits a fixed public GitHub channel feed', () => 
     `],
     { encoding: 'utf8', env: { ...process.env, BETTERFINGERS_SIGNING_MODE: '' } },
   );
-  const loaded = loadForVersion('1.1.0-alpha.3');
+  const loaded = loadForVersion('1.1.0-alpha.4');
   assert.equal(loaded.status, 0, loaded.stderr);
   const config = JSON.parse(loaded.stdout);
   assert.equal(config.appId, 'com.betterfingers.desktop');

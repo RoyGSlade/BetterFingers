@@ -32,7 +32,7 @@ Work order: **NOW** protects the core loop and release truth; **NEXT** completes
 4. Use [DESIGN](../DESIGN.md), [ACCOMPLISH](../ACCOMPLISH.md), UI specifications, and archive plans for requirements, not automatic current-status authority.
 5. Marketing copy and old test counts cannot promote a capability. A generated QA report proves only its recorded run and harness.
 
-The release board and limitations were last reviewed **2026-08-27**. They record public **v1.1.0-alpha.3**, signed Windows x64 NSIS and experimental Linux AppImage, separately from later local stabilization. This consolidation did not query GitHub, install a package, run product tests, or perform hardware qualification. Public/live state must be refreshed before publication; no new release-readiness claim is made here.
+The release board and limitations were last reviewed **2026-10-07** for the **v1.1.0-alpha.4** release preparation. They record public **v1.1.0-alpha.3** (signed Windows x64 NSIS and experimental Linux AppImage) as the latest published release and Alpha 4 as prepared but not yet public; the feature, parity and status sections below were consolidated earlier (2026-08-27) and were not re-audited for Alpha 4. This consolidation did not query GitHub, install a package, run product tests, or perform hardware qualification. Public/live state must be refreshed before publication; no new release-readiness claim is made here.
 
 ### 1.2 Current alpha availability must accompany implementation status
 
