@@ -350,6 +350,150 @@ def _verify_contacts() -> VerificationResult:
     return VerificationResult(ok=True, detail="no contacts remain")
 
 
+# --- Settings that the running app recreates after a reset -------------------
+
+# utils.load_profile and save_profile store a profile as "<name>.yaml", and
+# save_profile writes "<name>.yaml.bak" beside a live file it overwrites.
+_DEFAULT_PROFILE = "Default.yaml"
+_ALLOWED_PROFILE_FILES = frozenset({_DEFAULT_PROFILE, _DEFAULT_PROFILE + ".bak"})
+_MISSING = object()
+
+
+def _app_profile_steps(config: dict, defaults: dict) -> None:
+    """The normalisation load_profile and save_profile both apply, in order.
+
+    Held in one helper so the expected payload below runs the same steps the
+    app runs. A change to either function that is not mirrored here fails the
+    parity test instead of passing silently.
+    """
+    from backend.audio import audio_schema
+    from backend.config import utils
+    utils._migrate_controller_binding(config)
+    utils._migrate_output_delivery(config)
+    audio_schema.migrate_audio_settings(config)
+    audio_schema.project_legacy_audio_keys(config)
+    utils._sanitize_profile_values(config, defaults)
+
+
+def _untouched_default_profile() -> dict:
+    """The parsed profiles/Default.yaml the app writes when none exists.
+
+    Computed in memory and never written. load_profile() writes the defaults
+    after normalising them, and save_profile() normalises again, then stamps the
+    schema version and the input-device fingerprint. The fingerprint step only
+    probes audio hardware for a non-negative input_device_index, and the
+    defaults use -1, so nothing here touches a device. The return value is what
+    yaml.safe_load gives back for the written file, so it compares directly with
+    a parsed file.
+    """
+    import copy
+    import yaml
+    from backend.config import utils
+
+    defaults = utils._profile_defaults()
+    loaded = copy.deepcopy(defaults)  # load_profile(), missing-file branch
+    _app_profile_steps(loaded, defaults)
+    payload = copy.deepcopy(loaded)  # save_profile()
+    _app_profile_steps(payload, defaults)
+    utils._refresh_input_device_fingerprint(payload)
+    payload["schema_version"] = utils._PROFILE_SCHEMA_VERSION
+    return yaml.safe_load(yaml.dump(payload))
+
+
+def _profile_file_mismatch(path: Path, expected: dict) -> Optional[str]:
+    """None when the file is exactly the untouched default, else the reason.
+
+    The reason names the settings that differ and never their values. Values are
+    the user's settings, and this text is shown on the Settings screen.
+    """
+    import yaml
+    try:
+        found = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, yaml.YAMLError):
+        return "unreadable"
+    if not isinstance(found, dict):
+        return "not a settings mapping"
+    if found == expected:
+        return None
+    differing = sorted(str(key) for key in set(found) | set(expected)
+                       if found.get(key, _MISSING) != expected.get(key, _MISSING))
+    if not differing:
+        return "does not match the defaults"
+    shown = ", ".join(differing[:10])
+    more = f" (+{len(differing) - 10} more)" if len(differing) > 10 else ""
+    return f"{len(differing)} setting(s) differ from defaults: {shown}{more}"
+
+
+def _verify_profiles() -> VerificationResult:
+    """The settings category survives a reset only in the shape the app
+    recreates by itself.
+
+    A factory reset removes profiles/ and config.yaml. The running app then
+    recreates profiles/Default.yaml from defaults the next time it reads its
+    settings, and this check used to count that file as a survivor. The reset had
+    already reported success, so the two results contradicted each other.
+
+    Passes when profiles/ is absent or empty, or holds only Default.yaml and that
+    file is exactly the untouched defaults. Its .bak may sit beside it, but only
+    if the .bak is also untouched. Fails on a changed setting, on any other file
+    or folder in profiles/, on a config.yaml, and on a file that cannot be read.
+
+    Read-only. Paths come from data_paths, which never creates anything, and the
+    expected payload is computed in memory. Deletion is unchanged: the wipe
+    still comes from make_wipe(data_paths.profiles).
+    """
+    declared = data_paths.profiles()
+    root = data_paths.base()
+    legacy = root / "config.yaml"
+    profiles_dir = root / "profiles"
+    if legacy in declared:
+        return VerificationResult(ok=False, remaining=[str(legacy)],
+                                  detail="legacy config.yaml remains")
+    if profiles_dir not in declared:
+        return VerificationResult(ok=True, detail="no profiles directory remains")
+    if profiles_dir.is_symlink() or not profiles_dir.is_dir():
+        return VerificationResult(ok=False, remaining=[str(profiles_dir)],
+                                  detail="profiles is not a plain directory")
+    try:
+        entries = sorted(profiles_dir.iterdir(), key=lambda p: p.name)
+    except OSError as exc:
+        return VerificationResult(ok=False, remaining=[str(profiles_dir)],
+                                  detail=f"could not read profiles directory: {exc}")
+    if not entries:
+        return VerificationResult(ok=True, detail="profiles directory is empty")
+
+    unexpected = [p for p in entries
+                  if p.name not in _ALLOWED_PROFILE_FILES or p.is_symlink() or not p.is_file()]
+    if unexpected:
+        return VerificationResult(
+            ok=False, remaining=[str(p) for p in unexpected[:20]],
+            detail=f"{len(unexpected)} unexpected file(s) or folder(s) in profiles/")
+
+    names = {p.name for p in entries}
+    live = profiles_dir / _DEFAULT_PROFILE
+    if _DEFAULT_PROFILE not in names:
+        # save_profile only writes a backup beside the live file it replaces.
+        return VerificationResult(
+            ok=False, remaining=[str(profiles_dir / (_DEFAULT_PROFILE + ".bak"))],
+            detail="a Default profile backup remains without its profile")
+
+    expected = _untouched_default_profile()
+    checked = [live]
+    if _DEFAULT_PROFILE + ".bak" in names:
+        checked.append(profiles_dir / (_DEFAULT_PROFILE + ".bak"))
+    failing = []
+    for path in checked:
+        reason = _profile_file_mismatch(path, expected)
+        if reason is not None:
+            failing.append((path, reason))
+    if failing:
+        return VerificationResult(
+            ok=False, remaining=[str(path) for path, _ in failing],
+            detail="; ".join(f"{path.name}: {reason}" for path, reason in failing))
+    return VerificationResult(
+        ok=True, detail="only the untouched recreated Default profile remains")
+
+
 # --- The inventory -----------------------------------------------------------
 # One entry per persistent store. Ordered roughly by wipe breadth (conversation
 # data first, settings/electron state last). Sensitivity and may_contain_user_text
@@ -460,7 +604,7 @@ CATEGORIES: list[DataCategory] = [
          paths=data_paths.voice_presets, in_export=True),
     _cat("profiles", "Profiles & settings", "python", "configuration",
          "Settings; removed on factory reset.", _FACTORY,
-         paths=data_paths.profiles, in_export=True),
+         paths=data_paths.profiles, in_export=True, verify=_verify_profiles),
     _cat("app_state", "App state & first-run marker", "python", "configuration",
          "Settings; removed on factory reset.", _FACTORY,
          paths=data_paths.app_state),
