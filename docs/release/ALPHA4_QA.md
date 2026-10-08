@@ -45,6 +45,10 @@ Safety record: the installer was never run. The owner's installed alpha.3, `%APP
 | Installer run, install, upgrade, uninstall | Not run (rule: no installers on this laptop) | U | n/a |
 | Real mic, F8/F9 into real windows, read-aloud, game profile, Library Clear dialogs, Report a Bug | Not run (owner steps, section 5) | U | section 5 |
 
+### Re-check after the reset-verify fix (2026-10-08)
+
+Rebuilt the unsigned test build at `3cafd3b` (exit 0, 420 s under background load): installer 360,484,357 B, `app.asar` 4,296,070 B (unchanged), bundled `base.en` present. Re-ran the real-app factory reset (`drive_reset.mjs bridge`, throwaway profile): all 13 checks pass, including **verify straight after the reset** and **verify a moment later** (`reset-bridge/`; the `f4b7c15` run is kept as `reset-bridge-f4b7c15/`). The owner checklist below uses this build. **V**
+
 ### Open after this run
 
 - **O1 `profiles/` is recreated after reset.** Every reset path leaves `profiles/Default.yaml`. Only the UI path also fails the check straight after the reset. The cause is not established: the app calls `GET /settings/profiles/Default` after the reset in the bridge run as well (`reset-bridge/app.log`), so that alone does not explain the difference. Not debugged (one retry only). Known item; alpha.4 ships with it per the brief.
