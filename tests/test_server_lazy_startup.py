@@ -254,9 +254,15 @@ class ServerLazyStartupTests(unittest.TestCase):
         def _get_engine_if_initialized():
             return engine_holder.get("engine")
 
+        # The fake profile above has no llm_model_id, so /runtime/warmup takes
+        # server.get_selected_llm_model_id's repair branch and would persist
+        # this dict over the session-wide profiles/Default.yaml (seeded with
+        # llm_enabled: true by conftest). Keep that write off disk.
         with patch.dict(os.environ, {"BETTERFINGERS_LAZY_STARTUP": "1"}, clear=False), patch.object(
             server, "Transcriber", DummyTranscriber
         ), patch.object(server, "load_profile", return_value=profile), patch.object(
+            server, "save_runtime_profile"
+        ), patch.object(
             server, "get_engine", side_effect=_get_engine
         ), patch.object(
             server, "get_engine_if_initialized", side_effect=_get_engine_if_initialized
