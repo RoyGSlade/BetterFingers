@@ -52,6 +52,26 @@ into private rooms; workers join their supervisor's room; claims and fleet
 limits remain repo-global. See `.claude/skills/hierarchy/SKILL.md` for the
 director/supervisor workflow and current model-family caps.
 
+Codex also has a dedicated repository-local director MCP at
+`.codex/director-mcp/server.py`. It launches `codex exec --json` sessions
+instead of Claude processes and exposes `codex_director_register`,
+`codex_director_spawn`, `codex_director_status`, `codex_director_wait`,
+`codex_director_result`, `codex_director_resume`, `codex_director_stop`, and
+topology-limited message tools. Its two-supervisor/four-worker caps are global
+to the Codex director state and independent of the Claude hierarchy caps.
+Supervisors are read-only; workers default to workspace-write; no unrestricted
+sandbox bypass is exposed. See `.codex/director-mcp/README.md` for the exact
+contract and verification commands.
+
+When directing Codex agents, register with both systems: the director MCP owns
+process lifecycle, while `collab` remains authoritative for shared file claims
+and cross-client coordination. Spawned Codex prompts require the same claim,
+START, handoff, release, and coordinator-only Git lifecycle described below.
+The Codex project configuration intentionally hides `collab_spawn`,
+`collab_stop`, and `collab_clear`; use the role-scoped Codex director tools for
+Codex process lifecycle. This prevents a read-only Codex worker from escaping
+its role by launching a separate Claude hierarchy.
+
 1. Call `collab_register` with a short kebab-case session name that is unique
    among live sessions in the room and a one-line focus, before any edits.
 2. Call `collab_status` and `collab_inbox`. If another session's focus
