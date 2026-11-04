@@ -178,3 +178,21 @@ test('the SVG is valid XML: no valueless attributes (standalone exports must par
     }
   }
 });
+
+// --- read-aloud ---------------------------------------------------------------
+
+import { syntheticSpeechLevel } from '../src/renderer/lib/signalEngineerFace.mjs';
+
+test('read-aloud statuses get readable labels and leave the ring idle', () => {
+  assert.deepEqual(interpretOverlayStatus('draft_tts_started'), { ring: 'idle', text: 'Reading aloud...' });
+  assert.deepEqual(interpretOverlayStatus('draft_tts_stopped'), { ring: 'idle', text: 'Done reading' });
+});
+
+test('synthetic speech level is bounded, varies like syllables, and breathes', () => {
+  const xs = Array.from({ length: 600 }, (_, i) => syntheticSpeechLevel(i / 60));
+  assert.ok(xs.every((x) => x >= 0 && x <= 1));
+  const loud = xs.filter((x) => x > 0.5).length;
+  const quiet = xs.filter((x) => x < 0.1).length;
+  assert.ok(loud > 60 && quiet > 60, `needs both open and closed mouth frames (${loud} loud, ${quiet} quiet)`);
+  assert.equal(syntheticSpeechLevel(1.234), syntheticSpeechLevel(1.234), 'deterministic');
+});

@@ -51,6 +51,12 @@ export function interpretOverlayStatus(status, payload = {}) {
     case 'draft_send_error':
     case 'selection_capture_failed':
       return { ring: 'error', text: payload.message || 'Needs attention' };
+    // Read-aloud (backend TTS playback). The ring has no speaking state, so it
+    // stays idle; the Signal Engineer face talks (overlay.html setSpeaking).
+    case 'draft_tts_started':
+      return { ring: 'idle', text: 'Reading aloud...' };
+    case 'draft_tts_stopped':
+      return { ring: 'idle', text: 'Done reading' };
     default:
       return { ring: 'idle', text: status };
   }

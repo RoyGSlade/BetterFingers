@@ -136,6 +136,10 @@
         ring.setState(ringState);
         lastRingState = ringState;
         face?.setRingState(ringState);
+        // Read-aloud plays in the backend and sends no audio level yet, so the
+        // face lip-syncs to a synthetic speech rhythm between start and stop.
+        if (status === 'draft_tts_started') face?.setSpeaking(true, { synthetic: true });
+        else if (status !== 'unknown') face?.setSpeaking(false);
         // Presentation-only hook: colors the label pill (and its dot) per
         // ring state via signal-desk.css's [data-ring-state] rules. Does not
         // affect the ring itself or any IPC/backend behavior.

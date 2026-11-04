@@ -466,6 +466,25 @@ function registerIpc({
       overlayHideTimer = null;
     }
 
+    // Read-aloud: with a Signal Engineer face selected, the overlay comes up so
+    // the face can talk while the backend plays the audio, and goes back down a
+    // beat after it stops. With the plain ring nothing changes (these statuses
+    // fall through to the idle handling below, exactly as before).
+    const face = getOverlayAppearance().face;
+    if ((status === 'draft_tts_started' || status === 'draft_tts_stopped') && face && face !== 'ring') {
+      if (status === 'draft_tts_started' && !overlay.isVisible()) {
+        overlay.showInactive();
+      }
+      overlay.webContents.send('overlay:update', safePayload);
+      if (status === 'draft_tts_stopped' && !alwaysOn) {
+        overlayHideTimer = setTimeout(() => {
+          if (!overlay.isDestroyed() && overlay.isVisible()) overlay.hide();
+          overlayHideTimer = null;
+        }, 1500);
+      }
+      return true;
+    }
+
     if (
       status === 'recording_started' ||
       status === 'recording' ||

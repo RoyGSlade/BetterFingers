@@ -255,6 +255,20 @@ function partLeds(part, colors, glowId, surge = 0) {
     .join('');
 }
 
+/**
+ * A speech-like loudness (0..1) for when the audio itself is not available
+ * (read-aloud plays in the backend, which sends no level yet): ~5 syllables a
+ * second, uneven stresses, and a short breath pause every couple of seconds.
+ * Deterministic in t, so it is testable and two faces stay in step.
+ */
+export function syntheticSpeechLevel(t) {
+  const syllable = Math.max(0, Math.sin(t * 2 * Math.PI * 4.7)) ** 0.6;
+  const stress = 0.55 + 0.45 * hash01(Math.floor(t * 4.7));
+  const phrase = (t % 2.6) / 2.6;
+  const breath = phrase > 0.88 ? 0.08 : 1;
+  return Math.max(0, Math.min(1, syllable * stress * breath));
+}
+
 /** Vertical jaw-bob offset in px for a part with talkBob = `bob`. */
 export function bobOffset(expression, level, t, bob) {
   if (!bob || expression !== 'talking') return 0;
@@ -474,7 +488,7 @@ export function renderFaceSvg(spec, { partUrls = {}, expression = 'neutral', lev
  */
 export function createSignalEngineerFace({ container, spec, partUrls, colors, idPrefix = 'se', now = () => performance.now() / 1000 }) {
   let expression = 'neutral';
-  let level = 0;
+  let levelIn = 0;
   let current = { ...(colors || {}) };
   let raf = 0;
   let blinkUntil = 0;
@@ -485,11 +499,12 @@ export function createSignalEngineerFace({ container, spec, partUrls, colors, id
   let headEl = null;
   let fxEl = null;
   let speaking = false;
+  let synthetic = false;
   let look = [0, 0];
   let nextGlance = now() + 2;
 
   function full() {
-    container.innerHTML = renderFaceSvg(spec, { partUrls, expression, level, t: now(), speaking, look, colors: current, idPrefix });
+    container.innerHTML = renderFaceSvg(spec, { partUrls, expression, level: levelIn, t: now(), speaking, look, colors: current, idPrefix });
     eyesEl = container.querySelector('[data-part="eyes"]');
     mouthEl = container.querySelector('[data-part="mouth"]');
     bobEls = [...container.querySelectorAll('[data-bob]')];
@@ -500,6 +515,7 @@ export function createSignalEngineerFace({ container, spec, partUrls, colors, id
   function frame() {
     raf = 0;
     const t = now();
+    const level = speaking && synthetic ? syntheticSpeechLevel(t) : levelIn;
     if (t > nextBlink && expression !== 'sleeping') {
       blinkUntil = t + 0.13;
       nextBlink = t + 2.5 + Math.random() * 4;
@@ -554,14 +570,19 @@ export function createSignalEngineerFace({ container, spec, partUrls, colors, id
     setRingState(ringState) {
       this.setExpression(RING_STATE_EXPRESSION[ringState] || 'neutral');
     },
-    /** Lip-sync on top of the current expression (e.g. while reading aloud). */
-    setSpeaking(on) {
+    /**
+     * Lip-sync on top of the current expression (e.g. while reading aloud).
+     * `synthetic: true` drives the mouth from syntheticSpeechLevel() when no
+     * real audio level arrives via setLevel().
+     */
+    setSpeaking(on, { synthetic: useSynthetic = false } = {}) {
       speaking = Boolean(on);
+      synthetic = speaking && Boolean(useSynthetic);
       cancel();
       schedule();
     },
     setLevel(value) {
-      level = typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
+      levelIn = typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
     },
     setColors(next) {
       current = { ...current, ...(next || {}) };
