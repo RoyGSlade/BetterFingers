@@ -852,6 +852,7 @@ export const SETTINGS_ELEMENT_IDS = {
   overlayVibrancyValue: 'sdSetOverlayVibrancyValue',
   overlayLabelPos: 'sdSetOverlayLabelPos',
   overlayAlwaysOn: 'sdSetOverlayAlwaysOn',
+  overlayFace: 'sdSetOverlayFace',
 
   // --- Profile fields (SETTINGS_FIELD_KEYS -> element id) ---
   fields: {
@@ -1599,6 +1600,13 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
     vibEl.addEventListener('change', () => push({ vibrancy: Number(vibEl.value) }));
     labelPosEl.addEventListener('change', () => push({ labelPos: labelPosEl.value }));
     alwaysOnEl.addEventListener('change', () => push({ alwaysOn: alwaysOnEl.checked }));
+
+    // Optional: older pages without the face picker keep the ring.
+    const faceEl = els.overlayFace;
+    if (faceEl) {
+      overlayBridge.getOverlayAppearance().then((a) => { faceEl.value = a?.face ?? 'ring'; }).catch(() => {});
+      faceEl.addEventListener('change', () => push({ face: faceEl.value }));
+    }
   }
 
   // --- Privacy (§7.14) -------------------------------------------------------

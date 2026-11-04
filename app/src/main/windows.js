@@ -44,6 +44,11 @@ const OVERLAY_PLACEMENTS = new Set([
   'bottom-left', 'bottom', 'bottom-right',
 ]);
 const OVERLAY_LABEL_POSITIONS = new Set(['hidden', 'beside', 'above', 'below', 'center']);
+// What the overlay draws: the Signal Core ring, or the Signal Engineer face
+// (lib/signalEngineerFace.mjs). The face is wider than tall, so the window
+// keeps the size setting as its height and widens by FACE_ASPECT.
+const OVERLAY_FACES = new Set(['ring', 'signal-engineer', 'rustbucket']);
+const FACE_ASPECT = 566 / 356; // widest shell viewBox (standard.parts.json); rustbucket is 576/372
 const DEFAULT_OVERLAY_APPEARANCE = {
   size: 'medium',
   placement: 'bottom-right',
@@ -51,6 +56,7 @@ const DEFAULT_OVERLAY_APPEARANCE = {
   vibrancy: 1,
   labelPos: 'hidden',
   alwaysOn: false,
+  face: 'ring',
 };
 let overlayAppearance = { ...DEFAULT_OVERLAY_APPEARANCE };
 
@@ -82,6 +88,7 @@ function normalizeOverlayAppearance(partial) {
     vibrancy: Math.max(0.3, Math.min(2, Number(base.vibrancy) || 1)),
     labelPos: OVERLAY_LABEL_POSITIONS.has(labelPos) ? labelPos : 'hidden',
     alwaysOn: Boolean(base.alwaysOn),
+    face: OVERLAY_FACES.has(base.face) ? base.face : 'ring',
   };
 }
 
@@ -91,10 +98,11 @@ function overlayWindowSize(appearance) {
   const ring = OVERLAY_SIZE_PX[appearance.size] || OVERLAY_SIZE_PX.medium;
   const pad = 20;
   const box = ring + pad;
+  const boxW = appearance.face && appearance.face !== 'ring' ? Math.round(ring * FACE_ASPECT) + pad : box;
   const pos = appearance.labelPos;
-  if (pos === 'beside') return { width: box + 176, height: box };
-  if (pos === 'above' || pos === 'below') return { width: Math.max(box, 190), height: box + 26 };
-  return { width: box, height: box }; // hidden or center
+  if (pos === 'beside') return { width: boxW + 176, height: box };
+  if (pos === 'above' || pos === 'below') return { width: Math.max(boxW, 190), height: box + 26 };
+  return { width: boxW, height: box }; // hidden or center
 }
 
 // Screen position for a placement anchor, given the window size.
@@ -125,9 +133,9 @@ function applyOverlayAppearance() {
   const [x, y] = overlayAnchorPosition(a.placement, width, height);
   overlayWindow.setPosition(x, y);
   try { overlayWindow.setOpacity(a.opacity); } catch (error) { /* WM may not support it */ }
-  // Forward the renderer-side bits (ring size / vibrancy / label position) to the overlay.
+  // Forward the renderer-side bits (ring size / vibrancy / label position / face) to the overlay.
   overlayWindow.webContents.send('overlay:appearance', {
-    size: a.size, vibrancy: a.vibrancy, labelPos: a.labelPos,
+    size: a.size, vibrancy: a.vibrancy, labelPos: a.labelPos, face: a.face,
   });
   // Pinned always-on: keep it up showing the idle ring. (When it's off, the
   // status flow in ipc.js hides it once nothing is happening.)
