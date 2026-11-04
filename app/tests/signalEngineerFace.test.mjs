@@ -196,3 +196,65 @@ test('synthetic speech level is bounded, varies like syllables, and breathes', (
   assert.ok(loud > 60 && quiet > 60, `needs both open and closed mouth frames (${loud} loud, ${quiet} quiet)`);
   assert.equal(syntheticSpeechLevel(1.234), syntheticSpeechLevel(1.234), 'deterministic');
 });
+
+// --- three shells, meters, energy, real lip-sync plumbing ---------------------
+
+import { overlayPayloadFor } from '../src/renderer/features/overlayBridge.js';
+import { partLedSvg, headTransform } from '../src/renderer/lib/signalEngineerFace.mjs';
+
+const sweet = JSON.parse(readFileSync(join(assets, 'sweetheart.parts.json'), 'utf8'));
+const sweetUrls = Object.fromEntries(Object.keys(sweet.parts).map((n) => [n, `${n}.png`]));
+
+test('sweetheart: parts cut, pink by default, bow placed and rotated, glowing lashes', () => {
+  for (const name of Object.keys(sweet.parts)) {
+    assert.ok(existsSync(join(assets, sweet.partsDir, `${name}.png`)), `sweetheart/${name}.png missing`);
+  }
+  const svg = renderFaceSvg(sweet, { partUrls: sweetUrls });
+  assert.ok(svg.includes('#ff8fc2'), 'shell default accent colour');
+  assert.match(svg, /data-part="bow" transform="[^"]*rotate\(14\)/);
+  const withLashes = renderLightsSvg(sweet, {}).eyes;
+  const plain = renderLightsSvg(spec, {}).eyes;
+  assert.ok((withLashes.match(/<path /g) || []).length > (plain.match(/<path /g) || []).length);
+  assert.ok(renderFaceSvg(sweet, { partUrls: sweetUrls, colors: { accent: '#00ff00' } }).includes('#00ff00'), 'caller colours still win');
+});
+
+test('every shell has loudness and energy gauges', () => {
+  for (const [name, s] of Object.entries({ standard: spec, rustbucket: rust, sweetheart: sweet })) {
+    const meters = Object.values(s.parts).flatMap((p) => p.leds || []).map((l) => l.meter).filter(Boolean);
+    assert.ok(meters.includes('loudness') && meters.includes('energy'), name);
+  }
+});
+
+test('loudness shortens an arc gauge; energy dims a ring; no value draws it full', () => {
+  const arc = { id: 'a', role: 'amber', kind: 'arc', c: [0, 0], r: 50, a0: 50, a1: 130, w: 3, meter: 'loudness' };
+  const colors = { accent: '#0ff', amber: '#fa0' };
+  const quiet = partLedSvg(arc, colors, 'g', { meters: { loudness: 0 } });
+  const loud = partLedSvg(arc, colors, 'g', { meters: { loudness: 1 } });
+  const full = partLedSvg(arc, colors, 'g');
+  assert.notEqual(quiet, loud);
+  assert.equal(loud.replace(/data-[^ ]+ /g, ''), full.replace(/data-[^ ]+ /g, ''));
+  const ring = { id: 'r', role: 'accent', kind: 'arc', c: [0, 0], r: 70, a0: 0, a1: 360, w: 4, meter: 'energy' };
+  assert.match(partLedSvg(ring, colors, 'g', { meters: { energy: 0 } }), /opacity="0\.3"/);
+  assert.doesNotMatch(partLedSvg(ring, colors, 'g'), /\sopacity="/);
+  assert.match(full, /data-meter="loudness" data-led="a"/);
+});
+
+test('energy scales how much the head moves while talking', () => {
+  const tilt = (energy) => Math.abs(Number(headTransform(spec, { speaking: true, level: 0.8, t: 0.6, energy }).match(/rotate\((-?[\d.]+)\)/)[1]));
+  assert.ok(tilt(1) > tilt(0) * 2);
+});
+
+test('the bridge carries the loudness envelope and the assistant emotion to the overlay', () => {
+  const lvl = overlayPayloadFor({ status: 'draft_tts_level', envelope: [0, 0.5, 1], fps: 30, duration: 0.1 });
+  assert.deepEqual(lvl.envelope, [0, 0.5, 1]);
+  assert.equal(lvl.fps, 30);
+  assert.equal(overlayPayloadFor({ status: 'talk_speaking', emotion: 'rage' }).emotion, 'rage');
+  assert.equal(overlayPayloadFor({ status: 'recording' }).envelope, undefined);
+});
+
+test('talk-mode statuses have labels and sensible ring states', () => {
+  assert.equal(interpretOverlayStatus('talk_listening').ring, 'listening');
+  assert.equal(interpretOverlayStatus('talk_thinking').ring, 'transcribing');
+  assert.equal(interpretOverlayStatus('talk_awaiting_tap').text, 'Tap to approve');
+  assert.equal(RING_STATE_EXPRESSION[interpretOverlayStatus('talk_error').ring], 'shocked');
+});

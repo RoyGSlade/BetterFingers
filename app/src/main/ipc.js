@@ -444,6 +444,18 @@ function registerIpc({
     if (payload.fallback !== undefined) {
       safePayload.fallback = Boolean(payload.fallback);
     }
+    // Signal Engineer face: read-aloud loudness (0..1 per frame, one chunk per
+    // message) and an expression name chosen by the assistant.
+    if (Array.isArray(payload.envelope)) {
+      safePayload.envelope = payload.envelope
+        .slice(0, 1800)
+        .map((v) => (typeof v === 'number' && isFinite(v) ? Math.max(0, Math.min(1, v)) : 0));
+      const fps = Number(payload.fps);
+      safePayload.fps = fps >= 1 && fps <= 120 ? fps : 30;
+    }
+    if (typeof payload.emotion === 'string' && /^[a-z_]{1,20}$/.test(payload.emotion)) {
+      safePayload.emotion = payload.emotion;
+    }
 
     if (review && !review.isDestroyed() && review.isVisible()) {
       review.webContents.send('review:status', safePayload);
@@ -471,7 +483,20 @@ function registerIpc({
     // beat after it stops. With the plain ring nothing changes (these statuses
     // fall through to the idle handling below, exactly as before).
     const face = getOverlayAppearance().face;
-    if ((status === 'draft_tts_started' || status === 'draft_tts_stopped') && face && face !== 'ring') {
+    const faceOn = Boolean(face && face !== 'ring');
+    // Loudness frames only matter to a visible face; never change visibility.
+    if (status === 'draft_tts_level') {
+      if (faceOn && overlay.isVisible()) overlay.webContents.send('overlay:update', safePayload);
+      return true;
+    }
+    // Assistant talk mode (brain session): the face shows while it listens,
+    // thinks, speaks or waits for a tap.
+    if (faceOn && status.startsWith('talk_')) {
+      if (!overlay.isVisible()) overlay.showInactive();
+      overlay.webContents.send('overlay:update', safePayload);
+      return true;
+    }
+    if ((status === 'draft_tts_started' || status === 'draft_tts_stopped') && faceOn) {
       if (status === 'draft_tts_started' && !overlay.isVisible()) {
         overlay.showInactive();
       }

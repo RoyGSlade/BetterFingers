@@ -19,11 +19,23 @@ import rBeardCenter from '../assets/signal-engineer/rustbucket/beardCenter.png';
 import rMustache from '../assets/signal-engineer/rustbucket/mustache.png';
 import rSideBeard from '../assets/signal-engineer/rustbucket/sideBeard.png';
 
+import sweetSpec from '../assets/signal-engineer/sweetheart.parts.json';
+import sChassis from '../assets/signal-engineer/sweetheart/chassis.png';
+import sEarLeft from '../assets/signal-engineer/sweetheart/earLeft.png';
+import sEarRight from '../assets/signal-engineer/sweetheart/earRight.png';
+import sBrowLeft from '../assets/signal-engineer/sweetheart/browLeft.png';
+import sBrowRight from '../assets/signal-engineer/sweetheart/browRight.png';
+import sBow from '../assets/signal-engineer/sweetheart/bow.png';
+
 /** Overlay appearance `face` value -> shell. */
 export const FACE_SHELLS = Object.freeze({
   'signal-engineer': {
     spec: standardSpec,
     partUrls: { chassis, earLeft, earRight, browLeft, browRight },
+  },
+  sweetheart: {
+    spec: sweetSpec,
+    partUrls: { chassis: sChassis, earLeft: sEarLeft, earRight: sEarRight, browLeft: sBrowLeft, browRight: sBrowRight, bow: sBow },
   },
   rustbucket: {
     spec: rustSpec,

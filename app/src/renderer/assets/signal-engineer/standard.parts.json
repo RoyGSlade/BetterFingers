@@ -398,7 +398,7 @@
    },
    "leds": [
     {
-     "id": "earLeftRing",
+     "id": "earLeftRing", "meter": "energy",
      "role": "accent",
      "kind": "arc",
      "c": [
@@ -411,7 +411,7 @@
      "w": 5
     },
     {
-     "id": "earLeftArc",
+     "id": "earLeftArc", "meter": "loudness",
      "role": "amber",
      "kind": "arc",
      "c": [
@@ -441,7 +441,7 @@
    },
    "leds": [
     {
-     "id": "earRightRing",
+     "id": "earRightRing", "meter": "energy",
      "role": "accent",
      "kind": "arc",
      "c": [
@@ -454,7 +454,7 @@
      "w": 5
     },
     {
-     "id": "earRightArc",
+     "id": "earRightArc", "meter": "loudness",
      "role": "amber",
      "kind": "arc",
      "c": [

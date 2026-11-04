@@ -132,13 +132,24 @@
       window.betterFingersOverlay?.onStatusUpdate((update) => {
         const payload = typeof update === 'string' ? { status: update } : (update || {});
         const status = payload.status || 'unknown';
+        // Read-aloud loudness for the chunk that is starting to play: the face
+        // lip-syncs to it. It is not a state change, so the ring, label and
+        // expression stay as they are.
+        if (status === 'draft_tts_level') {
+          face?.playEnvelope(payload.envelope, payload.fps);
+          return;
+        }
         const { ring: ringState, text: label } = interpretOverlayStatus(status, payload);
         ring.setState(ringState);
         lastRingState = ringState;
-        face?.setRingState(ringState);
-        // Read-aloud plays in the backend and sends no audio level yet, so the
-        // face lip-syncs to a synthetic speech rhythm between start and stop.
-        if (status === 'draft_tts_started') face?.setSpeaking(true, { synthetic: true });
+        // Read-aloud start/stop is not a mood change: keep whatever expression
+        // he has (e.g. the emotion the assistant picked for this reply).
+        if (!status.startsWith('draft_tts_')) face?.setRingState(ringState);
+        // The assistant can pick his expression per reply (talk_speaking etc.).
+        if (payload.emotion) face?.setExpression(payload.emotion);
+        // Talking: synthetic rhythm until the first real loudness envelope
+        // arrives (SAPI voices never send one).
+        if (status === 'draft_tts_started' || status === 'talk_speaking') face?.setSpeaking(true, { synthetic: true });
         else if (status !== 'unknown') face?.setSpeaking(false);
         // Presentation-only hook: colors the label pill (and its dot) per
         // ring state via signal-desk.css's [data-ring-state] rules. Does not
@@ -146,7 +157,7 @@
         textEl.dataset.ringState = ringState;
         textEl.textContent = label;
         // Live mic RMS (when the backend includes it) pulses the ring + wave.
-        if (status === 'recording' && typeof payload.amplitude === 'number') {
+        if ((status === 'recording' || status === 'talk_listening') && typeof payload.amplitude === 'number') {
           ring.setAmplitude(payload.amplitude);
           face?.setLevel(payload.amplitude);
         } else {

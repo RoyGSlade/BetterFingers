@@ -133,6 +133,9 @@ class ReviewTTSEngine:
 
         self.on_start = None
         self.on_stop = None
+        # Called with backend.tts.loudness.loudness_envelope(...) just before
+        # each audio buffer plays, so the overlay face can lip-sync to it.
+        self.on_audio_level = None
 
         self._loaded = False
         self._backend = "none"
@@ -825,7 +828,7 @@ class ReviewTTSEngine:
             audio, rate = cached
             self._current_playback = text
             self._run_playback_with_callbacks(
-                text, lambda: self._play_audio(audio, rate, cancel_check=cancel_requested)
+                text, lambda: self._play_with_level(audio, rate, cancel_check=cancel_requested)
             )
             spoke = True
         elif backend in {"kokoro", "kokoro_onnx"}:
@@ -868,6 +871,17 @@ class ReviewTTSEngine:
                     self.on_stop()
                 except Exception as e:
                     logging.warning(f"TTS on_stop callback error: {e}")
+
+    def _play_with_level(self, audio, sample_rate, cancel_check=None):
+        """Report this buffer's loudness envelope (if anyone listens), then play it."""
+        if self.on_audio_level:
+            try:
+                from backend.tts.loudness import loudness_envelope
+
+                self.on_audio_level(loudness_envelope(audio, sample_rate))
+            except Exception as e:
+                logging.warning(f"TTS on_audio_level callback error: {e}")
+        self._play_audio(audio, sample_rate, cancel_check=cancel_check)
 
     @staticmethod
     def _play_audio(audio, sample_rate, cancel_check=None):
@@ -1225,7 +1239,7 @@ class ReviewTTSEngine:
             raise RuntimeError("Kokoro generated no audio frames.")
         merged, sample_rate = audio_tuple
         sd.stop()
-        self._play_audio(merged, sample_rate, cancel_check=cancel_check)
+        self._play_with_level(merged, sample_rate, cancel_check=cancel_check)
 
     def _onnx_voice_exists(self, voice: str) -> bool:
         voices = getattr(self._kokoro_onnx, "voices", None)
@@ -1522,7 +1536,7 @@ class ReviewTTSEngine:
                     first_chunk = False
 
                 # Play this chunk (blocking, but interruptible via cancel_check)
-                self._play_audio(audio_data, sample_rate, cancel_check=cancel_check)
+                self._play_with_level(audio_data, sample_rate, cancel_check=cancel_check)
 
             except queue.Empty:
                 # Check if generation is done
@@ -1533,7 +1547,7 @@ class ReviewTTSEngine:
                             audio_data, sample_rate = audio_queue.get_nowait()
                             if len(text) < 100:
                                 full_audio_buffer.append(audio_data)
-                            self._play_audio(audio_data, sample_rate, cancel_check=cancel_check)
+                            self._play_with_level(audio_data, sample_rate, cancel_check=cancel_check)
                         except queue.Empty:
                             break
                     break

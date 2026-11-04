@@ -57,6 +57,17 @@ export function interpretOverlayStatus(status, payload = {}) {
       return { ring: 'idle', text: 'Reading aloud...' };
     case 'draft_tts_stopped':
       return { ring: 'idle', text: 'Done reading' };
+    // Assistant talk mode (brain session statuses).
+    case 'talk_listening':
+      return { ring: 'listening', text: payload.message || 'Listening...' };
+    case 'talk_thinking':
+      return { ring: 'transcribing', text: payload.message || 'Thinking...' };
+    case 'talk_speaking':
+      return { ring: 'idle', text: payload.message || 'Talking...' };
+    case 'talk_awaiting_tap':
+      return { ring: 'ready', text: payload.message || 'Tap to approve' };
+    case 'talk_error':
+      return { ring: 'error', text: payload.message || 'Something went wrong' };
     default:
       return { ring: 'idle', text: status };
   }

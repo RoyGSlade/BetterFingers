@@ -161,6 +161,15 @@ def scrub_lights(rgb: np.ndarray, zone: np.ndarray) -> np.ndarray:
     return rgb * (1 - z) + cleaned * z
 
 
+def scrub_bright(rgb: np.ndarray, zone: np.ndarray) -> np.ndarray:
+    """For pale lights (e.g. copper/pink trim) that saturation cannot find:
+    inside the zone, pull pixels brighter than the surrounding metal down to
+    the dark channel colour."""
+    lum = rgb @ np.array([0.2126, 0.7152, 0.0722])
+    core = np.clip((lum - 135.0) / 55.0, 0, 1)[..., None] * zone[..., None]
+    return rgb * (1 - core) + CHANNEL_RGB * core
+
+
 def build(spec_path: Path, atlas_path: Path, out_dir: Path) -> list[Path]:
     spec = json.loads(spec_path.read_text(encoding="utf-8"))
     atlas = Image.open(atlas_path).convert("RGB")
@@ -173,9 +182,14 @@ def build(spec_path: Path, atlas_path: Path, out_dir: Path) -> list[Path]:
         raw = np.asarray(atlas.crop(tuple(box)), dtype=np.float64)
         rgb = raw
         leds = part.get("leds", [])
-        if leds:
-            zone = np.asarray(led_zone(leds, box), dtype=np.float64) / 255.0
+        tinted = [l for l in leds if l.get("scrub", "saturated") == "saturated"]
+        pale = [l for l in leds if l.get("scrub") == "bright"]
+        if tinted:
+            zone = np.asarray(led_zone(tinted, box), dtype=np.float64) / 255.0
             rgb = scrub_lights(rgb, zone)
+        if pale:
+            zone = np.asarray(led_zone(pale, box), dtype=np.float64) / 255.0
+            rgb = scrub_bright(rgb, zone)
         alpha = part_mask(part["mask"], box)
         band = int(part["mask"].get("refine", 0))
         if band:

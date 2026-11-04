@@ -235,24 +235,47 @@ function led(d, color, width, glowId, extra = '') {
   );
 }
 
-function partLeds(part, colors, glowId, surge = 0) {
-  const k = 1 + surge * 0.7;
-  return (part.leds || [])
-    .map((l0) => {
-      const l = surge ? { ...l0, w: l0.w * k } : l0;
-      const color = l.role === 'amber' ? colors.amber : colors.accent;
-      if (l.kind === 'arc') {
-        if ((l.a1 - l.a0) % 360 === 0) {
-          return (
-            `<g filter="url(#${glowId})"><circle cx="${l.c[0]}" cy="${l.c[1]}" r="${l.r}" fill="none" stroke="${color}" stroke-width="${l.w}"/>` +
-            `<circle cx="${l.c[0]}" cy="${l.c[1]}" r="${l.r}" fill="none" stroke="#fff" stroke-opacity=".5" stroke-width="${r1(l.w * 0.38)}"/></g>`
-          );
-        }
-        return led(arcPath(l.c, l.r, l.a0, l.a1), color, l.w, glowId);
-      }
-      return led(polyline(l.pts), color, l.w, glowId);
-    })
-    .join('');
+/**
+ * One part LED as SVG. A 'meter' LED is a live gauge when a value is given:
+ * loudness shortens the arc/bar to that fraction (centred arc, bar grows from
+ * its first point); energy sets glow strength. With no value it is drawn full.
+ */
+export function partLedSvg(l0, colors, glowId, { surge = 0, meters = null } = {}) {
+  let l = surge ? { ...l0, w: l0.w * (1 + surge * 0.7) } : l0;
+  const v = l.meter && meters && typeof meters[l.meter] === 'number' ? Math.max(0, Math.min(1, meters[l.meter])) : null;
+  let opacity = 1;
+  if (v != null && l.meter === 'loudness') {
+    const f = 0.08 + 0.92 * v;
+    if (l.kind === 'arc' && (l.a1 - l.a0) % 360 !== 0) {
+      const mid = (l.a0 + l.a1) / 2;
+      const half = ((l.a1 - l.a0) / 2) * f;
+      l = { ...l, a0: mid - half, a1: mid + half };
+    } else if (l.kind === 'line' && l.pts.length >= 2) {
+      const [[x0, y0], [x1, y1]] = l.pts;
+      l = { ...l, pts: [[x0, y0], [x0 + (x1 - x0) * f, y0 + (y1 - y0) * f]] };
+    } else {
+      opacity = 0.25 + 0.75 * v;
+    }
+  } else if (v != null && l.meter === 'energy') {
+    opacity = 0.3 + 0.7 * v;
+    l = { ...l, w: l.w * (0.75 + 0.6 * v) };
+  }
+  const color = l.role === 'amber' ? colors.amber : colors.accent;
+  const op = opacity < 1 ? ` opacity="${r1(opacity * 100) / 100}"` : '';
+  let body;
+  if (l.kind === 'arc' && (l.a1 - l.a0) % 360 === 0) {
+    body =
+      `<g filter="url(#${glowId})"${op}><circle cx="${l.c[0]}" cy="${l.c[1]}" r="${l.r}" fill="none" stroke="${color}" stroke-width="${r1(l.w)}"/>` +
+      `<circle cx="${l.c[0]}" cy="${l.c[1]}" r="${l.r}" fill="none" stroke="#fff" stroke-opacity=".5" stroke-width="${r1(l.w * 0.38)}"/></g>`;
+  } else {
+    const d = l.kind === 'arc' ? arcPath(l.c, l.r, l.a0, l.a1) : polyline(l.pts);
+    body = led(d, color, l.w, glowId, op);
+  }
+  return l0.meter ? `<g data-meter="${l0.meter}" data-led="${l0.id}">${body}</g>` : body;
+}
+
+function partLeds(part, colors, glowId, surge = 0, meters = null) {
+  return (part.leds || []).map((l) => partLedSvg(l, colors, glowId, { surge, meters })).join('');
 }
 
 /**
@@ -276,7 +299,7 @@ export function bobOffset(expression, level, t, bob) {
   return r1(bob * lv * Math.abs(Math.sin(t * 9.5)));
 }
 
-function placePart(name, partName, part, place, { partUrls, mood, colors, glowId, expression, level, t, speaking = false, surge = 0 }) {
+function placePart(name, partName, part, place, { partUrls, mood, colors, glowId, expression, level, t, speaking = false, surge = 0, gauge = null, browLift = 0 }) {
   const [x0, y0, x1, y1] = part.box;
   const [px, py] = pivotOf(part);
   let transform = '';
@@ -287,15 +310,16 @@ function placePart(name, partName, part, place, { partUrls, mood, colors, glowId
     if (name === 'browLeft' || name === 'browRight') {
       const [lr, ly, rr, ry] = mood.brows;
       const [rot, dy] = name === 'browLeft' ? [lr, ly] : [rr, ry];
-      pose = ` translate(0 ${dy}) rotate(${rot})`;
+      pose = ` translate(0 ${r1(dy + browLift)}) rotate(${rot})`;
     }
+    if (place.rotate) pose += ` rotate(${place.rotate})`;
     transform = ` transform="translate(${place.at[0]} ${place.at[1]})${pose} scale(${sx} ${s}) translate(${-px} ${-py})"`;
   }
   const href = partUrls[partName] || '';
   const inner =
     `<g data-part="${name}"${transform}>` +
     (href ? `<image href="${href}" x="${x0}" y="${y0}" width="${x1 - x0}" height="${y1 - y0}"/>` : '') +
-    partLeds(part, colors, `${glowId}-part`, surge) +
+    partLeds(part, colors, `${glowId}-part`, surge, gauge) +
     `</g>`;
   const bob = place?.talkBob;
   if (!bob) return inner;
@@ -320,7 +344,7 @@ function resolveColors(colors, expression) {
  * the eyes toward where he is looking.
  */
 export function renderLightsSvg(spec, { expression = 'neutral', level = 0, t = 0, blink = false, speaking = false, look = [0, 0], colors, idPrefix = 'se' } = {}) {
-  const c = resolveColors(colors, expression);
+  const c = resolveColors({ ...(spec.colors || {}), ...(colors || {}) }, expression);
   const L = spec.layout;
   const glowId = `${idPrefix}-glow`;
   const [ew, eh] = L.eyes.size;
@@ -331,10 +355,28 @@ export function renderLightsSvg(spec, { expression = 'neutral', level = 0, t = 0
   const [mw, mh] = L.mouth.size;
   const mouthExpr = speaking && expression !== 'listening' && expression !== 'sleeping' ? 'talking' : expression;
   const mouth = mouthGlyph(mouthExpr, { cx: L.mouth.at[0], cy: L.mouth.at[1], w: mw, h: mh, level, t });
+  const closed = blink || expression === 'sleeping';
+  const lashes = L.eyes.lashes
+    ? led(lashPath(L.eyes.left[0] + lx, L.eyes.left[1] + ly, ew, eh, -1, closed), c.eye, 2.6, glowId) +
+      led(lashPath(L.eyes.right[0] + lx, L.eyes.right[1] + ly, ew, eh, 1, closed), c.eye, 2.6, glowId)
+    : '';
   return {
-    eyes: led(left.d, c.eye, left.w, glowId) + led(right.d, c.eye, right.w, glowId),
+    eyes: led(left.d, c.eye, left.w, glowId) + led(right.d, c.eye, right.w, glowId) + lashes,
     mouth: led(mouth.d, c.mouth, mouth.w, glowId),
   };
+}
+
+/** Three lashes flicking up and out from the eye's outer top corner; they droop when the eye closes. */
+function lashPath(cx, cy, w, h, side, closed) {
+  let d = '';
+  for (let k = 0; k < 3; k += 1) {
+    const x = cx + side * w * (0.2 + 0.14 * k);
+    const y = closed ? cy + h * 0.18 : cy - h * (0.5 - 0.08 * k);
+    const len = 7 + 2 * k;
+    const [dx, dy] = closed ? [side * 0.5, 0.85] : [side * 0.55, -0.85];
+    d += `M${r1(x)},${r1(y)} l${r1(dx * len)},${r1(dy * len)} `;
+  }
+  return d.trim();
 }
 
 function clamp1(v) {
@@ -345,7 +387,7 @@ function clamp1(v) {
  * Whole-head motion: explicit `head` = {tilt (deg), dy (px), scale} plus, while
  * speaking, a voice-driven sway and bounce. Returns an SVG transform string.
  */
-export function headTransform(spec, { head = {}, speaking = false, level = 0, t = 0 } = {}) {
+export function headTransform(spec, { head = {}, speaking = false, level = 0, t = 0, energy = null } = {}) {
   const [vx, vy, vw, vh] = spec.viewBox;
   const cx = vx + vw / 2;
   const cy = vy + vh * 0.55;
@@ -354,8 +396,10 @@ export function headTransform(spec, { head = {}, speaking = false, level = 0, t 
   let dy = Number(head.dy) || 0;
   const scale = Number(head.scale) || 1;
   if (speaking) {
-    tilt += Math.sin(t * 2.3) * 2.2 * (0.4 + lv);
-    dy -= lv * 5 * Math.abs(Math.sin(t * 6.8));
+    // Energy (0..1) scales how much he moves: low = calm, high = bouncing.
+    const amp = energy == null ? 1 : 0.35 + 1.3 * Math.max(0, Math.min(1, energy));
+    tilt += Math.sin(t * 2.3) * 2.2 * (0.4 + lv) * amp;
+    dy -= lv * 5 * Math.abs(Math.sin(t * 6.8)) * amp;
   }
   return `translate(${r1(cx)} ${r1(cy + dy)}) rotate(${r1(tilt)}) scale(${r1(scale * 1000) / 1000}) translate(${r1(-cx)} ${r1(-cy)})`;
 }
@@ -416,16 +460,21 @@ export function renderFxSvg(spec, { fx = {}, t = 0, idPrefix = 'se' } = {}) {
  * @param {object} opts
  * @param {Record<string,string>} opts.partUrls  part name -> image URL (or data: URI)
  */
-export function renderFaceSvg(spec, { partUrls = {}, expression = 'neutral', level = 0, t = 0, blink = false, speaking = false, look = [0, 0], head = {}, pulse = null, fx = {}, colors, idPrefix = 'se', title = 'Signal Engineer' } = {}) {
+export function renderFaceSvg(spec, { partUrls = {}, expression = 'neutral', level = 0, t = 0, blink = false, speaking = false, look = [0, 0], head = {}, pulse = null, fx = {}, energy = null, meters = null, colors, idPrefix = 'se', title = 'Signal Engineer' } = {}) {
   if (!EXPRESSIONS.includes(expression)) expression = 'neutral';
-  const c = resolveColors(colors, expression);
+  const c = resolveColors({ ...(spec.colors || {}), ...(colors || {}) }, expression);
   const L = spec.layout;
   const mood = MOODS[expression] || MOODS.neutral;
   const glowId = `${idPrefix}-glow`;
   const glassId = `${idPrefix}-glass`;
   const lights = renderLightsSvg(spec, { expression, level, t, blink, speaking, look, colors, idPrefix });
   // LED surge: follows the voice while speaking unless given explicitly.
-  const surge = pulse == null ? (speaking ? Math.max(0, Math.min(1, level)) : 0) : Math.max(0, Math.min(1, pulse));
+  let surge = pulse == null ? (speaking ? Math.max(0, Math.min(1, level)) : 0) : Math.max(0, Math.min(1, pulse));
+  if (energy != null) surge *= 0.6 + 0.8 * Math.max(0, Math.min(1, energy));
+  // Gauges: explicit, or live while he talks/listens (loudness = level).
+  const gauge = meters || (speaking || expression === 'listening' ? { loudness: level, energy: energy == null ? 0.5 : energy } : energy != null ? { energy } : null);
+  // High energy lifts the brows while talking.
+  const browLift = speaking && energy != null ? -(Math.max(0, Math.min(1, energy)) - 0.4) * 6 : 0;
 
   const layers = {
     screens:
@@ -448,17 +497,17 @@ export function renderFaceSvg(spec, { partUrls = {}, expression = 'neutral', lev
     const part = spec.parts[partName];
     if (!part) continue;
     placed.add(partName);
-    layers[name] = placePart(name, partName, part, place, { partUrls, mood, colors: c, glowId, expression, level, t, speaking, surge });
+    layers[name] = placePart(name, partName, part, place, { partUrls, mood, colors: c, glowId, expression, level, t, speaking, surge, gauge, browLift });
   }
   for (const [name, part] of Object.entries(spec.parts)) {
     if (!placed.has(name) && !layers[name]) {
-      layers[name] = placePart(name, name, part, null, { partUrls, mood, colors: c, glowId, expression, level, t, speaking, surge });
+      layers[name] = placePart(name, name, part, null, { partUrls, mood, colors: c, glowId, expression, level, t, speaking, surge, gauge, browLift });
     }
   }
 
   const [vx, vy, vw, vh] = spec.viewBox;
   const body =
-    `<g data-head="1" transform="${headTransform(spec, { head, speaking, level, t })}">` +
+    `<g data-head="1" transform="${headTransform(spec, { head, speaking, level, t, energy })}">` +
     L.order.map((k) => layers[k] || '').join('') +
     `<g data-fx-layer="1">${renderFxSvg(spec, { fx: fx && Object.keys(fx).length ? fx : defaultFx(expression), t, idPrefix })}</g>` +
     `</g>`;
@@ -502,9 +551,37 @@ export function createSignalEngineerFace({ container, spec, partUrls, colors, id
   let synthetic = false;
   let look = [0, 0];
   let nextGlance = now() + 2;
+  // Energy: explicit (setEnergy) or an automatic slow read of the voice --
+  // rises over ~1 s of lively speech, settles over ~2.5 s of quiet.
+  let energyIn = null;
+  let energyAuto = 0.2;
+  let lastT = now();
+  // Real loudness from the backend, played back from when it arrived.
+  let envelope = null;
+  let envelopeFps = 30;
+  let envelopeStart = 0;
+
+  function currentLevel(t) {
+    if (envelope) {
+      const i = Math.floor((t - envelopeStart) * envelopeFps);
+      if (i >= 0 && i < envelope.length) return envelope[i];
+      if (i >= envelope.length) envelope = null; // chunk over; next chunk sends its own
+    }
+    return speaking && synthetic ? syntheticSpeechLevel(t) : levelIn;
+  }
+
+  function stepEnergy(t, level) {
+    const dt = Math.max(0, Math.min(0.5, t - lastT));
+    lastT = t;
+    const active = speaking || expression === 'listening';
+    const target = active ? Math.min(1, level * 1.6) : 0.15;
+    const tau = target > energyAuto ? 1.0 : 2.5;
+    energyAuto += (target - energyAuto) * (1 - Math.exp(-dt / tau));
+    return energyIn == null ? energyAuto : energyIn;
+  }
 
   function full() {
-    container.innerHTML = renderFaceSvg(spec, { partUrls, expression, level: levelIn, t: now(), speaking, look, colors: current, idPrefix });
+    container.innerHTML = renderFaceSvg(spec, { partUrls, expression, level: levelIn, t: now(), speaking, look, energy: energyIn == null ? energyAuto : energyIn, colors: current, idPrefix });
     eyesEl = container.querySelector('[data-part="eyes"]');
     mouthEl = container.querySelector('[data-part="mouth"]');
     bobEls = [...container.querySelectorAll('[data-bob]')];
@@ -515,7 +592,8 @@ export function createSignalEngineerFace({ container, spec, partUrls, colors, id
   function frame() {
     raf = 0;
     const t = now();
-    const level = speaking && synthetic ? syntheticSpeechLevel(t) : levelIn;
+    const level = currentLevel(t);
+    const energy = stepEnergy(t, level);
     if (t > nextBlink && expression !== 'sleeping') {
       blinkUntil = t + 0.13;
       nextBlink = t + 2.5 + Math.random() * 4;
@@ -531,7 +609,13 @@ export function createSignalEngineerFace({ container, spec, partUrls, colors, id
     for (const el of bobEls) {
       el.setAttribute('transform', `translate(0 ${bobOffset(speaking ? 'talking' : expression, level, t, Number(el.dataset.bob))})`);
     }
-    if (headEl) headEl.setAttribute('transform', headTransform(spec, { speaking, level, t }));
+    if (headEl) headEl.setAttribute('transform', headTransform(spec, { speaking, level, t, energy }));
+    const gauge = speaking || expression === 'listening' ? { loudness: level, energy } : { energy };
+    const c = resolveColors({ ...(spec.colors || {}), ...current }, expression);
+    for (const el of container.querySelectorAll('[data-meter]')) {
+      const def = meterDefs.get(el.dataset.led);
+      if (def) el.outerHTML = partLedSvg(def, c, `${idPrefix}-glow-part`, { meters: gauge });
+    }
     if (fxEl) fxEl.innerHTML = renderFxSvg(spec, { fx: defaultFx(expression), t, idPrefix });
     schedule();
   }
@@ -552,6 +636,11 @@ export function createSignalEngineerFace({ container, spec, partUrls, colors, id
     if (raf > 0) cancelAnimationFrame(raf);
     else if (raf < 0) clearTimeout(-raf);
     raf = 0;
+  }
+
+  const meterDefs = new Map();
+  for (const part of Object.values(spec.parts)) {
+    for (const l of part.leds || []) if (l.meter) meterDefs.set(l.id, l);
   }
 
   full();
@@ -578,9 +667,28 @@ export function createSignalEngineerFace({ container, spec, partUrls, colors, id
     setSpeaking(on, { synthetic: useSynthetic = false } = {}) {
       speaking = Boolean(on);
       synthetic = speaking && Boolean(useSynthetic);
+      if (!speaking) envelope = null;
       cancel();
       schedule();
     },
+    /**
+     * Play a real loudness curve (0..1 values at `fps`) starting now, e.g. the
+     * backend's per-chunk read-aloud envelope. Implies speaking.
+     */
+    playEnvelope(values, fps = 30) {
+      if (!Array.isArray(values) || !values.length) return;
+      envelope = values.map((v) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0));
+      envelopeFps = Number(fps) > 0 ? Number(fps) : 30;
+      envelopeStart = now();
+      speaking = true;
+      cancel();
+      schedule();
+    },
+    /** Pin the energy level (0..1), or null to go back to the automatic one. */
+    setEnergy(value) {
+      energyIn = typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : null;
+    },
+    get energy() { return energyIn == null ? energyAuto : energyIn; },
     setLevel(value) {
       levelIn = typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
     },

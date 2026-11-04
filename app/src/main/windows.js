@@ -47,7 +47,7 @@ const OVERLAY_LABEL_POSITIONS = new Set(['hidden', 'beside', 'above', 'below', '
 // What the overlay draws: the Signal Core ring, or the Signal Engineer face
 // (lib/signalEngineerFace.mjs). The face is wider than tall, so the window
 // keeps the size setting as its height and widens by FACE_ASPECT.
-const OVERLAY_FACES = new Set(['ring', 'signal-engineer', 'rustbucket']);
+const OVERLAY_FACES = new Set(['ring', 'signal-engineer', 'sweetheart', 'rustbucket']);
 const FACE_ASPECT = 566 / 356; // widest shell viewBox (standard.parts.json); rustbucket is 576/372
 const DEFAULT_OVERLAY_APPEARANCE = {
   size: 'medium',

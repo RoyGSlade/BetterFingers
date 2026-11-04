@@ -3188,6 +3188,9 @@ def ensure_tts_initialized():
                 
             tts_engine.on_start = tts_start_callback
             tts_engine.on_stop = tts_stop_callback
+            # Read-aloud lip-sync: one loudness envelope per audio chunk, sent as it
+            # starts playing (backend/tts/loudness.py; overlay face plays it back).
+            tts_engine.on_audio_level = lambda env: broadcast_status_threadsafe("draft_tts_level", env)
         except Exception as e:
             logging.error(f"Failed to load ReviewTTSEngine: {e}")
             record_runtime_error("tts", str(e))
