@@ -219,3 +219,35 @@ test('createLineRedactor holds back an unfinished line, flushes it redacted, and
   assert.ok(flood.length >= 1, 'a line that never ends is flushed at the cap');
   assert.deepEqual(createLineRedactor().push('a\r\nb\n'), ['a', 'b']);
 });
+
+// Round 3, item 5 (Codex re-check 2, finding 5): the overflow flush used to emit the oversized
+// line raw-redacted and RESET, so a credential straddling the 16 KiB boundary lost its prefix
+// ("token=") in the first half and its suffix arrived in the next chunk looking like plain text.
+// Now the oversized line is dropped through its terminating newline and replaced by a marker.
+test('a credential split across the 16 KiB overflow boundary never reaches the output', () => {
+  const credential = 'Zq7Vt2Lm9Rw4Kp8Xc3Nb6Hy1Gd5Fs0Ja'; // synthetic, non-hex, 32 chars
+  for (const offset of [1, 6, 12, 20, 31]) {
+    const redactor = createLineRedactor();
+    // A space before "token=" so the whole line WOULD be caught; the cut lands past the cap.
+    const prefix = `${'x'.repeat(16 * 1024 - 'token='.length - 1)} `;
+    const line = `${prefix}token=${credential} tail\nnext line ok\n`;
+    const cut = prefix.length + 'token='.length + offset; // inside the credential, past the cap
+    const out = [...redactor.push(line.slice(0, cut)), ...redactor.push(line.slice(cut)), ...redactor.flush()];
+    const joined = out.join('\n');
+    assert.ok(!joined.includes(credential.slice(offset)), `credential suffix leaked at offset ${offset}`);
+    assert.ok(out.includes('[line too long, dropped]'), `no drop marker at offset ${offset}`);
+    assert.ok(out.includes('next line ok'), `the following line was lost at offset ${offset}`);
+    assert.ok(!joined.includes(' tail'), `the rest of the dropped line leaked at offset ${offset}`);
+  }
+});
+
+test('an oversized line keeps being discarded across many chunks until its newline', () => {
+  const redactor = createLineRedactor({ maxPending: 64 });
+  const out = [];
+  out.push(...redactor.push('a'.repeat(100)));
+  out.push(...redactor.push('password=hunter2hunter2'));
+  out.push(...redactor.push('b'.repeat(100)));
+  out.push(...redactor.push(' end\nafter\n'));
+  assert.deepEqual(out, ['[line too long, dropped]', 'after']);
+  assert.deepEqual(redactor.flush(), []);
+});

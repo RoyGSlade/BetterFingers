@@ -67,25 +67,42 @@ function redactSecrets(text) {
 
 // Line-oriented redaction for a byte stream that arrives in arbitrary chunks. A secret can
 // straddle two chunks ("...token=ab" / "cd..."), and redacting each chunk on its own would
-// miss it, so an unfinished line is held back until its newline arrives (or until it has grown
-// past maxPending, so a stream that never ends a line cannot grow without bound; in that rare
-// case the held text is redacted and flushed). push() returns the finished, redacted lines;
-// flush() returns whatever is still held, redacted.
+// miss it, so an unfinished line is held back until its newline arrives. push() returns the
+// finished, redacted lines; flush() returns whatever is still held, redacted.
+//
+// A line that grows past maxPending without ending is DROPPED, not flushed (round 3, item 5):
+// flushing it and starting over would cut a credential in two, and the second half would arrive
+// without the "token=" or "Bearer" that identifies it. So the held text is discarded, one
+// LINE_DROPPED marker is emitted, and everything up to and including that line's newline is
+// discarded too. The stream resumes at the next line.
+const LINE_DROPPED = '[line too long, dropped]';
+
 function createLineRedactor({ maxPending = 16 * 1024 } = {}) {
   let pending = '';
+  let dropping = false;
   return {
     push(chunk) {
-      pending += String(chunk);
+      let text = String(chunk);
+      const out = [];
+      if (dropping) {
+        const newline = text.indexOf('\n');
+        if (newline === -1) return out; // still inside the oversized line
+        dropping = false;
+        text = text.slice(newline + 1);
+      }
+      pending += text;
       const lines = pending.split('\n');
       pending = lines.pop();
-      const out = lines.map((line) => redactSecrets(line.endsWith('\r') ? line.slice(0, -1) : line));
+      out.push(...lines.map((line) => redactSecrets(line.endsWith('\r') ? line.slice(0, -1) : line)));
       if (pending.length > maxPending) {
-        out.push(redactSecrets(pending));
+        out.push(LINE_DROPPED);
         pending = '';
+        dropping = true;
       }
       return out;
     },
     flush() {
+      if (dropping) { dropping = false; pending = ''; return []; }
       if (!pending) return [];
       const line = redactSecrets(pending);
       pending = '';
@@ -94,4 +111,4 @@ function createLineRedactor({ maxPending = 16 * 1024 } = {}) {
   };
 }
 
-module.exports = { rawTextLoggingEnabled, redact, redactSecrets, createLineRedactor };
+module.exports = { rawTextLoggingEnabled, redact, redactSecrets, createLineRedactor, LINE_DROPPED };
