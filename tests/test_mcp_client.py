@@ -95,52 +95,81 @@ class McpConfigTests(unittest.TestCase):
 
 
 
+# A minimal stdio MCP server using only the standard library: the sandboxed server runs on the
+# SYSTEM interpreter (round 5, item 1: nothing is mounted from the home, so the test's own venv
+# and its FastMCP are not in the sandbox). It answers initialize, tools/list and ping.
+STDLIB_SERVER = """
+import json, os, sys
+TOOLS = TOOLS_JSON
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    if "id" not in msg:
+        continue
+    method = msg.get("method")
+    if method == "initialize":
+        result = {"protocolVersion": msg["params"]["protocolVersion"], "capabilities": {"tools": {}},
+                  "serverInfo": {"name": "stdlib", "version": "1"}}
+    elif method == "tools/list":
+        result = {"tools": TOOLS}
+    else:
+        result = {}
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}) + "\\n")
+    sys.stdout.flush()
+"""
+SYSTEM_PYTHON = "/usr/bin/python3"
+
+
 @unittest.skipUnless(mcp_client.sdk_available(), "mcp SDK not installed")
-@unittest.skipUnless(STRICT, "the strict bubblewrap sandbox is not usable here (MCP is disabled)")
+@unittest.skipUnless(STRICT and os.path.exists(SYSTEM_PYTHON), "the strict bubblewrap sandbox (or /usr/bin/python3) is not usable here")
 class McpLiveStdioTests(unittest.TestCase):
-    """Round-trip against a real stdio MCP server (FastMCP), started the only way an MCP server
-    starts now: inside the strict bubblewrap sandbox (round 4, item 4). The scripts live in their
-    own folder, outside the app's data folder (which is never mounted); the test interpreter's
-    environment is the server's install_dir."""
+    """Round-trip against a real stdio MCP server, started the only way an MCP server starts now:
+    inside the strict bubblewrap sandbox (round 4, item 4), installed in its own folder
+    ``<app data>/mcp-servers/<name>/`` (round 5, item 1). The data folder is made outside /tmp,
+    which is never mounted."""
 
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        base = os.path.join(os.path.expanduser("~"), ".cache")
+        os.makedirs(base, exist_ok=True)
+        self.tmp = tempfile.TemporaryDirectory(dir=base)
         self.addCleanup(self.tmp.cleanup)
-        self.scripts = tempfile.TemporaryDirectory()
-        self.addCleanup(self.scripts.cleanup)
         patcher = patch("backend.dev.mcp_client.get_user_data_path", return_value=self.tmp.name)
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def script(self, name, body):
-        path = os.path.join(self.scripts.name, name)
+    def install(self, name, tools):
+        folder = os.path.join(self.tmp.name, "mcp-servers", name)
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, "server.py")
         with open(path, "w", encoding="utf-8") as handle:
-            handle.write(textwrap.dedent(body))
-        return path
+            handle.write(STDLIB_SERVER.replace("TOOLS_JSON", tools))
+        return folder, path
 
-    def configure(self, name, args, **extra):
-        _write_config(self.tmp.name, {"enabled": True, "mcpServers": {name: {
-            "command": sys.executable, "args": args, "install_dir": sys.prefix, **extra}}})
+    def configure(self, name, args, folder=None, **extra):
+        entry = {"command": SYSTEM_PYTHON, "args": args, **extra}
+        if folder:
+            entry["install_dir"] = folder
+        _write_config(self.tmp.name, {"enabled": True, "mcpServers": {name: entry}})
 
     def test_lists_tools_from_live_server(self):
-        server_path = self.script("tiny_server.py", """
-            from mcp.server.fastmcp import FastMCP
-
-            mcp = FastMCP("tiny")
-
-            @mcp.tool()
-            def add(a: int, b: int) -> int:
-                \"\"\"Add two integers.\"\"\"
-                return a + b
-
-            mcp.run()
-            """)
-        self.configure("tiny", [server_path])
+        folder, server_path = self.install("tiny", json.dumps([{
+            "name": "add", "description": "Add two integers.",
+            "inputSchema": {"type": "object", "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}}}}]))
+        self.configure("tiny", [server_path], folder)
         result = mcp_client.list_tools("tiny", timeout=30.0)
         self.assertTrue(result["ok"], result.get("error"))
         add_tool = next(t for t in result["tools"] if t["name"] == "add")
         self.assertIn("Add two integers", add_tool["description"])
         self.assertIn("properties", add_tool["input_schema"])
+
+    def test_a_script_outside_its_folder_is_not_mounted_and_the_server_fails(self):
+        """Round 5, item 1: naming a file as an argument no longer mounts it."""
+        _folder, server_path = self.install("tiny", "[]")
+        self.configure("tiny", [server_path])  # no install_dir: the script is not inside the sandbox
+        result = mcp_client.list_tools("tiny", timeout=10.0)
+        self.assertFalse(result["ok"])
 
     def test_connection_failure_returns_error_not_raise(self):
         self.configure("broken", ["-c", "raise SystemExit(1)"])
@@ -153,18 +182,9 @@ class McpLiveStdioTests(unittest.TestCase):
         no BETTERFINGERS_* credential, no provider key, no loader variable and nothing else from
         the backend -- and it still gets its own env block. The server reports what it saw in
         its tool description (the sandbox gives it nowhere on the host to write)."""
-        server_path = self.script("snoop_server.py", """
-            import json, os
-            from mcp.server.fastmcp import FastMCP
-            mcp = FastMCP("snoop")
-
-            @mcp.tool(description=json.dumps(sorted(os.environ)))
-            def noop() -> str:
-                return "ok"
-
-            mcp.run()
-            """)
-        self.configure("snoop", [server_path], env={
+        folder, server_path = self.install(
+            "snoop", '[{"name": "noop", "description": json.dumps(sorted(os.environ)), "inputSchema": {"type": "object"}}]')
+        self.configure("snoop", [server_path], folder, env={
             "SNOOP_OWN_SETTING": "1", "BETTERFINGERS_AUTH_TOKEN": "must-not-pass", "LD_PRELOAD": "/nonexistent.so"})
         secrets = {
             "BETTERFINGERS_AUTH_TOKEN": "t" * 64, "BETTERFINGERS_APPROVAL_KEY": "k" * 64,
@@ -237,14 +257,12 @@ class McpSandboxTests(unittest.TestCase):
         self.assertIn("/opt/srv/bin", plan["binds"], "an absolute command's own folder is mounted")
 
     def test_home_data_and_credential_folders_are_never_mounted(self):
+        # Round 5, item 1: such a request refuses the server outright instead of being dropped.
         with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as data:
             os.makedirs(os.path.join(home, ".ssh"))
-            spec = {**self.SPEC, "install_dir": [home, data, os.path.join(home, ".ssh", ".."), "/"]}
-            plan = self.plan(spec, home=home, data_root=data)
-            self.assertEqual(plan["binds"], ["/opt/srv/bin"], "a folder that is or holds home/data is refused")
-            sources = [plan["args"][i + 1] for i, a in enumerate(plan["args"]) if a in ("--ro-bind", "--ro-bind-try")]
-            for source in sources:
-                self.assertFalse(source.startswith(home) or source.startswith(data), source)
+            for install_dir in (home, data, os.path.join(home, ".ssh"), os.path.join(home, ".ssh", ".."), "/"):
+                with self.subTest(install_dir=install_dir), self.assertRaises(mcp_client.McpConfinementError):
+                    self.plan({**self.SPEC, "install_dir": install_dir}, home=home, data_root=data)
 
     def test_windows_macos_and_no_bwrap_disable_mcp_with_the_reason(self):
         for platform, which, words in (
@@ -266,7 +284,7 @@ class McpSandboxTests(unittest.TestCase):
                 mcp_client.list_tools("srv")
             started.assert_not_called()
 
-    @unittest.skipUnless(STRICT, "bubblewrap is not usable here")
+    @unittest.skipUnless(STRICT and os.path.exists("/usr/bin/python3"), "bubblewrap is not usable here")
     def test_a_confined_process_cannot_see_the_backend_the_data_folder_or_the_desktop(self):
         probe = (
             "import json, os, sys\n"
@@ -282,7 +300,7 @@ class McpSandboxTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as data:
             with open(os.path.join(data, "approval.key"), "w") as handle:
                 handle.write("not-a-real-key")
-            spec = {"command": sys.executable, "args": ["-c", probe, str(os.getpid()), data], "install_dir": sys.prefix,
+            spec = {"command": "/usr/bin/python3", "args": ["-c", probe, str(os.getpid()), data],
                     "env": {}, "enabled": True, "sandbox": "auto", "network": False}
             launch = mcp_client.stdio_launch("srv", spec, data_root=data)
             result = subprocess.run([launch["command"], *launch["args"]], env=launch["env"], capture_output=True,

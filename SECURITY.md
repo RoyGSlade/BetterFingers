@@ -132,11 +132,18 @@ What the app enforces on the machine itself (details in [docs/DEVELOPMENT.md](do
   them. An MCP server runs only under bubblewrap on Linux: its own PID/IPC/UTS namespaces, no new
   privileges, no capabilities, and a filesystem made only of the system runtime (`/usr` and the
   `/lib*`, `/bin`, `/sbin` links, read-only), a few `/etc` files programs need to start, and the
-  server's own install folder (read-only; `install_dir` in its entry, plus an absolute command's
-  folder and absolute file arguments). Its home is an empty tmpfs; the host home, the app's data
-  folder, all of `/run` (D-Bus, Wayland, PipeWire, keyrings, `$XDG_RUNTIME_DIR`) and the X11 sockets
-  are not there. **The network is off** unless the entry says exactly `"network": true`, which the
-  server listing shows. `bwrap` itself starts with a fixed, trusted environment; the server's own
+  server's own files (read-only). **Install your server here: `<app data>/mcp-servers/<server
+  name>/`** (the app creates the folder). An entry's `install_dir` and the folder of an absolute
+  `command` may only be inside that folder or a system location under `/usr`, `/opt` or
+  `/nix/store`, judged on the real path after every symlink is resolved. Anything else (the rest of
+  the home, `/run` and `/var/run`, `/proc`, `/sys`, `/dev`, `/tmp`, `/var/tmp`, `/etc`, the app's own
+  data folder) refuses the whole server with the reason; nothing is silently dropped. Arguments are
+  never mounted: naming a file as an argument gives the server nothing. The configured mounts come
+  before the private `/dev`, `/proc` and `/tmp`, so each isolation mount is the last mount for its
+  path (the empty home comes before them, because the server's folder normally lives under it).
+  Its home is an empty tmpfs; the host home, the app's data folder, all of `/run` (D-Bus, Wayland,
+  PipeWire, keyrings, `$XDG_RUNTIME_DIR`) and the X11 sockets are not there. **The network is off**
+  unless the entry says exactly `"network": true`, which the server listing shows with a warning. `bwrap` itself starts with a fixed, trusted environment; the server's own
   `env` block is installed inside the sandbox (`--clearenv`, `--setenv`), and loader and
   runtime-injection variables (`LD_*`, `GCONV_PATH` and the rest of glibc's unsecure list, `PATH`,
   `BETTERFINGERS_*`) are refused everywhere. The listing shows each server's full configuration
@@ -145,8 +152,14 @@ What the app enforces on the machine itself (details in [docs/DEVELOPMENT.md](do
   bubblewrap) MCP servers are disabled**, with a message that says why; a `"sandbox": "off"` entry
   is refused everywhere. There is no "trusted on this machine" exception: a one-time consent cannot
   make every later launch of an unconfined process harmless. **MCP on Windows and macOS waits for a
-  real sandbox, in a later phase.** Known limit: with `"network": true` a server shares the host
-  network namespace, so abstract-namespace sockets (such as an X server's `@/tmp/.X11-unix/X0`)
-  stay reachable; no X authority file is mounted, which defeats cookie authentication, and leaving
-  the network off closes it entirely. The backend's environment route for credentials (`python server.py` with
+  real sandbox, in a later phase.** **Known risk of `"network": true`:** the server then shares the
+  host network namespace, so besides the internet it can reach services listening on the
+  computer's own network and **abstract unix sockets**, which no mount rule can hide (such as an X
+  server's `@/tmp/.X11-unix/X0`, or a D-Bus or other desktop service bound to an abstract address).
+  No X authority file is mounted, which defeats cookie authentication, but a service that accepts
+  local connections without one (for example an X server after `xhost +local:`) would accept
+  this server too. Leaving the network off closes that entirely; the server listing warns on every
+  entry that turns it on. A further limit: the server's own folder is writable by you, so a program
+  running as you could swap a folder in it for a link between the check and the launch; that same
+  program could already edit the MCP configuration itself. The backend's environment route for credentials (`python server.py` with
   `BETTERFINGERS_AUTH_TOKEN`) is for development only and is not hardened.

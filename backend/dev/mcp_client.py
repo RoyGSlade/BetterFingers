@@ -19,8 +19,20 @@ Every server is UNTRUSTED and runs only inside the strict bubblewrap sandbox on 
 (see the sandbox section below). Where bubblewrap is unavailable -- Windows, macOS, or Linux
 without a usable bwrap -- MCP servers are DISABLED, with a message that says why. There is no
 "trusted on this machine" exception (round 4, item 4). "network": true gives a server the
-network; it is off otherwise. "install_dir" names the server's own install folder, which is
-mounted read-only (an absolute command's folder and absolute file arguments are mounted too).
+network; it is off otherwise (the listing warns about what it allows).
+
+Install your server here: ``<userdata>/mcp-servers/<server name>/`` (the app creates the folder).
+"install_dir" (one path or a list) and the folder of an absolute "command" are mounted read-only,
+and each may only be inside that folder or a system location under /usr, /opt or /nix/store,
+judged after resolving every symlink. Anything else -- the rest of the home, /run, /proc, /tmp,
+/etc, the app's own data -- refuses the server with the reason. Arguments are never mounted:
+a script the server needs belongs in its folder. Example:
+
+    "notes": {
+      "command": "/usr/bin/python3",
+      "args": ["<userdata>/mcp-servers/notes/server.py"],
+      "install_dir": "<userdata>/mcp-servers/notes"
+    }
 
 The whole feature is gated by the top-level "enabled" flag (default false) and
 kept fully defensive: the `mcp` SDK is imported lazily, and any failure here
@@ -32,6 +44,7 @@ import functools
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -69,7 +82,7 @@ def sdk_available():
 #      its own PID, IPC and UTS namespaces, no new privileges, no capabilities, and a
 #      filesystem made of ONLY the system runtime (/usr and the /lib*, /bin, /sbin links,
 #      read-only), a handful of /etc files programs need to start, the server's own install
-#      folder (read-only), an empty tmpfs home, a private /tmp, a fresh /dev and /proc. The host
+#      folder (read-only; see "what may be mounted" below), an empty tmpfs home, a private /tmp, a fresh /dev and /proc. The host
 #      home, the app's data folder, /run (the D-Bus buses, Wayland, PipeWire, keyrings,
 #      $XDG_RUNTIME_DIR) and the X11 sockets are simply not there. The network is cut unless the
 #      server's config says ``"network": true``. It dies with the backend (--die-with-parent).
@@ -93,6 +106,12 @@ def sdk_available():
 # stay reachable. No X authority file is mounted, which defeats cookie authentication, but an X
 # server configured to accept local connections without a cookie (xhost +local:) would still
 # accept one. That is why the network is off by default and the listing shows the flag.
+
+NETWORK_WARNING = (
+    'Network on: this server shares the computer\'s network. It can reach local network services, and '
+    'abstract unix sockets such as an X server\'s, which a desktop may accept without a password. Turn '
+    '"network" off unless the server needs the internet.'
+)
 
 REQUIRED_CONFINEMENT = "bubblewrap"
 TRUSTED_PATH = "/usr/local/bin:/usr/bin:/bin"
@@ -185,35 +204,132 @@ def _is_system_path(path):
     return any(path == root or path.startswith(root + os.sep) for root in _SYSTEM_PATHS)
 
 
-def _contains(parent, child):
-    parent, child = os.path.realpath(parent), os.path.realpath(child)
-    return child == parent or child.startswith(parent.rstrip(os.sep) + os.sep)
+def _under(path, root):
+    """``path`` is ``root`` or inside it (plain string test on already-resolved paths)."""
+    root = root.rstrip(os.sep) or os.sep
+    return path == root or path.startswith(root + os.sep) if root != os.sep else path.startswith(os.sep)
 
 
-def install_binds(spec, *, home, data_root):
-    """The server's own files, mounted read-only: its ``install_dir`` folder(s), the folder of an
-    absolute command outside the system runtime, and every absolute argument that names an
-    existing FILE (that file only). A folder that is, or contains, the host home or the app's
-    data folder is never mounted."""
+# --- what may be mounted into the sandbox (round 5, item 1) ---------------------------------------
+#
+# Codex re-check 4, blocker 1: ``install_dir``, an absolute command's folder and every absolute FILE
+# argument used to be mounted unless they were, or contained, the home or the data folder. So a
+# config could mount /run (D-Bus, Wayland, PipeWire sockets: read-only does not stop a socket
+# accepting commands), the host /proc, or ~/.ssh and one key file named as an argument; and those
+# binds came after the private /dev, /proc and /tmp, so they could replace them. Now (director's
+# decisions):
+#   * an argument is never mounted: it is passed to the server as text, nothing more;
+#   * ``install_dir`` and an absolute command's folder may only be inside the server's OWN folder,
+#     ``<app data>/mcp-servers/<server name>/`` (the app creates it: install your server there), or a
+#     read-only system location under /usr, /opt or /nix/store -- judged on the REAL path, every
+#     symlink resolved first;
+#   * anything else refuses the whole server with the reason. A mount is never silently dropped;
+#   * configured binds come before the private /dev, /proc and /tmp, so each isolation mount is the
+#     last mount for its path. The empty home is created BEFORE them: the server's folder lives
+#     under the home in a normal install, a strict descendant of it, and would be hidden otherwise.
+#     Nothing configured can be the home or contain it.
+SERVERS_DIRNAME = "mcp-servers"
+_MOUNT_SYSTEM_ROOTS = ("/usr", "/opt", "/nix/store")
+# Never mounted, whatever is asked: host services and sockets, process and kernel filesystems,
+# devices, shared temporary folders and host configuration (the fixed /etc files are separate).
+_NEVER_MOUNTED = ("/run", "/var/run", "/proc", "/sys", "/dev", "/tmp", "/var/tmp", "/etc")
+_SERVER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+
+
+def server_install_root(name, data_root):
+    """``<app data>/mcp-servers/<name>`` (the data folder's real path), or None when ``name`` cannot
+    be a folder name (it must start with a letter or digit and use only letters, digits, ``.``,
+    ``_`` and ``-``)."""
+    if not data_root or not _SERVER_NAME.fullmatch(str(name)):
+        return None
+    return os.path.join(os.path.realpath(data_root), SERVERS_DIRNAME, str(name))
+
+
+def ensure_install_root(name, data_root):
+    """Create the server's own folder if it is missing (never through a link). Returns its path,
+    or None when the name cannot have one."""
+    root = server_install_root(name, data_root)
+    if root and not os.path.lexists(root):
+        try:
+            os.makedirs(root, mode=0o700, exist_ok=True)
+        except OSError as exc:
+            logging.warning(f"mcp_client: could not create {root}: {exc}")
+    return root
+
+
+def _usable_root(server_root):
+    """The server's folder counts only when it is a real folder at exactly that path (no link in
+    ``mcp-servers`` or the server's own component) outside every never-mounted location."""
+    if not server_root or os.path.realpath(server_root) != server_root:
+        return False
+    return not any(_under(server_root, denied) for denied in _NEVER_MOUNTED)
+
+
+def mount_refusal(real, *, server_root, home, data_root):
+    """None when the RESOLVED path ``real`` may be mounted read-only into the sandbox; otherwise
+    the reason it may not, in words for the server listing."""
+    if _usable_root(server_root) and _under(real, server_root):
+        return None
+    if any(real != root and _under(real, root) for root in _MOUNT_SYSTEM_ROOTS):
+        if not any(_under(real, denied) for denied in _NEVER_MOUNTED):
+            return None
+    if server_root and _under(real, server_root):
+        return "the server's folder is a link or sits where the sandbox never mounts anything"
+    for denied in _NEVER_MOUNTED:
+        if _under(real, denied):
+            return f"{denied} is never mounted into the sandbox"
+    if data_root and _under(real, os.path.realpath(data_root)):
+        return "it is inside BetterFingers' own data folder, where only the server's own folder may be mounted"
+    if home and (_under(real, os.path.realpath(home)) or _under(os.path.realpath(home), real)):
+        return "it is in (or contains) your home folder"
+    return "it is not an allowed install location"
+
+
+def install_binds(name, spec, *, home, data_root):
+    """The folders mounted read-only for server ``name``: its ``install_dir`` entries and the
+    folder of an absolute command outside the system runtime, each resolved and checked by
+    ``mount_refusal``. Raises ``McpConfinementError`` when ANY requested mount is refused: the
+    server does not start with less than it asked for."""
+    root = server_install_root(name, data_root)
+    where = (f"Install the server in its own folder, {root}{os.sep}, or use a system location under /usr, "
+             "/opt or /nix/store." if root else
+             "Rename the server (letters, digits, '.', '_' and '-', starting with a letter or digit) to give it "
+             "its own install folder, or use a system location under /usr, /opt or /nix/store.")
+
+    def refuse(path, reason):
+        raise McpConfinementError(
+            f"MCP server '{name}' was not started: it asks to mount {path!r}, and {reason}. {where} "
+            "Nothing was started.")
+
     wanted = []
     configured = spec.get("install_dir")
-    for item in configured if isinstance(configured, list) else [configured]:
-        if isinstance(item, str) and item.strip():
-            wanted.append(os.path.expanduser(item.strip()))
+    if configured is not None:
+        items = configured if isinstance(configured, list) else [configured]
+        for item in items:
+            if not isinstance(item, str):
+                refuse(str(item), "an install_dir entry must be a folder path")
+            if not item.strip():
+                continue
+            path = os.path.expanduser(item.strip())
+            if not os.path.isabs(path):
+                refuse(item, "an install_dir entry must be an absolute path")
+            wanted.append(path)
     command = str(spec.get("command", ""))
-    if os.path.isabs(command) and not _is_system_path(command):
-        wanted.append(os.path.dirname(command))
-    for arg in spec.get("args", []):
-        arg = str(arg)
-        if os.path.isabs(arg) and os.path.isfile(arg) and not _is_system_path(arg):
-            wanted.append(arg)
+    if os.path.isabs(command):
+        real_command = os.path.realpath(command)
+        if not (_is_system_path(command) and _is_system_path(real_command)):
+            wanted.append(os.path.dirname(command))
+            # The command itself must not lead out of the allowed roots through a link.
+            if not _is_system_path(real_command):
+                reason = mount_refusal(real_command, server_root=root, home=home, data_root=data_root)
+                if reason:
+                    refuse(command, reason)
     out = []
     for path in wanted:
         real = os.path.realpath(path)
-        if real in ("/", "") or _contains(real, home) or (data_root and _contains(real, data_root)):
-            continue
-        if data_root and _contains(data_root, real):
-            continue
+        reason = mount_refusal(real, server_root=root, home=home, data_root=data_root)
+        if reason:
+            refuse(path, reason)
         if real not in out:
             out.append(real)
     return out
@@ -233,9 +349,12 @@ def _bwrap_profile(command, args, *, home, network, binds, env):
             wrapped += ["--ro-bind", path, path]
     for path in _ETC_BASE + (_ETC_NETWORK if network else ()):
         wrapped += ["--ro-bind-try", path, path]
-    wrapped += ["--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--tmpfs", home]
+    # Round 5, item 1: the empty home, then the configured (checked) binds, then the private /dev,
+    # /proc and /tmp LAST, so nothing configured can be mounted over them.
+    wrapped += ["--tmpfs", home]
     for path in binds:
         wrapped += ["--ro-bind-try", path, path]
+    wrapped += ["--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"]
     wrapped.append("--clearenv")
     for name, value in env.items():
         wrapped += ["--setenv", name, value]
@@ -266,7 +385,8 @@ def launch_plan(name, spec, *, platform=None, which=shutil.which, data_root=None
     home = os.path.realpath(home or os.path.expanduser("~"))
     environ = os.environ if environ is None else environ
     network = spec.get("network") is True
-    binds = install_binds(spec, home=home, data_root=data_root)
+    ensure_install_root(name, data_root)
+    binds = install_binds(name, spec, home=home, data_root=data_root)
     inside = _inside_env(spec, home=home, environ=environ)
     args = _bwrap_profile(spec["command"], [str(a) for a in spec.get("args", [])], home=home,
                           network=network, binds=binds, env=inside)
@@ -313,9 +433,10 @@ def load_config():
             # Round 4, item 4: the network is OFF unless the config says exactly "network": true.
             "network": spec.get("network", False) is True,
         }
-        install_dir = spec.get("install_dir")
-        if isinstance(install_dir, str) or (isinstance(install_dir, list) and all(isinstance(i, str) for i in install_dir)):
-            cleaned[name]["install_dir"] = install_dir
+        # Round 5, item 1: kept AS WRITTEN, malformed or not. ``install_binds`` refuses a malformed
+        # entry with the reason instead of the server quietly starting without it.
+        if spec.get("install_dir") is not None:
+            cleaned[name]["install_dir"] = spec["install_dir"]
     return {"enabled": bool(raw.get("enabled", False)), "mcpServers": cleaned}
 
 
@@ -351,6 +472,9 @@ def _listing_row(name, spec):
     except McpConfinementError as exc:
         sandbox, starts, why, binds = "disabled", False, str(exc), []
     return {
+        # Round 5, item 1: where this server's files go, and what "network": true really allows.
+        "install_root": server_install_root(name, get_user_data_path()),
+        "warning": NETWORK_WARNING if spec["network"] else "",
         "name": name,
         "command": spec["command"],
         "args": list(spec["args"]),

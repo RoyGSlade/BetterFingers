@@ -151,8 +151,18 @@ class StrictProfileTests(_Case):
             self.assertIn(system, sources)
 
     def test_the_server_install_dir_is_bound_read_only(self):
-        with tempfile.TemporaryDirectory() as install:
-            args, _home = self.profile(install_dir=install, command=os.path.join(install, "srv"))
+        # Round 5, item 1: the install folder must be the server's own folder under the app data
+        # (or a system location); a scratch folder under /tmp would be refused.
+        base = os.path.join(os.path.expanduser("~"), ".cache")
+        os.makedirs(base, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=base) as data:
+            install = os.path.join(data, "mcp-servers", "srv")
+            os.makedirs(install)
+            with tempfile.TemporaryDirectory() as home:
+                spec = {"command": os.path.join(install, "srv"), "args": [], "env": {}, "enabled": True,
+                        "sandbox": "auto", "network": False, "install_dir": install}
+                args = mcp_client.stdio_launch("srv", spec, platform="linux", which=BWRAP, home=home, data_root=data,
+                                               environ={})["args"]
         ro = [args[i + 1] for i, a in enumerate(args) if a in ("--ro-bind", "--ro-bind-try")]
         self.assertIn(os.path.realpath(install), ro)
 
@@ -183,7 +193,8 @@ class FullConfigVisibleTests(_Case):
         self.assertIn("why", row)
 
 
-@unittest.skipUnless(mcp_client.sandbox_kind() == "bubblewrap", "bubblewrap is not usable here")
+@unittest.skipUnless(mcp_client.sandbox_kind() == "bubblewrap" and os.path.exists("/usr/bin/python3"),
+                     "bubblewrap or /usr/bin/python3 is not usable here")
 class LiveStrictSandboxTests(_Case):
     def test_a_confined_process_sees_no_home_no_run_no_network_and_no_preload(self):
         probe = (
@@ -196,7 +207,8 @@ class LiveStrictSandboxTests(_Case):
             "print(json.dumps(out))\n"
         )
         home = os.path.expanduser("~")
-        spec = {"command": sys.executable, "args": ["-c", probe, home], "install_dir": sys.prefix,
+        # Round 5, item 1: the system interpreter, nothing mounted from the home.
+        spec = {"command": "/usr/bin/python3", "args": ["-c", probe, home],
                 "env": {"OWN_SETTING": "1", "LD_PRELOAD": "/nonexistent/evil.so"},
                 "enabled": True, "sandbox": "auto", "network": False}
         launch = mcp_client.stdio_launch("srv", spec)
@@ -206,10 +218,7 @@ class LiveStrictSandboxTests(_Case):
                                 text=True, timeout=60, check=False)
         self.assertEqual(result.returncode, 0, result.stderr[-600:])
         report = json.loads(result.stdout.strip().splitlines()[-1])
-        # Only the mount point leading to the server's own install dir exists in the empty home.
-        prefix = os.path.realpath(sys.prefix)
-        allowed = [os.path.relpath(prefix, home).split(os.sep)[0]] if prefix.startswith(home + os.sep) else []
-        self.assertEqual(report["home"], allowed, "the host home is not visible")
+        self.assertEqual(report["home"], [], "the host home is not visible")
         self.assertFalse(report["run_user"])
         self.assertFalse(report["etc_shadow"])
         self.assertEqual(report["ifaces"], ["lo"])

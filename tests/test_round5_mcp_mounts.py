@@ -205,7 +205,7 @@ class AllowedLocationsTests(_Case):
     def test_binds_are_read_only(self):
         os.makedirs(self.root)
         args = self.plan(self.spec(install_dir=self.root))["args"]
-        flags = [args[i] for i, a in enumerate(args) if i + 1 < len(args) and args[i + 1] == os.path.realpath(self.root)]
+        flags = [args[i] for i, a in enumerate(args) if a.startswith("--") and i + 1 < len(args) and args[i + 1] == os.path.realpath(self.root)]
         self.assertTrue(flags and all(flag in ("--ro-bind", "--ro-bind-try") for flag in flags), flags)
 
 
