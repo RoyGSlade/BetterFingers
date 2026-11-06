@@ -10,8 +10,10 @@ const require = createRequire(import.meta.url);
 const broker = require('../src/main/approvalBroker.js');
 const {
   createApprovalBroker, signTicket, linesDigest, textDigest, draftSendBind, personaExampleBind,
-  makeVisible, wrapLine, displayLines, MAX_DISPLAY_LINES, personaFewShotBind, addedFewShot,
+  makeVisible, wrapLine, displayLines, MAX_DISPLAY_LINES, MAX_DISPLAY_CHARS, personaFewShotBind, fewShotItems,
+  fewShotListDigest, learnedDeleteBind, mcpTrustBind,
 } = broker;
+const { resolveLaunchPlan } = require('../src/main/applicationLauncher.js');
 
 const SECRET = Buffer.from(Array.from({ length: 32 }, (_, i) => i));
 
@@ -58,13 +60,14 @@ function fakeBackend(handlers = {}) {
   };
 }
 
-function makeBroker({ answers = [0], handlers = {}, nowMs = 1_000_000, secret = SECRET, registry = [] } = {}) {
+function makeBroker({ answers = [0], handlers = {}, nowMs = 1_000_000, secret = SECRET, registry = [], runAuthorizations } = {}) {
   const dialog = fakeDialog(answers);
   const backend = fakeBackend(handlers);
   let clock = nowMs;
   const instance = createApprovalBroker({
     secret, dialog, backend, listApplications: () => registry, now: () => clock,
     getParentWindow: () => ({ isDestroyed: () => false }),
+    planLaunch: resolveLaunchPlan, runAuthorizations,
   });
   return { instance, dialog, backend, advance: (ms) => { clock += ms; } };
 }
@@ -213,14 +216,45 @@ test('a preview whose digest does not match its lines is refused before any dial
   assert.equal(dialog.shown.length, 0);
 });
 
-test('a preview that cannot be shown in full is refused, never clipped', async () => {
+// Round 3, item 7: content over the line OR character budget gets a dialog with no approving
+// button at all; it says it is too long to show in full and where to read it. Nothing is signed.
+function assertTooLongDialog(shown) {
+  assert.equal(shown.length, 1, 'exactly one dialog');
+  const { options } = shown[0];
+  assert.deepEqual(options.buttons, ['Close'], 'no Approve button is offered');
+  assert.equal(options.defaultId, 0);
+  assert.equal(options.cancelId, 0);
+  assert.match(options.message, /too long to show in full/);
+  assert.match(options.detail, /Nothing was approved and nothing was signed/);
+}
+
+test('a preview that cannot be shown in full is refused, never clipped, and the dialog offers no Approve', async () => {
   const long = Array.from({ length: MAX_DISPLAY_LINES + 5 }, (_, i) => `${i + 1}. step`);
-  const { instance, dialog, backend } = makeBroker({ handlers: previewHandler(long) });
+  const { instance, dialog, backend } = makeBroker({ answers: [0], handlers: previewHandler(long) });
   const result = await instance.approveWorkflow('studio_setup');
   assert.equal(result.ok, false);
   assert.match(result.error, /too long to review/);
-  assert.equal(dialog.shown.length, 0);
+  assertTooLongDialog(dialog.shown);
+  assert.match(dialog.shown[0].options.detail, /Workflows page/);
   assert.ok(!backend.calls.some((call) => call.path === '/workflows/approve'));
+});
+
+test('the character budget is enforced too: few lines, too many characters, no Approve', async () => {
+  // 45 wrapped lines of ~96 characters each is under the line budget and over the character one.
+  const line = `1. ${'x'.repeat(90)} ${'y'.repeat(90)} ${'z'.repeat(90)} ${'w'.repeat(90)} ${'v'.repeat(90)}`;
+  const lines = Array.from({ length: 9 }, (_, i) => line.replace(/^1/, String(i + 1)));
+  const shownLines = lines.flatMap((l) => displayLines(l));
+  assert.ok(shownLines.length < MAX_DISPLAY_LINES && shownLines.join('\n').length > MAX_DISPLAY_CHARS, 'the fixture tests the right budget');
+  const { instance, dialog, backend } = makeBroker({ answers: [0], handlers: previewHandler(lines) });
+  assert.equal((await instance.approveWorkflow('studio_setup')).ok, false);
+  assertTooLongDialog(dialog.shown);
+  assert.ok(!backend.calls.some((call) => call.path === '/workflows/approve'));
+});
+
+test('a too-long message line is refused the same way', async () => {
+  const { instance, dialog } = makeBroker({ answers: [0], handlers: previewHandler(PREVIEW_LINES, { name: 'N'.repeat(400) }) });
+  assert.equal((await instance.approveWorkflow('studio_setup')).ok, false);
+  assertTooLongDialog(dialog.shown);
 });
 
 test('a long line is wrapped in the dialog, every character present', async () => {
@@ -401,42 +435,86 @@ function runPreview(overrides = {}) {
   return { 'POST /workflows/preview': { ok: true, status: 200, body: previewBody(PREVIEW_LINES, { outward: true, runnable: true, ...overrides }) } };
 }
 
-test('a renderer-triggered run with an outward action needs a fresh native confirmation', async () => {
-  const { instance, dialog } = makeBroker({ answers: [0], handlers: runPreview() });
-  assert.deepEqual(await instance.confirmWorkflowRun('studio_setup'), { ok: true, confirmed: true });
+const RUN_STEPS = [{ action: 'launch_app', app_id: 'obsidian' }, { action: 'activate_application_profile', profile_id: 'writing_app' }];
+const OBSIDIAN = { id: 'obsidian', display_name: 'Obsidian', launch_method: 'flatpak', flatpak_id: 'md.obsidian.Obsidian', confirmed: true };
+function runBroker({ answers = [0], overrides = {}, registry = [OBSIDIAN], runAuthorizations } = {}) {
+  return makeBroker({
+    answers, registry, runAuthorizations,
+    handlers: { 'POST /workflows/preview': { ok: true, status: 200, body: previewBody(PREVIEW_LINES, { outward: true, runnable: true, steps: RUN_STEPS, ...overrides }) } },
+  });
+}
+
+test('every run needs a fresh native confirmation that names the exact program, and yields an authorization', async () => {
+  const { createRunAuthorizations } = require('../src/main/runAuthorization.js');
+  const runAuthorizations = createRunAuthorizations();
+  const { instance, dialog, backend } = runBroker({ runAuthorizations });
+  const result = await instance.confirmWorkflowRun('studio_setup');
+  assert.equal(result.ok, true);
+  assert.equal(result.confirmed, true);
+  assert.match(result.authorization, /^[0-9a-f]{48}$/);
   const { options } = dialog.shown[0];
-  assert.equal(options.defaultId, 1, 'Cancel is the default: a page asked for this run');
+  assert.equal(options.defaultId, 1, 'Cancel is the default');
   for (const line of PREVIEW_LINES) assert.ok(options.detail.includes(line));
+  assert.ok(options.detail.includes('Starts the program flatpak with arguments ["run","md.obsidian.Obsidian"]'));
+  assert.deepEqual(backend.calls[0].body.context.registry, [OBSIDIAN], 'the preview is computed from the registry snapshot that is frozen');
+  const grant = runAuthorizations.consume(result.authorization, 'studio_setup');
+  assert.equal(grant.targets[0].entry.flatpak_id, 'md.obsidian.Obsidian');
+  assert.deepEqual(grant.targets[0].plan, { command: 'flatpak', args: ['run', 'md.obsidian.Obsidian'] });
+  assert.ok(Object.isFrozen(grant.targets[0].entry));
+  assert.equal(runAuthorizations.consume(result.authorization, 'studio_setup'), null, 'single use');
 });
 
-test('declining the run confirmation stops the run', async () => {
-  for (const answer of [1, -1, undefined]) {
-    const { instance } = makeBroker({ answers: [answer], handlers: runPreview() });
+test('declining the run confirmation stops the run and issues nothing', async () => {
+  for (const answer of [1, -1, undefined, new Error('no display')]) {
+    const { instance } = runBroker({ answers: [answer] });
     const result = await instance.confirmWorkflowRun('studio_setup');
     assert.equal(result.ok, false);
+    assert.equal(result.confirmed, false);
     assert.equal(result.error, 'declined');
+    assert.ok(!('authorization' in result));
   }
 });
 
-test('a workflow with no outward action runs without a dialog', async () => {
-  const { instance, dialog } = makeBroker({ answers: [0], handlers: runPreview({ outward: false }) });
-  assert.deepEqual(await instance.confirmWorkflowRun('studio_setup'), { ok: true, confirmed: false });
-  assert.equal(dialog.shown.length, 0);
+test('a workflow with no outward action still asks (every run is confirmed)', async () => {
+  const { instance, dialog } = runBroker({ answers: [0], overrides: { outward: false } });
+  assert.equal((await instance.confirmWorkflowRun('studio_setup')).confirmed, true);
+  assert.equal(dialog.shown.length, 1);
 });
 
-test('a workflow the gate would refuse is left to the gate (nothing outward can happen)', async () => {
-  const { instance, dialog } = makeBroker({ answers: [0], handlers: runPreview({ runnable: false }) });
-  assert.deepEqual(await instance.confirmWorkflowRun('studio_setup'), { ok: true, confirmed: false });
-  assert.equal(dialog.shown.length, 0);
+test('FAIL CLOSED: not runnable, invalid, unverifiable or unresolvable previews refuse with no dialog', async () => {
+  const cases = [
+    [{ runnable: false }, 'not_runnable'],
+    [{ ok: false, refusals: [{ step: 1 }] }, 'not_runnable'],
+    [{ preview_sha256: 'f'.repeat(64) }, 'preview_unverified'],
+    [{ preview_lines: [] }, 'preview_unverified'],
+    [{ workflow_id: 'other' }, 'preview_unverified'],
+    [{ steps: undefined }, 'preview_unverified'],
+    [{ steps: [{ action: 'launch_app', app_id: 'not_confirmed' }] }, 'targets_unresolved'],
+  ];
+  for (const [overrides, error] of cases) {
+    const { instance, dialog } = runBroker({ overrides });
+    const result = await instance.confirmWorkflowRun('studio_setup');
+    assert.deepEqual([result.ok, result.confirmed, result.error], [false, false, error], JSON.stringify(overrides));
+    assert.equal(dialog.shown.length, 0, JSON.stringify(overrides));
+  }
+  for (const reply of [{ ok: false, status: 0 }, { ok: true, status: 404, body: { detail: 'gone' } }, { ok: true, status: 200, body: 'x' }]) {
+    const { instance, dialog } = makeBroker({ registry: [OBSIDIAN], handlers: { 'POST /workflows/preview': reply } });
+    assert.equal((await instance.confirmWorkflowRun('studio_setup')).error, 'preview_unavailable');
+    assert.equal(dialog.shown.length, 0);
+  }
+  const empty = makeBroker({ registry: [OBSIDIAN], handlers: { 'POST /workflows/preview': { ok: true, status: 200, body: {} } } });
+  assert.equal((await empty.instance.confirmWorkflowRun('studio_setup')).ok, false);
+  assert.equal(empty.dialog.shown.length, 0);
 });
 
-test('a run whose preview cannot be verified, or cannot be shown in full, does not run', async () => {
-  const bad = makeBroker({ handlers: runPreview({ preview_sha256: 'f'.repeat(64) }) });
-  assert.equal((await bad.instance.confirmWorkflowRun('studio_setup')).ok, false);
+test('a run preview too long to show offers no Run button', async () => {
   const long = Array.from({ length: MAX_DISPLAY_LINES + 3 }, (_, i) => `${i + 1}. step`);
-  const tall = makeBroker({ handlers: { 'POST /workflows/preview': { ok: true, status: 200, body: previewBody(long, { outward: true, runnable: true }) } } });
-  assert.equal((await tall.instance.confirmWorkflowRun('studio_setup')).ok, false);
-  assert.equal(bad.dialog.shown.length + tall.dialog.shown.length, 0);
+  const { instance, dialog } = makeBroker({
+    answers: [0], registry: [OBSIDIAN],
+    handlers: { 'POST /workflows/preview': { ok: true, status: 200, body: previewBody(long, { runnable: true, steps: RUN_STEPS }) } },
+  });
+  assert.equal((await instance.confirmWorkflowRun('studio_setup')).error, 'too_long');
+  assertTooLongDialog(dialog.shown);
 });
 
 test('bad workflow ids never reach the backend', async () => {
@@ -447,9 +525,24 @@ test('bad workflow ids never reach the backend', async () => {
   }
 });
 
-// ---- persona few-shot saves (round 2, item 4) ---------------------------------------------
+test('replacing a confirmed application shows before and after; only a click approves it', async () => {
+  const before = { ...OBSIDIAN, launch_method: 'executable', executable: '/opt/obsidian/obsidian' };
+  const after = { ...before, executable: '/tmp/evil' };
+  for (const [answer, approved] of [[0, true], [1, false], [-1, false]]) {
+    const { instance, dialog } = makeBroker({ answers: [answer] });
+    assert.equal((await instance.confirmApplicationReplace({ before, after })).approved, approved);
+    const { options } = dialog.shown[0];
+    assert.equal(options.defaultId, 1);
+    assert.ok(options.detail.indexOf('/opt/obsidian/obsidian') < options.detail.indexOf('/tmp/evil'));
+  }
+});
 
-const STORED = { 'GET /personas/Coach': { ok: true, status: 200, body: { few_shot: [{ raw: 'old', out: 'Old.' }] } } };
+// ---- persona few-shot saves (round 2, item 4; round 3, item 3) ------------------------------
+
+const A = { raw: 'hey whats up', out: 'Hey, what\u2019s up?' };
+const B = { raw: 'ok see you', out: 'Okay, see you then.' };
+const STORED = { 'GET /personas/Coach': { ok: true, status: 200, body: { few_shot: [A, B] } } };
+const P = (list) => fewShotItems(list);
 
 test('a persona save with no few-shot field goes straight through, with no dialog', async () => {
   const { instance, dialog, backend } = makeBroker({ handlers: STORED });
@@ -458,29 +551,53 @@ test('a persona save with no few-shot field goes straight through, with no dialo
   assert.deepEqual(backend.calls.map((c) => `${c.method} ${c.path}`), ['POST /personas']);
 });
 
-test('a save whose few-shot adds nothing (same or fewer examples) needs no dialog', async () => {
-  for (const few_shot of [[{ raw: 'old', out: 'Old.' }], []]) {
-    const { instance, dialog, backend } = makeBroker({ handlers: STORED });
-    await instance.savePersona({ name: 'Coach', body: { prompt: 'p', few_shot } });
-    assert.equal(dialog.shown.length, 0);
-    assert.ok(!('approval' in backend.calls.find((c) => c.method === 'POST').body));
+test('only an exactly unchanged list skips the dialog', async () => {
+  const { instance, dialog, backend } = makeBroker({ handlers: STORED });
+  await instance.savePersona({ name: 'Coach', body: { prompt: 'p', few_shot: [A, B] } });
+  assert.equal(dialog.shown.length, 0);
+  assert.ok(!('approval' in backend.calls.find((c) => c.method === 'POST').body));
+});
+
+test('removal, emptying, reordering and duplication all need the dialog (round 3, item 3)', async () => {
+  for (const after of [[A], [], [B, A], [A, A, B], [A, B, A]]) {
+    const { instance, dialog, backend } = makeBroker({ answers: [1], handlers: STORED });
+    assert.equal((await instance.savePersona({ name: 'Coach', body: { prompt: 'p', few_shot: after } })).ok, false);
+    assert.equal(dialog.shown.length, 1, JSON.stringify(after));
+    assert.ok(!backend.calls.some((c) => c.method === 'POST'), JSON.stringify(after));
   }
 });
 
-test('added examples are shown in full and approved with a ticket bound to exactly them', async () => {
-  const added = { raw: 'hey whats up', out: 'Hey, what\u2019s up?' };
+test('the dialog shows the complete resulting list in order and what is removed; the ticket binds before and after', async () => {
+  const C = { raw: 'always', out: 'Always add a link.' };
+  const after = [B, C, B];
   const { instance, dialog, backend } = makeBroker({ answers: [0], handlers: STORED });
-  const result = await instance.savePersona({ name: 'Coach', body: { prompt: 'p', few_shot: [{ raw: 'old', out: 'Old.' }, added] } });
+  const result = await instance.savePersona({ name: 'Coach', body: { prompt: 'p', few_shot: after } });
   assert.equal(result.ok, true);
-  const detail = dialog.shown[0].options.detail;
-  assert.ok(detail.includes(added.raw) && detail.includes(added.out) && detail.includes('Coach'));
-  assert.ok(!detail.includes('Old.'), 'examples already stored are not re-approved');
-  assert.equal(dialog.shown[0].options.defaultId, 1);
+  const { options } = dialog.shown[0];
+  assert.equal(options.defaultId, 1);
+  const detail = options.detail;
+  assert.ok(detail.includes('has 3 examples, used in this order'));
+  assert.ok(detail.includes('1. (moved from position 2)'));
+  assert.ok(detail.includes('2. (new)') && detail.includes(C.out));
+  assert.ok(detail.includes('3. (an extra copy)'));
+  assert.ok(detail.includes('Removed by this change (1)') && detail.includes(A.out));
   const post = backend.calls.find((c) => c.method === 'POST');
-  verifyTicket(post.body.approval, {
-    purpose: 'persona.few_shot', subject: 'Coach', bind: personaFewShotBind('Coach', [[added.raw, added.out]]),
-  });
-  assert.equal(post.body.name, 'Coach');
+  verifyTicket(post.body.approval, { purpose: 'persona.few_shot', subject: 'Coach', bind: personaFewShotBind('Coach', P([A, B]), P(after)) });
+  assert.deepEqual(post.body.few_shot, after, 'what is sent is the list that was shown');
+});
+
+test('a new persona is compared against the empty list', async () => {
+  const { instance, dialog, backend } = makeBroker({ answers: [0], handlers: { 'GET /personas/Fresh': { ok: false, status: 404, body: { detail: 'nope' } } } });
+  assert.equal((await instance.savePersona({ name: 'Fresh', body: { few_shot: [A] } })).ok, true);
+  assert.equal(dialog.shown.length, 1);
+  verifyTicket(backend.calls.find((c) => c.method === 'POST').body.approval, { purpose: 'persona.few_shot', subject: 'Fresh', bind: personaFewShotBind('Fresh', [], P([A])) });
+});
+
+test('an unreadable stored persona saves nothing (fail closed)', async () => {
+  const { instance, dialog, backend } = makeBroker({ answers: [0], handlers: { 'GET /personas/Coach': { ok: false, status: 0, error: 'down' } } });
+  assert.equal((await instance.savePersona({ name: 'Coach', body: { few_shot: [A] } })).ok, false);
+  assert.equal(dialog.shown.length, 0);
+  assert.ok(!backend.calls.some((c) => c.method === 'POST'));
 });
 
 test('the stored examples come from the backend, and a page-supplied approval is discarded', async () => {
@@ -497,12 +614,11 @@ test('declining a few-shot save saves nothing', async () => {
   }
 });
 
-test('too many, too long or malformed few-shot saves are refused before any dialog', async () => {
+test('too many, too long or malformed few-shot saves are refused, and a list too long to show offers no Approve', async () => {
   const cases = [
     { name: '', body: { few_shot: [] } }, { name: 'Coach', body: null }, { name: 'Coach', body: { few_shot: 'x' } },
     { name: 'Coach', body: { few_shot: Array.from({ length: 51 }, () => ({ raw: 'a', out: 'b' })) } },
     { name: 'Coach', body: { few_shot: [{ raw: 'x'.repeat(4001), out: 'b' }] } },
-    { name: 'Coach', body: { few_shot: Array.from({ length: 12 }, (_, i) => ({ raw: `${'long '.repeat(60)}${i}`, out: 'b' })) } },
   ];
   for (const args of cases) {
     const { instance, dialog, backend } = makeBroker({ answers: [0], handlers: STORED });
@@ -510,11 +626,58 @@ test('too many, too long or malformed few-shot saves are refused before any dial
     assert.equal(dialog.shown.length, 0);
     assert.ok(!backend.calls.some((c) => c.method === 'POST'));
   }
+  const tall = Array.from({ length: 12 }, (_, i) => ({ raw: `${'long '.repeat(60)}${i}`, out: 'b' }));
+  const { instance, dialog, backend } = makeBroker({ answers: [0], handlers: STORED });
+  assert.equal((await instance.savePersona({ name: 'Coach', body: { few_shot: tall } })).ok, false);
+  assertTooLongDialog(dialog.shown);
+  assert.match(dialog.shown[0].options.detail, /persona editor/);
+  assert.ok(!backend.calls.some((c) => c.method === 'POST'));
 });
 
-test('addedFewShot matches the backend\'s normalisation', () => {
-  assert.deepEqual(addedFewShot([{ raw: 'a', out: 'b' }, 'junk', null, { raw: 'c' }], [{ raw: 'a', out: 'b' }]), [['c', '']]);
-  assert.deepEqual(addedFewShot('nope', []), []);
+test('fewShotItems matches the backend\'s normalisation and keeps order and repeats', () => {
+  assert.deepEqual(fewShotItems([{ raw: 'a', out: 'b' }, 'junk', null, { raw: 'c' }, { raw: 'a', out: 'b' }, { raw: null, out: 0 }]),
+    [['a', 'b'], ['c', ''], ['a', 'b'], ['', '']]);
+  assert.deepEqual(fewShotItems('nope'), []);
+  assert.notEqual(fewShotListDigest('C', [['a', 'b'], ['c', 'd']]), fewShotListDigest('C', [['c', 'd'], ['a', 'b']]));
+  assert.notEqual(fewShotListDigest('C', [['a', 'b']]), fewShotListDigest('C', [['a', 'b'], ['a', 'b']]));
+});
+
+test('deleting a learned example shows it, and the ticket binds its id and the list before and after', async () => {
+  const examples = [{ id: 'ex_1', ...A }, { id: 'ex_2', ...B }];
+  const handlers = { 'GET /personas/Coach/examples': { ok: true, status: 200, body: { examples } } };
+  const { instance, dialog, backend } = makeBroker({ answers: [0], handlers });
+  assert.equal((await instance.deleteLearnedExample({ persona: 'Coach', exampleId: 'ex_1' })).ok, true);
+  assert.ok(dialog.shown[0].options.detail.includes(A.out));
+  assert.equal(dialog.shown[0].options.defaultId, 1);
+  const del = backend.calls.find((c) => c.method === 'DELETE');
+  assert.equal(del.path, '/personas/Coach/examples/ex_1');
+  verifyTicket(del.body.approval, { purpose: 'persona.learned_delete', subject: 'Coach', bind: learnedDeleteBind('Coach', 'ex_1', P([A, B]), P([B])) });
+  for (const [answer, exampleId] of [[1, 'ex_1'], [0, 'missing'], [0, '../x']]) {
+    const other = makeBroker({ answers: [answer], handlers });
+    assert.equal((await other.instance.deleteLearnedExample({ persona: 'Coach', exampleId })).ok, false);
+    assert.ok(!other.backend.calls.some((c) => c.method === 'DELETE'));
+  }
+});
+
+test('trusting an MCP server shows its exact configuration and binds the config digest', async () => {
+  const config = 'cd'.repeat(32);
+  const handlers = { 'GET /mcp/servers/files/trust': { ok: true, status: 200, body: {
+    name: 'files', command: '/usr/bin/files-mcp', args: ['--root', '/home/x'], env_keys: ['API_KEY'], network: false,
+    config_sha256: config, weaker_confinement: 'none (no bubblewrap)', why_untrusted: 'bubblewrap is not installed.',
+  } } };
+  const { instance, dialog, backend } = makeBroker({ answers: [0], handlers });
+  assert.equal((await instance.trustMcpServer({ name: 'files' })).ok, true);
+  const { options } = dialog.shown[0];
+  assert.equal(options.defaultId, 1);
+  for (const part of ['/usr/bin/files-mcp', '["--root","/home/x"]', 'API_KEY', 'Network: off', 'bubblewrap is not installed']) assert.ok(options.detail.includes(part), part);
+  const post = backend.calls.find((c) => c.method === 'POST');
+  assert.equal(post.path, '/mcp/servers/files/trust');
+  verifyTicket(post.body.approval, { purpose: 'mcp.trust', subject: 'files', bind: mcpTrustBind(config) });
+  for (const [answer, name, body] of [[1, 'files', handlers], [0, '../x', handlers], [0, 'files', { 'GET /mcp/servers/files/trust': { ok: true, status: 200, body: { config_sha256: 'nope' } } }]]) {
+    const other = makeBroker({ answers: [answer], handlers: body });
+    assert.equal((await other.instance.trustMcpServer({ name })).ok, false);
+    assert.ok(!other.backend.calls.some((c) => c.method === 'POST'));
+  }
 });
 
 // ---- drafts -------------------------------------------------------------------
@@ -576,7 +739,8 @@ test('a draft too long to show in full cannot be placed from the button (copy is
   const result = await instance.sendDraft({ id: 7, action: 'paste' });
   assert.equal(result.ok, false);
   assert.match(result.error, /Copy it instead/);
-  assert.equal(dialog.shown.length, 0);
+  assertTooLongDialog(dialog.shown);
+  assert.match(dialog.shown[0].options.detail, /review window/);
   assert.ok(!backend.calls.some((c) => c.method === 'POST'));
 });
 
@@ -668,7 +832,8 @@ test('the broker exposes no way to sign without a dialog', () => {
   const { instance } = makeBroker();
   assert.ok(!('signPhysicalPress' in instance));
   assert.deepEqual(Object.keys(instance).sort(), [
-    'addPersonaExample', 'approveWorkflow', 'confirmSendHotkeyChange', 'confirmWorkflowRun', 'placeFromHotkey', 'presentVoiceTap', 'primaryActionFromUi', 'savePersona', 'sendDraft',
+    'addPersonaExample', 'approveWorkflow', 'confirmApplicationReplace', 'confirmSendHotkeyChange', 'confirmWorkflowRun',
+    'deleteLearnedExample', 'placeFromHotkey', 'presentVoiceTap', 'primaryActionFromUi', 'savePersona', 'sendDraft', 'trustMcpServer',
   ]);
 });
 

@@ -55,6 +55,11 @@ const LAUNCH_METHOD_FIELD = {
 };
 
 const MAX_ENTRIES = 200;
+
+function sortKeys(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortKeys(value[key])]));
+}
 const MAX_CANDIDATES = 500;
 const MAX_TEXT = 120;
 const MAX_URI = 2048;
@@ -382,7 +387,7 @@ function createApplicationRegistry({
    * launch method has no value behind it would sit in the registry looking
    * valid and fail at the moment the user's workflow ran.
    */
-  function confirm(payload) {
+  function confirm(payload, { expect } = {}) {
     const entry = coerceEntry(payload);
     if (!entry) {
       return {
@@ -407,6 +412,20 @@ function createApplicationRegistry({
       };
     }
     const data = load();
+    // Round 3, item 2: a conditional write. `expect: null` means "only if there is no entry with
+    // this id yet"; an entry means "only if the stored one is still exactly what the person was
+    // shown". ipc.js always passes one, so a replacement can never slip through unseen.
+    if (expect !== undefined) {
+      const current = data.entries[entry.id] || null;
+      const same = expect === null ? current === null : (current !== null && JSON.stringify(sortKeys(current)) === JSON.stringify(sortKeys(expect)));
+      if (!same) {
+        return {
+          ok: false,
+          error: 'changed',
+          message: 'That application changed while you were looking at it. Nothing was saved; check it and try again.',
+        };
+      }
+    }
     if (!data.entries[entry.id] && Object.keys(data.entries).length >= MAX_ENTRIES) {
       return {
         ok: false,
@@ -458,7 +477,7 @@ function createApplicationRegistry({
     return { ok: true };
   }
 
-  return { discover, confirm, remove, list, get, clearAll, path: filePath };
+  return { discover, confirm, coerce: coerceEntry, remove, list, get, clearAll, path: filePath };
 }
 
 module.exports = {

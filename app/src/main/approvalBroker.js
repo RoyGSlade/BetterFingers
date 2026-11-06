@@ -30,12 +30,19 @@
 // the backend's (approvals.lines_digest), checked by a shared test vector.
 
 const crypto = require('node:crypto');
+const { freezeRunTargets, createRunAuthorizations, canonicalJson } = require('./runAuthorization');
 
 const TICKET_VERSION = 1;
 const TICKET_TTL_S = 60;
 // A native dialog cannot scroll: content that does not fit is REFUSED, never
 // clipped. (A person approving the first half of a thing has not approved it.)
+// Both budgets are checked on the WHOLE dialog (message, body and note) inside
+// confirm(), and anything over either one gets a dialog with NO approving button
+// (round 3, item 7): it says the thing is too long to show in full and where to read
+// it, and nothing is signed.
 const MAX_DISPLAY_LINES = 48;
+const MAX_DISPLAY_CHARS = 4000;
+const MAX_MESSAGE_CHARS = 240;
 const WRAP_WIDTH = 96;
 const MIN_DIALOG_GAP_MS = 500;
 
@@ -43,6 +50,8 @@ const PURPOSE_WORKFLOW_APPROVE = 'workflow.approve';
 const PURPOSE_PERSONA_EXAMPLE = 'persona.example';
 const PURPOSE_DRAFT_SEND = 'draft.send';
 const PURPOSE_PERSONA_FEW_SHOT = 'persona.few_shot';
+const PURPOSE_PERSONA_LEARNED_DELETE = 'persona.learned_delete';
+const PURPOSE_MCP_TRUST = 'mcp.trust';
 
 const WORKFLOW_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const SEND_ACTIONS = new Set(['copy_only', 'paste', 'type', 'open_chat_then_send']);
@@ -65,23 +74,37 @@ function textDigest(text) {
   return linesDigest([String(text)]);
 }
 
-// Few-shot items as [raw, out] string pairs, normalised exactly like the backend's
-// approvals.few_shot_items, and the ones a save would ADD to what is stored.
+// Few-shot items as [raw, out] string pairs, normalised like the backend's
+// approvals.few_shot_items (and llm_engine.normalize_persona): a non-object item is
+// dropped and a missing or empty field is the empty string. ORDER AND DUPLICATES ARE
+// KEPT: inference uses the first five in order, so reordering or repeating an example
+// changes what the model sees (round 3, item 3).
 function fewShotItems(value) {
   return (Array.isArray(value) ? value : [])
     .filter((item) => item && typeof item === 'object' && !Array.isArray(item))
-    .map((item) => [String(item.raw ?? ''), String(item.out ?? '')]);
+    .map((item) => [item.raw ? String(item.raw) : '', item.out ? String(item.out) : '']);
 }
 
-function addedFewShot(next, previous) {
-  const existing = new Set(fewShotItems(previous).map(([raw, out]) => JSON.stringify([raw, out])));
-  return fewShotItems(next).filter(([raw, out]) => !existing.has(JSON.stringify([raw, out])));
+// Digest of a COMPLETE ordered example list for one persona (identical bytes to
+// approvals.few_shot_list_digest).
+function fewShotListDigest(persona, items) {
+  const lines = ['persona.few_shot.v2', String(persona), String(items.length)];
+  for (const [raw, out] of items) lines.push(raw, out);
+  return linesDigest(lines);
 }
 
-function personaFewShotBind(persona, added) {
-  const lines = [String(persona)];
-  for (const [raw, out] of added) lines.push(raw, out);
-  return { few_shot_sha256: linesDigest(lines) };
+// A change is approved against the list it REPLACES and the list it RESULTS IN, so a
+// change made by anything else between the dialog and the save voids the approval.
+function personaFewShotBind(persona, before, after) {
+  return { before_sha256: fewShotListDigest(persona, before), after_sha256: fewShotListDigest(persona, after) };
+}
+
+function learnedDeleteBind(persona, exampleId, before, after) {
+  return { example_id: String(exampleId), ...personaFewShotBind(persona, before, after) };
+}
+
+function mcpTrustBind(configSha256) {
+  return { config_sha256: String(configSha256) };
 }
 
 function draftSendBind(action, text, openChat) {
@@ -174,11 +197,73 @@ function fingerprint(digest) {
   return `${digest.slice(0, 8)} ${digest.slice(8, 16)}`;
 }
 
+function fingerprintOf(text) {
+  return fingerprint(textDigest(text));
+}
+
+// The before/after diff a person reads for a few-shot change: the COMPLETE resulting
+// list in order, each example marked, then every example the change removes.
+function fewShotDiffLines(before, after) {
+  const key = ([raw, out]) => JSON.stringify([raw, out]);
+  const unused = new Map();
+  before.forEach((pair, index) => {
+    const k = key(pair);
+    if (!unused.has(k)) unused.set(k, []);
+    unused.get(k).push(index);
+  });
+  const lines = [after.length === 0
+    ? 'After this change the persona has NO examples.'
+    : `After this change the persona has ${after.length} example${after.length === 1 ? '' : 's'}, used in this order:`];
+  after.forEach((pair, index) => {
+    const slots = unused.get(key(pair));
+    let mark = 'new';
+    if (slots && slots.length) {
+      const from = slots.shift();
+      mark = from === index ? 'unchanged' : `moved from position ${from + 1}`;
+    } else if (before.some((other) => key(other) === key(pair))) {
+      mark = 'an extra copy';
+    }
+    lines.push(`${index + 1}. (${mark}) What was said:`, ...displayLines(pair[0]), '   What it should become:', ...displayLines(pair[1]));
+  });
+  const removed = [];
+  for (const indexes of unused.values()) for (const index of indexes) removed.push([index, before[index]]);
+  removed.sort((a, b) => a[0] - b[0]);
+  if (removed.length) {
+    lines.push('', `Removed by this change (${removed.length}):`);
+    for (const [index, [raw, out]] of removed) {
+      lines.push(`was ${index + 1}. What was said:`, ...displayLines(raw), '   What it should become:', ...displayLines(out));
+    }
+  }
+  return lines;
+}
+
+// Describe a registry entry's launch for the replace dialog.
+function describeEntry(entry, planLaunch) {
+  const lines = [
+    ...displayLines(`Name: ${String(entry.display_name || entry.id)}`),
+    ...displayLines(`Start method: ${String(entry.launch_method || '(none)')}`),
+  ];
+  let plan = null;
+  try { plan = typeof planLaunch === 'function' ? planLaunch(entry) : null; } catch { plan = null; }
+  if (plan && plan.ok) {
+    lines.push(...displayLines(`Runs: ${plan.command}${plan.args && plan.args.length ? ` with arguments ${JSON.stringify(plan.args)}` : ' with no arguments'}`));
+  } else {
+    lines.push('Runs: nothing (no usable start method)');
+  }
+  for (const field of ['executable', 'desktop_entry', 'flatpak_id', 'uri', 'steam_uri', 'profile_id']) {
+    if (entry[field]) lines.push(...displayLines(`${field}: ${entry[field]}`));
+  }
+  return lines;
+}
+
 // --- the broker ----------------------------------------------------------------
 
 function fault(error, status = 0) {
   return { ok: false, status, error };
 }
+
+const TOO_LONG = 'That is too long to review in one window, so BetterFingers will not approve it. Shorten it and try again.';
+const UNAVAILABLE = 'Approvals are not available right now. Nothing was changed.';
 
 function createApprovalBroker({
   secret,
@@ -186,12 +271,18 @@ function createApprovalBroker({
   getParentWindow = () => null,
   backend,
   listApplications = () => [],
+  // applicationLauncher.planFor: entry => { ok, command, args }. Needed to freeze and
+  // show the exact program a workflow run will start (round 3, item 2).
+  planLaunch = null,
+  // The run-authorization store shared with the workflow executor (runAuthorization.js).
+  runAuthorizations = null,
   now = () => Date.now(),
   randomBytes = crypto.randomBytes,
   log = () => {},
 } = {}) {
   if (!dialog || typeof dialog.showMessageBox !== 'function') throw new Error('a dialog implementation is required');
   if (!backend || typeof backend.send !== 'function') throw new Error('a backend client is required');
+  const runs = runAuthorizations || createRunAuthorizations({ now });
 
   let busy = false;
   let lastClosedAt = 0;
@@ -201,7 +292,6 @@ function createApprovalBroker({
   }
 
   // A missing/short key means approvals are unavailable; say so instead of throwing.
-  const UNAVAILABLE = 'Approvals are not available right now. Nothing was changed.';
   function trySign(purpose, subject, bind) {
     try {
       return sign(purpose, subject, bind);
@@ -210,22 +300,64 @@ function createApprovalBroker({
     }
   }
 
-  // Show the native dialog; resolves true ONLY when the person clicked Approve.
-  // Anything else (Cancel, Escape, closing the window, an error) is a no.
-  async function confirm({ title, message, body, approveLabel = 'Approve', note = '', defaultApprove = false }) {
+  async function show(options) {
+    const parent = getParentWindow();
+    return parent && !(typeof parent.isDestroyed === 'function' && parent.isDestroyed())
+      ? dialog.showMessageBox(parent, options)
+      : dialog.showMessageBox(options);
+  }
+
+  // Does the whole dialog fit the budgets? Counted on exactly what would be shown.
+  function fitsDialog(message, lines) {
+    if (Array.from(String(message)).length > MAX_MESSAGE_CHARS) return false;
+    if (lines.length > MAX_DISPLAY_LINES) return false;
+    let chars = 0;
+    for (const line of lines) {
+      const length = Array.from(String(line)).length;
+      if (length > WRAP_WIDTH + 8) return false; // every body line must already be wrapped
+      chars += length + 1;
+    }
+    return chars <= MAX_DISPLAY_CHARS;
+  }
+
+  // Show the native dialog; resolves approved:true ONLY when the person clicked the
+  // approving button. Anything else (Cancel, Escape, closing the window, an error) is a no.
+  // Content that does not fit gets a dialog with ONLY a Close button (round 3, item 7).
+  async function confirm({
+    title, message, body, approveLabel = 'Approve', note = '', defaultApprove = false, tooLongWhere = '', tooLongError = TOO_LONG,
+  }) {
     if (busy) return { approved: false, error: 'Another approval is already waiting for you.' };
     if (now() - lastClosedAt < MIN_DIALOG_GAP_MS) {
       return { approved: false, error: 'Please wait a moment before asking again.' };
     }
+    const lines = [...body, ...(note ? ['', ...displayLines(note)] : [])];
     busy = true;
     try {
-      const detail = [...body, ...(note ? ['', note] : [])].join('\n');
-      const parent = getParentWindow();
-      const options = {
+      if (!fitsDialog(message, lines)) {
+        await show({
+          type: 'warning',
+          title,
+          message: 'This is too long to show in full here, so it cannot be approved from this window.',
+          detail: [
+            'BetterFingers only asks for your approval when it can show you all of it, and this does not fit.',
+            '',
+            tooLongWhere || 'Read it in full in the BetterFingers window, shorten it, and try again.',
+            '',
+            'Nothing was approved and nothing was signed.',
+          ].join('\n'),
+          // ONE button. There is nothing to approve here, so there is no way to approve it.
+          buttons: ['Close'],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true,
+        });
+        return { approved: false, tooLong: true, error: tooLongError };
+      }
+      const result = await show({
         type: 'question',
         title,
         message,
-        detail,
+        detail: lines.join('\n'),
         buttons: [approveLabel, 'Cancel'],
         // Cancel is the default EXCEPT when the person themselves just pressed the
         // send shortcut (defaultApprove): then Enter confirms. Anything a page or the
@@ -233,10 +365,7 @@ function createApprovalBroker({
         defaultId: defaultApprove ? 0 : 1,
         cancelId: 1,
         noLink: true,
-      };
-      const result = parent && !(typeof parent.isDestroyed === 'function' && parent.isDestroyed())
-        ? await dialog.showMessageBox(parent, options)
-        : await dialog.showMessageBox(options);
+      });
       return { approved: Boolean(result) && result.response === 0 };
     } catch (error) {
       log(`[approval] dialog failed: ${error && error.name}`);
@@ -251,12 +380,9 @@ function createApprovalBroker({
     return fault((result && result.error) || 'You cancelled. Nothing was changed.');
   }
 
-  // Fit-or-refuse: the dialog must be able to show ALL of it.
-  function fits(lines) {
-    return lines.length <= MAX_DISPLAY_LINES;
-  }
-
-  const TOO_LONG = 'That is too long to review in one window, so BetterFingers will not approve it. Shorten it and try again.';
+  const WHERE_WORKFLOW = 'Open the workflow on the Workflows page of the BetterFingers window to read every step, then make it shorter.';
+  const WHERE_PERSONA = 'Open the persona in the persona editor of the BetterFingers window to review its examples, then change fewer at a time.';
+  const WHERE_DRAFT = 'Open the draft in the review window to read it in full. Copy never needs a confirmation.';
 
   // --- workflow ---------------------------------------------------------------
 
@@ -289,13 +415,12 @@ function createApprovalBroker({
     }
 
     const shown = lines.flatMap((line) => displayLines(line));
-    if (!fits(shown)) return fault(TOO_LONG);
-
     const decision = await confirm({
       title: 'Approve workflow',
       message: `Approve the workflow “${makeVisible(String(info.name || info.workflow_id))}”?`,
       body: ['When it runs, BetterFingers will do exactly this, in this order:', '', ...shown],
       note: `Fingerprint ${fingerprint(info.preview_sha256)}. Any change to these steps cancels the approval.`,
+      tooLongWhere: WHERE_WORKFLOW,
     });
     if (!decision.approved) return declined(decision);
 
@@ -307,45 +432,89 @@ function createApprovalBroker({
     return backend.send('POST', '/workflows/approve', { workflow_id: info.workflow_id, preview: lines, approval }, 5000);
   }
 
-  // --- running an approved workflow (round 2, item 5) ----------------------------------------
+  // --- running an approved workflow (round 2, item 5; round 3, items 1 and 2) -------------------
   //
-  // POLICY. An approved workflow is approved ONCE, but a RUN is a separate act. A run that a
-  // renderer asks for (workflows:execute) and that has any outward effect (launching or
-  // raising a program, opening a link or a folder) needs a fresh native confirmation, so a
-  // compromised page cannot replay an approved workflow whenever it likes. A PHYSICAL owner
-  // trigger that main itself observes (a hotkey chord, a trigger phrase heard on the mic) is
-  // the owner acting now, and runs without a dialog: ipc.js exposes that as
-  // runWorkflowFromPhysicalTrigger, which no renderer channel can reach. Workflows that only
-  // change BetterFingers' own settings or speak need no confirmation either way.
+  // POLICY. An approved workflow is approved ONCE; every RUN is a separate act and is confirmed
+  // here, in a native dialog, whatever the workflow does and whoever asked. There is no
+  // dialog-free path: not for a renderer, not for a "physical" trigger, not for a workflow that
+  // only changes a setting. This FAILS CLOSED: if the backend cannot describe the run, if the
+  // preview cannot be verified, if the gate would refuse it now (not approved, switched off,
+  // changed), or if any target cannot be resolved, nothing is shown and nothing runs. A later
+  // "enable" cannot rescue an earlier "not runnable" answer, because no authorization exists.
+  //
+  // What a click produces is a single-use run authorization (runAuthorization.js) bound to the
+  // exact plan that was shown and to the launch targets resolved from the SAME registry snapshot
+  // the preview was computed from: the program and its arguments, each link, each folder. The
+  // executor runs only those, and only while the registry still holds exactly them.
   async function confirmWorkflowRun(workflowId) {
+    const refuse = (error, reason, extra = {}) => ({ ok: false, confirmed: false, error, reason, ...extra });
     const id = typeof workflowId === 'string' ? workflowId.trim() : '';
-    if (!WORKFLOW_ID.test(id)) return { ok: false, error: 'invalid_id', reason: 'That is not a workflow BetterFingers knows about.' };
-    const preview = await backend.send('POST', '/workflows/preview', {
-      workflow_id: id, context: { registry: listApplications() || [] },
-    }, 5000);
-    const info = preview && preview.ok && preview.body && typeof preview.body === 'object' ? preview.body : null;
-    // If the backend cannot describe it, or the gate would refuse it anyway, let the executor give
-    // the gate's own refusal: nothing outward can happen, so there is nothing to confirm.
-    if (!info || info.ok !== true || info.runnable !== true) return { ok: true, confirmed: false };
-    if (info.outward !== true) return { ok: true, confirmed: false };
-
-    const lines = Array.isArray(info.preview_lines) ? info.preview_lines.map(String) : [];
-    if (lines.length === 0 || linesDigest(lines) !== info.preview_sha256) {
-      return { ok: false, error: 'preview_unverified', reason: 'BetterFingers could not verify what that workflow would do, so it did not run.' };
+    if (!WORKFLOW_ID.test(id)) return refuse('invalid_id', 'That is not a workflow BetterFingers knows about.');
+    let registry;
+    try {
+      registry = JSON.parse(JSON.stringify(listApplications() || []));
+    } catch {
+      return refuse('registry_unavailable', 'BetterFingers could not read its application list, so nothing ran.');
     }
-    const shown = lines.flatMap((line) => displayLines(line));
-    if (!fits(shown)) return { ok: false, error: 'too_long', reason: TOO_LONG };
+    const preview = await backend.send('POST', '/workflows/preview', { workflow_id: id, context: { registry } }, 5000);
+    const info = preview && preview.ok && preview.status < 400 && preview.body && typeof preview.body === 'object' ? preview.body : null;
+    if (!info) return refuse('preview_unavailable', 'BetterFingers could not check what that workflow would do, so it did not run.');
+    if (info.ok !== true) {
+      return refuse('not_runnable', 'Some steps no longer point at anything BetterFingers can open, so it did not run.', { refusals: Array.isArray(info.refusals) ? info.refusals : [] });
+    }
+    if (info.runnable !== true) {
+      return refuse('not_runnable', 'That workflow is not approved, is switched off, or has changed since you approved it, so it did not run.');
+    }
+    const lines = Array.isArray(info.preview_lines) ? info.preview_lines.map(String) : [];
+    if (lines.length === 0 || linesDigest(lines) !== info.preview_sha256 || info.workflow_id !== id || !Array.isArray(info.steps)) {
+      return refuse('preview_unverified', 'BetterFingers could not verify what that workflow would do, so it did not run.');
+    }
+    const frozen = freezeRunTargets(info.steps, registry, { planLaunch });
+    if (!frozen.ok) return refuse('targets_unresolved', `${frozen.reason} Nothing ran.`);
+
+    const shown = [
+      'It will do exactly this, in this order:', '', ...lines.flatMap((line) => displayLines(line)),
+    ];
+    if (frozen.lines.length) shown.push('', 'Exactly what it starts or opens:', ...frozen.lines.flatMap((line) => displayLines(line)));
     const decision = await confirm({
       title: 'Run workflow',
-      message: `Run the workflow \u201C${makeVisible(String(info.name || id))}\u201D now?`,
-      body: ['It will do exactly this, in this order:', '', ...shown],
+      message: `Run the workflow “${makeVisible(String(info.name || id))}” now?`,
+      body: shown,
       approveLabel: 'Run it',
-      note: 'Something in the app asked for this run. If you did not, choose Cancel.',
+      note: 'If you did not just ask for this run, choose Cancel. If an application changes before its step, the run stops.',
+      tooLongWhere: WHERE_WORKFLOW,
     });
-    if (!decision.approved) {
-      return { ok: false, error: 'declined', reason: (decision && decision.error) || 'You cancelled. Nothing was run.' };
+    if (decision.tooLong) return refuse('too_long', TOO_LONG);
+    if (!decision.approved) return refuse('declined', (decision && decision.error) || 'You cancelled. Nothing was run.');
+    let authorization;
+    try {
+      authorization = runs.issue({ workflowId: id, previewSha256: info.preview_sha256, steps: info.steps, targets: frozen.targets });
+    } catch {
+      return refuse('unavailable', 'BetterFingers could not prepare that run. Nothing ran.');
     }
-    return { ok: true, confirmed: true };
+    return { ok: true, confirmed: true, authorization };
+  }
+
+  // --- replacing a confirmed application (round 3, item 2) -----------------------------------
+  //
+  // The registry is what a workflow may launch. Creating an entry changes nothing that is already
+  // approved; REPLACING one changes what an approved workflow's id points at, so it is shown here,
+  // before and after, and only a click lets main write it.
+  async function confirmApplicationReplace({ before, after } = {}) {
+    if (!before || !after || typeof before !== 'object' || typeof after !== 'object') return { approved: false, error: 'Nothing to replace.' };
+    const body = [
+      'An application BetterFingers is allowed to start is about to change.',
+      'Approved workflows that use it will start the NEW target.', '',
+      'Now:', ...describeEntry(before, planLaunch), '',
+      'After the change:', ...describeEntry(after, planLaunch),
+    ];
+    return confirm({
+      title: 'Change a confirmed application',
+      message: `Change what “${makeVisible(String(before.display_name || before.id))}” starts?`,
+      body,
+      approveLabel: 'Change it',
+      note: 'If you did not just edit this application, choose Cancel.',
+    });
   }
 
   // --- persona learning --------------------------------------------------------
@@ -360,14 +529,13 @@ function createApprovalBroker({
       `Persona: ${makeVisible(persona)}`, '', 'What was said:', ...displayLines(raw), '',
       'What it should become:', ...displayLines(out),
     ];
-    if (!fits(shown)) return fault(TOO_LONG);
-
     const decision = await confirm({
       title: 'Teach this persona',
       message: `Let “${makeVisible(persona)}” learn from this example?`,
       body: shown,
       approveLabel: 'Learn it',
       note: 'It will shape how this persona rewrites your future dictation until you delete it.',
+      tooLongWhere: WHERE_PERSONA,
     });
     if (!decision.approved) return declined(decision);
 
@@ -378,12 +546,48 @@ function createApprovalBroker({
     );
   }
 
+  // Deleting ONE learned example (round 3, item 3). The list is read from the backend; the
+  // ticket binds the example id and the complete list before and after.
+  async function deleteLearnedExample({ persona, exampleId, timeoutMs } = {}) {
+    if (typeof persona !== 'string' || !persona.trim() || persona.length > 128) return fault('Choose a persona first.');
+    if (typeof exampleId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(exampleId)) return fault('That is not a learned example.');
+    const listing = await backend.send('GET', `/personas/${encodeURIComponent(persona)}/examples`, undefined, 5000);
+    const examples = listing && listing.ok && listing.body && Array.isArray(listing.body.examples) ? listing.body.examples : null;
+    if (!examples) return fault('BetterFingers could not read that persona’s learned examples. Nothing was deleted.');
+    const target = examples.find((entry) => entry && entry.id === exampleId);
+    if (!target) return fault('That learned example is already gone.');
+    const before = fewShotItems(examples);
+    const after = fewShotItems(examples.filter((entry) => entry && entry.id !== exampleId));
+    const [raw, out] = fewShotItems([target])[0];
+    const decision = await confirm({
+      title: 'Remove a learned example',
+      message: `Remove this learned example from “${makeVisible(persona)}”?`,
+      body: [
+        `Persona: ${makeVisible(persona)}`, '', 'What was said:', ...displayLines(raw), '',
+        'What it should become:', ...displayLines(out), '',
+        `It will have ${after.length} learned example${after.length === 1 ? '' : 's'} left, in the same order.`,
+      ],
+      approveLabel: 'Remove it',
+      note: 'This changes how the persona rewrites your future dictation.',
+      tooLongWhere: WHERE_PERSONA,
+    });
+    if (!decision.approved) return declined(decision);
+    const approval = trySign(PURPOSE_PERSONA_LEARNED_DELETE, persona, learnedDeleteBind(persona, exampleId, before, after));
+    if (!approval) return fault(UNAVAILABLE);
+    return backend.send(
+      'DELETE', `/personas/${encodeURIComponent(persona)}/examples/${encodeURIComponent(exampleId)}`,
+      { approval }, Number(timeoutMs) || 10000,
+    );
+  }
+
   // --- voice requests (round 2, item 6; round 3, item 6) -----------------------------------------
   //
   // A spoken command can only REQUEST. Ambient audio, a video, or a replayed phrase can say "send it";
   // that is not a person's yes. The backend announces the request (a status event) and the native
-  // dialog below is the only thing that can place the draft. Voice-started dialogs keep
-  // Cancel as the default and are rate limited, so repeated speech cannot grind a person into clicking.
+  // dialog below is the only thing that can place the draft. There is no voice-CONFIRMATION flow:
+  // the one command it served had no implementation, and a dialog that confirms nothing is surface
+  // without a purpose. Voice-started dialogs keep Cancel as the default and are rate limited, so
+  // repeated speech cannot grind a person into clicking.
   const VOICE_WINDOW_MS = 60000;
   const VOICE_MAX_PER_WINDOW = 3;
   let voiceRequests = [];
@@ -414,7 +618,7 @@ function createApprovalBroker({
       openChat: false,
       text,
       approveLabel: 'Place it',
-      note: 'You said \u201Csend it\u201D. Voice alone never sends; only this button does.',
+      note: 'You said “send it”. Voice alone never sends; only this button does.',
     });
     if (!decision.approved) return declined(decision);
     const approval = trySign(PURPOSE_DRAFT_SEND, String(draftId), draftSendBind('paste', text, false));
@@ -422,50 +626,98 @@ function createApprovalBroker({
     return backend.send('POST', `/drafts/${draftId}/send`, { action: 'paste', open_chat: false, allow_resend: false, approval }, 120000);
   }
 
-  // Round 3, item 6: there is no voice CONFIRMATION flow. The one command it served
-  // (delete_history) has no implementation behind it, and a dialog that confirms nothing is
-  // surface without a purpose. A spoken command can only REQUEST; the only spoken request that
-  // opens a dialog is "send it" above, and the dialog, not the voice, places the draft.
-
-  // --- saving a persona (few-shot examples) ----------------------------------------
-
-  // Few-shot examples steer every future rewrite like learned examples do, so a save that
-  // ADDS or changes one is approved in a native dialog (round 2, item 4). A save that adds
-  // nothing goes straight through. The renderer names the persona and the body; the
-  // stored examples are read from the backend, never taken from the page.
+  // --- saving a persona (few-shot examples; round 2, item 4; round 3, item 3) -----------------------
+  //
+  // Few-shot examples steer every future rewrite, so ANY change to the ordered list a save
+  // results in -- an addition, an edit, a removal, a reordering, a repeated copy, emptying it --
+  // is shown in a native dialog as a before/after diff and signed against the complete list
+  // before and after. A save that leaves the list exactly as stored goes straight through. The
+  // stored list is read from the backend, never taken from the page, and what is sent is the
+  // normalised list that was shown, so what is stored is exactly what was approved.
   async function savePersona({ name, body, timeoutMs } = {}) {
     if (typeof name !== 'string' || !name.trim() || name.length > 128) return fault('Choose a persona name first.');
     if (!body || typeof body !== 'object' || Array.isArray(body)) return fault('That persona could not be saved.');
     const payload = { ...body, name };
     delete payload.approval; // a page cannot supply one
-    const wantsExamples = Object.prototype.hasOwnProperty.call(payload, 'few_shot');
-    if (!wantsExamples) return backend.send('POST', '/personas', payload, Number(timeoutMs) || 5000);
+    const wantsExamples = Object.prototype.hasOwnProperty.call(payload, 'few_shot') && payload.few_shot !== null && payload.few_shot !== undefined;
+    if (!wantsExamples) {
+      delete payload.few_shot;
+      return backend.send('POST', '/personas', payload, Number(timeoutMs) || 5000);
+    }
     if (!Array.isArray(payload.few_shot) || payload.few_shot.length > 50) return fault('That persona has too many examples.');
 
     const current = await backend.send('GET', `/personas/${encodeURIComponent(name)}`, undefined, 5000);
-    const stored = current && current.ok && current.body && typeof current.body === 'object' ? current.body.few_shot : [];
-    const added = addedFewShot(payload.few_shot, stored);
-    if (added.length === 0) return backend.send('POST', '/personas', payload, Number(timeoutMs) || 5000);
+    let storedList;
+    if (current && current.ok && current.status < 400 && current.body && typeof current.body === 'object') {
+      storedList = current.body.few_shot;
+    } else if (current && current.status === 404) {
+      storedList = []; // a new persona starts with no examples
+    } else {
+      return fault('BetterFingers could not read the stored persona, so nothing was saved.');
+    }
+    const before = fewShotItems(storedList);
+    const after = fewShotItems(payload.few_shot);
+    payload.few_shot = after.map(([raw, out]) => ({ raw, out }));
+    if (canonicalJson(before) === canonicalJson(after)) return backend.send('POST', '/personas', payload, Number(timeoutMs) || 5000);
 
-    if (added.some(([raw, out]) => raw.length > MAX_EXAMPLE_CHARS || out.length > MAX_EXAMPLE_CHARS)) {
+    if (after.some(([raw, out]) => raw.length > MAX_EXAMPLE_CHARS || out.length > MAX_EXAMPLE_CHARS)) {
       return fault('One of those examples is too long to learn.');
     }
-    const shown = [`Persona: ${makeVisible(name)}`, ''];
-    added.forEach(([raw, out], index) => {
-      shown.push(`Example ${index + 1} \u2013 what was said:`, ...displayLines(raw), 'What it should become:', ...displayLines(out), '');
-    });
-    if (!fits(shown)) return fault(TOO_LONG);
     const decision = await confirm({
-      title: 'Add examples to this persona',
-      message: `Let \u201C${makeVisible(name)}\u201D learn ${added.length === 1 ? 'this example' : `these ${added.length} examples`}?`,
-      body: shown,
-      approveLabel: 'Add them',
-      note: 'They will shape how this persona rewrites your future dictation until you remove them.',
+      title: 'Change this persona’s examples',
+      message: `Change the examples “${makeVisible(name)}” learns from?`,
+      body: [`Persona: ${makeVisible(name)}`, `Before this change it has ${before.length} example${before.length === 1 ? '' : 's'}.`, '', ...fewShotDiffLines(before, after)],
+      approveLabel: 'Save the examples',
+      note: 'The first examples in this list shape how this persona rewrites your future dictation.',
+      tooLongWhere: WHERE_PERSONA,
     });
     if (!decision.approved) return declined(decision);
-    const approval = trySign(PURPOSE_PERSONA_FEW_SHOT, name, personaFewShotBind(name, added));
+    const approval = trySign(PURPOSE_PERSONA_FEW_SHOT, name, personaFewShotBind(name, before, after));
     if (!approval) return fault(UNAVAILABLE);
     return backend.send('POST', '/personas', { ...payload, approval }, Number(timeoutMs) || 5000);
+  }
+
+  // --- trusting an MCP server on this machine (round 3, item 4) --------------------------------
+  //
+  // Every MCP server is untrusted by default and starts only inside the required confinement
+  // (bubblewrap on Linux). Where that cannot be established -- no bubblewrap, Windows, macOS, or a
+  // server configured with "sandbox": "off" -- it starts only after the owner marks it trusted ON
+  // THIS MACHINE here. The trust is bound to a digest of the server's exact configuration, so any
+  // change to its command, arguments, environment or options voids it.
+  async function trustMcpServer({ name, timeoutMs } = {}) {
+    if (typeof name !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(name)) return fault('That is not an MCP server BetterFingers knows about.');
+    const route = `/mcp/servers/${encodeURIComponent(name)}/trust`;
+    const info = await backend.send('GET', route, undefined, 5000);
+    const server = info && info.ok && info.status < 400 && info.body && typeof info.body === 'object' ? info.body : null;
+    if (!server || typeof server.config_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(server.config_sha256)) {
+      return fault('BetterFingers could not read that server’s configuration. Nothing was trusted.');
+    }
+    const args = Array.isArray(server.args) ? server.args.map(String) : [];
+    const envKeys = Array.isArray(server.env_keys) ? server.env_keys.map(String) : [];
+    const body = [
+      `Server: ${makeVisible(name)}`,
+      ...displayLines(`Program: ${String(server.command || '')}`),
+      ...displayLines(`Arguments: ${JSON.stringify(args)}`),
+      ...displayLines(`Environment variables it is given: ${envKeys.length ? envKeys.join(', ') : 'none'}`),
+      `Network: ${server.network === false ? 'off' : 'on'}`,
+      '',
+      ...displayLines(`Confinement it will get: ${String(server.weaker_confinement || 'none')}`),
+      ...displayLines(String(server.why_untrusted || 'The required confinement cannot be established on this machine.')),
+      '',
+      'A trusted server runs as you, with your files and your desktop in reach.',
+      'Values shown as [redacted] are hidden here; the trust covers the exact configuration.',
+    ];
+    const decision = await confirm({
+      title: 'Trust an MCP server on this machine',
+      message: `Let the MCP server “${makeVisible(name)}” run with weaker confinement on this machine?`,
+      body,
+      approveLabel: 'Trust it on this machine',
+      note: `Fingerprint ${fingerprint(server.config_sha256)}. Any change to its configuration cancels the trust.`,
+    });
+    if (!decision.approved) return declined(decision);
+    const approval = trySign(PURPOSE_MCP_TRUST, name, mcpTrustBind(server.config_sha256));
+    if (!approval) return fault(UNAVAILABLE);
+    return backend.send('POST', route, { approval }, Number(timeoutMs) || 5000);
   }
 
   // --- sending a draft -----------------------------------------------------------
@@ -482,7 +734,8 @@ function createApprovalBroker({
     if (!SEND_ACTIONS.has(sendAction)) return fault(`sendDraft: unknown action ${String(action)}`);
     const payload = { action: sendAction, open_chat: Boolean(openChat), allow_resend: Boolean(allowResend) };
 
-    // Copying to the clipboard places nothing in another application.
+    // POLICY (SECURITY.md, "Clipboard"): copying to the clipboard places nothing in another
+    // application and sends nothing outward, so it needs no dialog.
     if (sendAction === 'copy_only') {
       return backend.send('POST', `/drafts/${id}/send`, payload, timeoutMs);
     }
@@ -509,22 +762,22 @@ function createApprovalBroker({
     return backend.send('POST', `/drafts/${id}/send`, { ...payload, approval }, timeoutMs);
   }
 
-  async function presentDraft({ title, action, openChat, text, approveLabel, defaultApprove = false }) {
+  async function presentDraft({ title, action, openChat, text, approveLabel, defaultApprove = false, note = '' }) {
     const body = displayLines(text);
     const header = [
       `${ACTION_DESCRIPTIONS[action] || action}${openChat && action !== 'open_chat_then_send' ? ' (opening the chat first)' : ''}.`,
       'This is the exact text:', '',
     ];
-    if (!fits([...header, ...body])) {
-      return { approved: false, error: 'This draft is too long to confirm in one window. Copy it instead (Copy never needs a confirmation).' };
-    }
+    const facts = `Length ${Array.from(text).length} characters. Fingerprint ${fingerprintOf(text)}.`;
     return confirm({
       title,
       message: 'Place this text into another application?',
       body: [...header, ...body],
       approveLabel,
       defaultApprove,
-      note: `Length ${Array.from(text).length} characters. Fingerprint ${fingerprint(textDigest(text))}.`,
+      note: note ? `${note}\n${facts}` : facts,
+      tooLongWhere: WHERE_DRAFT,
+      tooLongError: 'This draft is too long to confirm in one window. Copy it instead (Copy never needs a confirmation).',
     });
   }
 
@@ -601,7 +854,7 @@ function createApprovalBroker({
   async function confirmSendHotkeyChange(newKey) {
     const decision = await confirm({
       title: 'Change the send shortcut',
-      message: `Make \u201C${makeVisible(String(newKey))}\u201D the shortcut that places a draft?`,
+      message: `Make “${makeVisible(String(newKey))}” the shortcut that places a draft?`,
       body: [
         'Pressing it will open a window showing the draft, and you confirm there.',
         'If you did not just change this setting, choose Cancel.',
@@ -614,9 +867,12 @@ function createApprovalBroker({
   return {
     approveWorkflow,
     confirmWorkflowRun,
+    confirmApplicationReplace,
     presentVoiceTap,
     addPersonaExample,
+    deleteLearnedExample,
     savePersona,
+    trustMcpServer,
     sendDraft,
     primaryActionFromUi,
     placeFromHotkey,
@@ -632,11 +888,17 @@ module.exports = {
   draftSendBind,
   personaExampleBind,
   personaFewShotBind,
-  addedFewShot,
+  learnedDeleteBind,
+  mcpTrustBind,
+  fewShotItems,
+  fewShotListDigest,
+  fewShotDiffLines,
   makeVisible,
   wrapLine,
   displayLines,
   MAX_DISPLAY_LINES,
+  MAX_DISPLAY_CHARS,
+  MAX_MESSAGE_CHARS,
   WRAP_WIDTH,
   TICKET_TTL_S,
 };

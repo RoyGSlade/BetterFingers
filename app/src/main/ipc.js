@@ -131,6 +131,10 @@ function registerIpc({
   // Approve makes main sign the ticket the backend demands. A renderer never sees
   // the key or a ticket and cannot obtain a "yes" any other way.
   const { createApprovalBroker } = require('./approvalBroker');
+  const { createRunAuthorizations, canonicalJson } = require('./runAuthorization');
+  // One store shared by the broker (which issues a run authorization after a click) and the
+  // workflow executor (which consumes it before running anything). Round 3, items 1 and 2.
+  const runAuthorizations = createRunAuthorizations();
   let approvalBroker = null;
   function broker() {
     if (!approvalBroker) {
@@ -144,6 +148,8 @@ function registerIpc({
         },
         backend: { send: (method, path, body, timeoutMs) => backendProxy.sendTrusted(method, path, body, timeoutMs) },
         listApplications: () => applicationRegistry().list(),
+        planLaunch: (entry) => applicationLauncher().planFor(entry),
+        runAuthorizations,
         log: (line) => console.warn(line),
       });
       // The send hotkey opens the native approval dialog; it never signs by itself.
@@ -180,6 +186,18 @@ function registerIpc({
   handleTrusted('approvals:persona-save', (_event, req) => {
     const { name, body, timeoutMs } = req || {};
     return broker().savePersona({ name, body, timeoutMs });
+  });
+
+  // Round 3, item 3: removing a learned example is an example change too.
+  handleTrusted('approvals:persona-learned-delete', (_event, req) => {
+    const { persona, exampleId, timeoutMs } = req || {};
+    return broker().deleteLearnedExample({ persona, exampleId, timeoutMs });
+  });
+
+  // Round 3, item 4: marking an MCP server "trusted on this machine" (weaker confinement).
+  handleTrusted('approvals:mcp-trust', (_event, req) => {
+    const { name, timeoutMs } = req || {};
+    return broker().trustMcpServer({ name, timeoutMs });
   });
 
   handleTrusted('backend:send-draft', (_event, req) => {
@@ -378,7 +396,24 @@ function registerIpc({
   handleTrusted('applications:discover', async () => ({
     ok: true, candidates: await applicationRegistry().discover(),
   }));
-  handleTrusted('applications:confirm', (_event, payload) => applicationRegistry().confirm(payload));
+  // Round 3, item 2: REPLACING a confirmed entry changes what an approved workflow's id starts,
+  // so it needs a native dialog showing before and after. Creating a new entry, or re-confirming
+  // one unchanged, changes nothing approved and needs none (every run is confirmed anyway, with
+  // the exact program shown). The write is conditional on the entry the person was shown, so an
+  // entry changed while the dialog was open is not overwritten blind.
+  handleTrusted('applications:confirm', async (_event, payload) => {
+    const registry = applicationRegistry();
+    const proposed = registry.coerce(payload);
+    if (!proposed) return registry.confirm(payload); // its own refusal (invalid id)
+    const existing = registry.get(proposed.id);
+    if (!existing) return registry.confirm(proposed, { expect: null });
+    if (canonicalJson(existing) === canonicalJson(proposed)) return { ok: true, entry: existing };
+    const decision = await broker().confirmApplicationReplace({ before: existing, after: proposed });
+    if (!decision || decision.approved !== true) {
+      return { ok: false, error: 'declined', message: (decision && decision.error) || 'You cancelled. The application was not changed.' };
+    }
+    return registry.confirm(proposed, { expect: existing });
+  });
   handleTrusted('applications:remove', (_event, { id } = {}) => applicationRegistry().remove(id));
 
   // Wave 10 / D-0027: the workflow run executor. This is the ONLY caller of
@@ -391,14 +426,23 @@ function registerIpc({
   // The controller and the Stream Deck arrive here too, by the same route: their
   // `workflow.run` action reaches the renderer as a request and the renderer
   // calls this channel. There is no second path, and there must not be one.
+  let _applicationLauncher = null;
+  function applicationLauncher() {
+    if (!_applicationLauncher) {
+      const { createApplicationLauncher } = require('./applicationLauncher');
+      _applicationLauncher = createApplicationLauncher({});
+    }
+    return _applicationLauncher;
+  }
+
   let _workflowExecutor = null;
   function workflowExecutor() {
     if (!_workflowExecutor) {
-      const { createApplicationLauncher } = require('./applicationLauncher');
       const { createWorkflowExecutor } = require('./workflowExecutor');
       _workflowExecutor = createWorkflowExecutor({
         backendProxy,
-        launcher: createApplicationLauncher({}),
+        launcher: applicationLauncher(),
+        authorizations: runAuthorizations,
         listApplications: () => applicationRegistry().list(),
         notify: (message) => {
           const { Notification } = require('electron');
@@ -411,22 +455,37 @@ function registerIpc({
     return _workflowExecutor;
   }
 
+  // Every run, whoever asks, is confirmed in a native dialog first, and the click yields a
+  // single-use authorization bound to the exact plan and frozen targets (round 3, items 1-2;
+  // approvalBroker.confirmWorkflowRun explains the policy). Anything other than an explicit
+  // confirmed:true with an authorization is a refusal: the executor is never called. The
+  // authorization stays in main; what the page gets back never contains it.
+  async function runWorkflowConfirmed(workflowId) {
+    const confirmation = await broker().confirmWorkflowRun(workflowId);
+    if (!confirmation || confirmation.ok !== true || confirmation.confirmed !== true
+        || typeof confirmation.authorization !== 'string') {
+      const refusal = {
+        ok: false,
+        error: (confirmation && typeof confirmation.error === 'string' && confirmation.error) || 'not_confirmed',
+        reason: (confirmation && typeof confirmation.reason === 'string' && confirmation.reason) || 'That run was not confirmed, so nothing ran.',
+      };
+      if (confirmation && Array.isArray(confirmation.refusals)) refusal.refusals = confirmation.refusals;
+      return refusal;
+    }
+    return workflowExecutor().execute(workflowId, { authorization: confirmation.authorization });
+  }
+
   handleTrusted('workflows:execute', async (_event, payload) => {
     // Destructured to exactly one field on purpose: passing `payload` through
     // would let a future edit start honouring extra keys without anybody
     // noticing that the channel had stopped being id-only.
     const { workflowId } = payload || {};
-    // A renderer-triggered run with an outward effect needs a fresh native confirmation
-    // (round 2, item 5; approvalBroker.confirmWorkflowRun explains the policy).
-    const confirmation = await broker().confirmWorkflowRun(workflowId);
-    if (!confirmation.ok) return confirmation;
-    return workflowExecutor().execute(workflowId);
+    return runWorkflowConfirmed(workflowId);
   });
 
-  // The owner acting NOW, observed by main itself (a hotkey chord, a trigger phrase heard on
-  // the mic): runs without a dialog. Deliberately not an IPC channel, so no page can call it;
-  // registerIpc hands it to main.js, whose physical-trigger handlers are its only callers.
-  const runWorkflowFromPhysicalTrigger = (workflowId) => workflowExecutor().execute(workflowId);
+  // There is no dialog-free run path (round 3, item 1). The old physical-trigger entry, which
+  // ran without a confirmation, is gone; a future hotkey or controller trigger in main must call
+  // runWorkflowConfirmed like the channel above.
 
   // The send shortcut is gated (round 2, item 2): only a Ctrl/Alt/Meta chord or a function
   // key is accepted, and changing it from the confirmed value needs a native dialog.
@@ -710,7 +769,7 @@ function registerIpc({
     return applied;
   });
 
-  return { runWorkflowFromPhysicalTrigger };
+  return { runWorkflowConfirmed };
 }
 
 module.exports = {
