@@ -121,3 +121,84 @@ class LogTailRedactionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CodexRecheckLoggingGaps(unittest.TestCase):
+    """Round 2, item 7 (second half). The Codex re-review listed three places the
+    heuristic redaction did not reach: quoted JSON/repr token values, exception traceback
+    text (the message filter never saw it) and secrets split across output chunks."""
+
+    def test_quoted_json_and_repr_values_are_masked(self):
+        from backend.privacy.secret_scrub import redact_secrets
+        samples = [
+            '{"token": "%s"}' % TOKEN,
+            "{'access_token': '%s', 'x': 1}" % TOKEN,
+            '{"Authorization": "Bearer %s"}' % TOKEN,
+            "{'Authorization': 'abc-secret-value-123'}",
+            '{"api_key":"sk-short"}',
+            '{ "password" : "hunter2hunter2" }',
+            'payload={"auth_token":"short-token-value"}',
+            '{"client_secret": "s3cr3t-value"}',
+        ]
+        for sample in samples:
+            out = redact_secrets(sample)
+            for secret in (TOKEN, "abc-secret-value-123", "sk-short", "hunter2hunter2", "short-token-value", "s3cr3t-value"):
+                self.assertNotIn(secret, out, sample)
+            self.assertIn("[redacted]", out, sample)
+
+    def test_ordinary_json_is_left_alone(self):
+        from backend.privacy.secret_scrub import redact_secrets
+        for sample in ('{"name": "Coach", "token_count": 5}', '{"author": "bob"}', '{"keys": ["a", "b"]}', '{"status": "ok"}'):
+            self.assertEqual(redact_secrets(sample), sample)
+
+    def test_a_traceback_that_quotes_a_credential_is_scrubbed(self):
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+        handler.addFilter(SecretRedactingFilter())
+        logger = logging.getLogger("phase0.traceback")
+        logger.handlers = [handler]
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+        try:
+            try:
+                raise RuntimeError(f"request failed: Authorization: Bearer {TOKEN} and {{'token': '{TOKEN}'}}")
+            except RuntimeError:
+                logger.exception("handler crashed")
+        finally:
+            logger.handlers = []
+        out = stream.getvalue()
+        self.assertIn("Traceback", out)
+        self.assertIn("RuntimeError", out)
+        self.assertNotIn(TOKEN, out)
+
+    def test_stack_info_is_scrubbed_too(self):
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        handler.addFilter(SecretRedactingFilter())
+        logger = logging.getLogger("phase0.stack")
+        logger.handlers = [handler]
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+        token_in_local = TOKEN  # noqa: F841 - appears in the frame source line below
+        try:
+            logger.info("marker", stack_info=True, extra={})
+        finally:
+            logger.handlers = []
+        self.assertNotIn(TOKEN, stream.getvalue())
+
+    def test_the_root_handlers_installed_by_setup_logging_scrub_exception_text(self):
+        root = logging.getLogger()
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        root.addHandler(handler)
+        old = root.level
+        root.setLevel(logging.INFO)
+        self.addCleanup(root.removeHandler, handler)
+        self.addCleanup(root.setLevel, old)
+        install_log_redaction()
+        try:
+            raise ValueError(f"bad header Bearer {TOKEN}")
+        except ValueError:
+            logging.getLogger("some.module").exception("boom")
+        self.assertNotIn(TOKEN, stream.getvalue())

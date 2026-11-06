@@ -151,7 +151,7 @@ test('no unwrapped user-content-shaped console.*() calls in app/src/renderer/mai
 
 // --- redactSecrets (Phase 0 item 10) ---------------------------------------
 
-const { redactSecrets } = require('../src/main/redact.js');
+const { redactSecrets, createLineRedactor } = require('../src/main/redact.js');
 const SECRET = '9f8e7d6c'.repeat(8);
 
 test('redactSecrets masks bearer tokens, token= parameters, auth frames and key shapes', () => {
@@ -179,4 +179,43 @@ test('redactSecrets leaves ordinary log text alone and is idempotent', () => {
   const once = redactSecrets(`Bearer ${SECRET}`);
   assert.equal(redactSecrets(once), once);
   assert.equal(redactSecrets(null), '');
+});
+
+// --- Round 2, item 7: the gaps Codex listed ---------------------------------------
+
+test('quoted JSON and repr values are masked', () => {
+  const secrets = [SECRET, 'abc-secret-value-123', 'sk-short', 'hunter2hunter2', 'short-token-value', 's3cr3t-value'];
+  for (const sample of [
+    `{"token": "${SECRET}"}`, `{'access_token': '${SECRET}', 'x': 1}`, `{"Authorization": "Bearer ${SECRET}"}`,
+    "{'Authorization': 'abc-secret-value-123'}", '{"api_key":"sk-short"}', '{ "password" : "hunter2hunter2" }',
+    'payload={"auth_token":"short-token-value"}', '{"client_secret": "s3cr3t-value"}',
+  ]) {
+    const out = redactSecrets(sample);
+    for (const secret of secrets) assert.ok(!out.includes(secret), `${secret} survived in ${out}`);
+    assert.ok(out.includes('[redacted]'), sample);
+  }
+  for (const plain of ['{"name": "Coach", "token_count": 5}', '{"author": "bob"}', '{"keys": ["a", "b"]}']) {
+    assert.equal(redactSecrets(plain), plain);
+  }
+});
+
+test('createLineRedactor masks a secret split across chunk boundaries', () => {
+  const redactor = createLineRedactor();
+  const line = `INFO: GET /x Authorization: Bearer ${SECRET} done\n`;
+  for (const cut of [10, 33, 40, 60, 80]) {
+    const out = [...redactor.push(line.slice(0, cut)), ...redactor.push(line.slice(cut))].join('\n');
+    assert.ok(!out.includes(SECRET), `cut at ${cut}`);
+    assert.ok(!out.includes(SECRET.slice(0, 12)), `a prefix survived at ${cut}`);
+    assert.ok(out.includes('done'), `cut at ${cut}`);
+  }
+});
+
+test('createLineRedactor holds back an unfinished line, flushes it redacted, and caps a runaway line', () => {
+  const redactor = createLineRedactor({ maxPending: 200 });
+  assert.deepEqual(redactor.push('partial line with token=abc'), []);
+  assert.deepEqual(redactor.flush(), ['partial line with token=[redacted]']);
+  assert.deepEqual(redactor.flush(), []);
+  const flood = redactor.push('x'.repeat(500));
+  assert.ok(flood.length >= 1, 'a line that never ends is flushed at the cap');
+  assert.deepEqual(createLineRedactor().push('a\r\nb\n'), ['a', 'b']);
 });

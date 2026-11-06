@@ -47,6 +47,9 @@ function redact(text) {
 const REDACTED = '[redacted]';
 const BEARER_RE = /\b(bearer)([\s:=]+)([A-Za-z0-9._~+/=-]{6,})/gi;
 const KV_RE = /\b((?:[a-z0-9]*[_-])*(?:token|api[_-]?key|apikey|secret|password|passwd|auth))(=|:\s*)(?!\[redacted\])([^\s&"'<>,;]{3,})/gi;
+// Quoted keys, as in JSON bodies and Python dict reprs: {"token": "abc"}, {'Authorization': 'x'}
+// (the unquoted pattern never matched these; Codex re-review).
+const QUOTED_KV_RE = /(["'])((?:[a-z0-9]*[_-])*(?:token|api[_-]?key|apikey|secret|password|passwd|auth|authorization|credential|credentials))\1(\s*:\s*)(["'])(.*?)(?<!\\)\4/gi;
 const AUTH_FRAME_RE = /\b(auth:)([A-Za-z0-9._~+/=-]{6,})/gi;
 const KEY_SHAPE_RE = /\b(sk-ant-[A-Za-z0-9_-]{8,}|sk-[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abpr]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,})\b/g;
 const LONG_HEX_RE = /\b[0-9a-fA-F]{48,}\b/g;
@@ -54,6 +57,7 @@ const LONG_HEX_RE = /\b[0-9a-fA-F]{48,}\b/g;
 function redactSecrets(text) {
   if (text === null || text === undefined) return '';
   return String(text)
+    .replace(QUOTED_KV_RE, (_m, q, key, colon, vq) => `${q}${key}${q}${colon}${vq}${REDACTED}${vq}`)
     .replace(BEARER_RE, (_m, a, b) => `${a}${b}${REDACTED}`)
     .replace(AUTH_FRAME_RE, (_m, a) => `${a}${REDACTED}`)
     .replace(KV_RE, (_m, a, b) => `${a}${b}${REDACTED}`)
@@ -61,4 +65,33 @@ function redactSecrets(text) {
     .replace(LONG_HEX_RE, REDACTED);
 }
 
-module.exports = { rawTextLoggingEnabled, redact, redactSecrets };
+// Line-oriented redaction for a byte stream that arrives in arbitrary chunks. A secret can
+// straddle two chunks ("...token=ab" / "cd..."), and redacting each chunk on its own would
+// miss it, so an unfinished line is held back until its newline arrives (or until it has grown
+// past maxPending, so a stream that never ends a line cannot grow without bound; in that rare
+// case the held text is redacted and flushed). push() returns the finished, redacted lines;
+// flush() returns whatever is still held, redacted.
+function createLineRedactor({ maxPending = 16 * 1024 } = {}) {
+  let pending = '';
+  return {
+    push(chunk) {
+      pending += String(chunk);
+      const lines = pending.split('\n');
+      pending = lines.pop();
+      const out = lines.map((line) => redactSecrets(line.endsWith('\r') ? line.slice(0, -1) : line));
+      if (pending.length > maxPending) {
+        out.push(redactSecrets(pending));
+        pending = '';
+      }
+      return out;
+    },
+    flush() {
+      if (!pending) return [];
+      const line = redactSecrets(pending);
+      pending = '';
+      return [line];
+    },
+  };
+}
+
+module.exports = { rawTextLoggingEnabled, redact, redactSecrets, createLineRedactor };

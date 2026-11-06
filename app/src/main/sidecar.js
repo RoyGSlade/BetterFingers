@@ -5,7 +5,7 @@ const { spawn } = require('node:child_process');
 const { app } = require('electron');
 const { EXPECTED_API_SCHEMA_VERSION } = require('./config');
 const { resolveUserDataRoot } = require('./userDataRoot');
-const { redactSecrets } = require('./redact');
+const { redactSecrets, createLineRedactor } = require('./redact');
 
 // How the post-startup health monitor behaves once the backend is ready.
 // A busy backend is not a dead backend: restarting on missed pings alone
@@ -655,15 +655,23 @@ function createSidecar({
           error: '',
         });
 
-        processRef.stdout?.on('data', (chunk) => {
-          process.stdout.write(`[backend] ${redactSecrets(chunk)}`);
-          appendLog('stdout', chunk);
-        });
-
-        processRef.stderr?.on('data', (chunk) => {
-          process.stderr.write(`[backend] ${redactSecrets(chunk)}`);
-          appendLog('stderr', chunk);
-        });
+        // One line redactor per stream: a secret split across two chunks is only visible once the
+        // line is whole, so each stream's unfinished line is held until its newline arrives
+        // (round 2, item 7). Everything downstream (console, buffer, file) gets redacted lines.
+        const forward = (streamName, sink, lines) => {
+          if (!lines.length) return;
+          sink.write(lines.map((line) => `[backend] ${line}\n`).join(''));
+          appendLog(streamName, lines.join('\n'));
+        };
+        const stdoutLines = createLineRedactor();
+        const stderrLines = createLineRedactor();
+        processRef.stdout?.on('data', (chunk) => forward('stdout', process.stdout, stdoutLines.push(chunk)));
+        processRef.stderr?.on('data', (chunk) => forward('stderr', process.stderr, stderrLines.push(chunk)));
+        const flushStreams = () => {
+          forward('stdout', process.stdout, stdoutLines.flush());
+          forward('stderr', process.stderr, stderrLines.flush());
+        };
+        processRef.once?.('exit', flushStreams);
 
         exitPromise = new Promise((resolve, reject) => {
           exitListener = (code, signal) => {

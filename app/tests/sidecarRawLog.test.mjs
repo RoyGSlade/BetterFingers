@@ -123,3 +123,19 @@ test('a credential in backend output never reaches the log buffer or the raw log
   assert.ok(buffered.includes('/ws/voice_status'), 'the rest of the line survives');
   assert.ok(!fs.readFileSync(logPath, 'utf8').includes(secret), 'raw log file');
 });
+
+test('a credential split across two output chunks never reaches the buffer or the file (round 2, item 7)', async (t) => {
+  const { sidecar, child, logPath } = await startedSidecar(t);
+  const secret = 'cd34ef56'.repeat(8);
+  const line = `INFO: 127.0.0.1 - "GET /ws/voice_status?token=${secret} HTTP/1.1" 101\n`;
+  for (const cut of [30, 52, 60, 70]) {
+    child.stdout.emit('data', Buffer.from(line.slice(0, cut)));
+    child.stdout.emit('data', Buffer.from(line.slice(cut)));
+  }
+  child.stderr.emit('data', Buffer.from(`debug {"token": "${secret}"}\n`));
+  const buffered = sidecar.getLogs().join('\n');
+  assert.ok(!buffered.includes(secret) && !buffered.includes(secret.slice(0, 10)), 'in-memory buffer');
+  assert.ok(buffered.includes('HTTP/1.1'), 'the rest of each line survives');
+  const file = fs.readFileSync(logPath, 'utf8');
+  assert.ok(!file.includes(secret) && !file.includes(secret.slice(0, 10)), 'raw log file');
+});

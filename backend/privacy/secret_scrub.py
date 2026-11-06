@@ -100,6 +100,16 @@ _KV_RE = re.compile(
     r"(?i)\b((?:[a-z0-9]*[_\-])*(?:token|api[_\-]?key|apikey|secret|password|passwd|auth))"
     r"(=|:\s*)(?!\[redacted\])([^\s&\"'<>,;]{3,})"
 )
+# Quoted keys, as in JSON bodies and Python dict reprs: {"token": "abc"}, {'Authorization': 'x'}.
+# The unquoted pattern above never matched these because the key is followed by a quote, not
+# by = or : (Codex re-review). The value is masked whatever its shape.
+_QUOTED_KV_RE = re.compile(
+    r"""(?ix)
+    (["'])((?:[a-z0-9]*[_\-])*(?:token|api[_\-]?key|apikey|secret|password|passwd|auth|authorization|credential|credentials))\1
+    (\s*:\s*)
+    (["'])(.*?)(?<!\\)\4
+    """
+)
 # The WebSocket first-frame form: "auth:<token>".
 _AUTH_FRAME_RE = re.compile(r"(?i)\b(auth:)([A-Za-z0-9._~+/=\-]{6,})")
 # Well-known shapes that are secrets wherever they appear.
@@ -118,6 +128,7 @@ def redact_secrets(text) -> str:
     if text is None:
         return ""
     out = str(text)
+    out = _QUOTED_KV_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{m.group(1)}{m.group(3)}{m.group(4)}{REDACTED}{m.group(4)}", out)
     out = _BEARER_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", out)
     out = _AUTH_FRAME_RE.sub(lambda m: f"{m.group(1)}{REDACTED}", out)
     out = _KV_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", out)
@@ -175,6 +186,19 @@ class SecretRedactingFilter(_logging.Filter):
         if redacted != message:
             record.msg = redacted
             record.args = ()
+        # Exception and stack text is formatted by the HANDLER from exc_info, after this filter
+        # has run, so scrubbing the message alone left tracebacks (which routinely quote the
+        # failing request, headers included) untouched. Format it here once, scrub it, and let the
+        # formatter reuse the cached, scrubbed text (logging.Formatter does when exc_text is set).
+        if record.exc_info and not record.exc_text:
+            try:
+                record.exc_text = redact_secrets(_logging.Formatter().formatException(record.exc_info))
+            except Exception:
+                record.exc_text = "[traceback withheld: it could not be formatted safely]"
+        elif record.exc_text:
+            record.exc_text = redact_secrets(record.exc_text)
+        if record.stack_info:
+            record.stack_info = redact_secrets(record.stack_info)
         return True
 
 
