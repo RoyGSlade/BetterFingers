@@ -65,8 +65,11 @@ What the app enforces on the machine itself (details in [docs/DEVELOPMENT.md](do
   approval. **Everything fails closed**: if the content cannot be fetched, verified or shown,
   nothing is approved.
 - **A dialog that cannot show everything offers no way to approve.** Every approval dialog has a
-  line budget (48 lines) and a character budget (4000 characters, with a 240-character headline),
-  counted on exactly what would be shown. Anything over either budget gets a dialog with a single
+  line budget (26 lines, fewer on a short screen) and a character budget (1600 characters, with a
+  short headline), counted on exactly what would be shown. Lines are wrapped by their estimated
+  rendered width so the toolkit never wraps them again; the budgets were measured by opening the
+  real dialog under a virtual display at 1920x1080, 1366x768 and 1280x720
+  (`app/tests/nativeDialogXvfb.test.mjs`). Anything over either budget gets a dialog with a single
   Close button that says it is too long to show in full and where to read it (the review window
   for a draft, the Workflows page, the persona editor); nothing is signed. Long lines are wrapped,
   never cut, and invisible characters are shown as `<U+XXXX>`.

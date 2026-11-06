@@ -18,11 +18,13 @@
 // THE ORDER, and every line of it is load-bearing:
 //
 //   1. shape-check the id                (a path segment, not a path)
-//   2. build the context from the CONFIRMED registry, read here in main
-//   3. POST /workflows/run                (re-validate, re-preview, can_run)
-//   4. refuse unless ok                   -- no step runs on a bad verdict
-//   5. perform each step, in order, collecting a STATUS CODE per step
-//   6. POST /workflows/run/record         (codes only; the history holds no paths)
+//   2. consume the run authorization      (single use; none, expired or another id: refuse)
+//   3. build the context from the CONFIRMED registry, read here in main
+//   4. POST /workflows/run                (re-validate, re-preview, can_run)
+//   5. refuse unless ok AND the plan equals the confirmed one -- no step runs otherwise
+//   6. perform each FROZEN step against its FROZEN target, in order, collecting a STATUS
+//      CODE per step; a changed application stops the run
+//   7. POST /workflows/run/record         (codes only; the history holds no paths)
 //
 // Step 3 is not a formality. A workflow can become unrunnable without anybody
 // editing it -- the user removes the application it launches, or re-confirms it
