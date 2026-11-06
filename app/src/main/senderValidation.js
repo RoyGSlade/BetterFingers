@@ -131,7 +131,31 @@ function isTrustedRendererUrl(candidateUrl, { rendererDir, devOrigin } = {}) {
   return false;
 }
 
+// The shipped page a trusted URL names ("signal-desk.html", "overlay.html", ...), or
+// null for anything untrusted. Lets main decide which CHANNELS a page may call, not
+// just whether it is one of ours (ipcPolicy.js). The dev server's bare "/" is the
+// legacy dashboard (windows.js loads it path-less), and a dev-server path that is not
+// a shipped page names nothing.
+function pageNameOf(candidateUrl, options = {}) {
+  if (!isTrustedRendererUrl(candidateUrl, options)) return null;
+  let parsed;
+  try {
+    parsed = new URL(candidateUrl);
+  } catch {
+    return null;
+  }
+  let name;
+  try {
+    name = decodeURIComponent(parsed.pathname).split('/').pop();
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'file:' && (!name || parsed.pathname === '/')) name = 'index.html';
+  return RENDERER_PAGES.has(name) ? name : null;
+}
+
 module.exports = {
+  pageNameOf,
   RENDERER_PAGES,
   isTrustedFileUrl,
   isTrustedDevOrigin,

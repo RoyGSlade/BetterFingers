@@ -2,7 +2,8 @@ const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 const { app, clipboard, dialog, ipcMain, session, shell, webContents } = require('electron');
-const { isTrustedRendererUrl } = require('./senderValidation');
+const { isTrustedRendererUrl, pageNameOf } = require('./senderValidation');
+const { isPageAllowed } = require('./ipcPolicy');
 const { deletionRan, finishFactoryReset } = require('./rendererState');
 const { evaluateOpenTarget: evaluateOpenTargetPolicy } = require('./openPathPolicy');
 
@@ -32,6 +33,21 @@ function isTrustedSender(event) {
   });
 }
 
+// Trusted AND allowed for this channel: the page must be one the channel is open to
+// (ipcPolicy.js), so the overlay, review window and splash cannot call the
+// dashboard's channels even if they somehow held the bridge method.
+function isAllowedSender(event, channel) {
+  if (!isTrustedSender(event)) return false;
+  // Top frame only: a subframe (which the CSP forbids anyway) is never a caller.
+  const main = event?.sender?.mainFrame;
+  if (main && event.senderFrame !== main) return false;
+  const page = pageNameOf(event.senderFrame.url, {
+    rendererDir: rendererDir(),
+    devOrigin: process.env.ELECTRON_RENDERER_URL,
+  });
+  return isPageAllowed(channel, page);
+}
+
 function rejectUntrusted(event, channel) {
   const url = event?.senderFrame?.url || '(no frame)';
   console.warn(`[ipc] Rejected '${channel}' from untrusted sender: ${url}`);
@@ -41,7 +57,7 @@ function rejectUntrusted(event, channel) {
 // ipcMain.handle with a mandatory sender check.
 function handleTrusted(channel, handler) {
   ipcMain.handle(channel, (event, ...args) => {
-    if (!isTrustedSender(event)) {
+    if (!isAllowedSender(event, channel)) {
       return rejectUntrusted(event, channel);
     }
     return handler(event, ...args);
@@ -51,7 +67,7 @@ function handleTrusted(channel, handler) {
 // ipcMain.on (fire-and-forget) with a mandatory sender check.
 function onTrusted(channel, handler) {
   ipcMain.on(channel, (event, ...args) => {
-    if (!isTrustedSender(event)) {
+    if (!isAllowedSender(event, channel)) {
       rejectUntrusted(event, channel);
       return;
     }

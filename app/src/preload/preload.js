@@ -1,5 +1,11 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+// The DASHBOARD's bridge (signal-desk.html, its preview and the legacy index.html).
+// The overlay, review window and splash each have their own minimal preload
+// (preload-overlay.js, preload-review.js, preload-splash.js) and receive none of
+// this: Phase 0 item 7. Main also refuses every channel below from any page that
+// is not the dashboard (ipcPolicy.js), so the two layers fail independently.
+
 // Phase 3c: the renderer never receives the bearer token or the backend origin.
 // All backend access goes through the main-process proxy below.
 const api = {
@@ -122,29 +128,3 @@ const api = {
 };
 
 contextBridge.exposeInMainWorld('betterFingers', api);
-
-contextBridge.exposeInMainWorld('betterFingersOverlay', {
-  onStatusUpdate: (callback) => ipcRenderer.on('overlay:update', (_event, status) => callback(status)),
-  onAppearance: (callback) => ipcRenderer.on('overlay:appearance', (_event, appearance) => callback(appearance)),
-  setIgnoreMouseEvents: (ignore) => ipcRenderer.invoke('overlay:set-ignore-mouse-events', ignore),
-});
-
-contextBridge.exposeInMainWorld('betterFingersSplash', {
-  // Pushed by main every ~500ms while booting (see main.js's pushBootSnapshot).
-  onBootEvent: (callback) => {
-    const handler = (_event, snapshot) => callback(snapshot);
-    ipcRenderer.on('splash:boot', handler);
-    return () => ipcRenderer.removeListener('splash:boot', handler);
-  },
-  // Pull for the first paint, in case boot started before this page attached
-  // its listener.
-  getState: () => ipcRenderer.invoke('splash:get-state'),
-  retry: () => ipcRenderer.invoke('splash:retry'),
-});
-
-contextBridge.exposeInMainWorld('betterFingersReview', {
-  displayed: (payload) => ipcRenderer.send('review:displayed', payload),
-  hide: () => ipcRenderer.invoke('review:hide'),
-  onDraft: (callback) => ipcRenderer.on('review:draft', (_event, draft) => callback(draft)),
-  onStatus: (callback) => ipcRenderer.on('review:status', (_event, status) => callback(status)),
-});

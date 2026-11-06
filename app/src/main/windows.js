@@ -170,8 +170,19 @@ function isPositionOnScreen(x, y) {
   });
 }
 
-function resolvePreloadPath() {
-  return path.join(__dirname, '../preload/preload.js');
+// One preload per window kind (Phase 0 item 7). Only the dashboard gets the full
+// bridge; the overlay, review window and splash get a minimal one each.
+const PRELOADS = Object.freeze({
+  dashboard: 'preload.js',
+  overlay: 'preload-overlay.js',
+  review: 'preload-review.js',
+  splash: 'preload-splash.js',
+});
+
+function resolvePreloadPath(kind = 'dashboard') {
+  const file = PRELOADS[kind];
+  if (!file) throw new Error(`Unknown window kind for preload: ${kind}`);
+  return path.join(__dirname, '../preload', file);
 }
 
 // The packaged renderer pages sit beside the compiled main scripts
@@ -279,7 +290,7 @@ function createMainWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      preload: resolvePreloadPath(),
+      preload: resolvePreloadPath('dashboard'),
     },
   });
 
@@ -337,7 +348,7 @@ function createSplashWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      preload: resolvePreloadPath(),
+      preload: resolvePreloadPath('splash'),
     },
   });
 
@@ -404,7 +415,7 @@ function createOverlayWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      preload: resolvePreloadPath(),
+      preload: resolvePreloadPath('overlay'),
     },
   });
 
@@ -483,7 +494,7 @@ function createReviewWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      preload: resolvePreloadPath(),
+      preload: resolvePreloadPath('review'),
     },
   });
 
@@ -563,6 +574,8 @@ function isReviewWindowVisible() {
 }
 
 module.exports = {
+  resolvePreloadPath,
+  PRELOADS,
   createMainWindow,
   getMainWindow,
   focusMainWindow,

@@ -32,6 +32,8 @@ module.exports = defineConfig({
           redact: resolve(__dirname, 'src/main/redact.js'),
           // shell:open-path file-type policy; ipc.js requires it.
           openPathPolicy: resolve(__dirname, 'src/main/openPathPolicy.js'),
+          // Which page may call which IPC channel; ipc.js requires it.
+          ipcPolicy: resolve(__dirname, 'src/main/ipcPolicy.js'),
           // Session-level hardening (permission handlers, CSP backstop);
           // main.js requires it.
           sessionSecurity: resolve(__dirname, 'src/main/sessionSecurity.js'),
@@ -53,7 +55,13 @@ module.exports = defineConfig({
     build: {
       rollupOptions: {
         input: {
+          // The dashboard's bridge, and one MINIMAL preload per other window
+          // (Phase 0 item 7). Each is self-contained: a sandboxed preload cannot
+          // require a shared local module, and a shared chunk would not load.
           preload: resolve(__dirname, 'src/preload/preload.js'),
+          'preload-overlay': resolve(__dirname, 'src/preload/preload-overlay.js'),
+          'preload-review': resolve(__dirname, 'src/preload/preload-review.js'),
+          'preload-splash': resolve(__dirname, 'src/preload/preload-splash.js'),
         },
       },
     },
