@@ -36,7 +36,6 @@ test('accepts known backend routes with the right method', () => {
     ['POST', '/message-rescue/generate/job-1/cancel'],
     ['DELETE', '/message-rescue/context'],
     ['GET', '/personas/Assistant/examples'],
-    ['POST', '/personas/Assistant/examples'],
     ['DELETE', '/personas/Assistant/examples/abc123'],
     ['DELETE', '/personas/Assistant/examples'],
   ];
@@ -237,4 +236,30 @@ test('destructive typed operations require confirm: true', async () => {
   const del = await proxy.deleteWhisperModel({ modelSize: 'base' });
   assert.equal(del.ok, false);
   assert.match(del.error, /confirm/);
+});
+
+// --- Phase 0: routes that confer authority are not on the generic channel ----
+
+test('routes that need the person\'s approval are refused on the generic proxy (Phase 0 items 1 and 3)', () => {
+  const needApproval = [
+    ['POST', '/workflows/approve'],
+    ['POST', '/personas/Assistant/examples'],
+    ['POST', '/runtime/primary-action'],
+    ['POST', '/drafts/1/send'],
+    ['POST', '/voice-commands/execute'],
+    ['POST', '/workflows/preview'],
+  ];
+  for (const [method, path] of needApproval) {
+    assert.notEqual(proxy._validateRequest(method, path), null, `${method} ${path} must not be reachable by a renderer`);
+  }
+});
+
+test('the main-only transport is not an IPC-facing function', () => {
+  // sendTrusted names its own route, so it must never be handed to ipcMain.
+  const ipcSource = readFileSync(new URL('../src/main/ipc.js', import.meta.url), 'utf8');
+  const exposed = ipcSource.match(/backendProxy\.sendTrusted\([^)]*\)/g) || [];
+  // Only the broker's fixed-shape backend client may use it, never a renderer-chosen route.
+  assert.equal(exposed.length, 1);
+  assert.match(ipcSource, /backend: \{ send: \(method, path, body, timeoutMs\) => backendProxy\.sendTrusted\(method, path, body, timeoutMs\) \}/);
+  assert.ok(!/handleTrusted\([^)]*,\s*\(_event, req\) => backendProxy\.sendTrusted/.test(ipcSource));
 });

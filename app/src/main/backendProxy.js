@@ -81,8 +81,12 @@ const ROUTE_ALLOWLIST = {
     // main-process global-hotkey action that captures another application's
     // selection; renderer code must not be able to trigger that side effect
     // through the generic proxy.
+    // `/runtime/primary-action` is NOT here (Phase 0 item 3): it can place a draft
+    // into another application, so it is reachable only through the typed
+    // `backend:primary-action` channel, where the approval broker shows the exact
+    // text in a native dialog and signs the approval.
     '/runtime/audio-devices/refresh', '/runtime/warmup',
-    '/runtime/primary-action', '/runtime/emergency-stop',
+    '/runtime/emergency-stop',
     '/runtime/recording/toggle',
     '/runtime/recording/start', '/runtime/recording/stop',
     '/settings/profiles', '/settings/profiles/import',
@@ -102,7 +106,9 @@ const ROUTE_ALLOWLIST = {
     '/personas/refine', '/personas/draft',
     '/personas/interview/start', '/personas/interview/answer',
     '/personas/compile', '/personas/test-suite/run',
-    '/personas/:name/examples',
+    // POST /personas/:name/examples is NOT here (Phase 0 item 1): teaching a persona
+    // an example needs the person's approval, minted only by the approval broker
+    // (typed channel `approvals:persona-example`).
     '/voice-presets', '/voice-presets/:name/make-default',
     '/wake/enable', '/wake/disable', '/wake/test', '/wake/train',
     // Pure text preflight only. The route receives the proposed phrase and
@@ -123,10 +129,12 @@ const ROUTE_ALLOWLIST = {
     '/library/drafts/:id/reopen', '/library/drafts/:id/resend',
     '/library/drafts/:id/restore', '/library/recordings/:id/restore',
     '/library/clear',
-    // Wave 9. compile writes nothing; save always stores unapproved; approve
-    // records the exact preview lines the user read; run is the gate, and
-    // run/record files the per-step status codes.
-    '/workflows/compile', '/workflows/save', '/workflows/approve',
+    // Wave 9. compile writes nothing; save always stores unapproved; run is the
+    // gate, and run/record files the per-step status codes. `/workflows/approve`
+    // is NOT here (Phase 0 item 1): approval is a native dialog shown by the main
+    // process and a signed ticket the backend verifies (approvalBroker.js, typed
+    // channel `approvals:workflow`); a renderer cannot approve by calling it.
+    '/workflows/compile', '/workflows/save',
     '/workflows/enable', '/workflows/delete',
     '/workflows/run', '/workflows/run/record',
     // Wave 10. `/input/dispatch` is here because the SETUP UI needs it: the
@@ -532,9 +540,18 @@ function stopVoiceStatus() {
   _wsBoundSender = null;
 }
 
+// For OTHER MAIN-PROCESS modules only (the approval broker): the same transport
+// with the token attached, but the caller names the route. It is never wired to an
+// IPC channel, so a renderer cannot reach a route the allowlist refuses by going
+// through it.
+function sendTrusted(method, path, body, timeoutMs) {
+  return _send(String(method).toUpperCase(), path, body, timeoutMs);
+}
+
 module.exports = {
   init,
   request,
+  sendTrusted,
   uploadVoiceSample,
   uploadWakeModel,
   startVoiceStatus,

@@ -77,7 +77,7 @@ function evaluateOpenTarget(targetPath) {
 }
 
 function registerIpc({
-  getMainWindow, getSidecarStatus, getSidecarLogs, getAuthToken, getBackendOrigin, onQuit, onShow,
+  getMainWindow, getSidecarStatus, getSidecarLogs, getAuthToken, getApprovalKey, getBackendOrigin, onQuit, onShow,
   onSplashRetry, getSplashBootState, updateController, onRuntimeStatus, onConsentChanged,
   onFactoryResetStart, onFactoryResetEnd,
 } = {}) {
@@ -106,9 +106,52 @@ function registerIpc({
     return backendProxy.fetchHealth({ timeoutMs });
   });
 
+  // The approval broker (Phase 0 items 1-3). The renderer can ASK for one of
+  // these; each shows a native dialog with the exact content, and only a click on
+  // Approve makes main sign the ticket the backend demands. A renderer never sees
+  // the key or a ticket and cannot obtain a "yes" any other way.
+  const { createApprovalBroker } = require('./approvalBroker');
+  let approvalBroker = null;
+  function broker() {
+    if (!approvalBroker) {
+      const keyHex = typeof getApprovalKey === 'function' ? getApprovalKey() : '';
+      approvalBroker = createApprovalBroker({
+        secret: Buffer.from(String(keyHex || ''), 'hex'),
+        dialog,
+        getParentWindow: () => {
+          const win = getMainWindow?.();
+          return win && !win.isDestroyed() ? win : null;
+        },
+        backend: { send: (method, path, body, timeoutMs) => backendProxy.sendTrusted(method, path, body, timeoutMs) },
+        listApplications: () => applicationRegistry().list(),
+        log: (line) => console.warn(line),
+      });
+      // The send hotkey signs a press without a dialog: the key press is the tap.
+      require('./hotkeys').setApprovalSigner((press) => broker().signPhysicalPress(press));
+    }
+    return approvalBroker;
+  }
+  // Create it now so the hotkey signer is installed before the first key press.
+  setImmediate(() => { try { broker(); } catch (error) { console.error('[approval] broker unavailable:', error.message); } });
+
+  handleTrusted('approvals:workflow', (_event, req) => {
+    const { workflowId } = req || {};
+    return broker().approveWorkflow(workflowId);
+  });
+
+  handleTrusted('approvals:persona-example', (_event, req) => {
+    const { persona, raw, out, timeoutMs } = req || {};
+    return broker().addPersonaExample({ persona, raw, out, timeoutMs });
+  });
+
   handleTrusted('backend:send-draft', (_event, req) => {
     const { id, action, openChat, allowResend, timeoutMs } = req || {};
-    return backendProxy.sendDraft({ id, action, openChat, allowResend, timeoutMs });
+    return broker().sendDraft({ id, action, openChat, allowResend, timeoutMs });
+  });
+
+  handleTrusted('backend:primary-action', (_event, req) => {
+    const { timeoutMs } = req || {};
+    return broker().primaryActionFromUi({ timeoutMs });
   });
 
   handleTrusted('backend:wipe-privacy', (_event, req) => {

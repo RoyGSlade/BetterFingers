@@ -26,6 +26,8 @@ module.exports = defineConfig({
           // OR-02 startup splash phase derivation (main.js requires it for
           // pushBootSnapshot()).
           bootPhases: resolve(__dirname, 'src/main/bootPhases.js'),
+          // The approval broker (native dialog + signed approvals); ipc.js requires it.
+          approvalBroker: resolve(__dirname, 'src/main/approvalBroker.js'),
           // Credential masking for backend log lines (sidecar.js requires it).
           redact: resolve(__dirname, 'src/main/redact.js'),
           // shell:open-path file-type policy; ipc.js requires it.

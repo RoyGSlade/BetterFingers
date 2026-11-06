@@ -389,6 +389,7 @@ function createSidecar({
   host = '127.0.0.1',
   port = 8000,
   authToken = '',
+  approvalKey = '',
   devCommand = 'python',
   devArgs = [],
   onStatusChange = null,
@@ -419,6 +420,10 @@ function createSidecar({
       BETTERFINGERS_LAZY_STARTUP: '1',
       BETTERFINGERS_ENV: isPackaged ? 'production' : 'development',
       BETTERFINGERS_AUTH_TOKEN: authToken,
+      // Phase 0 item 1: the HMAC key the backend verifies approvals with. Only this
+      // process and the backend hold it; the backend removes it from its own
+      // environment as soon as it has read it.
+      ...(approvalKey ? { BETTERFINGERS_APPROVAL_KEY: approvalKey } : {}),
     },
   });
   let childProcess = null;

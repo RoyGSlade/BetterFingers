@@ -10,8 +10,20 @@ const api = {
   // Typed operations: destructive/sensitive routes are refused by the generic
   // proxy and only reachable through these fixed-shape channels.
   fetchHealth: (timeoutMs) => ipcRenderer.invoke('backend:fetch-health', { timeoutMs }),
+  // Placing a draft into another application. Main shows a native dialog with the
+  // exact text and signs the approval the backend requires; this call only asks.
   sendDraft: (id, { action, openChat, allowResend } = {}, timeoutMs) =>
     ipcRenderer.invoke('backend:send-draft', { id, action, openChat, allowResend, timeoutMs }),
+  // The Primary Action button: the backend picks the draft, main shows it and asks.
+  runPrimaryAction: (timeoutMs) => ipcRenderer.invoke('backend:primary-action', { timeoutMs }),
+  // Approvals. The renderer names WHAT to approve (a workflow id, a persona and the
+  // example text); main fetches the rest from the backend, shows the person a native
+  // dialog and only on their click signs the proof the backend demands. Nothing
+  // returned here is, or can be turned into, an approval.
+  approveWorkflow: (workflowId, timeoutMs) =>
+    ipcRenderer.invoke('approvals:workflow', { workflowId, timeoutMs }),
+  addPersonaExample: ({ persona, raw, out } = {}, timeoutMs) =>
+    ipcRenderer.invoke('approvals:persona-example', { persona, raw, out, timeoutMs }),
   wipePrivacyData: ({ wipeVoices, confirm, mode } = {}, timeoutMs) =>
     ipcRenderer.invoke('backend:wipe-privacy', { wipeVoices, confirm, mode, timeoutMs }),
   factoryReset: ({ confirm, deleteDownloadedModels } = {}, timeoutMs) =>

@@ -53,9 +53,88 @@ function loadUiohook() {
   return uiohook;
 }
 
+// Signs a draft-send approval for a PHYSICAL key press (approvalBroker.js's
+// signPhysicalPress, installed by ipc.js). The press is the tap: this module sees
+// it through uiohook or globalShortcut, which a renderer cannot synthesise.
+let approvalSigner = null;
+function setApprovalSigner(fn) {
+  approvalSigner = typeof fn === 'function' ? fn : null;
+}
+
+function postJson(endpoint, bodyObject) {
+  return new Promise((resolve) => {
+    const request = net.request({
+      method: 'POST',
+      protocol: 'http:',
+      hostname: BACKEND_HOST,
+      port: BACKEND_PORT,
+      path: endpoint,
+    });
+    request.setHeader('Authorization', `Bearer ${authToken}`);
+    request.setHeader('Content-Type', 'application/json');
+    request.on('response', (response) => {
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+      response.on('end', () => {
+        let json = null;
+        try { json = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { /* not JSON */ }
+        resolve({ status: response.statusCode, json });
+      });
+    });
+    request.on('error', (error) => {
+      console.error(`Hotkey trigger failed for ${endpoint}:`, error);
+      resolve({ status: 0, json: null });
+    });
+    request.write(JSON.stringify(bodyObject));
+    request.end();
+  });
+}
+
+// The send hotkey. Snapshot at the physical key press: a queued newer draft is not
+// evidence that its renderer has displayed it yet; hidden/unknown overlays pass
+// null. A visible overlay without an acknowledgment is reported so the backend
+// refuses to guess; a hidden one lets the press fall back to read-aloud.
+//
+// Placing text into another application needs a signed approval (Phase 0 items 1
+// and 3). With a draft on display we sign for exactly that draft and text. Without
+// one the backend answers with a challenge naming the draft it would place and its
+// text, and we sign for that on the same press.
+async function triggerPrimaryAction() {
+  const { getDisplayedReviewDraft, isReviewWindowVisible } = require('./windows');
+  const visible = typeof isReviewWindowVisible === 'function' && isReviewWindowVisible();
+  const displayed = getDisplayedReviewDraft();
+  let body = displayed || (visible ? { review_visible: true } : {});
+  if (displayed && approvalSigner) {
+    const approval = approvalSigner({
+      draftId: displayed.displayed_draft_id, text: displayed.displayed_final_text, action: 'paste',
+    });
+    if (approval) body = { ...displayed, approval };
+  }
+  const first = await postJson(EP_PRIMARY, body);
+  const challenge = first.json;
+  if (
+    !displayed && approvalSigner && challenge && challenge.error === 'approval_required'
+    && Number.isInteger(challenge.draft_id) && typeof challenge.final_text === 'string'
+  ) {
+    const approval = approvalSigner({
+      draftId: challenge.draft_id, text: challenge.final_text, action: challenge.action || 'paste',
+    });
+    if (approval) {
+      const second = await postJson(EP_PRIMARY, { approval });
+      if (second.status !== 200) console.warn(`Hotkey triggered ${EP_PRIMARY} but backend returned ${second.status}`);
+      return;
+    }
+  }
+  if (first.status !== 200) console.warn(`Hotkey triggered ${EP_PRIMARY} but backend returned ${first.status}`);
+}
+
 function triggerBackendAction(endpoint) {
   if (!authToken) {
     console.error(`Cannot trigger ${endpoint}: authToken is not set.`);
+    return;
+  }
+  if (endpoint === EP_PRIMARY) {
+    triggerPrimaryAction().catch((error) => console.error('Primary action hotkey failed:', error));
     return;
   }
 
@@ -68,17 +147,6 @@ function triggerBackendAction(endpoint) {
   });
 
   request.setHeader('Authorization', `Bearer ${authToken}`);
-  if (endpoint === EP_PRIMARY) {
-    // Snapshot at the physical key press. A queued newer draft is not evidence
-    // that its renderer has displayed it yet; hidden/unknown overlays pass null.
-    // A visible overlay without an acknowledgment is reported so the backend
-    // refuses to guess; a hidden one lets F9 fall back to read-aloud.
-    const { getDisplayedReviewDraft, isReviewWindowVisible } = require('./windows');
-    const visible = typeof isReviewWindowVisible === 'function' && isReviewWindowVisible();
-    request.setHeader('Content-Type', 'application/json');
-    request.write(JSON.stringify(getDisplayedReviewDraft() || (visible ? { review_visible: true } : {})));
-  }
-
   request.on('response', (response) => {
     if (response.statusCode !== 200) {
       console.warn(`Hotkey triggered ${endpoint} but backend returned ${response.statusCode}`);
@@ -377,6 +445,7 @@ function getHotkeyCapabilities() {
 }
 
 module.exports = {
+  setApprovalSigner,
   registerHotkeys,
   unregisterAllHotkeys,
   restoreActiveHotkeys,

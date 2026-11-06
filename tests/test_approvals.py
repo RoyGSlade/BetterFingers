@@ -1,6 +1,7 @@
 """The signed-approval verifier (Phase 0 item 1) and full-preview binding (item 2)."""
 import base64
 import json
+import shutil
 import subprocess
 import sys
 import time
@@ -193,6 +194,67 @@ class ConfigurationTests(unittest.TestCase):
             capture_output=True, text=True, cwd=REPO, check=True,
         )
         self.assertEqual(out.stdout.strip(), "True")
+
+
+@unittest.skipUnless(shutil.which("node"), "node is required for the cross-language check")
+class NodeBrokerInteropTests(unittest.TestCase):
+    """The broker is JavaScript and the verifier is Python. These tests make the
+    REAL Electron-side signer produce tickets and the REAL Python verifier accept
+    or refuse them, so a drift in framing, canonicalisation or encoding cannot
+    pass either suite alone."""
+
+    SCRIPT = """
+    const b = require(process.argv[1]);
+    const key = Buffer.from(process.argv[2], 'hex');
+    const cases = JSON.parse(process.argv[3]);
+    const out = cases.map((c) => {
+      const bind = c.kind === 'draft' ? b.draftSendBind(c.action, c.text, c.openChat)
+        : c.kind === 'persona' ? b.personaExampleBind(c.persona, c.raw, c.out)
+        : { preview_sha256: b.linesDigest(c.lines), steps_sha256: c.steps_sha256 };
+      return b.signTicket({ secret: key, purpose: c.purpose, subject: c.subject, bind });
+    });
+    console.log(JSON.stringify(out));
+    """
+
+    def tickets(self, cases):
+        result = subprocess.run(
+            ["node", "-e", self.SCRIPT, str(REPO / "app" / "src" / "main" / "approvalBroker.js"),
+             TEST_KEY.hex(), json.dumps(cases)],
+            capture_output=True, text=True, check=True, timeout=60,
+        )
+        return json.loads(result.stdout)
+
+    def test_node_signed_draft_persona_and_workflow_tickets_verify_in_python(self):
+        text = "Héllo \u2603 wörld\nsecond line with 😀 and a\ttab"
+        lines = ["1. Launch Obsidian (flatpak run md.obsidian.Obsidian)", "2. Say “ready” \u2603"]
+        steps = [{"action": "launch_app", "app_id": "obsidian"}]
+        draft, persona, workflow = self.tickets([
+            {"kind": "draft", "purpose": "draft.send", "subject": "7", "action": "paste", "text": text, "openChat": False},
+            {"kind": "persona", "purpose": "persona.example", "subject": "Coach", "persona": "Coach", "raw": "hey \u2603", "out": "Hey, 😀"},
+            {"kind": "workflow", "purpose": "workflow.approve", "subject": "w", "lines": lines,
+             "steps_sha256": approvals.steps_digest(steps)},
+        ])
+        approvals.verify(draft, purpose="draft.send", subject="7", bind=approvals.draft_send_bind("paste", text, False))
+        approvals.verify(persona, purpose="persona.example", subject="Coach",
+                         bind=approvals.persona_example_bind("Coach", "hey \u2603", "Hey, 😀"))
+        approvals.verify(workflow, purpose="workflow.approve", subject="w", bind=approvals.workflow_bind(lines, steps))
+
+    def test_a_node_ticket_for_one_text_is_refused_for_another_text(self):
+        (ticket,) = self.tickets([
+            {"kind": "draft", "purpose": "draft.send", "subject": "7", "action": "paste", "text": "A", "openChat": False},
+        ])
+        with self.assertRaises(ApprovalError):
+            approvals.verify(ticket, purpose="draft.send", subject="7", bind=approvals.draft_send_bind("paste", "B", False))
+
+    def test_a_node_ticket_signed_with_a_different_key_is_refused(self):
+        result = subprocess.run(
+            ["node", "-e", self.SCRIPT, str(REPO / "app" / "src" / "main" / "approvalBroker.js"),
+             ("77" * 32), json.dumps([{"kind": "draft", "purpose": "draft.send", "subject": "7", "action": "paste", "text": "A", "openChat": False}])],
+            capture_output=True, text=True, check=True, timeout=60,
+        )
+        (ticket,) = json.loads(result.stdout)
+        with self.assertRaises(ApprovalError):
+            approvals.verify(ticket, purpose="draft.send", subject="7", bind=approvals.draft_send_bind("paste", "A", False))
 
 
 if __name__ == "__main__":

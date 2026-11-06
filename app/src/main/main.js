@@ -1,6 +1,6 @@
 const path = require('node:path');
 const fs = require('node:fs');
-const { randomUUID } = require('node:crypto');
+const { randomBytes, randomUUID } = require('node:crypto');
 const { app, session } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const {
@@ -34,6 +34,12 @@ const { isTrustedRendererUrl } = require('./senderValidation');
 // ourselves, nothing is inherited and we generate one as before, which stays
 // the normal path.
 const authToken = process.env.BETTERFINGERS_AUTH_TOKEN || randomUUID();
+// The approval-signing key (Phase 0 item 1): 32 random bytes, held ONLY here and
+// by the backend we spawn (environment variable, removed by the backend as it
+// reads it). It is never sent to a renderer. Inherited when the backend is managed
+// externally and was started with one, exactly like the token above.
+const approvalKey = process.env.BETTERFINGERS_APPROVAL_KEY || randomBytes(32).toString('hex');
+delete process.env.BETTERFINGERS_APPROVAL_KEY;
 // The token lives only in the main process (Phase 3c). The renderer reaches the
 // backend exclusively through the validated proxy, which holds these.
 backendProxy.init({ origin: BACKEND_ORIGIN, token: authToken });
@@ -369,6 +375,7 @@ function bootstrapApp() {
     host: BACKEND_HOST,
     port: BACKEND_PORT,
     authToken,
+    approvalKey,
     devCommand: resolveDevPythonCommand(),
     devArgs: [
       'server.py',
@@ -402,6 +409,7 @@ function bootstrapApp() {
     getSidecarStatus: () => sidecar?.getStatus?.() ?? { state: 'unknown', message: 'Sidecar is unavailable.' },
     getSidecarLogs: () => sidecar?.getLogs?.() ?? [],
     getAuthToken: () => authToken,
+    getApprovalKey: () => approvalKey,
     getBackendOrigin: () => BACKEND_ORIGIN,
     onQuit: requestQuit,
     onShow: () => focusAppropriateWindow(),

@@ -481,8 +481,12 @@ export function createWorkflowBuilderFeature({
   async function approve() {
     if (!availability.available || !computeFlowState(state).canApprove) return null;
     try {
+      // Approval happens in a native dialog shown by the main process, which fetches
+      // the exact preview itself; what was approved is what the backend reports back.
       const result = await api.approveWorkflow(workflowId, previewLines);
-      approvedLines = previewLines.slice();
+      approvedLines = Array.isArray(result?.workflow?.approved_preview)
+        ? result.workflow.approved_preview.slice()
+        : previewLines.slice();
       state = {
         ...state,
         approved: Boolean(result?.workflow?.approved),

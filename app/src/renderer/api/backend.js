@@ -558,7 +558,9 @@ async function sendDraft(id, { action = 'copy_only', openChat = false } = {}, ti
 }
 
 async function runPrimaryAction(timeoutMs = 120000) {
-  return postJson(RUNTIME_PRIMARY_ACTION_URL, {}, timeoutMs);
+  // Typed channel (Phase 0 item 3): placing a draft needs the person's approval in
+  // a native dialog shown by the main process.
+  return typedRequest('runPrimaryAction', RUNTIME_PRIMARY_ACTION_URL, timeoutMs);
 }
 
 async function emergencyStop(timeoutMs = 10000) {
@@ -625,8 +627,12 @@ async function saveWorkflow(workflow, enabled = false, timeoutMs = 2500) {
   return postJson(`${WORKFLOWS_URL}/save`, { workflow, enabled }, timeoutMs);
 }
 
-async function approveWorkflow(workflowId, preview, timeoutMs = 2500) {
-  return postJson(`${WORKFLOWS_URL}/approve`, { workflow_id: workflowId, preview }, timeoutMs);
+// Approval is the main process's job (Phase 0 item 1): it fetches the exact preview
+// from the backend, shows it in a native dialog and signs the approval only if the
+// person clicks Approve. The renderer passes the id and NOTHING else -- not the
+// preview, which main re-derives -- so there is no preview here to tamper with.
+async function approveWorkflow(workflowId, _previewShownInThePage, timeoutMs = 5000) {
+  return typedRequest('approveWorkflow', `${WORKFLOWS_URL}/approve`, timeoutMs, workflowId);
 }
 
 /**
@@ -736,12 +742,13 @@ async function fetchPersonaExamples(name, timeoutMs = 2500) {
   return fetchJson(`${PERSONAS_URL}/${encodeURIComponent(name)}/examples`, timeoutMs);
 }
 
-async function addPersonaExample(name, raw, out, consent = false, timeoutMs = 10000) {
-  return postJson(
-    `${PERSONAS_URL}/${encodeURIComponent(name)}/examples`,
-    { raw, out, consent: consent === true },
-    timeoutMs,
-  );
+// Teaching a persona an example is consented to in a native dialog shown by the
+// main process (Phase 0 item 1), which shows the persona and the exact text. The
+// old `consent` argument is kept so callers do not change, but it is IGNORED: a
+// boolean from the page is not consent and the backend no longer accepts one.
+async function addPersonaExample(name, raw, out, _consentIgnored = false, timeoutMs = 10000) {
+  return typedRequest('addPersonaExample', `${PERSONAS_URL}/${encodeURIComponent(name)}/examples`, timeoutMs,
+    { persona: name, raw, out });
 }
 
 async function deletePersonaExample(name, exampleId, timeoutMs = 10000) {
