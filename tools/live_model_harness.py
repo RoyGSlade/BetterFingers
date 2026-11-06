@@ -43,6 +43,13 @@ class _RealEngine:
     def __init__(self, api_url: str):
         self.api_url = api_url
 
+    def api_headers(self) -> dict:
+        # llama-server now requires an API key (Phase 0 item 4). This harness runs
+        # in its own process, so it cannot see the backend's per-run key: point it
+        # at a server you started yourself and export that server's key.
+        key = os.getenv("BETTERFINGERS_LLAMA_API_KEY", "").strip()
+        return {"Authorization": f"Bearer {key}"} if key else {}
+
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
