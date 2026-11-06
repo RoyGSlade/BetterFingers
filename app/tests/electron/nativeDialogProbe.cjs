@@ -66,12 +66,12 @@ function screenshot(file) {
     '-i', display, '-frames:v', '1', file]);
 }
 
-function fakeBackend(lines) {
+function fakeBackend(lines, name = 'Native dialog probe') {
   return {
     async send(method, route) {
       if (route === '/workflows/preview') {
         return { ok: true, status: 200, body: {
-          ok: true, workflow_id: 'probe', name: 'Native dialog probe', preview_lines: lines,
+          ok: true, workflow_id: 'probe', name, preview_lines: lines,
           preview_sha256: linesDigest(lines), steps_sha256: 'a'.repeat(64), refusals: [],
         } };
       }
@@ -80,8 +80,8 @@ function fakeBackend(lines) {
   };
 }
 
-async function runCase(name, lines, expectTitle) {
-  const backend = fakeBackend(lines);
+async function runCase(name, lines, expectTitle, workflowName) {
+  const backend = fakeBackend(lines, workflowName);
   const posted = [];
   const wrapped = { send: async (...args) => { posted.push(args[1]); return backend.send(...args); } };
   const broker = createApprovalBroker({ secret: Buffer.alloc(32, 7), dialog, backend: wrapped });
@@ -115,6 +115,13 @@ app.whenReady().then(async () => {
     await sleep(700);
     const cjk = fillBudget((i) => `${i + 1}. ${'\u6f22'.repeat(80)}`);
     report.cases.push(await runCase('wide-cjk', cjk, 'Approve workflow'));
+    await sleep(700);
+    // Round 4, item 2 (Codex re-check 3, finding 2): an untrusted name with 45 newlines, on top
+    // of content filled to the budget. Before round 4 the message grew to 46 lines and the dialog
+    // ran off the screen with an approving button. It must be drawn on one visible line (or be
+    // refused with the Close-only notice) and fit with its buttons on screen.
+    const newlineName = `Probe${'\n'.repeat(45)}end`;
+    report.cases.push(await runCase('newline-name', atBudget, 'Approve workflow', newlineName));
     await sleep(700);
     const overBudget = Array.from({ length: MAX_DISPLAY_LINES + 10 }, (_, i) => `${i + 1}. step`);
     report.cases.push(await runCase('over-budget', overBudget, 'Approve workflow'));

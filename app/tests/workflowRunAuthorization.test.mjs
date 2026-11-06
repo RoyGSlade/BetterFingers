@@ -39,7 +39,7 @@ function previewLinesFor(registry) {
 const Module = require('node:module');
 const ORIGINAL_LOAD = Module._load;
 
-function setup(t, { answers = [], preview = {}, gate = {}, onGate = null } = {}) {
+function setup(t, { answers = [], preview = {}, gate = {}, onGate = null, workflows = [{ id: 'studio_setup', steps: WAIT_THEN_LAUNCH }] } = {}) {
   const original = ORIGINAL_LOAD;
   const handlers = new Map();
   const dialogs = [];
@@ -66,6 +66,7 @@ function setup(t, { answers = [], preview = {}, gate = {}, onGate = null } = {})
     onBackendEvent: () => () => {},
     // The broker's main-only route to the backend.
     sendTrusted: async (method, route, body) => {
+      if (method === 'GET' && route === '/workflows') return { ok: true, status: 200, body: { ok: true, workflows } };
       if (route !== '/workflows/preview') return { ok: true, status: 200, body: {} };
       const lines = previewLinesFor(body.context.registry);
       return {
@@ -228,4 +229,43 @@ test('adding a new application, or re-confirming one unchanged, needs no dialog'
   assert.equal((await ctx.call('applications:confirm', { id: 'notes', display_name: 'Notes', launch_method: 'executable', executable: '/usr/bin/notes' })).ok, true);
   assert.equal((await ctx.call('applications:confirm', OBSIDIAN)).ok, true);
   assert.equal(ctx.dialogs.length, 0);
+});
+
+// ---- round 4, item 6 (Codex re-check 3, finding 7): remove / re-add -----------------------------
+
+test('round 4: removing a confirmed application needs a native dialog; declining keeps it', async (t) => {
+  const ctx = setup(t, { answers: [1, 0] });
+  const refused = await ctx.call('applications:remove', { id: 'obsidian' });
+  assert.equal(refused.ok, false);
+  assert.equal(ctx.dialogs.length, 1);
+  assert.ok(ctx.dialogs[0].detail.includes('/opt/obsidian/obsidian'), 'the dialog shows what is removed');
+  assert.equal(ctx.dialogs[0].defaultId, 1, 'Cancel is the default');
+  assert.equal((await ctx.call('applications:list')).entries.length, 1);
+  await settle();
+  const removed = await ctx.call('applications:remove', { id: 'obsidian' });
+  assert.equal(removed.ok, true);
+  assert.equal((await ctx.call('applications:list')).entries.length, 0);
+});
+
+test('round 4: re-adding a removed id with a different target needs the replacement dialog', async (t) => {
+  const ctx = setup(t, { answers: [0, 1, 0] });
+  assert.equal((await ctx.call('applications:remove', { id: 'obsidian' })).ok, true);
+  await settle();
+  const evil = { ...OBSIDIAN, executable: '/tmp/evil' };
+  const refused = await ctx.call('applications:confirm', evil);
+  assert.equal(refused.ok, false, 'declining the replacement keeps it out');
+  assert.equal(ctx.dialogs.length, 2);
+  assert.ok(ctx.dialogs[1].detail.includes('/opt/obsidian/obsidian') && ctx.dialogs[1].detail.includes('/tmp/evil'),
+    'the replacement dialog shows the old target from the identity history and the new one');
+  assert.equal((await ctx.call('applications:list')).entries.length, 0);
+  await settle();
+  assert.equal((await ctx.call('applications:confirm', evil)).ok, true);
+});
+
+test('round 4: adding a new id that a workflow already names needs the replacement dialog', async (t) => {
+  const ctx = setup(t, { answers: [1], workflows: [{ id: 'studio_setup', steps: [{ action: 'launch_app', app_id: 'notes' }] }] });
+  const result = await ctx.call('applications:confirm', { id: 'notes', display_name: 'Notes', launch_method: 'executable', executable: '/usr/bin/notes' });
+  assert.equal(result.ok, false);
+  assert.equal(ctx.dialogs.length, 1);
+  assert.ok(ctx.dialogs[0].detail.includes('studio_setup') || ctx.dialogs[0].detail.includes('1 workflow'), 'it says which workflows it rebinds');
 });

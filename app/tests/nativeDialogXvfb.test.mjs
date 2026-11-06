@@ -53,6 +53,11 @@ for (const size of SIZES) {
       assert.equal(c.approvePosted, false, `${name}: nothing was approved`);
       assert.ok(fs.statSync(c.png).size > 1000, `${name}: screenshot taken`);
     }
+    // Round 4, item 2: a name with 45 newlines never yields a dialog taller than the screen.
+    const nl = byName['newline-name'];
+    assert.ok(nl && nl.geometry, 'newline-name: a dialog was shown');
+    assert.ok(nl.geometry.y + nl.geometry.height <= nl.screen.height, `newline-name: ${nl.geometry.height}px tall on a ${nl.screen.height}px screen`);
+    assert.equal(nl.approvePosted, false, 'newline-name: nothing was approved');
     const over = byName['over-budget'];
     assert.ok(over.geometry, 'the too-long dialog was shown');
     assert.ok(over.geometry.height < 400, 'it is the short Close-only notice, not the content');
