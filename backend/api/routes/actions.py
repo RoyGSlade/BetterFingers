@@ -45,6 +45,7 @@ from pydantic import BaseModel, Field
 from backend.api.models import ApprovalTicketModel
 from backend.domain.actions import (
     ALLOWED_ACTIONS,
+    OUTWARD_ACTIONS,
     PROHIBITED_ACTIONS,
     SCHEMA_VERSION,
     compile_workflow,
@@ -244,6 +245,9 @@ async def preview_workflow_route(request: PreviewRequest):
         "preview_sha256": approvals.preview_digest(lines),
         "steps_sha256": approvals.steps_digest(record["steps"]),
         "refusals": [r.to_dict() for r in validation.refusals],
+        # Round 2, item 5: does a run have an outward effect, and would the gate let it run now?
+        "outward": any(step.get("action") in OUTWARD_ACTIONS for step in record["steps"]),
+        "runnable": bool(validation.ok and _store().can_run(record["id"], lines).get("ok")),
     }
 
 

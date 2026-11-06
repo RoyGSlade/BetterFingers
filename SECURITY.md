@@ -62,6 +62,16 @@ What the app enforces on the machine itself (details in [docs/DEVELOPMENT.md](do
   showed the exact, complete content and the person clicked Approve. The signing key is held by
   the main process and the backend it spawns; renderers never see it, and the backend refuses
   approvals without it. A spoken phrase, a request flag or a model's text is never an approval.
+- **Running an approved workflow is a separate act from approving it.** A run asked for by a page
+  (`workflows:execute`) that has any outward effect (launching or raising a program, opening a
+  link or a folder) needs a fresh native confirmation every time, so a compromised page cannot
+  replay an approved workflow at will. A physical owner trigger that the main process observes
+  itself (a hotkey chord, a trigger phrase heard on the microphone) is the owner acting now and
+  runs without a dialog; no page can reach that entry point. Workflows that only change the
+  app's own settings or speak run without one. Stream Deck and controller presses arrive through
+  the page and are treated as page-triggered. The send shortcut never places text by itself: a
+  press opens the native dialog showing the draft main fetched from the backend, and only
+  Ctrl/Alt/Meta chords or function keys are accepted as that shortcut.
 - **The local API accepts only loopback Host headers and no foreign browser Origin**, and every
   call needs the bearer token. The token is never printed, never in a URL, and is masked in logs.
 - **llama-server runs with a per-run API key**, no web UI, no slots endpoint, loopback only.

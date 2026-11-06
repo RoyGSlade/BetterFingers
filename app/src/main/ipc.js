@@ -394,13 +394,22 @@ function registerIpc({
     return _workflowExecutor;
   }
 
-  handleTrusted('workflows:execute', (_event, payload) => {
+  handleTrusted('workflows:execute', async (_event, payload) => {
     // Destructured to exactly one field on purpose: passing `payload` through
     // would let a future edit start honouring extra keys without anybody
     // noticing that the channel had stopped being id-only.
     const { workflowId } = payload || {};
+    // A renderer-triggered run with an outward effect needs a fresh native confirmation
+    // (round 2, item 5; approvalBroker.confirmWorkflowRun explains the policy).
+    const confirmation = await broker().confirmWorkflowRun(workflowId);
+    if (!confirmation.ok) return confirmation;
     return workflowExecutor().execute(workflowId);
   });
+
+  // The owner acting NOW, observed by main itself (a hotkey chord, a trigger phrase heard on
+  // the mic): runs without a dialog. Deliberately not an IPC channel, so no page can call it;
+  // registerIpc hands it to main.js, whose physical-trigger handlers are its only callers.
+  const runWorkflowFromPhysicalTrigger = (workflowId) => workflowExecutor().execute(workflowId);
 
   // The send shortcut is gated (round 2, item 2): only a Ctrl/Alt/Meta chord or a function
   // key is accepted, and changing it from the confirmed value needs a native dialog.
@@ -686,6 +695,8 @@ function registerIpc({
     }
     return applied;
   });
+
+  return { runWorkflowFromPhysicalTrigger };
 }
 
 module.exports = {

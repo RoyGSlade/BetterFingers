@@ -302,6 +302,35 @@ class ApprovalGateRouteTests(RouteTestCase):
         self.assertEqual(run_b["error"], "preview_changed")
 
 
+class PreviewRunFlagsTests(RouteTestCase):
+    """Round 2, item 5: the preview tells main whether a run has an outward effect and whether
+    the gate would let it run now, so main can ask for a fresh confirmation only when it matters."""
+
+    def preview(self, workflow_id):
+        return self.client.post("/workflows/preview", json={"workflow_id": workflow_id, "context": CONTEXT}).json()
+
+    def test_launching_an_app_is_outward_and_a_settings_only_workflow_is_not(self):
+        self.client.post("/workflows/save", json={"workflow": WORKFLOW, "enabled": True})
+        self.client.post("/workflows/save", json={
+            "workflow": {"name": "Quiet", "steps": [{"action": "activate_application_profile", "profile_id": "writing_app"}]}, "enabled": True})
+        self.assertTrue(self.preview("studio_setup")["outward"])
+        self.assertFalse(self.preview("quiet")["outward"])
+
+    def test_every_outward_verb_is_listed_and_nothing_else(self):
+        from backend.domain.actions import OUTWARD_ACTIONS
+        self.assertEqual(set(OUTWARD_ACTIONS), {"launch_app", "focus_app", "open_uri", "open_folder"})
+
+    def test_runnable_is_true_only_for_an_approved_enabled_workflow_whose_preview_still_matches(self):
+        from approval_support import workflow_ticket
+        self.client.post("/workflows/save", json={"workflow": WORKFLOW, "enabled": True})
+        self.assertFalse(self.preview("studio_setup")["runnable"])
+        shown = self.preview("studio_setup")
+        steps = WorkflowStore(path=self.path).get("studio_setup")["steps"]
+        ticket = workflow_ticket("studio_setup", shown["preview_lines"], steps)
+        self.client.post("/workflows/approve", json={"workflow_id": "studio_setup", "preview": shown["preview_lines"], "approval": ticket})
+        self.assertTrue(self.preview("studio_setup")["runnable"])
+
+
 class RecordRunTests(RouteTestCase):
     def setUp(self):
         super().setUp()

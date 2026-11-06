@@ -261,7 +261,7 @@ function createApprovalBroker({
   // --- workflow ---------------------------------------------------------------
 
   async function approveWorkflow(workflowId) {
-    const id = String(workflowId || '').trim();
+    const id = typeof workflowId === 'string' ? workflowId.trim() : '';
     if (!WORKFLOW_ID.test(id)) return fault('That is not a workflow BetterFingers knows about.');
 
     const preview = await backend.send('POST', '/workflows/preview', {
@@ -305,6 +305,47 @@ function createApprovalBroker({
     });
     if (!approval) return fault(UNAVAILABLE);
     return backend.send('POST', '/workflows/approve', { workflow_id: info.workflow_id, preview: lines, approval }, 5000);
+  }
+
+  // --- running an approved workflow (round 2, item 5) ----------------------------------------
+  //
+  // POLICY. An approved workflow is approved ONCE, but a RUN is a separate act. A run that a
+  // renderer asks for (workflows:execute) and that has any outward effect (launching or
+  // raising a program, opening a link or a folder) needs a fresh native confirmation, so a
+  // compromised page cannot replay an approved workflow whenever it likes. A PHYSICAL owner
+  // trigger that main itself observes (a hotkey chord, a trigger phrase heard on the mic) is
+  // the owner acting now, and runs without a dialog: ipc.js exposes that as
+  // runWorkflowFromPhysicalTrigger, which no renderer channel can reach. Workflows that only
+  // change BetterFingers' own settings or speak need no confirmation either way.
+  async function confirmWorkflowRun(workflowId) {
+    const id = typeof workflowId === 'string' ? workflowId.trim() : '';
+    if (!WORKFLOW_ID.test(id)) return { ok: false, error: 'invalid_id', reason: 'That is not a workflow BetterFingers knows about.' };
+    const preview = await backend.send('POST', '/workflows/preview', {
+      workflow_id: id, context: { registry: listApplications() || [] },
+    }, 5000);
+    const info = preview && preview.ok && preview.body && typeof preview.body === 'object' ? preview.body : null;
+    // If the backend cannot describe it, or the gate would refuse it anyway, let the executor give
+    // the gate's own refusal: nothing outward can happen, so there is nothing to confirm.
+    if (!info || info.ok !== true || info.runnable !== true) return { ok: true, confirmed: false };
+    if (info.outward !== true) return { ok: true, confirmed: false };
+
+    const lines = Array.isArray(info.preview_lines) ? info.preview_lines.map(String) : [];
+    if (lines.length === 0 || linesDigest(lines) !== info.preview_sha256) {
+      return { ok: false, error: 'preview_unverified', reason: 'BetterFingers could not verify what that workflow would do, so it did not run.' };
+    }
+    const shown = lines.flatMap((line) => displayLines(line));
+    if (!fits(shown)) return { ok: false, error: 'too_long', reason: TOO_LONG };
+    const decision = await confirm({
+      title: 'Run workflow',
+      message: `Run the workflow \u201C${makeVisible(String(info.name || id))}\u201D now?`,
+      body: ['It will do exactly this, in this order:', '', ...shown],
+      approveLabel: 'Run it',
+      note: 'Something in the app asked for this run. If you did not, choose Cancel.',
+    });
+    if (!decision.approved) {
+      return { ok: false, error: 'declined', reason: (decision && decision.error) || 'You cancelled. Nothing was run.' };
+    }
+    return { ok: true, confirmed: true };
   }
 
   // --- persona learning --------------------------------------------------------
@@ -523,6 +564,7 @@ function createApprovalBroker({
 
   return {
     approveWorkflow,
+    confirmWorkflowRun,
     addPersonaExample,
     savePersona,
     sendDraft,

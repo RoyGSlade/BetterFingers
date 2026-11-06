@@ -81,6 +81,17 @@ ALLOWED_ACTIONS = (
     ACTION_SPEAK_CONFIRMATION,
 )
 
+# Verbs with an OUTWARD effect: they start or raise another program, open a link, or open a
+# folder in the file manager. A run of a workflow containing any of these, asked for by a
+# renderer, needs a fresh native confirmation (app/src/main/approvalBroker.js,
+# confirmWorkflowRun); the rest only flip BetterFingers' own settings or speak.
+OUTWARD_ACTIONS = (
+    ACTION_LAUNCH_APP,
+    ACTION_FOCUS_APP,
+    ACTION_OPEN_URI,
+    ACTION_OPEN_FOLDER,
+)
+
 # Which parameter each verb carries, and nothing else. A step is
 # {"action": <verb>, <the field below>: <value>} plus, for wait_for_process
 # only, an optional bounded timeout.

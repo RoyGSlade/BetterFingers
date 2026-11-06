@@ -334,6 +334,58 @@ test('persona example: a persona name with slashes cannot change the route', asy
   assert.equal(backend.calls[0].path, '/personas/..%2Fworkflows%2Fapprove/examples');
 });
 
+// ---- running an approved workflow (round 2, item 5) -------------------------------------------
+
+function runPreview(overrides = {}) {
+  return { 'POST /workflows/preview': { ok: true, status: 200, body: previewBody(PREVIEW_LINES, { outward: true, runnable: true, ...overrides }) } };
+}
+
+test('a renderer-triggered run with an outward action needs a fresh native confirmation', async () => {
+  const { instance, dialog } = makeBroker({ answers: [0], handlers: runPreview() });
+  assert.deepEqual(await instance.confirmWorkflowRun('studio_setup'), { ok: true, confirmed: true });
+  const { options } = dialog.shown[0];
+  assert.equal(options.defaultId, 1, 'Cancel is the default: a page asked for this run');
+  for (const line of PREVIEW_LINES) assert.ok(options.detail.includes(line));
+});
+
+test('declining the run confirmation stops the run', async () => {
+  for (const answer of [1, -1, undefined]) {
+    const { instance } = makeBroker({ answers: [answer], handlers: runPreview() });
+    const result = await instance.confirmWorkflowRun('studio_setup');
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'declined');
+  }
+});
+
+test('a workflow with no outward action runs without a dialog', async () => {
+  const { instance, dialog } = makeBroker({ answers: [0], handlers: runPreview({ outward: false }) });
+  assert.deepEqual(await instance.confirmWorkflowRun('studio_setup'), { ok: true, confirmed: false });
+  assert.equal(dialog.shown.length, 0);
+});
+
+test('a workflow the gate would refuse is left to the gate (nothing outward can happen)', async () => {
+  const { instance, dialog } = makeBroker({ answers: [0], handlers: runPreview({ runnable: false }) });
+  assert.deepEqual(await instance.confirmWorkflowRun('studio_setup'), { ok: true, confirmed: false });
+  assert.equal(dialog.shown.length, 0);
+});
+
+test('a run whose preview cannot be verified, or cannot be shown in full, does not run', async () => {
+  const bad = makeBroker({ handlers: runPreview({ preview_sha256: 'f'.repeat(64) }) });
+  assert.equal((await bad.instance.confirmWorkflowRun('studio_setup')).ok, false);
+  const long = Array.from({ length: MAX_DISPLAY_LINES + 3 }, (_, i) => `${i + 1}. step`);
+  const tall = makeBroker({ handlers: { 'POST /workflows/preview': { ok: true, status: 200, body: previewBody(long, { outward: true, runnable: true }) } } });
+  assert.equal((await tall.instance.confirmWorkflowRun('studio_setup')).ok, false);
+  assert.equal(bad.dialog.shown.length + tall.dialog.shown.length, 0);
+});
+
+test('bad workflow ids never reach the backend', async () => {
+  for (const id of ['', '../x', null, 5]) {
+    const { instance, backend } = makeBroker();
+    assert.equal((await instance.confirmWorkflowRun(id)).ok, false);
+    assert.equal(backend.calls.length, 0);
+  }
+});
+
 // ---- persona few-shot saves (round 2, item 4) ---------------------------------------------
 
 const STORED = { 'GET /personas/Coach': { ok: true, status: 200, body: { few_shot: [{ raw: 'old', out: 'Old.' }] } } };
@@ -555,7 +607,7 @@ test('the broker exposes no way to sign without a dialog', () => {
   const { instance } = makeBroker();
   assert.ok(!('signPhysicalPress' in instance));
   assert.deepEqual(Object.keys(instance).sort(), [
-    'addPersonaExample', 'approveWorkflow', 'confirmSendHotkeyChange', 'placeFromHotkey', 'primaryActionFromUi', 'savePersona', 'sendDraft',
+    'addPersonaExample', 'approveWorkflow', 'confirmSendHotkeyChange', 'confirmWorkflowRun', 'placeFromHotkey', 'primaryActionFromUi', 'savePersona', 'sendDraft',
   ]);
 });
 
