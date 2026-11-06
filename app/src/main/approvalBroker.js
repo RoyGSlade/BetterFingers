@@ -146,23 +146,12 @@ function personaDeleteBind(persona, before) {
   return { scope: 'persona', ...personaFewShotBind(persona, before, []) };
 }
 
-// Every persona's learned list, sorted by name (identical bytes to
-// approvals.learned_collection_digest). `personas` is [{ name, examples }] or [[name, pairs]].
-function learnedCollectionDigest(personas) {
-  const rows = (Array.isArray(personas) ? personas : []).map((row) => (Array.isArray(row)
-    ? [String(row[0]), (row[1] || []).map(([r, o]) => [String(r), String(o)])]
-    : [String(row && row.name), fewShotItems(row && row.examples)]));
-  rows.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-  const lines = ['persona.learned.collection.v1', String(rows.length)];
-  for (const [name, items] of rows) {
-    lines.push(name, String(items.length));
-    for (const [raw, out] of items) lines.push(raw, out);
-  }
-  return linesDigest(lines);
-}
-
-function learnedClearAllBind(collectionSha256) {
-  return { scope: 'all_personas', collection_sha256: String(collectionSha256) };
+// Clearing EVERY persona's learned examples (round 5, item 3): an explicit broad-scope action,
+// like the factory reset. The dialog states the scope ("All learned examples for all personas:
+// N examples") and the ticket binds exactly that (identical to approvals.learned_clear_all_bind).
+// It used to bind a digest of every example's text, which the dialog did not show.
+function learnedClearAllBind(exampleCount) {
+  return { scope: 'all_personas', example_count: String(Math.max(0, Math.floor(Number(exampleCount) || 0))) };
 }
 
 // A privacy wipe or factory reset: its mode, the exact categories it deletes (registry order)
@@ -386,6 +375,9 @@ function fault(error, status = 0) {
 }
 
 const TOO_LONG = 'That is too long to review in one window, so BetterFingers will not approve it. Shorten it and try again.';
+// Round 5, item 3: an example list that does not fit is Close only, and says what to do instead.
+const TOO_MANY_LEARNED = 'Too many to show here: delete examples one at a time, or use Settings > Privacy > Erase all learned examples';
+const TOO_MANY_PERSONA_EXAMPLES = 'Too many to show here: delete examples one at a time in the persona editor, then delete the persona.';
 const UNAVAILABLE = 'Approvals are not available right now. Nothing was changed.';
 
 function createApprovalBroker({
@@ -469,10 +461,8 @@ function createApprovalBroker({
     return chars <= budget.chars;
   }
 
-  // For callers that can choose a shorter form (a list, or only its count) before asking.
-  function fits(parts) {
-    return fitsLayout(layout(parts));
-  }
+  // (Round 5, item 3: there is no "fits?" helper for callers any more. No caller may swap the
+  // material for a shorter summary; what does not fit gets Close only, below.)
 
   // Show the native dialog; resolves approved:true ONLY when the person clicked the
   // approving button. Anything else (Cancel, Escape, closing the window, an error) is a no.
@@ -717,12 +707,11 @@ function createApprovalBroker({
     return ['What was said:', ...displayLines(raw), 'What it should become:', ...displayLines(out)];
   }
 
-  // A complete example list as dialog lines, or only its count when the full list does not fit.
-  function listOrCount(parts, items, describeCount) {
-    const full = [...parts.body, ...items.flatMap(([raw, out], index) => [
-      ...displayLines(`${index + 1}. said: ${raw}`), ...displayLines(`   becomes: ${out}`)])];
-    if (fits({ ...parts, body: full })) return full;
-    return [...parts.body, describeCount, 'The list is too long to show here; open the persona in BetterFingers to read it.'];
+  // A COMPLETE example list as dialog lines (round 5, item 3). There is no shorter form: when the
+  // whole list does not fit, confirm() gives Close only, so a list nobody was shown is never signed.
+  function exampleListLines(items) {
+    return items.flatMap(([raw, out], index) => [
+      ...displayLines(`${index + 1}. said: ${raw}`), ...displayLines(`   becomes: ${out}`)]);
   }
 
   const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -828,17 +817,17 @@ function createApprovalBroker({
     if (!examples) return fault('BetterFingers could not read that persona’s learned examples. Nothing was deleted.');
     const before = fewShotItems(examples);
     if (!before.length) return { ok: true, status: 200, body: { ok: true, cleared: false } };
-    const parts = {
+    const decision = await confirm({
       title: 'Clear learned examples',
       message: `Delete every learned example of “${inline(who.name)}”?`,
-      body: [`Persona: ${inline(who.name)}`, `Scope: this persona only. All ${plural(before.length, 'learned example')} are deleted:`, ''],
+      body: [
+        `Persona: ${inline(who.name)}`, `Scope: this persona only. All ${plural(before.length, 'learned example')} are deleted:`, '',
+        ...exampleListLines(before),
+      ],
       note: 'Other personas keep theirs. This changes how the persona rewrites your future dictation.',
-    };
-    const decision = await confirm({
-      ...parts,
-      body: listOrCount(parts, before, `(${plural(before.length, 'learned example')})`),
       approveLabel: 'Delete them',
-      tooLongWhere: WHERE_PERSONA,
+      tooLongWhere: TOO_MANY_LEARNED,
+      tooLongError: TOO_MANY_LEARNED,
     });
     if (!decision.approved) return declined(decision);
     const approval = trySign(PURPOSE_PERSONA_LEARNED_CLEAR, who.name, learnedClearBind(who.name, before));
@@ -853,24 +842,19 @@ function createApprovalBroker({
     const personas = preview && preview.ok && preview.status < 400 && preview.body && Array.isArray(preview.body.personas)
       ? preview.body.personas.filter((row) => row && typeof row.name === 'string') : null;
     if (!personas) return fault('BetterFingers could not read the learned examples. Nothing was deleted.');
+    // Round 5, item 3: an explicit broad-scope action. The dialog states the scope, and only the
+    // scope; the ticket binds exactly what it states (all personas, this many examples).
     const total = personas.reduce((sum, row) => sum + fewShotItems(row.examples).length, 0);
-    const names = personas.map((row) => `${inline(row.name)} (${fewShotItems(row.examples).length})`);
-    const parts = {
+    if (!total) return { ok: true, status: 200, body: { ok: true, cleared: false } };
+    const decision = await confirm({
       title: 'Clear all learned examples',
       message: 'Delete every learned example of every persona?',
-      body: [`Scope: all personas. ${plural(total, 'learned example')} across ${plural(personas.length, 'persona')} are deleted.`],
+      body: [`All learned examples for all personas: ${plural(total, 'example')}.`],
       note: 'Your personas stay; only what they learned from your approved examples is deleted.',
-    };
-    // The persona names when they fit; otherwise the counts alone (the scope is "all of them").
-    const withNames = [...parts.body, ...(names.length ? displayLines(`Personas: ${names.join(', ')}`) : [])];
-    const decision = await confirm({
-      ...parts,
-      body: fits({ ...parts, body: withNames }) ? withNames : parts.body,
       approveLabel: 'Delete them all',
-      tooLongWhere: WHERE_PERSONA,
     });
     if (!decision.approved) return declined(decision);
-    const approval = trySign(PURPOSE_LEARNED_CLEAR_ALL, 'all', learnedClearAllBind(learnedCollectionDigest(personas)));
+    const approval = trySign(PURPOSE_LEARNED_CLEAR_ALL, 'all', learnedClearAllBind(total));
     if (!approval) return fault(UNAVAILABLE);
     return backend.send('DELETE', '/privacy/persona-learning', { approval }, Number(timeoutMs) || 15000);
   }
@@ -884,22 +868,19 @@ function createApprovalBroker({
       return fault('BetterFingers could not read that persona. Nothing was deleted.');
     }
     const before = fewShotItems(current.body.few_shot);
-    const parts = {
+    const decision = await confirm({
       title: 'Delete a persona',
       message: `Delete the persona “${inline(who.name)}”?`,
       body: [
         `Persona: ${inline(who.name)}`,
         'Scope: this persona, with its prompt and settings,',
         `and its ${plural(before.length, 'example')}${before.length ? ':' : '.'}`,
-        ...(before.length ? [''] : []),
+        ...(before.length ? ['', ...exampleListLines(before)] : []),
       ],
       note: 'Profiles that use it switch to True Janitor.',
-    };
-    const decision = await confirm({
-      ...parts,
-      body: before.length ? listOrCount(parts, before, `(${plural(before.length, 'example')})`) : parts.body,
       approveLabel: 'Delete it',
-      tooLongWhere: WHERE_PERSONA,
+      tooLongWhere: TOO_MANY_PERSONA_EXAMPLES,
+      tooLongError: TOO_MANY_PERSONA_EXAMPLES,
     });
     if (!decision.approved) return declined(decision);
     const approval = trySign(PURPOSE_PERSONA_DELETE, who.name, personaDeleteBind(who.name, before));
@@ -927,24 +908,25 @@ function createApprovalBroker({
     return categories && categories.length ? categories : null;
   }
 
+  // Round 5, item 3: a wipe is an explicit broad-scope action. Its dialog names EVERY kind of data
+  // it deletes, by its label (the labels are short); when they do not all fit, it is Close only.
+  // There is no "N kinds of data" form. The factory reset's scope is "everything", stated as such.
   async function confirmWipe({ mode, categories, extra = [], approveLabel }) {
-    const parts = {
-      title: WIPE_TITLES[mode],
-      message: mode === 'factory_reset' ? 'Erase everything BetterFingers stores on this computer?' : 'Delete this data now?',
-      note: 'This cannot be undone. If you did not just ask for this, choose Cancel.',
-    };
-    const label = (c) => inline(c.label || c.id);
-    const personal = categories.filter((c) => c.may_contain_user_text);
-    // Every kind of data by name when that fits; otherwise the ones holding your own words by
-    // name and the rest counted (the Privacy page lists them all); the count alone as a last resort.
-    const forms = [
-      [`Scope: ${plural(categories.length, 'kind')} of data are deleted:`, ...displayLines(categories.map(label).join(', '))],
-      [`Scope: ${plural(categories.length, 'kind')} of data are deleted, including:`,
-        ...displayLines(`${personal.map(label).join(', ')}, and ${categories.length - personal.length} more (all listed on the Privacy page).`)],
-      [`Scope: ${plural(categories.length, 'kind')} of data are deleted (all listed on the Privacy page).`],
-    ].map((lines) => [...lines, ...extra]);
-    const body = forms.find((candidate) => fits({ ...parts, body: candidate })) || forms[forms.length - 1];
-    return confirm({ ...parts, body, approveLabel, tooLongWhere: 'Read the full list on the Privacy page of the BetterFingers window.' });
+    const common = { title: WIPE_TITLES[mode], note: 'This cannot be undone. If you did not just ask for this, choose Cancel.', approveLabel };
+    if (mode === 'factory_reset') {
+      return confirm({
+        ...common,
+        message: 'Erase everything BetterFingers stores on this computer?',
+        body: ['Scope: everything BetterFingers stores on this computer, as listed on the Privacy page.', ...extra],
+      });
+    }
+    const labels = categories.map((c) => inline(c.label || c.id));
+    return confirm({
+      ...common,
+      message: 'Delete this data now?',
+      body: ['Scope: everything of these kinds is deleted:', ...displayLines(labels.join(', ')), ...extra],
+      tooLongWhere: 'Too many to show here: read the full list on the Privacy page of the BetterFingers window.',
+    });
   }
 
   async function wipePrivacy({ mode, wipeVoices, timeoutMs } = {}) {
@@ -1257,7 +1239,6 @@ module.exports = {
   learnedAddBind,
   learnedClearBind,
   personaDeleteBind,
-  learnedCollectionDigest,
   learnedClearAllBind,
   privacyWipeBind,
   canonicalPersonaName,

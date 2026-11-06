@@ -90,7 +90,7 @@ async def privacy_export():
 @router.get("/privacy/persona-learning/preview")
 async def privacy_persona_learning_preview():
     """Every persona's learned examples, for the native dialog the global clear needs (round 4):
-    main shows the scope from this and binds its ticket to the digest of exactly this collection."""
+    main states the scope from this (all personas, N examples; round 5) and binds its ticket to it."""
     rows = await run_in_threadpool(persona_learning.snapshot)
     return {"ok": True, "personas": [
         {"name": name, "examples": [{"raw": raw, "out": out} for raw, out in items]} for name, items in rows]}
@@ -112,12 +112,13 @@ async def privacy_clear_persona_learning(request: Optional[LearningClearAllReque
     ticket = _ticket(request.approval) if request else None
 
     def _clear():
-        # Verified and wiped under the store lock, against the collection stored right now: an
-        # example learned after the dialog voids the ticket instead of being deleted unseen.
+        # Verified and wiped under the store lock, against the scope stored right now (all
+        # personas, this many examples; round 5, item 3): an example learned after the dialog
+        # voids the ticket instead of being deleted unseen.
         with persona_learning.store_lock():
-            collection = approvals.learned_collection_digest(persona_learning.snapshot())
+            count = approvals.learned_example_count(persona_learning.snapshot())
             approvals.verify(ticket, purpose=approvals.PURPOSE_LEARNED_CLEAR_ALL, subject="all",
-                             bind=approvals.learned_clear_all_bind(collection))
+                             bind=approvals.learned_clear_all_bind(count))
             wipe = category.wipe()
             verification = category.verify()
         return {

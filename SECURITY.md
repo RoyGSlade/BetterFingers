@@ -98,10 +98,15 @@ What the app enforces on the machine itself (details in [docs/DEVELOPMENT.md](do
   the list before and after. Learning an example binds the complete learned list it results in,
   so an example the cap evicts is shown in the dialog and covered by the ticket. Every DESTRUCTIVE
   example change needs a native dialog that shows its scope and a ticket bound to it: deleting one
-  learned example, clearing one persona's learned examples (the persona and its list or count),
-  clearing every persona's learned examples (the whole collection), deleting a custom persona with
-  its few-shot list, every privacy wipe mode and the factory reset (what the mode deletes, from the
-  backend's own inventory, and its options; the factory reset still needs its typed phrase too).
+  learned example, clearing one persona's learned examples and deleting a custom persona with its
+  few-shot list (each shows the COMPLETE example list, or gives Close only with what to do
+  instead; a list the dialog does not show is never signed), clearing every persona's learned
+  examples (an explicit broad-scope action: "All learned examples for all personas: N examples",
+  and the ticket binds exactly that), every privacy wipe mode (every kind of data it deletes, by
+  its label, from the backend's own inventory, and its options; Close only when the labels do not
+  all fit, never a count) and the factory reset ("erase everything", and its typed phrase too).
+  **Renaming a persona is turned off in Phase 0**: it moved the persona's examples to a new name
+  with no preview, so the route refuses every request and the Studio hides the control.
   None of these is reachable through the dashboard's generic proxy, and no request flag or
   renderer boolean counts as the tap. The backend verifies each ticket and commits the change in
   one step under the store's lock, against the list stored at that moment, so a list that changed

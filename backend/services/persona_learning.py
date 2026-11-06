@@ -362,7 +362,7 @@ def store_lock():
 
 def snapshot(store: Optional[PersonaLearningStore] = None) -> list:
     """Every persona's learned list as ``[(name, [(raw, out), ...]), ...]`` sorted by name: what
-    the global clear dialog shows and its ticket binds (``approvals.learned_collection_digest``)."""
+    the global clear counts for its dialog and ticket (``approvals.learned_example_count``)."""
     store = store or PersonaLearningStore()
     with _STORE_LOCK:
         data = store._load()

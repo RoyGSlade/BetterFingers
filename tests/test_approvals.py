@@ -215,7 +215,7 @@ class NodeBrokerInteropTests(unittest.TestCase):
         : c.kind === 'learned_add' ? b.learnedAddBind(c.persona, c.raw, c.out, c.before, c.after)
         : c.kind === 'learned_clear' ? b.learnedClearBind(c.persona, b.fewShotItems(c.before))
         : c.kind === 'persona_delete' ? b.personaDeleteBind(c.persona, b.fewShotItems(c.before))
-        : c.kind === 'learned_clear_all' ? b.learnedClearAllBind(b.learnedCollectionDigest(c.personas))
+        : c.kind === 'learned_clear_all' ? b.learnedClearAllBind(c.count)
         : c.kind === 'privacy_wipe' ? b.privacyWipeBind(c.mode, c.ids, { wipeVoices: c.wipeVoices, deleteModels: c.deleteModels })
         : { preview_sha256: b.linesDigest(c.lines), steps_sha256: c.steps_sha256 };
       return b.signTicket({ secret: key, purpose: c.purpose, subject: c.subject, bind });
@@ -263,17 +263,16 @@ class NodeBrokerInteropTests(unittest.TestCase):
 
     def test_node_signed_round4_tickets_verify_in_python(self):
         """Round 4, items 3 and 5: learning with its resulting list, clearing one persona, deleting a
-        persona, the global learned clear (collection digest) and the privacy wipes, byte for byte."""
+        persona, the global learned clear (its stated scope, round 5) and the privacy wipes, byte for byte."""
         items = [{"raw": "hey \u2603", "out": "Hey, 😀"}, {"raw": "second", "out": "Second."}]
         pairs = approvals.few_shot_items(items)
-        collection = [{"name": "Zed", "examples": items[:1]}, {"name": "Coach", "examples": items}]
         ids = ["drafts", "persona_learning", "personas"]
         add, clear, delete, clear_all, wipe = self.tickets([
             {"kind": "learned_add", "purpose": "persona.example", "subject": "Coach", "persona": "Coach",
              "raw": " new ", "out": "New.", "before": [list(p) for p in pairs], "after": [list(p) for p in pairs] + [["new", "New."]]},
             {"kind": "learned_clear", "purpose": "persona.learned_clear", "subject": "Coach", "persona": "Coach", "before": items},
             {"kind": "persona_delete", "purpose": "persona.delete", "subject": "Coach", "persona": "Coach", "before": items},
-            {"kind": "learned_clear_all", "purpose": "persona.learned_clear_all", "subject": "all", "personas": collection},
+            {"kind": "learned_clear_all", "purpose": "persona.learned_clear_all", "subject": "all", "count": 3},
             {"kind": "privacy_wipe", "purpose": "privacy.wipe", "subject": "clear_personal_data", "mode": "clear_personal_data",
              "ids": ids, "wipeVoices": True, "deleteModels": False},
         ])
@@ -281,8 +280,9 @@ class NodeBrokerInteropTests(unittest.TestCase):
                          bind=approvals.learned_add_bind("Coach", " new ", "New.", pairs, pairs + [("new", "New.")]))
         approvals.verify(clear, purpose="persona.learned_clear", subject="Coach", bind=approvals.learned_clear_bind("Coach", pairs))
         approvals.verify(delete, purpose="persona.delete", subject="Coach", bind=approvals.persona_delete_bind("Coach", pairs))
-        digest = approvals.learned_collection_digest([("Coach", pairs), ("Zed", pairs[:1])])
-        approvals.verify(clear_all, purpose="persona.learned_clear_all", subject="all", bind=approvals.learned_clear_all_bind(digest))
+        count = approvals.learned_example_count([("Coach", pairs), ("Zed", pairs[:1])])
+        self.assertEqual(count, 3)
+        approvals.verify(clear_all, purpose="persona.learned_clear_all", subject="all", bind=approvals.learned_clear_all_bind(count))
         approvals.verify(wipe, purpose="privacy.wipe", subject="clear_personal_data",
                          bind=approvals.privacy_wipe_bind("clear_personal_data", ids, wipe_voices=True))
 

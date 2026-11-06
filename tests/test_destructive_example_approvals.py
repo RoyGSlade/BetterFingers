@@ -97,16 +97,17 @@ class ClearEveryPersonaTests(_Case):
         self.assertEqual(len(self.learned()), 2)
 
     def test_a_ticket_bound_to_the_whole_collection_clears_it(self):
-        collection = approvals.learned_collection_digest(persona_learning.snapshot(self.store))
-        ticket = sign_ticket(approvals.PURPOSE_LEARNED_CLEAR_ALL, "all", approvals.learned_clear_all_bind(collection))
+        # Round 5, item 3: the bind is the stated scope, all personas and the example count.
+        count = approvals.learned_example_count(persona_learning.snapshot(self.store))
+        ticket = sign_ticket(approvals.PURPOSE_LEARNED_CLEAR_ALL, "all", approvals.learned_clear_all_bind(count))
         response = self.client.request("DELETE", "/privacy/persona-learning", json={"approval": ticket})
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(self.learned(), [])
         self.assertEqual(self.learned("Writer"), [])
 
     def test_a_collection_that_changed_since_the_dialog_voids_the_ticket(self):
-        collection = approvals.learned_collection_digest(persona_learning.snapshot(self.store))
-        ticket = sign_ticket(approvals.PURPOSE_LEARNED_CLEAR_ALL, "all", approvals.learned_clear_all_bind(collection))
+        count = approvals.learned_example_count(persona_learning.snapshot(self.store))
+        ticket = sign_ticket(approvals.PURPOSE_LEARNED_CLEAR_ALL, "all", approvals.learned_clear_all_bind(count))
         self.store.add_example("Writer", A["raw"], A["out"], consent=True)
         self.assertEqual(self.client.request("DELETE", "/privacy/persona-learning", json={"approval": ticket}).status_code, 403)
         self.assertEqual(len(self.learned("Writer")), 2)

@@ -285,20 +285,17 @@ def persona_delete_bind(persona: str, before) -> dict:
     return {"scope": "persona", **persona_few_shot_bind(persona, before, [])}
 
 
-def learned_collection_digest(personas) -> str:
-    """Digest of EVERY persona's learned list (``[(name, [(raw, out), ...]), ...]``), sorted by
-    name. Mirrored byte for byte by ``learnedCollectionDigest`` in approvalBroker.js."""
-    rows = sorted((str(name), [(str(r), str(o)) for r, o in items]) for name, items in personas)
-    lines = ["persona.learned.collection.v1", str(len(rows))]
-    for name, items in rows:
-        lines += [name, str(len(items))]
-        for raw, out in items:
-            lines += [raw, out]
-    return lines_digest(lines)
+def learned_example_count(personas) -> int:
+    """How many learned examples ``[(name, [(raw, out), ...]), ...]`` holds in all."""
+    return sum(len(items) for _name, items in personas)
 
 
-def learned_clear_all_bind(collection_sha256: str) -> dict:
-    return {"scope": "all_personas", "collection_sha256": str(collection_sha256)}
+def learned_clear_all_bind(example_count: int) -> dict:
+    """Clearing every persona's learned examples (round 5, item 3): an explicit broad-scope action.
+    The dialog states "All learned examples for all personas: N examples" and the ticket binds
+    exactly that scope. (It used to bind a digest of every example's text, which the dialog did not
+    show.) Mirrored by ``learnedClearAllBind`` in approvalBroker.js."""
+    return {"scope": "all_personas", "example_count": str(max(0, int(example_count)))}
 
 
 def privacy_wipe_bind(mode: str, category_ids, *, wipe_voices: bool = False, delete_models: bool = False) -> dict:

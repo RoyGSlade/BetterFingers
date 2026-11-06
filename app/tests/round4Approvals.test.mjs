@@ -175,7 +175,9 @@ test('finding 3: declining a clear sends nothing, whatever the page says', async
   assert.ok(!calls.some((c) => c.method === 'DELETE'));
 });
 
-test('finding 3: the global learning wipe is a native dialog bound to the whole collection', async () => {
+test('finding 3: the global learning wipe is a native dialog bound to its stated scope', async () => {
+  // Round 5, item 3: an explicit broad-scope action; the bind is "all personas, N examples"
+  // (round5Approvals.test.mjs has the rest).
   const snapshot = { personas: [{ name: 'Coach', examples: LEARNED }, { name: 'Writer', examples: [{ id: 'w', raw: 'x', out: 'y' }] }] };
   const { instance, dialog, calls } = makeBroker({
     answers: [0], handlers: { 'GET /privacy/persona-learning/preview': { ok: true, status: 200, body: snapshot } },
@@ -183,12 +185,12 @@ test('finding 3: the global learning wipe is a native dialog bound to the whole 
   const result = await instance.clearAllLearning({ confirm: true });
   assert.equal(result.ok, true);
   const shown = dialog.shown[0].detail;
-  assert.ok(shown.includes('3 learned examples') && shown.includes('Coach') && shown.includes('Writer'));
+  assert.ok(shown.includes('All learned examples for all personas: 3 examples'));
   const del = calls.find((c) => c.method === 'DELETE');
   assert.equal(del.path, '/privacy/persona-learning');
   const payload = payloadOf(del.body.approval);
   assert.equal(payload.purpose, 'persona.learned_clear_all');
-  assert.deepEqual(payload.bind, broker.learnedClearAllBind(broker.learnedCollectionDigest(snapshot.personas)));
+  assert.deepEqual(payload.bind, broker.learnedClearAllBind(3));
 });
 
 test('finding 3: deleting a custom persona shows its examples and binds its list', async () => {
@@ -257,7 +259,7 @@ test('finding 6: a plan whose result is not "before, minus the evicted, plus the
   assert.ok(!calls.some((c) => c.path === '/personas/Coach/examples'));
 });
 
-test('finding 3: a factory reset lists the whole scope when it fits and still offers approval on a short screen', async () => {
+test('finding 3: a factory reset states its whole scope and still offers approval on a short screen', async () => {
   const ids = ['raw_recordings', 'drafts', 'history_db', 'temp_audio', 'persona_learning', 'contacts', 'cloned_voices', 'personas',
     'dictionary', 'macros', 'user_profile', 'wake_models', 'audio_privacy_journal', 'mcp_config', 'graph_data', 'debug_log',
     'sidecar_raw_log', 'voice_presets', 'profiles', 'app_state', 'overlay_position', 'overlay_appearance', 'onboarding_consent',
@@ -270,7 +272,8 @@ test('finding 3: a factory reset lists the whole scope when it fits and still of
     assert.equal(result.ok, true, JSON.stringify(budgets));
     const options = dialog.shown[0];
     assert.ok(approving(options), 'an approving dialog');
-    assert.ok(options.detail.includes(`${ids.length} kinds of data`));
+    // Round 5, item 3: "everything", stated as such; no category count stands in for it.
+    assert.ok(options.detail.includes('everything BetterFingers stores on this computer'));
     const { total } = drawnLines(options);
     assert.ok(total <= (budgets.lines || MAX_DISPLAY_LINES), `${total} lines drawn`);
     const post = calls.find((c) => c.method === 'POST');
