@@ -149,6 +149,13 @@ function registerIpc({
         backend: { send: (method, path, body, timeoutMs) => backendProxy.sendTrusted(method, path, body, timeoutMs) },
         listApplications: () => applicationRegistry().list(),
         planLaunch: (entry) => applicationLauncher().planFor(entry),
+        // A smaller screen gets a smaller line budget (measured: a 26-line dialog is ~593 px).
+        getBudgets: () => {
+          const { screen } = require('electron');
+          const height = screen && typeof screen.getPrimaryDisplay === 'function'
+            ? screen.getPrimaryDisplay().workAreaSize.height : 0;
+          return height > 0 ? { lines: Math.max(10, Math.floor((height - 160) / 20)) } : {};
+        },
         runAuthorizations,
         log: (line) => console.warn(line),
       });

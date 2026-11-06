@@ -40,10 +40,18 @@ const TICKET_TTL_S = 60;
 // confirm(), and anything over either one gets a dialog with NO approving button
 // (round 3, item 7): it says the thing is too long to show in full and where to read
 // it, and nothing is signed.
-const MAX_DISPLAY_LINES = 48;
-const MAX_DISPLAY_CHARS = 4000;
-const MAX_MESSAGE_CHARS = 240;
-const WRAP_WIDTH = 96;
+//
+// The numbers were MEASURED, not assumed (round 3, item 7): the real GTK dialog, opened by
+// app/tests/nativeDialogXvfb.test.mjs on a virtual display, re-wraps detail lines longer than
+// about 75 characters at the default font, and 48 lines of 73 characters already made the
+// dialog 1030 px tall, too tall for a 768 px laptop screen. So lines are wrapped here at 64
+// characters (short enough that the toolkit does not wrap them again), and the whole dialog is
+// held to 26 lines and 1600 characters, which the same test shows fits a 1366x768 and a
+// 1280x720 screen with the buttons visible.
+const MAX_DISPLAY_LINES = 26;
+const MAX_DISPLAY_CHARS = 1600;
+const MAX_MESSAGE_CHARS = 120;
+const WRAP_WIDTH = 64;
 const MIN_DIALOG_GAP_MS = 500;
 
 const PURPOSE_WORKFLOW_APPROVE = 'workflow.approve';
@@ -163,23 +171,56 @@ function makeVisible(text) {
   });
 }
 
-// Wrap one logical line at `width` code points, preferring to break after a
-// space. EVERY character is kept (the space stays at the end of the earlier
-// piece); continuation pieces are marked so the wrap is visible as a wrap.
+// How wide a character is likely to RENDER, in units of an average lowercase letter, never
+// under-estimated: the toolkit wraps by pixels, and a line it wraps again makes the dialog taller
+// than what was budgeted (measured: 21 lines of 64 capital Ws made a 992 px dialog on a 720 px
+// screen). East Asian wide and fullwidth characters and emoji take two units; wide capitals and
+// symbols more than one.
+const WIDE_RANGES = [
+  [0x1100, 0x115F], [0x2E80, 0x303E], [0x3041, 0x33FF], [0x3400, 0x4DBF], [0x4E00, 0x9FFF],
+  [0xA000, 0xA4CF], [0xAC00, 0xD7A3], [0xF900, 0xFAFF], [0xFE30, 0xFE4F], [0xFF00, 0xFF60],
+  [0xFFE0, 0xFFE6], [0x1F000, 0x1FAFF], [0x20000, 0x3FFFD],
+];
+function charWidth(ch) {
+  const code = ch.codePointAt(0);
+  if (WIDE_RANGES.some(([lo, hi]) => code >= lo && code <= hi)) return 2;
+  if (ch === 'W' || ch === 'M' || ch === '@' || ch === '%' || ch === '—') return 1.8;
+  if ((ch >= 'A' && ch <= 'Z') || ch === 'm' || ch === 'w' || ch === '&' || ch === '#') return 1.5;
+  if (code > 0x7F) return 1.5; // other scripts and symbols: assume wider than average
+  return 1;
+}
+
+const CONTINUATION_WIDTH = 6;
+
+function displayWidth(text) {
+  let total = 0;
+  for (const ch of Array.from(String(text))) total += charWidth(ch);
+  return total;
+}
+
+// Wrap one logical line at `width` display units (see charWidth), preferring to break after a
+// space. EVERY character is kept (the space stays at the end of the earlier piece); continuation
+// pieces are marked so the wrap is visible as a wrap.
 function wrapLine(line, width = WRAP_WIDTH) {
   const chars = Array.from(line);
-  if (chars.length <= width) return [line];
+  if (displayWidth(line) <= width) return [line];
   const pieces = [];
   let start = 0;
-  while (chars.length - start > width) {
-    let end = start + width;
-    for (let probe = end; probe > start + Math.floor(width / 2); probe -= 1) {
-      if (chars[probe - 1] === ' ') { end = probe; break; }
+  while (start < chars.length) {
+    // continuation pieces carry the visible "   \u21B3 " marker, so they get that much less room
+    const room = pieces.length === 0 ? width : width - CONTINUATION_WIDTH;
+    let used = 0;
+    let end = start;
+    while (end < chars.length && used + charWidth(chars[end]) <= room) { used += charWidth(chars[end]); end += 1; }
+    if (end === start) end = start + 1; // a single character wider than the line still moves on
+    if (end < chars.length) {
+      for (let probe = end; probe > start + Math.floor((end - start) / 2); probe -= 1) {
+        if (chars[probe - 1] === ' ') { end = probe; break; }
+      }
     }
     pieces.push(chars.slice(start, end).join(''));
     start = end;
   }
-  pieces.push(chars.slice(start).join(''));
   return pieces.map((piece, index) => (index === 0 ? piece : `   ↳ ${piece}`));
 }
 
@@ -202,7 +243,8 @@ function fingerprintOf(text) {
 }
 
 // The before/after diff a person reads for a few-shot change: the COMPLETE resulting
-// list in order, each example marked, then every example the change removes.
+// list in order, each example marked, then every example the change removes. Two lines per
+// example (more only when the text itself is long), so a useful list fits the dialog budget.
 function fewShotDiffLines(before, after) {
   const key = ([raw, out]) => JSON.stringify([raw, out]);
   const unused = new Map();
@@ -211,28 +253,25 @@ function fewShotDiffLines(before, after) {
     if (!unused.has(k)) unused.set(k, []);
     unused.get(k).push(index);
   });
-  const lines = [after.length === 0
-    ? 'After this change the persona has NO examples.'
-    : `After this change the persona has ${after.length} example${after.length === 1 ? '' : 's'}, used in this order:`];
+  const example = (label, [raw, out]) => [...displayLines(`${label} said: ${raw}`), ...displayLines(`   becomes: ${out}`)];
+  const lines = [after.length === 0 ? 'After: NO examples.' : `After: ${after.length} example${after.length === 1 ? '' : 's'}, in the order used:`];
   after.forEach((pair, index) => {
     const slots = unused.get(key(pair));
     let mark = 'new';
     if (slots && slots.length) {
       const from = slots.shift();
-      mark = from === index ? 'unchanged' : `moved from position ${from + 1}`;
+      mark = from === index ? 'unchanged' : `moved from ${from + 1}`;
     } else if (before.some((other) => key(other) === key(pair))) {
-      mark = 'an extra copy';
+      mark = 'extra copy';
     }
-    lines.push(`${index + 1}. (${mark}) What was said:`, ...displayLines(pair[0]), '   What it should become:', ...displayLines(pair[1]));
+    lines.push(...example(`${index + 1}. [${mark}]`, pair));
   });
   const removed = [];
   for (const indexes of unused.values()) for (const index of indexes) removed.push([index, before[index]]);
   removed.sort((a, b) => a[0] - b[0]);
   if (removed.length) {
-    lines.push('', `Removed by this change (${removed.length}):`);
-    for (const [index, [raw, out]] of removed) {
-      lines.push(`was ${index + 1}. What was said:`, ...displayLines(raw), '   What it should become:', ...displayLines(out));
-    }
+    lines.push(`Removed (${removed.length}):`);
+    for (const [index, pair] of removed) lines.push(...example(`was ${index + 1}.`, pair));
   }
   return lines;
 }
@@ -279,6 +318,9 @@ function createApprovalBroker({
   now = () => Date.now(),
   randomBytes = crypto.randomBytes,
   log = () => {},
+  // Optional TIGHTER budgets, e.g. from the screen's work area (ipc.js). Never looser than the
+  // measured defaults.
+  getBudgets = () => ({}),
 } = {}) {
   if (!dialog || typeof dialog.showMessageBox !== 'function') throw new Error('a dialog implementation is required');
   if (!backend || typeof backend.send !== 'function') throw new Error('a backend client is required');
@@ -308,16 +350,23 @@ function createApprovalBroker({
   }
 
   // Does the whole dialog fit the budgets? Counted on exactly what would be shown.
+  function budgets() {
+    let wanted = {};
+    try { wanted = getBudgets() || {}; } catch { wanted = {}; }
+    const clamp = (value, max) => (Number.isFinite(value) && value > 0 ? Math.min(Math.floor(value), max) : max);
+    return { lines: clamp(wanted.lines, MAX_DISPLAY_LINES), chars: clamp(wanted.chars, MAX_DISPLAY_CHARS) };
+  }
+
   function fitsDialog(message, lines) {
-    if (Array.from(String(message)).length > MAX_MESSAGE_CHARS) return false;
-    if (lines.length > MAX_DISPLAY_LINES) return false;
+    const budget = budgets();
+    if (displayWidth(message) > MAX_MESSAGE_CHARS) return false;
+    if (lines.length > budget.lines) return false;
     let chars = 0;
     for (const line of lines) {
-      const length = Array.from(String(line)).length;
-      if (length > WRAP_WIDTH + 8) return false; // every body line must already be wrapped
-      chars += length + 1;
+      if (displayWidth(line) > WRAP_WIDTH) return false; // every line must already be wrapped
+      chars += Array.from(String(line)).length + 1;
     }
-    return chars <= MAX_DISPLAY_CHARS;
+    return chars <= budget.chars;
   }
 
   // Show the native dialog; resolves approved:true ONLY when the person clicked the
@@ -330,7 +379,10 @@ function createApprovalBroker({
     if (now() - lastClosedAt < MIN_DIALOG_GAP_MS) {
       return { approved: false, error: 'Please wait a moment before asking again.' };
     }
-    const lines = [...body, ...(note ? ['', ...displayLines(note)] : [])];
+    // Content lines arrive already made visible and wrapped (displayLines); a long FIXED sentence
+    // of our own is wrapped here, so nothing reaches the toolkit long enough for it to re-wrap.
+    const lines = [...body, ...(note ? ['', ...displayLines(note)] : [])]
+      .flatMap((line) => (displayWidth(line) > WRAP_WIDTH ? wrapLine(String(line)) : [String(line)]));
     busy = true;
     try {
       if (!fitsDialog(message, lines)) {
@@ -418,7 +470,7 @@ function createApprovalBroker({
     const decision = await confirm({
       title: 'Approve workflow',
       message: `Approve the workflow “${makeVisible(String(info.name || info.workflow_id))}”?`,
-      body: ['When it runs, BetterFingers will do exactly this, in this order:', '', ...shown],
+      body: ['When it runs, it will do exactly this, in this order:', '', ...shown],
       note: `Fingerprint ${fingerprint(info.preview_sha256)}. Any change to these steps cancels the approval.`,
       tooLongWhere: WHERE_WORKFLOW,
     });
@@ -666,9 +718,9 @@ function createApprovalBroker({
     const decision = await confirm({
       title: 'Change this persona’s examples',
       message: `Change the examples “${makeVisible(name)}” learns from?`,
-      body: [`Persona: ${makeVisible(name)}`, `Before this change it has ${before.length} example${before.length === 1 ? '' : 's'}.`, '', ...fewShotDiffLines(before, after)],
+      body: [`Persona: ${makeVisible(name)} (now ${before.length} example${before.length === 1 ? '' : 's'})`, ...fewShotDiffLines(before, after)],
       approveLabel: 'Save the examples',
-      note: 'The first examples in this list shape how this persona rewrites your future dictation.',
+      note: 'The first examples shape your future dictation.',
       tooLongWhere: WHERE_PERSONA,
     });
     if (!decision.approved) return declined(decision);
@@ -896,6 +948,7 @@ module.exports = {
   makeVisible,
   wrapLine,
   displayLines,
+  displayWidth,
   MAX_DISPLAY_LINES,
   MAX_DISPLAY_CHARS,
   MAX_MESSAGE_CHARS,

@@ -16,6 +16,8 @@ const {
 const { resolveLaunchPlan } = require('../src/main/applicationLauncher.js');
 
 const SECRET = Buffer.from(Array.from({ length: 32 }, (_, i) => i));
+// Undo the dialog's visible wrapping, to look for a phrase that may have been wrapped.
+const unwrap = (text) => String(text).replace(/\n {3}\u21B3 /g, '');
 
 // ---- helpers ------------------------------------------------------------------
 
@@ -239,16 +241,30 @@ test('a preview that cannot be shown in full is refused, never clipped, and the 
   assert.ok(!backend.calls.some((call) => call.path === '/workflows/approve'));
 });
 
-test('the character budget is enforced too: few lines, too many characters, no Approve', async () => {
-  // 45 wrapped lines of ~96 characters each is under the line budget and over the character one.
-  const line = `1. ${'x'.repeat(90)} ${'y'.repeat(90)} ${'z'.repeat(90)} ${'w'.repeat(90)} ${'v'.repeat(90)}`;
-  const lines = Array.from({ length: 9 }, (_, i) => line.replace(/^1/, String(i + 1)));
-  const shownLines = lines.flatMap((l) => displayLines(l));
-  assert.ok(shownLines.length < MAX_DISPLAY_LINES && shownLines.join('\n').length > MAX_DISPLAY_CHARS, 'the fixture tests the right budget');
-  const { instance, dialog, backend } = makeBroker({ answers: [0], handlers: previewHandler(lines) });
-  assert.equal((await instance.approveWorkflow('studio_setup')).ok, false);
-  assertTooLongDialog(dialog.shown);
-  assert.ok(!backend.calls.some((call) => call.path === '/workflows/approve'));
+test('the character budget is enforced too: within the line budget, over the character one, no Approve', async () => {
+  const lines = Array.from({ length: 10 }, (_, i) => `${i + 1}. ${'x'.repeat(55)}`);
+  const run = (getBudgets) => {
+    const dialog = fakeDialog([0]);
+    const backend = fakeBackend(previewHandler(lines));
+    const instance = createApprovalBroker({ secret: SECRET, dialog, backend, now: () => 1_000_000, getBudgets });
+    return { instance, dialog, backend };
+  };
+  const roomy = run(() => ({}));
+  await roomy.instance.approveWorkflow('studio_setup');
+  assert.deepEqual(roomy.dialog.shown[0].options.buttons, ['Approve', 'Cancel'], 'fits the default budgets');
+  const tight = run(() => ({ chars: 400 }));
+  assert.equal((await tight.instance.approveWorkflow('studio_setup')).ok, false);
+  assertTooLongDialog(tight.dialog.shown);
+  assert.ok(!tight.backend.calls.some((call) => call.path === '/workflows/approve'));
+  const short = run(() => ({ lines: 8 }));
+  assert.equal((await short.instance.approveWorkflow('studio_setup')).ok, false);
+  assertTooLongDialog(short.dialog.shown);
+  // A budget can only be tightened, never loosened.
+  const loose = run(() => ({ lines: 500, chars: 1e9 }));
+  const long = Array.from({ length: MAX_DISPLAY_LINES + 2 }, (_, i) => `${i + 1}. step`);
+  loose.backend.send = async (m, p) => (p === '/workflows/preview' ? previewHandler(long)['POST /workflows/preview'] : { ok: true, status: 200, body: {} });
+  assert.equal((await loose.instance.approveWorkflow('studio_setup')).ok, false);
+  assertTooLongDialog(loose.dialog.shown);
 });
 
 test('a too-long message line is refused the same way', async () => {
@@ -455,7 +471,7 @@ test('every run needs a fresh native confirmation that names the exact program, 
   const { options } = dialog.shown[0];
   assert.equal(options.defaultId, 1, 'Cancel is the default');
   for (const line of PREVIEW_LINES) assert.ok(options.detail.includes(line));
-  assert.ok(options.detail.includes('Starts the program flatpak with arguments ["run","md.obsidian.Obsidian"]'));
+  assert.ok(unwrap(options.detail).includes('Starts the program flatpak with arguments ["run","md.obsidian.Obsidian"]'));
   assert.deepEqual(backend.calls[0].body.context.registry, [OBSIDIAN], 'the preview is computed from the registry snapshot that is frozen');
   const grant = runAuthorizations.consume(result.authorization, 'studio_setup');
   assert.equal(grant.targets[0].entry.flatpak_id, 'md.obsidian.Obsidian');
@@ -576,11 +592,11 @@ test('the dialog shows the complete resulting list in order and what is removed;
   const { options } = dialog.shown[0];
   assert.equal(options.defaultId, 1);
   const detail = options.detail;
-  assert.ok(detail.includes('has 3 examples, used in this order'));
-  assert.ok(detail.includes('1. (moved from position 2)'));
-  assert.ok(detail.includes('2. (new)') && detail.includes(C.out));
-  assert.ok(detail.includes('3. (an extra copy)'));
-  assert.ok(detail.includes('Removed by this change (1)') && detail.includes(A.out));
+  assert.ok(detail.includes('After: 3 examples, in the order used:'));
+  assert.ok(detail.includes(`1. [moved from 2] said: ${B.raw}`));
+  assert.ok(detail.includes(`2. [new] said: ${C.raw}`) && detail.includes(`becomes: ${C.out}`));
+  assert.ok(detail.includes(`3. [extra copy] said: ${B.raw}`));
+  assert.ok(detail.includes('Removed (1):') && detail.includes(`was 1. said: ${A.raw}`) && detail.includes(A.out));
   const post = backend.calls.find((c) => c.method === 'POST');
   verifyTicket(post.body.approval, { purpose: 'persona.few_shot', subject: 'Coach', bind: personaFewShotBind('Coach', P([A, B]), P(after)) });
   assert.deepEqual(post.body.few_shot, after, 'what is sent is the list that was shown');
@@ -669,7 +685,7 @@ test('trusting an MCP server shows its exact configuration and binds the config 
   assert.equal((await instance.trustMcpServer({ name: 'files' })).ok, true);
   const { options } = dialog.shown[0];
   assert.equal(options.defaultId, 1);
-  for (const part of ['/usr/bin/files-mcp', '["--root","/home/x"]', 'API_KEY', 'Network: off', 'bubblewrap is not installed']) assert.ok(options.detail.includes(part), part);
+  for (const part of ['/usr/bin/files-mcp', '["--root","/home/x"]', 'API_KEY', 'Network: off', 'bubblewrap is not installed']) assert.ok(unwrap(options.detail).includes(part), part);
   const post = backend.calls.find((c) => c.method === 'POST');
   assert.equal(post.path, '/mcp/servers/files/trust');
   verifyTicket(post.body.approval, { purpose: 'mcp.trust', subject: 'files', bind: mcpTrustBind(config) });
