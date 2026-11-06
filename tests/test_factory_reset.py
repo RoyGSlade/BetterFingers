@@ -70,7 +70,7 @@ class _ResetRootMixin(unittest.TestCase):
                    "macros.json", "voice_presets.json", "app_state.yaml",
                    "onboarding.json", "app_profiles.json",
                    "launcher_workflows.json", "application_registry.json",
-                   "mcp_servers.json", "mcp_trust.json", "graph.json", "debug.log",
+                   "mcp_servers.json", "graph.json", "debug.log",
                    "controller_bindings.json", "stream_deck_config.json",
                    "persona_learning.json")
 

@@ -358,6 +358,13 @@
   "methods": [
    "POST"
   ],
+  "path": "/personas/{name}/examples/preview"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
   "path": "/personas/{name}/examples"
  },
  {
@@ -716,27 +723,6 @@
    "GET"
   ],
   "path": "/mcp/servers/{server_name}/tools"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/mcp/servers/{server_name}/trust"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/mcp/servers/{server_name}/trust"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "DELETE"
-  ],
-  "path": "/mcp/servers/{server_name}/trust"
  },
  {
   "kind": "APIRoute",
@@ -1297,6 +1283,13 @@
    "GET"
   ],
   "path": "/privacy/export"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/privacy/persona-learning/preview"
  },
  {
   "kind": "APIRoute",

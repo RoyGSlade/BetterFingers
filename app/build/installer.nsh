@@ -233,7 +233,6 @@ FunctionEnd
       !insertmacro BfSafeDeleteCanonical "persona_learning.json"
       !insertmacro BfSafeDeleteCanonical "user_profile.json"
       !insertmacro BfSafeDeleteCanonical "mcp_servers.json"
-      !insertmacro BfSafeDeleteCanonical "mcp_trust.json"
       !insertmacro BfSafeDeleteCanonical "graph.json"
       !insertmacro BfSafeDeleteCanonical "app_profiles.json"
       !insertmacro BfSafeDeleteCanonical "launcher_workflows.json"

@@ -25,9 +25,13 @@ from unittest.mock import patch
 from backend.dev import mcp_client
 
 BWRAP = staticmethod(lambda name: {"bwrap": "/usr/bin/bwrap", "setpriv": "/usr/bin/setpriv"}.get(name))
+# Refused everywhere: never given to bwrap, never installed inside the sandbox.
 DENIED = ("LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "LD_DEBUG", "GCONV_PATH", "GETCONF_DIR",
           "HOSTALIASES", "LOCALDOMAIN", "RES_OPTIONS", "NLSPATH", "MALLOC_TRACE", "LOCPATH", "PATH",
-          "BETTERFINGERS_AUTH_TOKEN", "PYTHONPATH", "PYTHONSTARTUP", "NODE_OPTIONS", "BASH_ENV")
+          "BETTERFINGERS_AUTH_TOKEN")
+# Interpreter settings only affect the confined server itself, so they may be installed INSIDE,
+# but they never reach the bwrap process either.
+INSIDE_ONLY = ("PYTHONPATH", "NODE_OPTIONS", "BASH_ENV")
 
 
 def _write_config(base_dir, payload):
@@ -87,17 +91,17 @@ class NoTrustExceptionTests(_Case):
 
 class BwrapEnvironmentTests(_Case):
     def test_the_bwrap_process_gets_a_trusted_environment_and_the_server_env_goes_inside(self):
-        hostile = {name: "/tmp/evil.so" for name in DENIED}
+        hostile = {name: "/tmp/evil.so" for name in DENIED + INSIDE_ONLY}
         spec = {"command": "/opt/srv/bin/srv", "args": ["--x"], "env": {"OWN_SETTING": "1", **hostile},
                 "enabled": True, "sandbox": "auto", "network": False}
         with patch.dict(os.environ, {"LD_PRELOAD": "/tmp/from-backend.so"}):
             launch = mcp_client.stdio_launch("srv", spec, platform="linux", which=BWRAP, home="/nonexistent")
         self.assertEqual(launch["command"], "/usr/bin/bwrap")
-        for name in DENIED:
+        for name in DENIED + INSIDE_ONLY:
             if name == "PATH":
                 continue
             self.assertNotIn(name, launch["env"], f"{name} reached the bwrap process")
-        self.assertEqual(launch["env"].get("PATH"), mcp_client.TRUSTED_PATH)
+        self.assertEqual(launch["env"], {"PATH": mcp_client.TRUSTED_PATH}, "bwrap gets a fixed environment")
         args = launch["args"]
         self.assertIn("--clearenv", args)
         setenv = {args[i + 1]: args[i + 2] for i, a in enumerate(args) if a == "--setenv"}
@@ -107,6 +111,8 @@ class BwrapEnvironmentTests(_Case):
                 self.assertEqual(setenv["PATH"], mcp_client.TRUSTED_PATH, "the server cannot override PATH")
             else:
                 self.assertNotIn(name, setenv, f"{name} was installed inside the sandbox")
+        for name in INSIDE_ONLY:
+            self.assertEqual(setenv.get(name), "/tmp/evil.so", f"{name} only affects the confined server")
         self.assertLess(args.index("--clearenv"), args.index("--setenv"))
         self.assertEqual(args[args.index("--") + 1:], ["/opt/srv/bin/srv", "--x"])
 
@@ -130,7 +136,7 @@ class StrictProfileTests(_Case):
 
     def test_no_host_root_no_home_and_no_run(self):
         args, home = self.profile()
-        binds = [(args[i], args[i + 1], args[i + 2]) for i, a in enumerate(args) if a in ("--bind", "--ro-bind", "--ro-bind-try", "--bind-try")]
+        binds = [(a, args[i + 1], args[i + 2]) for i, a in enumerate(args) if a in ("--bind", "--ro-bind", "--ro-bind-try", "--bind-try")]
         sources = [source for _flag, source, _dest in binds]
         self.assertNotIn("/", sources, "the host root is not mounted")
         self.assertFalse(any(flag in ("--bind", "--bind-try") for flag, _s, _d in binds), "nothing is writable")

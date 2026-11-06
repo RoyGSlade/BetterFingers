@@ -20,13 +20,11 @@ import logging
 import os
 import re
 import tempfile
-from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from backend.api.models import ApprovalTicketModel
 
 router = APIRouter()
 
@@ -66,54 +64,8 @@ async def mcp_server_tools(server_name: str):
         raise HTTPException(status_code=503, detail=str(exc))
 
 
-class McpTrustRequest(BaseModel):
-    approval: Optional[ApprovalTicketModel] = None
-
-
-@router.get("/mcp/servers/{server_name}/trust", dependencies=[Depends(_require_dev_routes)])
-async def mcp_server_trust_info(server_name: str):
-    """What the "trust on this machine" dialog shows, and the configuration digest its ticket
-    must bind (round 3, item 4). Arguments are shown masked."""
-    import server as s
-
-    try:
-        return s.mcp_client.trust_info(server_name)
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"MCP server '{server_name}' is not configured.")
-
-
-@router.post("/mcp/servers/{server_name}/trust", dependencies=[Depends(_require_dev_routes)])
-async def mcp_server_trust(server_name: str, request: McpTrustRequest):
-    """Mark a server trusted on this machine. Needs an ``mcp.trust`` ticket minted by main after
-    the native dialog, bound to the server's CURRENT configuration digest."""
-    import server as s
-    from backend.services import approvals
-
-    try:
-        info = s.mcp_client.trust_info(server_name)
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"MCP server '{server_name}' is not configured.")
-    try:
-        proof = approvals.verify(
-            request.approval.model_dump() if request.approval else None,
-            purpose=approvals.PURPOSE_MCP_TRUST,
-            subject=server_name,
-            bind=approvals.mcp_trust_bind(info["config_sha256"]),
-        )
-    except approvals.ApprovalError as exc:
-        raise HTTPException(status_code=approvals.http_status_for(exc.code), detail=exc.message)
-    try:
-        return s.mcp_client.trust(server_name, info["config_sha256"], proof)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
-
-
-@router.delete("/mcp/servers/{server_name}/trust", dependencies=[Depends(_require_dev_routes)])
-async def mcp_server_revoke_trust(server_name: str):
-    """Withdraw trust. Needs no approval: it only makes things stricter."""
-    import server as s
-
-    return s.mcp_client.revoke_trust(server_name)
+# There are no MCP trust routes (round 4, item 4): Phase 0 has no "trusted on this machine"
+# exception. A server runs only inside the strict bubblewrap sandbox, or not at all.
 
 
 class LLMRequest(BaseModel):

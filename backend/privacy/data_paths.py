@@ -349,12 +349,6 @@ def mcp_config() -> list[Path]:
     return _with_migration_siblings(base() / "mcp_servers.json")
 
 
-def mcp_trust() -> list[Path]:
-    """``mcp_trust.json``: which MCP servers the owner trusted on this machine (round 3,
-    item 4). Written by ``backend.dev.mcp_client.trust``."""
-    return _with_migration_siblings(base() / "mcp_trust.json")
-
-
 def graph_data() -> list[Path]:
     return _with_migration_siblings(base() / "graph.json")
 

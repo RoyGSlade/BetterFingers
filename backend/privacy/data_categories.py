@@ -588,14 +588,6 @@ CATEGORIES: list[DataCategory] = [
     _cat("mcp_config", "MCP configuration", "python", "sensitive",
          "Kept until personal data is cleared; may contain credentials/tokens.", _PERSONAL,
          paths=data_paths.mcp_config),
-    # MCP trust consents (round 3, item 4): which MCP servers the owner allowed to run with
-    # weaker confinement on this machine, each bound to a digest of that server's exact
-    # configuration. A consent record, like the onboarding one, but cleared WITH the MCP
-    # configuration it refers to (a personal wipe and a factory reset), never left behind it.
-    # No prose and no credentials: server names, digests and timestamps.
-    _cat("mcp_trust", "MCP servers trusted on this machine", "python", "configuration",
-         "Consent record; cleared with personal data and on factory reset.", _PERSONAL,
-         paths=data_paths.mcp_trust, user_text=False),
     _cat("graph_data", "Graph data", "python", "personal",
          "Kept until personal data is cleared.", _PERSONAL,
          paths=data_paths.graph_data, user_text=True),
