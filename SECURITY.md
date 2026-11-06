@@ -51,3 +51,21 @@ only copies the reviewed report and opens the user's email client or Discord; th
 claim delivery. Any other outbound connection is a reportable issue. See [DESIGN.md §9](DESIGN.md)
 for the data-lifecycle and supply-chain model, and [docs/BUG_REPORTING.md](docs/BUG_REPORTING.md)
 for the bug-report privacy boundary and relay contract.
+
+## Local trust boundaries
+
+What the app enforces on the machine itself (details in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)):
+
+- **A person's yes is a native dialog, not a request field.** Approving a workflow, teaching a
+  persona an example and placing a draft into another application each need a short-lived,
+  single-use ticket that only the Electron main process can sign, and only after a native dialog
+  showed the exact, complete content and the person clicked Approve. The signing key is held by
+  the main process and the backend it spawns; renderers never see it, and the backend refuses
+  approvals without it. A spoken phrase, a request flag or a model's text is never an approval.
+- **The local API accepts only loopback Host headers and no foreign browser Origin**, and every
+  call needs the bearer token. The token is never printed, never in a URL, and is masked in logs.
+- **llama-server runs with a per-run API key**, no web UI, no slots endpoint, loopback only.
+- **Each window has its own minimal preload and a strict CSP**; the overlay and the splash cannot
+  call workflow, draft, privacy or file channels. Web permissions (camera, screen, clipboard,
+  location) are denied; the microphone is allowed only for the dashboard's own recorder.
+- **MCP servers get an allowlisted environment** with none of the app's credentials.
