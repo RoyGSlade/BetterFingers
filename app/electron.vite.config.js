@@ -26,6 +26,9 @@ module.exports = defineConfig({
           // OR-02 startup splash phase derivation (main.js requires it for
           // pushBootSnapshot()).
           bootPhases: resolve(__dirname, 'src/main/bootPhases.js'),
+          // Session-level hardening (permission handlers, CSP backstop);
+          // main.js requires it.
+          sessionSecurity: resolve(__dirname, 'src/main/sessionSecurity.js'),
           // Wave 9 restricted actions. Listed here for the Wave 1 lesson: a
           // main-process module that is required at runtime but missing from
           // these inputs is not a build error -- it is a silent no-window

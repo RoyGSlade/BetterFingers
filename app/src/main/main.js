@@ -1,7 +1,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const { randomUUID } = require('node:crypto');
-const { app } = require('electron');
+const { app, session } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const {
   createMainWindow,
@@ -22,6 +22,8 @@ const { derivePhase, deriveServices, describeHardware } = require('./bootPhases'
 const { createUpdateController, createUpdateCheckScheduler } = require('./updateController');
 const onboardingStore = require('./onboardingStore');
 const { purgePendingReset } = require('./rendererState');
+const { installSessionSecurity, guardNewWebContents } = require('./sessionSecurity');
+const { isTrustedRendererUrl } = require('./senderValidation');
 
 // Adopt an inherited token when the backend is managed by something else (the
 // Linux launcher starts it before us, so sidecar.js finds it already listening
@@ -347,6 +349,22 @@ async function getAuthoritativeRuntimeActivity() {
 }
 
 function bootstrapApp() {
+  // Deny-by-default web permissions and a CSP backstop on the one session every
+  // window shares (Phase 0 items 6 and 11). Microphone capture is the single
+  // carve-out: the dashboard window's own top frame, audio only.
+  const rendererOptions = () => ({
+    rendererDir: path.resolve(__dirname, '..', 'renderer'),
+    devOrigin: process.env.ELECTRON_RENDERER_URL,
+  });
+  installSessionSecurity(session.defaultSession, {
+    getCaptureWebContents: () => {
+      const win = getMainWindow();
+      return win && !win.isDestroyed() ? win.webContents : null;
+    },
+    rendererOptions,
+  });
+  guardNewWebContents(app, { isTrustedUrl: (url) => isTrustedRendererUrl(url, rendererOptions()) });
+
   sidecar = createSidecar({
     host: BACKEND_HOST,
     port: BACKEND_PORT,
