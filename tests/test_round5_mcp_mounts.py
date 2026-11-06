@@ -270,6 +270,31 @@ class ListingTests(_Case):
         self.assertEqual(rows["quiet"]["warning"], "")
 
 
+class InstallFoldersAreUserDataTests(unittest.TestCase):
+    """The servers' folders hold whatever the person installed for MCP, so they are part of the
+    "MCP configuration" category: clearing personal data (and the factory reset) removes them."""
+
+    def test_clearing_personal_data_removes_the_server_folders(self):
+        import pathlib
+
+        from backend.privacy import data_categories as dc
+        from backend.privacy import data_lifecycle as dl
+        from backend.privacy import data_registry as dr
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            with patch("backend.config.app_paths.resolve_base", return_value=root):
+                server = root / "mcp-servers" / "srv"
+                server.mkdir(parents=True)
+                (server / "server.py").write_text("print('hi')\n", encoding="utf-8")
+                (root / "mcp_servers.json").write_text("{}", encoding="utf-8")
+                registry = dc.build_registry()
+                self.assertIn(root / "mcp-servers", registry.get("mcp_config").paths())
+                result = dl.execute_mode(registry, dr.WIPE_MODE_PERSONAL)
+                self.assertTrue(result["categories"]["mcp_config"]["verified"], result)
+                self.assertFalse((root / "mcp-servers").exists())
+
+
 @unittest.skipUnless(LINUX and STRICT and SYSTEM_PYTHON, "bubblewrap and /usr/bin/python3 are needed")
 class LiveMountTests(unittest.TestCase):
     """A real server, installed the documented way, under the real bwrap: it sees its own folder,
