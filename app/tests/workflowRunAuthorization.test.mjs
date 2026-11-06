@@ -39,7 +39,7 @@ function previewLinesFor(registry) {
 const Module = require('node:module');
 const ORIGINAL_LOAD = Module._load;
 
-function setup(t, { answers = [], preview = {}, gate = {}, onGate = null, workflows = [{ id: 'studio_setup', steps: WAIT_THEN_LAUNCH }] } = {}) {
+function setup(t, { answers = [], preview = {}, gate = {}, onGate = null, workflows = [{ id: 'studio_setup', steps: WAIT_THEN_LAUNCH }], routes = {}, sent = [] } = {}) {
   const original = ORIGINAL_LOAD;
   const handlers = new Map();
   const dialogs = [];
@@ -66,6 +66,8 @@ function setup(t, { answers = [], preview = {}, gate = {}, onGate = null, workfl
     onBackendEvent: () => () => {},
     // The broker's main-only route to the backend.
     sendTrusted: async (method, route, body) => {
+      sent.push({ method, route, body });
+      if (routes[`${method} ${route}`]) return routes[`${method} ${route}`];
       if (method === 'GET' && route === '/workflows') return { ok: true, status: 200, body: { ok: true, workflows } };
       if (route !== '/workflows/preview') return { ok: true, status: 200, body: {} };
       const lines = previewLinesFor(body.context.registry);
@@ -268,4 +270,26 @@ test('round 4: adding a new id that a workflow already names needs the replaceme
   assert.equal(result.ok, false);
   assert.equal(ctx.dialogs.length, 1);
   assert.ok(ctx.dialogs[0].detail.includes('studio_setup') || ctx.dialogs[0].detail.includes('1 workflow'), 'it says which workflows it rebinds');
+});
+
+// ---- round 4, item 3: the IPC channels for example-changing wipes go to the broker --------------
+
+test('round 4: the privacy channels ignore the page\'s confirm flag; only the native dialog decides', async (t) => {
+  const sent = [];
+  const routes = {
+    'GET /privacy/persona-learning/preview': { ok: true, status: 200, body: { ok: true, personas: [{ name: 'Coach', examples: [{ raw: 'a', out: 'b' }] }] } },
+    'GET /privacy/modes': { ok: true, status: 200, body: { ok: true, modes: {
+      clear_conversations: { categories: [{ id: 'drafts', label: 'Drafts' }, { id: 'persona_learning', label: 'Learned persona examples', may_contain_user_text: true }] },
+    } } },
+    'GET /personas/Coach/examples': { ok: true, status: 200, body: { examples: [{ id: 'e1', raw: 'a', out: 'b' }] } },
+  };
+  const ctx = setup(t, { answers: [1, 1, 1], routes, sent });
+  assert.equal((await ctx.call('backend:clear-persona-learning', { confirm: true })).ok, false);
+  await settle();
+  assert.equal((await ctx.call('backend:wipe-privacy', { confirm: true, mode: 'clear_conversations' })).ok, false);
+  await settle();
+  assert.equal((await ctx.call('approvals:persona-learned-clear', { persona: 'Coach', confirm: true })).ok, false);
+  assert.equal(ctx.dialogs.length, 3, 'each one opened a native dialog');
+  assert.ok(ctx.dialogs.every((d) => d.defaultId === 1), 'Cancel is the default');
+  assert.ok(!sent.some((c) => c.method !== 'GET'), 'nothing destructive was sent after Cancel');
 });

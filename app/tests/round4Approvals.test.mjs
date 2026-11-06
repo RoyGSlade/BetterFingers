@@ -29,7 +29,7 @@ function payloadOf(ticket) {
   return JSON.parse(Buffer.from(ticket.payload, 'base64url').toString('utf8'));
 }
 
-function makeBroker({ answers = [0], handlers = {} } = {}) {
+function makeBroker({ answers = [0], handlers = {}, budgets = {} } = {}) {
   const queue = [...answers];
   const dialog = {
     shown: [],
@@ -49,7 +49,7 @@ function makeBroker({ answers = [0], handlers = {} } = {}) {
     },
   };
   let clock = 1_000_000;
-  const instance = createApprovalBroker({ secret: SECRET, dialog, backend, now: () => { clock += 1000; return clock; } });
+  const instance = createApprovalBroker({ secret: SECRET, dialog, backend, now: () => { clock += 1000; return clock; }, getBudgets: () => budgets });
   return { instance, dialog, calls };
 }
 
@@ -255,4 +255,27 @@ test('finding 6: a plan whose result is not "before, minus the evicted, plus the
   assert.equal((await instance.addPersonaExample({ persona: 'Coach', raw: 'new', out: 'New.' })).ok, false);
   assert.equal(dialog.shown.length, 0);
   assert.ok(!calls.some((c) => c.path === '/personas/Coach/examples'));
+});
+
+test('finding 3: a factory reset lists the whole scope when it fits and still offers approval on a short screen', async () => {
+  const ids = ['raw_recordings', 'drafts', 'history_db', 'temp_audio', 'persona_learning', 'contacts', 'cloned_voices', 'personas',
+    'dictionary', 'macros', 'user_profile', 'wake_models', 'audio_privacy_journal', 'mcp_config', 'graph_data', 'debug_log',
+    'sidecar_raw_log', 'voice_presets', 'profiles', 'app_state', 'overlay_position', 'overlay_appearance', 'onboarding_consent',
+    'app_profiles', 'launcher_workflows', 'application_registry', 'controller_bindings', 'stream_deck_config', 'model_runtime_metadata'];
+  const categories = ids.map((id, i) => ({ id, label: `Category label ${id.replace(/_/g, ' ')}`, may_contain_user_text: i < 8 }));
+  const handlers = { 'GET /privacy/modes': { ok: true, status: 200, body: { ok: true, modes: { factory_reset: { categories } } } } };
+  for (const budgets of [{}, { lines: 14 }]) {
+    const { instance, dialog, calls } = makeBroker({ answers: [0], handlers, budgets });
+    const result = await instance.factoryReset({ confirm: 'DELETE EVERYTHING', deleteDownloadedModels: false });
+    assert.equal(result.ok, true, JSON.stringify(budgets));
+    const options = dialog.shown[0];
+    assert.ok(approving(options), 'an approving dialog');
+    assert.ok(options.detail.includes(`${ids.length} kinds of data`));
+    const { total } = drawnLines(options);
+    assert.ok(total <= (budgets.lines || MAX_DISPLAY_LINES), `${total} lines drawn`);
+    const post = calls.find((c) => c.method === 'POST');
+    assert.equal(post.path, '/privacy/factory-reset');
+    assert.equal(post.body.confirm, 'DELETE EVERYTHING', 'the phrase is still forwarded');
+    assert.deepEqual(payloadOf(post.body.approval).bind, broker.privacyWipeBind('factory_reset', ids, { deleteModels: false }));
+  }
 });

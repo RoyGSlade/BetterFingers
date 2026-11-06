@@ -855,15 +855,18 @@ function createApprovalBroker({
     if (!personas) return fault('BetterFingers could not read the learned examples. Nothing was deleted.');
     const total = personas.reduce((sum, row) => sum + fewShotItems(row.examples).length, 0);
     const names = personas.map((row) => `${inline(row.name)} (${fewShotItems(row.examples).length})`);
-    const decision = await confirm({
+    const parts = {
       title: 'Clear all learned examples',
       message: 'Delete every learned example of every persona?',
-      body: [
-        `Scope: all personas. ${plural(total, 'learned example')} across ${plural(personas.length, 'persona')} are deleted.`,
-        ...(names.length ? displayLines(`Personas: ${names.join(', ')}`) : []),
-      ],
-      approveLabel: 'Delete them all',
+      body: [`Scope: all personas. ${plural(total, 'learned example')} across ${plural(personas.length, 'persona')} are deleted.`],
       note: 'Your personas stay; only what they learned from your approved examples is deleted.',
+    };
+    // The persona names when they fit; otherwise the counts alone (the scope is "all of them").
+    const withNames = [...parts.body, ...(names.length ? displayLines(`Personas: ${names.join(', ')}`) : [])];
+    const decision = await confirm({
+      ...parts,
+      body: fits({ ...parts, body: withNames }) ? withNames : parts.body,
+      approveLabel: 'Delete them all',
       tooLongWhere: WHERE_PERSONA,
     });
     if (!decision.approved) return declined(decision);
@@ -925,18 +928,23 @@ function createApprovalBroker({
   }
 
   async function confirmWipe({ mode, categories, extra = [], approveLabel }) {
-    return confirm({
+    const parts = {
       title: WIPE_TITLES[mode],
       message: mode === 'factory_reset' ? 'Erase everything BetterFingers stores on this computer?' : 'Delete this data now?',
-      body: [
-        `Scope: ${plural(categories.length, 'kind')} of data are deleted:`,
-        ...displayLines(categories.map((c) => inline(c.label || c.id)).join(', ')),
-        ...extra,
-      ],
-      approveLabel,
       note: 'This cannot be undone. If you did not just ask for this, choose Cancel.',
-      tooLongWhere: 'Read the full list on the Privacy page of the BetterFingers window.',
-    });
+    };
+    const label = (c) => inline(c.label || c.id);
+    const personal = categories.filter((c) => c.may_contain_user_text);
+    // Every kind of data by name when that fits; otherwise the ones holding your own words by
+    // name and the rest counted (the Privacy page lists them all); the count alone as a last resort.
+    const forms = [
+      [`Scope: ${plural(categories.length, 'kind')} of data are deleted:`, ...displayLines(categories.map(label).join(', '))],
+      [`Scope: ${plural(categories.length, 'kind')} of data are deleted, including:`,
+        ...displayLines(`${personal.map(label).join(', ')}, and ${categories.length - personal.length} more (all listed on the Privacy page).`)],
+      [`Scope: ${plural(categories.length, 'kind')} of data are deleted (all listed on the Privacy page).`],
+    ].map((lines) => [...lines, ...extra]);
+    const body = forms.find((candidate) => fits({ ...parts, body: candidate })) || forms[forms.length - 1];
+    return confirm({ ...parts, body, approveLabel, tooLongWhere: 'Read the full list on the Privacy page of the BetterFingers window.' });
   }
 
   async function wipePrivacy({ mode, wipeVoices, timeoutMs } = {}) {
