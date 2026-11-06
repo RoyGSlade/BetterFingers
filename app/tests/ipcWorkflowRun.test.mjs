@@ -26,7 +26,7 @@ function setup(t, { outward = true, runnable = true, answers = [0] } = {}) {
     ipcMain: { handle: (c, fn) => handlers.set(c, fn), on() {} },
   };
   const backendProxy = {
-    init() {}, request: async () => ({ ok: true, status: 200, body: {} }),
+    init() {}, request: async () => ({ ok: true, status: 200, body: {} }), onBackendEvent: () => () => {},
     sendTrusted: async (method, route) => (route === '/workflows/preview'
       ? { ok: true, status: 200, body: { ok: true, workflow_id: 'studio_setup', name: 'Studio', preview_lines: LINES, preview_sha256: linesDigest(LINES), steps_sha256: 'a'.repeat(64), outward, runnable, refusals: [] } }
       : { ok: true, status: 200, body: {} }),
