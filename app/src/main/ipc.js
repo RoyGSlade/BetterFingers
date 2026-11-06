@@ -135,6 +135,9 @@ function registerIpc({
   // One store shared by the broker (which issues a run authorization after a click) and the
   // workflow executor (which consumes it before running anything). Round 3, items 1 and 2.
   const runAuthorizations = createRunAuthorizations();
+  // MAIN's own client for routes the renderer may not reach. Main-process code names the route;
+  // it is never handed to an IPC channel.
+  const trustedBackend = { send: (method, path, body, timeoutMs) => backendProxy.sendTrusted(method, path, body, timeoutMs) };
   let approvalBroker = null;
   function broker() {
     if (!approvalBroker) {
@@ -146,7 +149,7 @@ function registerIpc({
           const win = getMainWindow?.();
           return win && !win.isDestroyed() ? win : null;
         },
-        backend: { send: (method, path, body, timeoutMs) => backendProxy.sendTrusted(method, path, body, timeoutMs) },
+        backend: trustedBackend,
         listApplications: () => applicationRegistry().list(),
         planLaunch: (entry) => applicationLauncher().planFor(entry),
         // A smaller screen gets a smaller line budget (measured: a 26-line dialog is ~593 px).
@@ -201,10 +204,18 @@ function registerIpc({
     return broker().deleteLearnedExample({ persona, exampleId, timeoutMs });
   });
 
-  // Round 3, item 4: marking an MCP server "trusted on this machine" (weaker confinement).
-  handleTrusted('approvals:mcp-trust', (_event, req) => {
+  // Round 4, item 3 (Codex re-check 3, finding 3): clearing a persona's learned examples and
+  // deleting a persona are example changes; each is a native dialog bound to its scope. These
+  // routes are no longer in the dashboard proxy. (There is no MCP trust channel any more: round 4,
+  // item 4.)
+  handleTrusted('approvals:persona-learned-clear', (_event, req) => {
+    const { persona, timeoutMs } = req || {};
+    return broker().clearLearnedExamples({ persona, timeoutMs });
+  });
+
+  handleTrusted('approvals:persona-delete', (_event, req) => {
     const { name, timeoutMs } = req || {};
-    return broker().trustMcpServer({ name, timeoutMs });
+    return broker().deletePersona({ name, timeoutMs });
   });
 
   handleTrusted('backend:send-draft', (_event, req) => {
@@ -217,9 +228,11 @@ function registerIpc({
     return broker().primaryActionFromUi({ timeoutMs });
   });
 
+  // Round 4, item 3: every privacy wipe deletes learned examples, so the renderer's `confirm`
+  // boolean is ignored; the native dialog (scope from the backend's own inventory) is the gate.
   handleTrusted('backend:wipe-privacy', (_event, req) => {
-    const { wipeVoices, confirm, mode, timeoutMs } = req || {};
-    return backendProxy.wipePrivacyData({ wipeVoices, confirm, mode, timeoutMs });
+    const { wipeVoices, mode, timeoutMs } = req || {};
+    return broker().wipePrivacy({ wipeVoices, mode, timeoutMs });
   });
 
   // Wave 6: the factory-reset executor. Its own channel rather than a mode on
@@ -241,7 +254,9 @@ function registerIpc({
     onFactoryResetStart?.();
     let deleted = false;
     try {
-      const result = await backendProxy.factoryReset({ confirm, deleteDownloadedModels, timeoutMs });
+      // The typed phrase AND a native dialog (round 4, item 3): the phrase alone is a value a page
+      // can send by itself.
+      const result = await broker().factoryReset({ confirm, deleteDownloadedModels, timeoutMs });
       deleted = deletionRan(result);
       const finished = await finishFactoryReset(result, {
         session: session.defaultSession,
@@ -255,9 +270,10 @@ function registerIpc({
     }
   });
 
+  // Round 4, item 3: the global learning wipe used to accept the page's `confirm: true`.
   handleTrusted('backend:clear-persona-learning', (_event, req) => {
-    const { confirm, timeoutMs } = req || {};
-    return backendProxy.clearPersonaLearning({ confirm, timeoutMs });
+    const { timeoutMs } = req || {};
+    return broker().clearAllLearning({ timeoutMs });
   });
 
   handleTrusted('backend:delete-llm-model', (_event, req) => {
@@ -408,20 +424,54 @@ function registerIpc({
   // one unchanged, changes nothing approved and needs none (every run is confirmed anyway, with
   // the exact program shown). The write is conditional on the entry the person was shown, so an
   // entry changed while the dialog was open is not overwritten blind.
+  //
+  // Round 4, item 6 (Codex re-check 3, finding 7): remove-then-add used to skip the replacement
+  // dialog. Removing now needs a native dialog, and adding an id that the registry's identity
+  // history remembers (it was removed before) or that a saved workflow already names is treated
+  // as a replacement: before (the remembered entry, or "nothing") and after are shown, with the
+  // workflows that name it. If the saved workflows cannot be read, an add is treated as one that
+  // may rebind them (fail closed).
+  async function workflowsNaming(id) {
+    const listing = await trustedBackend.send('GET', '/workflows', undefined, 5000);
+    const workflows = listing && listing.ok && listing.body && Array.isArray(listing.body.workflows) ? listing.body.workflows : null;
+    if (!workflows) return null;
+    return workflows
+      .filter((wf) => wf && Array.isArray(wf.steps) && wf.steps.some((step) => step && step.app_id === id))
+      .map((wf) => String(wf.name || wf.id || '?'));
+  }
+
   handleTrusted('applications:confirm', async (_event, payload) => {
     const registry = applicationRegistry();
     const proposed = registry.coerce(payload);
     if (!proposed) return registry.confirm(payload); // its own refusal (invalid id)
     const existing = registry.get(proposed.id);
-    if (!existing) return registry.confirm(proposed, { expect: null });
-    if (canonicalJson(existing) === canonicalJson(proposed)) return { ok: true, entry: existing };
-    const decision = await broker().confirmApplicationReplace({ before: existing, after: proposed });
+    if (existing && canonicalJson(existing) === canonicalJson(proposed)) return { ok: true, entry: existing };
+    let before = existing;
+    let references = [];
+    if (!existing) {
+      const remembered = registry.history(proposed.id);
+      const naming = await workflowsNaming(proposed.id);
+      references = naming || ['(the saved workflows could not be read)'];
+      if (!remembered && naming && naming.length === 0) return registry.confirm(proposed, { expect: null });
+      before = remembered || null;
+    }
+    const decision = await broker().confirmApplicationReplace({ before, after: proposed, references });
     if (!decision || decision.approved !== true) {
       return { ok: false, error: 'declined', message: (decision && decision.error) || 'You cancelled. The application was not changed.' };
     }
-    return registry.confirm(proposed, { expect: existing });
+    return registry.confirm(proposed, { expect: existing || null });
   });
-  handleTrusted('applications:remove', (_event, { id } = {}) => applicationRegistry().remove(id));
+  handleTrusted('applications:remove', async (_event, { id } = {}) => {
+    const registry = applicationRegistry();
+    const existing = registry.get(id);
+    if (!existing) return registry.remove(id); // invalid id, or nothing to remove
+    const references = (await workflowsNaming(existing.id)) || [];
+    const decision = await broker().confirmApplicationRemove({ entry: existing, references });
+    if (!decision || decision.approved !== true) {
+      return { ok: false, error: 'declined', message: (decision && decision.error) || 'You cancelled. The application was not removed.' };
+    }
+    return registry.remove(existing.id, { expect: existing });
+  });
 
   // Wave 10 / D-0027: the workflow run executor. This is the ONLY caller of
   // applicationLauncher.js and the only way to reach it is the single channel

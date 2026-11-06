@@ -759,13 +759,11 @@ async function deletePersonaExample(name, exampleId, timeoutMs = 10000) {
     { persona: name, exampleId });
 }
 
+// Clearing a persona's learned examples (round 4, item 3): main shows the persona and its
+// examples in a native dialog; only a click there deletes them.
 async function clearPersonaExamples(name, timeoutMs = 10000) {
-  return proxyRequest(
-    'DELETE',
-    `${PERSONAS_URL}/${encodeURIComponent(name)}/examples?confirm=true`,
-    undefined,
-    timeoutMs,
-  );
+  return typedRequest('clearLearnedExamples', `${PERSONAS_URL}/${encodeURIComponent(name)}/examples`, timeoutMs,
+    { persona: name });
 }
 
 // --- Contacts (Stage 11) -----------------------------------------------------
@@ -1069,8 +1067,10 @@ async function savePersona(name, prompt, extra = null, timeoutMs = 5000) {
   return postJson(PERSONAS_URL, body, timeoutMs);
 }
 
+// Deleting a persona removes its few-shot examples too (round 4, item 3): main shows them in a
+// native dialog first.
 async function deletePersona(name, timeoutMs = 5000) {
-  return proxyRequest('DELETE', `${PERSONAS_URL}/${encodeURIComponent(name)}`, undefined, timeoutMs);
+  return typedRequest('deletePersona', `${PERSONAS_URL}/${encodeURIComponent(name)}`, timeoutMs, { name });
 }
 
 // --- Persona Foundry: guided interview -> compile -> stress-test. ---

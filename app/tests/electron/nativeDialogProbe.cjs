@@ -18,15 +18,23 @@ const { execFileSync } = require('node:child_process');
 const { app, dialog } = require('electron');
 
 const MAIN = path.resolve(__dirname, '..', '..', 'src', 'main');
-const { createApprovalBroker, linesDigest, displayLines, MAX_DISPLAY_LINES, WRAP_WIDTH } = require(path.join(MAIN, 'approvalBroker.js'));
+const {
+  createApprovalBroker, linesDigest, displayLines, wrapLine, MAX_DISPLAY_LINES, MESSAGE_WRAP_WIDTH, MESSAGE_LINE_COST,
+} = require(path.join(MAIN, 'approvalBroker.js'));
 
-// As many copies of `make(i)` as fit the line budget once wrapped (header, blank and note: 5 lines).
+// What the workflow dialog spends besides the steps (round 4: the message is counted as drawn,
+// MESSAGE_LINE_COST per wrapped line): the message, the header and its blank line, the blank line
+// before the note and the wrapped note.
+const OVERHEAD = MESSAGE_LINE_COST * wrapLine('Approve the workflow “Native dialog probe”?', MESSAGE_WRAP_WIDTH).length
+  + 2 + 1 + displayLines(`Fingerprint ${'0'.repeat(8)} ${'0'.repeat(8)}. Any change to these steps cancels the approval.`).length;
+
+// As many copies of `make(i)` as fit the line budget once wrapped.
 function fillBudget(make) {
   const lines = [];
   let used = 0;
   for (let i = 0; ; i += 1) {
     const next = displayLines(make(i)).length;
-    if (used + next > MAX_DISPLAY_LINES - 5) return lines;
+    if (used + next > MAX_DISPLAY_LINES - OVERHEAD) return lines;
     lines.push(make(i));
     used += next;
   }
@@ -122,6 +130,10 @@ app.whenReady().then(async () => {
     // refused with the Close-only notice) and fit with its buttons on screen.
     const newlineName = `Probe${'\n'.repeat(45)}end`;
     report.cases.push(await runCase('newline-name', atBudget, 'Approve workflow', newlineName));
+    await sleep(700);
+    // The same name with short content: an approving dialog, the name drawn on one line with its
+    // newlines shown as ⏎ (wrapped by the broker at the message width), fitting the screen.
+    report.cases.push(await runCase('newline-name-short', ['1. Launch Obsidian', '2. Open the notes folder'], 'Approve workflow', newlineName));
     await sleep(700);
     const overBudget = Array.from({ length: MAX_DISPLAY_LINES + 10 }, (_, i) => `${i + 1}. step`);
     report.cases.push(await runCase('over-budget', overBudget, 'Approve workflow'));

@@ -58,6 +58,12 @@ for (const size of SIZES) {
     assert.ok(nl && nl.geometry, 'newline-name: a dialog was shown');
     assert.ok(nl.geometry.y + nl.geometry.height <= nl.screen.height, `newline-name: ${nl.geometry.height}px tall on a ${nl.screen.height}px screen`);
     assert.equal(nl.approvePosted, false, 'newline-name: nothing was approved');
+    const nlShort = byName['newline-name-short'];
+    assert.ok(nlShort && nlShort.geometry, 'newline-name-short: a dialog was shown');
+    assert.ok(nlShort.geometry.y + nlShort.geometry.height <= nlShort.screen.height, `newline-name-short: ${nlShort.geometry.height}px tall`);
+    assert.ok(nlShort.geometry.height < 500, 'newline-name-short: the 45 newlines did not become 45 lines');
+    assert.match(String(nlShort.result.error), /You cancelled/, 'newline-name-short: an approving dialog, dismissed with Escape');
+    assert.equal(nlShort.approvePosted, false);
     const over = byName['over-budget'];
     assert.ok(over.geometry, 'the too-long dialog was shown');
     assert.ok(over.geometry.height < 400, 'it is the short Close-only notice, not the content');

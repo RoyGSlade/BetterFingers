@@ -127,7 +127,7 @@ test('finding 2: content whose drawn lines exceed the budget gets only the Close
 // ---- finding 1: canonical persona names at the broker ------------------------------------
 
 test('finding 1: the broker refuses a non-canonical persona name before any lookup or dialog', async () => {
-  for (const name of ['Sam!ple', ' Sample', 'Sample ', 'Sam​ple', "Sa'mple"]) {
+  for (const name of ['Sam!ple', ' Sample', 'Sample ', 'Sam\u200bple', "Sa'mple"]) {
     const { instance, dialog, calls } = makeBroker({ answers: [0] });
     const result = await instance.savePersona({ name, body: { prompt: 'p', few_shot: [] } });
     assert.equal(result.ok, false, name);

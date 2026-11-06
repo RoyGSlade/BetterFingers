@@ -48,10 +48,25 @@ const TICKET_TTL_S = 60;
 // characters (short enough that the toolkit does not wrap them again), and the whole dialog is
 // held to 26 lines and 1600 characters, which the same test shows fits a 1366x768 and a
 // 1280x720 screen with the buttons visible.
+//
+// Round 4, item 2 (Codex re-check 3, finding 2): the budget counted ARRAY ELEMENTS, and untrusted
+// text with embedded newlines (a persona name with 45 of them) became a 46-line message and 52
+// detail lines with an approving button. Now every dynamic field -- title, message, detail lines,
+// persona names, labels -- goes through ONE display pipeline: a field that is meant to be one
+// line (a name, a label, a title, the message) has its newlines and tabs drawn as visible
+// symbols (⏎, ⇥) and every other control character as <U+XXXX>; multi-line content is split on
+// its newlines into separate counted lines. The budget is then checked on what the toolkit will
+// actually draw: every wrapped message line (counted twice: GTK draws the message larger and
+// bold) plus every wrapped detail line.
 const MAX_DISPLAY_LINES = 26;
 const MAX_DISPLAY_CHARS = 1600;
 const MAX_MESSAGE_CHARS = 120;
 const WRAP_WIDTH = 64;
+// The message is drawn in a larger bold font, so it wraps at fewer units and each of its lines
+// costs two of the line budget.
+const MESSAGE_WRAP_WIDTH = 48;
+const MESSAGE_LINE_COST = 2;
+const MAX_TITLE_WIDTH = 60;
 const MIN_DIALOG_GAP_MS = 500;
 
 const PURPOSE_WORKFLOW_APPROVE = 'workflow.approve';
@@ -59,7 +74,11 @@ const PURPOSE_PERSONA_EXAMPLE = 'persona.example';
 const PURPOSE_DRAFT_SEND = 'draft.send';
 const PURPOSE_PERSONA_FEW_SHOT = 'persona.few_shot';
 const PURPOSE_PERSONA_LEARNED_DELETE = 'persona.learned_delete';
-const PURPOSE_MCP_TRUST = 'mcp.trust';
+const PURPOSE_PERSONA_LEARNED_CLEAR = 'persona.learned_clear';
+const PURPOSE_LEARNED_CLEAR_ALL = 'persona.learned_clear_all';
+const PURPOSE_PERSONA_DELETE = 'persona.delete';
+const PURPOSE_PRIVACY_WIPE = 'privacy.wipe';
+// There is no MCP trust purpose (round 4, item 4): Phase 0 has no persistent MCP trust.
 
 const WORKFLOW_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const SEND_ACTIONS = new Set(['copy_only', 'paste', 'type', 'open_chat_then_send']);
@@ -111,8 +130,60 @@ function learnedDeleteBind(persona, exampleId, before, after) {
   return { example_id: String(exampleId), ...personaFewShotBind(persona, before, after) };
 }
 
-function mcpTrustBind(configSha256) {
-  return { config_sha256: String(configSha256) };
+// Learning one example (round 4, item 5): the example AND the complete learned list before and
+// after, so an example the cap evicts is part of what was approved.
+function learnedAddBind(persona, raw, out, before, after) {
+  return { ...personaExampleBind(persona, raw, out), ...personaFewShotBind(persona, before, after) };
+}
+
+// Clearing one persona's learned examples / deleting a persona with its few-shot list (round 4,
+// item 3): bound to the complete list removed.
+function learnedClearBind(persona, before) {
+  return { scope: 'persona_learned', ...personaFewShotBind(persona, before, []) };
+}
+
+function personaDeleteBind(persona, before) {
+  return { scope: 'persona', ...personaFewShotBind(persona, before, []) };
+}
+
+// Every persona's learned list, sorted by name (identical bytes to
+// approvals.learned_collection_digest). `personas` is [{ name, examples }] or [[name, pairs]].
+function learnedCollectionDigest(personas) {
+  const rows = (Array.isArray(personas) ? personas : []).map((row) => (Array.isArray(row)
+    ? [String(row[0]), (row[1] || []).map(([r, o]) => [String(r), String(o)])]
+    : [String(row && row.name), fewShotItems(row && row.examples)]));
+  rows.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  const lines = ['persona.learned.collection.v1', String(rows.length)];
+  for (const [name, items] of rows) {
+    lines.push(name, String(items.length));
+    for (const [raw, out] of items) lines.push(raw, out);
+  }
+  return linesDigest(lines);
+}
+
+function learnedClearAllBind(collectionSha256) {
+  return { scope: 'all_personas', collection_sha256: String(collectionSha256) };
+}
+
+// A privacy wipe or factory reset: its mode, the exact categories it deletes (registry order)
+// and its options (identical to approvals.privacy_wipe_bind).
+function privacyWipeBind(mode, categoryIds, { wipeVoices = false, deleteModels = false } = {}) {
+  const ids = (categoryIds || []).map(String);
+  return {
+    mode: String(mode),
+    scope_sha256: linesDigest(['privacy.wipe.v1', String(mode), String(ids.length), ...ids]),
+    wipe_voices: wipeVoices ? '1' : '0',
+    delete_models: deleteModels ? '1' : '0',
+  };
+}
+
+// The ONE identity a persona name stands for (round 4, item 1), mirroring
+// llm_engine._sanitize_persona_name: letters, digits, space, '_', '-', '.', trimmed. A name that
+// is not already in this form is refused before anything is read, shown or signed.
+function canonicalPersonaName(name) {
+  const trimmed = String(name === undefined || name === null ? '' : name).trim();
+  return Array.from(trimmed).filter((ch) => /^[\p{L}\p{N}]$/u.test(ch) || ch === ' ' || ch === '_' || ch === '-' || ch === '.')
+    .join('').trim();
 }
 
 function draftSendBind(action, text, openChat) {
@@ -171,6 +242,18 @@ function makeVisible(text) {
   });
 }
 
+const NEWLINE_MARK = '\u23CE'; // ⏎
+const TAB_MARK = '\u21E5'; // ⇥
+
+// A field that is ONE line on screen (a name, a label, a title, the message): newlines and tabs
+// become visible marks, every other invisible or control character <U+XXXX>. Nothing a caller
+// passes can start a new line here.
+function inline(value) {
+  return makeVisible(String(value === undefined || value === null ? '' : value)
+    .replace(/\r\n|\r|\n|\u2028|\u2029/g, NEWLINE_MARK)
+    .replace(/\t/g, TAB_MARK));
+}
+
 // How wide a character is likely to RENDER, in units of an average lowercase letter, never
 // under-estimated: the toolkit wraps by pixels, and a line it wraps again makes the dialog taller
 // than what was budgeted (measured: 21 lines of 64 capital Ws made a 992 px dialog on a 720 px
@@ -224,12 +307,13 @@ function wrapLine(line, width = WRAP_WIDTH) {
   return pieces.map((piece, index) => (index === 0 ? piece : `   ↳ ${piece}`));
 }
 
-// The lines of `text` (split on newlines) as shown: invisible characters made
-// visible, long lines wrapped. Returns an array of display lines.
+// The lines of multi-line `text` as shown: split on its newlines (each one a counted line),
+// tabs and invisible characters made visible, long lines wrapped. Idempotent on its own output,
+// so confirm() can pass every body line through it again. Returns an array of display lines.
 function displayLines(text, width = WRAP_WIDTH) {
   const out = [];
-  for (const raw of String(text).split('\n')) {
-    out.push(...wrapLine(makeVisible(raw.replace(/\r$/, '')), width));
+  for (const raw of String(text).split(/\r\n|\n|\r|\u2028|\u2029/)) {
+    out.push(...wrapLine(makeVisible(raw.replace(/\t/g, TAB_MARK)), width));
   }
   return out;
 }
@@ -279,18 +363,18 @@ function fewShotDiffLines(before, after) {
 // Describe a registry entry's launch for the replace dialog.
 function describeEntry(entry, planLaunch) {
   const lines = [
-    ...displayLines(`Name: ${String(entry.display_name || entry.id)}`),
-    ...displayLines(`Start method: ${String(entry.launch_method || '(none)')}`),
+    ...displayLines(`Name: ${inline(entry.display_name || entry.id)}`),
+    ...displayLines(`Start method: ${inline(entry.launch_method || '(none)')}`),
   ];
   let plan = null;
   try { plan = typeof planLaunch === 'function' ? planLaunch(entry) : null; } catch { plan = null; }
   if (plan && plan.ok) {
-    lines.push(...displayLines(`Runs: ${plan.command}${plan.args && plan.args.length ? ` with arguments ${JSON.stringify(plan.args)}` : ' with no arguments'}`));
+    lines.push(...displayLines(`Runs: ${inline(plan.command)}${plan.args && plan.args.length ? ` with arguments ${inline(JSON.stringify(plan.args))}` : ' with no arguments'}`));
   } else {
     lines.push('Runs: nothing (no usable start method)');
   }
   for (const field of ['executable', 'desktop_entry', 'flatpak_id', 'uri', 'steam_uri', 'profile_id']) {
-    if (entry[field]) lines.push(...displayLines(`${field}: ${entry[field]}`));
+    if (entry[field]) lines.push(...displayLines(`${field}: ${inline(entry[field])}`));
   }
   return lines;
 }
@@ -357,16 +441,37 @@ function createApprovalBroker({
     return { lines: clamp(wanted.lines, MAX_DISPLAY_LINES), chars: clamp(wanted.chars, MAX_DISPLAY_CHARS) };
   }
 
-  function fitsDialog(message, lines) {
+  // The ONE display pipeline (round 4, item 2). Everything the toolkit will draw, as it will
+  // draw it: the title and the message as single visible lines (the message then wrapped at its
+  // own width), every body and note line split on its newlines, made visible and wrapped.
+  function layout({ title, message, body, note = '' }) {
+    const shownTitle = inline(title);
+    const messageLines = wrapLine(inline(message), MESSAGE_WRAP_WIDTH);
+    const lines = [...(Array.isArray(body) ? body : [body]), ...(note ? ['', ...displayLines(note)] : [])]
+      .flatMap((line) => displayLines(String(line)));
+    return { title: shownTitle, messageLines, lines };
+  }
+
+  // Does the whole dialog fit? Counted on exactly what would be drawn: each message line costs
+  // MESSAGE_LINE_COST lines, each detail line one, and every line must already be within its width.
+  function fitsLayout({ title, messageLines, lines }) {
     const budget = budgets();
-    if (displayWidth(message) > MAX_MESSAGE_CHARS) return false;
-    if (lines.length > budget.lines) return false;
-    let chars = 0;
+    if (displayWidth(title) > MAX_TITLE_WIDTH) return false;
+    const messageText = messageLines.join('');
+    if (displayWidth(messageText) > MAX_MESSAGE_CHARS * 2) return false;
+    if (messageLines.some((line) => displayWidth(line) > MESSAGE_WRAP_WIDTH)) return false;
+    if (messageLines.length * MESSAGE_LINE_COST + lines.length > budget.lines) return false;
+    let chars = Array.from(messageText).length;
     for (const line of lines) {
-      if (displayWidth(line) > WRAP_WIDTH) return false; // every line must already be wrapped
+      if (displayWidth(line) > WRAP_WIDTH) return false;
       chars += Array.from(String(line)).length + 1;
     }
     return chars <= budget.chars;
+  }
+
+  // For callers that can choose a shorter form (a list, or only its count) before asking.
+  function fits(parts) {
+    return fitsLayout(layout(parts));
   }
 
   // Show the native dialog; resolves approved:true ONLY when the person clicked the
@@ -379,16 +484,14 @@ function createApprovalBroker({
     if (now() - lastClosedAt < MIN_DIALOG_GAP_MS) {
       return { approved: false, error: 'Please wait a moment before asking again.' };
     }
-    // Content lines arrive already made visible and wrapped (displayLines); a long FIXED sentence
-    // of our own is wrapped here, so nothing reaches the toolkit long enough for it to re-wrap.
-    const lines = [...body, ...(note ? ['', ...displayLines(note)] : [])]
-      .flatMap((line) => (displayWidth(line) > WRAP_WIDTH ? wrapLine(String(line)) : [String(line)]));
+    const shown = layout({ title, message, body, note });
     busy = true;
     try {
-      if (!fitsDialog(message, lines)) {
+      if (!fitsLayout(shown)) {
         await show({
           type: 'warning',
-          title,
+          // Our own fixed title when the given one is itself the problem.
+          title: displayWidth(shown.title) <= MAX_TITLE_WIDTH ? shown.title : 'BetterFingers',
           message: 'This is too long to show in full here, so it cannot be approved from this window.',
           detail: [
             'BetterFingers only asks for your approval when it can show you all of it, and this does not fit.',
@@ -407,9 +510,9 @@ function createApprovalBroker({
       }
       const result = await show({
         type: 'question',
-        title,
-        message,
-        detail: lines.join('\n'),
+        title: shown.title,
+        message: shown.messageLines.join('\n'),
+        detail: shown.lines.join('\n'),
         buttons: [approveLabel, 'Cancel'],
         // Cancel is the default EXCEPT when the person themselves just pressed the
         // send shortcut (defaultApprove): then Enter confirms. Anything a page or the
@@ -469,7 +572,7 @@ function createApprovalBroker({
     const shown = lines.flatMap((line) => displayLines(line));
     const decision = await confirm({
       title: 'Approve workflow',
-      message: `Approve the workflow “${makeVisible(String(info.name || info.workflow_id))}”?`,
+      message: `Approve the workflow “${inline(String(info.name || info.workflow_id))}”?`,
       body: ['When it runs, it will do exactly this, in this order:', '', ...shown],
       note: `Fingerprint ${fingerprint(info.preview_sha256)}. Any change to these steps cancels the approval.`,
       tooLongWhere: WHERE_WORKFLOW,
@@ -530,7 +633,7 @@ function createApprovalBroker({
     if (frozen.lines.length) shown.push('', 'Exactly what it starts or opens:', ...frozen.lines.flatMap((line) => displayLines(line)));
     const decision = await confirm({
       title: 'Run workflow',
-      message: `Run the workflow “${makeVisible(String(info.name || id))}” now?`,
+      message: `Run the workflow “${inline(String(info.name || id))}” now?`,
       body: shown,
       approveLabel: 'Run it',
       note: 'If you did not just ask for this run, choose Cancel. If an application changes before its step, the run stops.',
@@ -547,89 +650,324 @@ function createApprovalBroker({
     return { ok: true, confirmed: true, authorization };
   }
 
-  // --- replacing a confirmed application (round 3, item 2) -----------------------------------
+  // --- the application registry (round 3, item 2; round 4, item 6) ---------------------------------
   //
-  // The registry is what a workflow may launch. Creating an entry changes nothing that is already
-  // approved; REPLACING one changes what an approved workflow's id points at, so it is shown here,
-  // before and after, and only a click lets main write it.
-  async function confirmApplicationReplace({ before, after } = {}) {
-    if (!before || !after || typeof before !== 'object' || typeof after !== 'object') return { approved: false, error: 'Nothing to replace.' };
+  // The registry is what a workflow may launch. REPLACING an entry changes what a workflow's id
+  // points at, so it is shown here, before and after, and only a click lets main write it. Round 4
+  // (Codex re-check 3, finding 7): removing an entry and then adding the same id again used to
+  // skip that dialog, so REMOVING needs a dialog too, and adding an id that the registry's identity
+  // history remembers, or that a saved workflow already names, is treated as a replacement.
+  function referenceLines(references) {
+    const names = (Array.isArray(references) ? references : []).map((ref) => inline(ref));
+    if (!names.length) return [];
+    return displayLines(`Workflows that name it (${names.length}): ${names.join(', ')}`);
+  }
+
+  async function confirmApplicationReplace({ before, after, references = [] } = {}) {
+    if (!after || typeof after !== 'object') return { approved: false, error: 'Nothing to replace.' };
+    const known = before && typeof before === 'object';
     const body = [
-      'An application BetterFingers is allowed to start is about to change.',
-      'Approved workflows that use it will start the NEW target.', '',
-      'Now:', ...describeEntry(before, planLaunch), '',
+      known ? 'An application BetterFingers is allowed to start is about to change.'
+        : 'This id was used before, or a saved workflow already names it.',
+      'Workflows that use this id will start the NEW target.', '',
+      ...(known ? ['Before:', ...describeEntry(before, planLaunch)] : ['Before: nothing is registered under this id.']), '',
       'After the change:', ...describeEntry(after, planLaunch),
+      ...(references.length ? ['', ...referenceLines(references)] : []),
     ];
     return confirm({
       title: 'Change a confirmed application',
-      message: `Change what “${makeVisible(String(before.display_name || before.id))}” starts?`,
+      message: `Change what “${inline(after.id)}” starts?`,
       body,
       approveLabel: 'Change it',
       note: 'If you did not just edit this application, choose Cancel.',
     });
   }
 
-  // --- persona learning --------------------------------------------------------
+  async function confirmApplicationRemove({ entry, references = [] } = {}) {
+    if (!entry || typeof entry !== 'object') return { approved: false, error: 'Nothing to remove.' };
+    return confirm({
+      title: 'Remove a confirmed application',
+      message: `Remove “${inline(entry.display_name || entry.id)}” from the applications BetterFingers may start?`,
+      body: [
+        'This application is removed:', ...describeEntry(entry, planLaunch),
+        ...(references.length ? ['', ...referenceLines(references), 'They will not run until it is added again.'] : []),
+        '', 'Adding this id again later will show you the change before it is saved.',
+      ],
+      approveLabel: 'Remove it',
+      note: 'If you did not just remove this application, choose Cancel.',
+    });
+  }
 
+  // --- persona examples (round 3, item 3; round 4, items 1, 3 and 5) ---------------------------------
+
+  // The persona name the page sent, if it is already canonical; otherwise a refusal naming the
+  // canonical form. Nothing is read, shown or signed for an alias (round 4, item 1).
+  function personaName(name) {
+    if (typeof name !== 'string' || !name.trim() || name.length > 128) return { error: fault('Choose a persona first.') };
+    const canonical = canonicalPersonaName(name);
+    if (!canonical) return { error: fault('A persona name needs at least one letter or digit.') };
+    if (canonical !== name) {
+      return { error: fault(`That is not the persona’s saved name. Persona names use letters, digits, spaces, “_”, “-” and “.”; use “${canonical}”.`) };
+    }
+    return { name };
+  }
+
+  // An example as dialog lines: "What was said" and "What it should become".
+  function exampleLines([raw, out]) {
+    return ['What was said:', ...displayLines(raw), 'What it should become:', ...displayLines(out)];
+  }
+
+  // A complete example list as dialog lines, or only its count when the full list does not fit.
+  function listOrCount(parts, items, describeCount) {
+    const full = [...parts.body, ...items.flatMap(([raw, out], index) => [
+      ...displayLines(`${index + 1}. said: ${raw}`), ...displayLines(`   becomes: ${out}`)])];
+    if (fits({ ...parts, body: full })) return full;
+    return [...parts.body, describeCount, 'The list is too long to show here; open the persona in BetterFingers to read it.'];
+  }
+
+  const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
+
+  // Learning ONE example. Round 4, item 5 (Codex re-check 3, finding 6): at the cap the store
+  // evicts the oldest example, which the dialog did not show and the ticket did not bind. The
+  // backend now computes the COMPLETE resulting list (POST .../examples/preview); main checks it is
+  // exactly "before, minus what is evicted, plus the new example", shows the new example and every
+  // evicted one, and binds the ticket to both lists. The backend commits only that result.
   async function addPersonaExample({ persona, raw, out, timeoutMs } = {}) {
-    if (typeof persona !== 'string' || !persona.trim() || persona.length > 128) return fault('Choose a persona first.');
+    const who = personaName(persona);
+    if (who.error) return who.error;
     if (typeof raw !== 'string' || typeof out !== 'string' || !raw.trim() || !out.trim()
         || raw.length > MAX_EXAMPLE_CHARS || out.length > MAX_EXAMPLE_CHARS) {
       return fault('That example is empty or too long to learn.');
     }
-    const shown = [
-      `Persona: ${makeVisible(persona)}`, '', 'What was said:', ...displayLines(raw), '',
-      'What it should become:', ...displayLines(out),
-    ];
+    const route = `/personas/${encodeURIComponent(who.name)}/examples`;
+    const preview = await backend.send('POST', `${route}/preview`, { raw, out }, 5000);
+    const plan = preview && preview.ok && preview.status < 400 && preview.body && typeof preview.body === 'object' ? preview.body : null;
+    const pairsOf = (list) => (Array.isArray(list) ? list : []).map((p) => (Array.isArray(p) ? [String(p[0]), String(p[1])] : null));
+    const before = plan ? pairsOf(plan.before) : [];
+    const after = plan ? pairsOf(plan.after) : [];
+    const evicted = plan && Array.isArray(plan.evicted) ? fewShotItems(plan.evicted) : null;
+    if (!plan || plan.persona !== who.name || before.includes(null) || after.includes(null) || !evicted) {
+      return fault('BetterFingers could not work out what learning this example would change. Nothing was learned.');
+    }
+    const added = [raw.trim(), out.trim()];
+    if (plan.duplicate === true) {
+      if (canonicalJson(before) !== canonicalJson(after)) return fault('BetterFingers could not verify that change. Nothing was learned.');
+      return backend.send('POST', route, { raw, out }, Number(timeoutMs) || 10000); // changes nothing
+    }
+    // The only result that may be signed: before, minus the evicted examples from the front, plus the new one.
+    const expected = [...before.slice(evicted.length), added];
+    const evictedOk = canonicalJson(before.slice(0, evicted.length)) === canonicalJson(evicted);
+    if (!evictedOk || canonicalJson(after) !== canonicalJson(expected)) {
+      return fault('BetterFingers could not verify that change. Nothing was learned.');
+    }
+    const body = [`Persona: ${inline(who.name)}`, '', ...exampleLines(added)];
+    if (evicted.length) {
+      body.push('', `To make room, ${evicted.length === 1 ? 'this oldest example is removed' : `these ${evicted.length} oldest examples are removed`}:`);
+      for (const pair of evicted) body.push(...exampleLines(pair));
+    }
+    body.push('', `It will then have ${plural(after.length, 'learned example')}.`);
     const decision = await confirm({
       title: 'Teach this persona',
-      message: `Let “${makeVisible(persona)}” learn from this example?`,
-      body: shown,
+      message: evicted.length ? `Let “${inline(who.name)}” learn this, and forget its oldest example?` : `Let “${inline(who.name)}” learn from this example?`,
+      body,
       approveLabel: 'Learn it',
       note: 'It will shape how this persona rewrites your future dictation until you delete it.',
       tooLongWhere: WHERE_PERSONA,
     });
     if (!decision.approved) return declined(decision);
-
-    const approval = trySign(PURPOSE_PERSONA_EXAMPLE, persona, personaExampleBind(persona, raw, out));
+    const approval = trySign(PURPOSE_PERSONA_EXAMPLE, who.name, learnedAddBind(who.name, raw, out, before, after));
     if (!approval) return fault(UNAVAILABLE);
-    return backend.send(
-      'POST', `/personas/${encodeURIComponent(persona)}/examples`, { raw, out, approval }, Number(timeoutMs) || 10000,
-    );
+    return backend.send('POST', route, { raw, out, approval }, Number(timeoutMs) || 10000);
+  }
+
+  async function learnedList(name) {
+    const listing = await backend.send('GET', `/personas/${encodeURIComponent(name)}/examples`, undefined, 5000);
+    return listing && listing.ok && listing.status < 400 && listing.body && Array.isArray(listing.body.examples)
+      ? listing.body.examples : null;
   }
 
   // Deleting ONE learned example (round 3, item 3). The list is read from the backend; the
   // ticket binds the example id and the complete list before and after.
   async function deleteLearnedExample({ persona, exampleId, timeoutMs } = {}) {
-    if (typeof persona !== 'string' || !persona.trim() || persona.length > 128) return fault('Choose a persona first.');
+    const who = personaName(persona);
+    if (who.error) return who.error;
     if (typeof exampleId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(exampleId)) return fault('That is not a learned example.');
-    const listing = await backend.send('GET', `/personas/${encodeURIComponent(persona)}/examples`, undefined, 5000);
-    const examples = listing && listing.ok && listing.body && Array.isArray(listing.body.examples) ? listing.body.examples : null;
+    const examples = await learnedList(who.name);
     if (!examples) return fault('BetterFingers could not read that persona’s learned examples. Nothing was deleted.');
     const target = examples.find((entry) => entry && entry.id === exampleId);
     if (!target) return fault('That learned example is already gone.');
     const before = fewShotItems(examples);
     const after = fewShotItems(examples.filter((entry) => entry && entry.id !== exampleId));
-    const [raw, out] = fewShotItems([target])[0];
     const decision = await confirm({
       title: 'Remove a learned example',
-      message: `Remove this learned example from “${makeVisible(persona)}”?`,
+      message: `Remove this learned example from “${inline(who.name)}”?`,
       body: [
-        `Persona: ${makeVisible(persona)}`, '', 'What was said:', ...displayLines(raw), '',
-        'What it should become:', ...displayLines(out), '',
-        `It will have ${after.length} learned example${after.length === 1 ? '' : 's'} left, in the same order.`,
+        `Persona: ${inline(who.name)}`, '', ...exampleLines(fewShotItems([target])[0]), '',
+        `It will have ${plural(after.length, 'learned example')} left, in the same order.`,
       ],
       approveLabel: 'Remove it',
       note: 'This changes how the persona rewrites your future dictation.',
       tooLongWhere: WHERE_PERSONA,
     });
     if (!decision.approved) return declined(decision);
-    const approval = trySign(PURPOSE_PERSONA_LEARNED_DELETE, persona, learnedDeleteBind(persona, exampleId, before, after));
+    const approval = trySign(PURPOSE_PERSONA_LEARNED_DELETE, who.name, learnedDeleteBind(who.name, exampleId, before, after));
     if (!approval) return fault(UNAVAILABLE);
     return backend.send(
-      'DELETE', `/personas/${encodeURIComponent(persona)}/examples/${encodeURIComponent(exampleId)}`,
+      'DELETE', `/personas/${encodeURIComponent(who.name)}/examples/${encodeURIComponent(exampleId)}`,
       { approval }, Number(timeoutMs) || 10000,
     );
+  }
+
+  // Clearing EVERY learned example of one persona (round 4, item 3). Used to be `?confirm=true`
+  // through the dashboard proxy; a page's flag is not a tap. Anything the page sends besides the
+  // persona name is ignored.
+  async function clearLearnedExamples({ persona, timeoutMs } = {}) {
+    const who = personaName(persona);
+    if (who.error) return who.error;
+    const examples = await learnedList(who.name);
+    if (!examples) return fault('BetterFingers could not read that persona’s learned examples. Nothing was deleted.');
+    const before = fewShotItems(examples);
+    if (!before.length) return { ok: true, status: 200, body: { ok: true, cleared: false } };
+    const parts = {
+      title: 'Clear learned examples',
+      message: `Delete every learned example of “${inline(who.name)}”?`,
+      body: [`Persona: ${inline(who.name)}`, `Scope: this persona only. All ${plural(before.length, 'learned example')} are deleted:`, ''],
+      note: 'Other personas keep theirs. This changes how the persona rewrites your future dictation.',
+    };
+    const decision = await confirm({
+      ...parts,
+      body: listOrCount(parts, before, `(${plural(before.length, 'learned example')})`),
+      approveLabel: 'Delete them',
+      tooLongWhere: WHERE_PERSONA,
+    });
+    if (!decision.approved) return declined(decision);
+    const approval = trySign(PURPOSE_PERSONA_LEARNED_CLEAR, who.name, learnedClearBind(who.name, before));
+    if (!approval) return fault(UNAVAILABLE);
+    return backend.send('DELETE', `/personas/${encodeURIComponent(who.name)}/examples`, { approval }, Number(timeoutMs) || 10000);
+  }
+
+  // Clearing EVERY learned example of EVERY persona (round 4, item 3). The renderer's
+  // `confirm: true` used to be the whole gate (backendProxy.clearPersonaLearning).
+  async function clearAllLearning({ timeoutMs } = {}) {
+    const preview = await backend.send('GET', '/privacy/persona-learning/preview', undefined, 5000);
+    const personas = preview && preview.ok && preview.status < 400 && preview.body && Array.isArray(preview.body.personas)
+      ? preview.body.personas.filter((row) => row && typeof row.name === 'string') : null;
+    if (!personas) return fault('BetterFingers could not read the learned examples. Nothing was deleted.');
+    const total = personas.reduce((sum, row) => sum + fewShotItems(row.examples).length, 0);
+    const names = personas.map((row) => `${inline(row.name)} (${fewShotItems(row.examples).length})`);
+    const decision = await confirm({
+      title: 'Clear all learned examples',
+      message: 'Delete every learned example of every persona?',
+      body: [
+        `Scope: all personas. ${plural(total, 'learned example')} across ${plural(personas.length, 'persona')} are deleted.`,
+        ...(names.length ? displayLines(`Personas: ${names.join(', ')}`) : []),
+      ],
+      approveLabel: 'Delete them all',
+      note: 'Your personas stay; only what they learned from your approved examples is deleted.',
+      tooLongWhere: WHERE_PERSONA,
+    });
+    if (!decision.approved) return declined(decision);
+    const approval = trySign(PURPOSE_LEARNED_CLEAR_ALL, 'all', learnedClearAllBind(learnedCollectionDigest(personas)));
+    if (!approval) return fault(UNAVAILABLE);
+    return backend.send('DELETE', '/privacy/persona-learning', { approval }, Number(timeoutMs) || 15000);
+  }
+
+  // Deleting a custom persona together with its few-shot list (round 4, item 3).
+  async function deletePersona({ name, timeoutMs } = {}) {
+    const who = personaName(name);
+    if (who.error) return who.error;
+    const current = await backend.send('GET', `/personas/${encodeURIComponent(who.name)}`, undefined, 5000);
+    if (!current || !current.ok || current.status >= 400 || !current.body || typeof current.body !== 'object') {
+      return fault('BetterFingers could not read that persona. Nothing was deleted.');
+    }
+    const before = fewShotItems(current.body.few_shot);
+    const parts = {
+      title: 'Delete a persona',
+      message: `Delete the persona “${inline(who.name)}”?`,
+      body: [
+        `Persona: ${inline(who.name)}`,
+        'Scope: this persona, with its prompt and settings,',
+        `and its ${plural(before.length, 'example')}${before.length ? ':' : '.'}`,
+        ...(before.length ? [''] : []),
+      ],
+      note: 'Profiles that use it switch to True Janitor.',
+    };
+    const decision = await confirm({
+      ...parts,
+      body: before.length ? listOrCount(parts, before, `(${plural(before.length, 'example')})`) : parts.body,
+      approveLabel: 'Delete it',
+      tooLongWhere: WHERE_PERSONA,
+    });
+    if (!decision.approved) return declined(decision);
+    const approval = trySign(PURPOSE_PERSONA_DELETE, who.name, personaDeleteBind(who.name, before));
+    if (!approval) return fault(UNAVAILABLE);
+    return backend.send('DELETE', `/personas/${encodeURIComponent(who.name)}`, { approval }, Number(timeoutMs) || 5000);
+  }
+
+  // --- privacy wipes and the factory reset (round 4, item 3) ---------------------------------------
+  //
+  // Every wipe mode deletes learned examples (the larger ones the personas too), so each is a
+  // native dialog that lists what the mode deletes, read from the backend's own inventory
+  // (GET /privacy/modes), and a ticket bound to the mode, that exact list and the options. The
+  // factory reset keeps its typed phrase as well; the phrase alone is not a tap.
+  const WIPE_MODES = new Set(['clear_conversations', 'clear_personal_data', 'factory_reset']);
+  const WIPE_TITLES = {
+    clear_conversations: 'Clear conversations',
+    clear_personal_data: 'Clear personal data',
+    factory_reset: 'Factory reset',
+  };
+
+  async function wipeScope(mode) {
+    const modes = await backend.send('GET', '/privacy/modes', undefined, 5000);
+    const entry = modes && modes.ok && modes.status < 400 && modes.body && modes.body.modes && modes.body.modes[mode];
+    const categories = entry && Array.isArray(entry.categories) ? entry.categories.filter((c) => c && typeof c.id === 'string') : null;
+    return categories && categories.length ? categories : null;
+  }
+
+  async function confirmWipe({ mode, categories, extra = [], approveLabel }) {
+    return confirm({
+      title: WIPE_TITLES[mode],
+      message: mode === 'factory_reset' ? 'Erase everything BetterFingers stores on this computer?' : 'Delete this data now?',
+      body: [
+        `Scope: ${plural(categories.length, 'kind')} of data are deleted:`,
+        ...displayLines(categories.map((c) => inline(c.label || c.id)).join(', ')),
+        ...extra,
+      ],
+      approveLabel,
+      note: 'This cannot be undone. If you did not just ask for this, choose Cancel.',
+      tooLongWhere: 'Read the full list on the Privacy page of the BetterFingers window.',
+    });
+  }
+
+  async function wipePrivacy({ mode, wipeVoices, timeoutMs } = {}) {
+    const requested = typeof mode === 'string' && mode ? mode : 'clear_conversations';
+    if (!WIPE_MODES.has(requested) || requested === 'factory_reset') return fault(`Unknown wipe mode ${inline(requested)}. Nothing was deleted.`);
+    const categories = await wipeScope(requested);
+    if (!categories) return fault('BetterFingers could not read what that would delete. Nothing was deleted.');
+    const voices = Boolean(wipeVoices);
+    const decision = await confirmWipe({
+      mode: requested, categories, approveLabel: 'Delete it',
+      extra: [voices ? 'Your cloned voice samples are deleted too.' : 'Your cloned voice samples are kept.'],
+    });
+    if (!decision.approved) return declined(decision);
+    const approval = trySign(PURPOSE_PRIVACY_WIPE, requested, privacyWipeBind(requested, categories.map((c) => c.id), { wipeVoices: voices }));
+    if (!approval) return fault(UNAVAILABLE);
+    return backend.send('POST', '/privacy/wipe', { wipe_voices: voices, mode: requested, approval }, Number(timeoutMs) || 120000);
+  }
+
+  async function factoryReset({ confirm: phrase, deleteDownloadedModels, timeoutMs } = {}) {
+    if (typeof phrase !== 'string' || !phrase) return fault('factoryReset: confirmation phrase required');
+    const categories = await wipeScope('factory_reset');
+    if (!categories) return fault('BetterFingers could not read what a reset would delete. Nothing was deleted.');
+    const models = Boolean(deleteDownloadedModels);
+    const decision = await confirmWipe({
+      mode: 'factory_reset', categories, approveLabel: 'Erase everything',
+      extra: [models ? 'Downloaded models are deleted too.' : 'Downloaded models are kept.'],
+    });
+    if (!decision.approved) return declined(decision);
+    const approval = trySign(PURPOSE_PRIVACY_WIPE, 'factory_reset', privacyWipeBind('factory_reset', categories.map((c) => c.id), { deleteModels: models }));
+    if (!approval) return fault(UNAVAILABLE);
+    return backend.send('POST', '/privacy/factory-reset', { confirm: phrase, delete_downloaded_models: models, approval }, Number(timeoutMs) || 120000);
   }
 
   // --- voice requests (round 2, item 6; round 3, item 6) -----------------------------------------
@@ -686,8 +1024,13 @@ function createApprovalBroker({
   // before and after. A save that leaves the list exactly as stored goes straight through. The
   // stored list is read from the backend, never taken from the page, and what is sent is the
   // normalised list that was shown, so what is stored is exactly what was approved.
-  async function savePersona({ name, body, timeoutMs } = {}) {
-    if (typeof name !== 'string' || !name.trim() || name.length > 128) return fault('Choose a persona name first.');
+  async function savePersona({ name: requestedName, body, timeoutMs } = {}) {
+    if (typeof requestedName !== 'string' || !requestedName.trim() || requestedName.length > 128) return fault('Choose a persona name first.');
+    // Round 4, item 1: an alias ("Sam!ple") looked like a NEW persona with no examples, so the
+    // no-change shortcut below skipped the dialog while the backend saved onto "Sample".
+    const who = personaName(requestedName);
+    if (who.error) return who.error;
+    const { name } = who;
     if (!body || typeof body !== 'object' || Array.isArray(body)) return fault('That persona could not be saved.');
     const payload = { ...body, name };
     delete payload.approval; // a page cannot supply one
@@ -717,8 +1060,8 @@ function createApprovalBroker({
     }
     const decision = await confirm({
       title: 'Change this persona’s examples',
-      message: `Change the examples “${makeVisible(name)}” learns from?`,
-      body: [`Persona: ${makeVisible(name)} (now ${before.length} example${before.length === 1 ? '' : 's'})`, ...fewShotDiffLines(before, after)],
+      message: `Change the examples “${inline(name)}” learns from?`,
+      body: [`Persona: ${inline(name)} (now ${before.length} example${before.length === 1 ? '' : 's'})`, ...fewShotDiffLines(before, after)],
       approveLabel: 'Save the examples',
       note: 'The first examples shape your future dictation.',
       tooLongWhere: WHERE_PERSONA,
@@ -727,49 +1070,6 @@ function createApprovalBroker({
     const approval = trySign(PURPOSE_PERSONA_FEW_SHOT, name, personaFewShotBind(name, before, after));
     if (!approval) return fault(UNAVAILABLE);
     return backend.send('POST', '/personas', { ...payload, approval }, Number(timeoutMs) || 5000);
-  }
-
-  // --- trusting an MCP server on this machine (round 3, item 4) --------------------------------
-  //
-  // Every MCP server is untrusted by default and starts only inside the required confinement
-  // (bubblewrap on Linux). Where that cannot be established -- no bubblewrap, Windows, macOS, or a
-  // server configured with "sandbox": "off" -- it starts only after the owner marks it trusted ON
-  // THIS MACHINE here. The trust is bound to a digest of the server's exact configuration, so any
-  // change to its command, arguments, environment or options voids it.
-  async function trustMcpServer({ name, timeoutMs } = {}) {
-    if (typeof name !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(name)) return fault('That is not an MCP server BetterFingers knows about.');
-    const route = `/mcp/servers/${encodeURIComponent(name)}/trust`;
-    const info = await backend.send('GET', route, undefined, 5000);
-    const server = info && info.ok && info.status < 400 && info.body && typeof info.body === 'object' ? info.body : null;
-    if (!server || typeof server.config_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(server.config_sha256)) {
-      return fault('BetterFingers could not read that server’s configuration. Nothing was trusted.');
-    }
-    const args = Array.isArray(server.args) ? server.args.map(String) : [];
-    const envKeys = Array.isArray(server.env_keys) ? server.env_keys.map(String) : [];
-    const body = [
-      `Server: ${makeVisible(name)}`,
-      ...displayLines(`Program: ${String(server.command || '')}`),
-      ...displayLines(`Arguments: ${JSON.stringify(args)}`),
-      ...displayLines(`Environment variables it is given: ${envKeys.length ? envKeys.join(', ') : 'none'}`),
-      `Network: ${server.network === false ? 'off' : 'on'}`,
-      '',
-      ...displayLines(`Confinement it will get: ${String(server.weaker_confinement || 'none')}`),
-      ...displayLines(String(server.why_untrusted || 'The required confinement cannot be established on this machine.')),
-      '',
-      'A trusted server runs as you, with your files and your desktop in reach.',
-      'Values shown as [redacted] are hidden here; the trust covers the exact configuration.',
-    ];
-    const decision = await confirm({
-      title: 'Trust an MCP server on this machine',
-      message: `Let the MCP server “${makeVisible(name)}” run with weaker confinement on this machine?`,
-      body,
-      approveLabel: 'Trust it on this machine',
-      note: `Fingerprint ${fingerprint(server.config_sha256)}. Any change to its configuration cancels the trust.`,
-    });
-    if (!decision.approved) return declined(decision);
-    const approval = trySign(PURPOSE_MCP_TRUST, name, mcpTrustBind(server.config_sha256));
-    if (!approval) return fault(UNAVAILABLE);
-    return backend.send('POST', route, { approval }, Number(timeoutMs) || 5000);
   }
 
   // --- sending a draft -----------------------------------------------------------
@@ -906,7 +1206,7 @@ function createApprovalBroker({
   async function confirmSendHotkeyChange(newKey) {
     const decision = await confirm({
       title: 'Change the send shortcut',
-      message: `Make “${makeVisible(String(newKey))}” the shortcut that places a draft?`,
+      message: `Make “${inline(String(newKey))}” the shortcut that places a draft?`,
       body: [
         'Pressing it will open a window showing the draft, and you confirm there.',
         'If you did not just change this setting, choose Cancel.',
@@ -920,11 +1220,16 @@ function createApprovalBroker({
     approveWorkflow,
     confirmWorkflowRun,
     confirmApplicationReplace,
+    confirmApplicationRemove,
     presentVoiceTap,
     addPersonaExample,
     deleteLearnedExample,
+    clearLearnedExamples,
+    clearAllLearning,
+    deletePersona,
+    wipePrivacy,
+    factoryReset,
     savePersona,
-    trustMcpServer,
     sendDraft,
     primaryActionFromUi,
     placeFromHotkey,
@@ -941,7 +1246,14 @@ module.exports = {
   personaExampleBind,
   personaFewShotBind,
   learnedDeleteBind,
-  mcpTrustBind,
+  learnedAddBind,
+  learnedClearBind,
+  personaDeleteBind,
+  learnedCollectionDigest,
+  learnedClearAllBind,
+  privacyWipeBind,
+  canonicalPersonaName,
+  inline,
   fewShotItems,
   fewShotListDigest,
   fewShotDiffLines,
@@ -953,5 +1265,7 @@ module.exports = {
   MAX_DISPLAY_CHARS,
   MAX_MESSAGE_CHARS,
   WRAP_WIDTH,
+  MESSAGE_WRAP_WIDTH,
+  MESSAGE_LINE_COST,
   TICKET_TTL_S,
 };

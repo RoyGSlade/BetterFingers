@@ -157,10 +157,12 @@ const ROUTE_ALLOWLIST = {
     '/recordings/:id', '/recordings',
     '/history', '/drafts',
     '/dictionary/:term', '/macros/:trigger',
-    '/voice-presets/:name', '/voice-presets-default', '/personas/:name',
-    // DELETE /personas/:name/examples/:example_id is NOT here (round 3, item 3): removing a
-    // learned example needs the approval broker (typed channel approvals:persona-learned-delete).
-    '/personas/:name/examples',
+    '/voice-presets/:name', '/voice-presets-default',
+    // NOT here (round 3, item 3; round 4, item 3): DELETE /personas/:name (deleting a persona
+    // removes its few-shot list), DELETE /personas/:name/examples (clearing its learned examples)
+    // and DELETE /personas/:name/examples/:example_id. Each changes what a persona learns from, so
+    // each goes only through the approval broker's native dialog (typed channels
+    // approvals:persona-delete, approvals:persona-learned-clear, approvals:persona-learned-delete).
     '/wake/models/:id',
     '/message-rescue/context',
     '/contacts/:id',
@@ -335,44 +337,12 @@ function sendDraft({ id, action, openChat, allowResend, timeoutMs } = {}) {
   }, timeoutMs);
 }
 
-const WIPE_MODES = new Set(['clear_conversations', 'clear_personal_data', 'factory_reset']);
-
-function wipePrivacyData({ wipeVoices, confirm, mode, timeoutMs } = {}) {
-  // An unrecognised mode is refused here rather than forwarded. The backend
-  // rejects it too, but a mode is the difference between deleting drafts and
-  // deleting someone's personas, so a typo must not travel.
-  const requested = typeof mode === 'string' && mode ? mode : 'clear_conversations';
-  if (!WIPE_MODES.has(requested)) {
-    return _fault(`wipePrivacyData: unknown wipe mode ${requested}`);
-  }
-  return _requireConfirm({ confirm })
-    || _send('POST', '/privacy/wipe', {
-      wipe_voices: Boolean(wipeVoices),
-      mode: requested,
-    }, timeoutMs);
-}
-
-function clearPersonaLearning({ confirm, timeoutMs } = {}) {
-  // Typed rather than an allowlisted DELETE: this erases every approved
-  // raw-to-final example -- the user's own sentences on both sides -- so it
-  // goes through the same confirmed-operation gate as the other destructive
-  // routes rather than the generic proxy.
-  return _requireConfirm({ confirm })
-    || _send('DELETE', '/privacy/persona-learning', undefined, timeoutMs);
-}
-
-function factoryReset({ confirm, deleteDownloadedModels, timeoutMs } = {}) {
-  // Deliberately NOT _requireConfirm's boolean gate: the backend demands an
-  // exact phrase and this forwards it verbatim, so a stray `true` in a caller
-  // cannot erase an install. A non-string is refused before it leaves here.
-  if (typeof confirm !== 'string' || !confirm) {
-    return _fault('factoryReset: confirmation phrase required');
-  }
-  return _send('POST', '/privacy/factory-reset', {
-    confirm,
-    delete_downloaded_models: Boolean(deleteDownloadedModels),
-  }, timeoutMs);
-}
+// The privacy wipes, the factory reset and the global learned-example clear are NOT typed
+// operations here any more (round 4, item 3). Each deletes learned persona examples, and the
+// renderer's `confirm: true` (or the typed phrase alone) was the whole gate -- a value a
+// compromised page supplies itself. They now go only through the approval broker
+// (approvalBroker.wipePrivacy / factoryReset / clearAllLearning), which shows the scope in a
+// native dialog and signs a ticket the backend verifies.
 
 function deleteLlmModel({ modelId, confirm, timeoutMs } = {}) {
   if (typeof modelId !== 'string' || !ID_SEGMENT.test(modelId)) {
@@ -600,9 +570,6 @@ module.exports = {
   // typed operations (each bound to one exact method + route)
   fetchHealth,
   sendDraft,
-  wipePrivacyData,
-  factoryReset,
-  clearPersonaLearning,
   deleteLlmModel,
   deleteWhisperModel,
   deleteVoice,

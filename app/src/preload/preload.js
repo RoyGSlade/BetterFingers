@@ -37,16 +37,21 @@ const api = {
   // Removing a learned example changes what the persona learns from: main shows it and asks.
   deleteLearnedExample: ({ persona, exampleId } = {}, timeoutMs) =>
     ipcRenderer.invoke('approvals:persona-learned-delete', { persona, exampleId, timeoutMs }),
-  // Marking an MCP server trusted on this machine (weaker confinement): main shows its exact
-  // configuration and asks.
-  trustMcpServer: ({ name } = {}, timeoutMs) =>
-    ipcRenderer.invoke('approvals:mcp-trust', { name, timeoutMs }),
-  wipePrivacyData: ({ wipeVoices, confirm, mode } = {}, timeoutMs) =>
-    ipcRenderer.invoke('backend:wipe-privacy', { wipeVoices, confirm, mode, timeoutMs }),
+  // Clearing a persona's learned examples, and deleting a persona with its examples (round 4,
+  // item 3): main shows the scope in a native dialog and asks.
+  clearLearnedExamples: ({ persona } = {}, timeoutMs) =>
+    ipcRenderer.invoke('approvals:persona-learned-clear', { persona, timeoutMs }),
+  deletePersona: ({ name } = {}, timeoutMs) =>
+    ipcRenderer.invoke('approvals:persona-delete', { name, timeoutMs }),
+  // Privacy wipes, the factory reset and the global learned-example clear (round 4, item 3):
+  // each opens a native dialog in main listing what it deletes. Nothing the page sends, a
+  // `confirm` flag included, approves it; the factory reset's phrase is still required as well.
+  wipePrivacyData: ({ wipeVoices, mode } = {}, timeoutMs) =>
+    ipcRenderer.invoke('backend:wipe-privacy', { wipeVoices, mode, timeoutMs }),
   factoryReset: ({ confirm, deleteDownloadedModels } = {}, timeoutMs) =>
     ipcRenderer.invoke('backend:factory-reset', { confirm, deleteDownloadedModels, timeoutMs }),
-  clearPersonaLearning: ({ confirm } = {}, timeoutMs) =>
-    ipcRenderer.invoke('backend:clear-persona-learning', { confirm, timeoutMs }),
+  clearPersonaLearning: (_unused, timeoutMs) =>
+    ipcRenderer.invoke('backend:clear-persona-learning', { timeoutMs }),
   deleteLlmModel: (modelId, { confirm } = {}, timeoutMs) =>
     ipcRenderer.invoke('backend:delete-llm-model', { modelId, confirm, timeoutMs }),
   deleteWhisperModel: (modelSize, { confirm } = {}, timeoutMs) =>

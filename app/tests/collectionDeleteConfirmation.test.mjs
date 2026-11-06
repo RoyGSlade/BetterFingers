@@ -8,7 +8,7 @@ const proxy = require('../src/main/backendProxy.js');
 const source = readFileSync(new URL('../src/renderer/api/backend.js', import.meta.url), 'utf8');
 const api = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 
-test('all five explicit collection clears pass confirmation through the actual bridge', async () => {
+test('the explicit collection clears pass confirmation through the actual bridge; learned examples go through the broker', async () => {
   const calls = [];
   const previous = globalThis.window;
   const brokered = [];
@@ -19,6 +19,8 @@ test('all five explicit collection clears pass confirmation through the actual b
     },
     // Round 3, item 3: removing one learned example goes through the approval broker.
     deleteLearnedExample: async (...args) => { brokered.push(args); return { ok: true, status: 200, body: { ok: true } }; },
+    // Round 4, item 3: clearing a persona's learned examples is a native dialog in main too.
+    clearLearnedExamples: async (...args) => { brokered.push(args); return { ok: true, status: 200, body: { ok: true } }; },
   } };
   try {
     await api.clearRecordings();
@@ -30,9 +32,10 @@ test('all five explicit collection clears pass confirmation through the actual b
       ['DELETE', '/recordings?confirm=true'],
       ['DELETE', '/history?confirm=true'],
       ['DELETE', '/drafts?confirm=true'],
-      ['DELETE', '/personas/A%20B/examples?confirm=true'],
       ['DELETE', '/message-rescue/context?confirm=true'],
     ]);
+    assert.deepEqual(brokered.shift()[0], { persona: 'A B' }, 'the persona clear is brokered, with no confirm flag');
+    assert.notEqual(proxy._validateRequest('DELETE', '/personas/A%20B/examples?confirm=true'), null, 'the proxy refuses it');
     for (const [method, path] of calls) assert.equal(proxy._validateRequest(method, path), null);
     calls.length = 0;
     await api.deleteRecording('');

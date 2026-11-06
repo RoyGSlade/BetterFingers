@@ -36,7 +36,6 @@ test('accepts known backend routes with the right method', () => {
     ['POST', '/message-rescue/generate/job-1/cancel'],
     ['DELETE', '/message-rescue/context'],
     ['GET', '/personas/Assistant/examples'],
-    ['DELETE', '/personas/Assistant/examples'],
   ];
   for (const [method, path] of allowed) {
     assert.equal(proxy._validateRequest(method, path), null, `${method} ${path} should be allowed`);
@@ -228,10 +227,10 @@ test('GET /runtime/audio-devices is reachable, not just its POST refresh sibling
   assert.ok(ROUTE_ALLOWLIST.POST.includes('/runtime/audio-devices/refresh'));
 });
 
-test('destructive typed operations require confirm: true', async () => {
-  const wipe = await proxy.wipePrivacyData({ wipeVoices: true });
-  assert.equal(wipe.ok, false);
-  assert.match(wipe.error, /confirm/);
+test('destructive typed operations require confirm: true; example-changing wipes are not here at all', async () => {
+  // Round 4, item 3: the privacy wipes, the factory reset and the learned-example clear delete
+  // persona examples, so they are approval-broker flows (native dialog), not renderer-boolean gates.
+  for (const name of ['wipePrivacyData', 'factoryReset', 'clearPersonaLearning']) assert.equal(proxy[name], undefined, name);
   const del = await proxy.deleteWhisperModel({ modelSize: 'base' });
   assert.equal(del.ok, false);
   assert.match(del.error, /confirm/);
@@ -245,6 +244,12 @@ test('routes that need the person\'s approval are refused on the generic proxy (
     ['POST', '/personas/Assistant/examples'],
     // Round 3, item 3: deleting one learned example is brokered too.
     ['DELETE', '/personas/Assistant/examples/abc123'],
+    // Round 4, item 3: so are clearing them and deleting the persona with its few-shot list.
+    ['DELETE', '/personas/Assistant/examples'],
+    ['DELETE', '/personas/Assistant'],
+    ['DELETE', '/privacy/persona-learning'],
+    ['POST', '/privacy/wipe'],
+    ['POST', '/privacy/factory-reset'],
     ['POST', '/runtime/primary-action'],
     ['POST', '/drafts/1/send'],
     ['POST', '/voice-commands/execute'],
@@ -261,7 +266,8 @@ test('the main-only transport is not an IPC-facing function', () => {
   const exposed = ipcSource.match(/backendProxy\.sendTrusted\([^)]*\)/g) || [];
   // Only the broker's fixed-shape backend client may use it, never a renderer-chosen route.
   assert.equal(exposed.length, 1);
-  assert.match(ipcSource, /backend: \{ send: \(method, path, body, timeoutMs\) => backendProxy\.sendTrusted\(method, path, body, timeoutMs\) \}/);
+  assert.match(ipcSource, /const trustedBackend = \{ send: \(method, path, body, timeoutMs\) => backendProxy\.sendTrusted\(method, path, body, timeoutMs\) \};/);
+  assert.match(ipcSource, /backend: trustedBackend,/);
   assert.ok(!/handleTrusted\([^)]*,\s*\(_event, req\) => backendProxy\.sendTrusted/.test(ipcSource));
 });
 

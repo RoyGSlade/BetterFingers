@@ -11,7 +11,7 @@ const broker = require('../src/main/approvalBroker.js');
 const {
   createApprovalBroker, signTicket, linesDigest, textDigest, draftSendBind, personaExampleBind,
   makeVisible, wrapLine, displayLines, MAX_DISPLAY_LINES, MAX_DISPLAY_CHARS, personaFewShotBind, fewShotItems,
-  fewShotListDigest, learnedDeleteBind, mcpTrustBind,
+  fewShotListDigest, learnedDeleteBind,
 } = broker;
 const { resolveLaunchPlan } = require('../src/main/applicationLauncher.js');
 
@@ -349,17 +349,24 @@ test('a renderer looping on dialog requests is slowed down', async () => {
 
 // ---- persona examples ---------------------------------------------------------
 
-test('persona example: the dialog shows persona, raw and result text; the ticket binds all three', async () => {
-  const { instance, dialog, backend } = makeBroker({ answers: [0] });
+// Round 4, item 5: the backend's plan of the complete resulting learned list (no eviction here).
+function learnPlan(persona = 'Coach', raw = 'hey whats up', out = 'Hey, what’s up?') {
+  return { [`POST /personas/${encodeURIComponent(persona)}/examples/preview`]: { ok: true, status: 200, body: {
+    persona, before: [], after: [[raw.trim(), out.trim()]], duplicate: false, evicted: [],
+  } } };
+}
+
+test('persona example: the dialog shows persona, raw and result text; the ticket binds them and the resulting list', async () => {
+  const { instance, dialog, backend } = makeBroker({ answers: [0], handlers: learnPlan() });
   const result = await instance.addPersonaExample({ persona: 'Coach', raw: 'hey whats up', out: 'Hey, what’s up?' });
   assert.equal(result.ok, true);
   const detail = dialog.shown[0].options.detail;
   assert.ok(detail.includes('hey whats up') && detail.includes('Hey, what’s up?') && detail.includes('Coach'));
-  const post = backend.calls[0];
-  assert.equal(post.path, '/personas/Coach/examples');
+  const post = backend.calls.find((c) => c.path === '/personas/Coach/examples');
   assert.deepEqual(Object.keys(post.body).sort(), ['approval', 'out', 'raw'], 'no consent flag is sent');
   verifyTicket(post.body.approval, {
-    purpose: 'persona.example', subject: 'Coach', bind: personaExampleBind('Coach', 'hey whats up', 'Hey, what’s up?'),
+    purpose: 'persona.example', subject: 'Coach',
+    bind: broker.learnedAddBind('Coach', 'hey whats up', 'Hey, what’s up?', [], [['hey whats up', 'Hey, what’s up?']]),
   });
 });
 
@@ -372,16 +379,18 @@ test('persona example: declining, empty text and oversized text teach nothing', 
     [{ persona: 'Coach', raw: 'a', out: 5 }, [0]],
     [{ persona: 'Coach', raw: `${'long '.repeat(500)}`, out: `${'long '.repeat(500)}` }, [0]],
   ]) {
-    const { instance, backend } = makeBroker({ answers });
+    const { instance, backend } = makeBroker({ answers, handlers: learnPlan('Coach', 'a', 'b') });
     assert.equal((await instance.addPersonaExample(args)).ok, false, JSON.stringify(args).slice(0, 60));
-    assert.equal(backend.calls.length, 0);
+    assert.ok(!backend.calls.some((c) => c.path === '/personas/Coach/examples'), 'nothing was learned');
   }
 });
 
-test('persona example: a persona name with slashes cannot change the route', async () => {
+test('persona example: a persona name with slashes is not canonical and reaches no route at all', async () => {
   const { instance, backend } = makeBroker({ answers: [0] });
-  await instance.addPersonaExample({ persona: '../workflows/approve', raw: 'a', out: 'b' });
-  assert.equal(backend.calls[0].path, '/personas/..%2Fworkflows%2Fapprove/examples');
+  const result = await instance.addPersonaExample({ persona: '../workflows/approve', raw: 'a', out: 'b' });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /\.\.workflowsapprove/, 'the canonical form is suggested');
+  assert.equal(backend.calls.length, 0);
 });
 
 // ---- voice commands (round 2, item 6): voice only REQUESTS, the dialog confirms ----------------------------
@@ -675,25 +684,12 @@ test('deleting a learned example shows it, and the ticket binds its id and the l
   }
 });
 
-test('trusting an MCP server shows its exact configuration and binds the config digest', async () => {
-  const config = 'cd'.repeat(32);
-  const handlers = { 'GET /mcp/servers/files/trust': { ok: true, status: 200, body: {
-    name: 'files', command: '/usr/bin/files-mcp', args: ['--root', '/home/x'], env_keys: ['API_KEY'], network: false,
-    config_sha256: config, weaker_confinement: 'none (no bubblewrap)', why_untrusted: 'bubblewrap is not installed.',
-  } } };
-  const { instance, dialog, backend } = makeBroker({ answers: [0], handlers });
-  assert.equal((await instance.trustMcpServer({ name: 'files' })).ok, true);
-  const { options } = dialog.shown[0];
-  assert.equal(options.defaultId, 1);
-  for (const part of ['/usr/bin/files-mcp', '["--root","/home/x"]', 'API_KEY', 'Network: off', 'bubblewrap is not installed']) assert.ok(unwrap(options.detail).includes(part), part);
-  const post = backend.calls.find((c) => c.method === 'POST');
-  assert.equal(post.path, '/mcp/servers/files/trust');
-  verifyTicket(post.body.approval, { purpose: 'mcp.trust', subject: 'files', bind: mcpTrustBind(config) });
-  for (const [answer, name, body] of [[1, 'files', handlers], [0, '../x', handlers], [0, 'files', { 'GET /mcp/servers/files/trust': { ok: true, status: 200, body: { config_sha256: 'nope' } } }]]) {
-    const other = makeBroker({ answers: [answer], handlers: body });
-    assert.equal((await other.instance.trustMcpServer({ name })).ok, false);
-    assert.ok(!other.backend.calls.some((c) => c.method === 'POST'));
-  }
+test('there is no MCP trust flow: the broker cannot sign one (round 4, item 4)', () => {
+  const { instance } = makeBroker({ answers: [0] });
+  assert.equal(instance.trustMcpServer, undefined);
+  assert.equal(broker.mcpTrustBind, undefined);
+  const source = readFileSync(new URL('../src/main/approvalBroker.js', import.meta.url), 'utf8');
+  assert.ok(!source.includes("'mcp.trust'"), 'no mcp.trust purpose is signed anywhere');
 });
 
 // ---- drafts -------------------------------------------------------------------
@@ -837,7 +833,7 @@ test('only the hotkey dialog defaults to Approve; every other dialog still defau
   await workflow.instance.approveWorkflow('studio_setup');
   const draft = makeBroker({ answers: [1], handlers: DRAFTS });
   await draft.instance.sendDraft({ id: 7, action: 'paste' });
-  const persona = makeBroker({ answers: [1] });
+  const persona = makeBroker({ answers: [1], handlers: learnPlan('Coach', 'a', 'b') });
   await persona.instance.addPersonaExample({ persona: 'Coach', raw: 'a', out: 'b' });
   const change = makeBroker({ answers: [1] });
   await change.instance.confirmSendHotkeyChange('ctrl+alt+s');
@@ -848,8 +844,9 @@ test('the broker exposes no way to sign without a dialog', () => {
   const { instance } = makeBroker();
   assert.ok(!('signPhysicalPress' in instance));
   assert.deepEqual(Object.keys(instance).sort(), [
-    'addPersonaExample', 'approveWorkflow', 'confirmApplicationReplace', 'confirmSendHotkeyChange', 'confirmWorkflowRun',
-    'deleteLearnedExample', 'placeFromHotkey', 'presentVoiceTap', 'primaryActionFromUi', 'savePersona', 'sendDraft', 'trustMcpServer',
+    'addPersonaExample', 'approveWorkflow', 'clearAllLearning', 'clearLearnedExamples', 'confirmApplicationRemove',
+    'confirmApplicationReplace', 'confirmSendHotkeyChange', 'confirmWorkflowRun', 'deleteLearnedExample', 'deletePersona',
+    'factoryReset', 'placeFromHotkey', 'presentVoiceTap', 'primaryActionFromUi', 'savePersona', 'sendDraft', 'wipePrivacy',
   ]);
 });
 

@@ -206,7 +206,7 @@ function createApplicationRegistry({
   const filePath = nodePath.join(root, REGISTRY_FILENAME);
 
   function emptyStore() {
-    return { schema_version: SCHEMA_VERSION, entries: {} };
+    return { schema_version: SCHEMA_VERSION, entries: {}, history: {} };
   }
 
   function coerceEntry(raw) {
@@ -259,7 +259,15 @@ function createApplicationRegistry({
       const entry = coerceEntry(item);
       if (entry) entries[entry.id] = entry;
     }
-    return { schema_version: SCHEMA_VERSION, entries };
+    // The identity history (round 4, item 6): the last entry each removed id had, so adding the
+    // id again is shown as the replacement it is. Cleared with the registry (a privacy wipe).
+    const history = {};
+    const rawHistory = data && typeof data === 'object' && data.history && typeof data.history === 'object' ? data.history : {};
+    for (const item of Object.values(rawHistory)) {
+      const entry = coerceEntry(item);
+      if (entry && !entries[entry.id]) history[entry.id] = entry;
+    }
+    return { schema_version: SCHEMA_VERSION, entries, history };
   }
 
   function save(data) {
@@ -434,6 +442,7 @@ function createApplicationRegistry({
       };
     }
     data.entries[entry.id] = entry;
+    delete data.history[entry.id];
     try {
       save(data);
     } catch (error) {
@@ -442,11 +451,23 @@ function createApplicationRegistry({
     return { ok: true, entry };
   }
 
-  function remove(id) {
+  // `expect` (round 4, item 6): remove only if the stored entry is still exactly the one the
+  // person was shown in the removal dialog. The removed entry is kept in the identity history.
+  function remove(id, { expect } = {}) {
     const key = normalizeId(id);
     if (!key) return { ok: false, error: 'invalid_id' };
     const data = load();
     if (!data.entries[key]) return { ok: true, removed: false };
+    if (expect !== undefined && JSON.stringify(sortKeys(data.entries[key])) !== JSON.stringify(sortKeys(expect))) {
+      return {
+        ok: false,
+        error: 'changed',
+        message: 'That application changed while you were looking at it. Nothing was removed; check it and try again.',
+      };
+    }
+    data.history[key] = data.entries[key];
+    const historyIds = Object.keys(data.history);
+    if (historyIds.length > MAX_ENTRIES) delete data.history[historyIds[0]];
     delete data.entries[key];
     try {
       save(data);
@@ -467,6 +488,13 @@ function createApplicationRegistry({
     return load().entries[key] || null;
   }
 
+  /** The entry a removed id last had, or null (round 4, item 6). */
+  function history(id) {
+    const key = normalizeId(id);
+    if (!key) return null;
+    return load().history[key] || null;
+  }
+
   /** Privacy clear — the registry records which applications this person runs. */
   function clearAll() {
     try {
@@ -477,7 +505,7 @@ function createApplicationRegistry({
     return { ok: true };
   }
 
-  return { discover, confirm, coerce: coerceEntry, remove, list, get, clearAll, path: filePath };
+  return { discover, confirm, coerce: coerceEntry, remove, list, get, history, clearAll, path: filePath };
 }
 
 module.exports = {
