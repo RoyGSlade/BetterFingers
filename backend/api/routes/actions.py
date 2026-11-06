@@ -64,6 +64,7 @@ _ERROR_STATUS = {
     "invalid_id": 400,
     "invalid_summary": 400,
     "empty_preview": 400,
+    "preview_too_large": 400,
     "refused": 400,
     "not_found": 404,
     "cap_reached": 409,

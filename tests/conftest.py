@@ -179,6 +179,38 @@ def _forbid_real_data_root(monkeypatch):
     yield
 
 
+# Files that exercise the signed-approval gate for real. Everywhere else the
+# gate is relaxed (backend.services.approvals.ENFORCE = False) so the ~100 older
+# tests of persona learning, drafts and the like, which were written when
+# "approved" was a request boolean, still test what they were written to test.
+# The enforced files below are where the gate itself is proven, route by route.
+APPROVAL_ENFORCED_FILES = frozenset({
+    "test_approvals.py",
+    "test_approval_routes.py",
+    "test_workflow_store.py",
+    "test_action_routes.py",
+    "test_red_team_phase0.py",
+})
+
+
+@pytest.fixture(autouse=True)
+def _approval_gate_mode(request):
+    from backend.services import approvals
+
+    enforced = os.path.basename(str(request.node.fspath)) in APPROVAL_ENFORCED_FILES
+    saved = approvals.ENFORCE
+    approvals.reset()
+    approvals.ENFORCE = enforced
+    if enforced:
+        sys.path.insert(0, os.path.dirname(__file__))
+        import approval_support
+
+        approvals.configure(approval_support.TEST_KEY)
+    yield
+    approvals.ENFORCE = saved
+    approvals.reset()
+
+
 @pytest.fixture
 def isolated_data_root(tmp_path, monkeypatch):
     """Point every data-root lookup at this test's own tmp_path.
