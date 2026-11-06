@@ -105,5 +105,5 @@ test('update disclosure is visible before manual check and consent guards networ
   assert.match(html, /id="sdSetUpdateAutomatic" disabled> Check for updates automatically/);
   assert.match(controller, /async function check\(\) \{\s*if \(!consentGranted\(\)\) return set\(\{ errorCode: 'CONSENT_REQUIRED' \}\)/);
   assert.match(controller, /async function download\(\) \{\s*if \(!consentGranted\(\)\) return set\(\{ errorCode: 'CONSENT_REQUIRED' \}\)/);
-  assert.match(ipc, /const result = await backendProxy.factoryReset\([\s\S]*?onConsentChanged\?\.\(\)/);
+  assert.match(ipc, /const result = await broker\(\)\.factoryReset\([\s\S]*?onConsentChanged\?\.\(\)/);
 });

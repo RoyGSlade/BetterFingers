@@ -386,7 +386,7 @@ test('the factory-reset IPC handler runs the renderer-state clear before answeri
   assert.ok(handler, 'handler must be extractable');
   assert.match(ipc, /require\('\.\/rendererState'\)/);
   const order = [
-    handler.indexOf('backendProxy.factoryReset('),
+    handler.indexOf('broker().factoryReset('),
     handler.indexOf('finishFactoryReset('),
     handler.indexOf('onConsentChanged'),
     handler.lastIndexOf('return '),
@@ -437,7 +437,7 @@ test('the factory-reset handler switches raw-log writing off before the request 
   const handler = ipc.match(/handleTrusted\('backend:factory-reset'[\s\S]*?\n  \}\);/)?.[0] || '';
   assert.match(ipc, /onFactoryResetStart, onFactoryResetEnd/);
   const start = handler.indexOf('onFactoryResetStart?.()');
-  const request = handler.indexOf('backendProxy.factoryReset(');
+  const request = handler.indexOf('broker().factoryReset(');
   const end = handler.indexOf('onFactoryResetEnd?.({ deleted })');
   assert.ok(start >= 0 && request > start, 'logging must be switched off before the backend deletes the log');
   assert.ok(end > request);
