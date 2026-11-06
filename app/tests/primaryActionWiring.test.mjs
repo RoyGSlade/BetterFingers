@@ -117,6 +117,10 @@ test('display acknowledgment IPC rejects subframes and forwards identity; preloa
   assert.equal(calls.length, 0);
   callback({ sender, senderFrame: sender.mainFrame }, { id: 7 });
   assert.equal(calls[0][0], sender);
-  const preload = readFileSync(new URL('../src/preload/preload.js', import.meta.url), 'utf8');
+  // Phase 0 item 7: the acknowledgment lives in the review window's own preload, and the dashboard's
+  // bridge no longer carries it.
+  const preload = readFileSync(new URL('../src/preload/preload-review.js', import.meta.url), 'utf8');
   assert.match(preload, /displayed: \(payload\) => ipcRenderer\.send\('review:displayed', payload\)/);
+  const dashboard = readFileSync(new URL('../src/preload/preload.js', import.meta.url), 'utf8');
+  assert.ok(!dashboard.includes('review:displayed'));
 });
