@@ -141,3 +141,48 @@ def redact_args(args) -> list:
                 redacted = f"{name}={REDACTED}"
         out.append(redacted)
     return out
+
+
+# --- logging -----------------------------------------------------------------
+
+import logging as _logging
+
+
+class SecretRedactingFilter(_logging.Filter):
+    """Rewrites a log record so credentials never reach a handler.
+
+    uvicorn's access log prints the request line (``GET /path?token=... HTTP/1.1``)
+    and anything logged with ``%s`` may embed an ``Authorization`` value; this
+    filter masks both before the record is formatted by any handler.
+    """
+
+    def filter(self, record: _logging.LogRecord) -> bool:  # noqa: A003 - logging API name
+        try:
+            message = record.getMessage()
+        except Exception:  # a malformed format string must not become a logging crash
+            return True
+        redacted = redact_secrets(message)
+        if redacted != message:
+            record.msg = redacted
+            record.args = ()
+        return True
+
+
+_FILTER_ATTR = "_bf_secret_filter"
+
+#: Loggers whose records can carry request lines or headers.
+HTTP_LOGGER_NAMES = ("uvicorn", "uvicorn.access", "uvicorn.error", "fastapi", "starlette")
+
+
+def install_log_redaction(extra_loggers: Iterable[str] = HTTP_LOGGER_NAMES) -> None:
+    """Attach the redacting filter to the root handlers and the HTTP loggers.
+
+    Idempotent. A logger-level filter only sees records logged ON that logger, so
+    the filter is also put on every handler: that is the point every record,
+    from any logger, passes through before it is written.
+    """
+    targets = [_logging.getLogger()] + [_logging.getLogger(name) for name in extra_loggers]
+    for target in targets:
+        for holder in [target, *target.handlers]:
+            if not any(isinstance(f, SecretRedactingFilter) for f in holder.filters):
+                holder.addFilter(SecretRedactingFilter())

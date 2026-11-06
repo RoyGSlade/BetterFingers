@@ -5,6 +5,7 @@ const { spawn } = require('node:child_process');
 const { app } = require('electron');
 const { EXPECTED_API_SCHEMA_VERSION } = require('./config');
 const { resolveUserDataRoot } = require('./userDataRoot');
+const { redactSecrets } = require('./redact');
 
 // How the post-startup health monitor behaves once the backend is ready.
 // A busy backend is not a dead backend: restarting on missed pings alone
@@ -486,7 +487,9 @@ function createSidecar({
       if (!line && line === lines[lines.length - 1]) {
         continue;
       }
-      const logLine = `[${timestamp}] [${streamName}] ${line}`;
+      // A credential never reaches the in-memory buffer, the raw log file or the
+      // renderer's log view (Phase 0 item 10).
+      const logLine = `[${timestamp}] [${streamName}] ${redactSecrets(line)}`;
       logBuffer.push(logLine);
       fileChunk += logLine + '\n';
     }
@@ -632,12 +635,12 @@ function createSidecar({
         });
 
         processRef.stdout?.on('data', (chunk) => {
-          process.stdout.write(`[backend] ${chunk}`);
+          process.stdout.write(`[backend] ${redactSecrets(chunk)}`);
           appendLog('stdout', chunk);
         });
 
         processRef.stderr?.on('data', (chunk) => {
-          process.stderr.write(`[backend] ${chunk}`);
+          process.stderr.write(`[backend] ${redactSecrets(chunk)}`);
           appendLog('stderr', chunk);
         });
 

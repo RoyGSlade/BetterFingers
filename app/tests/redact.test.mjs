@@ -148,3 +148,35 @@ test('no unwrapped user-content-shaped console.*() calls in app/src/renderer/mai
     `reasoned ALLOWLIST entry if verified SAFE:\n${offenders.join('\n')}`,
   );
 });
+
+// --- redactSecrets (Phase 0 item 10) ---------------------------------------
+
+const { redactSecrets } = require('../src/main/redact.js');
+const SECRET = '9f8e7d6c'.repeat(8);
+
+test('redactSecrets masks bearer tokens, token= parameters, auth frames and key shapes', () => {
+  for (const text of [
+    `Authorization: Bearer ${SECRET}`,
+    `GET /ws/voice_status?token=${SECRET}&x=1 HTTP/1.1`,
+    `auth:${SECRET}`,
+    `BETTERFINGERS_AUTH_TOKEN=${SECRET}`,
+    `leaked ${SECRET} in prose`,
+    'key sk-ant-abcdefgh12345678',
+    'ghp_' + 'y'.repeat(30),
+  ]) {
+    const out = redactSecrets(text);
+    assert.ok(!out.includes(SECRET), text);
+    assert.ok(!out.includes('sk-ant-abcdefgh12345678'), text);
+    assert.ok(!out.includes('y'.repeat(30)), text);
+    assert.ok(out.includes('[redacted]'), text);
+  }
+});
+
+test('redactSecrets leaves ordinary log text alone and is idempotent', () => {
+  for (const text of ['Loaded model base.en in 1.2s', 'token_count=5', 'author=bob', 'GET /runtime/status 200']) {
+    assert.equal(redactSecrets(text), text);
+  }
+  const once = redactSecrets(`Bearer ${SECRET}`);
+  assert.equal(redactSecrets(once), once);
+  assert.equal(redactSecrets(null), '');
+});

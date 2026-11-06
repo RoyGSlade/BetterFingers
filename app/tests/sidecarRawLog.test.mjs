@@ -112,3 +112,14 @@ test('only an exact boolean turns it back on', async (t) => {
   sidecar.setRawLogEnabled(true);
   assert.equal(sidecar.isRawLogEnabled(), true);
 });
+
+test('a credential in backend output never reaches the log buffer or the raw log file (Phase 0 item 10)', async (t) => {
+  const { sidecar, child, logPath } = await startedSidecar(t);
+  const secret = 'ab12cd34'.repeat(8);
+  child.stdout.emit('data', Buffer.from(`INFO: 127.0.0.1 - "GET /ws/voice_status?token=${secret} HTTP/1.1" 101\n`));
+  child.stderr.emit('data', Buffer.from(`debug Authorization: Bearer ${secret}\n`));
+  const buffered = sidecar.getLogs().join('\n');
+  assert.ok(!buffered.includes(secret), 'in-memory buffer');
+  assert.ok(buffered.includes('/ws/voice_status'), 'the rest of the line survives');
+  assert.ok(!fs.readFileSync(logPath, 'utf8').includes(secret), 'raw log file');
+});

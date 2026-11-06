@@ -17,9 +17,9 @@ reads the clipboard through server helpers), so it is a pure relocation:
   name, so the declaration was a no-op; it reads ``s.transcriber`` now. Its form
   signature (``file: UploadFile = File(...)``) is unchanged. No other handler
   here declares ``global`` or assigns a server name.
-* ``/ws/voice_status`` keeps its auth exactly: a first-message ``auth:<token>``
-  frame (the legacy ``?token=`` query form still accepted and logged as
-  deprecated), ``auth_ok`` on success, close code 1008 otherwise. The
+* ``/ws/voice_status`` authenticates with a first-message ``auth:<token>``
+  frame only (the legacy ``?token=`` query form was removed in Phase 0:
+  tokens in URLs reach access logs), ``auth_ok`` on success, close code 1008 otherwise. The
   ``active_websockets`` registry is a server list that this handler mutates only
   through ``append`` / ``remove``; the event-loop capture (``loop``, set in
   ``startup_event`` under ``global``) and ``broadcast_status`` /
@@ -48,7 +48,7 @@ import tempfile
 import typing
 from typing import Optional
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, StrictBool, StrictInt, StrictStr
 
@@ -65,27 +65,23 @@ router = APIRouter()
 # an included-router WebSocket would change the pinned route table ('' instead of
 # '/ws/voice_status') even though it dispatches correctly. Registering it on the
 # app keeps the public route table byte-identical.
-async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
+async def websocket_endpoint(websocket: WebSocket):
     import server as s
 
-    # First-message auth: the bearer token must arrive as the first frame
-    # ("auth:<token>"), not in the query string — query strings leak into
-    # proxy logs, diagnostics, and crash reports. The legacy ?token= form is
-    # still accepted for one release (logged as deprecated).
+    # First-message auth ONLY: the bearer token must arrive as the first frame
+    # ("auth:<token>"). The legacy ``?token=`` query form is gone (Phase 0
+    # item 10): a query string lands in access logs, proxy logs, diagnostics and
+    # crash reports, so a token in a URL is a token in every one of them. A
+    # client that still sends one is simply unauthenticated.
     expected_token = os.getenv("BETTERFINGERS_AUTH_TOKEN")
     await websocket.accept()
     if expected_token:
-        authed = False
-        if token is not None and hmac.compare_digest(str(token), expected_token):
-            logging.warning("WS auth via query string is deprecated; send an 'auth:<token>' first message.")
-            authed = True
-        else:
-            try:
-                first = await asyncio.wait_for(websocket.receive_text(), timeout=3.0)
-                presented = first[5:] if first.startswith("auth:") else ""
-                authed = hmac.compare_digest(presented, expected_token)
-            except Exception:
-                authed = False
+        try:
+            first = await asyncio.wait_for(websocket.receive_text(), timeout=3.0)
+            presented = first[5:] if first.startswith("auth:") else ""
+            authed = hmac.compare_digest(presented, expected_token)
+        except Exception:
+            authed = False
         if not authed:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return

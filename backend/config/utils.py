@@ -1303,7 +1303,11 @@ def setup_logging(level=logging.DEBUG):
         format='%(asctime)s - %(levelname)s - %(message)s',
         filemode='a'
     )
-    
+    # Bearer tokens, token= query parameters and key-shaped strings never reach
+    # debug.log, whichever logger wrote them (Phase 0 item 10).
+    from backend.privacy.secret_scrub import install_log_redaction
+    install_log_redaction()
+
     # Catch uncaught exceptions
     def handle_exception(exc_type, exc_value, exc_traceback):
         if issubclass(exc_type, KeyboardInterrupt):

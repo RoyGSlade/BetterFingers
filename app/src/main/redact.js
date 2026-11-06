@@ -38,4 +38,27 @@ function redact(text) {
   return `<redacted ${s.length} chars>`;
 }
 
-module.exports = { rawTextLoggingEnabled, redact };
+// --- credentials -----------------------------------------------------------
+// Mirrors backend/privacy/secret_scrub.py (Phase 0 item 10): bearer tokens,
+// token= style parameters, the WebSocket "auth:" first frame and well-known key
+// shapes are masked in anything headed for a log, whatever raw-text setting is
+// on. This one is NOT opt-out: no debugging session needs a live credential in a
+// file.
+const REDACTED = '[redacted]';
+const BEARER_RE = /\b(bearer)([\s:=]+)([A-Za-z0-9._~+/=-]{6,})/gi;
+const KV_RE = /\b((?:[a-z0-9]*[_-])*(?:token|api[_-]?key|apikey|secret|password|passwd|auth))(=|:\s*)(?!\[redacted\])([^\s&"'<>,;]{3,})/gi;
+const AUTH_FRAME_RE = /\b(auth:)([A-Za-z0-9._~+/=-]{6,})/gi;
+const KEY_SHAPE_RE = /\b(sk-ant-[A-Za-z0-9_-]{8,}|sk-[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abpr]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,})\b/g;
+const LONG_HEX_RE = /\b[0-9a-fA-F]{48,}\b/g;
+
+function redactSecrets(text) {
+  if (text === null || text === undefined) return '';
+  return String(text)
+    .replace(BEARER_RE, (_m, a, b) => `${a}${b}${REDACTED}`)
+    .replace(AUTH_FRAME_RE, (_m, a) => `${a}${REDACTED}`)
+    .replace(KV_RE, (_m, a, b) => `${a}${b}${REDACTED}`)
+    .replace(KEY_SHAPE_RE, REDACTED)
+    .replace(LONG_HEX_RE, REDACTED);
+}
+
+module.exports = { rawTextLoggingEnabled, redact, redactSecrets };

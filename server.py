@@ -141,6 +141,7 @@ def _require_dev_routes():
 from backend.api.security import (  # noqa: E402
     _LOOPBACK_HOSTS,
     _allowed_cors_origins,
+    announce_generated_token,
     validate_startup_security,
 )
 
@@ -189,8 +190,7 @@ def enforce_startup_security():
             return result
         os.environ["BETTERFINGERS_AUTH_TOKEN"] = result["token"]
         logging.warning("No auth token supplied; generated an ephemeral one for this run.")
-        print(f"[betterfingers] Generated auth token for this run:\n"
-              f"[betterfingers]   BETTERFINGERS_AUTH_TOKEN={result['token']}")
+        announce_generated_token(result["token"])
     app.state.auth_token = os.getenv("BETTERFINGERS_AUTH_TOKEN")
     return result
 
@@ -532,10 +532,13 @@ def read_log_tail(max_lines=120):
         record_runtime_error("diagnostics", f"Failed reading debug log: {exc}")
         return {"path": str(log_path), "exists": True, "error": str(exc), "lines": []}
 
+    from backend.privacy.secret_scrub import redact_secrets
+
     return {
         "path": str(log_path),
         "exists": True,
-        "lines": [line.rstrip("\n") for line in lines[-safe_max_lines:]],
+        # An old log line may predate the redaction filter; mask on the way out.
+        "lines": [redact_secrets(line.rstrip("\n")) for line in lines[-safe_max_lines:]],
     }
 
 
@@ -3035,6 +3038,10 @@ async def startup_event():
     # Auth gate first: covers `uvicorn server:app` as well as `python
     # server.py`, and fails startup in production if no token is configured.
     enforce_startup_security()
+    # uvicorn has configured its own loggers by now: put the credential filter on
+    # them and on every handler (Phase 0 item 10).
+    from backend.privacy.secret_scrub import install_log_redaction
+    install_log_redaction()
     # Consolidate any legacy/split data root into the unified base (idempotent).
     # Guarded from the test suite so running tests never moves real user data.
     if not _is_test_env():
@@ -4711,8 +4718,8 @@ if __name__ == "__main__":
         raise SystemExit(_security["error"])
     if _security["generated"]:
         os.environ["BETTERFINGERS_AUTH_TOKEN"] = _security["token"]
-        # Printed once so a standalone developer can authenticate; the token
-        # is ephemeral to this process.
-        print(f"[betterfingers] No auth token supplied; generated one for this run:\n"
-              f"[betterfingers]   BETTERFINGERS_AUTH_TOKEN={_security['token']}")
+        # The token is NEVER printed (terminal scrollback, supervisors and
+        # support bundles keep stdout); a developer who needs it sets
+        # BETTERFINGERS_TOKEN_FILE and reads it from there.
+        announce_generated_token(_security["token"])
     uvicorn.run(app, host=args.host, port=args.port)

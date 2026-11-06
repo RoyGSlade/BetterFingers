@@ -26,6 +26,8 @@ module.exports = defineConfig({
           // OR-02 startup splash phase derivation (main.js requires it for
           // pushBootSnapshot()).
           bootPhases: resolve(__dirname, 'src/main/bootPhases.js'),
+          // Credential masking for backend log lines (sidecar.js requires it).
+          redact: resolve(__dirname, 'src/main/redact.js'),
           // shell:open-path file-type policy; ipc.js requires it.
           openPathPolicy: resolve(__dirname, 'src/main/openPathPolicy.js'),
           // Session-level hardening (permission handlers, CSP backstop);

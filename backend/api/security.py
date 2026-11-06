@@ -52,3 +52,34 @@ def validate_startup_security(host, token, env=None, allow_remote=False):
         return {"ok": True, "token": secrets.token_hex(32), "generated": True, "error": ""}
 
     return {"ok": True, "token": token, "generated": False, "error": ""}
+
+
+def announce_generated_token(token, env=None, out=None):
+    """Hand a generated standalone token to the developer WITHOUT printing it.
+
+    Anything written to stdout ends up in terminal scrollback, supervisors, CI
+    logs and support collections (Phase 0 item 10). If ``BETTERFINGERS_TOKEN_FILE``
+    names a path, the token is written there with owner-only permissions;
+    otherwise the developer is told how to choose their own. Returns a short
+    description of where the token went (never the token).
+    """
+    env = os.environ if env is None else env
+    out = print if out is None else out
+    target = str(env.get("BETTERFINGERS_TOKEN_FILE", "") or "").strip()
+    if target:
+        try:
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(token)
+            try:
+                os.chmod(target, 0o600)
+            except OSError:
+                pass
+            message = f"wrote the generated auth token to {target} (owner-only)"
+        except OSError as exc:
+            message = f"could not write BETTERFINGERS_TOKEN_FILE ({exc.__class__.__name__}); the token was not saved"
+    else:
+        message = ("generated an ephemeral auth token for this run; set BETTERFINGERS_AUTH_TOKEN "
+                   "(or BETTERFINGERS_TOKEN_FILE=<path>) to choose or retrieve one")
+    out(f"[betterfingers] {message}")
+    return message
