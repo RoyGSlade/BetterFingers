@@ -160,6 +160,11 @@ function registerIpc({
     return broker().addPersonaExample({ persona, raw, out, timeoutMs });
   });
 
+  handleTrusted('approvals:persona-save', (_event, req) => {
+    const { name, body, timeoutMs } = req || {};
+    return broker().savePersona({ name, body, timeoutMs });
+  });
+
   handleTrusted('backend:send-draft', (_event, req) => {
     const { id, action, openChat, allowResend, timeoutMs } = req || {};
     return broker().sendDraft({ id, action, openChat, allowResend, timeoutMs });

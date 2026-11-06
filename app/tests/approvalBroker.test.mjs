@@ -10,7 +10,7 @@ const require = createRequire(import.meta.url);
 const broker = require('../src/main/approvalBroker.js');
 const {
   createApprovalBroker, signTicket, linesDigest, textDigest, draftSendBind, personaExampleBind,
-  makeVisible, wrapLine, displayLines, MAX_DISPLAY_LINES,
+  makeVisible, wrapLine, displayLines, MAX_DISPLAY_LINES, personaFewShotBind, addedFewShot,
 } = broker;
 
 const SECRET = Buffer.from(Array.from({ length: 32 }, (_, i) => i));
@@ -334,6 +334,76 @@ test('persona example: a persona name with slashes cannot change the route', asy
   assert.equal(backend.calls[0].path, '/personas/..%2Fworkflows%2Fapprove/examples');
 });
 
+// ---- persona few-shot saves (round 2, item 4) ---------------------------------------------
+
+const STORED = { 'GET /personas/Coach': { ok: true, status: 200, body: { few_shot: [{ raw: 'old', out: 'Old.' }] } } };
+
+test('a persona save with no few-shot field goes straight through, with no dialog', async () => {
+  const { instance, dialog, backend } = makeBroker({ handlers: STORED });
+  await instance.savePersona({ name: 'Coach', body: { prompt: 'You are a coach.' } });
+  assert.equal(dialog.shown.length, 0);
+  assert.deepEqual(backend.calls.map((c) => `${c.method} ${c.path}`), ['POST /personas']);
+});
+
+test('a save whose few-shot adds nothing (same or fewer examples) needs no dialog', async () => {
+  for (const few_shot of [[{ raw: 'old', out: 'Old.' }], []]) {
+    const { instance, dialog, backend } = makeBroker({ handlers: STORED });
+    await instance.savePersona({ name: 'Coach', body: { prompt: 'p', few_shot } });
+    assert.equal(dialog.shown.length, 0);
+    assert.ok(!('approval' in backend.calls.find((c) => c.method === 'POST').body));
+  }
+});
+
+test('added examples are shown in full and approved with a ticket bound to exactly them', async () => {
+  const added = { raw: 'hey whats up', out: 'Hey, what\u2019s up?' };
+  const { instance, dialog, backend } = makeBroker({ answers: [0], handlers: STORED });
+  const result = await instance.savePersona({ name: 'Coach', body: { prompt: 'p', few_shot: [{ raw: 'old', out: 'Old.' }, added] } });
+  assert.equal(result.ok, true);
+  const detail = dialog.shown[0].options.detail;
+  assert.ok(detail.includes(added.raw) && detail.includes(added.out) && detail.includes('Coach'));
+  assert.ok(!detail.includes('Old.'), 'examples already stored are not re-approved');
+  assert.equal(dialog.shown[0].options.defaultId, 1);
+  const post = backend.calls.find((c) => c.method === 'POST');
+  verifyTicket(post.body.approval, {
+    purpose: 'persona.few_shot', subject: 'Coach', bind: personaFewShotBind('Coach', [[added.raw, added.out]]),
+  });
+  assert.equal(post.body.name, 'Coach');
+});
+
+test('the stored examples come from the backend, and a page-supplied approval is discarded', async () => {
+  const { instance, backend } = makeBroker({ answers: [1], handlers: STORED });
+  await instance.savePersona({ name: 'Coach', body: { prompt: 'p', few_shot: [{ raw: 'x', out: 'y' }], approval: { payload: 'forged', sig: '0'.repeat(64) } } });
+  assert.deepEqual(backend.calls.map((c) => `${c.method} ${c.path}`), ['GET /personas/Coach']);
+});
+
+test('declining a few-shot save saves nothing', async () => {
+  for (const answer of [1, -1, undefined]) {
+    const { instance, backend } = makeBroker({ answers: [answer], handlers: STORED });
+    assert.equal((await instance.savePersona({ name: 'Coach', body: { few_shot: [{ raw: 'a', out: 'b' }] } })).ok, false);
+    assert.ok(!backend.calls.some((c) => c.method === 'POST'));
+  }
+});
+
+test('too many, too long or malformed few-shot saves are refused before any dialog', async () => {
+  const cases = [
+    { name: '', body: { few_shot: [] } }, { name: 'Coach', body: null }, { name: 'Coach', body: { few_shot: 'x' } },
+    { name: 'Coach', body: { few_shot: Array.from({ length: 51 }, () => ({ raw: 'a', out: 'b' })) } },
+    { name: 'Coach', body: { few_shot: [{ raw: 'x'.repeat(4001), out: 'b' }] } },
+    { name: 'Coach', body: { few_shot: Array.from({ length: 12 }, (_, i) => ({ raw: `${'long '.repeat(60)}${i}`, out: 'b' })) } },
+  ];
+  for (const args of cases) {
+    const { instance, dialog, backend } = makeBroker({ answers: [0], handlers: STORED });
+    assert.equal((await instance.savePersona(args)).ok, false, JSON.stringify(args).slice(0, 60));
+    assert.equal(dialog.shown.length, 0);
+    assert.ok(!backend.calls.some((c) => c.method === 'POST'));
+  }
+});
+
+test('addedFewShot matches the backend\'s normalisation', () => {
+  assert.deepEqual(addedFewShot([{ raw: 'a', out: 'b' }, 'junk', null, { raw: 'c' }], [{ raw: 'a', out: 'b' }]), [['c', '']]);
+  assert.deepEqual(addedFewShot('nope', []), []);
+});
+
 // ---- drafts -------------------------------------------------------------------
 
 const DRAFTS = { 'GET /drafts': { ok: true, status: 200, body: { drafts: [{ id: 7, final_text: 'The final text.' }, { id: 8, final_text: 'Other.' }] } } };
@@ -485,7 +555,7 @@ test('the broker exposes no way to sign without a dialog', () => {
   const { instance } = makeBroker();
   assert.ok(!('signPhysicalPress' in instance));
   assert.deepEqual(Object.keys(instance).sort(), [
-    'addPersonaExample', 'approveWorkflow', 'confirmSendHotkeyChange', 'placeFromHotkey', 'primaryActionFromUi', 'sendDraft',
+    'addPersonaExample', 'approveWorkflow', 'confirmSendHotkeyChange', 'placeFromHotkey', 'primaryActionFromUi', 'savePersona', 'sendDraft',
   ]);
 });
 

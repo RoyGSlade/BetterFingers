@@ -42,6 +42,7 @@ const MIN_DIALOG_GAP_MS = 500;
 const PURPOSE_WORKFLOW_APPROVE = 'workflow.approve';
 const PURPOSE_PERSONA_EXAMPLE = 'persona.example';
 const PURPOSE_DRAFT_SEND = 'draft.send';
+const PURPOSE_PERSONA_FEW_SHOT = 'persona.few_shot';
 
 const WORKFLOW_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const SEND_ACTIONS = new Set(['copy_only', 'paste', 'type', 'open_chat_then_send']);
@@ -62,6 +63,25 @@ function linesDigest(lines) {
 
 function textDigest(text) {
   return linesDigest([String(text)]);
+}
+
+// Few-shot items as [raw, out] string pairs, normalised exactly like the backend's
+// approvals.few_shot_items, and the ones a save would ADD to what is stored.
+function fewShotItems(value) {
+  return (Array.isArray(value) ? value : [])
+    .filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+    .map((item) => [String(item.raw ?? ''), String(item.out ?? '')]);
+}
+
+function addedFewShot(next, previous) {
+  const existing = new Set(fewShotItems(previous).map(([raw, out]) => JSON.stringify([raw, out])));
+  return fewShotItems(next).filter(([raw, out]) => !existing.has(JSON.stringify([raw, out])));
+}
+
+function personaFewShotBind(persona, added) {
+  const lines = [String(persona)];
+  for (const [raw, out] of added) lines.push(raw, out);
+  return { few_shot_sha256: linesDigest(lines) };
 }
 
 function draftSendBind(action, text, openChat) {
@@ -317,6 +337,47 @@ function createApprovalBroker({
     );
   }
 
+  // --- saving a persona (few-shot examples) ----------------------------------------
+
+  // Few-shot examples steer every future rewrite like learned examples do, so a save that
+  // ADDS or changes one is approved in a native dialog (round 2, item 4). A save that adds
+  // nothing goes straight through. The renderer names the persona and the body; the
+  // stored examples are read from the backend, never taken from the page.
+  async function savePersona({ name, body, timeoutMs } = {}) {
+    if (typeof name !== 'string' || !name.trim() || name.length > 128) return fault('Choose a persona name first.');
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return fault('That persona could not be saved.');
+    const payload = { ...body, name };
+    delete payload.approval; // a page cannot supply one
+    const wantsExamples = Object.prototype.hasOwnProperty.call(payload, 'few_shot');
+    if (!wantsExamples) return backend.send('POST', '/personas', payload, Number(timeoutMs) || 5000);
+    if (!Array.isArray(payload.few_shot) || payload.few_shot.length > 50) return fault('That persona has too many examples.');
+
+    const current = await backend.send('GET', `/personas/${encodeURIComponent(name)}`, undefined, 5000);
+    const stored = current && current.ok && current.body && typeof current.body === 'object' ? current.body.few_shot : [];
+    const added = addedFewShot(payload.few_shot, stored);
+    if (added.length === 0) return backend.send('POST', '/personas', payload, Number(timeoutMs) || 5000);
+
+    if (added.some(([raw, out]) => raw.length > MAX_EXAMPLE_CHARS || out.length > MAX_EXAMPLE_CHARS)) {
+      return fault('One of those examples is too long to learn.');
+    }
+    const shown = [`Persona: ${makeVisible(name)}`, ''];
+    added.forEach(([raw, out], index) => {
+      shown.push(`Example ${index + 1} \u2013 what was said:`, ...displayLines(raw), 'What it should become:', ...displayLines(out), '');
+    });
+    if (!fits(shown)) return fault(TOO_LONG);
+    const decision = await confirm({
+      title: 'Add examples to this persona',
+      message: `Let \u201C${makeVisible(name)}\u201D learn ${added.length === 1 ? 'this example' : `these ${added.length} examples`}?`,
+      body: shown,
+      approveLabel: 'Add them',
+      note: 'They will shape how this persona rewrites your future dictation until you remove them.',
+    });
+    if (!decision.approved) return declined(decision);
+    const approval = trySign(PURPOSE_PERSONA_FEW_SHOT, name, personaFewShotBind(name, added));
+    if (!approval) return fault(UNAVAILABLE);
+    return backend.send('POST', '/personas', { ...payload, approval }, Number(timeoutMs) || 5000);
+  }
+
   // --- sending a draft -----------------------------------------------------------
 
   const ACTION_DESCRIPTIONS = {
@@ -463,6 +524,7 @@ function createApprovalBroker({
   return {
     approveWorkflow,
     addPersonaExample,
+    savePersona,
     sendDraft,
     primaryActionFromUi,
     placeFromHotkey,
@@ -477,6 +539,8 @@ module.exports = {
   textDigest,
   draftSendBind,
   personaExampleBind,
+  personaFewShotBind,
+  addedFewShot,
   makeVisible,
   wrapLine,
   displayLines,

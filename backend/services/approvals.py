@@ -60,8 +60,10 @@ PURPOSE_WORKFLOW_APPROVE = "workflow.approve"
 PURPOSE_PERSONA_EXAMPLE = "persona.example"
 PURPOSE_DRAFT_SEND = "draft.send"
 PURPOSE_VOICE_CONFIRM = "voice.confirm"
+PURPOSE_PERSONA_FEW_SHOT = "persona.few_shot"
 PURPOSES = frozenset({
     PURPOSE_WORKFLOW_APPROVE, PURPOSE_PERSONA_EXAMPLE, PURPOSE_DRAFT_SEND, PURPOSE_VOICE_CONFIRM,
+    PURPOSE_PERSONA_FEW_SHOT,
 })
 
 # Error codes. The messages are deliberately generic: they say what is missing,
@@ -214,6 +216,32 @@ def workflow_bind(preview_lines: Sequence[str], steps) -> dict:
 
 def persona_example_bind(persona: str, raw: str, out: str) -> dict:
     return {"example_sha256": lines_digest([str(persona), str(raw), str(out)])}
+
+
+def few_shot_items(value) -> list:
+    """A persona's few-shot list as ``[(raw, out), ...]`` of strings. Anything that is not
+    a dict contributes nothing; a missing field is the empty string. Both sides (the
+    backend here, main in approvalBroker.js) normalise identically before comparing."""
+    items = []
+    for item in value if isinstance(value, (list, tuple)) else []:
+        if isinstance(item, dict):
+            items.append((str(item.get("raw", "")), str(item.get("out", ""))))
+    return items
+
+
+def added_few_shot(new, old) -> list:
+    """The examples in ``new`` that ``old`` does not already contain. Removing an example
+    only ever makes a persona do less, so only ADDITIONS (and edits, which are a removal
+    plus an addition) need the person's approval."""
+    existing = set(few_shot_items(old))
+    return [pair for pair in few_shot_items(new) if pair not in existing]
+
+
+def persona_few_shot_bind(persona: str, added) -> dict:
+    lines = [str(persona)]
+    for raw, out in added:
+        lines += [raw, out]
+    return {"few_shot_sha256": lines_digest(lines)}
 
 
 def draft_send_bind(action: str, text: str, open_chat: bool = False) -> dict:

@@ -97,6 +97,8 @@ class PersonaRequest(BaseModel):
     revision: Optional[int] = None
     confirmed_revision: Optional[int] = None
     writing_preset_id: Optional[str] = None
+    # Required when this save ADDS or changes a few-shot example (round 2, item 4).
+    approval: Optional[ApprovalTicketModel] = None
 
 
 @router.get("/personas")
@@ -134,6 +136,24 @@ async def save_persona_route(request: PersonaRequest):
         value = getattr(request, key)
         if value is not None:
             payload[key] = value
+    # Few-shot examples steer every future rewrite, exactly like learned examples, so
+    # adding or changing one needs the same signed approval as POST /personas/{name}/examples
+    # (round 2, item 4). Codex re-review: this route accepted and persisted `few_shot`
+    # without any approval, an equivalent path to persistent example-based behaviour.
+    # Unchanged lists and removals need nothing.
+    if "few_shot" in payload:
+        existing = persona_service.get_persona(request.name) or {}
+        added = approvals.added_few_shot(payload["few_shot"], existing.get("few_shot"))
+        if added:
+            try:
+                approvals.verify(
+                    request.approval.model_dump() if request.approval else None,
+                    purpose=approvals.PURPOSE_PERSONA_FEW_SHOT,
+                    subject=request.name,
+                    bind=approvals.persona_few_shot_bind(request.name, added),
+                )
+            except approvals.ApprovalError as exc:
+                raise HTTPException(status_code=approvals.http_status_for(exc.code), detail=exc.message)
     ok, msg = persona_service.save_persona(request.name, payload)
     if not ok:
         raise HTTPException(status_code=400, detail=msg)

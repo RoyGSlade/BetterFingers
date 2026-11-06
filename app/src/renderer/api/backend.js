@@ -1061,6 +1061,12 @@ async function fetchPersonaFieldGuidance(fieldId, timeoutMs = 5000) {
 
 async function savePersona(name, prompt, extra = null, timeoutMs = 5000) {
   const body = _mergeExtraFields({ name, prompt }, extra);
+  // Few-shot examples steer every future rewrite, so a save that carries them goes through
+  // the main process, which shows any NEW example in a native dialog and signs the approval
+  // the backend demands (round 2, item 4). Saves without examples are ordinary.
+  if (Object.prototype.hasOwnProperty.call(body, 'few_shot')) {
+    return typedRequest('savePersonaWithExamples', PERSONAS_URL, timeoutMs, { name, body });
+  }
   return postJson(PERSONAS_URL, body, timeoutMs);
 }
 

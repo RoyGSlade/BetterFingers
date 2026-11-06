@@ -30,6 +30,10 @@ const api = {
     ipcRenderer.invoke('approvals:workflow', { workflowId, timeoutMs }),
   addPersonaExample: ({ persona, raw, out } = {}, timeoutMs) =>
     ipcRenderer.invoke('approvals:persona-example', { persona, raw, out, timeoutMs }),
+  // Saving a persona whose few-shot examples change: main shows the added examples in a
+  // native dialog before the backend will accept them.
+  savePersonaWithExamples: ({ name, body } = {}, timeoutMs) =>
+    ipcRenderer.invoke('approvals:persona-save', { name, body, timeoutMs }),
   wipePrivacyData: ({ wipeVoices, confirm, mode } = {}, timeoutMs) =>
     ipcRenderer.invoke('backend:wipe-privacy', { wipeVoices, confirm, mode, timeoutMs }),
   factoryReset: ({ confirm, deleteDownloadedModels } = {}, timeoutMs) =>
