@@ -142,6 +142,7 @@ from backend.api.security import (  # noqa: E402
     _LOOPBACK_HOSTS,
     _allowed_cors_origins,
     announce_generated_token,
+    check_request_origin,
     validate_startup_security,
 )
 
@@ -224,6 +225,23 @@ async def auth_middleware(request: Request, call_next):
                     return JSONResponse(status_code=429, content={"detail": "Too many auth failures; slow down."})
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
     return await call_next(request)
+
+@app.middleware("http")
+async def host_origin_middleware(request: Request, call_next):
+    """DNS-rebinding / cross-site guard (Phase 0 item 5). Registered AFTER the auth
+    middleware so it is the OUTERMOST layer: a rebinding page's request, and its
+    CORS preflight, are refused before the bearer check or any route sees them."""
+    server_info = request.scope.get("server") or (None, None)
+    reason = check_request_origin(
+        request.headers.get("host"),
+        request.headers.get("origin"),
+        server_port=server_info[1],
+        allow_testserver=_is_test_env(),
+    )
+    if reason:
+        return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+    return await call_next(request)
+
 
 # Global Instances
 transcriber = None

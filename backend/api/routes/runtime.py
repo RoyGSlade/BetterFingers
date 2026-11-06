@@ -53,6 +53,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, StrictBool, StrictInt, StrictStr
 
 from backend.api.routes import drafts as routes_drafts
+from backend.api.security import check_request_origin
 
 router = APIRouter()
 
@@ -74,6 +75,18 @@ async def websocket_endpoint(websocket: WebSocket):
     # crash reports, so a token in a URL is a token in every one of them. A
     # client that still sends one is simply unauthenticated.
     expected_token = os.getenv("BETTERFINGERS_AUTH_TOKEN")
+    # DNS-rebinding / cross-site guard BEFORE the handshake completes: a browser
+    # page can open a WebSocket to 127.0.0.1 from any site, and the HTTP
+    # middleware does not run for WebSocket scopes (Phase 0 item 5).
+    server_info = websocket.scope.get("server") or (None, None)
+    if check_request_origin(
+        websocket.headers.get("host"),
+        websocket.headers.get("origin"),
+        server_port=server_info[1],
+        allow_testserver=s._is_test_env(),
+    ):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
     await websocket.accept()
     if expected_token:
         try:

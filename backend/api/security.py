@@ -15,10 +15,83 @@ _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
 
 def _allowed_cors_origins():
-    origins = ["null", "file://", "http://localhost:5173", "http://127.0.0.1:5173"]
+    """Browser origins allowed to call this API (Phase 0 item 5).
+
+    The Electron renderer no longer talks to the backend at all: since Phase 3c
+    every request goes through the main process (Node ``fetch``, which sends no
+    ``Origin``). So there is no packaged-app origin to allow, and the opaque
+    ``null`` and ``file://`` origins that used to be here are gone -- ``null`` is
+    what a sandboxed iframe or a ``data:`` page sends, i.e. anyone. Only the
+    electron-vite dev server (not in production) and origins the operator names
+    explicitly in ``BETTERFINGERS_CORS_ORIGINS`` remain.
+    """
+    origins = []
+    if os.getenv("BETTERFINGERS_ENV", "development").lower() != "production":
+        origins.extend(["http://localhost:5173", "http://127.0.0.1:5173"])
     extra = os.getenv("BETTERFINGERS_CORS_ORIGINS", "")
-    origins.extend(o.strip() for o in extra.split(",") if o.strip())
+    origins.extend(o.strip() for o in extra.split(",") if o.strip() and o.strip().lower() not in {"null", "file://"})
     return origins
+
+
+def _split_host_header(value):
+    """``"127.0.0.1:8000"`` -> ``("127.0.0.1", "8000")``; ``"[::1]:8000"`` -> ``("::1", "8000")``."""
+    value = str(value or "").strip().lower()
+    if not value:
+        return None, None
+    if value.startswith("["):
+        end = value.find("]")
+        if end == -1:
+            return None, None
+        host = value[1:end]
+        rest = value[end + 1:]
+        if rest.startswith(":") and rest[1:].isdigit():
+            return host, rest[1:]
+        return (host, "") if rest == "" else (None, None)
+    if value.count(":") > 1:
+        return None, None  # an unbracketed IPv6 literal is not a valid Host value
+    host, _, port = value.partition(":")
+    if port and not port.isdigit():
+        return None, None
+    return host, port
+
+
+def check_request_origin(host_header, origin_header, *, server_port=None, env=None, allow_testserver=False):
+    """Reject DNS-rebinding and cross-site browser requests (Phase 0 item 5).
+
+    Returns ``None`` when the request may proceed, else a short reason (never an
+    echo of a header value). Two independent checks:
+
+    * **Host** must be a loopback name (``127.0.0.1``, ``localhost``, ``[::1]``)
+      on the port the server is actually listening on. A DNS-rebinding page keeps
+      its own hostname in ``Host``, so it fails here even though the TCP peer is
+      127.0.0.1. Skipped only for an explicit remote bind
+      (``BETTERFINGERS_ALLOW_REMOTE=1``), where the bearer token is the gate.
+    * **Origin**, when the request carries one, must be a configured origin or the
+      server's own origin. The app's own callers (Electron main, curl, the Stream
+      Deck bridge) send none; a browser always does on a cross-site request.
+    """
+    env = os.environ if env is None else env
+    remote = str(env.get("BETTERFINGERS_ALLOW_REMOTE", "")) == "1"
+
+    host, port = _split_host_header(host_header)
+    if not remote:
+        allowed = {"127.0.0.1", "localhost", "::1"}
+        extra = str(env.get("BETTERFINGERS_ALLOWED_HOSTS", ""))
+        allowed.update(h.strip().lower() for h in extra.split(",") if h.strip())
+        if allow_testserver:
+            allowed.add("testserver")
+        if host is None or host not in allowed:
+            return "host_not_allowed"
+        if server_port is not None and host != "testserver" and str(port or "") != str(server_port):
+            return "host_not_allowed"
+
+    if origin_header not in (None, ""):
+        origin = str(origin_header).strip().rstrip("/")
+        configured = {o.rstrip("/") for o in _allowed_cors_origins()}
+        own = {f"http://{str(host_header or '').strip().lower()}"} if host_header and (remote or host) else set()
+        if origin not in configured and origin.lower() not in own:
+            return "origin_not_allowed"
+    return None
 
 
 def validate_startup_security(host, token, env=None, allow_remote=False):
