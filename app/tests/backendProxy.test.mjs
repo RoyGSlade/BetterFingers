@@ -36,7 +36,6 @@ test('accepts known backend routes with the right method', () => {
     ['POST', '/message-rescue/generate/job-1/cancel'],
     ['DELETE', '/message-rescue/context'],
     ['GET', '/personas/Assistant/examples'],
-    ['DELETE', '/personas/Assistant/examples/abc123'],
     ['DELETE', '/personas/Assistant/examples'],
   ];
   for (const [method, path] of allowed) {
@@ -244,6 +243,8 @@ test('routes that need the person\'s approval are refused on the generic proxy (
   const needApproval = [
     ['POST', '/workflows/approve'],
     ['POST', '/personas/Assistant/examples'],
+    // Round 3, item 3: deleting one learned example is brokered too.
+    ['DELETE', '/personas/Assistant/examples/abc123'],
     ['POST', '/runtime/primary-action'],
     ['POST', '/drafts/1/send'],
     ['POST', '/voice-commands/execute'],

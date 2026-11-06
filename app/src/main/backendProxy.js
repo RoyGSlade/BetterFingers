@@ -158,7 +158,9 @@ const ROUTE_ALLOWLIST = {
     '/history', '/drafts',
     '/dictionary/:term', '/macros/:trigger',
     '/voice-presets/:name', '/voice-presets-default', '/personas/:name',
-    '/personas/:name/examples/:example_id', '/personas/:name/examples',
+    // DELETE /personas/:name/examples/:example_id is NOT here (round 3, item 3): removing a
+    // learned example needs the approval broker (typed channel approvals:persona-learned-delete).
+    '/personas/:name/examples',
     '/wake/models/:id',
     '/message-rescue/context',
     '/contacts/:id',

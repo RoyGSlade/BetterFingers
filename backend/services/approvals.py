@@ -60,8 +60,11 @@ PURPOSE_WORKFLOW_APPROVE = "workflow.approve"
 PURPOSE_PERSONA_EXAMPLE = "persona.example"
 PURPOSE_DRAFT_SEND = "draft.send"
 PURPOSE_PERSONA_FEW_SHOT = "persona.few_shot"
+PURPOSE_PERSONA_LEARNED_DELETE = "persona.learned_delete"
+PURPOSE_MCP_TRUST = "mcp.trust"
 PURPOSES = frozenset({
     PURPOSE_WORKFLOW_APPROVE, PURPOSE_PERSONA_EXAMPLE, PURPOSE_DRAFT_SEND, PURPOSE_PERSONA_FEW_SHOT,
+    PURPOSE_PERSONA_LEARNED_DELETE, PURPOSE_MCP_TRUST,
 })
 
 # Error codes. The messages are deliberately generic: they say what is missing,
@@ -217,29 +220,49 @@ def persona_example_bind(persona: str, raw: str, out: str) -> dict:
 
 
 def few_shot_items(value) -> list:
-    """A persona's few-shot list as ``[(raw, out), ...]`` of strings. Anything that is not
-    a dict contributes nothing; a missing field is the empty string. Both sides (the
-    backend here, main in approvalBroker.js) normalise identically before comparing."""
+    """A persona's few-shot list as ``[(raw, out), ...]`` of strings, ORDER AND DUPLICATES
+    KEPT. Anything that is not a dict contributes nothing; a missing or empty field is the
+    empty string -- exactly how ``llm_engine.normalize_persona`` stores it, so the list that
+    is approved is the list that is stored. Main (approvalBroker.js) normalises the same way."""
     items = []
     for item in value if isinstance(value, (list, tuple)) else []:
         if isinstance(item, dict):
-            items.append((str(item.get("raw", "")), str(item.get("out", ""))))
+            items.append((str(item.get("raw", "") or ""), str(item.get("out", "") or "")))
     return items
 
 
-def added_few_shot(new, old) -> list:
-    """The examples in ``new`` that ``old`` does not already contain. Removing an example
-    only ever makes a persona do less, so only ADDITIONS (and edits, which are a removal
-    plus an addition) need the person's approval."""
-    existing = set(few_shot_items(old))
-    return [pair for pair in few_shot_items(new) if pair not in existing]
+def few_shot_list_digest(persona: str, items) -> str:
+    """Digest of one persona's COMPLETE ordered example list (round 3, item 3).
 
-
-def persona_few_shot_bind(persona: str, added) -> dict:
-    lines = [str(persona)]
-    for raw, out in added:
+    Inference uses the first examples in order, so the order, every repeat and every
+    removal matter as much as the text: the digest frames the persona, the count and each
+    pair. Mirrored byte for byte by ``fewShotListDigest`` in approvalBroker.js.
+    """
+    pairs = [(str(raw), str(out)) for raw, out in items]
+    lines = ["persona.few_shot.v2", str(persona), str(len(pairs))]
+    for raw, out in pairs:
         lines += [raw, out]
-    return {"few_shot_sha256": lines_digest(lines)}
+    return lines_digest(lines)
+
+
+def persona_few_shot_bind(persona: str, before, after) -> dict:
+    """Any change to a persona's example list is approved against the list it REPLACES
+    and the list it RESULTS IN: additions, edits, removals, reordering and repeats alike.
+    A list that changed between the dialog and the save voids the ticket."""
+    return {
+        "before_sha256": few_shot_list_digest(persona, before),
+        "after_sha256": few_shot_list_digest(persona, after),
+    }
+
+
+def learned_delete_bind(persona: str, example_id: str, before, after) -> dict:
+    """Deleting one learned example: bound to its id and the learned list before and after."""
+    return {"example_id": str(example_id), **persona_few_shot_bind(persona, before, after)}
+
+
+def mcp_trust_bind(config_sha256: str) -> dict:
+    """Marking an MCP server trusted on this machine: bound to its exact configuration."""
+    return {"config_sha256": str(config_sha256)}
 
 
 def draft_send_bind(action: str, text: str, open_chat: bool = False) -> dict:

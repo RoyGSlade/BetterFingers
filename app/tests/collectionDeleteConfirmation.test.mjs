@@ -11,10 +11,15 @@ const api = await import(`data:text/javascript;base64,${Buffer.from(source).toSt
 test('all five explicit collection clears pass confirmation through the actual bridge', async () => {
   const calls = [];
   const previous = globalThis.window;
-  globalThis.window = { betterFingers: { backendRequest: async (...args) => {
-    calls.push(args);
-    return { ok: true, status: 200, body: { ok: true } };
-  } } };
+  const brokered = [];
+  globalThis.window = { betterFingers: {
+    backendRequest: async (...args) => {
+      calls.push(args);
+      return { ok: true, status: 200, body: { ok: true } };
+    },
+    // Round 3, item 3: removing one learned example goes through the approval broker.
+    deleteLearnedExample: async (...args) => { brokered.push(args); return { ok: true, status: 200, body: { ok: true } }; },
+  } };
   try {
     await api.clearRecordings();
     await api.clearHistory();
@@ -33,6 +38,9 @@ test('all five explicit collection clears pass confirmation through the actual b
     await api.deleteRecording('');
     await api.deletePersonaExample('A B', '.');
     for (const [, path] of calls) assert.equal(new URL(path, 'http://local').searchParams.has('confirm'), false);
+    assert.equal(calls.filter(([, path]) => path.includes('/examples/')).length, 0, 'never through the generic proxy');
+    assert.deepEqual(brokered[0][0], { persona: 'A B', exampleId: '.' });
+    assert.notEqual(proxy._validateRequest('DELETE', '/personas/A%20B/examples/ex_1'), null, 'the proxy refuses it');
   } finally {
     globalThis.window = previous;
   }

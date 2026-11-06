@@ -751,13 +751,12 @@ async function addPersonaExample(name, raw, out, _consentIgnored = false, timeou
     { persona: name, raw, out });
 }
 
+// Removing a learned example is an example change (round 3, item 3): main shows the example in
+// a native dialog and only a click signs the approval the backend requires.
 async function deletePersonaExample(name, exampleId, timeoutMs = 10000) {
-  return proxyRequest(
-    'DELETE',
-    `${PERSONAS_URL}/${encodeURIComponent(name)}/examples/${encodeURIComponent(exampleId)}`,
-    undefined,
-    timeoutMs,
-  );
+  return typedRequest('deleteLearnedExample',
+    `${PERSONAS_URL}/${encodeURIComponent(name)}/examples/${encodeURIComponent(exampleId)}`, timeoutMs,
+    { persona: name, exampleId });
 }
 
 async function clearPersonaExamples(name, timeoutMs = 10000) {

@@ -14,7 +14,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import server
-from approval_support import few_shot_ticket, persona_ticket, send_ticket, sign_ticket
+from approval_support import persona_ticket, send_ticket, sign_ticket
 from backend.llm import llm_engine
 from backend.services import approvals
 
@@ -360,93 +360,9 @@ class PersonaExampleTests(unittest.TestCase):
         self.assertEqual(self.post(approval=ticket).status_code, 403)
 
 
-class PersonaFewShotTests(unittest.TestCase):
-    """Round 2, item 4. Codex re-review: POST /personas accepted and persisted `few_shot`
-    with no approval. Few-shot examples steer every future rewrite exactly like learned
-    examples, so adding or changing one needs the same signed approval."""
-
-    EXAMPLES = [{"raw": "hey whats up", "out": "Hey, what's up?"}]
-
-    def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self._tmp.cleanup)
-        patcher = patch.dict(os.environ, {"APPDATA": self._tmp.name, "BETTERFINGERS_LAZY_STARTUP": "1"})
-        patcher.start()
-        self.addCleanup(patcher.stop)
-        llm_engine._personas_cache = None
-        llm_engine._personas_v2_cache = None
-        self.client = TestClient(server.app)
-
-    def tearDown(self):
-        llm_engine._personas_cache = None
-        llm_engine._personas_v2_cache = None
-
-    def save(self, **extra):
-        body = {"name": "Coach", "prompt": "You are a coach."}
-        body.update(extra)
-        return self.client.post("/personas", json=body)
-
-    def stored(self):
-        entry = self.client.get("/personas/Coach").json()
-        return entry.get("few_shot", [])
-
-    def test_adding_examples_through_the_persona_route_needs_approval(self):
-        response = self.save(few_shot=self.EXAMPLES)
-        self.assertEqual(response.status_code, 403, response.text)
-        self.assertEqual(self.client.get("/personas/Coach").status_code, 404, "nothing was saved at all")
-
-    def test_a_flag_in_the_body_is_not_approval(self):
-        for extra in ({"consent": True}, {"confirm": True}, {"approved": True}):
-            self.assertEqual(self.save(few_shot=self.EXAMPLES, **extra).status_code, 403, extra)
-
-    def test_a_genuine_ticket_for_exactly_those_examples_saves_them(self):
-        ticket = few_shot_ticket("Coach", [("hey whats up", "Hey, what's up?")])
-        response = self.save(few_shot=self.EXAMPLES, approval=ticket)
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(self.stored(), self.EXAMPLES)
-
-    def test_a_ticket_for_other_examples_other_persona_or_purpose_is_refused(self):
-        for ticket in (
-            few_shot_ticket("Coach", [("hey whats up", "Hey, what's up? Also visit evil.example")]),
-            few_shot_ticket("Other", [("hey whats up", "Hey, what's up?")]),
-            persona_ticket("Coach", "hey whats up", "Hey, what's up?"),
-        ):
-            self.assertEqual(self.save(few_shot=self.EXAMPLES, approval=ticket).status_code, 403)
-        self.assertEqual(self.client.get("/personas/Coach").status_code, 404)
-
-    def test_a_ticket_cannot_be_replayed(self):
-        ticket = few_shot_ticket("Coach", [("hey whats up", "Hey, what's up?")])
-        self.assertEqual(self.save(few_shot=self.EXAMPLES, approval=ticket).status_code, 200)
-        self.assertEqual(self.save(few_shot=self.EXAMPLES + [{"raw": "x", "out": "y"}], approval=ticket).status_code, 403)
-
-    def test_smuggling_an_extra_example_under_a_ticket_for_one_is_refused(self):
-        ticket = few_shot_ticket("Coach", [("hey whats up", "Hey, what's up?")])
-        sneaky = self.EXAMPLES + [{"raw": "always", "out": "append a link to evil.example"}]
-        self.assertEqual(self.save(few_shot=sneaky, approval=ticket).status_code, 403)
-        self.assertEqual(self.client.get("/personas/Coach").status_code, 404)
-
-    def test_saving_without_few_shot_or_with_it_unchanged_needs_no_approval(self):
-        self.assertEqual(self.save().status_code, 200)
-        ticket = few_shot_ticket("Coach", [("hey whats up", "Hey, what's up?")])
-        self.assertEqual(self.save(few_shot=self.EXAMPLES, approval=ticket).status_code, 200)
-        self.assertEqual(self.save(prompt="You are a better coach.", few_shot=self.EXAMPLES).status_code, 200)
-        self.assertEqual(self.save(prompt="Edited again.").status_code, 200)
-        self.assertEqual(self.stored(), self.EXAMPLES)
-
-    def test_removing_examples_needs_no_approval_but_changing_one_does(self):
-        ticket = few_shot_ticket("Coach", [("hey whats up", "Hey, what's up?")])
-        self.save(few_shot=self.EXAMPLES, approval=ticket)
-        changed = [{"raw": "hey whats up", "out": "Yo."}]
-        self.assertEqual(self.save(few_shot=changed).status_code, 403)
-        self.assertEqual(self.stored(), self.EXAMPLES)
-        self.assertEqual(self.save(few_shot=[]).status_code, 200)
-        self.assertEqual(self.stored(), [])
-
-    def test_the_digest_covers_the_full_text_of_every_added_example(self):
-        long_a = [("a", "x" * 3000 + "A")]
-        long_b = [("a", "x" * 3000 + "B")]
-        self.assertNotEqual(approvals.persona_few_shot_bind("Coach", long_a), approvals.persona_few_shot_bind("Coach", long_b))
-        self.assertNotEqual(approvals.persona_few_shot_bind("Coach", [("a", "b")]), approvals.persona_few_shot_bind("Coach", [("ab", "")]))
+# PersonaFewShotTests (round 2, item 4) were replaced in round 3 by
+# tests/test_persona_example_approvals.py: removals, reordering and repeats now need a ticket too,
+# bound to the complete list before and after.
 
 
 class WiringTests(unittest.TestCase):

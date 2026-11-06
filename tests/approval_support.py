@@ -54,6 +54,7 @@ def send_ticket(draft_id, action, text, open_chat=False, **kw):
                        approvals.draft_send_bind(action, text, open_chat), **kw)
 
 
-def few_shot_ticket(persona, added, **kw):
+def few_shot_ticket(persona, before, after, **kw):
+    """A persona.few_shot ticket for changing ``before`` (the stored list) into ``after``."""
     return sign_ticket(approvals.PURPOSE_PERSONA_FEW_SHOT, persona,
-                       approvals.persona_few_shot_bind(persona, added), **kw)
+                       approvals.persona_few_shot_bind(persona, before, after), **kw)

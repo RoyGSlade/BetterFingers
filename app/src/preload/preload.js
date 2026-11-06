@@ -34,6 +34,13 @@ const api = {
   // native dialog before the backend will accept them.
   savePersonaWithExamples: ({ name, body } = {}, timeoutMs) =>
     ipcRenderer.invoke('approvals:persona-save', { name, body, timeoutMs }),
+  // Removing a learned example changes what the persona learns from: main shows it and asks.
+  deleteLearnedExample: ({ persona, exampleId } = {}, timeoutMs) =>
+    ipcRenderer.invoke('approvals:persona-learned-delete', { persona, exampleId, timeoutMs }),
+  // Marking an MCP server trusted on this machine (weaker confinement): main shows its exact
+  // configuration and asks.
+  trustMcpServer: ({ name } = {}, timeoutMs) =>
+    ipcRenderer.invoke('approvals:mcp-trust', { name, timeoutMs }),
   wipePrivacyData: ({ wipeVoices, confirm, mode } = {}, timeoutMs) =>
     ipcRenderer.invoke('backend:wipe-privacy', { wipeVoices, confirm, mode, timeoutMs }),
   factoryReset: ({ confirm, deleteDownloadedModels } = {}, timeoutMs) =>

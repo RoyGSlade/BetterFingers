@@ -97,7 +97,7 @@ class PersonaRequest(BaseModel):
     revision: Optional[int] = None
     confirmed_revision: Optional[int] = None
     writing_preset_id: Optional[str] = None
-    # Required when this save ADDS or changes a few-shot example (round 2, item 4).
+    # Required when this save changes the few-shot list in ANY way (round 3, item 3).
     approval: Optional[ApprovalTicketModel] = None
 
 
@@ -136,21 +136,25 @@ async def save_persona_route(request: PersonaRequest):
         value = getattr(request, key)
         if value is not None:
             payload[key] = value
-    # Few-shot examples steer every future rewrite, exactly like learned examples, so
-    # adding or changing one needs the same signed approval as POST /personas/{name}/examples
-    # (round 2, item 4). Codex re-review: this route accepted and persisted `few_shot`
-    # without any approval, an equivalent path to persistent example-based behaviour.
-    # Unchanged lists and removals need nothing.
+    # Few-shot examples steer every future rewrite, exactly like learned examples (round 2,
+    # item 4). Round 3, item 3: the COMPLETE ordered resulting list is what is authorized.
+    # Inference uses the first examples in order, so an addition, an edit, a removal, a
+    # reordering, a repeated copy and emptying the list all change behaviour, and each needs a
+    # ``persona.few_shot`` ticket bound to the stored list and the resulting list. Only a save
+    # that leaves the list exactly as stored needs nothing. What is stored is the normalised
+    # list the ticket covers.
     if "few_shot" in payload:
         existing = persona_service.get_persona(request.name) or {}
-        added = approvals.added_few_shot(payload["few_shot"], existing.get("few_shot"))
-        if added:
+        before = approvals.few_shot_items(existing.get("few_shot"))
+        after = approvals.few_shot_items(payload["few_shot"])
+        payload["few_shot"] = [{"raw": raw, "out": out} for raw, out in after]
+        if after != before:
             try:
                 approvals.verify(
                     request.approval.model_dump() if request.approval else None,
                     purpose=approvals.PURPOSE_PERSONA_FEW_SHOT,
                     subject=request.name,
-                    bind=approvals.persona_few_shot_bind(request.name, added),
+                    bind=approvals.persona_few_shot_bind(request.name, before, after),
                 )
             except approvals.ApprovalError as exc:
                 raise HTTPException(status_code=approvals.http_status_for(exc.code), detail=exc.message)
@@ -455,10 +459,31 @@ async def add_persona_example_route(name: str, request: PersonaExampleRequest):
     return result
 
 
+class LearnedExampleDeleteRequest(BaseModel):
+    approval: Optional[ApprovalTicketModel] = None
+
+
 @router.delete("/personas/{name}/examples/{example_id}")
-async def delete_persona_example_route(name: str, example_id: str):
-    """Delete a single learned example by id."""
-    result = await run_in_threadpool(_learning_store().delete_example, name, example_id)
+async def delete_persona_example_route(name: str, example_id: str, request: Optional[LearnedExampleDeleteRequest] = None):
+    """Delete a single learned example by id. Round 3, item 3: removing a learned example
+    changes what the persona learns from, so it needs a ``persona.learned_delete`` ticket
+    bound to this example and the complete learned list before and after."""
+    store = _learning_store()
+    examples = await run_in_threadpool(store.list_examples, name)
+    if not any(e.get("id") == example_id for e in examples):
+        raise HTTPException(status_code=404, detail="Learned example not found.")
+    before = approvals.few_shot_items(examples)
+    after = approvals.few_shot_items([e for e in examples if e.get("id") != example_id])
+    try:
+        approvals.verify(
+            request.approval.model_dump() if request and request.approval else None,
+            purpose=approvals.PURPOSE_PERSONA_LEARNED_DELETE,
+            subject=name,
+            bind=approvals.learned_delete_bind(name, example_id, before, after),
+        )
+    except approvals.ApprovalError as exc:
+        raise HTTPException(status_code=approvals.http_status_for(exc.code), detail=exc.message)
+    result = await run_in_threadpool(store.delete_example, name, example_id)
     if not result["ok"]:
         status = _LEARNING_ERROR_STATUS.get(result["error"], 500)
         raise HTTPException(status_code=status, detail=result.get("message", result["error"]))

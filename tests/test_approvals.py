@@ -210,7 +210,9 @@ class NodeBrokerInteropTests(unittest.TestCase):
     const out = cases.map((c) => {
       const bind = c.kind === 'draft' ? b.draftSendBind(c.action, c.text, c.openChat)
         : c.kind === 'persona' ? b.personaExampleBind(c.persona, c.raw, c.out)
-        : c.kind === 'few_shot' ? b.personaFewShotBind(c.persona, c.added)
+        : c.kind === 'few_shot' ? b.personaFewShotBind(c.persona, b.fewShotItems(c.before), b.fewShotItems(c.after))
+        : c.kind === 'learned_delete' ? b.learnedDeleteBind(c.persona, c.exampleId, b.fewShotItems(c.before), b.fewShotItems(c.after))
+        : c.kind === 'mcp_trust' ? b.mcpTrustBind(c.config)
         : { preview_sha256: b.linesDigest(c.lines), steps_sha256: c.steps_sha256 };
       return b.signTicket({ secret: key, purpose: c.purpose, subject: c.subject, bind });
     });
@@ -240,11 +242,24 @@ class NodeBrokerInteropTests(unittest.TestCase):
                          bind=approvals.persona_example_bind("Coach", "hey \u2603", "Hey, 😀"))
         approvals.verify(workflow, purpose="workflow.approve", subject="w", bind=approvals.workflow_bind(lines, steps))
 
-    def test_node_signed_few_shot_tickets_verify_in_python(self):
-        added = [["hey \u2603", "Hey, 😀"], ["second", ""]]
-        (ticket,) = self.tickets([{"kind": "few_shot", "purpose": "persona.few_shot", "subject": "Coach", "persona": "Coach", "added": added}])
+    def test_node_signed_few_shot_list_tickets_verify_in_python(self):
+        """Round 3, item 3: the bind is the complete ordered list before and after, normalised
+        the same way on both sides (order, repeats, missing fields)."""
+        before = [{"raw": "hey \u2603", "out": "Hey, 😀"}, {"raw": "second"}]
+        after = [{"raw": "second", "out": None}, {"raw": "hey \u2603", "out": "Hey, 😀"}, {"raw": "second", "out": ""}, "junk"]
+        (ticket, learned) = self.tickets([
+            {"kind": "few_shot", "purpose": "persona.few_shot", "subject": "Coach", "persona": "Coach", "before": before, "after": after},
+            {"kind": "learned_delete", "purpose": "persona.learned_delete", "subject": "Coach", "persona": "Coach",
+             "exampleId": "ex_1", "before": before, "after": before[1:]},
+        ])
         approvals.verify(ticket, purpose="persona.few_shot", subject="Coach",
-                         bind=approvals.persona_few_shot_bind("Coach", [tuple(pair) for pair in added]))
+                         bind=approvals.persona_few_shot_bind("Coach", approvals.few_shot_items(before), approvals.few_shot_items(after)))
+        approvals.verify(learned, purpose="persona.learned_delete", subject="Coach",
+                         bind=approvals.learned_delete_bind("Coach", "ex_1", approvals.few_shot_items(before), approvals.few_shot_items(before[1:])))
+
+    def test_node_signed_mcp_trust_ticket_verifies_in_python(self):
+        (ticket,) = self.tickets([{"kind": "mcp_trust", "purpose": "mcp.trust", "subject": "files", "config": "ab" * 32}])
+        approvals.verify(ticket, purpose="mcp.trust", subject="files", bind=approvals.mcp_trust_bind("ab" * 32))
 
     def test_a_node_ticket_for_one_text_is_refused_for_another_text(self):
         (ticket,) = self.tickets([
