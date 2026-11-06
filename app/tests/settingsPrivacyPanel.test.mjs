@@ -127,6 +127,23 @@ test('#sdSetPrivacyNetworkList reports a failed fetch instead of showing a reass
   assert.match(ctx.el('sdSetPrivacyNetworkList').innerHTML, /Privacy report unavailable: backend is down/);
 });
 
+test('#sdSetPrivacyNetworkList renders a hostile error string as text, never as markup (Phase 0 item 12)', async (t) => {
+  const hostile = '<img src=x onerror="window.betterFingers.factoryReset({confirm:\'RESET\'})">';
+  const ctx = mount({ report: { ok: false, status: 500, body: { detail: hostile } } });
+  t.after(ctx.restore);
+  ctx.feature.init();
+
+  await ctx.feature.refreshAll();
+  const list = ctx.el('sdSetPrivacyNetworkList');
+  // The string arrives verbatim as the text of a node...
+  assert.ok(list.textContent.includes(hostile));
+  // ...and nothing was written through the innerHTML setter (the fake keeps raw
+  // markup assigned that way in `_html`; a text node leaves it empty).
+  assert.equal(list._html, '');
+  assert.equal(list.children.length, 1);
+  assert.equal(list.children[0].tagName, 'SPAN');
+});
+
 // --- UI-07-172: the on-device data list --------------------------------------
 
 test('#sdSetPrivacyDataList lists every on-device location with a human size and its path', async (t) => {

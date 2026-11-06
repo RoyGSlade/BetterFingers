@@ -1977,7 +1977,7 @@ async function refreshRecordings() {
       })
       .join('');
   } catch (error) {
-    el.innerHTML = `<p class="empty-state">Recordings unavailable: ${error.message}</p>`;
+    el.innerHTML = `<p class="empty-state">Recordings unavailable: ${escapeHtml(error.message)}</p>`;
   }
 }
 

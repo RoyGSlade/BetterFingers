@@ -1830,7 +1830,12 @@ export function createSettingsWorkspaceFeature({ elements, hooks } = {}) {
       }
     }
     if (!lastPrivacyReport && els.privacyNetworkList) {
-      els.privacyNetworkList.innerHTML = `<span class="empty-state">Privacy report unavailable: ${String(lastError?.message || lastError)}</span>`;
+      // textContent, never innerHTML: the message is a backend error string and
+      // can echo content the backend did not author (Phase 0 item 12).
+      const note = document.createElement('span');
+      note.className = 'empty-state';
+      note.textContent = `Privacy report unavailable: ${String(lastError?.message || lastError)}`;
+      els.privacyNetworkList.replaceChildren(note);
     }
   }
 
