@@ -190,7 +190,7 @@ async def execute_voice_command(request: VoiceCommandExecuteRequest):
         except approvals.ApprovalError as exc:
             s.broadcast_status_threadsafe(
                 "command_needs_confirmation",
-                {"action": intent.action, "kind": intent.kind},
+                {"action": intent.action, "kind": intent.kind, "draft_id": request.draft_id},
             )
             return {"ok": False, "reason": "needs_confirmation", "action": intent.action, "error": exc.code}
 

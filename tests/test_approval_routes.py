@@ -272,9 +272,9 @@ class HotkeyPressTests(DraftTestCase):
 
 
 class VoiceCommandTests(DraftTestCase):
-    def speak(self, text, **extra):
+    def speak(self, text, context=None, **extra):
         return self.client.post("/voice-commands/execute", json={
-            "text": text, "context": OVERLAY_CTX, "draft_id": self.draft["id"], **extra,
+            "text": text, "context": OVERLAY_CTX if context is None else context, "draft_id": self.draft["id"], **extra,
         }).json()
 
     def test_no_voice_input_can_send_with_or_without_a_ticket(self):
@@ -286,6 +286,29 @@ class VoiceCommandTests(DraftTestCase):
             self.assertEqual(data["reason"], "needs_tap")
         self.assertEqual(self.performed, [])
         self.assertEqual(self.status(), "pending")
+
+    def test_a_confirmation_gated_command_executes_only_with_a_voice_confirm_ticket(self):
+        """Round 2, item 6: 'delete my history' by voice is only a REQUEST. Without a ticket it
+        asks for confirmation (and tells the shell, which opens the native dialog); with one
+        minted after a click it passes the gate."""
+        statuses = []
+        with patch.object(server, "broadcast_status_threadsafe", side_effect=lambda s, d=None: statuses.append((s, d or {}))):
+            refused = self.speak("delete history", {"command_mode_on": True})
+            self.assertEqual(refused["reason"], "needs_confirmation")
+            self.assertIn(("command_needs_confirmation", {"action": "delete_history", "kind": "app_action", "draft_id": self.draft["id"]}), statuses)
+            ticket = voice_ticket("delete_history", self.draft["id"], "The final text.")
+            accepted = self.speak("delete history", {"command_mode_on": True}, approval=ticket)
+        self.assertEqual(accepted["reason"], "not_implemented", "it passed the confirmation gate")
+        self.assertEqual(self.performed, [])
+
+    def test_a_voice_confirm_ticket_is_single_use_and_bound_to_the_command_and_draft(self):
+        ticket = voice_ticket("delete_history", self.draft["id"], "The final text.")
+        wrong_draft = voice_ticket("delete_history", self.draft["id"] + 1, "The final text.")
+        wrong_text = voice_ticket("delete_history", self.draft["id"], "other text")
+        for bad in (wrong_draft, wrong_text, send_ticket(self.draft["id"], "paste", "The final text.")):
+            self.assertEqual(self.speak("delete history", {"command_mode_on": True}, approval=bad)["reason"], "needs_confirmation")
+        self.assertEqual(self.speak("delete history", {"command_mode_on": True}, approval=ticket)["reason"], "not_implemented")
+        self.assertEqual(self.speak("delete history", {"command_mode_on": True}, approval=ticket)["reason"], "needs_confirmation")
 
     def test_ambient_audio_saying_yes_approve_it_does_nothing(self):
         for phrase in ("yes approve it", "yes", "confirm", "approve the workflow"):

@@ -10,7 +10,7 @@ const require = createRequire(import.meta.url);
 const broker = require('../src/main/approvalBroker.js');
 const {
   createApprovalBroker, signTicket, linesDigest, textDigest, draftSendBind, personaExampleBind,
-  makeVisible, wrapLine, displayLines, MAX_DISPLAY_LINES, personaFewShotBind, addedFewShot,
+  makeVisible, wrapLine, displayLines, MAX_DISPLAY_LINES, personaFewShotBind, addedFewShot, voiceConfirmBind,
 } = broker;
 
 const SECRET = Buffer.from(Array.from({ length: 32 }, (_, i) => i));
@@ -334,6 +334,92 @@ test('persona example: a persona name with slashes cannot change the route', asy
   assert.equal(backend.calls[0].path, '/personas/..%2Fworkflows%2Fapprove/examples');
 });
 
+// ---- voice commands (round 2, item 6): voice only REQUESTS, the dialog confirms ----------------------------
+
+test('a spoken "send it" shows the backend\'s draft in a dialog and places it only on a click', async () => {
+  const { instance, dialog, backend } = makeBroker({ answers: [0], handlers: DRAFTS });
+  const result = await instance.presentVoiceTap({ draftId: 7 });
+  assert.equal(result.ok, true);
+  const { options } = dialog.shown[0];
+  assert.equal(options.defaultId, 1, 'ambient audio can start this dialog, so Cancel is the default');
+  assert.ok(options.detail.includes('The final text.'));
+  const post = backend.calls.find((c) => c.method === 'POST');
+  assert.equal(post.path, '/drafts/7/send');
+  verifyTicket(post.body.approval, { purpose: 'draft.send', subject: '7', bind: draftSendBind('paste', 'The final text.', false) });
+});
+
+test('declining a spoken send places nothing and signs nothing', async () => {
+  for (const answer of [1, -1, undefined]) {
+    const { instance, backend } = makeBroker({ answers: [answer], handlers: DRAFTS });
+    assert.equal((await instance.presentVoiceTap({ draftId: 7 })).ok, false);
+    assert.ok(!backend.calls.some((c) => c.method === 'POST'));
+  }
+});
+
+test('a spoken send for a draft the backend does not have, or without a draft, shows nothing', async () => {
+  for (const draftId of [99, null, undefined, 0, '7']) {
+    const { instance, dialog } = makeBroker({ answers: [0], handlers: DRAFTS });
+    assert.equal((await instance.presentVoiceTap({ draftId })).ok, false);
+    assert.equal(dialog.shown.length, 0);
+  }
+});
+
+test('a confirmation-gated spoken command is confirmed in a dialog and replayed with a voice.confirm ticket', async () => {
+  const { instance, dialog, backend } = makeBroker({ answers: [0] });
+  const result = await instance.confirmVoiceCommand({ action: 'delete_history', draftId: null });
+  assert.equal(result.ok, true);
+  assert.equal(dialog.shown[0].options.defaultId, 1);
+  assert.ok(dialog.shown[0].options.message.includes('Delete your whole history'));
+  const post = backend.calls[0];
+  assert.equal(post.path, '/voice-commands/execute');
+  assert.deepEqual(post.body.context, { command_mode_on: true });
+  verifyTicket(post.body.approval, { purpose: 'voice.confirm', subject: 'delete_history', bind: voiceConfirmBind('delete_history', null, '') });
+});
+
+test('a draft-bound spoken confirmation binds the backend\'s draft text', async () => {
+  const { instance, dialog, backend } = makeBroker({ answers: [0], handlers: DRAFTS });
+  await instance.confirmVoiceCommand({ action: 'delete_history', draftId: 7 });
+  assert.ok(dialog.shown[0].options.detail.includes('The final text.'));
+  verifyTicket(backend.calls.find((c) => c.method === 'POST').body.approval, {
+    purpose: 'voice.confirm', subject: 'delete_history', bind: voiceConfirmBind('delete_history', 7, 'The final text.'),
+  });
+});
+
+test('declining, unknown commands and the "send" action itself are never confirmed through this path', async () => {
+  const declined = makeBroker({ answers: [1] });
+  assert.equal((await declined.instance.confirmVoiceCommand({ action: 'delete_history' })).ok, false);
+  assert.equal(declined.backend.calls.length, 0);
+  for (const action of ['send', 'cancel', 'emergency_stop', '', undefined, 5, '../x']) {
+    const { instance, dialog, backend } = makeBroker({ answers: [0] });
+    assert.equal((await instance.confirmVoiceCommand({ action })).ok, false, String(action));
+    assert.equal(dialog.shown.length, 0);
+    assert.equal(backend.calls.length, 0);
+  }
+});
+
+test('repeated spoken requests are rate limited: only three dialogs a minute', async () => {
+  const { instance, dialog, advance } = makeBroker({ answers: [1, 1, 1, 1, 1], handlers: DRAFTS });
+  const results = [];
+  for (let i = 0; i < 5; i += 1) {
+    results.push(await instance.presentVoiceTap({ draftId: 7 }));
+    advance(600); // past the minimum gap between dialogs, still inside the one-minute window
+  }
+  assert.equal(dialog.shown.length, 3);
+  assert.match(results[3].error, /Too many spoken requests/);
+  advance(61000);
+  await instance.presentVoiceTap({ draftId: 7 });
+  assert.equal(dialog.shown.length, 4, 'the budget refills');
+});
+
+test('voice has no way to approve by itself: neither method signs without a dialog', async () => {
+  for (const [method, args] of [['presentVoiceTap', { draftId: 7 }], ['confirmVoiceCommand', { action: 'delete_history' }]]) {
+    const { instance, backend } = makeBroker({ answers: [new Error('no display')], handlers: DRAFTS });
+    const result = await instance[method](args);
+    assert.equal(result.ok, false);
+    assert.ok(!backend.calls.some((c) => c.method === 'POST'));
+  }
+});
+
 // ---- running an approved workflow (round 2, item 5) -------------------------------------------
 
 function runPreview(overrides = {}) {
@@ -607,7 +693,7 @@ test('the broker exposes no way to sign without a dialog', () => {
   const { instance } = makeBroker();
   assert.ok(!('signPhysicalPress' in instance));
   assert.deepEqual(Object.keys(instance).sort(), [
-    'addPersonaExample', 'approveWorkflow', 'confirmSendHotkeyChange', 'confirmWorkflowRun', 'placeFromHotkey', 'primaryActionFromUi', 'savePersona', 'sendDraft',
+    'addPersonaExample', 'approveWorkflow', 'confirmSendHotkeyChange', 'confirmVoiceCommand', 'confirmWorkflowRun', 'placeFromHotkey', 'presentVoiceTap', 'primaryActionFromUi', 'savePersona', 'sendDraft',
   ]);
 });
 

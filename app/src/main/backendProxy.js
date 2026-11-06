@@ -465,6 +465,22 @@ let _reconnectTimer = null;
 let _wsClosedByUser = false;
 let _wsAttempt = 0;
 
+// Main-side listeners for backend status events (round 2, item 6: spoken requests). The
+// renderer gets the same frames; this lets MAIN react to "a tap is needed" without trusting the
+// page to relay it.
+const _eventListeners = new Set();
+function onBackendEvent(listener) {
+  if (typeof listener !== 'function') return () => {};
+  _eventListeners.add(listener);
+  return () => _eventListeners.delete(listener);
+}
+function _notifyEventListeners(message) {
+  if (!message || typeof message !== 'object') return;
+  for (const listener of _eventListeners) {
+    try { listener(message); } catch (_e) { /* a listener must never break the socket */ }
+  }
+}
+
 function _wsUrl() {
   return `${_origin.replace(/^http/, 'ws')}/ws/voice_status`;
 }
@@ -501,7 +517,9 @@ function _connectWs() {
       return;
     }
     try {
-      _sendToRenderer('backend:voice-status:message', typeof data === 'string' ? JSON.parse(data) : data);
+      const message = typeof data === 'string' ? JSON.parse(data) : data;
+      _notifyEventListeners(message);
+      _sendToRenderer('backend:voice-status:message', message);
     } catch (_e) {
       // ignore unparseable frames
     }
@@ -552,6 +570,8 @@ module.exports = {
   init,
   request,
   sendTrusted,
+  onBackendEvent,
+  _notifyEventListeners,
   uploadVoiceSample,
   uploadWakeModel,
   startVoiceStatus,
