@@ -16,6 +16,7 @@ import unittest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from approval_support import workflow_ticket
 from backend.api.routes import actions as routes_actions
 from backend.services.workflow_store import WorkflowStore
 
@@ -106,6 +107,18 @@ class SaveApproveRunTests(RouteTestCase):
             "/workflows/compile", json={"workflow": WORKFLOW, "context": CONTEXT},
         ).json()["preview_lines"]
 
+    def approve(self, **overrides):
+        """Approve the way the Electron broker does: ask the backend for the exact
+        preview, 'show it', sign a ticket bound to what was shown, post it."""
+        shown = self.client.post(
+            "/workflows/preview", json={"workflow_id": "studio_setup", "context": CONTEXT},
+        ).json()
+        record = WorkflowStore(path=self.path).get("studio_setup")
+        ticket = workflow_ticket("studio_setup", shown["preview_lines"], record["steps"])
+        body = {"workflow_id": "studio_setup", "preview": shown["preview_lines"], "approval": ticket}
+        body.update(overrides)
+        return self.client.post("/workflows/approve", json=body)
+
     def test_save_stores_the_workflow_unapproved(self):
         body = self.save().json()
         self.assertTrue(body["ok"])
@@ -130,9 +143,7 @@ class SaveApproveRunTests(RouteTestCase):
 
     def test_the_full_flow_reaches_a_runnable_workflow(self):
         self.save()
-        approve = self.client.post("/workflows/approve", json={
-            "workflow_id": "studio_setup", "preview": self.preview(),
-        }).json()
+        approve = self.approve().json()
         self.assertTrue(approve["ok"])
         run = self.client.post(
             "/workflows/run", json={"workflow_id": "studio_setup", "context": CONTEXT},
@@ -148,9 +159,7 @@ class SaveApproveRunTests(RouteTestCase):
         would happen.
         """
         self.save()
-        self.client.post("/workflows/approve", json={
-            "workflow_id": "studio_setup", "preview": self.preview(),
-        })
+        self.assertEqual(self.approve().status_code, 200)
         changed = dict(CONTEXT, registry=[{
             **REGISTRY[0], "launch_method": "executable", "executable": "/usr/bin/obsidian",
         }])
@@ -162,9 +171,7 @@ class SaveApproveRunTests(RouteTestCase):
 
     def test_removing_the_application_blocks_the_run_with_validation_refusals(self):
         self.save()
-        self.client.post("/workflows/approve", json={
-            "workflow_id": "studio_setup", "preview": self.preview(),
-        })
+        self.assertEqual(self.approve().status_code, 200)
         run = self.client.post("/workflows/run", json={
             "workflow_id": "studio_setup", "context": dict(CONTEXT, registry=[]),
         }).json()
@@ -174,14 +181,125 @@ class SaveApproveRunTests(RouteTestCase):
 
     def test_a_disabled_workflow_cannot_run(self):
         self.save(enabled=False)
-        self.client.post("/workflows/approve", json={
-            "workflow_id": "studio_setup", "preview": self.preview(),
-        })
+        self.assertEqual(self.approve().status_code, 200)
         run = self.client.post(
             "/workflows/run", json={"workflow_id": "studio_setup", "context": CONTEXT},
         ).json()
         self.assertFalse(run["ok"])
         self.assertEqual(run["error"], "disabled")
+
+
+class ApprovalGateRouteTests(RouteTestCase):
+    """Phase 0 item 1: nobody who merely holds the bearer token can approve."""
+
+    def setUp(self):
+        super().setUp()
+        self.client.post("/workflows/save", json={"workflow": WORKFLOW, "enabled": True})
+        self.shown = self.client.post(
+            "/workflows/preview", json={"workflow_id": "studio_setup", "context": CONTEXT},
+        ).json()
+        self.record = WorkflowStore(path=self.path).get("studio_setup")
+
+    def post_approve(self, **fields):
+        body = {"workflow_id": "studio_setup", "preview": self.shown["preview_lines"]}
+        body.update(fields)
+        return self.client.post("/workflows/approve", json=body)
+
+    def assert_still_unapproved(self):
+        self.assertFalse(WorkflowStore(path=self.path).get("studio_setup")["approved"])
+        run = self.client.post("/workflows/run", json={"workflow_id": "studio_setup", "context": CONTEXT}).json()
+        self.assertFalse(run["ok"])
+
+    def test_the_preview_route_returns_the_exact_lines_and_their_digests(self):
+        from backend.services import approvals
+
+        self.assertTrue(self.shown["ok"])
+        self.assertEqual(self.shown["preview_sha256"], approvals.preview_digest(self.shown["preview_lines"]))
+        self.assertEqual(self.shown["steps_sha256"], approvals.steps_digest(self.record["steps"]))
+
+    def test_approving_with_the_replayed_preview_and_no_ticket_is_refused(self):
+        """The review's exploit: save, compile, copy the preview lines back into
+        /workflows/approve. Compile and run both hand the lines out, so they are
+        not proof of anything."""
+        response = self.post_approve()
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("needs your approval", response.json()["detail"])
+        self.assert_still_unapproved()
+
+    def test_a_forged_boolean_or_flag_in_the_body_is_ignored(self):
+        for extra in ({"approved": True}, {"consent": True}, {"confirm": True}, {"approval": True}):
+            response = self.post_approve(**extra)
+            self.assertIn(response.status_code, (403, 422), extra)
+        self.assert_still_unapproved()
+
+    def test_a_ticket_signed_with_a_key_the_caller_guessed_is_refused(self):
+        forged = workflow_ticket("studio_setup", self.shown["preview_lines"], self.record["steps"], secret=b"\x09" * 32)
+        self.assertEqual(self.post_approve(approval=forged).status_code, 403)
+        self.assert_still_unapproved()
+
+    def test_a_genuine_ticket_approves_and_only_then_can_the_workflow_run(self):
+        ticket = workflow_ticket("studio_setup", self.shown["preview_lines"], self.record["steps"])
+        self.assertEqual(self.post_approve(approval=ticket).status_code, 200)
+        run = self.client.post("/workflows/run", json={"workflow_id": "studio_setup", "context": CONTEXT}).json()
+        self.assertTrue(run["ok"], run)
+
+    def test_a_ticket_cannot_be_replayed(self):
+        ticket = workflow_ticket("studio_setup", self.shown["preview_lines"], self.record["steps"])
+        self.assertEqual(self.post_approve(approval=ticket).status_code, 200)
+        self.client.post("/workflows/save", json={"workflow": {**WORKFLOW, "steps": WORKFLOW["steps"][:1]}, "enabled": True})
+        again = self.post_approve(approval=ticket)
+        self.assertEqual(again.status_code, 403)
+
+    def test_a_ticket_for_a_different_preview_is_refused(self):
+        """The person saw X; the caller submits Y with the ticket for X."""
+        ticket = workflow_ticket("studio_setup", self.shown["preview_lines"], self.record["steps"])
+        swapped = list(self.shown["preview_lines"])
+        swapped[0] = swapped[0] + " "  # a single character
+        self.assertEqual(self.post_approve(preview=swapped, approval=ticket).status_code, 403)
+        self.assert_still_unapproved()
+
+    def test_a_ticket_minted_before_the_steps_changed_is_refused(self):
+        ticket = workflow_ticket("studio_setup", self.shown["preview_lines"], self.record["steps"])
+        edited = {**WORKFLOW, "steps": [{"action": "launch_app", "app_id": "obsidian"}]}
+        self.client.post("/workflows/save", json={"workflow": edited, "enabled": True})
+        self.assertEqual(self.post_approve(approval=ticket).status_code, 403)
+        self.assert_still_unapproved()
+
+    def test_a_ticket_for_another_workflow_is_refused(self):
+        other = workflow_ticket("other_workflow", self.shown["preview_lines"], self.record["steps"])
+        self.assertEqual(self.post_approve(approval=other).status_code, 403)
+
+    def test_a_malformed_or_oversized_ticket_is_a_clean_refusal_not_a_crash(self):
+        for bad in ({"payload": "x", "sig": "y"}, {"payload": "a" * 5000, "sig": "0" * 64}, {"payload": "x", "sig": "0" * 64, "extra": 1}):
+            self.assertIn(self.post_approve(approval=bad).status_code, (403, 422), bad)
+
+    def test_without_a_configured_key_the_route_says_approvals_are_unavailable(self):
+        from backend.services import approvals
+
+        approvals.reset()
+        ticket = workflow_ticket("studio_setup", self.shown["preview_lines"], self.record["steps"])
+        self.assertEqual(self.post_approve(approval=ticket).status_code, 503)
+
+    def test_an_oversized_preview_is_refused_not_clipped(self):
+        response = self.post_approve(preview=["x" * 9000])
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("too long", response.json()["detail"])
+
+    def test_a_long_preview_line_change_is_caught_end_to_end(self):
+        """Item 2 through the HTTP gate: the registry entry's launch description
+        differs only past character 240 and the approved workflow stops running."""
+        long_reg = [{**REGISTRY[0], "launch_method": "executable", "executable": "/opt/" + "a" * 250 + "/obsidian"}]
+        ctx_a = dict(CONTEXT, registry=long_reg)
+        ctx_b = dict(CONTEXT, registry=[{**long_reg[0], "executable": "/opt/" + "a" * 250 + "/EVIL"}])
+        shown_a = self.client.post("/workflows/preview", json={"workflow_id": "studio_setup", "context": ctx_a}).json()
+        self.assertTrue(any(len(line) > 240 for line in shown_a["preview_lines"]))
+        ticket = workflow_ticket("studio_setup", shown_a["preview_lines"], self.record["steps"])
+        self.assertEqual(self.post_approve(preview=shown_a["preview_lines"], approval=ticket).status_code, 200)
+        run_a = self.client.post("/workflows/run", json={"workflow_id": "studio_setup", "context": ctx_a}).json()
+        self.assertTrue(run_a["ok"], run_a)
+        run_b = self.client.post("/workflows/run", json={"workflow_id": "studio_setup", "context": ctx_b}).json()
+        self.assertFalse(run_b["ok"])
+        self.assertEqual(run_b["error"], "preview_changed")
 
 
 class RecordRunTests(RouteTestCase):

@@ -146,6 +146,14 @@ from backend.api.security import (  # noqa: E402
     validate_startup_security,
 )
 
+# Signed approvals (Phase 0 item 1). The Electron main process hands this backend
+# the approval-verification key through the environment; reading it REMOVES it from
+# os.environ so it can never be inherited by a process this backend spawns (MCP
+# servers, llama-server). No key => no approvals can be granted (fail closed).
+from backend.services import approvals  # noqa: E402
+
+approvals.configure_from_env()
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_cors_origins(),
@@ -1133,7 +1141,7 @@ def start_hotkey_manager():
         on_recording_complete_callback=on_recording_complete,
         on_recording_start_callback=on_recording_start,
         on_force_stop_callback=emergency_stop_runtime,
-        on_manual_send_callback=handle_primary_action,
+        on_manual_send_callback=handle_physical_primary_action,
         on_review_tts_callback=handle_review_tts_shortcut,
         on_selection_rewrite_callback=handle_selection_rewrite_shortcut,
         # Recording is never blocked by draft processing anymore — a finished
@@ -1507,7 +1515,7 @@ def mark_draft_pending_send(draft):
         pending_manual_send_ids.append(draft["id"])
 
 
-def send_draft_by_id(draft_id, action=None, open_chat=False, allow_resend=False, reviewed_text=None):
+def send_draft_by_id(draft_id, action=None, open_chat=False, allow_resend=False, reviewed_text=None, approval=None):
     # A wipe is draining/deleting user data — do not inject (which could reopen
     # or re-clipboard content the user is trying to erase).
     wiping = _reject_if_wiping("draft send")
@@ -1526,12 +1534,12 @@ def send_draft_by_id(draft_id, action=None, open_chat=False, allow_resend=False,
         }
         return {"id": draft_id, **wiping}
     try:
-        return _send_draft_by_id_locked(draft_id, action, open_chat, allow_resend, reviewed_text)
+        return _send_draft_by_id_locked(draft_id, action, open_chat, allow_resend, reviewed_text, approval)
     finally:
         output_coordinator.end_send(send_op_id)
 
 
-def _send_draft_by_id_locked(draft_id, action, open_chat, allow_resend, reviewed_text=None):
+def _send_draft_by_id_locked(draft_id, action, open_chat, allow_resend, reviewed_text=None, approval=None):
     # Atomic state transition (compare-and-set to "sending" under the lock)
     # so two simultaneous requests cannot both inject the same text. A request
     # that loses the race gets the existing outcome instead of re-injecting.
@@ -1552,6 +1560,32 @@ def _send_draft_by_id_locked(draft_id, action, open_chat, allow_resend, reviewed
             response.update({"ok": False, "error": "already_sent",
                              "message": "This draft was already sent; pass allow_resend to send again."})
             return response
+        # Phase 0 items 1 and 3: placing text into another application needs a
+        # signed approval minted by the Electron main process after the person
+        # tapped, bound to this exact draft text, action and open-chat flag. A
+        # request body can no longer stand in for the tap. Copy-to-clipboard is the
+        # only action that does not need one (it puts nothing into another app).
+        requested = action or ("open_chat_then_send" if get_profile_output_settings()["send_mode"] == "auto_send" else "copy_only")
+        if requested != "copy_only":
+            expected_bind = approvals.draft_send_bind(requested, draft.get("final_text", ""), bool(open_chat))
+            try:
+                if isinstance(approval, approvals.VerifiedApproval):
+                    # Already verified in-process (the physical hotkey witness);
+                    # it must still be for exactly this draft, action and text.
+                    if not (
+                        approvals.require_verified(approval, purpose=approvals.PURPOSE_DRAFT_SEND, subject=str(draft_id))
+                        and dict(approval.bind) == expected_bind
+                    ):
+                        raise approvals.ApprovalError(approvals.ERR_INVALID)
+                else:
+                    approvals.verify(
+                        approval,
+                        purpose=approvals.PURPOSE_DRAFT_SEND,
+                        subject=str(draft_id),
+                        bind=expected_bind,
+                    )
+            except approvals.ApprovalError as exc:
+                return {"ok": False, "error": exc.code, "message": exc.message, "draft_id": draft_id}
         if reviewed_text is not None:
             # The renderer supplies evidence of what was visible, never new
             # content. Compare and reserve the backend-owned text atomically.
@@ -1996,7 +2030,8 @@ _primary_action_selection_guard_until = 0.0
 _primary_action_selection_guard_draft_id = None
 
 
-def handle_primary_action(displayed_draft_id=None, displayed_final_text=None, review_visible=False):
+def handle_primary_action(displayed_draft_id=None, displayed_final_text=None, review_visible=False, approval=None,
+                          physical=False):
     global _primary_action_selection_guard_until
     global _primary_action_selection_guard_draft_id
     # A repeated F9 cannot fall through to selection capture while its first
@@ -2012,7 +2047,7 @@ def handle_primary_action(displayed_draft_id=None, displayed_final_text=None, re
                 and time.monotonic() < _primary_action_selection_guard_until:
             return {"ok": False, "error": "primary_action_repeat",
                     "message": "Ignored repeated primary action after placement."}
-        result = _handle_primary_action(displayed_draft_id, displayed_final_text, review_visible)
+        result = _handle_primary_action(displayed_draft_id, displayed_final_text, review_visible, approval, physical)
         if result.get("status") == "sent":
             # The overlay hides after placement, so a quick second press loses
             # its display ID. Do not reinterpret that double press as read-aloud.
@@ -2023,7 +2058,8 @@ def handle_primary_action(displayed_draft_id=None, displayed_final_text=None, re
         _primary_action_lock.release()
 
 
-def _handle_primary_action(displayed_draft_id, displayed_final_text, review_visible=False):
+def _handle_primary_action(displayed_draft_id, displayed_final_text, review_visible=False, approval=None,
+                           physical=False):
     if hotkey_manager is not None and bool(getattr(hotkey_manager, "is_recording", False)):
         logging.info("Ignored primary action while recording is active.")
         return {"ok": False, "message": "Recording is active; primary action ignored."}
@@ -2036,16 +2072,21 @@ def _handle_primary_action(displayed_draft_id, displayed_final_text, review_visi
             return {"ok": False, "error": "displayed_draft_unknown"}
         # Never substitute another draft (including an older accepted draft).
         return send_draft_by_id(displayed_draft_id, action="paste", open_chat=False,
-                                reviewed_text=displayed_final_text)
+                                reviewed_text=displayed_final_text, approval=approval)
 
     with draft_lock:
         draft_id = None
+        pending_text = ""
         while pending_manual_send_ids:
-            candidate = pending_manual_send_ids.pop(0)
+            # Peek, do not pop: a send that is refused for want of an approval
+            # must leave the draft queued for the press that carries one.
+            candidate = pending_manual_send_ids[0]
             draft = get_draft_by_id(candidate)
             if draft and draft.get("pending_send"):
                 draft_id = candidate
+                pending_text = draft.get("final_text", "")
                 break
+            pending_manual_send_ids.pop(0)  # stale entry, dropped as before
         if draft_id is None and any(d.get("status") == "sending" for d in draft_queue):
             # Selection capture uses the clipboard; never race an in-flight paste.
             return {"ok": False, "error": "send_in_progress",
@@ -2058,7 +2099,21 @@ def _handle_primary_action(displayed_draft_id, displayed_final_text, review_visi
             return {"ok": False, "error": "displayed_draft_unknown",
                     "message": "The review overlay is still showing the draft; press again."}
     if draft_id is not None:
-        return send_draft_by_id(draft_id, action="paste", open_chat=False)
+        if physical:
+            # Reached only from this process's own keyboard hook (see
+            # handle_physical_primary_action): the press itself is the tap.
+            approval = approvals.attest_physical_press(draft_id, "paste", pending_text)
+        result = send_draft_by_id(draft_id, action="paste", open_chat=False, approval=approval)
+        if result.get("error") in (approvals.ERR_REQUIRED, approvals.ERR_INVALID, approvals.ERR_UNAVAILABLE):
+            # Challenge: tell the caller (Electron main, on the physical key press)
+            # exactly which draft and text this press would place, so it can sign
+            # an approval bound to them. The draft stays queued.
+            result = {**result, "draft_id": draft_id, "action": "paste", "final_text": pending_text}
+        else:
+            with draft_lock:
+                while draft_id in pending_manual_send_ids:
+                    pending_manual_send_ids.remove(draft_id)  # same bookkeeping the old pop() did
+        return result
 
     try:
         from backend.output.clipboard_capture import capture_selection_text_with_restore
@@ -2075,6 +2130,17 @@ def _handle_primary_action(displayed_draft_id, displayed_final_text, review_visi
 
     broadcast_status_threadsafe("selection_captured" if result.get("ok") else "selection_capture_failed", result)
     return result
+
+
+def handle_physical_primary_action():
+    """The send hotkey as seen by THIS process's keyboard hook.
+
+    A physical key press is the tap, and an API caller cannot press a key, so the
+    hook may vouch for the press (``approvals.attest_physical_press``). Nothing
+    that arrives over HTTP reaches this function: the routes call
+    ``handle_primary_action`` without ``physical``.
+    """
+    return handle_primary_action(physical=True)
 
 
 def emergency_stop_runtime():

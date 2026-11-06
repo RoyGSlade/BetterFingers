@@ -1350,6 +1350,13 @@
   "methods": [
    "POST"
   ],
+  "path": "/workflows/preview"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
   "path": "/workflows/approve"
  },
  {

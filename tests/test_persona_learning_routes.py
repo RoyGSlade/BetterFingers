@@ -3,6 +3,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 import server
@@ -46,24 +48,23 @@ class PersonaLearningRoutesTests(unittest.TestCase):
 
     # --- add / consent -----------------------------------------------------
 
-    def test_add_requires_explicit_consent(self):
+    @pytest.mark.approvals_enforced
+    def test_add_requires_a_signed_approval_not_a_flag(self):
+        """Phase 0 item 1: ``consent: true`` in a request body is not consent. The
+        example is learned only with a ticket minted by the Electron main process
+        for exactly this persona and text (see tests/test_approval_routes.py for
+        the full matrix)."""
         with self._lazy(), patch.object(server, "Transcriber", DummyTranscriber):
             with self._client() as client:
-                resp = client.post(
-                    "/personas/Coach/examples",
-                    json={"raw": "hey whats up", "out": "Hey, what's up?"},
-                )
-                self.assertEqual(resp.status_code, 400, resp.text)
-                self.assertIn("consent", resp.json()["detail"])
-
-    def test_add_false_consent_rejected(self):
-        with self._lazy(), patch.object(server, "Transcriber", DummyTranscriber):
-            with self._client() as client:
-                resp = client.post(
-                    "/personas/Coach/examples",
-                    json={"raw": "hey whats up", "out": "Hey, what's up?", "consent": False},
-                )
-                self.assertEqual(resp.status_code, 400, resp.text)
+                for body in (
+                    {"raw": "hey whats up", "out": "Hey, what's up?"},
+                    {"raw": "hey whats up", "out": "Hey, what's up?", "consent": True},
+                    {"raw": "hey whats up", "out": "Hey, what's up?", "consent": False},
+                ):
+                    resp = client.post("/personas/Coach/examples", json=body)
+                    self.assertEqual(resp.status_code, 403, resp.text)
+                listed = client.get("/personas/Coach/examples").json()
+                self.assertEqual(listed["examples"], [])
 
     def test_add_list_delete_clear_round_trip(self):
         with self._lazy(), patch.object(server, "Transcriber", DummyTranscriber):

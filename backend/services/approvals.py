@@ -308,6 +308,21 @@ def verify(
     return VerifiedApproval(purpose, str(subject), dict(ticket_bind), nonce, _SEAL)
 
 
+def attest_physical_press(draft_id, action: str, text: str, open_chat: bool = False) -> VerifiedApproval:
+    """Proof that THIS process just observed the physical send hotkey.
+
+    The Python hotkey manager (a global keyboard hook inside this backend) is the
+    second witness of a physical key press, next to Electron main's own hook. A
+    key press cannot be forged by an API caller, so the manager's callback may
+    vouch for exactly the draft, action and text the press is about to place. It
+    is an in-process capability: no route calls it and no request body can reach
+    it, which ``tests/test_red_team_phase0.py`` checks by walking the route table.
+    """
+    return VerifiedApproval(
+        PURPOSE_DRAFT_SEND, str(draft_id), draft_send_bind(action, text, open_chat), "physical-press", _SEAL,
+    )
+
+
 def require_verified(proof, *, purpose: str, subject: Optional[str] = None) -> bool:
     """True when ``proof`` came out of :func:`verify` for this purpose (and subject)."""
     return (

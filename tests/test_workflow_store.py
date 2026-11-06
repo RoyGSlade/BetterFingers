@@ -22,6 +22,24 @@ from backend.services.workflow_store import (
     _normalize_store,
 )
 
+def grant(store, workflow_id, preview_lines):
+    """Approve the way production does: a ticket signed like the Electron broker's,
+    verified by the real verifier, handed to the store as proof."""
+    from approval_support import workflow_ticket
+    from backend.domain.actions import normalize_workflow_id
+    from backend.services import approvals
+
+    wid = normalize_workflow_id(workflow_id)
+    record = store.get(wid) or {"steps": []}
+    proof = approvals.verify(
+        workflow_ticket(wid, preview_lines, record["steps"]),
+        purpose=approvals.PURPOSE_WORKFLOW_APPROVE,
+        subject=wid,
+        bind=approvals.workflow_bind(preview_lines, record["steps"]),
+    )
+    return store.approve(wid, preview_lines, proof)
+
+
 WORKFLOW = {
     "name": "Studio setup",
     "trigger_phrases": ["open my studio"],
@@ -81,7 +99,7 @@ class SaveTests(StoreTestCase):
 class ApprovalTests(StoreTestCase):
     def approve(self):
         self.store.save(WORKFLOW, enabled=True)
-        return self.store.approve("studio_setup", PREVIEW)
+        return grant(self.store, "studio_setup", PREVIEW)
 
     def test_approval_records_the_exact_lines_the_user_read(self):
         result = self.approve()
@@ -90,7 +108,7 @@ class ApprovalTests(StoreTestCase):
 
     def test_an_empty_preview_cannot_be_approved(self):
         self.store.save(WORKFLOW)
-        result = self.store.approve("studio_setup", [])
+        result = grant(self.store, "studio_setup", [])
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "empty_preview")
 
@@ -111,6 +129,67 @@ class ApprovalTests(StoreTestCase):
         self.assertEqual(record["approved_preview"], PREVIEW)
 
 
+class ProofRequiredTests(StoreTestCase):
+    """Phase 0 item 1, store level: even an in-process caller cannot approve
+    without a proof that came out of the verifier."""
+
+    def test_approve_without_a_proof_does_nothing(self):
+        self.store.save(WORKFLOW, enabled=True)
+        for proof in (None, "yes", {"purpose": "workflow.approve"}, object(), True):
+            result = self.store.approve("studio_setup", PREVIEW, proof)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["error"], "approval_required")
+        self.assertFalse(self.store.get("studio_setup")["approved"])
+        self.assertEqual(self.store.can_run("studio_setup", PREVIEW)["error"], "not_approved")
+
+    def test_a_hand_built_proof_object_is_not_genuine(self):
+        from backend.services import approvals
+
+        self.store.save(WORKFLOW, enabled=True)
+        forged = approvals.VerifiedApproval(
+            purpose=approvals.PURPOSE_WORKFLOW_APPROVE, subject="studio_setup",
+            bind={}, nonce="x" * 16, _seal=object(),
+        )
+        self.assertFalse(self.store.approve("studio_setup", PREVIEW, forged)["ok"])
+
+    def test_a_proof_for_another_workflow_or_purpose_is_refused(self):
+        from approval_support import sign_ticket, workflow_ticket
+        from backend.services import approvals
+
+        self.store.save(WORKFLOW, enabled=True)
+        self.store.save({**WORKFLOW, "name": "Other"}, enabled=True)
+        record = self.store.get("other")
+        proof_for_other = approvals.verify(
+            workflow_ticket("other", PREVIEW, record["steps"]),
+            purpose=approvals.PURPOSE_WORKFLOW_APPROVE, subject="other",
+            bind=approvals.workflow_bind(PREVIEW, record["steps"]),
+        )
+        self.assertFalse(self.store.approve("studio_setup", PREVIEW, proof_for_other)["ok"])
+        send_proof = approvals.verify(
+            sign_ticket(approvals.PURPOSE_DRAFT_SEND, "studio_setup", approvals.draft_send_bind("paste", "x")),
+            purpose=approvals.PURPOSE_DRAFT_SEND, subject="studio_setup",
+            bind=approvals.draft_send_bind("paste", "x"),
+        )
+        self.assertFalse(self.store.approve("studio_setup", PREVIEW, send_proof)["ok"])
+
+    def test_steps_edited_between_the_dialog_and_the_approval_void_it(self):
+        from approval_support import workflow_ticket
+        from backend.services import approvals
+
+        self.store.save(WORKFLOW, enabled=True)
+        seen = self.store.get("studio_setup")
+        proof = approvals.verify(
+            workflow_ticket("studio_setup", PREVIEW, seen["steps"]),
+            purpose=approvals.PURPOSE_WORKFLOW_APPROVE, subject="studio_setup",
+            bind=approvals.workflow_bind(PREVIEW, seen["steps"]),
+        )
+        # An attacker with the token re-saves the same id with a different step.
+        self.store.save({**WORKFLOW, "steps": [{"action": "launch_app", "app_id": "obsidian"}]}, enabled=True)
+        result = self.store.approve("studio_setup", PREVIEW, proof)
+        self.assertEqual(result["error"], "workflow_changed")
+        self.assertFalse(self.store.get("studio_setup")["approved"])
+
+
 class FullPreviewTests(StoreTestCase):
     """Phase 0 item 2. The preview comparison used to cut every line at 240
     characters (and keep only 64 lines), so a change past that point compared
@@ -120,7 +199,7 @@ class FullPreviewTests(StoreTestCase):
 
     def approved(self, lines):
         self.store.save(WORKFLOW, enabled=True)
-        self.assertTrue(self.store.approve("studio-setup", lines)["ok"])
+        self.assertTrue(grant(self.store, "studio-setup", lines)["ok"])
 
     def test_a_change_past_character_240_blocks_the_run(self):
         self.assertGreater(len(self.PREFIX), 240)
@@ -153,9 +232,9 @@ class FullPreviewTests(StoreTestCase):
 
     def test_an_oversized_preview_is_refused_not_clipped(self):
         self.store.save(WORKFLOW)
-        too_wide = self.store.approve("studio-setup", ["x" * 9000])
+        too_wide = grant(self.store, "studio-setup", ["x" * 9000])
         self.assertEqual(too_wide["error"], "preview_too_large")
-        too_tall = self.store.approve("studio-setup", [f"{n}" for n in range(300)])
+        too_tall = grant(self.store, "studio-setup", [f"{n}" for n in range(300)])
         self.assertEqual(too_tall["error"], "preview_too_large")
         self.assertFalse(self.store.get("studio-setup")["approved"])
 
@@ -205,19 +284,19 @@ class RunGateTests(StoreTestCase):
 
     def test_a_disabled_workflow_cannot_run_even_when_approved(self):
         self.store.save(WORKFLOW, enabled=False)
-        self.store.approve("studio_setup", PREVIEW)
+        grant(self.store, "studio_setup", PREVIEW)
         gate = self.store.can_run("studio_setup", PREVIEW)
         self.assertFalse(gate["ok"])
         self.assertEqual(gate["error"], "disabled")
 
     def test_an_approved_enabled_workflow_runs_when_the_preview_still_matches(self):
         self.store.save(WORKFLOW, enabled=True)
-        self.store.approve("studio_setup", PREVIEW)
+        grant(self.store, "studio_setup", PREVIEW)
         self.assertTrue(self.store.can_run("studio_setup", PREVIEW)["ok"])
 
     def test_a_changed_preview_blocks_the_run_even_though_nobody_edited_it(self):
         self.store.save(WORKFLOW, enabled=True)
-        self.store.approve("studio_setup", PREVIEW)
+        grant(self.store, "studio_setup", PREVIEW)
         drifted = ["1. Launch Obsidian (program /usr/bin/obsidian)", PREVIEW[1]]
         gate = self.store.can_run("studio_setup", drifted)
         self.assertFalse(gate["ok"])
@@ -294,7 +373,7 @@ class DurabilityTests(StoreTestCase):
 
     def test_a_hand_edited_file_that_adds_a_shell_step_loses_the_whole_record(self):
         self.store.save(WORKFLOW, enabled=True)
-        self.store.approve("studio_setup", PREVIEW)
+        grant(self.store, "studio_setup", PREVIEW)
         data = self.read_file()
         data["workflows"]["studio_setup"]["steps"].append({"action": "shell", "command": "id"})
         with open(self.path, "w", encoding="utf-8") as handle:

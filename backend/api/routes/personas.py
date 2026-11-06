@@ -15,6 +15,8 @@ from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
+from backend.api.models import ApprovalTicketModel
+from backend.services import approvals
 from backend.services import personas as persona_service
 from backend.services.persona_learning import PersonaLearningStore
 from backend.services import persona_drafts
@@ -60,11 +62,13 @@ def _learning_store() -> PersonaLearningStore:
 class PersonaExampleRequest(BaseModel):
     raw: str = Field(..., min_length=1, max_length=MAX_LEARNING_EXAMPLE_CHARS)
     out: str = Field(..., min_length=1, max_length=MAX_LEARNING_EXAMPLE_CHARS)
-    # No default of True: every learn request must explicitly opt in. There
-    # is no persisted "this persona has consent" flag anywhere in the system
-    # (F2.6) -- omitting this field means consent=False, which the store
-    # rejects with consent_required rather than silently learning.
+    # DEPRECATED and ignored (Phase 0 item 1). A request boolean is not consent:
+    # any holder of the bearer token could send ``consent: true`` and poison every
+    # future rewrite with a persistent prompt injection. Consent is now a signed
+    # ticket from the Electron main process, minted only after a native dialog
+    # showed the person this exact persona and example (raw and result text).
     consent: bool = False
+    approval: Optional[ApprovalTicketModel] = None
 
 
 class PersonaRequest(BaseModel):
@@ -409,11 +413,21 @@ async def list_persona_examples_route(name: str):
 
 @router.post("/personas/{name}/examples")
 async def add_persona_example_route(name: str, request: PersonaExampleRequest):
-    """Learn one new few-shot example for a persona. Requires consent=True on
-    this exact request -- there is no persisted consent flag to rely on."""
+    """Learn one new few-shot example for a persona. Requires a signed approval
+    for exactly this persona, raw text and result text (one-shot: there is no
+    persisted consent flag, and a request boolean does not count)."""
+    try:
+        approvals.verify(
+            request.approval.model_dump() if request.approval else None,
+            purpose=approvals.PURPOSE_PERSONA_EXAMPLE,
+            subject=name,
+            bind=approvals.persona_example_bind(name, request.raw, request.out),
+        )
+    except approvals.ApprovalError as exc:
+        raise HTTPException(status_code=approvals.http_status_for(exc.code), detail=exc.message)
     result = await run_in_threadpool(
         _learning_store().add_example, name, request.raw, request.out,
-        consent=request.consent,
+        consent=True,
     )
     if not result["ok"]:
         status = _LEARNING_ERROR_STATUS.get(result["error"], 400)

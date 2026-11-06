@@ -44,6 +44,9 @@ from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
+from backend.api.models import ApprovalTicketModel
+from backend.services import approvals
+
 router = APIRouter()
 
 
@@ -377,15 +380,23 @@ class DraftSendRequest(BaseModel):
     action: str = "copy_only"
     open_chat: bool = False
     allow_resend: bool = False
+    # Required for every action except copy_only (Phase 0 items 1 and 3): a
+    # signed ticket minted by the Electron main process after the person tapped,
+    # bound to this exact draft text. See backend/services/approvals.py.
+    approval: Optional[ApprovalTicketModel] = None
 
 
 @router.post("/drafts/{draft_id}/send")
 async def send_draft(draft_id: int, request: DraftSendRequest = DraftSendRequest()):
     import server as s
 
-    return s.send_draft_by_id(
+    result = s.send_draft_by_id(
         draft_id,
         action=request.action,
         open_chat=request.open_chat,
         allow_resend=request.allow_resend,
+        approval=request.approval.model_dump() if request.approval else None,
     )
+    if result.get("error") in (approvals.ERR_REQUIRED, approvals.ERR_INVALID, approvals.ERR_UNAVAILABLE):
+        raise HTTPException(status_code=approvals.http_status_for(result["error"]), detail=result["message"])
+    return result

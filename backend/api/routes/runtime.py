@@ -53,7 +53,9 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, StrictBool, StrictInt, StrictStr
 
 from backend.api.routes import drafts as routes_drafts
+from backend.api.models import ApprovalTicketModel
 from backend.api.security import check_request_origin
+from backend.services import approvals
 
 router = APIRouter()
 
@@ -133,11 +135,14 @@ class VoiceCommandExecuteRequest(BaseModel):
     text: str
     draft_id: Optional[int] = None
     context: dict = {}
+    # DEPRECATED and ignored (Phase 0 items 1/3): a request boolean is not a tap.
+    # Confirmation-gated commands need ``approval``, a signed ticket from main.
     confirm: bool = False
+    approval: Optional[ApprovalTicketModel] = None
 
 
 _REWRITE_ACTION_FOR = {"rewrite_shorter": "shorter", "rewrite_clearer": "clearer"}
-_DRAFT_DEPENDENT_ACTIONS = {"cancel", "send", "copy", "read_back", "retry", *_REWRITE_ACTION_FOR}
+_DRAFT_DEPENDENT_ACTIONS = {"cancel", "copy", "read_back", "retry", *_REWRITE_ACTION_FOR}
 
 
 @router.post("/voice-commands/execute")
@@ -161,12 +166,33 @@ async def execute_voice_command(request: VoiceCommandExecuteRequest):
         {"action": intent.action, "kind": intent.kind, "confidence": intent.confidence},
     )
 
-    if intent.requires_confirmation and not request.confirm:
+    if intent.action == "send":
+        # Phase 0 item 3: a spoken "send it" may ask BetterFingers to PRESENT the
+        # draft; it can never place it. Sending takes a tap approved in the
+        # BetterFingers window (backend/services/approvals.py), and ambient audio
+        # or a replayed phrase is not one.
         s.broadcast_status_threadsafe(
-            "command_needs_confirmation",
-            {"action": intent.action, "kind": intent.kind},
+            "command_needs_tap", {"action": intent.action, "kind": intent.kind, "draft_id": request.draft_id},
         )
-        return {"ok": False, "reason": "needs_confirmation", "action": intent.action}
+        return {"ok": False, "reason": "needs_tap", "action": intent.action, "draft_id": request.draft_id}
+
+    if intent.requires_confirmation:
+        draft = s.get_draft_by_id(request.draft_id) if request.draft_id is not None else None
+        try:
+            approvals.verify(
+                request.approval.model_dump() if request.approval else None,
+                purpose=approvals.PURPOSE_VOICE_CONFIRM,
+                subject=intent.action,
+                bind=approvals.voice_confirm_bind(
+                    intent.action, request.draft_id, (draft or {}).get("final_text", ""),
+                ),
+            )
+        except approvals.ApprovalError as exc:
+            s.broadcast_status_threadsafe(
+                "command_needs_confirmation",
+                {"action": intent.action, "kind": intent.kind},
+            )
+            return {"ok": False, "reason": "needs_confirmation", "action": intent.action, "error": exc.code}
 
     draft_id = request.draft_id
     try:
@@ -187,8 +213,6 @@ async def execute_voice_command(request: VoiceCommandExecuteRequest):
 
         if intent.action == "cancel":
             result = await routes_drafts.decline_draft(draft_id)
-        elif intent.action == "send":
-            result = s.send_draft_by_id(draft_id)
         elif intent.action == "copy":
             draft = s.get_draft_by_id(draft_id)
             if draft is None:
@@ -219,6 +243,8 @@ class PrimaryActionRequest(BaseModel):
     # True when the review overlay is visible but has not acknowledged which
     # draft it painted (Electron main knows; the backend cannot).
     review_visible: StrictBool = False
+    # Signed by the Electron main process on the person's tap (Phase 0 item 3).
+    approval: Optional[ApprovalTicketModel] = None
 
 
 @router.post("/runtime/primary-action")
@@ -230,7 +256,8 @@ async def runtime_primary_action(request: PrimaryActionRequest | None = None):
     return await run_in_threadpool(s.handle_primary_action,
                                   displayed_draft_id=request.displayed_draft_id,
                                   displayed_final_text=request.displayed_final_text,
-                                  review_visible=request.review_visible)
+                                  review_visible=request.review_visible,
+                                  approval=request.approval.model_dump() if request.approval else None)
 
 
 @router.post("/runtime/emergency-stop")

@@ -63,7 +63,8 @@ from backend.services.action_validator import (
     STEP_STATUS_CODES,
 )
 from backend.config.store_migration import load_versioned_store, write_atomic
-from backend.services.approvals import preview_digest
+from backend.services import approvals
+from backend.services.approvals import preview_digest, steps_digest
 
 # Schema history:
 #   v1 (current): {"schema_version": 1, "workflows": {id: <record>},
@@ -359,8 +360,16 @@ class WorkflowStore:
             return {"ok": True, "workflow": dict(record),
                     "dropped_fields": list(result.dropped_fields)}
 
-    def approve(self, workflow_id, preview_lines) -> dict:
+    def approve(self, workflow_id, preview_lines, proof=None) -> dict:
         """Record that the user read **these exact, complete lines** and said yes.
+
+        ``proof`` must be the ``VerifiedApproval`` that
+        ``approvals.verify(..., purpose="workflow.approve")`` returned for this
+        workflow: a signed ticket from the Electron main process, minted only
+        after a native dialog showed the person the complete preview. Without it
+        nothing is approved, whoever the caller is (Phase 0 item 1) -- including
+        any in-process caller, which is why the check lives here and not only in
+        the HTTP route.
 
         The lines are stored whole together with their SHA-256; an empty or
         oversized preview is refused rather than clipped.
@@ -369,6 +378,8 @@ class WorkflowStore:
         lines = _clean_preview(preview_lines)
         if not wid:
             return {"ok": False, "error": "invalid_id"}
+        if not approvals.require_verified(proof, purpose=approvals.PURPOSE_WORKFLOW_APPROVE, subject=wid):
+            return {"ok": False, "error": approvals.ERR_REQUIRED, "message": approvals.ApprovalError(approvals.ERR_REQUIRED).message}
         if not lines:
             return {"ok": False, "error": "empty_preview",
                     "message": "There is nothing to approve — the preview is empty."}
@@ -380,6 +391,13 @@ class WorkflowStore:
             record = data["workflows"].get(wid)
             if record is None:
                 return {"ok": False, "error": "not_found"}
+            # The ticket was minted for the workflow the person SAW. If its steps
+            # changed between the dialog and now, that approval describes
+            # something that no longer exists.
+            if proof.bind.get("steps_sha256") != steps_digest(record["steps"]) \
+                    or proof.bind.get("preview_sha256") != preview_digest(lines):
+                return {"ok": False, "error": "workflow_changed",
+                        "message": "That workflow changed while you were reviewing it. Review it again."}
             record["approved"] = True
             record["approved_preview"] = lines
             record["approved_preview_sha256"] = preview_digest(lines)

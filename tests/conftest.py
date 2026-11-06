@@ -197,7 +197,10 @@ APPROVAL_ENFORCED_FILES = frozenset({
 def _approval_gate_mode(request):
     from backend.services import approvals
 
-    enforced = os.path.basename(str(request.node.fspath)) in APPROVAL_ENFORCED_FILES
+    enforced = (
+        os.path.basename(str(request.node.fspath)) in APPROVAL_ENFORCED_FILES
+        or request.node.get_closest_marker("approvals_enforced") is not None
+    )
     saved = approvals.ENFORCE
     approvals.reset()
     approvals.ENFORCE = enforced
