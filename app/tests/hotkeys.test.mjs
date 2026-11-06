@@ -81,23 +81,27 @@ const CONFIG = {
 };
 
 const PRIMARY_CASES = [
-  { label: 'hidden', displayedDraft: null, reviewVisible: false, body: {} },
-  { label: 'visible, unacknowledged', displayedDraft: null, reviewVisible: true, body: { review_visible: true } },
-  { label: 'visible', displayedDraft: { displayed_draft_id: 7, displayed_final_text: 'shown fixture' }, reviewVisible: true,
-    body: { displayed_draft_id: 7, displayed_final_text: 'shown fixture' } },
+  { label: 'hidden', displayedDraft: null, reviewVisible: false, expected: { displayedDraftId: null, reviewVisible: false } },
+  { label: 'visible, unacknowledged', displayedDraft: null, reviewVisible: true, expected: { displayedDraftId: null, reviewVisible: true } },
+  { label: 'visible', displayedDraft: { displayed_draft_id: 7, displayed_final_text: 'text the review window CLAIMS it painted' }, reviewVisible: true,
+    expected: { displayedDraftId: 7, reviewVisible: true } },
 ];
 
 for (const hookStarts of [true, false]) {
-  for (const { label, displayedDraft, reviewVisible, body } of PRIMARY_CASES) {
-    test(`F9 passes exact displayed evidence (${hookStarts ? 'uiohook' : 'fallback'}, ${label})`, () => {
+  for (const { label, displayedDraft, reviewVisible, expected } of PRIMARY_CASES) {
+    test(`the send key hands the press to the approval handler (${hookStarts ? 'uiohook' : 'fallback'}, ${label})`, async () => {
       const ctx = loadHotkeysWithStubs({ hookStarts, displayedDraft, reviewVisible });
       try {
+        const presses = [];
+        ctx.hotkeys.setPrimaryActionHandler(async (press) => { presses.push(press); return { ok: true }; });
         ctx.hotkeys.registerHotkeys({ ...CONFIG, manual_send_hotkey: 'f9' }, 'fixture-token');
         if (hookStarts) ctx.listeners.get('keydown')({ keycode: 67 });
         else ctx.registeredShortcuts.find(s => s.accelerator === 'F9').callback();
-        assert.equal(ctx.requests.length, 1);
-        assert.equal(ctx.requests[0].path, '/runtime/primary-action');
-        assert.deepEqual(ctx.requests[0].body, body);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        // The press itself sends nothing to the backend and signs nothing; only WHICH draft
+        // the review window believes it shows is passed on, never what it says it painted.
+        assert.equal(ctx.requests.length, 0);
+        assert.deepEqual(presses, [expected]);
       } finally {
         ctx.hotkeys.unregisterAllHotkeys();
         ctx.restore();

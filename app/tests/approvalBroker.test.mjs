@@ -425,13 +425,76 @@ test('the primary-action challenge is only honoured when it is well formed', asy
   }
 });
 
-test('the physical-press signer signs without a dialog and only for a well-formed press', () => {
-  const { instance, dialog } = makeBroker();
-  const ticket = instance.signPhysicalPress({ draftId: 7, text: 'The final text.' });
-  verifyTicket(ticket, { purpose: 'draft.send', subject: '7', bind: draftSendBind('paste', 'The final text.', false) });
+// ---- the send hotkey (round 2, item 2) ------------------------------------------------------
+
+test('a hotkey press shows the BACKEND\'s text for the draft the window names, and Enter confirms', async () => {
+  const { instance, dialog, backend } = makeBroker({ answers: [0], handlers: DRAFTS });
+  const result = await instance.placeFromHotkey({ displayedDraftId: 7, reviewVisible: true, displayedFinalText: 'EVIL text the review window claims' });
+  assert.equal(result.ok, true);
+  const { options } = dialog.shown[0];
+  assert.equal(options.defaultId, 0, 'the person just pressed the shortcut: Enter confirms');
+  assert.equal(options.cancelId, 1, 'Escape still cancels');
+  assert.ok(options.detail.includes('The final text.'));
+  assert.ok(!options.detail.includes('EVIL'));
+  const post = backend.calls.find((c) => c.method === 'POST');
+  assert.equal(post.path, '/runtime/primary-action');
+  assert.equal(post.body.displayed_final_text, 'The final text.');
+  verifyTicket(post.body.approval, { purpose: 'draft.send', subject: '7', bind: draftSendBind('paste', 'The final text.', false) });
+});
+
+test('a hotkey press with nothing displayed answers the backend\'s challenge through the dialog', async () => {
+  const challenge = { ok: true, status: 200, body: { ok: false, error: 'approval_required', draft_id: 9, action: 'paste', final_text: 'queued text' } };
+  let calls = 0;
+  const { instance, dialog, backend } = makeBroker({
+    answers: [0],
+    handlers: { 'POST /runtime/primary-action': () => { calls += 1; return calls === 1 ? challenge : { ok: true, status: 200, body: { status: 'sent' } }; } },
+  });
+  const result = await instance.placeFromHotkey({ displayedDraftId: null });
+  assert.equal(result.body.status, 'sent');
+  assert.ok(dialog.shown[0].options.detail.includes('queued text'));
+  verifyTicket(backend.calls[1].body.approval, { purpose: 'draft.send', subject: '9', bind: draftSendBind('paste', 'queued text', false) });
+});
+
+test('cancelling the hotkey dialog places nothing and signs nothing', async () => {
+  for (const answer of [1, -1, undefined]) {
+    const { instance, backend } = makeBroker({ answers: [answer], handlers: DRAFTS });
+    assert.equal((await instance.placeFromHotkey({ displayedDraftId: 7 })).ok, false);
+    assert.ok(!backend.calls.some((c) => c.method === 'POST'));
+  }
+});
+
+test('a hotkey press for a draft the backend does not have shows no dialog', async () => {
+  const { instance, dialog } = makeBroker({ answers: [0], handlers: DRAFTS });
+  assert.equal((await instance.placeFromHotkey({ displayedDraftId: 99 })).ok, false);
   assert.equal(dialog.shown.length, 0);
-  for (const bad of [undefined, {}, { draftId: 0, text: 'x' }, { draftId: '7', text: 'x' }, { draftId: 7, text: 5 }]) {
-    assert.equal(instance.signPhysicalPress(bad), null);
+});
+
+test('only the hotkey dialog defaults to Approve; every other dialog still defaults to Cancel', async () => {
+  const workflow = makeBroker({ answers: [1], handlers: previewHandler() });
+  await workflow.instance.approveWorkflow('studio_setup');
+  const draft = makeBroker({ answers: [1], handlers: DRAFTS });
+  await draft.instance.sendDraft({ id: 7, action: 'paste' });
+  const persona = makeBroker({ answers: [1] });
+  await persona.instance.addPersonaExample({ persona: 'Coach', raw: 'a', out: 'b' });
+  const change = makeBroker({ answers: [1] });
+  await change.instance.confirmSendHotkeyChange('ctrl+alt+s');
+  for (const ctx of [workflow, draft, persona, change]) assert.equal(ctx.dialog.shown[0].options.defaultId, 1);
+});
+
+test('the broker exposes no way to sign without a dialog', () => {
+  const { instance } = makeBroker();
+  assert.ok(!('signPhysicalPress' in instance));
+  assert.deepEqual(Object.keys(instance).sort(), [
+    'addPersonaExample', 'approveWorkflow', 'confirmSendHotkeyChange', 'placeFromHotkey', 'primaryActionFromUi', 'sendDraft',
+  ]);
+});
+
+test('changing the send shortcut shows a native dialog naming the key; only a click applies it', async () => {
+  const yes = makeBroker({ answers: [0] });
+  assert.equal(await yes.instance.confirmSendHotkeyChange('ctrl+alt+s'), true);
+  assert.ok(yes.dialog.shown[0].options.message.includes('ctrl+alt+s'));
+  for (const answer of [1, -1, undefined]) {
+    assert.equal(await makeBroker({ answers: [answer] }).instance.confirmSendHotkeyChange('ctrl+alt+s'), false);
   }
 });
 
@@ -441,7 +504,7 @@ const SRC = (rel) => readFileSync(new URL(`../src/${rel}`, import.meta.url), 'ut
 
 test('the preload never exposes the key, a signer or a ticket', () => {
   const preload = SRC('preload/preload.js');
-  for (const forbidden of ['APPROVAL_KEY', 'getApprovalKey', 'signTicket', 'signPhysicalPress', 'sendTrusted', 'createApprovalBroker']) {
+  for (const forbidden of ['APPROVAL_KEY', 'getApprovalKey', 'signTicket', 'signPhysicalPress', 'placeFromHotkey', 'sendTrusted', 'createApprovalBroker']) {
     assert.ok(!preload.includes(forbidden), `${forbidden} must not appear in the preload bridge`);
   }
   // The renderer-facing approval methods are fixed-shape invokes that return the backend's answer.

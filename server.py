@@ -1141,7 +1141,7 @@ def start_hotkey_manager():
         on_recording_complete_callback=on_recording_complete,
         on_recording_start_callback=on_recording_start,
         on_force_stop_callback=emergency_stop_runtime,
-        on_manual_send_callback=handle_physical_primary_action,
+        on_manual_send_callback=handle_hotkey_primary_action,
         on_review_tts_callback=handle_review_tts_shortcut,
         on_selection_rewrite_callback=handle_selection_rewrite_shortcut,
         # Recording is never blocked by draft processing anymore — a finished
@@ -1590,21 +1590,12 @@ def _send_draft_by_id_locked(draft_id, action, open_chat, allow_resend, reviewed
         if requested != "copy_only":
             expected_bind = approvals.draft_send_bind(requested, draft.get("final_text", ""), bool(open_chat))
             try:
-                if isinstance(approval, approvals.VerifiedApproval):
-                    # Already verified in-process (the physical hotkey witness);
-                    # it must still be for exactly this draft, action and text.
-                    if not (
-                        approvals.require_verified(approval, purpose=approvals.PURPOSE_DRAFT_SEND, subject=str(draft_id))
-                        and dict(approval.bind) == expected_bind
-                    ):
-                        raise approvals.ApprovalError(approvals.ERR_INVALID)
-                else:
-                    approvals.verify(
-                        approval,
-                        purpose=approvals.PURPOSE_DRAFT_SEND,
-                        subject=str(draft_id),
-                        bind=expected_bind,
-                    )
+                approvals.verify(
+                    approval,
+                    purpose=approvals.PURPOSE_DRAFT_SEND,
+                    subject=str(draft_id),
+                    bind=expected_bind,
+                )
             except approvals.ApprovalError as exc:
                 return {"ok": False, "error": exc.code, "message": exc.message, "draft_id": draft_id}
         if reviewed_text is not None:
@@ -2050,8 +2041,7 @@ _primary_action_selection_guard_until = 0.0
 _primary_action_selection_guard_draft_id = None
 
 
-def handle_primary_action(displayed_draft_id=None, displayed_final_text=None, review_visible=False, approval=None,
-                          physical=False):
+def handle_primary_action(displayed_draft_id=None, displayed_final_text=None, review_visible=False, approval=None):
     global _primary_action_selection_guard_until
     global _primary_action_selection_guard_draft_id
     # A repeated F9 cannot fall through to selection capture while its first
@@ -2067,7 +2057,7 @@ def handle_primary_action(displayed_draft_id=None, displayed_final_text=None, re
                 and time.monotonic() < _primary_action_selection_guard_until:
             return {"ok": False, "error": "primary_action_repeat",
                     "message": "Ignored repeated primary action after placement."}
-        result = _handle_primary_action(displayed_draft_id, displayed_final_text, review_visible, approval, physical)
+        result = _handle_primary_action(displayed_draft_id, displayed_final_text, review_visible, approval)
         if result.get("status") == "sent":
             # The overlay hides after placement, so a quick second press loses
             # its display ID. Do not reinterpret that double press as read-aloud.
@@ -2078,8 +2068,7 @@ def handle_primary_action(displayed_draft_id=None, displayed_final_text=None, re
         _primary_action_lock.release()
 
 
-def _handle_primary_action(displayed_draft_id, displayed_final_text, review_visible=False, approval=None,
-                           physical=False):
+def _handle_primary_action(displayed_draft_id, displayed_final_text, review_visible=False, approval=None):
     if hotkey_manager is not None and bool(getattr(hotkey_manager, "is_recording", False)):
         logging.info("Ignored primary action while recording is active.")
         return {"ok": False, "message": "Recording is active; primary action ignored."}
@@ -2119,10 +2108,6 @@ def _handle_primary_action(displayed_draft_id, displayed_final_text, review_visi
             return {"ok": False, "error": "displayed_draft_unknown",
                     "message": "The review overlay is still showing the draft; press again."}
     if draft_id is not None:
-        if physical:
-            # Reached only from this process's own keyboard hook (see
-            # handle_physical_primary_action): the press itself is the tap.
-            approval = approvals.attest_physical_press(draft_id, "paste", pending_text)
         result = send_draft_by_id(draft_id, action="paste", open_chat=False, approval=approval)
         if result.get("error") in (approvals.ERR_REQUIRED, approvals.ERR_INVALID, approvals.ERR_UNAVAILABLE):
             # Challenge: tell the caller (Electron main, on the physical key press)
@@ -2152,15 +2137,19 @@ def _handle_primary_action(displayed_draft_id, displayed_final_text, review_visi
     return result
 
 
-def handle_physical_primary_action():
-    """The send hotkey as seen by THIS process's keyboard hook.
+def handle_hotkey_primary_action():
+    """The send hotkey as seen by THIS process's own keyboard hook (the standalone/dev path).
 
-    A physical key press is the tap, and an API caller cannot press a key, so the
-    hook may vouch for the press (``approvals.attest_physical_press``). Nothing
-    that arrives over HTTP reaches this function: the routes call
-    ``handle_primary_action`` without ``physical``.
+    A key press is not an approval (round 2, item 2): a profile can name any key, and
+    pressing one proves nothing about what the person reviewed. So this asks for the
+    placement and, when it needs a signed approval it does not have, announces that a
+    tap is needed (``command_needs_tap``), which the Electron shell turns into its native
+    approval dialog. It never places text by itself.
     """
-    return handle_primary_action(physical=True)
+    result = handle_primary_action()
+    if isinstance(result, dict) and result.get("error") in (approvals.ERR_REQUIRED, approvals.ERR_INVALID, approvals.ERR_UNAVAILABLE):
+        broadcast_status_threadsafe("command_needs_tap", {"action": "send", "draft_id": result.get("draft_id")})
+    return result
 
 
 def emergency_stop_runtime():

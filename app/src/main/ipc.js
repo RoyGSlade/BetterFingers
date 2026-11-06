@@ -142,8 +142,8 @@ function registerIpc({
         listApplications: () => applicationRegistry().list(),
         log: (line) => console.warn(line),
       });
-      // The send hotkey signs a press without a dialog: the key press is the tap.
-      require('./hotkeys').setApprovalSigner((press) => broker().signPhysicalPress(press));
+      // The send hotkey opens the native approval dialog; it never signs by itself.
+      require('./hotkeys').setPrimaryActionHandler((press) => broker().placeFromHotkey(press));
     }
     return approvalBroker;
   }
@@ -397,10 +397,33 @@ function registerIpc({
     return workflowExecutor().execute(workflowId);
   });
 
+  // The send shortcut is gated (round 2, item 2): only a Ctrl/Alt/Meta chord or a function
+  // key is accepted, and changing it from the confirmed value needs a native dialog.
+  // Everything else in the config is applied as before.
+  const { createSendHotkeyGate } = require('./sendHotkeyPolicy');
+  const sendHotkeyFile = () => path.join(app.getPath('userData'), 'send-hotkey.json');
+  const sendHotkeyGate = createSendHotkeyGate({
+    load: () => {
+      try { return JSON.parse(fs.readFileSync(sendHotkeyFile(), 'utf8')).key; } catch { return null; }
+    },
+    save: (key) => fs.writeFileSync(sendHotkeyFile(), JSON.stringify({ key })),
+  });
+
   onTrusted('update-hotkeys', (_event, config) => {
     const { registerHotkeys } = require('./hotkeys');
     const token = typeof getAuthToken === 'function' ? getAuthToken() : null;
-    registerHotkeys(config, token);
+    if (!config || typeof config !== 'object') { registerHotkeys(config, token); return; }
+    const verdict = sendHotkeyGate.evaluate(config.manual_send_hotkey);
+    if (verdict.rejected) console.warn('[hotkeys] Refused a send shortcut that is not a Ctrl/Alt/Meta chord or function key.');
+    registerHotkeys({ ...config, manual_send_hotkey: verdict.effective }, token);
+    if (verdict.needsConfirmation) {
+      const wanted = verdict.needsConfirmation;
+      broker().confirmSendHotkeyChange(wanted).then((approved) => {
+        if (!approved) { sendHotkeyGate.decline(wanted); return; }
+        sendHotkeyGate.confirm(wanted);
+        registerHotkeys({ ...config, manual_send_hotkey: wanted }, token);
+      }).catch((error) => console.warn('[hotkeys] send shortcut confirmation failed:', error && error.name));
+    }
   });
 
   handleTrusted('hotkeys:get-capabilities', () => {

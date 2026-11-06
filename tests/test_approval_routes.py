@@ -220,39 +220,36 @@ class PrimaryActionTests(DraftTestCase):
         self.assertEqual(self.performed, [])
 
 
-class PhysicalPressTests(DraftTestCase):
-    """The backend's own keyboard hook is the second witness of a physical press."""
+class HotkeyPressTests(DraftTestCase):
+    """Round 2, item 2. The backend's own keyboard hook is no longer a witness: a press
+    asks for the placement and, lacking a signed approval, announces that a tap is needed."""
 
-    def test_the_hotkey_managers_press_places_the_pending_draft_without_a_ticket(self):
+    def test_the_hotkey_managers_press_places_nothing_and_asks_for_a_tap(self):
         server.mark_draft_pending_send(server.get_draft_by_id(self.draft["id"]))
-        result = server.handle_physical_primary_action()
-        self.assertEqual(result["status"], "sent")
-        self.assertEqual(self.performed, [("The final text.", "paste", False)])
+        statuses = []
+        with patch.object(server, "broadcast_status_threadsafe", side_effect=lambda s, d=None: statuses.append((s, d))):
+            result = server.handle_hotkey_primary_action()
+        self.assertEqual(result["error"], approvals.ERR_REQUIRED)
+        self.assertEqual(self.performed, [])
+        self.assertIn(self.draft["id"], server.pending_manual_send_ids, "the draft stays queued")
+        self.assertIn(("command_needs_tap", {"action": "send", "draft_id": self.draft["id"]}), statuses)
 
-    def test_no_route_can_claim_a_physical_press(self):
-        server.mark_draft_pending_send(server.get_draft_by_id(self.draft["id"]))
-        for body in ({"physical": True}, {"approval": {"payload": "physical-press", "sig": "0" * 64}}):
-            result = TestClient(server.app).post("/runtime/primary-action", json=body).json()
-            self.assertIn(result.get("error"), (approvals.ERR_REQUIRED, approvals.ERR_INVALID), body)
+    def test_there_is_no_in_process_attestation_left(self):
+        self.assertFalse(hasattr(approvals, "attest_physical_press"))
+        self.assertFalse(hasattr(server, "handle_physical_primary_action"))
+        import inspect
+        self.assertNotIn("physical", inspect.signature(server.handle_primary_action).parameters)
+
+    def test_a_forged_approval_object_in_process_is_not_accepted_by_the_send_path(self):
+        forged = approvals.VerifiedApproval(
+            approvals.PURPOSE_DRAFT_SEND, str(self.draft["id"]),
+            approvals.draft_send_bind("paste", "The final text.", False), "x" * 16, object(),
+        )
+        result = server.send_draft_by_id(self.draft["id"], action="paste", approval=forged)
+        self.assertIn(result["error"], (approvals.ERR_REQUIRED, approvals.ERR_INVALID))
         self.assertEqual(self.performed, [])
 
-    def test_a_press_attestation_is_bound_to_the_exact_draft_action_and_text(self):
-        attestation = approvals.attest_physical_press(self.draft["id"], "paste", "The final text.")
-        for kwargs in (
-            {"action": "type"},
-            {"action": "paste", "open_chat": True},
-        ):
-            result = server.send_draft_by_id(self.draft["id"], approval=attestation, **kwargs)
-            self.assertEqual(result["error"], approvals.ERR_INVALID, kwargs)
-        server.get_draft_by_id(self.draft["id"])["final_text"] = "Changed after the press was witnessed."
-        self.assertEqual(server.send_draft_by_id(self.draft["id"], action="paste", approval=attestation)["error"],
-                         approvals.ERR_INVALID)
-        other = approvals.attest_physical_press(self.draft["id"] + 1, "paste", "Changed after the press was witnessed.")
-        self.assertEqual(server.send_draft_by_id(self.draft["id"], action="paste", approval=other)["error"],
-                         approvals.ERR_INVALID)
-        self.assertEqual(self.performed, [])
-
-    def test_the_hotkey_manager_is_wired_to_the_physical_entry_point(self):
+    def test_the_hotkey_manager_is_wired_to_the_non_attesting_entry_point(self):
         captured = {}
 
         class FakeManager:
@@ -269,7 +266,7 @@ class PhysicalPressTests(DraftTestCase):
         with patch.object(server, "HotkeyManager", FakeManager), patch.object(server, "hotkey_manager_started", False), \
                 patch.object(server, "hotkey_manager", None), patch("backend.audio.recorder.AudioRecorder"):
             server.start_hotkey_manager()
-        self.assertIs(captured["on_manual_send_callback"], server.handle_physical_primary_action)
+        self.assertIs(captured["on_manual_send_callback"], server.handle_hotkey_primary_action)
         server.hotkey_manager = None
         server.hotkey_manager_started = False
 

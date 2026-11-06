@@ -478,13 +478,15 @@ class ApprovalReachTests(RedTeamCase):
         self.assertNotIn(key, text)
         self.assertNotIn("BETTERFINGERS_APPROVAL_KEY", text)
 
-    def test_the_physical_press_attestation_is_not_reachable_from_any_route(self):
-        reachable = [r for r in server.app.routes if getattr(r, "endpoint", None)]
-        for route in reachable:
-            module = getattr(route.endpoint, "__module__", "")
-            code = getattr(route.endpoint, "__code__", None)
-            if code is not None and module.startswith("backend.api"):
-                self.assertNotIn("attest_physical_press", code.co_names, route.path)
+    def test_no_in_process_approval_minting_exists(self):
+        """The send hotkey used to be vouched for in-process (and by main). A key press is not an
+        approval, so nothing mints one without a ticket from the Electron main process."""
+        self.assertFalse(hasattr(approvals, "attest_physical_press"))
+        source = Path(approvals.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("VerifiedApproval(", source.split("def verify")[0].split("class VerifiedApproval")[0])
+        constructions = [line for line in source.splitlines() if "VerifiedApproval(" in line and "class " not in line]
+        # the only constructions are inside verify() (genuine and test-relaxed returns)
+        self.assertLessEqual(len(constructions), 2, constructions)
 
 
 if __name__ == "__main__":

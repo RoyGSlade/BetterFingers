@@ -26,6 +26,8 @@ module.exports = defineConfig({
           // OR-02 startup splash phase derivation (main.js requires it for
           // pushBootSnapshot()).
           bootPhases: resolve(__dirname, 'src/main/bootPhases.js'),
+          // Which keys may be the send shortcut, and who may change it; ipc.js requires it.
+          sendHotkeyPolicy: resolve(__dirname, 'src/main/sendHotkeyPolicy.js'),
           // The approval broker (native dialog + signed approvals); ipc.js requires it.
           approvalBroker: resolve(__dirname, 'src/main/approvalBroker.js'),
           // Credential masking for backend log lines (sidecar.js requires it).

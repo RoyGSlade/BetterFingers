@@ -192,7 +192,7 @@ function createApprovalBroker({
 
   // Show the native dialog; resolves true ONLY when the person clicked Approve.
   // Anything else (Cancel, Escape, closing the window, an error) is a no.
-  async function confirm({ title, message, body, approveLabel = 'Approve', note = '' }) {
+  async function confirm({ title, message, body, approveLabel = 'Approve', note = '', defaultApprove = false }) {
     if (busy) return { approved: false, error: 'Another approval is already waiting for you.' };
     if (now() - lastClosedAt < MIN_DIALOG_GAP_MS) {
       return { approved: false, error: 'Please wait a moment before asking again.' };
@@ -207,7 +207,10 @@ function createApprovalBroker({
         message,
         detail,
         buttons: [approveLabel, 'Cancel'],
-        defaultId: 1,
+        // Cancel is the default EXCEPT when the person themselves just pressed the
+        // send shortcut (defaultApprove): then Enter confirms. Anything a page or the
+        // backend can start keeps Cancel as the default.
+        defaultId: defaultApprove ? 0 : 1,
         cancelId: 1,
         noLink: true,
       };
@@ -355,7 +358,7 @@ function createApprovalBroker({
     return backend.send('POST', `/drafts/${id}/send`, { ...payload, approval }, timeoutMs);
   }
 
-  async function presentDraft({ title, action, openChat, text, approveLabel }) {
+  async function presentDraft({ title, action, openChat, text, approveLabel, defaultApprove = false }) {
     const body = displayLines(text);
     const header = [
       `${ACTION_DESCRIPTIONS[action] || action}${openChat && action !== 'open_chat_then_send' ? ' (opening the chat first)' : ''}.`,
@@ -369,6 +372,7 @@ function createApprovalBroker({
       message: 'Place this text into another application?',
       body: [...header, ...body],
       approveLabel,
+      defaultApprove,
       note: `Length ${Array.from(text).length} characters. Fingerprint ${fingerprint(textDigest(text))}.`,
     });
   }
@@ -395,13 +399,65 @@ function createApprovalBroker({
     return backend.send('POST', '/runtime/primary-action', { approval }, timeoutMs || 120000);
   }
 
-  // The send HOTKEY. No dialog: the physical key press, observed by this process's
-  // own global hook or shortcut registration, is the tap, and the text is the text
-  // the review overlay is showing (or the draft the person already accepted).
-  // Not reachable from any renderer: hotkeys.js is its only caller.
-  function signPhysicalPress({ draftId, text, action = 'paste', openChat = false } = {}) {
-    if (!Number.isInteger(draftId) || draftId <= 0 || typeof text !== 'string') return null;
-    return trySign(PURPOSE_DRAFT_SEND, String(draftId), draftSendBind(action, text, openChat));
+  // The send HOTKEY. It signs NOTHING by itself (round 2, item 2): a key press is
+  // not evidence that anyone reviewed anything, and a renderer can choose the key.
+  // A press opens the native dialog for the text MAIN fetched from the backend (the
+  // renderer, or the review window, only names WHICH draft it believes is on display;
+  // what it says it painted is never shown or signed), and Enter confirms because the
+  // person has just pressed the shortcut. Cancel or Escape places nothing.
+  async function placeFromHotkey({ displayedDraftId, reviewVisible = false, timeoutMs } = {}) {
+    let draftId;
+    let text;
+    if (Number.isInteger(displayedDraftId) && displayedDraftId > 0) {
+      const listing = await backend.send('GET', '/drafts', undefined, 5000);
+      const drafts = listing && listing.ok && listing.body && Array.isArray(listing.body.drafts) ? listing.body.drafts : null;
+      const draft = drafts && drafts.find((entry) => entry && entry.id === displayedDraftId);
+      if (!draft || typeof draft.final_text !== 'string' || !draft.final_text.trim()) {
+        return fault('That draft is gone or empty. Nothing was placed.');
+      }
+      draftId = displayedDraftId;
+      text = draft.final_text;
+    } else {
+      const first = await backend.send('POST', '/runtime/primary-action', reviewVisible ? { review_visible: true } : {}, timeoutMs || 120000);
+      const body = first && first.body;
+      const challenged = body && typeof body === 'object' && body.error === 'approval_required'
+        && Number.isInteger(body.draft_id) && typeof body.final_text === 'string';
+      if (!challenged) return first;
+      draftId = body.draft_id;
+      text = body.final_text;
+    }
+
+    const decision = await presentDraft({
+      title: 'Place this draft',
+      action: 'paste',
+      openChat: false,
+      text,
+      approveLabel: 'Place it',
+      defaultApprove: true,
+    });
+    if (!decision.approved) return declined(decision);
+    const approval = trySign(PURPOSE_DRAFT_SEND, String(draftId), draftSendBind('paste', text, false));
+    if (!approval) return fault(UNAVAILABLE);
+    return backend.send(
+      'POST', '/runtime/primary-action',
+      { displayed_draft_id: draftId, displayed_final_text: text, approval },
+      timeoutMs || 120000,
+    );
+  }
+
+  // The person asked to change the send shortcut (settings). A native dialog names
+  // the new key; only a click applies it.
+  async function confirmSendHotkeyChange(newKey) {
+    const decision = await confirm({
+      title: 'Change the send shortcut',
+      message: `Make \u201C${makeVisible(String(newKey))}\u201D the shortcut that places a draft?`,
+      body: [
+        'Pressing it will open a window showing the draft, and you confirm there.',
+        'If you did not just change this setting, choose Cancel.',
+      ],
+      approveLabel: 'Change it',
+    });
+    return decision.approved === true;
   }
 
   return {
@@ -409,7 +465,8 @@ function createApprovalBroker({
     addPersonaExample,
     sendDraft,
     primaryActionFromUi,
-    signPhysicalPress,
+    placeFromHotkey,
+    confirmSendHotkeyChange,
   };
 }
 
