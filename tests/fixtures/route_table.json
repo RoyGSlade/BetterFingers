@@ -32,704 +32,6 @@
   "path": "/redoc"
  },
  {
-  "kind": "APIWebSocketRoute",
-  "methods": [],
-  "path": "/ws/voice_status"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/runtime/version"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/runtime/audio-devices"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/runtime/audio-devices/refresh"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/doctor"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/hardware/tier"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/models/recommend"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/health"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/runtime/status"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/runtime/rewrite-selection"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/runtime/output-settings"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/settings/profiles/import"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/settings/profiles"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/settings/profiles/{profile_name}"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/settings/profiles/{profile_name}"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/settings/profiles"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/settings/profiles/{profile_name}/activate"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "DELETE"
-  ],
-  "path": "/settings/profiles/{profile_name}"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/settings/profiles/{profile_name}/rename"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/settings/profiles/{profile_name}/duplicate"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/settings/profiles/{profile_name}/export"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/capabilities"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/audio/status"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/models/llm"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/models/llm/select"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/models/llm/{model_id}/download"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "DELETE"
-  ],
-  "path": "/models/llm/{model_id}"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/models/llm/{model_id}/download-state"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/models/whisper"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/models/whisper/download"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "DELETE"
-  ],
-  "path": "/models/whisper/{model_size}"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/models/whisper/test"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/models/whisper/select"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/models/unload/{component}"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/metrics"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/jobs"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/jobs/{job_id}"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/jobs/{job_id}/cancel"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/privacy/export"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "DELETE"
-  ],
-  "path": "/privacy/persona-learning"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/privacy/persona-learning/verify"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/privacy"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/privacy/wipe"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/privacy/modes"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/privacy/factory-reset"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/privacy/factory-reset/verify"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/mcp/status"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/mcp/servers"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/mcp/servers/{server_name}/tools"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/recordings"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/recordings/{rec_id}/retranscribe"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "DELETE"
-  ],
-  "path": "/recordings/{rec_id}"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "DELETE"
-  ],
-  "path": "/recordings"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/history/search"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/history"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "DELETE"
-  ],
-  "path": "/history"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/diagnostics/logs"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/diagnostics/paths"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/runtime/errors"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/diagnostics/support-report"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/drafts"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/drafts/latest"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "DELETE"
-  ],
-  "path": "/drafts"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/drafts/test-mock"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/drafts/{draft_id}/accept"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/drafts/{draft_id}/decline"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/drafts/{draft_id}/retry"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/drafts/{draft_id}/edit"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/drafts/{draft_id}/contact"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/drafts/{draft_id}/rewrite"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/drafts/{draft_id}/tts"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/drafts/{draft_id}/send"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/voice-commands/execute"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/runtime/primary-action"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/runtime/emergency-stop"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/runtime/recording/toggle"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/runtime/recording/start"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/runtime/recording/stop"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/runtime/tts/toggle"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/runtime/warmup"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/llm/process"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/transcribe"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/tts/speak"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/tts/stop"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/runtime/tts-status"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/tts/clone"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/tts/voices"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/tts/clone/status"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/tts/clone/provision"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "DELETE"
-  ],
-  "path": "/tts/voices/{voice_id}"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/ocr/extract"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/graph/save"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/graph/load"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/llm/generate_plan"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/project/export"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/profile"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/profile"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "GET"
-  ],
-  "path": "/intent/state"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/intent/state"
- },
- {
-  "kind": "APIRoute",
-  "methods": [
-   "POST"
-  ],
-  "path": "/project/generate"
- },
- {
   "kind": "APIRoute",
   "methods": [
    "POST"
@@ -1393,6 +695,725 @@
    "GET"
   ],
   "path": "/workflows/history"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/mcp/status"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/mcp/servers"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/mcp/servers/{server_name}/tools"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/mcp/servers/{server_name}/trust"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/mcp/servers/{server_name}/trust"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "DELETE"
+  ],
+  "path": "/mcp/servers/{server_name}/trust"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/llm/process"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/ocr/extract"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/graph/save"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/graph/load"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/llm/generate_plan"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/project/export"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/intent/state"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/intent/state"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/project/generate"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/settings/profiles/import"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/settings/profiles"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/settings/profiles/{profile_name}"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/settings/profiles/{profile_name}"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/settings/profiles"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/settings/profiles/{profile_name}/activate"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "DELETE"
+  ],
+  "path": "/settings/profiles/{profile_name}"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/settings/profiles/{profile_name}/rename"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/settings/profiles/{profile_name}/duplicate"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/settings/profiles/{profile_name}/export"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/profile"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/profile"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/recordings"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/recordings/{rec_id}/retranscribe"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "DELETE"
+  ],
+  "path": "/recordings/{rec_id}"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "DELETE"
+  ],
+  "path": "/recordings"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/history/search"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/history"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "DELETE"
+  ],
+  "path": "/history"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/runtime/version"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/runtime/audio-devices"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/runtime/audio-devices/refresh"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/doctor"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/health"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/runtime/status"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/runtime/output-settings"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/capabilities"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/audio/status"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/metrics"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/jobs"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/jobs/{job_id}"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/jobs/{job_id}/cancel"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/diagnostics/logs"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/diagnostics/paths"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/runtime/errors"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/diagnostics/support-report"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/hardware/tier"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/models/recommend"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/models/llm"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/models/llm/select"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/models/llm/{model_id}/download"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "DELETE"
+  ],
+  "path": "/models/llm/{model_id}"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/models/llm/{model_id}/download-state"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/models/whisper"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/models/whisper/download"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "DELETE"
+  ],
+  "path": "/models/whisper/{model_size}"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/models/whisper/test"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/models/whisper/select"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/models/unload/{component}"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/runtime/tts/toggle"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/tts/speak"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/tts/stop"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/runtime/tts-status"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/tts/clone"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/tts/voices"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/tts/clone/status"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/tts/clone/provision"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "DELETE"
+  ],
+  "path": "/tts/voices/{voice_id}"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/drafts"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/drafts/latest"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "DELETE"
+  ],
+  "path": "/drafts"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/drafts/test-mock"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/drafts/{draft_id}/accept"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/drafts/{draft_id}/decline"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/drafts/{draft_id}/retry"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/drafts/{draft_id}/edit"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/drafts/{draft_id}/contact"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/drafts/{draft_id}/rewrite"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/drafts/{draft_id}/tts"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/drafts/{draft_id}/send"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/privacy/export"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "DELETE"
+  ],
+  "path": "/privacy/persona-learning"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/privacy/persona-learning/verify"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/privacy"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/privacy/wipe"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/privacy/modes"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/privacy/factory-reset"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "GET"
+  ],
+  "path": "/privacy/factory-reset/verify"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/runtime/rewrite-selection"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/voice-commands/execute"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/runtime/primary-action"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/runtime/emergency-stop"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/runtime/recording/toggle"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/runtime/recording/start"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/runtime/recording/stop"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/runtime/warmup"
+ },
+ {
+  "kind": "APIRoute",
+  "methods": [
+   "POST"
+  ],
+  "path": "/transcribe"
+ },
+ {
+  "kind": "APIWebSocketRoute",
+  "methods": [],
+  "path": "/ws/voice_status"
  },
  {
   "kind": "APIRoute",

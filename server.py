@@ -157,9 +157,16 @@ from backend.services import approvals  # noqa: E402
 
 # Round 2, item 3: the shell hands over the bearer token and the signing key on stdin, not
 # in the environment (where /proc/<pid>/environ would keep them readable to any same-user
-# process). The environment route below remains for a standalone launch and the tests.
+# process). Round 3, item 4: on Linux the process is made non-dumpable FIRST, and if that
+# fails it exits rather than hold the secrets (boot_secrets.HARDENING_FAILED_MESSAGE).
 boot_secrets.load_from_stdin()
-approvals.configure_from_env()
+# DEV-ONLY: a standalone `python server.py` (and the tests) may still pass the approval key in
+# the environment. That path is not hardened, so a packaged (frozen) backend ignores it and
+# can approve nothing unless the shell handed the key over on stdin.
+if getattr(sys, "frozen", False):
+    os.environ.pop("BETTERFINGERS_APPROVAL_KEY", None)
+else:
+    approvals.configure_from_env()
 
 app.add_middleware(
     CORSMiddleware,

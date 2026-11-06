@@ -84,6 +84,7 @@ WRITTEN_BY_THE_APP = {
     "wake_models/imported_models.json": "backend/wake/wake_models.py",
     "audio_privacy_journal.json": "backend/platform/audio_privacy/journal.py",
     "mcp_servers.json": "backend/dev/mcp_client.py",
+    "mcp_trust.json": "backend/dev/mcp_client.py (trust on this machine)",
     "graph.json": "server.py",
     "debug.log": "backend/config/utils.py setup_logging",
     "app_profiles.json": "backend/stores/app_profiles.py",

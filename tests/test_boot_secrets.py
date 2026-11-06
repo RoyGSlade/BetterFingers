@@ -165,3 +165,74 @@ class ShellSideContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HardeningFailsClosedTests(unittest.TestCase):
+    """Round 3, item 4 (Codex re-check 2): ``harden_process()`` could return False and the
+    stdin launch carried on holding the token and the signing key in a dumpable process. Where
+    hardening applies (Linux), a failure now means the secrets are NOT installed and the
+    backend exits with a clear error."""
+
+    def tearDown(self):
+        security.set_runtime_token(None)
+
+    def _stream(self, payload):
+        import io
+        return io.BytesIO(json.dumps(payload).encode("utf-8"))
+
+    def test_a_failed_hardening_on_linux_installs_nothing_and_exits(self):
+        from backend.services import approvals
+        env = {boot_secrets.FLAG: "1"}
+        stream = self._stream({"token": TOKEN, "approval_key": KEY})
+        with patch.object(boot_secrets, "harden_process", return_value=False), \
+             patch.object(boot_secrets.sys, "platform", "linux"), \
+             patch.object(approvals, "configure") as configure, \
+             self.assertRaises(SystemExit) as caught:
+            boot_secrets.load_from_stdin(env=env, stream=stream)
+        self.assertNotEqual(caught.exception.code, 0)
+        self.assertIn("non-dumpable", str(caught.exception.code))
+        configure.assert_not_called()
+        self.assertNotEqual(security.get_auth_token(), TOKEN)
+
+    def test_hardening_happens_before_any_secret_is_read(self):
+        order = []
+        env = {boot_secrets.FLAG: "1"}
+
+        class Recorder:
+            def read(self, n):
+                order.append("read")
+                return json.dumps({"token": TOKEN}).encode("utf-8")
+
+        def harden():
+            order.append("harden")
+            return True
+
+        with patch.object(boot_secrets, "harden_process", side_effect=harden), patch.object(boot_secrets.sys, "platform", "linux"):
+            self.assertTrue(boot_secrets.load_from_stdin(env=env, stream=Recorder()))
+        self.assertEqual(order, ["harden", "read"])
+
+    def test_off_linux_hardening_does_not_apply_and_the_launch_proceeds(self):
+        env = {boot_secrets.FLAG: "1"}
+        with patch.object(boot_secrets, "harden_process", return_value=False), patch.object(boot_secrets.sys, "platform", "win32"):
+            self.assertTrue(boot_secrets.load_from_stdin(env=env, stream=self._stream({"token": TOKEN})))
+        self.assertEqual(security.get_auth_token(), TOKEN)
+
+    @unittest.skipUnless(LINUX, "the non-dumpable flag is Linux-only")
+    def test_the_real_server_exits_when_hardening_is_unavailable(self):
+        """End to end: the backend module started as the shell starts it, with prctl made to
+        fail, exits non-zero with the error and never serves."""
+        code = (
+            "import sys\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "from backend.privacy import boot_secrets\n"
+            "boot_secrets.harden_process = lambda: False  # prctl refused\n"
+            "import server\n"
+            "print('SERVED')\n"
+        )
+        payload = json.dumps({"token": TOKEN, "approval_key": KEY})
+        result = subprocess.run([sys.executable, "-c", code, str(REPO)], input=payload, capture_output=True, text=True,
+                                timeout=120, cwd=str(REPO), env=clean_env(BETTERFINGERS_SECRETS_STDIN="1"), check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("SERVED", result.stdout)
+        self.assertIn("non-dumpable", result.stderr)
+        self.assertNotIn(TOKEN, result.stdout + result.stderr)

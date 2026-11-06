@@ -16,6 +16,18 @@ download, a script) could read both and then forge approvals. Now:
   debugger to it. (Windows and macOS: see docs/DEVELOPMENT.md for what is and is not
   covered.)
 
+FAIL CLOSED (round 3, item 4). Hardening now happens BEFORE the pipe is read, and where it
+applies (Linux) a failure means the secrets are never read or installed: the process exits
+with ``HARDENING_FAILED_MESSAGE``. A backend that cannot protect its memory must not hold
+the bearer token or the approval-signing key. On Windows and macOS there is no equivalent
+call in this tree, so hardening does not apply there and the launch proceeds (documented in
+SECURITY.md and docs/DEVELOPMENT.md; MCP servers there need per-server trust anyway).
+
+THE ENVIRONMENT ROUTE IS DEV-ONLY. ``python server.py`` with ``BETTERFINGERS_AUTH_TOKEN`` /
+``BETTERFINGERS_APPROVAL_KEY`` in the environment still works for a developer and the tests,
+but it is not hardened: the initial environment stays readable in ``/proc/<pid>/environ``. A
+packaged (frozen) backend ignores an approval key in the environment.
+
 Nothing here logs a value.
 """
 
@@ -32,6 +44,16 @@ READ_TIMEOUT_S = 15.0
 
 _PR_SET_DUMPABLE = 4
 _PR_GET_DUMPABLE = 3
+
+HARDENING_FAILED_MESSAGE = (
+    "BetterFingers backend: could not make this process non-dumpable (PR_SET_DUMPABLE), so other "
+    "programs running as you could read its memory. It will not hold the app's credentials. Exiting."
+)
+
+
+def hardening_applies(platform=None) -> bool:
+    """Where ``harden_process`` has something to do (and so where its failure is fatal)."""
+    return (sys.platform if platform is None else platform).startswith("linux")
 
 
 def harden_process() -> bool:
@@ -84,6 +106,9 @@ def load_from_stdin(env=None, stream=None, harden: bool = True) -> bool:
     if environ.get(FLAG) != "1":
         return False
     environ.pop(FLAG, None)
+    # Harden FIRST: nothing secret is read into a process that other programs could dump.
+    if harden and hardening_applies() and not harden_process():
+        raise SystemExit(HARDENING_FAILED_MESSAGE)
     source = stream if stream is not None else getattr(sys.stdin, "buffer", None)
     if source is None:
         return False
@@ -113,6 +138,4 @@ def load_from_stdin(env=None, stream=None, harden: bool = True) -> bool:
             installed = True
         except ValueError:
             pass
-    if harden:
-        harden_process()
     return installed
