@@ -194,6 +194,18 @@ APPROVAL_ENFORCED_FILES = frozenset({
 
 
 @pytest.fixture(autouse=True)
+def _no_leaked_runtime_token():
+    """The in-memory bearer token (backend.api.security) is process-global. A test that leaves
+    one behind turns every later TestClient request into a 401 and then a 429, so reset it
+    around every test (round 2, item 3)."""
+    from backend.api import security
+
+    security.set_runtime_token(None)
+    yield
+    security.set_runtime_token(None)
+
+
+@pytest.fixture(autouse=True)
 def _approval_gate_mode(request):
     from backend.services import approvals
 

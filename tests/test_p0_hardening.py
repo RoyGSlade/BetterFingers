@@ -290,9 +290,15 @@ class LifespanAuthTests(unittest.TestCase):
             try:
                 result = server.enforce_startup_security()
                 self.assertTrue(result["generated"])
-                self.assertEqual(os.environ["BETTERFINGERS_AUTH_TOKEN"], result["token"])
+                # Round 2, item 3: a generated token is held in memory, NOT published in the
+                # environment (where /proc/<pid>/environ would expose it to same-user processes).
+                from backend.api import security
+                self.assertEqual(security.get_auth_token(), result["token"])
+                self.assertNotIn("BETTERFINGERS_AUTH_TOKEN", os.environ)
                 self.assertEqual(server.app.state.auth_token, result["token"])
             finally:
+                from backend.api import security
+                security.set_runtime_token(None)
                 os.environ.pop("BETTERFINGERS_AUTH_TOKEN", None)
 
     def test_auth_failures_get_rate_limited(self):
