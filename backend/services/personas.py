@@ -24,9 +24,15 @@ def get_persona(name: str) -> Optional[dict]:
     return _get_persona(name)
 
 
-def save_persona(name: str, payload: dict) -> tuple:
+def canonical_name(name: str) -> str:
+    """The one stored identity for ``name`` (round 4, item 1)."""
+    from backend.llm.llm_engine import canonical_persona_name
+    return canonical_persona_name(name)
+
+
+def save_persona(name: str, payload: dict, guard=None) -> tuple:
     from backend.llm.llm_engine import upsert_persona
-    return upsert_persona(name, payload)
+    return upsert_persona(name, payload, guard=guard)
 
 
 def lint_persona(payload: dict) -> list:
@@ -34,9 +40,9 @@ def lint_persona(payload: dict) -> list:
     return _lint_persona(payload)
 
 
-def delete_persona(name: str) -> tuple:
+def delete_persona(name: str, guard=None) -> tuple:
     from backend.llm.llm_engine import delete_persona as _delete_persona
-    return _delete_persona(name)
+    return _delete_persona(name, guard=guard)
 
 
 def run_persona_preview(engine: Any, persona: dict, sample: str, max_output_tokens: Optional[int] = None) -> Any:

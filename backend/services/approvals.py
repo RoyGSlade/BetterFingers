@@ -61,10 +61,16 @@ PURPOSE_PERSONA_EXAMPLE = "persona.example"
 PURPOSE_DRAFT_SEND = "draft.send"
 PURPOSE_PERSONA_FEW_SHOT = "persona.few_shot"
 PURPOSE_PERSONA_LEARNED_DELETE = "persona.learned_delete"
-PURPOSE_MCP_TRUST = "mcp.trust"
+# Round 4, item 3: every DESTRUCTIVE example transition is a native dialog bound to its scope.
+PURPOSE_PERSONA_LEARNED_CLEAR = "persona.learned_clear"
+PURPOSE_LEARNED_CLEAR_ALL = "persona.learned_clear_all"
+PURPOSE_PERSONA_DELETE = "persona.delete"
+PURPOSE_PRIVACY_WIPE = "privacy.wipe"
+# There is no "mcp.trust" purpose any more (round 4, item 4): Phase 0 has no persistent MCP trust.
 PURPOSES = frozenset({
     PURPOSE_WORKFLOW_APPROVE, PURPOSE_PERSONA_EXAMPLE, PURPOSE_DRAFT_SEND, PURPOSE_PERSONA_FEW_SHOT,
-    PURPOSE_PERSONA_LEARNED_DELETE, PURPOSE_MCP_TRUST,
+    PURPOSE_PERSONA_LEARNED_DELETE, PURPOSE_PERSONA_LEARNED_CLEAR, PURPOSE_LEARNED_CLEAR_ALL,
+    PURPOSE_PERSONA_DELETE, PURPOSE_PRIVACY_WIPE,
 })
 
 # Error codes. The messages are deliberately generic: they say what is missing,
@@ -260,9 +266,51 @@ def learned_delete_bind(persona: str, example_id: str, before, after) -> dict:
     return {"example_id": str(example_id), **persona_few_shot_bind(persona, before, after)}
 
 
-def mcp_trust_bind(config_sha256: str) -> dict:
-    """Marking an MCP server trusted on this machine: bound to its exact configuration."""
-    return {"config_sha256": str(config_sha256)}
+def learned_add_bind(persona: str, raw: str, out: str, before, after) -> dict:
+    """Learning one example (round 4, item 5): bound to the example AND to the complete learned
+    list before and after, so an eviction the cap forces is part of what was approved."""
+    return {
+        **persona_example_bind(persona, raw, out),
+        **persona_few_shot_bind(persona, before, after),
+    }
+
+
+def learned_clear_bind(persona: str, before) -> dict:
+    """Clearing one persona's learned examples: bound to the complete list it removes."""
+    return {"scope": "persona_learned", **persona_few_shot_bind(persona, before, [])}
+
+
+def persona_delete_bind(persona: str, before) -> dict:
+    """Deleting a persona with its few-shot list: bound to that complete list."""
+    return {"scope": "persona", **persona_few_shot_bind(persona, before, [])}
+
+
+def learned_collection_digest(personas) -> str:
+    """Digest of EVERY persona's learned list (``[(name, [(raw, out), ...]), ...]``), sorted by
+    name. Mirrored byte for byte by ``learnedCollectionDigest`` in approvalBroker.js."""
+    rows = sorted((str(name), [(str(r), str(o)) for r, o in items]) for name, items in personas)
+    lines = ["persona.learned.collection.v1", str(len(rows))]
+    for name, items in rows:
+        lines += [name, str(len(items))]
+        for raw, out in items:
+            lines += [raw, out]
+    return lines_digest(lines)
+
+
+def learned_clear_all_bind(collection_sha256: str) -> dict:
+    return {"scope": "all_personas", "collection_sha256": str(collection_sha256)}
+
+
+def privacy_wipe_bind(mode: str, category_ids, *, wipe_voices: bool = False, delete_models: bool = False) -> dict:
+    """A privacy wipe or factory reset: bound to its mode, the exact categories it deletes (in the
+    registry's order) and its options. Mirrored by ``privacyWipeBind`` in approvalBroker.js."""
+    ids = [str(item) for item in category_ids]
+    return {
+        "mode": str(mode),
+        "scope_sha256": lines_digest(["privacy.wipe.v1", str(mode), str(len(ids)), *ids]),
+        "wipe_voices": "1" if wipe_voices else "0",
+        "delete_models": "1" if delete_models else "0",
+    }
 
 
 def draft_send_bind(action: str, text: str, open_chat: bool = False) -> dict:

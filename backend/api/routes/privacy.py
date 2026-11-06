@@ -36,12 +36,45 @@ the end of its own load, and every server name is read as ``s.<name>`` at call
 time so ``patch.object(server, ...)`` in tests still lands. Registered via
 ``app.include_router`` at the end of server.py.
 """
+from typing import Optional
+
 from fastapi import APIRouter
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from starlette.responses import JSONResponse
 
+from backend.api.models import ApprovalTicketModel
 from backend.privacy import data_registry
+from backend.services import approvals, persona_learning
+
+# Round 4, item 3 (Codex re-check 3, finding 3). Every wipe below deletes learned persona
+# examples (and the larger modes the personas and their few-shot lists too), so each needs a
+# ticket minted by main after a native dialog that showed its scope. A renderer boolean, or the
+# factory-reset phrase on its own, is not a tap: a compromised renderer supplies either itself.
+
+
+def _refused(exc: approvals.ApprovalError) -> JSONResponse:
+    return JSONResponse(status_code=approvals.http_status_for(exc.code), content={
+        "ok": False, "error": exc.code, "message": exc.message})
+
+
+def _ticket(model) -> Optional[dict]:
+    return model.model_dump() if model is not None else None
+
+
+def _mode_scope(s, mode: str) -> list:
+    """The category ids a mode deletes, in registry order: what the dialog listed."""
+    return [category.id for category in s.data_categories.get_registry().in_mode(mode)]
+
+
+def _verify_wipe(s, ticket, mode: str, *, wipe_voices: bool = False, delete_models: bool = False):
+    approvals.verify(ticket, purpose=approvals.PURPOSE_PRIVACY_WIPE, subject=mode,
+                     bind=approvals.privacy_wipe_bind(mode, _mode_scope(s, mode),
+                                                      wipe_voices=wipe_voices, delete_models=delete_models))
+
+
+class LearningClearAllRequest(BaseModel):
+    approval: Optional[ApprovalTicketModel] = None
 
 router = APIRouter()
 
@@ -54,8 +87,17 @@ async def privacy_export():
     return await run_in_threadpool(s._build_privacy_export)
 
 
+@router.get("/privacy/persona-learning/preview")
+async def privacy_persona_learning_preview():
+    """Every persona's learned examples, for the native dialog the global clear needs (round 4):
+    main shows the scope from this and binds its ticket to the digest of exactly this collection."""
+    rows = await run_in_threadpool(persona_learning.snapshot)
+    return {"ok": True, "personas": [
+        {"name": name, "examples": [{"raw": raw, "out": out} for raw, out in items]} for name, items in rows]}
+
+
 @router.delete("/privacy/persona-learning")
-async def privacy_clear_persona_learning():
+async def privacy_clear_persona_learning(request: Optional[LearningClearAllRequest] = None):
     """Delete every learned example for every persona, then verify.
 
     Goes through the registry's category wipe (which goes through
@@ -67,10 +109,17 @@ async def privacy_clear_persona_learning():
     import server as s
 
     category = s.data_categories.get_registry().get("persona_learning")
+    ticket = _ticket(request.approval) if request else None
 
     def _clear():
-        wipe = category.wipe()
-        verification = category.verify()
+        # Verified and wiped under the store lock, against the collection stored right now: an
+        # example learned after the dialog voids the ticket instead of being deleted unseen.
+        with persona_learning.store_lock():
+            collection = approvals.learned_collection_digest(persona_learning.snapshot())
+            approvals.verify(ticket, purpose=approvals.PURPOSE_LEARNED_CLEAR_ALL, subject="all",
+                             bind=approvals.learned_clear_all_bind(collection))
+            wipe = category.wipe()
+            verification = category.verify()
         return {
             "ok": verification.ok,
             "wiped": wipe.ok,
@@ -81,7 +130,10 @@ async def privacy_clear_persona_learning():
             "detail": verification.detail,
         }
 
-    result = await run_in_threadpool(_clear)
+    try:
+        result = await run_in_threadpool(_clear)
+    except approvals.ApprovalError as exc:
+        return _refused(exc)
     return JSONResponse(status_code=200 if result["ok"] else 500, content=result)
 
 
@@ -112,6 +164,7 @@ class PrivacyWipeRequest(BaseModel):
     # has always done. Widening the default would silently delete personas,
     # dictionaries and macros for anyone whose client predates this field.
     mode: str = data_registry.WIPE_MODE_CONVERSATIONS
+    approval: Optional[ApprovalTicketModel] = None
 
 
 class FactoryResetRequest(BaseModel):
@@ -121,6 +174,7 @@ class FactoryResetRequest(BaseModel):
 
     confirm: str = ""
     delete_downloaded_models: bool = False
+    approval: Optional[ApprovalTicketModel] = None
 
 
 @router.post("/privacy/wipe")
@@ -140,6 +194,11 @@ async def privacy_wipe(request: PrivacyWipeRequest = PrivacyWipeRequest()):
     fully succeed never reports 200."""
     import server as s
 
+    if request.mode in data_registry.WIPE_MODES:
+        try:
+            _verify_wipe(s, _ticket(request.approval), request.mode, wipe_voices=request.wipe_voices)
+        except approvals.ApprovalError as exc:
+            return _refused(exc)
     result = await run_in_threadpool(s._perform_privacy_wipe, request.wipe_voices, request.mode)
     return JSONResponse(status_code=s._wipe_status_code(result), content=result)
 
@@ -183,6 +242,11 @@ async def privacy_factory_reset(request: FactoryResetRequest):
             "message": (f"A factory reset requires confirm={s.FACTORY_RESET_CONFIRMATION!r}. "
                         "Nothing was deleted."),
         })
+    try:
+        _verify_wipe(s, _ticket(request.approval), data_registry.WIPE_MODE_FACTORY_RESET,
+                     delete_models=request.delete_downloaded_models)
+    except approvals.ApprovalError as exc:
+        return _refused(exc)
     result = await run_in_threadpool(s._perform_factory_reset,
                                      request.delete_downloaded_models)
     status = 200 if result.get("ok") else s._WIPE_ERROR_STATUS.get(result.get("error"), 500)

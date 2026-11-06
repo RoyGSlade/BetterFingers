@@ -44,9 +44,12 @@ def workflow_ticket(workflow_id, preview_lines, steps, **kw):
                        approvals.workflow_bind(preview_lines, steps), **kw)
 
 
-def persona_ticket(persona, raw, out, **kw):
+def persona_ticket(persona, raw, out, before=(), after=None, **kw):
+    """A persona.example ticket. Round 4, item 5: it binds the complete learned list before and
+    after too; by default, adding (raw, out) to an empty list."""
+    after = [(raw.strip(), out.strip())] if after is None else after
     return sign_ticket(approvals.PURPOSE_PERSONA_EXAMPLE, persona,
-                       approvals.persona_example_bind(persona, raw, out), **kw)
+                       approvals.learned_add_bind(persona, raw, out, list(before), list(after)), **kw)
 
 
 def send_ticket(draft_id, action, text, open_chat=False, **kw):

@@ -287,6 +287,17 @@ def _sanitize_persona_name(name):
     return candidate.strip()
 
 
+def canonical_persona_name(name):
+    """The ONE identity a persona name stands for (round 4, item 1): the form ``upsert_persona``
+    stores it under. Routes refuse any name that is not already in this form, so the lookup, the
+    approval's subject, the before/after comparison and the write can never name two personas."""
+    return _sanitize_persona_name(name)
+
+
+class _GuardRefused(Exception):
+    """Carries a guard's own exception out of the store's generic error handling."""
+
+
 def _coerce_float(value, fallback):
     try:
         return float(value)
@@ -1637,12 +1648,17 @@ def _parse_foundry_stress_response(text):
     ]
 
 
-def upsert_persona(name, persona):
+def upsert_persona(name, persona, guard=None):
     """Create or update a persona.
 
     `persona` may be a plain prompt string (legacy call sites) or a full/partial
     schema v2 dict. Either shape is normalized, validated, and persisted in v2 form.
     Updating an existing persona preserves its unspecified rich fields.
+
+    ``guard(existing_entry_or_None)`` (round 4, item 1) runs under the store lock, after the
+    stored entry is read and before anything is written. The route verifies its approval there,
+    against the list stored at that moment, so the verify and the commit are one atomic step
+    (compare-and-swap on the list). Whatever the guard raises propagates unchanged.
     """
     global _personas_cache, _personas_v2_cache
     persona_name = _sanitize_persona_name(name)
@@ -1654,6 +1670,12 @@ def upsert_persona(name, persona):
     try:
         with _personas_lock:
             personas = _read_personas_v2(path)
+            if guard is not None:
+                existing_entry = personas.get(persona_name)
+                try:
+                    guard(copy.deepcopy(existing_entry) if existing_entry else None)
+                except Exception as exc:
+                    raise _GuardRefused() from exc
 
             if isinstance(persona, dict):
                 # Merge onto any existing entry so partial updates keep prior rich fields.
@@ -1674,12 +1696,16 @@ def upsert_persona(name, persona):
             _personas_v2_cache = personas
             _personas_cache = {n: e["prompt"] for n, e in personas.items()}
         return True, f"Saved persona '{persona_name}'."
+    except _GuardRefused as refused:
+        raise refused.__cause__ from None
     except Exception as exc:
         logging.error("Failed to save persona '%s': %s", persona_name, exc)
         return False, f"Failed to save persona '{persona_name}'. Check the application logs for details."
 
 
-def delete_persona(name, allow_builtin=False):
+def delete_persona(name, allow_builtin=False, guard=None):
+    """Delete a persona. ``guard(existing_entry_or_None)`` runs under the store lock before the
+    delete (round 4, item 3: the route verifies the approval for its few-shot list there)."""
     global _personas_cache, _personas_v2_cache
     persona_name = str(name or "").strip()
     if not persona_name:
@@ -1699,6 +1725,11 @@ def delete_persona(name, allow_builtin=False):
             refresh_migration_backups(path, None, PERSONA_SCHEMA_VERSION, parse=_parse_personas_yaml)
             personas = _read_personas_v2(path)
             found = persona_name in personas
+            if guard is not None and found:
+                try:
+                    guard(copy.deepcopy(personas[persona_name]))
+                except Exception as exc:
+                    raise _GuardRefused() from exc
             if found:
                 personas.pop(persona_name, None)
                 if not personas:
@@ -1714,6 +1745,8 @@ def delete_persona(name, allow_builtin=False):
             _personas_v2_cache = personas
             _personas_cache = {n: e["prompt"] for n, e in personas.items()}
         return True, f"Deleted persona '{persona_name}'."
+    except _GuardRefused as refused:
+        raise refused.__cause__ from None
     except Exception as exc:
         logging.error("Failed deleting persona '%s': %s", persona_name, exc)
         return False, f"Failed to delete persona '{persona_name}'. Check the application logs for details."

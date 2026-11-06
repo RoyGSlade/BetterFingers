@@ -72,7 +72,7 @@ class CodexSamPleSequenceTests(_Case):
         self.assertEqual(self.stored(), [A, B], "the existing persona's approved examples are untouched")
 
     def test_every_alias_shape_is_refused_before_anything_is_read_or_written(self):
-        for alias in ("Sam!ple", " Sample", "Sample ", "Sample\n", "Sam​ple", "Sa'mple", "Sample?"):
+        for alias in ("Sam!ple", " Sample", "Sample ", "Sample\n", "Sam\u200bple", "Sa'mple", "Sample?"):
             with self.subTest(alias=repr(alias)):
                 response = self.client.post("/personas", json={"name": alias, "prompt": "x", "few_shot": [EVIL]})
                 self.assertEqual(response.status_code, 422, response.text)

@@ -353,7 +353,16 @@ class PersonaExampleTests(unittest.TestCase):
     def test_a_ticket_cannot_teach_the_same_example_twice_by_replay(self):
         ticket = persona_ticket("Coach", "hey whats up", "Hey, what's up?")
         self.assertEqual(self.post(approval=ticket).status_code, 200)
-        self.assertEqual(self.post(approval=ticket).status_code, 403)
+        # A second copy is a duplicate and changes nothing; a replay for a DIFFERENT result is refused.
+        self.assertEqual(self.post(raw="other", out="Other.", approval=ticket).status_code, 403)
+        self.assertEqual(len(self.examples()), 1)
+
+    def test_a_ticket_for_only_the_pair_does_not_cover_the_resulting_list(self):
+        """Round 4, item 5: the ticket binds the complete learned list before and after."""
+        old_style = sign_ticket(approvals.PURPOSE_PERSONA_EXAMPLE, "Coach",
+                                approvals.persona_example_bind("Coach", "hey whats up", "Hey, what's up?"))
+        self.assertEqual(self.post(approval=old_style).status_code, 403)
+        self.assertEqual(self.examples(), [])
 
     def test_a_send_ticket_is_not_a_persona_ticket(self):
         ticket = sign_ticket(approvals.PURPOSE_DRAFT_SEND, "Coach", approvals.persona_example_bind("Coach", "hey whats up", "Hey, what's up?"))

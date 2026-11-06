@@ -24,9 +24,8 @@ from fastapi.testclient import TestClient
 
 import server
 from backend.llm import llm_engine
-from backend.services import approvals
+from backend.services import approvals, persona_learning
 from backend.services import personas as persona_service
-from backend.services import persona_learning
 from backend.services.persona_learning import PersonaLearningStore
 
 pytestmark = pytest.mark.approvals_enforced

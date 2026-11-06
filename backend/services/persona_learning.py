@@ -50,6 +50,17 @@ SCHEMA_VERSION = 2
 DEFAULT_CAP = 50
 
 
+# ONE lock for every instance (round 4, items 3 and 5). Routes make a fresh store per request, so
+# a per-instance lock serialised nothing between two requests: an approval verified against the
+# list one request read could be committed after another request had changed it. Every mutation
+# and every read-verify-commit sequence holds this lock.
+_STORE_LOCK = threading.RLock()
+
+
+def _pairs(examples) -> list:
+    return [(e["raw"], e["out"]) for e in examples]
+
+
 def _empty_store() -> dict:
     return {"personas": {}}
 
@@ -147,7 +158,7 @@ class PersonaLearningStore:
     def __init__(self, path: Optional[str] = None, cap: int = DEFAULT_CAP):
         self._path = path
         self.cap = max(1, int(cap))
-        self._lock = threading.RLock()
+        self._lock = _STORE_LOCK
 
     @property
     def path(self) -> str:
@@ -173,12 +184,52 @@ class PersonaLearningStore:
 
     # --- mutation -------------------------------------------------------
 
-    def add_example(self, persona_name, raw, out, consent: bool = False) -> dict:
+    def _apply_add(self, examples, raw_s, out_s):
+        """The list that adding (raw_s, out_s) to ``examples`` RESULTS IN, as the store would
+        write it: a duplicate (by canonical content) changes nothing; at the cap the oldest is
+        evicted (FIFO). Returns (after_examples, added_or_None, evicted_list)."""
+        cid = _compute_id(raw_s, out_s)
+        if any(e["id"] == cid for e in examples):
+            return [dict(e) for e in examples], None, []
+        after = [dict(e) for e in examples]
+        evicted = []
+        while len(after) >= self.cap:
+            evicted.append(after.pop(0))
+        added = {"id": cid, "raw": raw_s, "out": out_s, "created_at": _now_iso()}
+        after.append(added)
+        return after, added, evicted
+
+    def plan_add(self, persona_name, raw, out) -> dict:
+        """What adding this example WOULD do, without doing it (round 4, item 5): the complete
+        list before and after as (raw, out) pairs, the example added (None for a duplicate) and
+        every example the cap would evict. The approval dialog shows this; the ticket binds it."""
+        name = self._key(persona_name)
+        raw_s = str(raw or "").strip()
+        out_s = str(out or "").strip()
+        with self._lock:
+            data = self._load()
+            examples = data["personas"].get(name, {"examples": []})["examples"]
+            after, added, evicted = self._apply_add(examples, raw_s, out_s)
+            return {
+                "persona": name,
+                "before": _pairs(examples),
+                "after": _pairs(after),
+                "added": None if added is None else {"id": added["id"], "raw": raw_s, "out": out_s},
+                "duplicate": added is None,
+                "evicted": [{"id": e["id"], "raw": e["raw"], "out": e["out"]} for e in evicted],
+            }
+
+    def add_example(self, persona_name, raw, out, consent: bool = False, expect=None, guard=None) -> dict:
         """Add a learned example. Requires ``consent=True`` on this exact
         call — there is no persisted consent flag; every add is an explicit,
         one-shot decision by the caller. Duplicates (by canonical content) are
         recognized and reported, not stored twice. Once ``self.cap`` examples
-        are stored for a persona, the oldest is evicted (FIFO) to make room."""
+        are stored for a persona, the oldest is evicted (FIFO) to make room.
+
+        ``expect`` (round 4, item 5) is the ``(before, after)`` pair lists the approval covers;
+        the write happens only if the stored list and the computed result are exactly those, all
+        under the store lock. ``guard(before, after)`` runs under the same lock before anything is
+        written (the route verifies its ticket there) and may raise to stop the write."""
         name = self._key(persona_name)
         if not name:
             return {"ok": False, "error": "invalid_persona_name"}
@@ -190,29 +241,31 @@ class PersonaLearningStore:
         if not raw_s or not out_s:
             return {"ok": False, "error": "empty_example"}
 
-        cid = _compute_id(raw_s, out_s)
         with self._lock:
             data = self._load()
             entry = data["personas"].setdefault(name, {"examples": []})
-            existing_ids = {e["id"] for e in entry["examples"]}
-            if cid in existing_ids:
-                return {"ok": True, "duplicate": True, "id": cid, "evicted_id": None}
-
-            evicted_id = None
-            if len(entry["examples"]) >= self.cap:
-                evicted_id = entry["examples"].pop(0)["id"]  # oldest-first eviction
-
-            entry["examples"].append({
-                "id": cid, "raw": raw_s, "out": out_s, "created_at": _now_iso(),
-            })
+            after, added, evicted = self._apply_add(entry["examples"], raw_s, out_s)
+            before_pairs, after_pairs = _pairs(entry["examples"]), _pairs(after)
+            if expect is not None and (list(map(tuple, expect[0])) != before_pairs
+                                       or list(map(tuple, expect[1])) != after_pairs):
+                return {"ok": False, "error": "changed",
+                        "message": "The learned examples changed since you approved this. Nothing was learned."}
+            if guard is not None:
+                guard(before_pairs, after_pairs)
+            if added is None:
+                return {"ok": True, "duplicate": True, "id": _compute_id(raw_s, out_s), "evicted_id": None}
+            entry["examples"] = after
             try:
                 self._save(data)
             except OSError as exc:
                 return {"ok": False, "error": "write_failed", "message": str(exc)}
-            return {"ok": True, "duplicate": False, "id": cid, "evicted_id": evicted_id}
+            evicted_id = evicted[0]["id"] if evicted else None
+            return {"ok": True, "duplicate": False, "id": added["id"], "evicted_id": evicted_id,
+                    "evicted_ids": [e["id"] for e in evicted]}
 
-    def delete_example(self, persona_name, example_id) -> dict:
-        """Delete a single learned example by id."""
+    def delete_example(self, persona_name, example_id, guard=None) -> dict:
+        """Delete a single learned example by id. ``guard(before, after)`` runs under the store
+        lock with the complete list before and after (pairs) and may raise to stop the delete."""
         name = self._key(persona_name)
         with self._lock:
             try:
@@ -222,6 +275,9 @@ class PersonaLearningStore:
                 data = self._load()
                 entry = data["personas"].get(name)
                 existed = False
+                if guard is not None:
+                    current = entry["examples"] if entry else []
+                    guard(_pairs(current), _pairs([e for e in current if e["id"] != example_id]))
                 if entry:
                     before = len(entry["examples"])
                     entry["examples"] = [e for e in entry["examples"] if e["id"] != example_id]
@@ -233,10 +289,11 @@ class PersonaLearningStore:
                 return {"ok": False, "error": "write_failed", "message": str(exc)}
             return {"ok": True, "deleted": existed}
 
-    def clear_persona(self, persona_name) -> dict:
+    def clear_persona(self, persona_name, guard=None) -> dict:
         """Privacy clear: delete every learned example for one persona. The
         persona's key is dropped, not blacklisted — a later ``add_example``
-        with fresh consent recreates it, so this clear is reversible."""
+        with fresh consent recreates it, so this clear is reversible.
+        ``guard(before)`` runs under the store lock with the complete list it removes."""
         name = self._key(persona_name)
         with self._lock:
             try:
@@ -244,6 +301,8 @@ class PersonaLearningStore:
                 # survive in a .bak-v<N> recovery copy.
                 refresh_migration_backups(self.path, None, SCHEMA_VERSION)
                 data = self._load()
+                if guard is not None:
+                    guard(_pairs(data["personas"].get(name, {}).get("examples", [])))
                 existed = bool(data["personas"].get(name, {}).get("examples"))
                 data["personas"].pop(name, None)
                 refresh_migration_backups(self.path, json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False), SCHEMA_VERSION)
@@ -253,7 +312,9 @@ class PersonaLearningStore:
             return {"ok": True, "cleared": existed}
 
     def clear_all(self) -> dict:
-        """Privacy clear: delete every learned example for every persona."""
+        """Privacy clear: delete every learned example for every persona. Callers that need the
+        clear to match an approved collection hold ``persona_learning.store_lock()`` around their
+        check and this call (the lock is re-entrant)."""
         with self._lock:
             data = _normalize_store(_empty_store())
             try:
@@ -292,3 +353,18 @@ class PersonaLearningStore:
         schema expects — for callers that want to feed learned examples into
         a persona's prompt construction."""
         return [{"raw": e["raw"], "out": e["out"]} for e in self.list_examples(persona_name)]
+
+
+def store_lock():
+    """The lock every learned-example mutation holds (re-entrant)."""
+    return _STORE_LOCK
+
+
+def snapshot(store: Optional[PersonaLearningStore] = None) -> list:
+    """Every persona's learned list as ``[(name, [(raw, out), ...]), ...]`` sorted by name: what
+    the global clear dialog shows and its ticket binds (``approvals.learned_collection_digest``)."""
+    store = store or PersonaLearningStore()
+    with _STORE_LOCK:
+        data = store._load()
+        return sorted((name, _pairs(entry["examples"])) for name, entry in data["personas"].items()
+                      if entry["examples"])
