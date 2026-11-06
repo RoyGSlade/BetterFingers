@@ -69,7 +69,8 @@ test('a new chord is registered as the OLD key first, and applied only after the
   assert.equal(ctx.dialogs.length, 1);
   assert.equal(ctx.dialogs[0].defaultId, 1);
   assert.equal(ctx.registered.at(-1).manual_send_hotkey, 'ctrl+alt+s');
-  assert.equal(JSON.parse(fs.readFileSync(path.join(ctx.userData, 'send-hotkey.json'), 'utf8')).key, 'ctrl+alt+s');
+  // Nothing is written to disk: a new file would have to be declared in the privacy inventory.
+  assert.deepEqual(fs.readdirSync(ctx.userData), []);
 });
 
 test('a declined change leaves the old key, and the same request is not asked again', async (t) => {

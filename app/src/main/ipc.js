@@ -433,13 +433,10 @@ function registerIpc({
   // key is accepted, and changing it from the confirmed value needs a native dialog.
   // Everything else in the config is applied as before.
   const { createSendHotkeyGate } = require('./sendHotkeyPolicy');
-  const sendHotkeyFile = () => path.join(app.getPath('userData'), 'send-hotkey.json');
-  const sendHotkeyGate = createSendHotkeyGate({
-    load: () => {
-      try { return JSON.parse(fs.readFileSync(sendHotkeyFile(), 'utf8')).key; } catch { return null; }
-    },
-    save: (key) => fs.writeFileSync(sendHotkeyFile(), JSON.stringify({ key })),
-  });
+  // Held in memory for the session. Persisting a confirmed key would mean a new file under the
+  // app's data folder, which the privacy inventory, the factory reset and the uninstaller would all
+  // have to declare; until that is done a custom chord is simply confirmed once per launch.
+  const sendHotkeyGate = createSendHotkeyGate();
 
   onTrusted('update-hotkeys', (_event, config) => {
     const { registerHotkeys } = require('./hotkeys');
