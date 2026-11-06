@@ -4,6 +4,7 @@ const os = require('node:os');
 const { app, clipboard, dialog, ipcMain, session, shell, webContents } = require('electron');
 const { isTrustedRendererUrl } = require('./senderValidation');
 const { deletionRan, finishFactoryReset } = require('./rendererState');
+const { evaluateOpenTarget: evaluateOpenTargetPolicy } = require('./openPathPolicy');
 
 let overlayHideTimer = null;
 
@@ -70,16 +71,9 @@ function allowedOpenRoots() {
   return roots.map((r) => path.resolve(r));
 }
 
-function isAllowedOpenTarget(targetPath) {
-  let resolved;
-  try {
-    resolved = fs.realpathSync(path.resolve(String(targetPath)));
-  } catch {
-    return false; // must exist
-  }
-  return allowedOpenRoots().some(
-    (root) => resolved === root || resolved.startsWith(root + path.sep),
-  );
+// Containment AND file-type policy live in openPathPolicy.js (Phase 0 item 8).
+function evaluateOpenTarget(targetPath) {
+  return evaluateOpenTargetPolicy(targetPath, { roots: allowedOpenRoots() });
 }
 
 function registerIpc({
@@ -357,17 +351,17 @@ function registerIpc({
 
 
   handleTrusted('shell:open-path', async (_event, targetPath) => {
-    // Open an exported file/folder (e.g. the reel.html preview) in the OS
-    // default app. Only locations the app itself exports to are allowed —
-    // Downloads and the app's own data dir — and the target must exist.
-    if (typeof targetPath !== 'string' || !targetPath || targetPath.length > 4096) {
-      return { ok: false, error: 'No path provided' };
+    // Show an exported folder, or open an exported DOCUMENT (e.g. the reel.html
+    // preview), from locations the app itself writes to. Never an executable,
+    // script, shortcut or installer: shell.openPath launches what it opens, so
+    // openPathPolicy.js allows directories and a closed list of document types
+    // only, judged on the symlink-resolved path.
+    const verdict = evaluateOpenTarget(targetPath);
+    if (!verdict.ok) {
+      console.warn(`[ipc] Refused shell:open-path: ${verdict.reason}`);
+      return { ok: false, error: verdict.reason };
     }
-    if (!isAllowedOpenTarget(targetPath)) {
-      console.warn(`[ipc] Refused shell:open-path outside allowed roots: ${targetPath}`);
-      return { ok: false, error: 'Path is outside the allowed export locations.' };
-    }
-    const error = await shell.openPath(targetPath);
+    const error = await shell.openPath(verdict.resolved);
     return { ok: !error, error: error || null };
   });
 

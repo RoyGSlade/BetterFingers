@@ -26,6 +26,8 @@ module.exports = defineConfig({
           // OR-02 startup splash phase derivation (main.js requires it for
           // pushBootSnapshot()).
           bootPhases: resolve(__dirname, 'src/main/bootPhases.js'),
+          // shell:open-path file-type policy; ipc.js requires it.
+          openPathPolicy: resolve(__dirname, 'src/main/openPathPolicy.js'),
           // Session-level hardening (permission handlers, CSP backstop);
           // main.js requires it.
           sessionSecurity: resolve(__dirname, 'src/main/sessionSecurity.js'),
