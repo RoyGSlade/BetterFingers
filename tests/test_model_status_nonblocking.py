@@ -110,7 +110,7 @@ def test_shared_event_loop_status_and_health_during_load(stt):
     ticks = []
 
     async def exercise():
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://testserver") as client:
             async def ticker():
                 await asyncio.sleep(.01)
                 ticks.append(True)
@@ -179,7 +179,7 @@ def test_tts_snapshot_and_status_route_do_not_wait_for_load_lock():
     assert entered.wait(5)
 
     async def exercise():
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://testserver") as client:
             started = time.monotonic()
             tts, health = await asyncio.gather(client.get("/runtime/tts-status"), client.get("/health"))
             assert time.monotonic() - started < .25
