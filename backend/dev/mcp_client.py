@@ -23,6 +23,8 @@ import asyncio
 import json
 import logging
 import os
+import shutil
+import sys
 import threading
 
 from backend.config.utils import get_user_data_path
@@ -43,6 +45,72 @@ def sdk_available():
         return True
     except Exception:
         return False
+
+
+# --- the MCP subprocess sandbox (round 2, item 3) ---------------------------------------
+#
+# Scrubbing the environment (Phase 0 item 9) stops an MCP server INHERITING credentials; it
+# does not stop a hostile same-user executable from looking for them. The Codex re-review's
+# concrete path was /proc/<backend pid>/environ. Three layers now close it:
+#   1. the backend holds no credential in its environment (backend/privacy/boot_secrets.py),
+#   2. the backend is non-dumpable on Linux, so /proc/<pid>/{environ,mem,maps} are not
+#      readable by other processes of the same user, and
+#   3. where the platform allows, the server itself runs confined:
+#        Linux with bubblewrap: its own PID namespace (the backend does not exist in its
+#          /proc), no new privileges, no capabilities, the whole filesystem read-only, the
+#          app's data folder and the usual credential folders (~/.ssh, ~/.gnupg, ~/.aws,
+#          ~/.config/gcloud, ~/.kube) replaced by empty temporary ones, a private /tmp,
+#          private IPC and hostname. The network is NOT cut (most servers need it).
+#        Linux without bwrap but with setpriv: no-new-privs only.
+#        Windows and macOS: no confinement is applied by this tree. The server runs as the
+#          same user with the scrubbed environment and no credential in its reach through
+#          the environment or /proc, but a same-user process can still use OS facilities
+#          (for example reading another process's memory on Windows). AppContainer / a job
+#          object, or the Windows Sandbox, would be the next step and is not claimed here.
+#   A server may be run unconfined only by naming "sandbox": "off" in its config entry, and
+#   the listing shows what each server actually gets.
+
+_CREDENTIAL_DIRS = (".ssh", ".gnupg", ".aws", ".kube", os.path.join(".config", "gcloud"))
+
+
+def sandbox_kind(*, platform=None, which=shutil.which):
+    """What confinement this machine can give an MCP server: 'bubblewrap', 'no_new_privs'
+    or 'none'."""
+    platform = sys.platform if platform is None else platform
+    if not platform.startswith("linux"):
+        return "none"
+    if which("bwrap"):
+        return "bubblewrap"
+    if which("setpriv"):
+        return "no_new_privs"
+    return "none"
+
+
+def sandbox_command(command, args, *, mode="auto", platform=None, which=shutil.which,
+                    data_root=None, home=None):
+    """``(command, args, kind)`` to launch an MCP server, confined where possible.
+
+    ``mode`` is the server's ``"sandbox"`` setting: ``"auto"`` (default) or ``"off"``.
+    """
+    args = [str(item) for item in (args or [])]
+    if str(mode).lower() == "off":
+        return command, args, "none"
+    kind = sandbox_kind(platform=platform, which=which)
+    if kind == "bubblewrap":
+        home = home or os.path.expanduser("~")
+        wrapped = [
+            "--die-with-parent", "--new-session", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
+            "--cap-drop", "ALL",
+            "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp",
+        ]
+        hidden = [d for d in (data_root,) if d and os.path.isdir(d)]
+        hidden += [os.path.join(home, rel) for rel in _CREDENTIAL_DIRS if os.path.isdir(os.path.join(home, rel))]
+        for directory in hidden:
+            wrapped += ["--tmpfs", directory]
+        return which("bwrap"), [*wrapped, "--", command, *args], kind
+    if kind == "no_new_privs":
+        return which("setpriv"), ["--no-new-privs", "--", command, *args], kind
+    return command, args, "none"
 
 
 def load_config():
@@ -73,6 +141,7 @@ def load_config():
             "args": [str(item) for item in spec.get("args", []) if isinstance(item, (str, int, float))],
             "env": {str(k): str(v) for k, v in spec.get("env", {}).items()} if isinstance(spec.get("env"), dict) else {},
             "enabled": bool(spec.get("enabled", True)),
+            "sandbox": "off" if str(spec.get("sandbox", "auto")).lower() == "off" else "auto",
         }
     return {"enabled": bool(raw.get("enabled", False)), "mcpServers": cleaned}
 
@@ -100,6 +169,9 @@ def list_servers():
             # the listing is an API response, so show it masked.
             "args": redact_args(spec["args"]),
             "enabled": spec["enabled"],
+            # what confinement this server actually gets on this machine
+            "sandbox": sandbox_command(spec["command"], spec["args"], mode=spec.get("sandbox", "auto"),
+                                       data_root=get_user_data_path())[2],
         }
         for name, spec in sorted(config["mcpServers"].items())
     ]
@@ -109,9 +181,14 @@ async def _list_tools_async(spec, timeout):
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
 
+    command, args, kind = sandbox_command(
+        spec["command"], spec["args"], mode=spec.get("sandbox", "auto"), data_root=get_user_data_path(),
+    )
+    if kind == "none" and str(spec.get("sandbox", "auto")).lower() != "off":
+        logging.warning("mcp_client: no sandbox available on this machine; the MCP server runs unconfined")
     params = StdioServerParameters(
-        command=spec["command"],
-        args=spec["args"],
+        command=command,
+        args=args,
         # An ALLOWLISTED environment plus the server's own configured ``env``
         # block -- never ``os.environ``, which holds this backend's bearer token
         # and approval key and whatever provider keys the user's shell exports

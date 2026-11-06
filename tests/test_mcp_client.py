@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -115,7 +116,7 @@ class McpLiveStdioTests(unittest.TestCase):
             ))
         _write_config(self.tmp.name, {
             "enabled": True,
-            "mcpServers": {"tiny": {"command": sys.executable, "args": [server_path]}},
+            "mcpServers": {"tiny": {"sandbox": "off", "command": sys.executable, "args": [server_path]}},
         })
 
     def test_lists_tools_from_live_server(self):
@@ -126,6 +127,20 @@ class McpLiveStdioTests(unittest.TestCase):
         add_tool = next(t for t in result["tools"] if t["name"] == "add")
         self.assertIn("Add two integers", add_tool["description"])
         self.assertIn("properties", add_tool["input_schema"])
+
+    @unittest.skipUnless(mcp_client.sandbox_kind() == "bubblewrap", "bubblewrap is not installed")
+    def test_a_server_can_still_be_listed_while_confined(self):
+        """The same live listing, through the sandbox (script kept outside /tmp and the data
+        folder, which the sandbox replaces with empty ones)."""
+        repo_tmp = tempfile.mkdtemp(prefix="mcp-sandboxed-", dir=os.path.dirname(os.path.abspath(__file__)))
+        self.addCleanup(lambda: __import__("shutil").rmtree(repo_tmp, ignore_errors=True))
+        script = os.path.join(repo_tmp, "tiny_server.py")
+        with open(script, "w", encoding="utf-8") as handle:
+            handle.write("from mcp.server.fastmcp import FastMCP\nmcp = FastMCP('tiny')\n\n@mcp.tool()\ndef add(a: int, b: int) -> int:\n    return a + b\n\nmcp.run()\n")
+        _write_config(self.tmp.name, {"enabled": True, "mcpServers": {"tiny": {"command": sys.executable, "args": [script]}}})
+        result = mcp_client.list_tools("tiny", timeout=30.0)
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertIn("add", [tool["name"] for tool in result["tools"]])
 
     def test_connection_failure_returns_error_not_raise(self):
         _write_config(self.tmp.name, {
@@ -162,6 +177,9 @@ class McpLiveStdioTests(unittest.TestCase):
         _write_config(self.tmp.name, {
             "enabled": True,
             "mcpServers": {"snoop": {
+                # unconfined here: this test is about the ENVIRONMENT, and it needs to write a
+                # file the test can read back (a sandbox gives the server a private /tmp)
+                "sandbox": "off",
                 "command": sys.executable, "args": [server_path, dump_path],
                 "env": {"SNOOP_OWN_SETTING": "1", "BETTERFINGERS_AUTH_TOKEN": "must-not-pass"},
             }},
@@ -199,6 +217,71 @@ class McpListingRedactionTests(unittest.TestCase):
         self.assertEqual(servers[0]["args"], ["srv.py", "--api-key", "[redacted]", "--token=[redacted]", "--port", "8"])
         self.assertNotIn("topsecretvalue", json.dumps(servers))
         self.assertNotIn("abcdef123456", json.dumps(servers))
+
+
+class McpSandboxTests(unittest.TestCase):
+    """Round 2, item 3: a hostile same-user MCP executable must not be able to reach the
+    backend's /proc entry, the app's data folder or the usual credential folders."""
+
+    def test_command_construction_by_platform(self):
+        which = lambda name: {"bwrap": "/usr/bin/bwrap", "setpriv": "/usr/bin/setpriv"}.get(name)
+        cmd, args, kind = mcp_client.sandbox_command("srv", ["--x"], platform="linux", which=which, data_root="/nonexistent-dir", home="/nonexistent")
+        self.assertEqual((cmd, kind), ("/usr/bin/bwrap", "bubblewrap"))
+        for flag in ("--unshare-pid", "--die-with-parent", "--new-session", "--cap-drop", "--ro-bind", "--proc"):
+            self.assertIn(flag, args)
+        self.assertEqual(args[args.index("--") + 1:], ["srv", "--x"])
+        only_setpriv = lambda name: "/usr/bin/setpriv" if name == "setpriv" else None
+        cmd, args, kind = mcp_client.sandbox_command("srv", [], platform="linux", which=only_setpriv)
+        self.assertEqual((cmd, args, kind), ("/usr/bin/setpriv", ["--no-new-privs", "--", "srv"], "no_new_privs"))
+        for platform in ("win32", "darwin"):
+            self.assertEqual(mcp_client.sandbox_command("srv", ["a"], platform=platform, which=which), ("srv", ["a"], "none"))
+        self.assertEqual(mcp_client.sandbox_command("srv", ["a"], mode="off", platform="linux", which=which), ("srv", ["a"], "none"))
+
+    def test_data_and_credential_folders_are_hidden_when_they_exist(self):
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as data:
+            os.makedirs(os.path.join(home, ".ssh"))
+            _cmd, args, _kind = mcp_client.sandbox_command(
+                "srv", [], platform="linux", which=lambda n: f"/usr/bin/{n}" if n == "bwrap" else None, data_root=data, home=home)
+            hidden = [args[i + 1] for i, a in enumerate(args) if a == "--tmpfs"]
+            self.assertIn(data, hidden)
+            self.assertIn(os.path.join(home, ".ssh"), hidden)
+            self.assertNotIn(os.path.join(home, ".aws"), hidden, "only folders that exist are replaced")
+
+    @unittest.skipUnless(mcp_client.sandbox_kind() == "bubblewrap", "bubblewrap is not installed")
+    def test_a_confined_process_cannot_see_the_backend_or_the_data_folder(self):
+        probe = (
+            "import json, os, sys\n"
+            "parent, secret, data = int(sys.argv[1]), sys.argv[2], sys.argv[3]\n"
+            "out = {'parent_visible': str(parent) in os.listdir('/proc'),\n"
+            "       'secret_visible': os.path.exists(secret), 'data_listing': sorted(os.listdir(data)),\n"
+            "       'pid': os.getpid(), 'nnp': open('/proc/self/status').read().count('NoNewPrivs:\\t1')}\n"
+            "try:\n    open('/usr/bin/sandbox-write-test', 'w').close(); out['wrote_system'] = True\n"
+            "except OSError:\n    out['wrote_system'] = False\n"
+            "print(json.dumps(out))\n"
+        )
+        with tempfile.TemporaryDirectory() as data:
+            secret = os.path.join(data, "approval.key")
+            with open(secret, "w") as handle:
+                handle.write("not-a-real-key")
+            cmd, args, kind = mcp_client.sandbox_command(sys.executable, ["-c", probe, str(os.getpid()), secret, data], data_root=data)
+            self.assertEqual(kind, "bubblewrap")
+            result = subprocess.run([cmd, *args], capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stderr[-400:])
+            report = json.loads(result.stdout.strip().splitlines()[-1])
+            self.assertFalse(report["parent_visible"], "the backend must not exist in the server's /proc")
+            self.assertFalse(report["secret_visible"], "a file in the data folder must not be visible")
+            self.assertEqual(report["data_listing"], [])
+            self.assertFalse(report["wrote_system"])
+            self.assertEqual(report["pid"] < 10, True, "its own PID namespace")
+            self.assertEqual(report["nnp"], 1)
+            self.assertTrue(os.path.exists(secret), "the real file is untouched")
+
+    def test_listing_reports_the_confinement_each_server_gets(self):
+        with tempfile.TemporaryDirectory() as tmp, patch("backend.dev.mcp_client.get_user_data_path", return_value=tmp):
+            _write_config(tmp, {"enabled": True, "mcpServers": {"a": {"command": "x"}, "b": {"command": "y", "sandbox": "off"}}})
+            listed = {item["name"]: item["sandbox"] for item in mcp_client.list_servers()}
+        self.assertEqual(listed["b"], "none")
+        self.assertIn(listed["a"], ("bubblewrap", "no_new_privs", "none"))
 
 
 class McpEndpointTests(unittest.TestCase):

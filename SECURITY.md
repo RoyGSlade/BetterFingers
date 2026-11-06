@@ -68,4 +68,14 @@ What the app enforces on the machine itself (details in [docs/DEVELOPMENT.md](do
 - **Each window has its own minimal preload and a strict CSP**; the overlay and the splash cannot
   call workflow, draft, privacy or file channels. Web permissions (camera, screen, clipboard,
   location) are denied; the microphone is allowed only for the dashboard's own recorder.
-- **MCP servers get an allowlisted environment** with none of the app's credentials.
+- **MCP servers get an allowlisted environment and, on Linux, run confined.** The backend's own
+  credentials are never in its environment (the shell hands them over a pipe) and the backend is
+  non-dumpable, so another process of the same user cannot read them from `/proc`. With
+  bubblewrap installed an MCP server also runs in its own PID namespace with no new privileges,
+  a read-only filesystem and empty stand-ins for the app's data folder and `~/.ssh`, `~/.gnupg`,
+  `~/.aws`, `~/.kube`, `~/.config/gcloud`; without bubblewrap it gets no-new-privs only. **On
+  Windows and macOS this tree applies no confinement**: the server runs as the same user with the
+  scrubbed environment and no credential reachable through the environment, but a same-user
+  process can still use OS facilities such as reading another process's memory. Treat an MCP
+  server you install as running with your own rights there. A server entry can opt out with
+  `"sandbox": "off"`; the server listing shows what each server actually gets.
