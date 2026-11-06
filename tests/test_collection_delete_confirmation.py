@@ -31,8 +31,13 @@ def collection_client(monkeypatch):
         broadcast_status_threadsafe=lambda *a: None,
     )
     monkeypatch.setitem(sys.modules, "server", fake)
-    monkeypatch.setattr(personas, "_learning_store", lambda: SimpleNamespace(
-        clear_persona=cleared("examples", {"ok": True, "cleared": True})))
+    def clear_persona(name, guard=None):
+        if guard is not None:
+            guard([("stored raw", "stored out")])  # the route verifies its ticket here, under the lock
+        calls.append("examples")
+        return {"ok": True, "cleared": True}
+
+    monkeypatch.setattr(personas, "_learning_store", lambda: SimpleNamespace(clear_persona=clear_persona))
     app = FastAPI()
     app.include_router(history.router)
     app.include_router(drafts.router)
@@ -43,7 +48,9 @@ def collection_client(monkeypatch):
         yield client, calls, queue
 
 
-COLLECTIONS = ["/recordings", "/history", "/drafts", "/personas/Coach/examples", "/message-rescue/context"]
+# Clearing a persona's learned examples is not a ?confirm=true collection any more (round 4, item 3):
+# it needs a native-dialog ticket, covered by the enforced test at the end of this file.
+COLLECTIONS = ["/recordings", "/history", "/drafts", "/message-rescue/context"]
 
 
 @pytest.mark.parametrize("path", COLLECTIONS)
@@ -70,3 +77,25 @@ def test_valid_per_recording_delete_needs_no_collection_grant(collection_client)
     client, calls, _ = collection_client
     assert client.delete("/recordings/valid-id").status_code == 200
     assert calls == ["recording_item"]
+
+
+@pytest.mark.approvals_enforced
+@pytest.mark.parametrize("url", ["/personas/Coach/examples", "/personas/Coach/examples/", "/personas/Coach/examples/.",
+                                 "/personas/Coach/examples?confirm=true"])
+def test_a_persona_learned_clear_needs_a_ticket_whatever_the_url_shape(collection_client, url):
+    client, calls, _ = collection_client
+    assert client.delete(url).status_code in (400, 403, 404, 405)
+    assert calls == []
+
+
+@pytest.mark.approvals_enforced
+def test_a_persona_learned_clear_with_a_ticket_for_the_stored_list_still_works(collection_client):
+    from approval_support import sign_ticket
+
+    from backend.services import approvals
+
+    client, calls, _ = collection_client
+    ticket = sign_ticket(approvals.PURPOSE_PERSONA_LEARNED_CLEAR, "Coach",
+                         approvals.learned_clear_bind("Coach", [("stored raw", "stored out")]))
+    assert client.request("DELETE", "/personas/Coach/examples", json={"approval": ticket}).status_code == 200
+    assert calls == ["examples"]
