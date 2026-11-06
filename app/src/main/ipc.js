@@ -109,9 +109,13 @@ function registerIpc({
   // Phase 3c: the token is never exposed to the renderer. All backend HTTP
   // goes through this validated proxy (origin-locked, method/path allowlisted,
   // body-size capped); the credential stays in the main process.
-  handleTrusted('backend:request', (_event, req) => {
+  handleTrusted('backend:request', (event, req) => {
     const { method, path, body, timeoutMs } = req || {};
-    return backendProxy.request({ method, path, body, timeoutMs });
+    // The review window gets a much smaller route table than the dashboard (round 2, item 7).
+    // The profile comes from the PAGE main sees, never from anything the page sends.
+    const page = pageNameOf(event.senderFrame.url, { rendererDir: rendererDir(), devOrigin: process.env.ELECTRON_RENDERER_URL });
+    const profile = page === 'review-overlay.html' ? 'review' : 'dashboard';
+    return backendProxy.request({ method, path, body, timeoutMs, profile });
   });
 
   // Typed channels for destructive/sensitive operations. Each maps to exactly

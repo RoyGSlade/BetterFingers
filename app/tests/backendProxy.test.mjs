@@ -263,3 +263,53 @@ test('the main-only transport is not an IPC-facing function', () => {
   assert.match(ipcSource, /backend: \{ send: \(method, path, body, timeoutMs\) => backendProxy\.sendTrusted\(method, path, body, timeoutMs\) \}/);
   assert.ok(!/handleTrusted\([^)]*,\s*\(_event, req\) => backendProxy\.sendTrusted/.test(ipcSource));
 });
+
+// --- Round 2, item 7: the review window's own, much smaller route table ---------
+
+test('the review profile allows exactly the routes review-overlay.html calls', () => {
+  const allowed = [
+    ['GET', '/runtime/output-settings'], ['GET', '/runtime/tts-status'], ['POST', '/tts/stop'],
+    ['POST', '/drafts/7/edit'], ['POST', '/drafts/7/accept'], ['POST', '/drafts/7/decline'],
+    ['POST', '/drafts/7/rewrite'], ['POST', '/drafts/7/tts'],
+  ];
+  for (const [method, path] of allowed) assert.equal(proxy._validateRequest(method, path, 'review'), null, `${method} ${path}`);
+});
+
+test('every backend route the review page actually calls is in its profile (so the page keeps working)', () => {
+  const html = readFileSync(new URL('../src/renderer/review-overlay.html', import.meta.url), 'utf8');
+  const called = new Set();
+  for (const m of html.matchAll(/(fetchJson|postJson)\(\s*`\$\{BACKEND_ORIGIN\}([^`]+)`/g)) {
+    called.add([m[1] === 'fetchJson' ? 'GET' : 'POST', m[2].replace(/\$\{[^}]+\}/g, '7')].join(' '));
+  }
+  assert.ok(called.size >= 8, [...called].join(', '));
+  for (const entry of called) {
+    const [method, path] = entry.split(' ');
+    assert.equal(proxy._validateRequest(method, path, 'review'), null, `review page calls ${entry}`);
+  }
+});
+
+test('the review profile refuses profile, persona, workflow, privacy, settings, drafts-listing and every other write', () => {
+  const refused = [
+    ['POST', '/settings/profiles'], ['POST', '/settings/profiles/x/activate'], ['DELETE', '/settings/profiles/x'],
+    ['POST', '/personas'], ['POST', '/personas/lint'], ['DELETE', '/personas/x'], ['GET', '/personas/x/examples'],
+    ['POST', '/workflows/save'], ['POST', '/workflows/enable'], ['POST', '/workflows/delete'], ['POST', '/workflows/run'], ['GET', '/workflows'],
+    ['GET', '/privacy/export'], ['GET', '/history'], ['GET', '/drafts'], ['DELETE', '/drafts'], ['DELETE', '/history'],
+    ['POST', '/dictionary'], ['POST', '/macros'], ['POST', '/models/llm/select'], ['POST', '/app-context/override'],
+    ['POST', '/stream-deck/pair'], ['POST', '/input/bindings/set'], ['POST', '/library/clear'], ['POST', '/contacts'],
+    ['POST', '/drafts/7/retry'], ['POST', '/drafts/7/contact'], ['POST', '/drafts/test-mock'], ['POST', '/runtime/emergency-stop'],
+    ['POST', '/runtime/warmup'], ['GET', '/diagnostics/logs'], ['GET', '/runtime/status'], ['POST', '/tts/speak'],
+    ['POST', '/drafts/7/send'], ['POST', '/runtime/primary-action'], ['POST', '/drafts/7/accept/../../x'],
+  ];
+  for (const [method, path] of refused) {
+    assert.notEqual(proxy._validateRequest(method, path, 'review'), null, `${method} ${path} must be refused for the review window`);
+  }
+});
+
+test('the review profile is a strict subset of the dashboard profile, and unknown profiles are refused', () => {
+  for (const [method, patterns] of Object.entries(proxy.REVIEW_ROUTE_ALLOWLIST)) {
+    for (const pattern of patterns) assert.ok(proxy.ROUTE_ALLOWLIST[method].includes(pattern), `${method} ${pattern}`);
+  }
+  assert.notEqual(proxy._validateRequest('GET', '/runtime/status', 'admin'), null);
+  assert.notEqual(proxy._validateRequest('GET', '/runtime/status', 'nope'), null);
+  assert.equal(proxy._validateRequest('GET', '/runtime/status'), null, 'the default profile is still the dashboard');
+});

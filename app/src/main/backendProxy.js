@@ -166,6 +166,21 @@ const ROUTE_ALLOWLIST = {
   ],
 };
 const ALLOWED_METHODS = new Set(Object.keys(ROUTE_ALLOWLIST));
+
+// The review overlay is a small always-on-top window that handles one draft. Round 2, item 7:
+// it used to get the dashboard's whole proxy (profile and persona writes, workflow mutation,
+// privacy routes...). It now reaches exactly the routes review-overlay.html calls: read the
+// output settings and TTS status, stop speech, and edit / accept / decline / rewrite / read
+// aloud the draft it is showing. Anything else is refused for that window.
+const REVIEW_ROUTE_ALLOWLIST = {
+  GET: ['/runtime/output-settings', '/runtime/tts-status'],
+  POST: [
+    '/tts/stop',
+    '/drafts/:id/edit', '/drafts/:id/accept', '/drafts/:id/decline',
+    '/drafts/:id/rewrite', '/drafts/:id/tts',
+  ],
+};
+const ROUTE_PROFILES = { dashboard: ROUTE_ALLOWLIST, review: REVIEW_ROUTE_ALLOWLIST };
 // One URL-encoded path segment: the characters encodeURIComponent can emit.
 const PARAM_SEGMENT = /^[A-Za-z0-9._~%!'()*-]{1,256}$/;
 const MAX_BODY_BYTES = 8 * 1024 * 1024; // 8 MB (covers voice-sample uploads)
@@ -195,8 +210,12 @@ function _matchesRoute(pattern, routePart) {
   );
 }
 
-function _validateRequest(method, path) {
-  if (!ALLOWED_METHODS.has(method)) {
+function _validateRequest(method, path, profile = 'dashboard') {
+  const table = ROUTE_PROFILES[profile];
+  if (!table) {
+    return `unknown route profile ${String(profile)}`;
+  }
+  if (!ALLOWED_METHODS.has(method) || !table[method]) {
     return `method ${method} not allowed`;
   }
   if (typeof path !== 'string' || path.length === 0 || path.length > MAX_PATH_LEN) {
@@ -209,7 +228,7 @@ function _validateRequest(method, path) {
     return 'path must not contain a scheme, traversal, or backslash';
   }
   const routePart = path.split('?', 1)[0];
-  if (!ROUTE_ALLOWLIST[method].some((pattern) => _matchesRoute(pattern, routePart))) {
+  if (!table[method].some((pattern) => _matchesRoute(pattern, routePart))) {
     return `${method} ${routePart} is not an allowed backend route`;
   }
   return null;
@@ -219,9 +238,9 @@ function _validateRequest(method, path) {
 // where body is parsed JSON (or the raw text if not JSON). Never throws for
 // HTTP errors — the renderer inspects ok/status — but returns
 // { ok:false, error } for validation/transport faults.
-async function request({ method, path, body, timeoutMs } = {}) {
+async function request({ method, path, body, timeoutMs, profile = 'dashboard' } = {}) {
   const upperMethod = String(method || 'GET').toUpperCase();
-  const requestError = _validateRequest(upperMethod, path);
+  const requestError = _validateRequest(upperMethod, path, profile);
   if (requestError) {
     return { ok: false, status: 0, error: requestError };
   }
@@ -589,5 +608,6 @@ module.exports = {
   // exported for unit tests
   _validateRequest,
   ROUTE_ALLOWLIST,
+  REVIEW_ROUTE_ALLOWLIST,
   ALLOWED_METHODS,
 };
