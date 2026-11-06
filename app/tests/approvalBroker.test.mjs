@@ -535,29 +535,64 @@ test('no IPC handler returns the approval key or a ticket', () => {
   assert.ok(!otherUses.some((line) => /send\(|console\.|log\(|JSON\.stringify/.test(line)), otherUses.join('\n'));
 });
 
-test('the key is removed from main\'s own environment and handed only to the sidecar', () => {
+test('the key is removed from main\'s own environment and handed to the sidecar only over a pipe', () => {
   const main = SRC('main/main.js');
   assert.match(main, /delete process\.env\.BETTERFINGERS_APPROVAL_KEY/);
-  assert.match(SRC('main/sidecar.js'), /BETTERFINGERS_APPROVAL_KEY: approvalKey/);
+  const sidecar = SRC('main/sidecar.js');
+  assert.ok(!/BETTERFINGERS_APPROVAL_KEY:\s*approvalKey/.test(sidecar), 'never in the child environment');
+  assert.ok(!/BETTERFINGERS_AUTH_TOKEN:\s*authToken/.test(sidecar), 'never in the child environment');
+  assert.match(sidecar, /BETTERFINGERS_SECRETS_STDIN/);
 });
 
-test('sidecar passes the key to the backend it spawns, and omits it when there is none', async () => {
+test('round 2 item 3: the spawned backend\'s environment holds no key material; the secrets arrive on stdin', async () => {
   const { createSidecar } = require('../src/main/sidecar.js');
-  const seen = [];
-  for (const approvalKey of ['ab'.repeat(32), '']) {
-    let spawnEnv = null;
+  const secretToken = 'tok-' + 'z9'.repeat(16);
+  const secretKey = 'ab'.repeat(32);
+  for (const platform of ['linux']) {
+    let spawn = null;
+    const written = [];
     const sidecar = createSidecar({
-      platform: 'linux', port: 8191, approvalKey, authToken: 'tok', devCommand: 'stub',
+      platform, port: 8191, approvalKey: secretKey, authToken: secretToken, devCommand: 'stub',
       isTcpPortOpenImpl: async () => false,
-      spawnProcess: (_cmd, _args, options) => { spawnEnv = options.env; throw new Error('stop here'); },
+      spawnProcess: (command, args, options) => {
+        spawn = { command, args, options };
+        return Object.assign(new (require('node:events').EventEmitter)(), {
+          pid: 4242, killed: false, exitCode: null, signalCode: null,
+          stdout: new (require('node:events').EventEmitter)(), stderr: new (require('node:events').EventEmitter)(),
+          stdin: { on() {}, end: (data) => written.push(data) },
+          kill() { return true; },
+        });
+      },
       waitForHealthyImpl: async () => ({ status: 'ok' }), readHealthImpl: async () => ({ status: 'ok' }),
-      setIntervalImpl: () => ({ unref() {} }), clearIntervalImpl: () => {}, readStat: () => null,
-      parentEnv: { PATH: '/bin' },
+      fetchImpl: async () => ({ ok: true, json: async () => ({ schema_version: 1, backend_version: 'test' }) }),
+      setIntervalImpl: () => ({ unref() {} }), clearIntervalImpl: () => {}, readStat: () => null, stopGraceMs: 10,
+      // Even a parent environment that carries them (an adopted launcher) must not forward them.
+      parentEnv: { PATH: '/bin', BETTERFINGERS_AUTH_TOKEN: 'inherited-token', BETTERFINGERS_APPROVAL_KEY: 'inherited-key' },
     });
     await sidecar.start().catch(() => {});
-    seen.push(spawnEnv);
+    await sidecar.stop().catch(() => {});
+    const env = JSON.stringify(spawn.options.env);
+    assert.ok(!env.includes(secretToken) && !env.includes(secretKey), `${platform}: secret in the environment`);
+    assert.ok(!env.includes('inherited-token') && !env.includes('inherited-key'), `${platform}: inherited secret forwarded`);
+    assert.ok(!/AUTH_TOKEN|APPROVAL_KEY/.test(Object.keys(spawn.options.env).join(',')), `${platform}: credential variable names present`);
+    assert.equal(spawn.options.env.BETTERFINGERS_SECRETS_STDIN, '1');
+    assert.equal(spawn.options.stdio[0], 'pipe');
+    assert.equal(written.length, 1);
+    assert.deepEqual(JSON.parse(written[0]), { token: secretToken, approval_key: secretKey });
   }
-  assert.equal(seen[0].BETTERFINGERS_APPROVAL_KEY, 'ab'.repeat(32));
-  assert.equal(seen[0].BETTERFINGERS_AUTH_TOKEN, 'tok');
-  assert.ok(!('BETTERFINGERS_APPROVAL_KEY' in seen[1]));
+});
+
+test('with no credentials there is no hand-off and stdin stays closed', async () => {
+  const { createSidecar } = require('../src/main/sidecar.js');
+  let spawn = null;
+  const sidecar = createSidecar({
+    platform: 'linux', port: 8192, devCommand: 'stub',
+    isTcpPortOpenImpl: async () => false,
+    spawnProcess: (_c, _a, options) => { spawn = options; throw new Error('stop'); },
+    waitForHealthyImpl: async () => ({}), readHealthImpl: async () => ({}), setIntervalImpl: () => ({ unref() {} }),
+    clearIntervalImpl: () => {}, readStat: () => null, parentEnv: { PATH: '/bin' },
+  });
+  await sidecar.start().catch(() => {});
+  assert.equal(spawn.stdio[0], 'ignore');
+  assert.ok(!('BETTERFINGERS_SECRETS_STDIN' in spawn.env));
 });

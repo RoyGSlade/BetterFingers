@@ -54,7 +54,7 @@ from pydantic import BaseModel, Field, StrictBool, StrictInt, StrictStr
 
 from backend.api.routes import drafts as routes_drafts
 from backend.api.models import ApprovalTicketModel
-from backend.api.security import check_request_origin
+from backend.api.security import check_request_origin, get_auth_token
 from backend.services import approvals
 
 router = APIRouter()
@@ -76,7 +76,7 @@ async def websocket_endpoint(websocket: WebSocket):
     # item 10): a query string lands in access logs, proxy logs, diagnostics and
     # crash reports, so a token in a URL is a token in every one of them. A
     # client that still sends one is simply unauthenticated.
-    expected_token = os.getenv("BETTERFINGERS_AUTH_TOKEN")
+    expected_token = get_auth_token()
     # DNS-rebinding / cross-site guard BEFORE the handshake completes: a browser
     # page can open a WebSocket to 127.0.0.1 from any site, and the HTTP
     # middleware does not run for WebSocket scopes (Phase 0 item 5).

@@ -156,3 +156,24 @@ def announce_generated_token(token, env=None, out=None):
                    "(or BETTERFINGERS_TOKEN_FILE=<path>) to choose or retrieve one")
     out(f"[betterfingers] {message}")
     return message
+
+
+# --- the bearer token, held in memory ------------------------------------------
+# Round 2, item 3. An environment variable is readable by any same-user process
+# through /proc/<pid>/environ for the life of the process (and Python's os.environ.pop
+# does not touch that initial copy). The Electron shell therefore hands the backend its
+# bearer token over the child's stdin pipe (backend/privacy/boot_secrets.py), and it
+# lives here. A standalone developer launch can still supply BETTERFINGERS_AUTH_TOKEN in
+# the environment; that fallback keeps `python server.py` and the test suite working.
+_runtime_token = None
+
+
+def set_runtime_token(token):
+    global _runtime_token
+    _runtime_token = str(token) if token else None
+
+
+def get_auth_token():
+    """The active bearer token: the in-memory one if the shell supplied it, else the
+    environment's (standalone/dev), else None."""
+    return _runtime_token or os.getenv("BETTERFINGERS_AUTH_TOKEN") or None

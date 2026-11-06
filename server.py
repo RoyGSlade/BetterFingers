@@ -143,6 +143,8 @@ from backend.api.security import (  # noqa: E402
     _allowed_cors_origins,
     announce_generated_token,
     check_request_origin,
+    get_auth_token,
+    set_runtime_token,
     validate_startup_security,
 )
 
@@ -150,8 +152,13 @@ from backend.api.security import (  # noqa: E402
 # the approval-verification key through the environment; reading it REMOVES it from
 # os.environ so it can never be inherited by a process this backend spawns (MCP
 # servers, llama-server). No key => no approvals can be granted (fail closed).
+from backend.privacy import boot_secrets  # noqa: E402
 from backend.services import approvals  # noqa: E402
 
+# Round 2, item 3: the shell hands over the bearer token and the signing key on stdin, not
+# in the environment (where /proc/<pid>/environ would keep them readable to any same-user
+# process). The environment route below remains for a standalone launch and the tests.
+boot_secrets.load_from_stdin()
 approvals.configure_from_env()
 
 app.add_middleware(
@@ -182,7 +189,7 @@ def enforce_startup_security():
     in app.state.auth_token, not only os.environ.
     """
     host = os.getenv("BETTERFINGERS_HOST", "127.0.0.1")
-    token = os.getenv("BETTERFINGERS_AUTH_TOKEN")
+    token = get_auth_token()
     result = validate_startup_security(
         host, token, allow_remote=os.getenv("BETTERFINGERS_ALLOW_REMOTE") == "1"
     )
@@ -197,10 +204,10 @@ def enforce_startup_security():
         if _is_test_env():
             app.state.auth_token = token or None
             return result
-        os.environ["BETTERFINGERS_AUTH_TOKEN"] = result["token"]
+        set_runtime_token(result["token"])  # in memory, not in the environment
         logging.warning("No auth token supplied; generated an ephemeral one for this run.")
         announce_generated_token(result["token"])
-    app.state.auth_token = os.getenv("BETTERFINGERS_AUTH_TOKEN")
+    app.state.auth_token = get_auth_token()
     return result
 
 
@@ -220,7 +227,7 @@ def _record_auth_failure():
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
-    expected_token = os.getenv("BETTERFINGERS_AUTH_TOKEN")
+    expected_token = get_auth_token()
     if expected_token and not request.url.path.startswith("/ws/"):
         if request.method != "OPTIONS":
             auth_header = request.headers.get("Authorization", "")
@@ -4803,14 +4810,14 @@ if __name__ == "__main__":
     # Fail-closed auth (§5): never serve an open API by accident.
     _security = validate_startup_security(
         args.host,
-        os.getenv("BETTERFINGERS_AUTH_TOKEN"),
+        get_auth_token(),
         allow_remote=os.getenv("BETTERFINGERS_ALLOW_REMOTE") == "1",
     )
     if not _security["ok"]:
         logging.error(_security["error"])
         raise SystemExit(_security["error"])
     if _security["generated"]:
-        os.environ["BETTERFINGERS_AUTH_TOKEN"] = _security["token"]
+        set_runtime_token(_security["token"])
         # The token is NEVER printed (terminal scrollback, supervisors and
         # support bundles keep stdout); a developer who needs it sets
         # BETTERFINGERS_TOKEN_FILE and reads it from there.

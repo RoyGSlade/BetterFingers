@@ -412,6 +412,12 @@ function createSidecar({
 } = {}) {
   const healthUrl = `http://${host}:${port}/health`;
   const backendHeaders = authHeaders(authToken);
+  // Round 2, item 3: NO credential goes in the backend's environment. On Linux the
+  // initial environment of a process stays readable through /proc/<pid>/environ for its
+  // whole life, so any same-user program could read the bearer token and the approval
+  // key and forge approvals. They are written to the child's stdin pipe instead
+  // (writeSecretsToChild below), announced only by a flag. Names that could carry them
+  // in from our own environment are stripped even if present.
   const backendEnv = buildBackendEnv({
     platform,
     parentEnv,
@@ -419,13 +425,22 @@ function createSidecar({
     runtimeEnv: {
       BETTERFINGERS_LAZY_STARTUP: '1',
       BETTERFINGERS_ENV: isPackaged ? 'production' : 'development',
-      BETTERFINGERS_AUTH_TOKEN: authToken,
-      // Phase 0 item 1: the HMAC key the backend verifies approvals with. Only this
-      // process and the backend hold it; the backend removes it from its own
-      // environment as soon as it has read it.
-      ...(approvalKey ? { BETTERFINGERS_APPROVAL_KEY: approvalKey } : {}),
+      ...(authToken || approvalKey ? { BETTERFINGERS_SECRETS_STDIN: '1' } : {}),
     },
   });
+  delete backendEnv.BETTERFINGERS_AUTH_TOKEN;
+  delete backendEnv.BETTERFINGERS_APPROVAL_KEY;
+
+  // Hand the credentials to a freshly spawned backend over its stdin and close it.
+  function writeSecretsToChild(child) {
+    if (!child || !child.stdin || typeof child.stdin.end !== 'function') return;
+    try {
+      child.stdin.on?.('error', () => {}); // a backend that died early must not crash main
+      child.stdin.end(JSON.stringify({ token: authToken || '', approval_key: approvalKey || '' }));
+    } catch {
+      /* the backend will fail its own startup check, which is the safe outcome */
+    }
+  }
   let childProcess = null;
   let startPromise = null;
   let logBuffer = [];
@@ -604,7 +619,7 @@ function createSidecar({
           appendLog('electron', `Spawning packaged backend executable at: ${executablePath}`);
           processRef = spawnOwnedBackend(executablePath, ['--host', host, '--port', String(port)], {
             cwd: path.dirname(executablePath),
-            stdio: ['ignore', 'pipe', 'pipe'],
+            stdio: [authToken || approvalKey ? 'pipe' : 'ignore', 'pipe', 'pipe'],
             windowsHide: true,
             env: backendEnv,
           }, { platform, spawnImpl: spawnProcess });
@@ -612,11 +627,12 @@ function createSidecar({
           appendLog('electron', `Spawning dev backend: ${devCommand} ${devArgs.join(' ')}`);
           processRef = spawnOwnedBackend(devCommand, devArgs, {
             cwd: path.resolve(__dirname, '../../../'),
-            stdio: ['ignore', 'pipe', 'pipe'],
+            stdio: [authToken || approvalKey ? 'pipe' : 'ignore', 'pipe', 'pipe'],
             windowsHide: true,
             env: backendEnv,
           }, { platform, spawnImpl: spawnProcess });
         }
+        writeSecretsToChild(processRef);
         childProcess = processRef;
 
         if (!isCurrentLifecycle()) {
