@@ -148,7 +148,6 @@ import {
   fetchBuiltinPersonaNames,
   savePersona,
   deletePersona,
-  renamePersona,
   testPersona,
   fetchTtsVoices,
   saveVoicePreset,
@@ -157,6 +156,8 @@ import {
 import { computeEffectiveMix, normalizeBlendForSend, MAX_BLEND_LAYERS } from './voiceStudio.js';
 import { createPersonaLearningFeature } from './personaLearning.js';
 import { isAlphaCapabilityEnabled } from '../config/alphaCapabilities.js';
+
+export const PERSONA_RENAME_OFF = 'Renaming is turned off for now; create a new persona and copy the voice.';
 
 // --- Pure helpers (no DOM) ---------------------------------------------------
 
@@ -1483,25 +1484,11 @@ export function createStudioWorkspaceFeature({ elements, hooks } = {}) {
     }
   }
 
-  async function handleRenameClick() {
-    if (!selectedName || isBuiltinPersonaName(selectedName, builtinNames)) {
-      hks.showToast?.('Built-in personas can’t be renamed.', 'warning');
-      return;
-    }
-    const promptFn = typeof window !== 'undefined' ? window.prompt?.bind(window) : null;
-    const nextName = String(promptFn?.('Rename persona', selectedName) || '').trim();
-    if (!nextName || nextName === selectedName) return;
-    try {
-      const prior = selectedName;
-      await renamePersona(prior, nextName);
-      selectedName = null;
-      toggleMenu(false);
-      await refresh();
-      selectPersona(nextName);
-      hks.showToast?.(`Renamed "${prior}" to "${nextName}".`, 'success');
-    } catch (error) {
-      hks.showToast?.(`Rename failed: ${error.message}`, 'danger');
-    }
+  // Round 5, item 2 (Codex re-check 4, blocker 2): renaming moved a persona's examples with no
+  // native preview, so Phase 0 turns it off. The control is hidden (alphaCapabilities
+  // `personaRename`); if anything still reaches this handler it only says why.
+  function handleRenameClick() {
+    hks.showToast?.(PERSONA_RENAME_OFF, 'warning', 5000);
   }
 
   // --- actions: voice blend strip ---------------------------------------------------

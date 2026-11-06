@@ -109,11 +109,12 @@ class EveryEntryPointTests(_Case):
     def test_rename_refuses_an_alias_on_either_side(self):
         ok, _ = persona_service.save_persona("Other", {"prompt": "o", "few_shot": [EVIL]})
         self.assertTrue(ok)
-        # Renaming Other onto "Sam!ple" would have sanitized onto Sample and replaced it.
+        # Renaming Other onto "Sam!ple" would have sanitized onto Sample and replaced it. Round 5,
+        # item 2: renaming is off altogether (403 for every request; test_round5_persona_rename.py).
         response = self.client.post("/personas/Other/rename", json={"new_name": self.ALIAS})
-        self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(response.status_code, 403, response.text)
         self.assertEqual(self.stored(), [A, B])
-        self.assertEqual(self.client.post(f"/personas/{self.ALIAS}/rename", json={"new_name": "Fine"}).status_code, 422)
+        self.assertEqual(self.client.post(f"/personas/{self.ALIAS}/rename", json={"new_name": "Fine"}).status_code, 403)
 
     def test_learned_example_routes_refuse_the_alias(self):
         store = PersonaLearningStore()

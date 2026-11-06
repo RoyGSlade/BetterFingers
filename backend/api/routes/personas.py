@@ -263,10 +263,6 @@ class PersonaConfirmRequest(BaseModel):
     structured: dict
 
 
-class PersonaRenameRequest(BaseModel):
-    new_name: str
-
-
 @router.get("/personas/{name}/editor")
 async def get_persona_editor_route(name: str):
     """Return confirmed structured data plus its separately persisted draft.
@@ -355,35 +351,18 @@ async def persona_field_guidance_route(field_path: str):
     return {"field_id": field_path, **guidance}
 
 
+# Round 5, item 2 (Codex re-check 4, blocker 2): renaming saved the whole entry, its approved
+# few-shot list included, under a new name and deleted the old one with no ticket and no native
+# preview, and left the learned examples (keyed by name) behind or merged them into whatever the
+# new name already had. Phase 0 turns renaming OFF rather than approve a transition nobody is
+# shown. The route stays so an old page gets a plain answer instead of a 404; it reads nothing
+# and writes nothing, whatever the request carries.
+PERSONA_RENAME_OFF = "Renaming is turned off for now; create a new persona and copy the voice."
+
+
 @router.post("/personas/{name}/rename")
-async def rename_persona_route(name: str, request: PersonaRenameRequest):
-    name = _canonical(name)
-    if not str(request.new_name or "").strip():
-        raise HTTPException(status_code=400, detail="A new persona name is required.")
-    # Round 4, item 1: renaming ONTO an alias would have been sanitized onto another persona and
-    # replaced it (its examples included) with no approval.
-    new_name = _canonical(request.new_name)
-    if persona_service.get_persona(new_name) is not None:
-        raise HTTPException(status_code=409, detail=f"Persona '{new_name}' already exists.")
-    entry = persona_service.get_persona(name)
-    if entry is None:
-        raise HTTPException(status_code=404, detail=f"Persona '{name}' not found.")
-    if name in persona_service.list_builtin_persona_names():
-        raise HTTPException(status_code=400, detail="Built-in personas cannot be renamed.")
-    entry = dict(entry)
-    if isinstance(entry.get("structured"), dict):
-        entry["structured"] = normalize_structured_persona(entry["structured"], display_name=new_name)
-        entry["structured"]["metadata"]["display_name"] = new_name
-    ok, msg = persona_service.save_persona(new_name, entry)
-    if not ok:
-        raise HTTPException(status_code=400, detail=msg)
-    ok, delete_msg = persona_service.delete_persona(name)
-    if not ok:
-        persona_service.delete_persona(new_name)
-        raise HTTPException(status_code=400, detail=delete_msg)
-    import server
-    server.reconcile_persona_profile_references(name, replacement=new_name)
-    return {"ok": True, "message": f"Renamed persona '{name}' to '{new_name}'.", "name": new_name}
+async def rename_persona_route(name: str):
+    raise HTTPException(status_code=403, detail=PERSONA_RENAME_OFF)
 
 
 class PersonaRefineRequest(BaseModel):

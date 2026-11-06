@@ -1048,9 +1048,8 @@ async function confirmPersonaDraft(name, structured, timeoutMs = 5000) {
   return postJson(`${PERSONAS_URL}/${encodeURIComponent(name)}/confirm`, { structured }, timeoutMs);
 }
 
-async function renamePersona(name, newName, timeoutMs = 5000) {
-  return postJson(`${PERSONAS_URL}/${encodeURIComponent(name)}/rename`, { new_name: newName }, timeoutMs);
-}
+// Round 5, item 2: there is no persona rename. It moved a persona's examples with no native
+// preview, so Phase 0 turns it off (the backend route answers 403, the Studio hides the control).
 
 async function fetchPersonaFieldGuidance(fieldId, timeoutMs = 5000) {
   return fetchJson(`${PERSONAS_URL}/field-guidance/${encodeURIComponent(fieldId)}`, timeoutMs);
@@ -1241,7 +1240,6 @@ export {
   savePersonaDraft,
   discardPersonaDraft,
   confirmPersonaDraft,
-  renamePersona,
   fetchPersonaFieldGuidance,
   fetchTtsVoices,
   provisionVoiceCloning,
