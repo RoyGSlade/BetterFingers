@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; media-src 'self' blob: data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Signal Desk — Director QA Preview (Talk)</title>
 <!--
@@ -3296,13 +3297,9 @@
   enabled only by a deliberate user action.
 -->
 
-<script>
-  // Onboarding is a modal gate on the default dashboard; this page has no
-  // onboarding markup of its own (SPEC gap -- no Signal Desk design exists
-  // for it yet), so nothing to suppress here. Kept as a marker so the next
-  // person does not re-add storage writes to this page casually: writes here
-  // are visible to index.html.
-</script>
+<!-- (An empty classic <script> marker used to sit here. A classic inline script
+     is blocked by this page's CSP, and it carried no code, so it is gone.
+     Do not re-add storage writes to this page: they are visible to index.html.) -->
 
 <!--
   Phase 2: mount the REAL Signal Core ring + Talk workspace adapter for
