@@ -539,8 +539,22 @@ def get_server_path():
     return os.path.join(get_models_dir(), get_server_filename())
 
 
+# Names the llama-server child must NOT inherit (Phase 0 item 4):
+#   LLAMA_ARG_*      every llama-server flag has an env twin (LLAMA_ARG_HOST,
+#                    LLAMA_ARG_AGENT, LLAMA_ARG_TOOLS, LLAMA_ARG_UI, ...). One
+#                    stray variable in the user's shell would silently re-bind it
+#                    to 0.0.0.0, switch the web UI back on or enable the built-in
+#                    shell/file tools.
+#   LLAMA_API_KEY    the env twin of --api-key: it would add a key we do not know.
+#   BETTERFINGERS_*  the backend's own bearer token, approval key and the optional
+#                    external-server key are credentials, not runtime settings.
+LLAMA_ENV_DROP_PREFIXES = ("LLAMA_ARG_", "LLAMA_API_KEY", "BETTERFINGERS_")
+
+
 def get_llama_runtime_env(server_path=None):
-    env = os.environ.copy()
+    from backend.privacy.secret_scrub import without_prefixes
+
+    env = without_prefixes(os.environ, LLAMA_ENV_DROP_PREFIXES)
     runtime_dir = os.path.dirname(os.path.abspath(server_path or get_server_path()))
     if not sys.platform.startswith("win"):
         existing = env.get("LD_LIBRARY_PATH", "")

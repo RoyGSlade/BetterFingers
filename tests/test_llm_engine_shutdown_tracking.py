@@ -27,11 +27,18 @@ class LLMEngineShutdownTrackingTests(unittest.TestCase):
         return engine
 
     def test_setup_server_tracks_pid_when_reusing_existing_server(self):
+        # Phase 0 item 4: an existing server is reused only when the operator
+        # supplied its API key (a server nobody can authenticate to is replaced;
+        # see tests/test_llama_server_hardening.py).
         engine = self._new_engine()
         LLMEngine._ready = False
         LLMEngine._process_pid = None
+        saved_key = LLMEngine._api_key
+        self.addCleanup(setattr, LLMEngine, "_api_key", saved_key)
 
-        with patch("backend.llm.llm_engine.is_server_running", return_value=True), patch(
+        with patch.dict("os.environ", {"BETTERFINGERS_LLAMA_API_KEY": "operator-key"}), patch(
+            "backend.llm.llm_engine.is_server_running", return_value=True
+        ), patch(
             "backend.llm.llm_engine._find_server_pid_on_port", return_value=4242
         ), patch.object(engine, "_start_server") as start_mock:
             engine._setup_server()

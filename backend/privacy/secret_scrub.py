@@ -80,6 +80,16 @@ def scrubbed_child_env(
     return env
 
 
+def without_prefixes(env: Mapping[str, str], prefixes: Iterable[str]) -> dict:
+    """A copy of ``env`` minus every variable whose name starts with a prefix
+    (case-insensitive). The llama-server runtime keeps the rest of the
+    environment (GPU drivers, ``CUDA_*``, ``VK_*``, ``LD_LIBRARY_PATH`` all matter
+    to it) and only loses the names that would change how it listens or what it
+    trusts."""
+    drop = tuple(prefix.upper() for prefix in prefixes)
+    return {k: v for k, v in env.items() if not str(k).upper().startswith(drop)}
+
+
 # --- redaction ---------------------------------------------------------------
 
 # "Authorization: Bearer abc", "authorization=Bearer abc", bare "Bearer abc".

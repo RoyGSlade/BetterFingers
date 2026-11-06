@@ -15,6 +15,8 @@ import atexit
 import threading
 import signal
 import re
+import secrets
+import shutil
 import tempfile
 import yaml
 
@@ -1996,6 +1998,13 @@ class LLMEngine:
     _loaded_model_id = None
     _last_error = ""
     _last_error_details = {}
+    # The credential llama-server wants on every request (Phase 0 item 4). Random
+    # per run, held only in this process and handed to the HTTP callers through
+    # ``api_headers()``; it is never logged, never put in the environment and never
+    # on the command line (the server reads it from a short-lived 0600 file).
+    # ``BETTERFINGERS_LLAMA_API_KEY`` supplies the key of an external server the
+    # operator started themselves on purpose.
+    _api_key = None
     # Admission-control DI (model_runtime_coordinator), mirrors tts_engine's
     # set_runtime_lease_factory pattern: server.py injects these once at
     # startup so this module never imports the coordinator or server.py
@@ -2011,6 +2020,12 @@ class LLMEngine:
     @classmethod
     def set_load_reporter(cls, fn):
         cls._load_reporter = staticmethod(fn) if fn is not None else None
+
+    @classmethod
+    def api_headers(cls):
+        """Headers every request to llama-server must carry. Empty only when no
+        key is known (a server we did not start and were not given a key for)."""
+        return {"Authorization": f"Bearer {cls._api_key}"} if cls._api_key else {}
 
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
@@ -2078,22 +2093,44 @@ class LLMEngine:
     def _setup_server(self):
         """Setup the sidecar server with deduplication."""
         
-        # STEP 1: Check if a healthy server is already running
+        # STEP 1: Is something already answering on our port?
+        #
+        # Phase 0 item 4: a llama-server we did not start is one whose API key we
+        # do not hold, and the only ones that would accept our requests are the
+        # ones with NO key (the exact hole this fix closes: any web page can use
+        # an open one). So an existing server is reused only when the operator
+        # told us its key on purpose (BETTERFINGERS_LLAMA_API_KEY); otherwise it
+        # is an orphan from a crashed run or a stranger, and it is replaced.
         if is_server_running():
-            inferred_pid = _find_server_pid_on_port(self.port)
-            LLMEngine._process = None
-            LLMEngine._owns_process = False
-            if inferred_pid:
-                LLMEngine._process_pid = inferred_pid
-                logging.info(f"âœ… Reusing existing llama-server on port {self.port} (PID {inferred_pid})")
-            else:
-                LLMEngine._process_pid = None
-                logging.info(f"âœ… Reusing existing llama-server on port {self.port}")
-            LLMEngine._ready = True
-            LLMEngine._loaded_model_id = getattr(self, "model_id", None)
-            self._clear_last_error()
-            self._report_loaded()
-            return
+            external_key = os.getenv("BETTERFINGERS_LLAMA_API_KEY", "").strip()
+            if external_key:
+                LLMEngine._api_key = external_key
+                inferred_pid = _find_server_pid_on_port(self.port)
+                LLMEngine._process = None
+                LLMEngine._owns_process = False
+                if inferred_pid:
+                    LLMEngine._process_pid = inferred_pid
+                    logging.info(f"Reusing operator-configured llama-server on port {self.port} (PID {inferred_pid})")
+                else:
+                    LLMEngine._process_pid = None
+                    logging.info(f"Reusing operator-configured llama-server on port {self.port}")
+                LLMEngine._ready = True
+                LLMEngine._loaded_model_id = getattr(self, "model_id", None)
+                self._clear_last_error()
+                self._report_loaded()
+                return
+            logging.warning(
+                "A llama-server that BetterFingers did not start is listening on port %s; "
+                "replacing it with one that requires an API key.", self.port,
+            )
+            self._stop_server_on_port()
+            if is_server_running():
+                self._mark_error(
+                    f"Port {self.port} is held by a llama-server BetterFingers could not stop, "
+                    "and it has no API key BetterFingers knows. Stop it, or set "
+                    "BETTERFINGERS_LLAMA_API_KEY to its key."
+                )
+                return
 
         # STEP 2: Ensure resources exist
         try:
@@ -2175,8 +2212,38 @@ class LLMEngine:
         if os.getenv("BETTERFINGERS_LLM_NO_MMAP") == "1":
             cmd.append("--no-mmap")
         cmd.extend(get_model_server_args(model_id))
-        
-        logging.info(f"ðŸš€ Starting llama-server: {os.path.basename(server_exe)}")
+
+        # Phase 0 item 4: lock the sidecar down. These go LAST so nothing above (an
+        # env-tuned flag, a model's own server_args) can override them. Every flag
+        # is checked against the pinned llama.cpp build's --help (b9548 and later):
+        #   --host 127.0.0.1   loopback only, stated rather than left to a default
+        #   --no-webui         no bundled chat UI for a web page to load
+        #   --no-slots         no /slots endpoint exposing in-flight prompt state
+        #   --api-key-file F   every API request needs the per-run key (the file,
+        #                      not --api-key, so the key is not in the process
+        #                      list; it is deleted as soon as the server is up)
+        # --agent and --tools are never passed, and their LLAMA_ARG_* env twins are
+        # stripped from the child's environment (get_llama_runtime_env).
+        api_key = secrets.token_urlsafe(32)
+        key_dir = tempfile.mkdtemp(prefix="bf-llama-")
+        key_file = os.path.join(key_dir, "api-key")
+        try:
+            fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(api_key)
+        except OSError as exc:
+            shutil.rmtree(key_dir, ignore_errors=True)
+            self._mark_error(f"Could not prepare the llama-server API key: {exc.__class__.__name__}")
+            return
+        cmd.extend([
+            "--host", "127.0.0.1",
+            "--no-webui",
+            "--no-slots",
+            "--api-key-file", key_file,
+        ])
+        LLMEngine._api_key = api_key
+
+        logging.info(f"Starting llama-server: {os.path.basename(server_exe)}")
         
         # Hide console window on Windows
         startupinfo = None
@@ -2202,15 +2269,22 @@ class LLMEngine:
                 env=get_llama_runtime_env(server_exe),
             )
         except Exception as exc:
+            shutil.rmtree(key_dir, ignore_errors=True)
+            LLMEngine._api_key = None
             self._mark_error(f"Failed to start llama-server: {exc}", {"server_path": server_exe})
             return
-        
+
         # Store PID for targeted shutdown
         LLMEngine._process_pid = LLMEngine._process.pid
         LLMEngine._owns_process = True
         logging.debug(f"llama-server started with PID {LLMEngine._process_pid}")
-        
-        self._wait_for_server()
+
+        try:
+            self._wait_for_server()
+        finally:
+            # The server reads the key at startup, before it reports healthy; once
+            # we are past that (ready or failed) the file has no further use.
+            shutil.rmtree(key_dir, ignore_errors=True)
 
     def _wait_for_server(self):
         logging.info("â³ Waiting for llama-server (up to 120s)...")
@@ -2617,6 +2691,7 @@ class LLMEngine:
             response = requests.post(
                 f"{self.api_url}/v1/chat/completions",
                 json=payload,
+                headers=LLMEngine.api_headers(),
                 # (connect, read): read scales with the token budget so a slow CPU
                 # cleanup completes instead of timing out and silently returning raw.
                 timeout=(5, compute_api_read_timeout(safe_max_tokens)),

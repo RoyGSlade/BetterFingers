@@ -87,6 +87,8 @@ def build_llm_call_fn(
                     "max_tokens": safe_max_tokens,
                     "stream": False,
                 },
+                # llama-server requires its per-run API key (Phase 0 item 4).
+                headers=getattr(engine, "api_headers", lambda: {})(),
                 timeout=(_CONNECT_TIMEOUT_S, read_timeout),
             )
             response.raise_for_status()
