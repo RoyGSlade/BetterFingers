@@ -19,7 +19,7 @@ EXPECTED_IDS = frozenset({
     "raw_recordings", "drafts", "history_db", "temp_audio",
     "cloned_voices", "personas", "persona_learning", "dictionary", "macros",
     "contacts", "user_profile", "wake_models",
-    "mcp_config", "graph_data", "debug_log", "sidecar_raw_log",
+    "mcp_config", "mcp_trust", "graph_data", "debug_log", "sidecar_raw_log",
     "voice_presets", "profiles", "app_state", "overlay_position",
     "overlay_appearance", "onboarding_consent", "app_profiles",
     "launcher_workflows", "application_registry", "audio_privacy_journal",
