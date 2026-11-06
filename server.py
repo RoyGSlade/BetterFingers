@@ -1515,6 +1515,19 @@ def mark_draft_pending_send(draft):
         pending_manual_send_ids.append(draft["id"])
 
 
+SEND_ACTIONS = frozenset({"copy_only", "paste", "type", "open_chat_then_send"})
+
+
+def _resolve_send_action(action):
+    """The action a send will perform. ``None`` (not given) follows the profile's
+    send mode, read once; anything else is returned as given so the caller can
+    validate it. An EMPTY string is not 'not given': it is refused."""
+    if action is None:
+        mode = get_profile_output_settings()["send_mode"]
+        return "open_chat_then_send" if mode == "auto_send" else "copy_only"
+    return action
+
+
 def send_draft_by_id(draft_id, action=None, open_chat=False, allow_resend=False, reviewed_text=None, approval=None):
     # A wipe is draining/deleting user data — do not inject (which could reopen
     # or re-clipboard content the user is trying to erase).
@@ -1565,7 +1578,15 @@ def _send_draft_by_id_locked(draft_id, action, open_chat, allow_resend, reviewed
         # tapped, bound to this exact draft text, action and open-chat flag. A
         # request body can no longer stand in for the tap. Copy-to-clipboard is the
         # only action that does not need one (it puts nothing into another app).
-        requested = action or ("open_chat_then_send" if get_profile_output_settings()["send_mode"] == "auto_send" else "copy_only")
+        # Resolve the action EXACTLY ONCE (round 2, item 1). It used to be resolved
+        # here to decide whether a ticket is needed and again after the lock to
+        # decide what to do, so a profile change between the two reads could turn an
+        # unchecked copy into open_chat_then_send. The value decided here is the value
+        # that is executed, and it must be one of the known actions.
+        requested = _resolve_send_action(action)
+        if requested not in SEND_ACTIONS:
+            return {"ok": False, "error": "invalid_action", "draft_id": draft_id,
+                    "message": "That is not a send action BetterFingers knows."}
         if requested != "copy_only":
             expected_bind = approvals.draft_send_bind(requested, draft.get("final_text", ""), bool(open_chat))
             try:
@@ -1617,8 +1638,7 @@ def _send_draft_by_id_locked(draft_id, action, open_chat, allow_resend, reviewed
     # (§9): disk + SQLite IO must not serialize other draft operations.
     save_draft_history(changed_draft_id=draft_id)
 
-    settings = get_profile_output_settings()
-    requested_action = action or ("open_chat_then_send" if settings["send_mode"] == "auto_send" else "copy_only")
+    requested_action = requested  # the value that was approved above; never re-resolved
     try:
         result = perform_output_action(final_text, requested_action, open_chat=open_chat)
     except BaseException:

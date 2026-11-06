@@ -38,7 +38,7 @@ so ``patch.object(server, ...)`` in tests still lands. Registered via
 """
 import logging
 import os
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
@@ -377,7 +377,8 @@ async def speak_draft(draft_id: int, request: DraftTtsRequest):
 
 
 class DraftSendRequest(BaseModel):
-    action: str = "copy_only"
+    # Closed set: an empty or unknown action is a 422, never "whatever the profile says".
+    action: Literal["copy_only", "paste", "type", "open_chat_then_send"] = "copy_only"
     open_chat: bool = False
     allow_resend: bool = False
     # Required for every action except copy_only (Phase 0 items 1 and 3): a

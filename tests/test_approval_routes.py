@@ -123,6 +123,51 @@ class DraftSendRouteTests(DraftTestCase):
         self.assertEqual(self.performed, [])
 
 
+class EmptyActionRaceTests(DraftTestCase):
+    """Round 2, item 1. Codex re-review: the action was resolved TWICE from the
+    profile (once to decide whether a ticket is needed, once to execute), so an empty
+    action plus a profile change between the two reads turned an unchecked copy into
+    open_chat_then_send. The action is now resolved and validated once."""
+
+    REVIEW = {"send_mode": "review_first", "auto_send": False, "auto_submit": False, "chat_close_action": "none"}
+    AUTO = {"send_mode": "auto_send", "auto_submit": True, "chat_close_action": "none"}
+
+    def test_a_settings_change_between_reads_cannot_upgrade_a_copy_into_a_send(self):
+        reads = [dict(self.REVIEW), dict(self.AUTO), dict(self.AUTO), dict(self.AUTO)]
+        self.mock_settings.side_effect = lambda: dict(reads.pop(0)) if reads else dict(self.AUTO)
+        result = server.send_draft_by_id(self.draft["id"], action="")
+        sent_actions = [action for _text, action, _open in self.performed]
+        self.assertNotIn("open_chat_then_send", sent_actions, "an unapproved send reached the output sink")
+        self.assertTrue(all(a == "copy_only" for a in sent_actions), sent_actions)
+        self.assertTrue(result.get("ok") is not True or sent_actions == ["copy_only"])
+
+    def test_the_same_race_with_no_action_at_all(self):
+        reads = [dict(self.REVIEW), dict(self.AUTO), dict(self.AUTO)]
+        self.mock_settings.side_effect = lambda: dict(reads.pop(0)) if reads else dict(self.AUTO)
+        server.send_draft_by_id(self.draft["id"])
+        self.assertTrue(all(action == "copy_only" for _t, action, _o in self.performed), self.performed)
+
+    def test_the_profile_is_read_once_per_send(self):
+        server.send_draft_by_id(self.draft["id"], action="copy_only")
+        self.assertLessEqual(self.mock_settings.call_count, 1)
+        self.mock_settings.reset_mock()
+        server.send_draft_by_id(self.draft["id"], allow_resend=True)
+        self.assertEqual(self.mock_settings.call_count, 1, "a send with no action reads the profile once")
+
+    def test_an_unknown_or_empty_action_is_refused_before_anything_happens(self):
+        for action in ("   ", "rm -rf", "PASTE", "paste;copy_only", "open_chat"):
+            result = server.send_draft_by_id(self.draft["id"], action=action)
+            self.assertEqual(result["error"], "invalid_action", action)
+        self.assertEqual(self.performed, [])
+        self.assertEqual(self.status(), "pending")
+
+    def test_the_schema_rejects_an_empty_or_unknown_action(self):
+        for action in ("", " ", "rm", "Paste", None, 5):
+            response = self.client.post(f"/drafts/{self.draft['id']}/send", json={"action": action})
+            self.assertEqual(response.status_code, 422, action)
+        self.assertEqual(self.performed, [])
+
+
 class PrimaryActionTests(DraftTestCase):
     def press(self, **body):
         return self.client.post("/runtime/primary-action", json=body).json()
