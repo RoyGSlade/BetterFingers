@@ -1,0 +1,143 @@
+"""Keep credentials out of child processes and out of text that gets logged.
+
+Two small, pure helpers shared by the Phase 0 security fixes:
+
+* ``scrubbed_child_env`` builds the environment for a subprocess the backend
+  launches on behalf of something it does not control (an MCP server, the
+  llama-server runtime). The backend's own environment carries the sidecar bearer
+  token (``BETTERFINGERS_AUTH_TOKEN``) and the approval key
+  (``BETTERFINGERS_APPROVAL_KEY``), and the user's shell may carry provider keys;
+  none of that may leak by inheritance. The child gets an ALLOWLIST of variables
+  it needs to run, plus whatever the caller names explicitly.
+* ``redact_secrets`` / ``redact_args`` mask bearer tokens, ``token=`` query
+  parameters, ``auth:`` first-frame messages and well-known key shapes in any
+  string headed for a log, an error message or an API response.
+
+No logging configuration and no I/O beyond reading the mapping it is handed.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+from typing import Iterable, Mapping, Optional
+
+REDACTED = "[redacted]"
+
+# What a child process legitimately needs to start and find its own files. Exact
+# names compared case-insensitively (Windows environment names are
+# case-insensitive), plus the LC_* locale family.
+CHILD_ENV_ALLOWLIST = frozenset(
+    name.upper()
+    for name in (
+        "PATH", "PATHEXT", "HOME", "USER", "USERNAME", "LOGNAME", "SHELL", "TERM", "LANG", "LANGUAGE",
+        "TZ", "TMPDIR", "TEMP", "TMP", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA",
+        "LOCALAPPDATA", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "COMMONPROGRAMFILES",
+        "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "NUMBER_OF_PROCESSORS",
+        "PROCESSOR_ARCHITECTURE", "OS", "XDG_RUNTIME_DIR", "DISPLAY", "WAYLAND_DISPLAY",
+    )
+)
+
+# Never forwarded, not even when a caller's explicit ``extra`` mapping names them:
+# these are the app's own credentials, and a child has no business holding them.
+_PROTECTED_PREFIXES = ("BETTERFINGERS_",)
+
+
+def _is_protected(name: str) -> bool:
+    upper = name.upper()
+    return upper.startswith(_PROTECTED_PREFIXES)
+
+
+def scrubbed_child_env(
+    base: Optional[Mapping[str, str]] = None,
+    extra: Optional[Mapping[str, str]] = None,
+    *,
+    drop_prefixes: Iterable[str] = (),
+) -> dict:
+    """The environment a launched child process should get.
+
+    ``base`` (default ``os.environ``) contributes only allowlisted names.
+    ``extra`` is the caller's explicit, deliberate additions (for an MCP server,
+    the ``env`` block the user wrote for that server); it is applied on top
+    except for the app's own ``BETTERFINGERS_*`` credentials, which are refused.
+    ``drop_prefixes`` removes further name prefixes from the result (the
+    llama-server runtime drops ``LLAMA_ARG_`` this way, because those variables
+    silently change how it runs).
+    """
+    source = os.environ if base is None else base
+    env = {}
+    for name, value in source.items():
+        upper = str(name).upper()
+        if upper in CHILD_ENV_ALLOWLIST or upper.startswith("LC_"):
+            env[str(name)] = str(value)
+    for name, value in (extra or {}).items():
+        if _is_protected(str(name)):
+            continue
+        env[str(name)] = str(value)
+    prefixes = tuple(prefix.upper() for prefix in drop_prefixes)
+    if prefixes:
+        env = {k: v for k, v in env.items() if not k.upper().startswith(prefixes)}
+    return env
+
+
+# --- redaction ---------------------------------------------------------------
+
+# "Authorization: Bearer abc", "authorization=Bearer abc", bare "Bearer abc".
+_BEARER_RE = re.compile(r"(?i)\b(bearer)([\s:=]+)([A-Za-z0-9._~+/=\-]{6,})")
+# token=..., access_token=..., api_key=..., apikey=..., auth_token=, secret=, password=
+# in a query string, a form body or a "key=value" log line.
+_KV_RE = re.compile(
+    r"(?i)\b((?:[a-z0-9]*[_\-])*(?:token|api[_\-]?key|apikey|secret|password|passwd|auth))"
+    r"(=|:\s*)(?!\[redacted\])([^\s&\"'<>,;]{3,})"
+)
+# The WebSocket first-frame form: "auth:<token>".
+_AUTH_FRAME_RE = re.compile(r"(?i)\b(auth:)([A-Za-z0-9._~+/=\-]{6,})")
+# Well-known shapes that are secrets wherever they appear.
+_KEY_SHAPE_RE = re.compile(
+    r"\b(sk-ant-[A-Za-z0-9_\-]{8,}|sk-[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abpr]-[A-Za-z0-9\-]{10,}|"
+    r"AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_\-]{30,})\b"
+)
+# 48+ hex characters: this app's own token is secrets.token_hex(32) (64 chars).
+_LONG_HEX_RE = re.compile(r"\b[0-9a-fA-F]{48,}\b")
+
+_SECRET_FLAG_RE = re.compile(r"(?i)^--?(?:[a-z0-9_\-]*)(?:token|api[_\-]?key|apikey|secret|password|passwd|auth)(?:[a-z0-9_\-]*)$")
+
+
+def redact_secrets(text) -> str:
+    """Mask credential-shaped substrings. Idempotent; never raises."""
+    if text is None:
+        return ""
+    out = str(text)
+    out = _BEARER_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", out)
+    out = _AUTH_FRAME_RE.sub(lambda m: f"{m.group(1)}{REDACTED}", out)
+    out = _KV_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", out)
+    out = _KEY_SHAPE_RE.sub(REDACTED, out)
+    out = _LONG_HEX_RE.sub(REDACTED, out)
+    return out
+
+
+def redact_args(args) -> list:
+    """A command line safe to show in an API response.
+
+    Masks the value after a secret-looking flag (``--api-key X``), the value in
+    ``--token=X`` / ``KEY=value`` forms, and any argument shaped like a key.
+    """
+    out = []
+    mask_next = False
+    for raw in args or []:
+        arg = str(raw)
+        if mask_next:
+            out.append(REDACTED)
+            mask_next = False
+            continue
+        if _SECRET_FLAG_RE.match(arg):
+            out.append(arg)
+            mask_next = True
+            continue
+        redacted = redact_secrets(arg)
+        if redacted == arg and "=" in arg:
+            name, _, value = arg.partition("=")
+            if _SECRET_FLAG_RE.match(name if name.startswith("-") else f"--{name}"):
+                redacted = f"{name}={REDACTED}"
+        out.append(redacted)
+    return out

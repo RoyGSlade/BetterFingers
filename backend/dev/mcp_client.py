@@ -26,6 +26,7 @@ import os
 import threading
 
 from backend.config.utils import get_user_data_path
+from backend.privacy.secret_scrub import redact_args, scrubbed_child_env
 
 DEFAULT_TIMEOUT_SECONDS = 15.0
 
@@ -95,7 +96,9 @@ def list_servers():
         {
             "name": name,
             "command": spec["command"],
-            "args": spec["args"],
+            # The launch command line can carry a credential (``--api-key X``);
+            # the listing is an API response, so show it masked.
+            "args": redact_args(spec["args"]),
             "enabled": spec["enabled"],
         }
         for name, spec in sorted(config["mcpServers"].items())
@@ -109,7 +112,12 @@ async def _list_tools_async(spec, timeout):
     params = StdioServerParameters(
         command=spec["command"],
         args=spec["args"],
-        env={**os.environ, **spec["env"]},
+        # An ALLOWLISTED environment plus the server's own configured ``env``
+        # block -- never ``os.environ``, which holds this backend's bearer token
+        # and approval key and whatever provider keys the user's shell exports
+        # (Phase 0 item 9). Merely listing tools launches the server, so it must
+        # not be able to read them.
+        env=scrubbed_child_env(os.environ, spec["env"]),
     )
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
