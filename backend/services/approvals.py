@@ -59,11 +59,9 @@ _MIN_KEY_BYTES = 32
 PURPOSE_WORKFLOW_APPROVE = "workflow.approve"
 PURPOSE_PERSONA_EXAMPLE = "persona.example"
 PURPOSE_DRAFT_SEND = "draft.send"
-PURPOSE_VOICE_CONFIRM = "voice.confirm"
 PURPOSE_PERSONA_FEW_SHOT = "persona.few_shot"
 PURPOSES = frozenset({
-    PURPOSE_WORKFLOW_APPROVE, PURPOSE_PERSONA_EXAMPLE, PURPOSE_DRAFT_SEND, PURPOSE_VOICE_CONFIRM,
-    PURPOSE_PERSONA_FEW_SHOT,
+    PURPOSE_WORKFLOW_APPROVE, PURPOSE_PERSONA_EXAMPLE, PURPOSE_DRAFT_SEND, PURPOSE_PERSONA_FEW_SHOT,
 })
 
 # Error codes. The messages are deliberately generic: they say what is missing,
@@ -246,14 +244,6 @@ def persona_few_shot_bind(persona: str, added) -> dict:
 
 def draft_send_bind(action: str, text: str, open_chat: bool = False) -> dict:
     return {"action": str(action), "text_sha256": text_digest(text), "open_chat": "1" if open_chat else "0"}
-
-
-def voice_confirm_bind(action: str, draft_id, text: str = "") -> dict:
-    return {
-        "action": str(action),
-        "draft_id": "" if draft_id is None else str(draft_id),
-        "text_sha256": text_digest(text),
-    }
 
 
 # --- verification --------------------------------------------------------------

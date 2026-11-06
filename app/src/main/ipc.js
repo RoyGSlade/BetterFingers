@@ -154,17 +154,16 @@ function registerIpc({
   // Create it now so the hotkey signer is installed before the first key press.
   setImmediate(() => { try { broker(); } catch (error) { console.error('[approval] broker unavailable:', error.message); } });
 
-  // Spoken requests (round 2, item 6). The backend announces that a draft placement or a
-  // confirmation-gated command was REQUESTED by voice; the native dialog is the only thing that
+  // Spoken requests (round 2, item 6). The backend announces that a draft placement was
+  // REQUESTED by voice; the native dialog is the only thing that
   // can confirm it. Main listens to the backend's own status events, so a page cannot forge or
   // suppress one by what it relays.
   backendProxy.onBackendEvent((message) => {
     if (!message || typeof message !== 'object') return;
     const draftId = Number.isInteger(message.draft_id) ? message.draft_id : null;
+    // Only "send it" opens a dialog. There is no voice-confirmation flow (round 3, item 6).
     if (message.status === 'command_needs_tap' && message.action === 'send') {
       broker().presentVoiceTap({ draftId }).catch(() => {});
-    } else if (message.status === 'command_needs_confirmation' && typeof message.action === 'string') {
-      broker().confirmVoiceCommand({ action: message.action, draftId }).catch(() => {});
     }
   });
 

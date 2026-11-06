@@ -10,7 +10,7 @@ const require = createRequire(import.meta.url);
 const broker = require('../src/main/approvalBroker.js');
 const {
   createApprovalBroker, signTicket, linesDigest, textDigest, draftSendBind, personaExampleBind,
-  makeVisible, wrapLine, displayLines, MAX_DISPLAY_LINES, personaFewShotBind, addedFewShot, voiceConfirmBind,
+  makeVisible, wrapLine, displayLines, MAX_DISPLAY_LINES, personaFewShotBind, addedFewShot,
 } = broker;
 
 const SECRET = Buffer.from(Array.from({ length: 32 }, (_, i) => i));
@@ -364,37 +364,12 @@ test('a spoken send for a draft the backend does not have, or without a draft, s
   }
 });
 
-test('a confirmation-gated spoken command is confirmed in a dialog and replayed with a voice.confirm ticket', async () => {
-  const { instance, dialog, backend } = makeBroker({ answers: [0] });
-  const result = await instance.confirmVoiceCommand({ action: 'delete_history', draftId: null });
-  assert.equal(result.ok, true);
-  assert.equal(dialog.shown[0].options.defaultId, 1);
-  assert.ok(dialog.shown[0].options.message.includes('Delete your whole history'));
-  const post = backend.calls[0];
-  assert.equal(post.path, '/voice-commands/execute');
-  assert.deepEqual(post.body.context, { command_mode_on: true });
-  verifyTicket(post.body.approval, { purpose: 'voice.confirm', subject: 'delete_history', bind: voiceConfirmBind('delete_history', null, '') });
-});
-
-test('a draft-bound spoken confirmation binds the backend\'s draft text', async () => {
-  const { instance, dialog, backend } = makeBroker({ answers: [0], handlers: DRAFTS });
-  await instance.confirmVoiceCommand({ action: 'delete_history', draftId: 7 });
-  assert.ok(dialog.shown[0].options.detail.includes('The final text.'));
-  verifyTicket(backend.calls.find((c) => c.method === 'POST').body.approval, {
-    purpose: 'voice.confirm', subject: 'delete_history', bind: voiceConfirmBind('delete_history', 7, 'The final text.'),
-  });
-});
-
-test('declining, unknown commands and the "send" action itself are never confirmed through this path', async () => {
-  const declined = makeBroker({ answers: [1] });
-  assert.equal((await declined.instance.confirmVoiceCommand({ action: 'delete_history' })).ok, false);
-  assert.equal(declined.backend.calls.length, 0);
-  for (const action of ['send', 'cancel', 'emergency_stop', '', undefined, 5, '../x']) {
-    const { instance, dialog, backend } = makeBroker({ answers: [0] });
-    assert.equal((await instance.confirmVoiceCommand({ action })).ok, false, String(action));
-    assert.equal(dialog.shown.length, 0);
-    assert.equal(backend.calls.length, 0);
-  }
+test('there is no voice-confirmation flow: the broker cannot confirm a spoken command (round 3, item 6)', () => {
+  const { instance } = makeBroker({ answers: [0] });
+  assert.equal(instance.confirmVoiceCommand, undefined);
+  assert.equal(broker.voiceConfirmBind, undefined);
+  const source = readFileSync(new URL('../src/main/approvalBroker.js', import.meta.url), 'utf8');
+  assert.ok(!source.includes("'voice.confirm'"), 'no voice.confirm purpose is signed anywhere');
 });
 
 test('repeated spoken requests are rate limited: only three dialogs a minute', async () => {
@@ -411,8 +386,8 @@ test('repeated spoken requests are rate limited: only three dialogs a minute', a
   assert.equal(dialog.shown.length, 4, 'the budget refills');
 });
 
-test('voice has no way to approve by itself: neither method signs without a dialog', async () => {
-  for (const [method, args] of [['presentVoiceTap', { draftId: 7 }], ['confirmVoiceCommand', { action: 'delete_history' }]]) {
+test('voice has no way to approve by itself: a spoken send signs nothing without a dialog', async () => {
+  for (const [method, args] of [['presentVoiceTap', { draftId: 7 }]]) {
     const { instance, backend } = makeBroker({ answers: [new Error('no display')], handlers: DRAFTS });
     const result = await instance[method](args);
     assert.equal(result.ok, false);
@@ -693,7 +668,7 @@ test('the broker exposes no way to sign without a dialog', () => {
   const { instance } = makeBroker();
   assert.ok(!('signPhysicalPress' in instance));
   assert.deepEqual(Object.keys(instance).sort(), [
-    'addPersonaExample', 'approveWorkflow', 'confirmSendHotkeyChange', 'confirmVoiceCommand', 'confirmWorkflowRun', 'placeFromHotkey', 'presentVoiceTap', 'primaryActionFromUi', 'savePersona', 'sendDraft',
+    'addPersonaExample', 'approveWorkflow', 'confirmSendHotkeyChange', 'confirmWorkflowRun', 'placeFromHotkey', 'presentVoiceTap', 'primaryActionFromUi', 'savePersona', 'sendDraft',
   ]);
 });
 

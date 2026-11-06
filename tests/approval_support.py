@@ -54,11 +54,6 @@ def send_ticket(draft_id, action, text, open_chat=False, **kw):
                        approvals.draft_send_bind(action, text, open_chat), **kw)
 
 
-def voice_ticket(action, draft_id, text="", **kw):
-    return sign_ticket(approvals.PURPOSE_VOICE_CONFIRM, action,
-                       approvals.voice_confirm_bind(action, draft_id, text), **kw)
-
-
 def few_shot_ticket(persona, added, **kw):
     return sign_ticket(approvals.PURPOSE_PERSONA_FEW_SHOT, persona,
                        approvals.persona_few_shot_bind(persona, added), **kw)

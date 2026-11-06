@@ -66,13 +66,12 @@ test('declining the spoken request places nothing', async (t) => {
   assert.deepEqual(ctx.posts, []);
 });
 
-test('a confirmation-gated command asks in a dialog and is replayed with a signed ticket', async (t) => {
+test('a confirmation-gated command event opens nothing: voice never confirms (round 3, item 6)', async (t) => {
   const ctx = setup(t, { answers: [0] });
   ctx.emit({ status: 'command_needs_confirmation', action: 'delete_history', kind: 'app_action', draft_id: null });
   await ctx.settle();
-  assert.equal(ctx.dialogs.length, 1);
-  assert.equal(ctx.posts[0].route, '/voice-commands/execute');
-  assert.ok(ctx.posts[0].body.approval.sig);
+  assert.equal(ctx.dialogs.length, 0);
+  assert.deepEqual(ctx.posts, []);
 });
 
 test('unrelated, malformed and unknown events open nothing', async (t) => {

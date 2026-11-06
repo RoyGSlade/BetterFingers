@@ -43,7 +43,6 @@ const PURPOSE_WORKFLOW_APPROVE = 'workflow.approve';
 const PURPOSE_PERSONA_EXAMPLE = 'persona.example';
 const PURPOSE_DRAFT_SEND = 'draft.send';
 const PURPOSE_PERSONA_FEW_SHOT = 'persona.few_shot';
-const PURPOSE_VOICE_CONFIRM = 'voice.confirm';
 
 const WORKFLOW_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const SEND_ACTIONS = new Set(['copy_only', 'paste', 'type', 'open_chat_then_send']);
@@ -83,10 +82,6 @@ function personaFewShotBind(persona, added) {
   const lines = [String(persona)];
   for (const [raw, out] of added) lines.push(raw, out);
   return { few_shot_sha256: linesDigest(lines) };
-}
-
-function voiceConfirmBind(action, draftId, text) {
-  return { action: String(action), draft_id: draftId === null || draftId === undefined ? '' : String(draftId), text_sha256: textDigest(text) };
 }
 
 function draftSendBind(action, text, openChat) {
@@ -383,11 +378,11 @@ function createApprovalBroker({
     );
   }
 
-  // --- voice commands (round 2, item 6) ---------------------------------------------------------
+  // --- voice requests (round 2, item 6; round 3, item 6) -----------------------------------------
   //
-  // A spoken command can only REQUEST. Ambient audio, a video, or a replayed phrase can say "send it" or
-  // "delete my history"; none of that is a person's yes. The backend announces the request (a status
-  // event) and the native dialog below is the only thing that can confirm it. Voice-started dialogs keep
+  // A spoken command can only REQUEST. Ambient audio, a video, or a replayed phrase can say "send it";
+  // that is not a person's yes. The backend announces the request (a status event) and the native
+  // dialog below is the only thing that can place the draft. Voice-started dialogs keep
   // Cancel as the default and are rate limited, so repeated speech cannot grind a person into clicking.
   const VOICE_WINDOW_MS = 60000;
   const VOICE_MAX_PER_WINDOW = 3;
@@ -427,39 +422,10 @@ function createApprovalBroker({
     return backend.send('POST', `/drafts/${draftId}/send`, { action: 'paste', open_chat: false, allow_resend: false, approval }, 120000);
   }
 
-  // The spoken commands that are confirmation-gated, and the canonical phrase main replays to the
-  // backend once the person has confirmed (the original audio text is not carried around).
-  const VOICE_CONFIRM_PHRASES = Object.freeze({ delete_history: 'delete history' });
-  const VOICE_CONFIRM_LABELS = Object.freeze({ delete_history: 'Delete your whole history' });
-
-  async function confirmVoiceCommand({ action, draftId } = {}) {
-    const phrase = typeof action === 'string' ? VOICE_CONFIRM_PHRASES[action] : undefined;
-    if (!phrase) return fault('That spoken command cannot be confirmed here.');
-    const hasDraft = Number.isInteger(draftId) && draftId > 0;
-    if (!voiceBudgetAvailable()) return fault('Too many spoken requests in a row; ignoring this one.');
-    let text = '';
-    if (hasDraft) {
-      const found = await backendDraftText(draftId);
-      if (found === null) return fault('That draft is gone. Nothing was done.');
-      text = found;
-    }
-    const body = [`You asked, by voice: ${VOICE_CONFIRM_LABELS[action]}.`, 'Only this window can confirm it.'];
-    if (hasDraft) body.push('', 'The draft it refers to:', ...displayLines(text));
-    if (!fits(body)) return fault(TOO_LONG);
-    const decision = await confirm({
-      title: 'Confirm a spoken command',
-      message: `Confirm \u201C${VOICE_CONFIRM_LABELS[action]}\u201D?`,
-      body,
-      approveLabel: 'Confirm',
-      note: 'If you did not say that, choose Cancel.',
-    });
-    if (!decision.approved) return declined(decision);
-    const approval = trySign(PURPOSE_VOICE_CONFIRM, action, voiceConfirmBind(action, hasDraft ? draftId : null, text));
-    if (!approval) return fault(UNAVAILABLE);
-    return backend.send('POST', '/voice-commands/execute', {
-      text: phrase, context: { command_mode_on: true }, draft_id: hasDraft ? draftId : null, approval,
-    }, 15000);
-  }
+  // Round 3, item 6: there is no voice CONFIRMATION flow. The one command it served
+  // (delete_history) has no implementation behind it, and a dialog that confirms nothing is
+  // surface without a purpose. A spoken command can only REQUEST; the only spoken request that
+  // opens a dialog is "send it" above, and the dialog, not the voice, places the draft.
 
   // --- saving a persona (few-shot examples) ----------------------------------------
 
@@ -649,7 +615,6 @@ function createApprovalBroker({
     approveWorkflow,
     confirmWorkflowRun,
     presentVoiceTap,
-    confirmVoiceCommand,
     addPersonaExample,
     savePersona,
     sendDraft,
@@ -668,7 +633,6 @@ module.exports = {
   personaExampleBind,
   personaFewShotBind,
   addedFewShot,
-  voiceConfirmBind,
   makeVisible,
   wrapLine,
   displayLines,

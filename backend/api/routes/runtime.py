@@ -55,7 +55,6 @@ from pydantic import BaseModel, Field, StrictBool, StrictInt, StrictStr
 from backend.api.routes import drafts as routes_drafts
 from backend.api.models import ApprovalTicketModel
 from backend.api.security import check_request_origin, get_auth_token
-from backend.services import approvals
 
 router = APIRouter()
 
@@ -135,8 +134,8 @@ class VoiceCommandExecuteRequest(BaseModel):
     text: str
     draft_id: Optional[int] = None
     context: dict = {}
-    # DEPRECATED and ignored (Phase 0 items 1/3): a request boolean is not a tap.
-    # Confirmation-gated commands need ``approval``, a signed ticket from main.
+    # DEPRECATED and ignored (Phase 0 items 1/3, round 3 item 6): a request boolean is
+    # not a tap, and no ticket makes a spoken command run. Kept so old callers still parse.
     confirm: bool = False
     approval: Optional[ApprovalTicketModel] = None
 
@@ -150,8 +149,9 @@ async def execute_voice_command(request: VoiceCommandExecuteRequest):
     """Real trigger point for app-control voice commands (task 9): classify
     `text` via voice_commands.parse_command, then execute the resolved
     action against the existing draft/runtime functions. `emergency_stop`
-    always executes; anything else with requires_confirmation=True only
-    executes when `confirm=True` is sent as a follow-up call."""
+    always executes; a command that would need a confirmation is refused
+    (voice only requests; round 3, item 6), and "send" only asks the shell
+    to present the draft in its native dialog."""
     import server as s
 
     if not s.app_commands_enabled():
@@ -177,22 +177,10 @@ async def execute_voice_command(request: VoiceCommandExecuteRequest):
         return {"ok": False, "reason": "needs_tap", "action": intent.action, "draft_id": request.draft_id}
 
     if intent.requires_confirmation:
-        draft = s.get_draft_by_id(request.draft_id) if request.draft_id is not None else None
-        try:
-            approvals.verify(
-                request.approval.model_dump() if request.approval else None,
-                purpose=approvals.PURPOSE_VOICE_CONFIRM,
-                subject=intent.action,
-                bind=approvals.voice_confirm_bind(
-                    intent.action, request.draft_id, (draft or {}).get("final_text", ""),
-                ),
-            )
-        except approvals.ApprovalError as exc:
-            s.broadcast_status_threadsafe(
-                "command_needs_confirmation",
-                {"action": intent.action, "kind": intent.kind, "draft_id": request.draft_id},
-            )
-            return {"ok": False, "reason": "needs_confirmation", "action": intent.action, "error": exc.code}
+        # Round 3, item 6: voice never approves, and there is no voice-confirmation flow. A
+        # spoken command that would need a confirmation (today only "delete history", which
+        # has no implementation) is refused outright: nothing is announced, no dialog opens.
+        return {"ok": False, "reason": "not_available_by_voice", "action": intent.action}
 
     draft_id = request.draft_id
     try:
