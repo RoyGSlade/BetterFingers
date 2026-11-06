@@ -346,7 +346,9 @@ def audio_privacy_journal() -> list[Path]:
 
 
 def mcp_config() -> list[Path]:
-    return _with_migration_siblings(base() / "mcp_servers.json")
+    # Round 5, item 1: the servers' own install folders (``mcp-servers/<name>/``) belong to the MCP
+    # configuration, so the wipes and the factory reset that clear it clear them too.
+    return _with_migration_siblings(base() / "mcp_servers.json") + _existing(base() / "mcp-servers")
 
 
 def graph_data() -> list[Path]:
