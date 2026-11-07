@@ -326,8 +326,9 @@ export const onboardingProdScenarios = [
           title: 'How it works',
           label: 'Next',
           backVisible: true,
-          // UI-02-007: "record -> review -> send explainer".
-          bodyContains: ['Record', 'press your record hotkey', 'Review', 'a draft appears', 'Send', 'accept to type or paste'],
+          // UI-02-007: "record -> review -> send explainer". Since BF-G2 the last step is
+          // "Place": the Primary Action key accepts and places the draft the review overlay shows.
+          bodyContains: ['Record', 'press your record hotkey', 'Review', 'a draft appears', 'Place', 'accept and place the draft'],
         },
         { title: 'Speech models', label: 'Finish', backVisible: true },
       ];

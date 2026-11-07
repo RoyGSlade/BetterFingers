@@ -509,6 +509,54 @@ export async function auxiliaryWindow(app, pageFile, { timeout = 15000 } = {}) {
   return win;
 }
 
+/**
+ * Answer the approval broker's NATIVE dialog from the test, the way the unit tests hand
+ * createApprovalBroker a fake `dialog` (approvalBroker.test.mjs, round5Approvals.test.mjs).
+ *
+ * The broker shows dialog.showMessageBox before it signs anything (SECURITY.md, "Approvals").
+ * On Xvfb nobody can click that window, so a scenario that places a draft would wait on it
+ * forever. This replaces showMessageBox on Electron's own `dialog` module, in the main
+ * process, for this test run only: production code is not changed and has no switch for it.
+ * The broker still builds the dialog, still requires the approving button (index 0), and
+ * still signs the ticket the backend checks. Every dialog shown is recorded so the scenario
+ * can assert what the person would have been asked.
+ *
+ * `answer`: 'approve' clicks the approving button when there is one; 'cancel' clicks
+ * the dialog's cancel button. Always pair with restoreNativeDialog() in a finally.
+ */
+export async function stubNativeDialog(app, { answer = 'cancel' } = {}) {
+  await app.evaluate(({ dialog }, chosen) => {
+    if (!globalThis.__bfQaNativeDialog) {
+      globalThis.__bfQaNativeDialog = { original: dialog.showMessageBox, shown: [] };
+    }
+    globalThis.__bfQaNativeDialog.shown = [];
+    dialog.showMessageBox = async (...args) => {
+      const options = (args.length > 1 ? args[1] : args[0]) || {};
+      const buttons = Array.isArray(options.buttons) ? options.buttons : [];
+      globalThis.__bfQaNativeDialog.shown.push({
+        title: String(options.title ?? ''),
+        message: String(options.message ?? ''),
+        detail: String(options.detail ?? ''),
+        buttons: buttons.map(String),
+      });
+      const cancelId = Number.isInteger(options.cancelId) ? options.cancelId : buttons.length - 1;
+      const response = chosen === 'approve' && buttons.length > 1 ? 0 : cancelId;
+      return { response, checkboxChecked: false };
+    };
+  }, answer);
+}
+
+/** Put Electron's real showMessageBox back; returns every dialog the stub answered. */
+export async function restoreNativeDialog(app) {
+  return app.evaluate(({ dialog }) => {
+    const saved = globalThis.__bfQaNativeDialog;
+    if (!saved) return [];
+    dialog.showMessageBox = saved.original;
+    delete globalThis.__bfQaNativeDialog;
+    return saved.shown;
+  });
+}
+
 /** True when a window for `pageFile` exists right now. Never waits. */
 export function hasAuxiliaryWindow(app, pageFile) {
   return app.windows().some(windowMatcher(pageFile));
